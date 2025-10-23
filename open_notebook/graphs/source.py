@@ -13,6 +13,7 @@ from open_notebook.domain.content_settings import ContentSettings
 from open_notebook.domain.notebook import Asset, Source
 from open_notebook.domain.transformation import Transformation
 from open_notebook.graphs.transformation import graph as transform_graph
+from open_notebook.processors.docling_gpu import extract_with_docling_gpu
 
 
 class SourceState(TypedDict):
@@ -43,12 +44,20 @@ async def content_process(state: SourceState) -> dict:
     content_state["url_engine"] = (
         content_settings.default_content_processing_engine_url or "auto"
     )
-    content_state["document_engine"] = (
+    document_engine = (
         content_settings.default_content_processing_engine_doc or "auto"
     )
+    content_state["document_engine"] = document_engine
     content_state["output_format"] = "markdown"
 
-    processed_state = await extract_content(content_state)
+    # Handle GPU-accelerated docling separately
+    if document_engine == "docling_gpu":
+        logger.info("🚀 Using GPU-accelerated Docling processor")
+        processed_state = await extract_with_docling_gpu(content_state)
+    else:
+        # Use standard content-core processing for all other engines
+        processed_state = await extract_content(content_state)
+
     return {"content_state": processed_state}
 
 
