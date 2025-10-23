@@ -53,10 +53,10 @@ export interface SourceStatusResponse {
 }
 
 export interface SettingsResponse {
-  default_content_processing_engine_doc?: string
-  default_content_processing_engine_url?: string
-  default_embedding_option?: string
-  auto_delete_files?: string
+  default_content_processing_engine_doc?: 'auto' | 'docling' | 'docling_gpu' | 'simple'
+  default_content_processing_engine_url?: 'auto' | 'firecrawl' | 'jina' | 'simple'
+  default_embedding_option?: 'ask' | 'always' | 'never'
+  auto_delete_files?: 'yes' | 'no'
   youtube_preferred_languages?: string[]
 }
 
