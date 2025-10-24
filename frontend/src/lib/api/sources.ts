@@ -105,4 +105,30 @@ export const sourcesApi = {
       responseType: 'blob',
     })
   },
+
+  getChunks: async (id: string) => {
+    const response = await apiClient.get<{
+      chunks: Array<{
+        id: string
+        text: string
+        order: number
+        physical_page: number
+        printed_page: number | null
+        chapter: string | null
+        paragraph_number: number | null
+        element_type: string
+        positions: number[][]
+        metadata: Record<string, any>
+      }>
+      total_chunks: number
+      has_spatial_data: boolean
+    }>(`/sources/${id}/chunks`)
+    return response.data
+  },
+
+  getPdfUrl: (id: string) => {
+    // Return the URL for the PDF endpoint
+    const baseUrl = apiClient.defaults.baseURL || ''
+    return `${baseUrl}/sources/${id}/pdf`
+  },
 }

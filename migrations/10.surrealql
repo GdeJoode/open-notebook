@@ -1,0 +1,38 @@
+
+-- Migration 10: Add chunk table for document chunk visualization
+-- This migration creates a table to store document chunks with bounding box positions
+
+DEFINE TABLE chunk SCHEMAFULL;
+
+-- Reference to source document
+DEFINE FIELD source ON chunk TYPE record<source>;
+
+-- Chunk content and ordering
+DEFINE FIELD text ON chunk TYPE string;
+DEFINE FIELD order ON chunk TYPE int;
+
+-- Page information
+DEFINE FIELD physical_page ON chunk TYPE int;
+DEFINE FIELD printed_page ON chunk TYPE option<int>;
+
+-- Structural metadata
+DEFINE FIELD chapter ON chunk TYPE option<string>;
+DEFINE FIELD paragraph_number ON chunk TYPE option<int>;
+DEFINE FIELD element_type ON chunk TYPE string;
+
+-- Bounding box positions: [[page, x1, x2, y1, y2], ...]
+DEFINE FIELD positions ON chunk FLEXIBLE TYPE array;
+DEFINE FIELD positions.* ON chunk TYPE array<float>;
+
+-- Additional metadata
+DEFINE FIELD metadata ON chunk FLEXIBLE TYPE object;
+
+-- Standard fields
+DEFINE FIELD created ON chunk TYPE datetime DEFAULT time::now() VALUE time::now();
+DEFINE FIELD updated ON chunk TYPE datetime DEFAULT time::now() VALUE time::now();
+
+-- Create index on source field for efficient chunk lookups
+DEFINE INDEX idx_chunk_source ON chunk FIELDS source;
+
+-- Create index on order for efficient ordering
+DEFINE INDEX idx_chunk_order ON chunk FIELDS source, order;

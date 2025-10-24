@@ -306,3 +306,12 @@ export function useRemoveSourceFromNotebook() {
     },
   })
 }
+
+export function useSourceChunks(sourceId: string, enabled = true) {
+  return useQuery({
+    queryKey: ['sources', sourceId, 'chunks'],
+    queryFn: () => sourcesApi.getChunks(sourceId),
+    enabled: !!sourceId && enabled,
+    staleTime: 60 * 1000, // 1 minute - chunks don't change often
+  })
+}

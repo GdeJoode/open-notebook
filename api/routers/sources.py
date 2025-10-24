@@ -1038,3 +1038,107 @@ async def create_source_insight(source_id: str, request: CreateSourceInsightRequ
     except Exception as e:
         logger.error(f"Error creating insight for source {source_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error creating insight: {str(e)}")
+
+
+@router.get("/sources/{source_id}/chunks")
+async def get_source_chunks(source_id: str):
+    """
+    Get chunks with bounding box positions for a source.
+
+    Returns:
+        {
+            "chunks": [...],
+            "total_chunks": int,
+            "has_spatial_data": bool
+        }
+    """
+    try:
+        source = await Source.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        # Get all chunks for this source
+        chunks = await source.get_chunks()
+
+        # Convert chunks to dict format
+        chunks_data = []
+        for chunk in chunks:
+            chunks_data.append({
+                "id": chunk.id,
+                "text": chunk.text,
+                "order": chunk.order,
+                "physical_page": chunk.physical_page,
+                "printed_page": chunk.printed_page,
+                "chapter": chunk.chapter,
+                "paragraph_number": chunk.paragraph_number,
+                "element_type": chunk.element_type,
+                "positions": chunk.positions,
+                "metadata": chunk.metadata,
+            })
+
+        has_spatial_data = any(
+            chunk_data.get("positions") and len(chunk_data["positions"]) > 0
+            for chunk_data in chunks_data
+        )
+
+        return {
+            "chunks": chunks_data,
+            "total_chunks": len(chunks_data),
+            "has_spatial_data": has_spatial_data,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching chunks for source {source_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error fetching chunks: {str(e)}"
+        )
+
+
+@router.get("/sources/{source_id}/pdf")
+async def get_source_pdf(source_id: str):
+    """
+    Return the original PDF file for chunk visualization.
+
+    Only works if:
+    1. Source has a file_path
+    2. File still exists on disk
+    3. File is a PDF
+    """
+    try:
+        source = await Source.get(source_id)
+        if not source or not source.asset or not source.asset.file_path:
+            raise HTTPException(status_code=404, detail="PDF file not found")
+
+        file_path = source.asset.file_path
+
+        # Security check: ensure file is within uploads folder
+        safe_root = os.path.realpath(UPLOADS_FOLDER)
+        resolved_path = os.path.realpath(file_path)
+
+        if not resolved_path.startswith(safe_root):
+            logger.warning(
+                f"Blocked PDF access outside uploads directory for source {source_id}: {resolved_path}"
+            )
+            raise HTTPException(status_code=403, detail="Access to file denied")
+
+        if not os.path.exists(resolved_path):
+            raise HTTPException(status_code=404, detail="PDF file has been deleted")
+
+        if not resolved_path.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="Source file is not a PDF document")
+
+        return FileResponse(
+            path=resolved_path,
+            media_type="application/pdf",
+            filename=source.title or "document.pdf"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving PDF for source {source_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error serving PDF: {str(e)}"
+        )

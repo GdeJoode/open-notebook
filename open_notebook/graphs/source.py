@@ -10,9 +10,10 @@ from loguru import logger
 from typing_extensions import Annotated, TypedDict
 
 from open_notebook.domain.content_settings import ContentSettings
-from open_notebook.domain.notebook import Asset, Source
+from open_notebook.domain.notebook import Asset, Chunk, Source
 from open_notebook.domain.transformation import Transformation
 from open_notebook.graphs.transformation import graph as transform_graph
+from open_notebook.processors import extract_chunks_from_docling
 
 
 class SourceState(TypedDict):
@@ -23,6 +24,7 @@ class SourceState(TypedDict):
     source: Source
     transformation: Annotated[list, operator.add]
     embed: bool
+    chunks: Optional[List[Dict[str, Any]]]  # Extracted document chunks with positions
 
 
 class TransformationState(TypedDict):
@@ -49,10 +51,35 @@ async def content_process(state: SourceState) -> dict:
     content_state["output_format"] = "markdown"
 
     processed_state = await extract_content(content_state)
-    return {"content_state": processed_state}
+
+    # Extract chunks with bounding boxes if using docling and processing a file
+    chunks = None
+    extraction_engine = processed_state.metadata.get("extraction_engine", "")
+
+    # Check if docling was used and we have a file path
+    if "docling" in extraction_engine.lower() and processed_state.file_path:
+        try:
+            logger.info(f"Extracting chunks with spatial data from {processed_state.file_path}")
+            # Note: We already have the content from extract_content, so we just need chunks
+            # Re-process with docling to get chunks (slightly inefficient but clean separation)
+            _, chunks, _ = extract_chunks_from_docling(
+                processed_state.file_path,
+                output_format="markdown"
+            )
+            logger.info(f"Extracted {len(chunks)} chunks with bounding boxes")
+        except Exception as e:
+            logger.warning(f"Failed to extract chunks from document: {e}")
+            chunks = None
+
+    return {
+        "content_state": processed_state,
+        "chunks": chunks
+    }
 
 
 async def save_source(state: SourceState) -> dict:
+    from open_notebook.database.repository import repo_query, ensure_record_id
+
     content_state = state["content_state"]
 
     # Get existing source using the provided source_id
@@ -63,12 +90,51 @@ async def save_source(state: SourceState) -> dict:
     # Update the source with processed content
     source.asset = Asset(url=content_state.url, file_path=content_state.file_path)
     source.full_text = content_state.content
-    
+
     # Preserve existing title if none provided in processed content
     if content_state.title:
         source.title = content_state.title
-    
+
     await source.save()
+
+    # Save chunks if extracted
+    chunks = state.get("chunks")
+    if chunks:
+        try:
+            logger.info(f"Saving {len(chunks)} chunks for source {source.id}")
+
+            # Delete existing chunks for this source first (for idempotency)
+            delete_result = await repo_query(
+                "DELETE chunk WHERE source = $source_id",
+                {"source_id": ensure_record_id(source.id)}
+            )
+            deleted_count = len(delete_result) if delete_result else 0
+            if deleted_count > 0:
+                logger.info(f"Deleted {deleted_count} existing chunks for source {source.id}")
+
+            # Create new chunks
+            for chunk_data in chunks:
+                chunk = Chunk(
+                    source=source.id,
+                    text=chunk_data["text"],
+                    order=chunk_data["order"],
+                    physical_page=chunk_data["physical_page"],
+                    printed_page=chunk_data.get("printed_page"),
+                    chapter=chunk_data.get("chapter"),
+                    paragraph_number=chunk_data.get("paragraph_number"),
+                    element_type=chunk_data["element_type"],
+                    positions=chunk_data.get("positions", []),
+                    metadata=chunk_data.get("metadata", {})
+                )
+                await chunk.save()
+
+            logger.info(f"Successfully saved {len(chunks)} chunks for source {source.id}")
+
+        except Exception as e:
+            logger.error(f"Error saving chunks for source {source.id}: {str(e)}")
+            logger.exception(e)
+            # Don't fail the whole process if chunk saving fails
+            logger.warning("Continuing despite chunk save failure")
 
     # NOTE: Notebook associations are created by the API immediately for UI responsiveness
     # No need to create them here to avoid duplicate edges

@@ -52,6 +52,8 @@ import { formatDistanceToNow } from 'date-fns'
 import { toast } from 'sonner'
 import { SourceInsightDialog } from '@/components/source/SourceInsightDialog'
 import { NotebookAssociations } from '@/components/source/NotebookAssociations'
+import { PdfChunkViewer } from '@/components/source/PdfChunkViewer'
+import { useSourceChunks } from '@/lib/hooks/use-sources'
 
 interface SourceDetailContentProps {
   sourceId: string
@@ -79,6 +81,9 @@ export function SourceDetailContent({
   const [isDownloadingFile, setIsDownloadingFile] = useState(false)
   const [fileAvailable, setFileAvailable] = useState<boolean | null>(null)
   const [selectedInsight, setSelectedInsight] = useState<SourceInsightResponse | null>(null)
+
+  // Fetch chunks data
+  const { data: chunksData, isLoading: chunksLoading } = useSourceChunks(sourceId)
 
   const fetchSource = useCallback(async () => {
     try {
@@ -403,10 +408,13 @@ export function SourceDetailContent({
       {/* Tabs Content */}
       <div className="flex-1 overflow-y-auto px-2">
         <Tabs defaultValue="content" className="w-full">
-          <TabsList className="grid w-full grid-cols-3 sticky top-0 z-10">
+          <TabsList className="grid w-full grid-cols-4 sticky top-0 z-10">
             <TabsTrigger value="content">Content</TabsTrigger>
             <TabsTrigger value="insights">
               Insights {insights.length > 0 && `(${insights.length})`}
+            </TabsTrigger>
+            <TabsTrigger value="chunks">
+              Chunks {chunksData?.total_chunks ? `(${chunksData.total_chunks})` : ''}
             </TabsTrigger>
             <TabsTrigger value="details">Details</TabsTrigger>
           </TabsList>
@@ -584,6 +592,44 @@ export function SourceDetailContent({
                       </div>
                     ))}
                   </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="chunks" className="mt-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Database className="h-5 w-5" />
+                  Document Chunks
+                </CardTitle>
+                <CardDescription>
+                  View document structure with bounding box visualization
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {chunksLoading ? (
+                  <div className="flex items-center justify-center py-12">
+                    <LoadingSpinner />
+                  </div>
+                ) : chunksData && chunksData.chunks.length > 0 ? (
+                  <PdfChunkViewer
+                    pdfUrl={sourcesApi.getPdfUrl(sourceId)}
+                    chunks={chunksData.chunks}
+                    sourceId={sourceId}
+                  />
+                ) : (
+                  <Alert>
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>No Chunks Available</AlertTitle>
+                    <AlertDescription>
+                      This source doesn't have chunk data. Chunks are automatically extracted when documents are processed with Docling.
+                      {source?.asset?.file_path?.endsWith('.pdf') && (
+                        <span> Try reprocessing this PDF with Docling to enable chunk visualization.</span>
+                      )}
+                    </AlertDescription>
+                  </Alert>
                 )}
               </CardContent>
             </Card>

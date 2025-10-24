@@ -140,6 +140,60 @@ class SourceInsight(ObjectModel):
         return note
 
 
+class Chunk(ObjectModel):
+    """
+    Represents a document chunk with spatial information (bounding boxes).
+    Each chunk corresponds to a document element (paragraph, table, title, etc.)
+    extracted during document processing.
+    """
+    table_name: ClassVar[str] = "chunk"
+    source: Union[str, RecordID] = Field(description="Reference to the source document")
+    text: str = Field(description="Text content of the chunk")
+    order: int = Field(description="Order of chunk in the document (0-indexed)")
+
+    # Page information
+    physical_page: int = Field(description="Physical page number in PDF (0-indexed)")
+    printed_page: Optional[int] = Field(None, description="Printed page number if available")
+
+    # Structural metadata
+    chapter: Optional[str] = Field(None, description="Chapter/section heading")
+    paragraph_number: Optional[int] = Field(None, description="Paragraph index within section")
+    element_type: str = Field(description="Type of element (paragraph, title, table, list, etc.)")
+
+    # Bounding box positions: [[page, x1, x2, y1, y2], ...]
+    positions: List[List[float]] = Field(
+        default_factory=list,
+        description="Bounding box positions [[page, x1, x2, y1, y2], ...]"
+    )
+
+    # Additional metadata
+    metadata: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Additional chunk metadata"
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def parse_source(cls, value):
+        """Parse source field to ensure RecordID format"""
+        if isinstance(value, str) and value:
+            return ensure_record_id(value)
+        return value
+
+    def _prepare_save_data(self) -> dict:
+        """Override to ensure source field is always RecordID format for database"""
+        data = super()._prepare_save_data()
+
+        # Ensure source field is RecordID format if not None
+        if data.get("source") is not None:
+            data["source"] = ensure_record_id(data["source"])
+
+        return data
+
+
 class Source(ObjectModel):
     table_name: ClassVar[str] = "source"
     asset: Optional[Asset] = None
@@ -256,6 +310,21 @@ class Source(ObjectModel):
             logger.error(f"Error fetching insights for source {self.id}: {str(e)}")
             logger.exception(e)
             raise DatabaseOperationError("Failed to fetch insights for source")
+
+    async def get_chunks(self) -> List["Chunk"]:
+        """Get all chunks for this source, ordered by their position in the document."""
+        try:
+            result = await repo_query(
+                """
+                SELECT * FROM chunk WHERE source=$id ORDER BY order ASC
+                """,
+                {"id": ensure_record_id(self.id)},
+            )
+            return [Chunk(**chunk) for chunk in result]
+        except Exception as e:
+            logger.error(f"Error fetching chunks for source {self.id}: {str(e)}")
+            logger.exception(e)
+            raise DatabaseOperationError("Failed to fetch chunks for source")
 
     async def add_to_notebook(self, notebook_id: str) -> Any:
         if not notebook_id:

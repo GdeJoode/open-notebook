@@ -1,0 +1,6 @@
+
+-- Migration 10 down: Remove chunk table
+
+REMOVE INDEX IF EXISTS idx_chunk_source ON chunk;
+REMOVE INDEX IF EXISTS idx_chunk_order ON chunk;
+REMOVE TABLE IF EXISTS chunk;
