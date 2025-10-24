@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react'
 import { ChevronDownIcon } from 'lucide-react'
 
 const settingsSchema = z.object({
-  default_content_processing_engine_doc: z.enum(['auto', 'docling', 'simple']).optional(),
+  default_content_processing_engine_doc: z.enum(['auto', 'docling', 'docling_gpu', 'simple']).optional(),
   default_content_processing_engine_url: z.enum(['auto', 'firecrawl', 'jina', 'simple']).optional(),
   default_embedding_option: z.enum(['ask', 'always', 'never']).optional(),
   auto_delete_files: z.enum(['yes', 'no']).optional(),
@@ -53,7 +53,7 @@ export function SettingsForm() {
   useEffect(() => {
     if (settings && settings.default_content_processing_engine_doc && !hasResetForm) {
       const formData = {
-        default_content_processing_engine_doc: settings.default_content_processing_engine_doc as 'auto' | 'docling' | 'simple',
+        default_content_processing_engine_doc: settings.default_content_processing_engine_doc as 'auto' | 'docling' | 'docling_gpu' | 'simple',
         default_content_processing_engine_url: settings.default_content_processing_engine_url as 'auto' | 'firecrawl' | 'jina' | 'simple',
         default_embedding_option: settings.default_embedding_option as 'ask' | 'always' | 'never',
         auto_delete_files: settings.auto_delete_files as 'yes' | 'no',
@@ -113,7 +113,8 @@ export function SettingsForm() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="auto">Auto (Recommended)</SelectItem>
-                      <SelectItem value="docling">Docling</SelectItem>
+                      <SelectItem value="docling">Docling (CPU)</SelectItem>
+                      <SelectItem value="docling_gpu">Docling GPU (Fastest)</SelectItem>
                       <SelectItem value="simple">Simple</SelectItem>
                     </SelectContent>
                   </Select>
@@ -125,9 +126,10 @@ export function SettingsForm() {
                 Help me choose
               </CollapsibleTrigger>
               <CollapsibleContent className="mt-2 text-sm text-muted-foreground space-y-2">
-                <p>• <strong>Docling</strong> is a little slower but more accurate, specially if the documents contain tables and images.</p>
-                <p>• <strong>Simple</strong> will extract any content from the document without formatting it. It&apos;s ok for simple documents, but will lose quality in complex ones.</p>
-                <p>• <strong>Auto (recommended)</strong> will try to process through docling and default to simple.</p>
+                <p>• <strong>Docling (CPU)</strong> is slower but more accurate, especially for documents with tables and images.</p>
+                <p>• <strong>Docling GPU (Fastest)</strong> uses GPU acceleration for 8-14x faster processing. Requires NVIDIA GPU with CUDA support.</p>
+                <p>• <strong>Simple</strong> will extract content without formatting. OK for simple documents, but loses quality in complex ones.</p>
+                <p>• <strong>Auto (recommended)</strong> will try docling and fallback to simple if needed.</p>
               </CollapsibleContent>
             </Collapsible>
           </div>
