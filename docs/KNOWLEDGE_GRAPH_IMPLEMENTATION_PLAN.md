@@ -1890,25 +1890,25 @@ Relevant fact indices:"""
 - [x] Add influence score computation (`kg_methods.py:InfluenceCalculator`)
 - [x] Create analysis result models (`kg_methods.py:ExpertResult`, `ClaimTraceResult`, `InfluenceResult`)
 
-### Phase 4: Retrieval Pipeline (Week 7-8)
+### Phase 4: Retrieval Pipeline (Week 7-8) ✅ COMPLETED
 
-#### 4.1 Fact Scoring
-- [ ] Implement fact embedding search
-- [ ] Add claim-based fact scoring
-- [ ] Add citation-based fact scoring
-- [ ] Test fact relevance ranking
+#### 4.1 Fact Scoring ✅
+- [x] Implement fact embedding search (`kg_retrieval.py:FactScorer._score_by_embedding`)
+- [x] Add claim-based fact scoring (`kg_retrieval.py:FactScorer._score_by_claim_similarity`)
+- [x] Add citation-based fact scoring (`kg_retrieval.py:FactScorer._score_by_citations`)
+- [x] Test fact relevance ranking (27 tests in `tests/test_kg_retrieval.py`)
 
-#### 4.2 Reranking (Optional)
-- [ ] Implement LLM-based fact reranker
-- [ ] Add reranking configuration options
-- [ ] Benchmark reranking impact
+#### 4.2 Reranking (Optional) ✅
+- [x] Implement LLM-based fact reranker (`kg_retrieval.py:LLMReranker` - placeholder)
+- [x] Add reranking configuration options (`RetrievalConfig.enable_reranking`, `rerank_top_k`)
+- [ ] Benchmark reranking impact *(deferred: requires LLM integration)*
 
-#### 4.3 HippoRAG Retrieval
-- [ ] Implement entity extraction from facts
-- [ ] Implement PPR-based passage ranking
-- [ ] Implement dense fallback
-- [ ] Create end-to-end retrieval tests
-- [ ] Benchmark retrieval quality
+#### 4.3 HippoRAG Retrieval ✅
+- [x] Implement entity extraction from facts (`kg_retrieval.py:EntityExtractor`)
+- [x] Implement PPR-based passage ranking (`kg_retrieval.py:PPRRetriever`)
+- [x] Implement dense fallback (`kg_retrieval.py:DenseRetriever`)
+- [x] Create end-to-end retrieval tests (27 tests covering all components)
+- [ ] Benchmark retrieval quality *(deferred: requires test dataset)*
 
 ### Phase 5: Integration & API (Week 9-10)
 
