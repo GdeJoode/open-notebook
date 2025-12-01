@@ -1843,25 +1843,30 @@ Relevant fact indices:"""
 
 ### Phase 2: Entity Extraction (Week 3-4)
 
+> **Local LLM**: Uses `qwen2.5:14b` via Ollama for extraction, `mxbai-embed-large` for embeddings.
+> See **Part 6.3** for setup instructions.
+
 #### 2.1 OpenIE Pipeline
 - [ ] Create `open_notebook/processors/openie.py`
-- [ ] Implement NER extraction with LLM (few-shot prompts)
+- [ ] Configure Ollama LLM (`qwen2.5:14b`) for extraction
+- [ ] Implement NER extraction with few-shot prompts
 - [ ] Implement triple extraction (subject-predicate-object)
 - [ ] Add entity hash ID generation
 - [ ] Create extraction tests with sample documents
 
 #### 2.2 Entity Linking
-- [ ] Implement KNN-based entity deduplication
+- [ ] Implement KNN-based entity deduplication (using local embeddings)
 - [ ] Create `same_as` relationship creation logic
 - [ ] Add external KB linking stubs (Wikidata, ORCID)
 - [ ] Test deduplication with similar entities
 
 #### 2.3 Embedding Generation
+- [ ] Configure Ollama embeddings (`mxbai-embed-large`, 1024 dims)
 - [ ] Add three-tier embedding generation to ingestion
 - [ ] Implement passage embeddings (sources)
 - [ ] Implement entity embeddings
 - [ ] Implement fact embeddings (on edges)
-- [ ] Verify vector index functionality
+- [ ] Verify vector index functionality with local embeddings
 
 ### Phase 3: Graph Analysis (Week 5-6)
 
@@ -2057,7 +2062,14 @@ ENABLE_FACT_RERANKING=false
 ENTITY_SIMILARITY_THRESHOLD=0.8
 ENTITY_KNN_K=100
 
-# Embeddings
+# Local LLM Configuration (Ollama)
+# OpenIE Extraction - dedicated model for entity/triple extraction
+OPENIE_MODEL=qwen2.5:14b          # ~9GB VRAM, excellent structured extraction
+OPENIE_OLLAMA_BASE_URL=http://localhost:11434
+
+# Embeddings - dedicated lightweight model
+EMBEDDING_MODEL=mxbai-embed-large  # ~0.7GB VRAM, 1024 dimensions
+EMBEDDING_OLLAMA_BASE_URL=http://localhost:11434
 EMBEDDING_DIMENSION=1024
 ```
 
@@ -2090,7 +2102,58 @@ class EntityConfig(BaseSettings):
 
     class Config:
         env_prefix = "ENTITY_"
+
+class OpenIEConfig(BaseSettings):
+    """Configuration for local LLM-based OpenIE extraction."""
+    model: str = "qwen2.5:14b"
+    ollama_base_url: str = "http://localhost:11434"
+    temperature: float = 0.1  # Low for consistent extraction
+    max_tokens: int = 4096
+
+    class Config:
+        env_prefix = "OPENIE_"
+
+class EmbeddingConfig(BaseSettings):
+    """Configuration for local embedding model."""
+    model: str = "mxbai-embed-large"
+    ollama_base_url: str = "http://localhost:11434"
+    dimension: int = 1024
+
+    class Config:
+        env_prefix = "EMBEDDING_"
 ```
+
+### 6.3 Local LLM Setup (Ollama)
+
+**Required Models** (Total ~10GB VRAM):
+
+| Model | Purpose | VRAM | Install Command |
+|-------|---------|------|-----------------|
+| `qwen2.5:14b` | OpenIE extraction (NER, triples, claims) | ~9GB | `ollama pull qwen2.5:14b` |
+| `mxbai-embed-large` | Embeddings (1024 dimensions) | ~0.7GB | `ollama pull mxbai-embed-large` |
+
+**Usage in Code**:
+
+```python
+from langchain_ollama import ChatOllama, OllamaEmbeddings
+
+# OpenIE extraction model
+extraction_llm = ChatOllama(
+    model="qwen2.5:14b",
+    base_url="http://localhost:11434",
+    temperature=0.1,
+)
+
+# Embedding model
+embeddings = OllamaEmbeddings(
+    model="mxbai-embed-large",
+    base_url="http://localhost:11434",
+)
+```
+
+**Why These Models**:
+- **qwen2.5:14b**: Excellent at structured extraction, follows JSON schemas well, good multilingual support
+- **mxbai-embed-large**: High-quality embeddings (1024 dims), optimized for retrieval, small footprint
 
 ---
 
