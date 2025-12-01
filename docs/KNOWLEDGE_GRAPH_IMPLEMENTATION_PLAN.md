@@ -1847,26 +1847,26 @@ Relevant fact indices:"""
 > See **Part 6.3** for setup instructions.
 
 #### 2.1 OpenIE Pipeline
-- [ ] Create `open_notebook/processors/openie.py`
-- [ ] Configure Ollama LLM (`qwen2.5:14b`) for extraction
-- [ ] Implement NER extraction with few-shot prompts
-- [ ] Implement triple extraction (subject-predicate-object)
-- [ ] Add entity hash ID generation
-- [ ] Create extraction tests with sample documents
+- [x] Create `open_notebook/processors/openie.py`
+- [x] Configure Ollama LLM (`qwen2.5:14b`) for extraction
+- [x] Implement NER extraction with few-shot prompts
+- [x] Implement triple extraction (subject-predicate-object)
+- [x] Add entity hash ID generation
+- [x] Create extraction tests with sample documents
 
 #### 2.2 Entity Linking
-- [ ] Implement KNN-based entity deduplication (using local embeddings)
-- [ ] Create `same_as` relationship creation logic
-- [ ] Add external KB linking stubs (Wikidata, ORCID)
-- [ ] Test deduplication with similar entities
+- [x] Implement KNN-based entity deduplication (using local embeddings)
+- [x] Create `same_as` relationship creation logic
+- [ ] Add external KB linking stubs (Wikidata, ORCID) *(deferred to Phase 5)*
+- [ ] Test deduplication with similar entities *(requires Ollama integration testing)*
 
 #### 2.3 Embedding Generation
-- [ ] Configure Ollama embeddings (`mxbai-embed-large`, 1024 dims)
-- [ ] Add three-tier embedding generation to ingestion
-- [ ] Implement passage embeddings (sources)
-- [ ] Implement entity embeddings
-- [ ] Implement fact embeddings (on edges)
-- [ ] Verify vector index functionality with local embeddings
+- [x] Configure Ollama embeddings (`mxbai-embed-large`, 1024 dims)
+- [x] Add three-tier embedding generation to ingestion
+- [x] Implement passage embeddings (sources)
+- [x] Implement entity embeddings
+- [x] Implement fact embeddings (on edges)
+- [ ] Verify vector index functionality with local embeddings *(requires Ollama integration testing)*
 
 ### Phase 3: Graph Analysis (Week 5-6)
 
