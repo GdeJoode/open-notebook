@@ -1,0 +1,411 @@
+-- Migration 11: Knowledge Graph Schema
+-- Implements Option C (Full Ontology-Driven KG) with HippoRAG enhancements
+-- See docs/KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md for full documentation
+
+-- ============================================================================
+-- EXTEND SOURCE TABLE
+-- ============================================================================
+
+-- Add source_type classification
+DEFINE FIELD IF NOT EXISTS source_type ON source TYPE option<string>
+    ASSERT $value == NONE OR $value IN [
+        "academic_paper", "policy_document", "policy_advice",
+        "social_media", "news_article", "legal_document",
+        "report", "presentation", "other"
+    ];
+
+-- Type-specific metadata (flexible object for different source types)
+DEFINE FIELD IF NOT EXISTS type_metadata ON source FLEXIBLE TYPE option<object>;
+
+-- External identifiers (doi, arxiv, wikidata, url, etc.)
+DEFINE FIELD IF NOT EXISTS external_ids ON source FLEXIBLE TYPE option<object>;
+
+-- Source-level embedding for semantic search
+DEFINE FIELD IF NOT EXISTS embedding ON source TYPE option<array<float>>;
+
+-- Cached graph analysis scores
+DEFINE FIELD IF NOT EXISTS cached_scores ON source FLEXIBLE TYPE option<object>;
+
+-- Index for source type filtering
+DEFINE INDEX IF NOT EXISTS idx_source_type ON source FIELDS source_type;
+
+
+-- ============================================================================
+-- ENTITY TABLE (HippoRAG: entity nodes with embeddings)
+-- ============================================================================
+
+DEFINE TABLE IF NOT EXISTS entity SCHEMAFULL;
+
+DEFINE FIELD name ON entity TYPE string;
+DEFINE FIELD entity_type ON entity TYPE string
+    ASSERT $value IN [
+        "person", "organization", "topic", "location",
+        "concept", "event", "product", "other"
+    ];
+DEFINE FIELD aliases ON entity TYPE array<string> DEFAULT [];
+DEFINE FIELD description ON entity TYPE option<string>;
+
+-- External KB links (wikidata, orcid, ror, linkedin, etc.)
+DEFINE FIELD external_ids ON entity FLEXIBLE TYPE object DEFAULT {};
+
+-- Entity embedding for KNN deduplication and semantic search
+DEFINE FIELD embedding ON entity TYPE option<array<float>>;
+
+-- Hash ID for deduplication (HippoRAG style: MD5 of normalized name)
+DEFINE FIELD hash_id ON entity TYPE string;
+
+DEFINE FIELD created ON entity TYPE datetime DEFAULT time::now();
+DEFINE FIELD updated ON entity TYPE datetime DEFAULT time::now();
+
+-- Indexes
+DEFINE INDEX IF NOT EXISTS idx_entity_type ON entity FIELDS entity_type;
+DEFINE INDEX IF NOT EXISTS idx_entity_hash ON entity FIELDS hash_id UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_entity_name ON entity FIELDS name;
+
+
+-- ============================================================================
+-- CLAIM TABLE (for fact tracking and verification)
+-- ============================================================================
+
+DEFINE TABLE IF NOT EXISTS claim SCHEMAFULL;
+
+DEFINE FIELD statement ON claim TYPE string;
+DEFINE FIELD claim_type ON claim TYPE string
+    ASSERT $value IN ["factual", "causal", "normative", "predictive"];
+DEFINE FIELD verification_status ON claim TYPE string DEFAULT "unverified"
+    ASSERT $value IN ["unverified", "supported", "contested", "refuted"];
+DEFINE FIELD confidence ON claim TYPE option<float>;
+DEFINE FIELD first_appearance ON claim TYPE option<datetime>;
+
+DEFINE FIELD embedding ON claim TYPE option<array<float>>;
+
+DEFINE FIELD created ON claim TYPE datetime DEFAULT time::now();
+DEFINE FIELD updated ON claim TYPE datetime DEFAULT time::now();
+
+-- Indexes
+DEFINE INDEX IF NOT EXISTS idx_claim_status ON claim FIELDS verification_status;
+DEFINE INDEX IF NOT EXISTS idx_claim_type ON claim FIELDS claim_type;
+
+
+-- ============================================================================
+-- EVIDENCE TABLE
+-- ============================================================================
+
+DEFINE TABLE IF NOT EXISTS evidence SCHEMAFULL;
+
+DEFINE FIELD description ON evidence TYPE string;
+DEFINE FIELD evidence_type ON evidence TYPE string
+    ASSERT $value IN [
+        "statistical", "qualitative", "experimental",
+        "observational", "expert_opinion", "case_study"
+    ];
+DEFINE FIELD strength ON evidence TYPE string DEFAULT "moderate"
+    ASSERT $value IN ["weak", "moderate", "strong"];
+DEFINE FIELD methodology ON evidence TYPE option<string>;
+DEFINE FIELD sample_size ON evidence TYPE option<int>;
+
+DEFINE FIELD embedding ON evidence TYPE option<array<float>>;
+DEFINE FIELD source_id ON evidence TYPE option<record<source>>;
+
+DEFINE FIELD created ON evidence TYPE datetime DEFAULT time::now();
+DEFINE FIELD updated ON evidence TYPE datetime DEFAULT time::now();
+
+
+-- ============================================================================
+-- PERSON TABLE (for author/expert tracking)
+-- ============================================================================
+
+DEFINE TABLE IF NOT EXISTS person SCHEMAFULL;
+
+DEFINE FIELD name ON person TYPE string;
+DEFINE FIELD aliases ON person TYPE array<string> DEFAULT [];
+DEFINE FIELD orcid ON person TYPE option<string>;
+DEFINE FIELD email ON person TYPE option<string>;
+DEFINE FIELD bio ON person TYPE option<string>;
+DEFINE FIELD expertise_areas ON person TYPE array<string> DEFAULT [];
+DEFINE FIELD h_index ON person TYPE option<int>;
+DEFINE FIELD current_position ON person TYPE option<string>;
+
+-- External identifiers (linkedin, twitter, google_scholar, etc.)
+DEFINE FIELD external_ids ON person FLEXIBLE TYPE object DEFAULT {};
+
+DEFINE FIELD embedding ON person TYPE option<array<float>>;
+
+DEFINE FIELD created ON person TYPE datetime DEFAULT time::now();
+DEFINE FIELD updated ON person TYPE datetime DEFAULT time::now();
+
+-- Indexes
+DEFINE INDEX IF NOT EXISTS idx_person_name ON person FIELDS name;
+DEFINE INDEX IF NOT EXISTS idx_person_orcid ON person FIELDS orcid;
+
+
+-- ============================================================================
+-- ORGANIZATION TABLE
+-- ============================================================================
+
+DEFINE TABLE IF NOT EXISTS organization SCHEMAFULL;
+
+DEFINE FIELD name ON organization TYPE string;
+DEFINE FIELD aliases ON organization TYPE array<string> DEFAULT [];
+DEFINE FIELD org_type ON organization TYPE string
+    ASSERT $value IN [
+        "university", "research_institute", "think_tank",
+        "advisory_body", "government", "ngo", "company",
+        "international_org", "other"
+    ];
+DEFINE FIELD country ON organization TYPE option<string>;
+DEFINE FIELD city ON organization TYPE option<string>;
+DEFINE FIELD website ON organization TYPE option<string>;
+DEFINE FIELD description ON organization TYPE option<string>;
+DEFINE FIELD ror_id ON organization TYPE option<string>;
+
+DEFINE FIELD embedding ON organization TYPE option<array<float>>;
+
+DEFINE FIELD created ON organization TYPE datetime DEFAULT time::now();
+DEFINE FIELD updated ON organization TYPE datetime DEFAULT time::now();
+
+-- Indexes
+DEFINE INDEX IF NOT EXISTS idx_org_name ON organization FIELDS name;
+DEFINE INDEX IF NOT EXISTS idx_org_type ON organization FIELDS org_type;
+DEFINE INDEX IF NOT EXISTS idx_org_ror ON organization FIELDS ror_id;
+
+
+-- ============================================================================
+-- TOPIC TABLE (hierarchical topic/concept taxonomy)
+-- ============================================================================
+
+DEFINE TABLE IF NOT EXISTS topic SCHEMAFULL;
+
+DEFINE FIELD name ON topic TYPE string;
+DEFINE FIELD description ON topic TYPE option<string>;
+DEFINE FIELD level ON topic TYPE string DEFAULT "specific"
+    ASSERT $value IN ["broad", "specific", "narrow"];
+DEFINE FIELD domain ON topic TYPE option<string>;
+DEFINE FIELD wikidata_id ON topic TYPE option<string>;
+
+DEFINE FIELD embedding ON topic TYPE option<array<float>>;
+
+DEFINE FIELD created ON topic TYPE datetime DEFAULT time::now();
+DEFINE FIELD updated ON topic TYPE datetime DEFAULT time::now();
+
+-- Indexes
+DEFINE INDEX IF NOT EXISTS idx_topic_name ON topic FIELDS name;
+DEFINE INDEX IF NOT EXISTS idx_topic_domain ON topic FIELDS domain;
+
+
+-- ============================================================================
+-- RELATIONSHIP TABLES
+-- ============================================================================
+
+-- CITES: source -> source (with fact embedding for HippoRAG)
+DEFINE TABLE IF NOT EXISTS cites SCHEMAFULL TYPE RELATION FROM source TO source;
+DEFINE FIELD citation_context ON cites TYPE option<string>;
+DEFINE FIELD section ON cites TYPE option<string>;
+DEFINE FIELD sentiment ON cites TYPE option<string>
+    ASSERT $value == NONE OR $value IN ["supportive", "critical", "neutral"];
+DEFINE FIELD fact_text ON cites TYPE option<string>;
+DEFINE FIELD fact_embedding ON cites TYPE option<array<float>>;
+DEFINE FIELD created ON cites TYPE datetime DEFAULT time::now();
+
+
+-- MENTIONS: source -> entity (with context and confidence)
+DEFINE TABLE IF NOT EXISTS mentions SCHEMAFULL TYPE RELATION FROM source TO entity;
+DEFINE FIELD context ON mentions TYPE option<string>;
+DEFINE FIELD confidence ON mentions TYPE float DEFAULT 1.0;
+DEFINE FIELD position ON mentions FLEXIBLE TYPE option<object>;
+DEFINE FIELD extraction_method ON mentions TYPE string DEFAULT "ner";
+DEFINE FIELD created ON mentions TYPE datetime DEFAULT time::now();
+
+
+-- SUPPORTS: source -> claim
+DEFINE TABLE IF NOT EXISTS supports SCHEMAFULL TYPE RELATION FROM source TO claim;
+DEFINE FIELD evidence_type ON supports TYPE option<string>;
+DEFINE FIELD strength ON supports TYPE string DEFAULT "moderate"
+    ASSERT $value IN ["weak", "moderate", "strong"];
+DEFINE FIELD quote ON supports TYPE option<string>;
+DEFINE FIELD created ON supports TYPE datetime DEFAULT time::now();
+
+
+-- CONTRADICTS: source -> claim
+DEFINE TABLE IF NOT EXISTS contradicts SCHEMAFULL TYPE RELATION FROM source TO claim;
+DEFINE FIELD evidence_type ON contradicts TYPE option<string>;
+DEFINE FIELD strength ON contradicts TYPE string DEFAULT "moderate"
+    ASSERT $value IN ["weak", "moderate", "strong"];
+DEFINE FIELD quote ON contradicts TYPE option<string>;
+DEFINE FIELD created ON contradicts TYPE datetime DEFAULT time::now();
+
+
+-- SAME_AS: entity -> entity (synonymy/deduplication via embedding similarity)
+DEFINE TABLE IF NOT EXISTS same_as SCHEMAFULL TYPE RELATION FROM entity TO entity;
+DEFINE FIELD similarity ON same_as TYPE float;
+DEFINE FIELD method ON same_as TYPE string DEFAULT "embedding_knn";
+DEFINE FIELD verified ON same_as TYPE bool DEFAULT false;
+DEFINE FIELD created ON same_as TYPE datetime DEFAULT time::now();
+
+
+-- AUTHORED_BY: source -> person
+DEFINE TABLE IF NOT EXISTS authored_by SCHEMAFULL TYPE RELATION FROM source TO person;
+DEFINE FIELD role ON authored_by TYPE string DEFAULT "author"
+    ASSERT $value IN ["author", "lead_author", "corresponding", "contributor"];
+DEFINE FIELD position ON authored_by TYPE option<int>;
+DEFINE FIELD contribution ON authored_by TYPE option<string>;
+DEFINE FIELD created ON authored_by TYPE datetime DEFAULT time::now();
+
+
+-- AFFILIATED_WITH: person -> organization
+DEFINE TABLE IF NOT EXISTS affiliated_with SCHEMAFULL TYPE RELATION FROM person TO organization;
+DEFINE FIELD role ON affiliated_with TYPE option<string>;
+DEFINE FIELD department ON affiliated_with TYPE option<string>;
+DEFINE FIELD start_date ON affiliated_with TYPE option<datetime>;
+DEFINE FIELD end_date ON affiliated_with TYPE option<datetime>;
+DEFINE FIELD is_current ON affiliated_with TYPE bool DEFAULT true;
+DEFINE FIELD created ON affiliated_with TYPE datetime DEFAULT time::now();
+
+
+-- DISCUSSES: source -> topic
+DEFINE TABLE IF NOT EXISTS discusses SCHEMAFULL TYPE RELATION FROM source TO topic;
+DEFINE FIELD relevance ON discusses TYPE float DEFAULT 1.0;
+DEFINE FIELD is_primary ON discusses TYPE bool DEFAULT false;
+DEFINE FIELD created ON discusses TYPE datetime DEFAULT time::now();
+
+
+-- BROADER_THAN: topic -> topic (topic hierarchy)
+DEFINE TABLE IF NOT EXISTS broader_than SCHEMAFULL TYPE RELATION FROM topic TO topic;
+DEFINE FIELD created ON broader_than TYPE datetime DEFAULT time::now();
+
+
+-- RELATED_TO: topic -> topic
+DEFINE TABLE IF NOT EXISTS related_to_topic SCHEMAFULL TYPE RELATION FROM topic TO topic;
+DEFINE FIELD strength ON related_to_topic TYPE float DEFAULT 1.0;
+DEFINE FIELD created ON related_to_topic TYPE datetime DEFAULT time::now();
+
+
+-- IMPLEMENTS: source -> source (e.g., NL law implements EU directive)
+DEFINE TABLE IF NOT EXISTS implements SCHEMAFULL TYPE RELATION FROM source TO source;
+DEFINE FIELD implementation_date ON implements TYPE option<datetime>;
+DEFINE FIELD compliance_status ON implements TYPE option<string>;
+DEFINE FIELD created ON implements TYPE datetime DEFAULT time::now();
+
+
+-- SUPERSEDES: source -> source
+DEFINE TABLE IF NOT EXISTS supersedes SCHEMAFULL TYPE RELATION FROM source TO source;
+DEFINE FIELD effective_date ON supersedes TYPE option<datetime>;
+DEFINE FIELD created ON supersedes TYPE datetime DEFAULT time::now();
+
+
+-- LEADS_TO: source -> source (e.g., policy advice leads to policy document)
+DEFINE TABLE IF NOT EXISTS leads_to SCHEMAFULL TYPE RELATION FROM source TO source;
+DEFINE FIELD influence_type ON leads_to TYPE option<string>;
+DEFINE FIELD created ON leads_to TYPE datetime DEFAULT time::now();
+
+
+-- ============================================================================
+-- VECTOR INDEXES (for semantic search)
+-- Note: Dimension should match your embedding model (1024 for most models)
+-- ============================================================================
+
+DEFINE INDEX IF NOT EXISTS idx_source_embedding ON source
+    FIELDS embedding MTREE DIMENSION 1024 DIST COSINE;
+
+DEFINE INDEX IF NOT EXISTS idx_entity_embedding ON entity
+    FIELDS embedding MTREE DIMENSION 1024 DIST COSINE;
+
+DEFINE INDEX IF NOT EXISTS idx_claim_embedding ON claim
+    FIELDS embedding MTREE DIMENSION 1024 DIST COSINE;
+
+DEFINE INDEX IF NOT EXISTS idx_person_embedding ON person
+    FIELDS embedding MTREE DIMENSION 1024 DIST COSINE;
+
+DEFINE INDEX IF NOT EXISTS idx_topic_embedding ON topic
+    FIELDS embedding MTREE DIMENSION 1024 DIST COSINE;
+
+DEFINE INDEX IF NOT EXISTS idx_cites_fact_embedding ON cites
+    FIELDS fact_embedding MTREE DIMENSION 1024 DIST COSINE;
+
+
+-- ============================================================================
+-- FULL-TEXT SEARCH INDEXES
+-- ============================================================================
+
+-- Dutch analyzer for Dutch content
+DEFINE ANALYZER IF NOT EXISTS dutch_analyzer
+    TOKENIZERS blank, class
+    FILTERS lowercase, snowball(nld);
+
+-- Use existing english analyzer (my_analyzer) for English content
+-- Entity and claim full-text search
+DEFINE INDEX IF NOT EXISTS idx_entity_fulltext ON entity
+    FIELDS name, description SEARCH ANALYZER my_analyzer BM25 HIGHLIGHTS;
+
+DEFINE INDEX IF NOT EXISTS idx_claim_fulltext ON claim
+    FIELDS statement SEARCH ANALYZER my_analyzer BM25 HIGHLIGHTS;
+
+DEFINE INDEX IF NOT EXISTS idx_person_fulltext ON person
+    FIELDS name, bio SEARCH ANALYZER my_analyzer BM25 HIGHLIGHTS;
+
+DEFINE INDEX IF NOT EXISTS idx_topic_fulltext ON topic
+    FIELDS name, description SEARCH ANALYZER my_analyzer BM25 HIGHLIGHTS;
+
+
+-- ============================================================================
+-- HELPER FUNCTIONS FOR KNOWLEDGE GRAPH QUERIES
+-- ============================================================================
+
+-- Find entities by semantic similarity
+DEFINE FUNCTION IF NOT EXISTS fn::find_similar_entities($query_embedding: array<float>, $threshold: float, $limit: int) {
+    RETURN SELECT
+        id,
+        name,
+        entity_type,
+        vector::similarity::cosine(embedding, $query_embedding) AS similarity
+    FROM entity
+    WHERE embedding != NONE
+        AND vector::similarity::cosine(embedding, $query_embedding) >= $threshold
+    ORDER BY similarity DESC
+    LIMIT $limit;
+};
+
+-- Find claims by semantic similarity
+DEFINE FUNCTION IF NOT EXISTS fn::find_similar_claims($query_embedding: array<float>, $threshold: float, $limit: int) {
+    RETURN SELECT
+        id,
+        statement,
+        claim_type,
+        verification_status,
+        vector::similarity::cosine(embedding, $query_embedding) AS similarity
+    FROM claim
+    WHERE embedding != NONE
+        AND vector::similarity::cosine(embedding, $query_embedding) >= $threshold
+    ORDER BY similarity DESC
+    LIMIT $limit;
+};
+
+-- Get citation network for a source (2 hops)
+DEFINE FUNCTION IF NOT EXISTS fn::get_citation_network($source_id: record<source>, $depth: int) {
+    LET $direct_cites = (SELECT out AS cited FROM cites WHERE in = $source_id);
+    LET $direct_cited_by = (SELECT in AS citing FROM cites WHERE out = $source_id);
+
+    RETURN {
+        source: $source_id,
+        cites: $direct_cites,
+        cited_by: $direct_cited_by,
+        cites_count: array::len($direct_cites),
+        cited_by_count: array::len($direct_cited_by)
+    };
+};
+
+-- Find experts on a topic
+DEFINE FUNCTION IF NOT EXISTS fn::find_topic_experts($topic_id: record<topic>, $min_publications: int, $limit: int) {
+    RETURN SELECT
+        person.id AS person_id,
+        person.name AS name,
+        count(->authored_by<-source) AS publications,
+        person.h_index AS h_index,
+        person.expertise_areas AS expertise
+    FROM person
+    WHERE ->authored_by<-source->discusses->topic = $topic_id
+    GROUP BY person.id
+    HAVING publications >= $min_publications
+    ORDER BY publications DESC
+    LIMIT $limit;
+};

@@ -42,6 +42,8 @@ dependencies = [
     "podcast-creator>=0.7.0",
     "docling[cuda12]>=2.58.0",
     "content-core",
+    "networkx>=3.0",
+    "python-louvain>=0.16",
 ]
 
 [tool.setuptools]

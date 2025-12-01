@@ -1,0 +1,57 @@
+-- Migration 11 Down: Remove Knowledge Graph Schema
+
+-- Remove helper functions
+REMOVE FUNCTION IF EXISTS fn::find_similar_entities;
+REMOVE FUNCTION IF EXISTS fn::find_similar_claims;
+REMOVE FUNCTION IF EXISTS fn::get_citation_network;
+REMOVE FUNCTION IF EXISTS fn::find_topic_experts;
+
+-- Remove vector indexes
+REMOVE INDEX IF EXISTS idx_source_embedding ON source;
+REMOVE INDEX IF EXISTS idx_entity_embedding ON entity;
+REMOVE INDEX IF EXISTS idx_claim_embedding ON claim;
+REMOVE INDEX IF EXISTS idx_person_embedding ON person;
+REMOVE INDEX IF EXISTS idx_topic_embedding ON topic;
+REMOVE INDEX IF EXISTS idx_cites_fact_embedding ON cites;
+
+-- Remove full-text indexes
+REMOVE INDEX IF EXISTS idx_entity_fulltext ON entity;
+REMOVE INDEX IF EXISTS idx_claim_fulltext ON claim;
+REMOVE INDEX IF EXISTS idx_person_fulltext ON person;
+REMOVE INDEX IF EXISTS idx_topic_fulltext ON topic;
+
+-- Remove relationship tables
+REMOVE TABLE IF EXISTS leads_to;
+REMOVE TABLE IF EXISTS supersedes;
+REMOVE TABLE IF EXISTS implements;
+REMOVE TABLE IF EXISTS related_to_topic;
+REMOVE TABLE IF EXISTS broader_than;
+REMOVE TABLE IF EXISTS discusses;
+REMOVE TABLE IF EXISTS affiliated_with;
+REMOVE TABLE IF EXISTS authored_by;
+REMOVE TABLE IF EXISTS same_as;
+REMOVE TABLE IF EXISTS contradicts;
+REMOVE TABLE IF EXISTS supports;
+REMOVE TABLE IF EXISTS mentions;
+REMOVE TABLE IF EXISTS cites;
+
+-- Remove entity tables
+REMOVE TABLE IF EXISTS topic;
+REMOVE TABLE IF EXISTS organization;
+REMOVE TABLE IF EXISTS person;
+REMOVE TABLE IF EXISTS evidence;
+REMOVE TABLE IF EXISTS claim;
+REMOVE TABLE IF EXISTS entity;
+
+-- Remove fields added to source table
+REMOVE FIELD IF EXISTS cached_scores ON source;
+REMOVE FIELD IF EXISTS embedding ON source;
+REMOVE FIELD IF EXISTS external_ids ON source;
+REMOVE FIELD IF EXISTS type_metadata ON source;
+REMOVE FIELD IF EXISTS source_type ON source;
+
+-- Remove index on source
+REMOVE INDEX IF EXISTS idx_source_type ON source;
+
+-- Remove dutch analyzer
+REMOVE ANALYZER IF EXISTS dutch_analyzer;
