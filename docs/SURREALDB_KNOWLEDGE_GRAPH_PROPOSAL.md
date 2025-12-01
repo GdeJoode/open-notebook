@@ -1025,6 +1025,575 @@ See [KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md](./KNOWLEDGE_GRAPH_IMPLEMENTATION_PL
 
 ---
 
+## Deel 9: API Endpoints Design
+
+### 9.1 Knowledge Graph Router (`api/routers/knowledge_graph.py`)
+
+```python
+from fastapi import APIRouter, HTTPException, Query
+from typing import List, Optional
+from pydantic import BaseModel
+
+router = APIRouter(prefix="/knowledge-graph", tags=["knowledge-graph"])
+
+# ============================================================================
+# ENTITY ENDPOINTS
+# ============================================================================
+
+class EntityResponse(BaseModel):
+    id: str
+    name: str
+    entity_type: str
+    aliases: List[str]
+    description: Optional[str]
+    mention_count: int
+    related_sources: int
+
+class EntitySearchRequest(BaseModel):
+    query: str
+    entity_types: Optional[List[str]] = None
+    limit: int = 20
+
+@router.post("/entities/search")
+async def search_entities(request: EntitySearchRequest) -> List[EntityResponse]:
+    """Search entities by name or semantic similarity."""
+    pass
+
+@router.get("/entities/{entity_id}")
+async def get_entity(entity_id: str) -> EntityResponse:
+    """Get entity details with related sources and claims."""
+    pass
+
+@router.get("/entities/{entity_id}/sources")
+async def get_entity_sources(
+    entity_id: str,
+    limit: int = Query(20, le=100)
+) -> List[dict]:
+    """Get sources that mention this entity."""
+    pass
+
+@router.get("/entities/{entity_id}/similar")
+async def get_similar_entities(
+    entity_id: str,
+    threshold: float = Query(0.8, ge=0.5, le=1.0),
+    limit: int = Query(10, le=50)
+) -> List[EntityResponse]:
+    """Find entities similar to this one (via same_as relations)."""
+    pass
+
+# ============================================================================
+# CLAIM ENDPOINTS
+# ============================================================================
+
+class ClaimResponse(BaseModel):
+    id: str
+    statement: str
+    claim_type: str
+    verification_status: str
+    confidence: Optional[float]
+    supporting_count: int
+    contradicting_count: int
+
+class ClaimTraceResponse(BaseModel):
+    claim: ClaimResponse
+    supporting_sources: List[dict]
+    contradicting_sources: List[dict]
+
+@router.get("/claims/{claim_id}")
+async def get_claim(claim_id: str) -> ClaimResponse:
+    """Get claim details."""
+    pass
+
+@router.get("/claims/{claim_id}/trace")
+async def trace_claim(claim_id: str) -> ClaimTraceResponse:
+    """Trace claim through supporting and contradicting evidence."""
+    pass
+
+@router.post("/claims/search")
+async def search_claims(
+    query: str,
+    status: Optional[str] = None,
+    limit: int = 20
+) -> List[ClaimResponse]:
+    """Search claims by semantic similarity."""
+    pass
+
+# ============================================================================
+# PERSON/EXPERT ENDPOINTS
+# ============================================================================
+
+class PersonResponse(BaseModel):
+    id: str
+    name: str
+    orcid: Optional[str]
+    expertise_areas: List[str]
+    publication_count: int
+    citation_count: int
+    h_index: Optional[int]
+    affiliations: List[str]
+
+@router.get("/persons/{person_id}")
+async def get_person(person_id: str) -> PersonResponse:
+    """Get person details with publications and metrics."""
+    pass
+
+@router.get("/persons/{person_id}/publications")
+async def get_person_publications(
+    person_id: str,
+    limit: int = Query(20, le=100)
+) -> List[dict]:
+    """Get publications by this person."""
+    pass
+
+@router.get("/experts")
+async def find_experts(
+    topic: str,
+    min_publications: int = Query(2, ge=1),
+    limit: int = Query(10, le=50)
+) -> List[PersonResponse]:
+    """Find experts on a topic based on publications and citations."""
+    pass
+
+# ============================================================================
+# TOPIC ENDPOINTS
+# ============================================================================
+
+class TopicResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str]
+    level: str
+    source_count: int
+    expert_count: int
+    related_topics: List[str]
+
+@router.get("/topics")
+async def list_topics(
+    domain: Optional[str] = None,
+    level: Optional[str] = None,
+    limit: int = Query(50, le=200)
+) -> List[TopicResponse]:
+    """List topics with optional filtering."""
+    pass
+
+@router.get("/topics/{topic_id}")
+async def get_topic(topic_id: str) -> TopicResponse:
+    """Get topic details with hierarchy."""
+    pass
+
+@router.get("/topics/{topic_id}/sources")
+async def get_topic_sources(
+    topic_id: str,
+    limit: int = Query(20, le=100)
+) -> List[dict]:
+    """Get sources discussing this topic."""
+    pass
+
+# ============================================================================
+# GRAPH ANALYSIS ENDPOINTS
+# ============================================================================
+
+class GraphStatsResponse(BaseModel):
+    node_count: int
+    edge_count: int
+    entity_count: int
+    claim_count: int
+    person_count: int
+    topic_count: int
+
+class CentralityResponse(BaseModel):
+    node_id: str
+    node_type: str
+    name: str
+    score: float
+
+class CommunityResponse(BaseModel):
+    community_id: int
+    member_count: int
+    members: List[dict]
+
+@router.get("/graph/stats")
+async def get_graph_stats() -> GraphStatsResponse:
+    """Get knowledge graph statistics."""
+    pass
+
+@router.get("/graph/centrality")
+async def compute_centrality(
+    method: str = Query("pagerank", regex="^(pagerank|betweenness|eigenvector|degree)$"),
+    node_type: Optional[str] = None,
+    limit: int = Query(20, le=100)
+) -> List[CentralityResponse]:
+    """Compute and return top nodes by centrality."""
+    pass
+
+@router.get("/graph/communities")
+async def detect_communities(
+    algorithm: str = Query("louvain", regex="^(louvain|label_propagation|greedy_modularity)$"),
+    limit: int = Query(10, le=50)
+) -> List[CommunityResponse]:
+    """Detect communities in the graph."""
+    pass
+
+@router.get("/graph/citation-network/{source_id}")
+async def get_citation_network(
+    source_id: str,
+    depth: int = Query(2, ge=1, le=3)
+) -> dict:
+    """Get citation network around a source."""
+    pass
+
+# ============================================================================
+# RETRIEVAL ENDPOINTS
+# ============================================================================
+
+class RetrievalRequest(BaseModel):
+    query: str
+    top_k: int = 20
+    use_graph: bool = True  # Use HippoRAG-style retrieval
+    source_types: Optional[List[str]] = None
+
+class RetrievalResult(BaseModel):
+    source_id: str
+    title: str
+    score: float
+    source_type: Optional[str]
+    retrieval_method: str  # "graph" or "dense"
+
+@router.post("/retrieve")
+async def retrieve_sources(request: RetrievalRequest) -> List[RetrievalResult]:
+    """
+    HippoRAG-style retrieval using graph + embeddings.
+    Falls back to dense retrieval if no graph matches.
+    """
+    pass
+
+# ============================================================================
+# VISUALIZATION DATA ENDPOINTS
+# ============================================================================
+
+class GraphVisualizationData(BaseModel):
+    nodes: List[dict]  # {id, label, type, size, ...}
+    edges: List[dict]  # {source, target, type, weight, ...}
+
+@router.get("/visualization/subgraph")
+async def get_visualization_subgraph(
+    center_id: str,
+    hops: int = Query(2, ge=1, le=3),
+    max_nodes: int = Query(100, le=500)
+) -> GraphVisualizationData:
+    """Get subgraph data for visualization centered on a node."""
+    pass
+
+@router.get("/visualization/topic-map")
+async def get_topic_map() -> GraphVisualizationData:
+    """Get topic hierarchy for visualization."""
+    pass
+```
+
+### 9.2 Extend Source Router (`api/routers/sources.py`)
+
+```python
+# Add to existing sources.py
+
+@router.get("/{source_id}/entities")
+async def get_source_entities(source_id: str) -> List[dict]:
+    """Get entities mentioned in this source."""
+    pass
+
+@router.get("/{source_id}/claims")
+async def get_source_claims(source_id: str) -> List[dict]:
+    """Get claims made in this source."""
+    pass
+
+@router.get("/{source_id}/citations")
+async def get_source_citations(source_id: str) -> dict:
+    """Get citation network for this source."""
+    pass
+
+@router.get("/{source_id}/related")
+async def get_related_sources(
+    source_id: str,
+    method: str = Query("graph", regex="^(graph|embedding|hybrid)$"),
+    limit: int = Query(10, le=50)
+) -> List[dict]:
+    """Get related sources via graph or embedding similarity."""
+    pass
+```
+
+---
+
+## Deel 10: UI Components Design
+
+### 10.1 New Pages
+
+#### Knowledge Graph Explorer (`frontend/src/app/(dashboard)/knowledge-graph/page.tsx`)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Knowledge Graph Explorer                                    [Settings] │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  Search: [_________________________________] [🔍]                │   │
+│  │  Filters: [Entity Type ▼] [Topic ▼] [Date Range]               │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  ┌──────────────────────────────┐  ┌────────────────────────────────┐  │
+│  │                              │  │  Selected: Entity Name         │  │
+│  │                              │  │  Type: Person                   │  │
+│  │     [Graph Visualization]    │  │  ─────────────────────────────  │  │
+│  │                              │  │  📊 12 publications             │  │
+│  │     Interactive node-link    │  │  📖 45 citations               │  │
+│  │     diagram with zoom/pan    │  │  🏛️ University of Amsterdam    │  │
+│  │                              │  │  ─────────────────────────────  │  │
+│  │     Nodes: sources, entities │  │  Related Sources:              │  │
+│  │     Edges: cites, mentions   │  │  • Source 1 (0.92)             │  │
+│  │                              │  │  • Source 2 (0.87)             │  │
+│  │                              │  │  ─────────────────────────────  │  │
+│  │                              │  │  [View Details] [Add to Note]  │  │
+│  └──────────────────────────────┘  └────────────────────────────────┘  │
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  Quick Stats: 1,234 entities | 567 claims | 89 topics          │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Expert Finder (`frontend/src/app/(dashboard)/experts/page.tsx`)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Find Experts                                                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Topic: [Climate Policy_________________] [🔍 Find Experts]             │
+│  Min. Publications: [3 ▼]                                               │
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  👤 Dr. Jane Smith                                    Score: 94 │   │
+│  │  ├─ 🏛️ VU Amsterdam - Environmental Sciences                   │   │
+│  │  ├─ 📊 Publications: 45 | Citations: 1,234 | h-index: 23       │   │
+│  │  ├─ 🏷️ Expertise: climate adaptation, policy analysis          │   │
+│  │  └─ [View Profile] [View Publications] [Co-author Network]     │   │
+│  ├─────────────────────────────────────────────────────────────────┤   │
+│  │  👤 Prof. Jan de Vries                                Score: 87 │   │
+│  │  ├─ 🏛️ Utrecht University - Public Administration              │   │
+│  │  ├─ 📊 Publications: 32 | Citations: 890 | h-index: 18         │   │
+│  │  └─ [View Profile] [View Publications] [Co-author Network]     │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Claim Tracker (`frontend/src/app/(dashboard)/claims/page.tsx`)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Claim Tracker                                                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Search: [________________________________] [🔍]                        │
+│  Status: [All ▼] [Supported ▼] [Contested ▼] [Refuted ▼]               │
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  💬 "Climate change increases flood risk in the Netherlands"    │   │
+│  │  ├─ Type: Causal | Status: ✅ Supported                         │   │
+│  │  ├─ 📗 12 supporting sources | 📕 2 contradicting              │   │
+│  │  ├─ First appeared: 2019-03-15 in "KNMI Report 2019"           │   │
+│  │  └─ [Trace Evidence] [View Sources] [Export]                    │   │
+│  ├─────────────────────────────────────────────────────────────────┤   │
+│  │  💬 "Sea level rise will exceed 1m by 2100"                     │   │
+│  │  ├─ Type: Predictive | Status: ⚠️ Contested                     │   │
+│  │  ├─ 📗 8 supporting sources | 📕 5 contradicting               │   │
+│  │  └─ [Trace Evidence] [View Sources] [Export]                    │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 10.2 Enhanced Source Detail Page
+
+Add KG-related tabs to existing source detail:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  ← Back to Sources                                                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│  📄 Climate Policy Report 2024                                          │
+│  Type: Policy Document | Added: 2024-01-15                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│  [Overview] [Content] [Insights] [Entities] [Citations] [Claims]        │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─ Entities Tab ───────────────────────────────────────────────────┐  │
+│  │  Mentioned Entities (24)                        [Extract More]   │  │
+│  │  ┌───────────────────────────────────────────────────────────┐   │  │
+│  │  │  👤 Persons (8)                                           │   │  │
+│  │  │  • Dr. Jane Smith (confidence: 0.95)                      │   │  │
+│  │  │  • Minister van Klimaat (confidence: 0.88)               │   │  │
+│  │  ├───────────────────────────────────────────────────────────┤   │  │
+│  │  │  🏛️ Organizations (6)                                     │   │  │
+│  │  │  • KNMI (confidence: 0.98)                                │   │  │
+│  │  │  • Rijkswaterstaat (confidence: 0.95)                    │   │  │
+│  │  ├───────────────────────────────────────────────────────────┤   │  │
+│  │  │  🏷️ Topics (10)                                           │   │  │
+│  │  │  • Climate Adaptation • Sea Level Rise • Flood Risk      │   │  │
+│  │  └───────────────────────────────────────────────────────────┘   │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  ┌─ Citations Tab ──────────────────────────────────────────────────┐  │
+│  │  Citation Network                          [View Full Graph]     │  │
+│  │  ┌───────────────────────────────────────────────────────────┐   │  │
+│  │  │  📥 Cites (12 sources)                                    │   │  │
+│  │  │  • IPCC AR6 Report (supportive)                          │   │  │
+│  │  │  • KNMI Climate Scenarios (neutral)                      │   │  │
+│  │  ├───────────────────────────────────────────────────────────┤   │  │
+│  │  │  📤 Cited By (5 sources)                                  │   │  │
+│  │  │  • Deltaprogramma 2025 (supportive)                      │   │  │
+│  │  │  • Academic Paper XYZ (critical)                         │   │  │
+│  │  └───────────────────────────────────────────────────────────┘   │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 10.3 New Components
+
+#### GraphVisualization Component (`frontend/src/components/graph/GraphVisualization.tsx`)
+
+```typescript
+interface GraphVisualizationProps {
+  data: {
+    nodes: Array<{
+      id: string
+      label: string
+      type: 'source' | 'entity' | 'person' | 'topic' | 'claim'
+      size?: number
+      color?: string
+    }>
+    edges: Array<{
+      source: string
+      target: string
+      type: string
+      weight?: number
+    }>
+  }
+  onNodeClick?: (nodeId: string) => void
+  onNodeHover?: (nodeId: string | null) => void
+  selectedNode?: string
+  layout?: 'force' | 'hierarchical' | 'radial'
+  height?: number
+}
+
+// Uses react-force-graph or vis-network for rendering
+export function GraphVisualization({ data, onNodeClick, ... }: GraphVisualizationProps) {
+  // Force-directed graph with:
+  // - Node colors by type (source=blue, entity=green, person=orange, etc.)
+  // - Node size by importance (degree or centrality)
+  // - Edge thickness by weight
+  // - Zoom/pan controls
+  // - Click to select, double-click to expand
+}
+```
+
+#### EntityCard Component (`frontend/src/components/graph/EntityCard.tsx`)
+
+```typescript
+interface EntityCardProps {
+  entity: {
+    id: string
+    name: string
+    entity_type: string
+    aliases: string[]
+    description?: string
+    mention_count: number
+    related_sources: number
+  }
+  onViewDetails?: () => void
+  onAddToNote?: () => void
+}
+
+export function EntityCard({ entity, onViewDetails, onAddToNote }: EntityCardProps) {
+  // Compact card showing entity info with action buttons
+}
+```
+
+#### ClaimCard Component (`frontend/src/components/graph/ClaimCard.tsx`)
+
+```typescript
+interface ClaimCardProps {
+  claim: {
+    id: string
+    statement: string
+    claim_type: string
+    verification_status: string
+    supporting_count: number
+    contradicting_count: number
+  }
+  onTraceEvidence?: () => void
+}
+
+export function ClaimCard({ claim, onTraceEvidence }: ClaimCardProps) {
+  // Card with claim statement, status badge, evidence counts
+}
+```
+
+#### ExpertCard Component (`frontend/src/components/graph/ExpertCard.tsx`)
+
+```typescript
+interface ExpertCardProps {
+  expert: {
+    id: string
+    name: string
+    affiliations: string[]
+    expertise_areas: string[]
+    publication_count: number
+    citation_count: number
+    h_index?: number
+    score: number
+  }
+  onViewProfile?: () => void
+  onViewPublications?: () => void
+}
+
+export function ExpertCard({ expert, ... }: ExpertCardProps) {
+  // Expert profile card with metrics and actions
+}
+```
+
+### 10.4 Navigation Integration
+
+Update sidebar navigation in `frontend/src/components/layout/Sidebar.tsx`:
+
+```typescript
+const navItems = [
+  // ... existing items ...
+  {
+    title: 'Knowledge Graph',
+    icon: Network,
+    items: [
+      { title: 'Explorer', href: '/knowledge-graph' },
+      { title: 'Find Experts', href: '/experts' },
+      { title: 'Claims', href: '/claims' },
+      { title: 'Topics', href: '/topics' },
+    ]
+  },
+]
+```
+
+### 10.5 Frontend Dependencies
+
+Add to `frontend/package.json`:
+
+```json
+{
+  "dependencies": {
+    "react-force-graph-2d": "^1.25.0",  // or "vis-network": "^9.1.0"
+    "@react-sigma/core": "^4.0.0",       // Alternative graph viz
+    "d3": "^7.8.0"                        // For custom visualizations
+  }
+}
+```
+
+---
+
 ## Appendix A: Example Queries
 
 ### Find experts on a topic

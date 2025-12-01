@@ -1907,11 +1907,42 @@ Relevant fact indices:"""
 
 ### Phase 5: Integration & API (Week 9-10)
 
-#### 5.1 API Endpoints
-- [ ] Create graph query endpoints
-- [ ] Create retrieval endpoints
-- [ ] Create analysis endpoints (experts, claims)
-- [ ] Add visualization data endpoints
+> **Note**: See `SURREALDB_KNOWLEDGE_GRAPH_PROPOSAL.md` **Deel 9** for detailed API endpoint specifications.
+
+#### 5.1 API Endpoints (`api/routers/knowledge_graph.py`)
+- [ ] Create router with `/knowledge-graph` prefix
+- [ ] **Entity endpoints**:
+  - [ ] `POST /entities/search` - Search entities by name/type
+  - [ ] `GET /entities/{entity_id}` - Get entity with relationships
+  - [ ] `GET /entities/{entity_id}/sources` - Get entity's source documents
+  - [ ] `GET /entities/{entity_id}/similar` - Find similar entities
+- [ ] **Claim endpoints**:
+  - [ ] `GET /claims/{claim_id}` - Get claim with provenance
+  - [ ] `GET /claims/{claim_id}/trace` - Trace claim to sources
+  - [ ] `POST /claims/search` - Search claims
+- [ ] **Expert endpoints**:
+  - [ ] `GET /persons/{person_id}` - Get person profile
+  - [ ] `GET /persons/{person_id}/publications` - Get publications
+  - [ ] `GET /experts` - Find domain experts
+- [ ] **Topic endpoints**:
+  - [ ] `GET /topics` - List detected topics
+  - [ ] `GET /topics/{topic_id}` - Get topic details
+  - [ ] `GET /topics/{topic_id}/sources` - Sources about topic
+- [ ] **Graph analysis endpoints**:
+  - [ ] `GET /graph/stats` - Get graph statistics
+  - [ ] `GET /graph/centrality` - Get node centrality scores
+  - [ ] `GET /graph/communities` - Detect communities
+  - [ ] `GET /graph/citation-network/{source_id}` - Citation network view
+- [ ] **Retrieval endpoint**:
+  - [ ] `POST /retrieve` - HippoRAG-style retrieval
+- [ ] **Visualization endpoints**:
+  - [ ] `GET /visualization/subgraph` - Get visualization data
+  - [ ] `GET /visualization/topic-map` - Get topic map data
+- [ ] **Source router extensions** (`api/routers/sources.py`):
+  - [ ] `GET /sources/{id}/entities` - Entities from source
+  - [ ] `GET /sources/{id}/claims` - Claims from source
+  - [ ] `GET /sources/{id}/citations` - Citation relationships
+  - [ ] `GET /sources/{id}/related` - Graph-based related sources
 
 #### 5.2 Ingestion Integration
 - [ ] Integrate OpenIE into source processing pipeline
@@ -1920,13 +1951,72 @@ Relevant fact indices:"""
 - [ ] Add progress tracking for bulk operations
 
 #### 5.3 Testing & Documentation
-- [ ] Create integration tests
-- [ ] Write API documentation
+- [ ] Create integration tests for all API endpoints
+- [ ] Write OpenAPI documentation
 - [ ] Create usage examples
 - [ ] Performance benchmarking
 - [ ] Document configuration options
 
-### Phase 6: Advanced Features (Week 11-12)
+### Phase 5.5: Frontend Implementation (Week 10-11)
+
+> **Note**: See `SURREALDB_KNOWLEDGE_GRAPH_PROPOSAL.md` **Deel 10** for detailed UI component specifications and wireframes.
+
+#### 5.5.1 Dependencies & Setup
+- [ ] Add frontend dependencies:
+  - [ ] `react-force-graph-2d` (or `react-force-graph-3d`)
+  - [ ] `vis-network` (alternative)
+  - [ ] `d3` for custom visualizations
+- [ ] Create shared TypeScript interfaces in `lib/types/knowledge-graph.ts`
+
+#### 5.5.2 Core Components (`components/knowledge-graph/`)
+- [ ] `GraphVisualization.tsx` - Force-directed graph component
+  - [ ] Node rendering with type-based styling
+  - [ ] Edge rendering with relationship labels
+  - [ ] Click, hover, and selection handlers
+  - [ ] Layout options (force, hierarchical, radial)
+- [ ] `EntityCard.tsx` - Entity display card
+- [ ] `ClaimCard.tsx` - Claim with provenance display
+- [ ] `ExpertCard.tsx` - Expert profile card
+- [ ] `TopicBadge.tsx` - Topic tag component
+- [ ] `GraphStats.tsx` - Graph statistics panel
+
+#### 5.5.3 Pages (`app/(dashboard)/`)
+- [ ] **Knowledge Graph Explorer** (`knowledge-graph/page.tsx`)
+  - [ ] Search panel with filters
+  - [ ] Interactive graph visualization
+  - [ ] Node detail sidebar
+  - [ ] Export functionality
+- [ ] **Expert Finder** (`experts/page.tsx`)
+  - [ ] Topic selection interface
+  - [ ] Expert ranking display
+  - [ ] Profile cards with metrics
+- [ ] **Claim Tracker** (`claims/page.tsx`)
+  - [ ] Claim search and filtering
+  - [ ] Evidence chain visualization
+  - [ ] Verification status indicators
+
+#### 5.5.4 Source Detail Integration
+- [ ] Add Knowledge Graph tab to source detail page
+  - [ ] Entity list from source
+  - [ ] Claims extracted from source
+  - [ ] Related sources via graph
+  - [ ] Mini graph visualization
+- [ ] Add citation network view
+- [ ] Add entity highlighting in source content
+
+#### 5.5.5 Navigation Integration
+- [ ] Add "Knowledge Graph" to sidebar navigation
+- [ ] Add "Experts" to sidebar navigation
+- [ ] Add "Claims" to sidebar navigation
+- [ ] Update breadcrumbs for new pages
+
+#### 5.5.6 API Integration (`lib/api/knowledge-graph.ts`)
+- [ ] Create API client functions for all endpoints
+- [ ] Add React Query hooks for data fetching
+- [ ] Implement caching strategies
+- [ ] Add error handling and loading states
+
+### Phase 6: Advanced Features (Week 12-13)
 
 #### 6.1 Claim Verification
 - [ ] Implement claim extraction from sources
