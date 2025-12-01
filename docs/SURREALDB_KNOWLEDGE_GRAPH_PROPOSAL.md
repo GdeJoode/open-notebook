@@ -1,5 +1,15 @@
 # SurrealDB Knowledge Graph Proposal
 
+> **Status**: ✅ **Option C (Full Ontology-Driven KG) selected and Phase 1 implemented**
+>
+> See [KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md](./KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md) for the detailed implementation plan.
+>
+> **Implemented in Phase 1** (commit `5ba3b13`):
+> - Full KG schema (`migrations/11.surrealql`)
+> - Domain models (`open_notebook/domain/knowledge_graph.py`)
+> - Graph analyzer with NetworkX backend (`open_notebook/graph_analysis/`)
+> - HippoRAG-style PPR retrieval
+
 ## Executive Summary
 
 Dit document beschrijft een voorstel voor het implementeren van een Knowledge Graph (KG) bovenop SurrealDB om diverse brontypen te integreren: academische papers, beleidsstukken, beleidsadviezen, social media (LinkedIn), en andere content. Het benut SurrealDB's native graph-capabilities, vector search, en multi-model architectuur.
@@ -961,30 +971,57 @@ DEFINE INDEX idx_source_fulltext ON source FIELDS title, content SEARCH ANALYZER
 
 ---
 
-## Deel 8: Recommended Starting Point
+## Deel 8: Implementation Decision
 
-**Recommendation**: Start with **Option B (Typed Hierarchy)** with phased delivery
+> **Decision Made**: ✅ **Option C (Full Ontology-Driven KG)** with HippoRAG enhancements
 
-**Rationale**:
-1. Option A is too limited for meaningful policy/research tracking
-2. Option C is overengineered for initial needs
-3. Option B provides:
-   - Clear source differentiation
-   - Rich enough relationships for useful queries
-   - Foundation for future expansion
-   - Manageable complexity
+**Rationale for Option C**:
+1. Full support for complex policy/research tracking workflows
+2. HippoRAG-style retrieval provides superior multi-hop reasoning
+3. Three-tier embedding architecture enables rich semantic search
+4. Graph analyzer abstraction allows future performance optimization (NetworkX → igraph)
 
-**First 4 Weeks Priority**:
-1. Source type classification + metadata schema
-2. Basic entity extraction (Person, Organization)
-3. Citation relationship (source→cites→source)
-4. Simple mentions relationship
+**Implementation Status**:
+
+### ✅ Phase 1: Foundation (Completed)
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| SurrealDB Migration | ✅ Done | `migrations/11.surrealql` |
+| Rollback Migration | ✅ Done | `migrations/11_down.surrealql` |
+| Domain Models | ✅ Done | `open_notebook/domain/knowledge_graph.py` |
+| Graph Backend Abstraction | ✅ Done | `open_notebook/graph_analysis/base.py` |
+| NetworkX Implementation | ✅ Done | `open_notebook/graph_analysis/networkx_backend.py` |
+| GraphAnalyzer Interface | ✅ Done | `open_notebook/graph_analysis/analyzer.py` |
+
+**Implemented Features**:
+- Entity, Claim, Evidence, Person, Organization, Topic models
+- 13 relationship types (cites, mentions, supports, contradicts, same_as, etc.)
+- Vector indexes (MTREE DIMENSION 1024 DIST COSINE)
+- Full-text search with Dutch analyzer
+- Personalized PageRank (HippoRAG-style with damping=0.5)
+- Centrality algorithms (PageRank, Betweenness, Eigenvector, Closeness)
+- Community detection (Louvain, Label Propagation, Greedy Modularity)
+- KNN-based entity deduplication via `same_as` relations
+
+### ⏳ Remaining Phases
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| Phase 2 | Entity Extraction Pipeline | Pending |
+| Phase 3 | Citation & Reference Network | Pending |
+| Phase 4 | Claims & Evidence | Pending |
+| Phase 5 | Advanced Queries & Analytics | Pending |
+| Phase 6 | Production Optimization | Pending |
+
+See [KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md](./KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md) for detailed phase descriptions.
 
 **Success Metrics**:
 - Can answer: "Which academic papers informed this policy advice?"
 - Can answer: "Who are the key experts on topic X?"
 - Can answer: "What evidence supports/contradicts claim Y?"
 - Can visualize: citation networks and author collaborations
+- Can retrieve: HippoRAG-style multi-hop reasoning through graph
 
 ---
 

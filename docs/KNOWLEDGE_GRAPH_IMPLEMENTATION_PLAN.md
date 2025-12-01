@@ -1809,30 +1809,36 @@ Relevant fact indices:"""
 
 ## Part 5: Step-by-Step Implementation Checklist
 
-### Phase 1: Foundation (Week 1-2)
+### Phase 1: Foundation (Week 1-2) ✅ COMPLETED
+
+> **Status**: Completed in commit `5ba3b13` on branch `feature/knowledge-graph`
 
 #### 1.1 Schema Setup
-- [ ] Create SurrealDB migration script with all table definitions
-- [ ] Define all indexes (vector, full-text, standard)
+- [x] Create SurrealDB migration script with all table definitions → `migrations/11.surrealql`
+- [x] Define all indexes (vector, full-text, standard)
+- [x] Create rollback migration → `migrations/11_down.surrealql`
 - [ ] Test schema with sample data
 - [ ] Create schema validation tests
 
 #### 1.2 Base Models
-- [ ] Extend `ObjectModel` with `source_type` field
-- [ ] Create `Entity` model class
-- [ ] Create `Claim` model class
-- [ ] Create `Evidence` model class
-- [ ] Create `Person` model class
-- [ ] Create `Organization` model class
-- [ ] Create `Topic` model class
-- [ ] Add relationship helper methods to models
+- [x] Extend `ObjectModel` with `source_type` field
+- [x] Create `Entity` model class → `open_notebook/domain/knowledge_graph.py`
+- [x] Create `Claim` model class
+- [x] Create `Evidence` model class
+- [x] Create `Person` model class
+- [x] Create `Organization` model class
+- [x] Create `Topic` model class
+- [x] Add relationship helper methods to models
+- [x] Add HippoRAG-style entity hash computation
 
 #### 1.3 Graph Analyzer Foundation
-- [ ] Create `open_notebook/graphs/` directory
-- [ ] Implement `base.py` with abstract `GraphBackend`
-- [ ] Implement `networkx_backend.py`
+- [x] Create `open_notebook/graph_analysis/` directory
+- [x] Implement `base.py` with abstract `GraphBackend`
+- [x] Implement `networkx_backend.py`
 - [ ] Write unit tests for NetworkX backend
-- [ ] Create `analyzer.py` with `GraphAnalyzer` class
+- [x] Create `analyzer.py` with `GraphAnalyzer` class
+- [x] Implement HippoRAG-style PPR retrieval
+- [x] Add `networkx>=3.0` and `python-louvain>=0.16` dependencies
 - [ ] Test graph loading from SurrealDB
 
 ### Phase 2: Entity Extraction (Week 3-4)
