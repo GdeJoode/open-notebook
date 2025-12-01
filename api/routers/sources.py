@@ -1097,9 +1097,11 @@ async def get_source_chunks(source_id: str):
 
 
 @router.get("/sources/{source_id}/pdf")
+@router.head("/sources/{source_id}/pdf")
 async def get_source_pdf(source_id: str):
     """
     Return the original PDF file for chunk visualization.
+    Supports both GET and HEAD methods for browser/PDF.js compatibility.
 
     Only works if:
     1. Source has a file_path
@@ -1129,10 +1131,17 @@ async def get_source_pdf(source_id: str):
         if not resolved_path.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="Source file is not a PDF document")
 
+        # Return PDF with inline disposition for react-pdf-highlighter
+        # This allows the PDF to be displayed in the browser instead of downloaded
+        # Include headers for PDF.js compatibility (range requests, CORS)
         return FileResponse(
             path=resolved_path,
             media_type="application/pdf",
-            filename=source.title or "document.pdf"
+            headers={
+                "Content-Disposition": "inline",
+                "Accept-Ranges": "bytes",
+                "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges"
+            }
         )
 
     except HTTPException:

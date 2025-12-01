@@ -118,7 +118,7 @@ export const sourcesApi = {
         paragraph_number: number | null
         element_type: string
         positions: number[][]
-        metadata: Record<string, any>
+        metadata: Record<string, unknown>
       }>
       total_chunks: number
       has_spatial_data: boolean
@@ -126,9 +126,11 @@ export const sourcesApi = {
     return response.data
   },
 
-  getPdfUrl: (id: string) => {
-    // Return the URL for the PDF endpoint
-    const baseUrl = apiClient.defaults.baseURL || ''
-    return `${baseUrl}/sources/${id}/pdf`
+  getPdfUrl: async (id: string) => {
+    // For react-pdf-highlighter PdfLoader, we need an absolute URL
+    // because it loads PDFs directly in the browser, not through axios
+    const { getApiUrl } = await import('@/lib/config')
+    const apiUrl = await getApiUrl()
+    return `${apiUrl}/api/sources/${id}/pdf`
   },
 }

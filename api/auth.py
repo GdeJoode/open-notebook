@@ -22,9 +22,23 @@ class PasswordAuthMiddleware(BaseHTTPMiddleware):
         # Skip authentication if no password is set
         if not self.password:
             return await call_next(request)
-        
-        # Skip authentication for excluded paths
+
+        # Skip authentication for excluded paths (exact match or pattern match)
         if request.url.path in self.excluded_paths:
+            return await call_next(request)
+
+        # Check for pattern-based exclusions (e.g., /api/sources/*/pdf)
+        for excluded_path in self.excluded_paths:
+            if '*' in excluded_path:
+                # Convert wildcard pattern to regex
+                import re
+                pattern = excluded_path.replace('*', '[^/]+')
+                if re.match(f'^{pattern}$', request.url.path):
+                    return await call_next(request)
+
+        # Special case: Allow PDF endpoint access for react-pdf-highlighter
+        # Pattern: /api/sources/{source_id}/pdf
+        if request.url.path.startswith('/api/sources/') and request.url.path.endswith('/pdf'):
             return await call_next(request)
         
         # Skip authentication for CORS preflight requests (OPTIONS)

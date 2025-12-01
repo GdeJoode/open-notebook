@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { isAxiosError } from 'axios'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { sourcesApi } from '@/lib/api/sources'
 import { insightsApi, SourceInsightResponse } from '@/lib/api/insights'
 import { transformationsApi } from '@/lib/api/transformations'
@@ -81,9 +82,21 @@ export function SourceDetailContent({
   const [isDownloadingFile, setIsDownloadingFile] = useState(false)
   const [fileAvailable, setFileAvailable] = useState<boolean | null>(null)
   const [selectedInsight, setSelectedInsight] = useState<SourceInsightResponse | null>(null)
+  const [pdfUrl, setPdfUrl] = useState<string>('')
 
   // Fetch chunks data
   const { data: chunksData, isLoading: chunksLoading } = useSourceChunks(sourceId)
+
+  // Fetch PDF URL on mount
+  useEffect(() => {
+    // Get absolute PDF URL for react-pdf-highlighter
+    sourcesApi.getPdfUrl(sourceId).then((url) => {
+      console.log('=== PDF URL Fetched ===')
+      console.log('Source ID:', sourceId)
+      console.log('PDF URL:', url)
+      setPdfUrl(url)
+    })
+  }, [sourceId])
 
   const fetchSource = useCallback(async () => {
     try {
@@ -406,9 +419,9 @@ export function SourceDetailContent({
       </div>
 
       {/* Tabs Content */}
-      <div className="flex-1 overflow-y-auto px-2">
-        <Tabs defaultValue="content" className="w-full">
-          <TabsList className="grid w-full grid-cols-4 sticky top-0 z-10">
+      <div className="flex-1 px-2 min-h-0">
+        <Tabs defaultValue="content" className="h-full flex flex-col">
+          <TabsList className="grid w-full grid-cols-4 flex-shrink-0">
             <TabsTrigger value="content">Content</TabsTrigger>
             <TabsTrigger value="insights">
               Insights {insights.length > 0 && `(${insights.length})`}
@@ -419,7 +432,7 @@ export function SourceDetailContent({
             <TabsTrigger value="details">Details</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="content" className="mt-6">
+          <TabsContent value="content" className="flex-1 overflow-y-auto mt-6">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -469,6 +482,7 @@ export function SourceDetailContent({
                 )}
                 <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none prose-headings:font-semibold prose-a:text-blue-600 prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-p:mb-4 prose-p:leading-7 prose-li:mb-2">
                   <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
                     components={{
                       p: ({ children }) => <p className="mb-4">{children}</p>,
                       h1: ({ children }) => <h1 className="text-2xl font-bold mt-6 mb-4">{children}</h1>,
@@ -477,6 +491,15 @@ export function SourceDetailContent({
                       ul: ({ children }) => <ul className="mb-4 list-disc pl-6">{children}</ul>,
                       ol: ({ children }) => <ol className="mb-4 list-decimal pl-6">{children}</ol>,
                       li: ({ children }) => <li className="mb-1">{children}</li>,
+                      table: ({ children }) => (
+                        <div className="overflow-x-auto my-4">
+                          <table className="min-w-full border-collapse border border-border">{children}</table>
+                        </div>
+                      ),
+                      thead: ({ children }) => <thead className="bg-muted">{children}</thead>,
+                      th: ({ children }) => <th className="border border-border px-3 py-2 text-left font-semibold">{children}</th>,
+                      td: ({ children }) => <td className="border border-border px-3 py-2">{children}</td>,
+                      tr: ({ children }) => <tr className="even:bg-muted/50">{children}</tr>,
                     }}
                   >
                     {source.full_text || 'No content available'}
@@ -486,7 +509,7 @@ export function SourceDetailContent({
             </Card>
           </TabsContent>
 
-          <TabsContent value="insights" className="mt-6">
+          <TabsContent value="insights" className="flex-1 overflow-y-auto mt-6">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
@@ -597,45 +620,35 @@ export function SourceDetailContent({
             </Card>
           </TabsContent>
 
-          <TabsContent value="chunks" className="mt-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Database className="h-5 w-5" />
-                  Document Chunks
-                </CardTitle>
-                <CardDescription>
-                  View document structure with bounding box visualization
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {chunksLoading ? (
-                  <div className="flex items-center justify-center py-12">
-                    <LoadingSpinner />
-                  </div>
-                ) : chunksData && chunksData.chunks.length > 0 ? (
+          <TabsContent value="chunks" className="flex-1 min-h-0 overflow-hidden mt-6">
+            <div className="h-full">
+              {chunksLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <LoadingSpinner />
+                </div>
+              ) : chunksData && chunksData.chunks.length > 0 && pdfUrl ? (
+                <div className="h-full">
                   <PdfChunkViewer
-                    pdfUrl={sourcesApi.getPdfUrl(sourceId)}
+                    pdfUrl={pdfUrl}
                     chunks={chunksData.chunks}
-                    sourceId={sourceId}
                   />
-                ) : (
-                  <Alert>
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertTitle>No Chunks Available</AlertTitle>
-                    <AlertDescription>
-                      This source doesn't have chunk data. Chunks are automatically extracted when documents are processed with Docling.
-                      {source?.asset?.file_path?.endsWith('.pdf') && (
-                        <span> Try reprocessing this PDF with Docling to enable chunk visualization.</span>
-                      )}
-                    </AlertDescription>
-                  </Alert>
-                )}
-              </CardContent>
-            </Card>
+                </div>
+              ) : (
+                <Alert>
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>No Chunks Available</AlertTitle>
+                  <AlertDescription>
+                    This source doesn&apos;t have chunk data. Chunks are automatically extracted when documents are processed with Docling.
+                    {source?.asset?.file_path?.endsWith('.pdf') && (
+                      <span> Try reprocessing this PDF with Docling to enable chunk visualization.</span>
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )}
+            </div>
           </TabsContent>
 
-          <TabsContent value="details" className="mt-6">
+          <TabsContent value="details" className="flex-1 overflow-y-auto mt-6">
             <Card>
               <CardHeader>
                 <CardTitle>Details</CardTitle>

@@ -39,7 +39,7 @@ export interface SourceListResponse {
 }
 
 export interface SourceDetailResponse extends SourceListResponse {
-  full_text: string
+  full_text: string | null  // Can be null for async processing sources
   notebooks?: string[]  // List of notebook IDs this source is linked to
 }
 
@@ -53,11 +53,47 @@ export interface SourceStatusResponse {
 }
 
 export interface SettingsResponse {
-  default_content_processing_engine_doc?: 'auto' | 'docling' | 'docling_gpu' | 'simple'
+  // Document Engine (simplified - GPU/VLM controlled via advanced settings)
+  default_content_processing_engine_doc?: 'auto' | 'docling' | 'simple'
   default_content_processing_engine_url?: 'auto' | 'firecrawl' | 'jina' | 'simple'
   default_embedding_option?: 'ask' | 'always' | 'never'
   auto_delete_files?: 'yes' | 'no'
   youtube_preferred_languages?: string[]
+
+  // GPU Acceleration Settings (content-core)
+  docling_gpu_enabled?: boolean
+  docling_gpu_device?: 'auto' | 'cuda' | 'cpu'
+
+  // Pipeline Settings (content-core)
+  docling_pipeline?: 'auto' | 'standard' | 'vlm'
+
+  // VLM Settings (content-core) - used when pipeline=vlm
+  docling_vlm_model?: 'granite-docling-258m' | 'smoldocling-256m'
+  docling_vlm_framework?: 'auto' | 'transformers' | 'mlx'
+
+  // OCR Settings (content-core) - used when pipeline=standard
+  docling_ocr_engine?: 'auto' | 'easyocr' | 'rapidocr' | 'tesseract'
+  docling_ocr_languages?: string[]
+  docling_ocr_use_gpu?: boolean
+
+  // Table Processing Settings (content-core)
+  docling_table_mode?: 'accurate' | 'fast'
+
+  // Image Export Settings (content-core) - not yet functional
+  docling_auto_export_images?: boolean
+  docling_image_scale?: number
+
+  // Chunking Settings (content-core)
+  docling_chunking_enabled?: boolean
+  docling_chunking_method?: 'hybrid' | 'hierarchical'
+  docling_chunking_max_tokens?: number
+
+  // File Management Settings
+  input_directory_path?: string
+  markdown_directory_path?: string
+  output_directory_path?: string
+  file_operation?: 'copy' | 'move' | 'none'
+  output_naming_scheme?: 'timestamp_prefix' | 'date_prefix' | 'datetime_suffix' | 'original'
 }
 
 export interface CreateNotebookRequest {

@@ -252,19 +252,91 @@ class RebuildStatusResponse(BaseModel):
 
 # Settings API models
 class SettingsResponse(BaseModel):
+    # Document Engine (simplified - GPU/VLM controlled via advanced settings)
     default_content_processing_engine_doc: Optional[str] = None
     default_content_processing_engine_url: Optional[str] = None
     default_embedding_option: Optional[str] = None
     auto_delete_files: Optional[str] = None
     youtube_preferred_languages: Optional[List[str]] = None
+
+    # GPU Acceleration Settings (content-core)
+    docling_gpu_enabled: Optional[bool] = None
+    docling_gpu_device: Optional[str] = None
+
+    # Pipeline Settings (content-core)
+    docling_pipeline: Optional[str] = None
+
+    # VLM Settings (content-core)
+    docling_vlm_model: Optional[str] = None
+    docling_vlm_framework: Optional[str] = None
+
+    # OCR Settings (content-core)
+    docling_ocr_engine: Optional[str] = None
+    docling_ocr_languages: Optional[List[str]] = None
+    docling_ocr_use_gpu: Optional[bool] = None
+
+    # Table Processing Settings (content-core)
+    docling_table_mode: Optional[str] = None
+
+    # Image Export Settings (content-core) - WIP
+    docling_auto_export_images: Optional[bool] = None
+    docling_image_scale: Optional[float] = None
+
+    # Chunking Settings (content-core)
+    docling_chunking_enabled: Optional[bool] = None
+    docling_chunking_method: Optional[str] = None
+    docling_chunking_max_tokens: Optional[int] = None
+
+    # File Management Settings
+    input_directory_path: Optional[str] = None
+    markdown_directory_path: Optional[str] = None
+    output_directory_path: Optional[str] = None
+    file_operation: Optional[str] = None
+    output_naming_scheme: Optional[str] = None
 
 
 class SettingsUpdate(BaseModel):
+    # Document Engine (simplified - GPU/VLM controlled via advanced settings)
     default_content_processing_engine_doc: Optional[str] = None
     default_content_processing_engine_url: Optional[str] = None
     default_embedding_option: Optional[str] = None
     auto_delete_files: Optional[str] = None
     youtube_preferred_languages: Optional[List[str]] = None
+
+    # GPU Acceleration Settings (content-core)
+    docling_gpu_enabled: Optional[bool] = None
+    docling_gpu_device: Optional[str] = None
+
+    # Pipeline Settings (content-core)
+    docling_pipeline: Optional[str] = None
+
+    # VLM Settings (content-core)
+    docling_vlm_model: Optional[str] = None
+    docling_vlm_framework: Optional[str] = None
+
+    # OCR Settings (content-core)
+    docling_ocr_engine: Optional[str] = None
+    docling_ocr_languages: Optional[List[str]] = None
+    docling_ocr_use_gpu: Optional[bool] = None
+
+    # Table Processing Settings (content-core)
+    docling_table_mode: Optional[str] = None
+
+    # Image Export Settings (content-core) - WIP
+    docling_auto_export_images: Optional[bool] = None
+    docling_image_scale: Optional[float] = None
+
+    # Chunking Settings (content-core)
+    docling_chunking_enabled: Optional[bool] = None
+    docling_chunking_method: Optional[str] = None
+    docling_chunking_max_tokens: Optional[int] = None
+
+    # File Management Settings
+    input_directory_path: Optional[str] = None
+    markdown_directory_path: Optional[str] = None
+    output_directory_path: Optional[str] = None
+    file_operation: Optional[str] = None
+    output_naming_scheme: Optional[str] = None
 
 
 # Sources API models
