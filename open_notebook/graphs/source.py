@@ -1,8 +1,18 @@
+"""
+Source Processing Graph using spaCy-Layout Pipeline.
+
+This module defines the LangGraph workflow for processing source documents,
+replacing the previous content-core based implementation.
+
+Includes integration with:
+- Entity Resolution Pipeline (3-tier entity extraction and linking)
+- RAPTOR Hierarchical Summarization
+- Knowledge Graph Extraction
+"""
+
 import operator
 from typing import Any, Dict, List, Optional
 
-from content_core import extract_content
-from content_core.common import ProcessSourceInput, ProcessSourceOutput
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -13,238 +23,82 @@ from open_notebook.domain.content_settings import ContentSettings
 from open_notebook.domain.notebook import Asset, Chunk, Source
 from open_notebook.domain.transformation import Transformation
 from open_notebook.graphs.transformation import graph as transform_graph
-from open_notebook.processors import extract_chunks_from_docling
-from open_notebook.utils.content_core_config import apply_content_core_settings, serialize_docling_document
+from open_notebook.processors.spacy_pipeline import (
+    ProcessingInput,
+    ProcessingOutput,
+    process_document,
+)
 
 
 class SourceState(TypedDict):
-    content_state: ProcessSourceInput | ProcessSourceOutput  # Input initially, Output after processing
+    """State for source processing workflow."""
+    # Input data
+    file_path: Optional[str]
+    url: Optional[str]
+    content: Optional[str]
+    title: Optional[str]
+    # Processing state
+    processing_output: Optional[ProcessingOutput]
     apply_transformations: List[Transformation]
     source_id: str
     notebook_ids: List[str]
     source: Source
     transformation: Annotated[list, operator.add]
     embed: bool
-    chunks: Optional[List[Dict[str, Any]]]  # Extracted document chunks with positions
+    chunks: Optional[List[Dict[str, Any]]]
+    # Knowledge Graph extraction
+    extract_knowledge: bool
+    kg_extraction_result: Optional[Dict[str, Any]]
+    # RAPTOR processing
+    raptor_enabled: bool
+    raptor_result: Optional[Dict[str, Any]]
 
 
 class TransformationState(TypedDict):
+    """State for transformation subprocess."""
     source: Source
     transformation: Transformation
 
 
 async def content_process(state: SourceState) -> dict:
-    # Load settings from database instead of hardcoding
+    """
+    Process document using spaCy-Layout pipeline.
+
+    Replaces the previous content-core based extraction.
+    """
+    # Load settings from database
     content_settings = await ContentSettings.get_instance()
-    content_state = state["content_state"]
 
-    # Convert dict to ProcessSourceInput if needed (LangGraph serializes to dict)
-    if isinstance(content_state, dict):
-        content_input = ProcessSourceInput(**content_state)
-    else:
-        content_input = content_state
+    # Get input data from state
+    file_path = state.get("file_path")
+    url = state.get("url")
+    content = state.get("content")
+    title = state.get("title")
 
-    # Apply content-core configuration from settings (GPU, pipeline, VLM, etc.)
-    await apply_content_core_settings(content_settings)
+    # Log processing configuration
+    gpu_enabled = content_settings.spacy_gpu_enabled if hasattr(content_settings, 'spacy_gpu_enabled') else True
+    gpu_device = content_settings.spacy_gpu_device if hasattr(content_settings, 'spacy_gpu_device') else "auto"
 
-    # Configure extraction settings
-    content_input.url_engine = (
-        content_settings.default_content_processing_engine_url or "auto"
-    )
-    content_input.document_engine = (
-        content_settings.default_content_processing_engine_doc or "docling"
-    )
-    content_input.output_format = "markdown"
-
-    # Log the configuration being used
     logger.info(
-        f"📄 Processing with engine={content_input.document_engine}, "
-        f"pipeline={content_settings.docling_pipeline}, "
-        f"gpu={content_settings.docling_gpu_enabled}"
+        f"📄 Processing with spaCy-Layout pipeline, "
+        f"gpu_enabled={gpu_enabled}, device={gpu_device}"
     )
 
-    # Use content-core for all extraction (GPU/VLM configured via apply_content_core_settings)
-    processed_state = await extract_content(content_input)
-
-    # Extract chunks BEFORE serializing DoclingDocument (need original object for chunking)
-    chunks = None
-    extraction_engine = (processed_state.metadata or {}).get("extraction_engine", "")
-    file_path = processed_state.file_path
-    is_pdf = file_path and file_path.lower().endswith('.pdf')
-    has_docling_doc = processed_state.metadata and processed_state.metadata.get("docling_document")
-
-    # Use content-core's chunking if enabled and we have a docling document
-    if content_settings.docling_chunking_enabled and has_docling_doc:
-        try:
-            from content_core.content.chunking import chunk_content
-
-            logger.info(
-                f"📦 Chunking with content-core: method={content_settings.docling_chunking_method}, "
-                f"max_tokens={content_settings.docling_chunking_max_tokens}, merge_peers=True"
-            )
-
-            # Use content-core's HybridChunker with merge_peers for proper chunk merging
-            chunk_outputs = await chunk_content(
-                content=processed_state,
-                chunk_size=content_settings.docling_chunking_max_tokens,
-                method=content_settings.docling_chunking_method or "hybrid",
-                merge_peers=True,  # Merge small consecutive chunks
-                preserve_metadata=True,
-                include_bboxes=True,
-            )
-
-            # Convert ChunkOutput to open-notebook's chunk format
-            chunks = []
-            for chunk_out in chunk_outputs:
-                # Extract page numbers from metadata
-                page_numbers = chunk_out.metadata.page_numbers or []
-                physical_page = page_numbers[0] if page_numbers else 0
-
-                # Convert bounding boxes to normalized positions format
-                # Docling uses BOTTOMLEFT origin with absolute coordinates in points
-                # Frontend expects TOPLEFT origin with normalized (0-1) coordinates
-                # Format: [page_number, x_left, x_right, y_top, y_bottom] normalized 0-1
-                positions = []
-
-                # Helper to normalize and convert coordinates
-                def normalize_bbox(bbox_dict: dict, page_no: int, chunk_idx: int = 0) -> list:
-                    """Convert absolute BOTTOMLEFT coords to normalized TOPLEFT coords."""
-                    left = float(bbox_dict['left'])
-                    right = float(bbox_dict['right'])
-                    top = float(bbox_dict['top'])
-                    bottom = float(bbox_dict['bottom'])
-                    page_width = bbox_dict.get('page_width')
-                    page_height = bbox_dict.get('page_height')
-                    coord_origin = str(bbox_dict.get('coord_origin', 'BOTTOMLEFT')).upper()
-
-                    # Default page size if not provided (A4 in points)
-                    if not page_width or page_width <= 0:
-                        page_width = 595.0  # A4 width
-                    if not page_height or page_height <= 0:
-                        page_height = 842.0  # A4 height
-
-                    # Normalize to 0-1 range
-                    x_left = left / page_width
-                    x_right = right / page_width
-
-                    # Convert Y coordinates based on origin
-                    # Content-core's bbox uses 'top' and 'bottom' which are y-coordinates
-                    # In BOTTOMLEFT: higher y = higher on page visually
-                    # 'top' edge of bbox has higher y, 'bottom' edge has lower y
-                    if 'BOTTOMLEFT' in coord_origin:
-                        # In BOTTOMLEFT: y=0 is bottom, y increases upward
-                        # Convert to TOPLEFT: y=0 is top, y increases downward
-                        # Visual top of box (high y in BOTTOMLEFT) -> small y in TOPLEFT
-                        y_top_converted = 1.0 - (top / page_height)
-                        y_bottom_converted = 1.0 - (bottom / page_height)
-                    else:
-                        # Already TOPLEFT origin
-                        y_top_converted = top / page_height
-                        y_bottom_converted = bottom / page_height
-
-                    # ALWAYS ensure y_top < y_bottom for TOPLEFT display
-                    y_top = min(y_top_converted, y_bottom_converted)
-                    y_bottom = max(y_top_converted, y_bottom_converted)
-
-                    # Clamp values to 0-1 range
-                    x_left = max(0.0, min(1.0, x_left))
-                    x_right = max(0.0, min(1.0, x_right))
-                    y_top = max(0.0, min(1.0, y_top))
-                    y_bottom = max(0.0, min(1.0, y_bottom))
-
-                    # Debug: log coordinate conversion for first few chunks
-                    if chunk_idx < 5 or page_no == 22:
-                        logger.info(
-                            f"normalize_bbox chunk={chunk_idx}: page={page_no}, origin={coord_origin}, "
-                            f"raw(l={left:.1f}, r={right:.1f}, t={top:.1f}, b={bottom:.1f}), "
-                            f"pageSize=({page_width:.1f}x{page_height:.1f}), "
-                            f"→ y_top={y_top:.3f} ({y_top*100:.1f}%), y_bottom={y_bottom:.3f} ({y_bottom*100:.1f}%)"
-                        )
-
-                    return [page_no, x_left, x_right, y_top, y_bottom]
-
-                # doc_items contain page-specific bounding box information
-                chunk_idx = chunk_out.index
-                for doc_item in chunk_out.metadata.doc_items:
-                    if 'bbox' in doc_item:
-                        bbox = doc_item['bbox']
-                        page_no = doc_item.get('page_no', page_numbers[0] if page_numbers else 0)
-                        positions.append(normalize_bbox(bbox, page_no, chunk_idx))
-
-                # Fallback: If doc_items don't have bbox but bounding_boxes does
-                if not positions and chunk_out.metadata.bounding_boxes:
-                    for i, bbox in enumerate(chunk_out.metadata.bounding_boxes):
-                        page_no = page_numbers[i] if i < len(page_numbers) else (page_numbers[0] if page_numbers else 0)
-                        bbox_dict = {
-                            'left': bbox.left,
-                            'right': bbox.right,
-                            'top': bbox.top,
-                            'bottom': bbox.bottom,
-                            'page_width': bbox.page_width,
-                            'page_height': bbox.page_height,
-                            'coord_origin': bbox.coord_origin,
-                        }
-                        positions.append(normalize_bbox(bbox_dict, page_no, chunk_idx))
-
-                chunk = {
-                    'text': chunk_out.text,
-                    'order': chunk_out.index,
-                    'physical_page': physical_page,
-                    'printed_page': physical_page + 1,
-                    'chapter': chunk_out.metadata.headings[0] if chunk_out.metadata.headings else None,
-                    'paragraph_number': None,
-                    'element_type': 'chunk',  # Merged chunk
-                    'positions': positions,
-                    'metadata': {
-                        'has_spatial_data': len(positions) > 0,
-                        'num_locations': len(positions),
-                        'headings': chunk_out.metadata.headings,
-                        'page_numbers': page_numbers,
-                    }
-                }
-                chunks.append(chunk)
-
-            logger.info(f"✅ Extracted {len(chunks)} merged chunks (content-core HybridChunker)")
-
-        except ImportError as e:
-            logger.warning(f"Content-core chunking not available: {e}. Falling back to element-based extraction.")
-            chunks = None
-        except Exception as e:
-            logger.warning(f"Content-core chunking failed: {e}. Falling back to element-based extraction.")
-            chunks = None
-
-    # Fallback: Extract raw document elements if chunking disabled or failed
-    if chunks is None and ("docling" in extraction_engine.lower() or is_pdf) and file_path:
-        try:
-            logger.info(f"Extracting document elements (no merging) from {file_path}")
-
-            from open_notebook.utils.docling_utils import reconstruct_docling_document
-            from open_notebook.processors.chunk_extractor import (
-                extract_chunks_from_existing_document,
-                extract_chunks_from_docling
-            )
-
-            # Try to get DoclingDocument from metadata before serialization
-            doc = processed_state.metadata.get("docling_document") if processed_state.metadata else None
-            if doc:
-                logger.debug("Using DoclingDocument from metadata for element extraction")
-                chunks = extract_chunks_from_existing_document(doc)
-            else:
-                # Fallback: Re-process with docling
-                logger.debug("Re-converting document for element extraction")
-                _, chunks, _ = extract_chunks_from_docling(file_path, output_format="markdown")
-
-            logger.info(f"Extracted {len(chunks)} document elements (unmerged)")
-        except Exception as e:
-            logger.warning(f"Failed to extract document elements: {e}")
-            chunks = None
-
-    # Serialize DoclingDocument for LangGraph state persistence (AFTER chunking)
-    if processed_state.metadata:
-        processed_state.metadata = serialize_docling_document(processed_state.metadata)
+    # Process using new pipeline
+    try:
+        processing_output, chunks = await process_document(
+            file_path=file_path,
+            url=url,
+            content=content,
+            title=title,
+            gpu_enabled=gpu_enabled,
+            gpu_device=gpu_device,
+        )
+    except Exception as e:
+        logger.error(f"Document processing failed: {e}")
+        raise
 
     # File Management System Integration
-    # Organize files and export markdown with assets if file_path exists
     if file_path:
         try:
             from open_notebook.utils.file_manager import organize_file
@@ -253,12 +107,11 @@ async def content_process(state: SourceState) -> dict:
             file_operation = content_settings.file_operation or "copy"
             naming_scheme = content_settings.output_naming_scheme or "date_prefix"
             input_dir = content_settings.input_directory_path or "./data/input"
-            markdown_dir = content_settings.markdown_directory_path or "./data/markdown"
             output_dir = content_settings.output_directory_path or "./data/output"
 
             logger.info(f"📁 Starting file management workflow for {file_path}")
 
-            # Step 1: Organize file (copy/move to INPUT, copy to OUTPUT)
+            # Organize file (copy/move to INPUT, copy to OUTPUT)
             input_path, output_path = organize_file(
                 file_path=file_path,
                 input_dir=input_dir,
@@ -268,83 +121,44 @@ async def content_process(state: SourceState) -> dict:
             )
 
             # Store organized paths in metadata
-            if processed_state.metadata is None:
-                processed_state.metadata = {}
-            processed_state.metadata["organized_input_path"] = str(input_path) if input_path else None
-            processed_state.metadata["organized_output_path"] = str(output_path)
+            if processing_output.metadata is None:
+                processing_output.metadata = {}
+            processing_output.metadata["organized_input_path"] = str(input_path) if input_path else None
+            processing_output.metadata["organized_output_path"] = str(output_path)
 
-            # NOTE: Markdown export with assets requires reconstructing DoclingDocument from JSON
-            # Content-core stores the document in metadata, which we serialize for LangGraph
-            markdown_export_path = processed_state.metadata.get("markdown_export_path")
-
-            if not markdown_export_path:
-                # Fallback: Try to reconstruct DoclingDocument and export
-                from open_notebook.utils.docling_utils import reconstruct_docling_document
-                from open_notebook.utils.file_manager import (
-                    create_document_subdirectory,
-                    generate_unique_document_name,
-                )
-                from open_notebook.utils.markdown_exporter import (
-                    export_document_to_markdown_with_assets,
-                )
-
-                doc = reconstruct_docling_document(processed_state.metadata)
-                if doc:
-                    try:
-                        from pathlib import Path
-                        doc_base_name = Path(file_path).stem
-                        doc_name = generate_unique_document_name(doc_base_name, timestamp=True)
-                        doc_dir = create_document_subdirectory(markdown_dir, doc_name)
-
-                        markdown_path, num_images, num_tables = export_document_to_markdown_with_assets(
-                            doc=doc,
-                            output_dir=str(doc_dir),
-                            document_name="document",
-                        )
-
-                        processed_state.metadata["markdown_export_path"] = markdown_path
-                        processed_state.metadata["markdown_images_count"] = num_images
-                        processed_state.metadata["markdown_tables_count"] = num_tables
-
-                        logger.success(
-                            f"📄 Exported markdown with {num_images} images and {num_tables} tables to {markdown_path}"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to export markdown in fallback: {e}")
-
-            logger.info(f"✅ File management workflow completed successfully")
+            logger.info("✅ File management workflow completed successfully")
 
         except Exception as e:
             logger.error(f"File management workflow failed: {e}")
             # Don't fail the entire processing if file management fails
-            # Continue with normal flow
 
     return {
-        "content_state": processed_state,
+        "processing_output": processing_output,
         "chunks": chunks
     }
 
 
 async def save_source(state: SourceState) -> dict:
+    """Save processed source and chunks to database."""
     from open_notebook.database.repository import repo_query, ensure_record_id
 
-    content_state = state["content_state"]
+    processing_output = state["processing_output"]
 
     # Get existing source using the provided source_id
     source = await Source.get(state["source_id"])
     if not source:
         raise ValueError(f"Source with ID {state['source_id']} not found")
 
-    # content_state is a ProcessSourceOutput Pydantic object from content_process
+    # Update source with processed content
     source.asset = Asset(
-        url=content_state.url,
-        file_path=content_state.file_path
+        url=processing_output.url,
+        file_path=processing_output.file_path
     )
-    source.full_text = content_state.content
+    source.full_text = processing_output.content
 
     # Preserve existing title if none provided in processed content
-    if content_state.title:
-        source.title = content_state.title
+    if processing_output.title:
+        source.title = processing_output.title
 
     await source.save()
 
@@ -368,7 +182,7 @@ async def save_source(state: SourceState) -> dict:
                 chunk = Chunk(
                     source=source.id,
                     text=chunk_data["text"],
-                    order=chunk_data["order"],
+                    chunk_order=chunk_data["chunk_order"],
                     physical_page=chunk_data["physical_page"],
                     printed_page=chunk_data.get("printed_page"),
                     chapter=chunk_data.get("chapter"),
@@ -387,9 +201,7 @@ async def save_source(state: SourceState) -> dict:
             # Don't fail the whole process if chunk saving fails
             logger.warning("Continuing despite chunk save failure")
 
-    # NOTE: Notebook associations are created by the API immediately for UI responsiveness
-    # No need to create them here to avoid duplicate edges
-
+    # Embed content for vector search if requested
     if state["embed"]:
         logger.debug("Embedding content for vector search")
         await source.vectorize()
@@ -397,7 +209,238 @@ async def save_source(state: SourceState) -> dict:
     return {"source": source}
 
 
+async def extract_knowledge_graph(state: SourceState) -> dict:
+    """
+    Extract entities and claims for the knowledge graph.
+
+    Uses ontology-driven extraction with document type detection:
+    1. Detect document type for specialized extraction
+    2. Select appropriate ontology based on document type
+    3. Extract entities and claims with EntityLinker deduplication
+    """
+    if not state.get("extract_knowledge", False):
+        return {"kg_extraction_result": None}
+
+    source = state["source"]
+    if not source or not source.full_text:
+        logger.warning("No source text for KG extraction")
+        return {"kg_extraction_result": None}
+
+    try:
+        from open_notebook.processors.openie import OpenIEExtractor, map_claim_type
+        from open_notebook.processors.entity_linking import EntityLinker
+        from open_notebook.domain.knowledge_graph import Claim
+        from open_notebook.database.repository import repo_query, ensure_record_id
+
+        # Get content settings for extraction config
+        content_settings = await ContentSettings.get_instance()
+        kg_enabled = getattr(content_settings, 'kg_extraction_enabled', True)
+        linking_enabled = getattr(content_settings, 'kg_entity_linking_enabled', True)
+
+        if not kg_enabled:
+            logger.info("Knowledge graph extraction is disabled in settings")
+            return {"kg_extraction_result": None}
+
+        logger.info(f"🧠 Starting knowledge graph extraction for source {source.id}")
+
+        extractor = OpenIEExtractor()
+        entities_extracted = 0
+        claims_extracted = 0
+        detected_type = None
+
+        # Import ontology mapper for document-type-specific extraction
+        try:
+            from open_notebook.ontology.document_ontology_mapper import get_ontology_for_document_type
+
+            # Phase 1: Detect document type
+            logger.info("Phase 1: Detecting document type...")
+            doc_type_result = await extractor._detect_document_type(source.full_text)
+            detected_type = doc_type_result.get("document_type")
+            type_confidence = doc_type_result.get("confidence", 0.0)
+
+            # Update source with detected document type if confident
+            if detected_type and type_confidence >= 0.7:
+                source.source_type = detected_type
+                await source.save()
+                logger.info(f"Detected document type: {detected_type} (confidence: {type_confidence:.2f})")
+
+            # Phase 2: Select appropriate ontology based on document type
+            ontology_name = get_ontology_for_document_type(detected_type)
+            logger.info(f"Phase 2: Using ontology '{ontology_name}' for extraction (document type: {detected_type})")
+
+            # Phase 3: Extract with specialized ontology
+            extraction_result = await extractor.extract_with_ontology(
+                source.full_text,
+                ontology_name=ontology_name,
+                detect_document_type=False  # Already detected
+            )
+            extraction_result.document_type = detected_type
+            extraction_result.document_type_confidence = type_confidence
+
+        except Exception as ontology_err:
+            logger.warning(f"Ontology-driven extraction failed, using generic: {ontology_err}")
+            extraction_result = await extractor.extract_all(source.full_text)
+
+        if not extraction_result:
+            logger.warning("No extraction result from OpenIE")
+            return {"kg_extraction_result": None}
+
+        # Process entities with deduplication through EntityLinker
+        if linking_enabled and extraction_result.entities:
+            linker = EntityLinker()
+            link_results = await linker.process_extracted_entities(
+                extraction_result.entities,
+                source_id=str(source.id)
+            )
+            entities_extracted = link_results["total"]
+
+            # Create mentions relationships
+            source_record_id = ensure_record_id(str(source.id))
+            for entity_info in link_results["entities"]:
+                try:
+                    confidence = next(
+                        (e.confidence for e in extraction_result.entities
+                         if e.name == entity_info["extracted_name"]),
+                        0.8
+                    )
+                    # Check if mention already exists
+                    existing = await repo_query(
+                        "SELECT * FROM mentions WHERE in = $source_id AND out = $entity_id LIMIT 1",
+                        {"source_id": source_record_id, "entity_id": ensure_record_id(entity_info["entity_id"])}
+                    )
+                    if not existing:
+                        await repo_query(
+                            "RELATE $source_id->mentions->$entity_id SET confidence = $confidence, created_at = time::now()",
+                            {
+                                "source_id": source_record_id,
+                                "entity_id": ensure_record_id(entity_info["entity_id"]),
+                                "confidence": confidence
+                            }
+                        )
+                except Exception as me:
+                    logger.debug(f"Error creating mention: {me}")
+
+            logger.info(
+                f"Entity linking: {link_results['new']} new, "
+                f"{link_results['existing']} existing, "
+                f"{link_results['linked']} linked"
+            )
+
+        # Process claims
+        if extraction_result.claims:
+            source_record_id = ensure_record_id(str(source.id))
+            for extracted_claim in extraction_result.claims:
+                try:
+                    claim_type = map_claim_type(extracted_claim.claim_type)
+                    claim = Claim(
+                        statement=extracted_claim.statement,
+                        claim_type=claim_type,
+                        confidence=extracted_claim.confidence
+                    )
+                    await claim.save()
+                    claims_extracted += 1
+
+                    # Create supports relationship
+                    await repo_query(
+                        "RELATE $source_id->supports->$claim_id SET strength = $strength, quote = $quote, created_at = time::now()",
+                        {
+                            "source_id": source_record_id,
+                            "claim_id": ensure_record_id(claim.id),
+                            "strength": extracted_claim.confidence,
+                            "quote": getattr(extracted_claim, 'supporting_quote', None) or getattr(extracted_claim, 'context', None)
+                        }
+                    )
+                except Exception as ce:
+                    logger.debug(f"Error processing claim: {ce}")
+
+            logger.info(f"Created {claims_extracted} claims for source {source.id}")
+
+        result = {
+            "entities_extracted": entities_extracted,
+            "claims_extracted": claims_extracted,
+            "triples_extracted": len(extraction_result.triples) if extraction_result.triples else 0,
+            "document_type": detected_type,
+        }
+
+        logger.info(f"✅ KG extraction complete: {result}")
+        return {"kg_extraction_result": result}
+
+    except Exception as e:
+        logger.error(f"Knowledge graph extraction failed: {e}")
+        logger.exception(e)
+        return {"kg_extraction_result": {"error": str(e)}}
+
+
+async def process_raptor(state: SourceState) -> dict:
+    """
+    Process source with RAPTOR hierarchical summarization.
+
+    Creates multi-layer summary chunks for improved retrieval.
+    """
+    if not state.get("raptor_enabled", False):
+        return {"raptor_result": None}
+
+    source = state["source"]
+    if not source:
+        return {"raptor_result": None}
+
+    try:
+        # Check if RAPTOR is enabled in settings
+        content_settings = await ContentSettings.get_instance()
+        raptor_enabled = getattr(content_settings, 'raptor_enabled', False)
+
+        if not raptor_enabled:
+            logger.debug("RAPTOR is disabled in settings")
+            return {"raptor_result": None}
+
+        # Check minimum chunk requirement
+        min_chunks = getattr(content_settings, 'raptor_min_chunks', 5)
+        chunks = state.get("chunks", [])
+
+        if not chunks or len(chunks) < min_chunks:
+            logger.info(
+                f"Source has {len(chunks) if chunks else 0} chunks, "
+                f"below minimum {min_chunks} for RAPTOR"
+            )
+            return {"raptor_result": {"skipped": "insufficient_chunks"}}
+
+        logger.info(f"🌲 Starting RAPTOR processing for source {source.id}")
+
+        # Import RAPTOR components
+        from open_notebook.processors.raptor import (
+            RaptorProcessor,
+            RaptorConfig,
+        )
+
+        # Build RAPTOR config from settings
+        max_layers = getattr(content_settings, 'raptor_max_layers', 5)
+        summarization_model = getattr(content_settings, 'raptor_summarization_model', None)
+
+        config = RaptorConfig(
+            max_layers=max_layers,
+            summarization_model=summarization_model,
+        )
+
+        # Process with RAPTOR
+        processor = RaptorProcessor(config)
+        tree = await processor.process_source(source.id)
+
+        result = {
+            "layers": tree.num_layers if tree else 0,
+            "nodes_created": len(tree.nodes) if tree and tree.nodes else 0,
+        }
+
+        logger.info(f"✅ RAPTOR complete: {result['layers']} layers, {result['nodes_created']} nodes")
+        return {"raptor_result": result}
+
+    except Exception as e:
+        logger.error(f"RAPTOR processing failed: {e}")
+        logger.exception(e)
+        return {"raptor_result": {"error": str(e)}}
+
+
 def trigger_transformations(state: SourceState, config: RunnableConfig) -> List[Send]:
+    """Trigger transformation subprocesses if any are requested."""
     if len(state["apply_transformations"]) == 0:
         return []
 
@@ -417,6 +460,7 @@ def trigger_transformations(state: SourceState, config: RunnableConfig) -> List[
 
 
 async def transform_content(state: TransformationState) -> Optional[dict]:
+    """Apply a transformation to source content."""
     source = state["source"]
     content = source.full_text
     if not content:
@@ -425,7 +469,7 @@ async def transform_content(state: TransformationState) -> Optional[dict]:
 
     logger.debug(f"Applying transformation {transformation.name}")
     result = await transform_graph.ainvoke(
-        dict(input_text=content, transformation=transformation)  # type: ignore[arg-type]
+        dict(input_text=content, transformation=transformation)
     )
     await source.add_insight(transformation.title, result["output"])
     return {
@@ -438,19 +482,73 @@ async def transform_content(state: TransformationState) -> Optional[dict]:
     }
 
 
+def should_extract_knowledge(state: SourceState) -> str:
+    """Determine if we should extract knowledge graph data."""
+    if state.get("extract_knowledge", False):
+        return "extract_knowledge_graph"
+    return "check_raptor"
+
+
+def should_process_raptor(state: SourceState) -> str:
+    """Determine if we should process with RAPTOR."""
+    if state.get("raptor_enabled", False):
+        return "process_raptor"
+    return "trigger_transformations"
+
+
+def trigger_transformations_or_end(state: SourceState) -> str:
+    """Determine if we should trigger transformations or end."""
+    if len(state.get("apply_transformations", [])) > 0:
+        return "transform_content"
+    return END
+
+
 # Create and compile the workflow
 workflow = StateGraph(SourceState)
 
 # Add nodes
 workflow.add_node("content_process", content_process)
 workflow.add_node("save_source", save_source)
+workflow.add_node("extract_knowledge_graph", extract_knowledge_graph)
+workflow.add_node("process_raptor", process_raptor)
 workflow.add_node("transform_content", transform_content)
+
 # Define the graph edges
+# Main flow: content_process -> save_source -> optional steps -> transformations
 workflow.add_edge(START, "content_process")
 workflow.add_edge("content_process", "save_source")
+
+# After saving, conditionally extract knowledge graph
 workflow.add_conditional_edges(
-    "save_source", trigger_transformations, ["transform_content"]
+    "save_source",
+    should_extract_knowledge,
+    {
+        "extract_knowledge_graph": "extract_knowledge_graph",
+        "check_raptor": "process_raptor",  # Skip KG extraction
+    }
 )
+
+# After KG extraction, check RAPTOR
+workflow.add_conditional_edges(
+    "extract_knowledge_graph",
+    should_process_raptor,
+    {
+        "process_raptor": "process_raptor",
+        "trigger_transformations": "transform_content",
+    }
+)
+
+# After RAPTOR, trigger transformations
+workflow.add_conditional_edges(
+    "process_raptor",
+    trigger_transformations_or_end,
+    {
+        "transform_content": "transform_content",
+        END: END,
+    }
+)
+
+# Transformations end the workflow
 workflow.add_edge("transform_content", END)
 
 # Compile the graph
