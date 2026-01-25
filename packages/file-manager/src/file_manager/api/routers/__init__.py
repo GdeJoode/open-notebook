@@ -1,5 +1,5 @@
 """
-File manager API module.
+File manager API routers.
 """
 
 from file_manager.api.routers import files, storage

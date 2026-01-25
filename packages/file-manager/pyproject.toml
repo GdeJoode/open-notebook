@@ -11,10 +11,17 @@ dependencies = [
     "python-magic>=0.4.27",
     "fastapi>=0.104.0",
     "mcp>=1.0.0",
+    "pydantic-settings>=2.0.0",
+    "loguru>=0.7.0",
 ]
 
 [project.optional-dependencies]
 ui = ["streamlit>=1.30.0"]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.25.0",
+]
 
 [project.scripts]
 file-manager = "file_manager.api.app:main"
@@ -30,3 +37,8 @@ packages = ["src/file_manager"]
 [tool.uv.sources]
 shared = { workspace = true }
 surrealdb-service = { workspace = true }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
