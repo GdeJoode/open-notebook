@@ -1,0 +1,32 @@
+[project]
+name = "ontology-extraction"
+version = "0.1.0"
+description = "Entity and relation extraction pipeline with ontology support"
+requires-python = ">=3.11"
+dependencies = [
+    "shared",
+    "surrealdb-service",
+    "llm-manager",
+    "rdflib>=7.0.0",
+    "networkx>=3.0",
+    "spacy>=3.7.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+ui = ["streamlit>=1.30.0"]
+
+[project.scripts]
+ontology-extraction = "ontology_extraction.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ontology_extraction"]
+
+[tool.uv.sources]
+shared = { workspace = true }
+surrealdb-service = { workspace = true }
+llm-manager = { workspace = true }
