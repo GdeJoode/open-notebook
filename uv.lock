@@ -5098,6 +5098,11 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+]
 ui = [
     { name = "streamlit" },
 ]
@@ -5107,12 +5112,15 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.104.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "mcp", specifier = ">=1.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "shared", editable = "packages/shared" },
     { name = "streamlit", marker = "extra == 'ui'", specifier = ">=1.30.0" },
     { name = "surrealdb", specifier = ">=1.0.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
 ]
-provides-extras = ["ui"]
+provides-extras = ["ui", "dev"]
 
 [[package]]
 name = "sympy"
