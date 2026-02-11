@@ -2,7 +2,7 @@
 name = "llm-manager"
 version = "0.1.0"
 description = "LLM provider management, routing, and usage tracking"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "shared",
     "surrealdb-service",
@@ -52,3 +52,4 @@ surrealdb-service = { workspace = true }
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+addopts = "--import-mode=importlib"

@@ -2,7 +2,7 @@
 name = "file-manager"
 version = "0.1.0"
 description = "File and knowledge base management for open-notebook"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "shared",
     "surrealdb-service",
@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ui = ["streamlit>=1.30.0"]
+queue = ["job-queue"]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
@@ -37,8 +38,10 @@ packages = ["src/file_manager"]
 [tool.uv.sources]
 shared = { workspace = true }
 surrealdb-service = { workspace = true }
+job-queue = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+addopts = "--import-mode=importlib"

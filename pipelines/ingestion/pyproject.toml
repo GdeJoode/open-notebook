@@ -2,13 +2,15 @@
 name = "ingestion"
 version = "0.1.0"
 description = "Document ingestion pipeline - parsing, chunking, source creation"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "shared",
     "surrealdb-service",
     "file-manager",
-    "llm-manager",
+    # llm-manager not needed - ingestion uses local models (Docling VLM, WhisperX)
     "docling>=2.58.0",
+    "easyocr>=1.7.0",  # Default OCR engine for Docling
+    "loguru>=0.7.2",   # Logging with rich output
     "beautifulsoup4>=4.12.0",
     "httpx>=0.27.0",
     "aiofiles>=23.0.0",
@@ -16,9 +18,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ui = ["streamlit>=1.30.0"]
-gpu = ["torch>=2.0.0"]
-audio = ["whisperx>=3.0.0", "torch>=2.0.0", "torchaudio>=2.0.0"]
+ui = ["streamlit>=1.30.0", "markdown>=3.5.0", "psutil>=5.9.0", "streamlit-autorefresh>=1.0.0"]
+gpu = ["torch==2.8.0"]
+audio = ["whisperx>=3.0.0", "torch==2.8.0", "torchaudio==2.8.0", "torchvision==0.23.0", "lightning==2.5.5", "pytorch-lightning==2.5.5"]
 
 [project.scripts]
 ingestion = "ingestion.cli:main"
@@ -34,4 +36,9 @@ packages = ["src/ingestion"]
 shared = { workspace = true }
 surrealdb-service = { workspace = true }
 file-manager = { workspace = true }
-llm-manager = { workspace = true }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"

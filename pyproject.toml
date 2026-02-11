@@ -12,7 +12,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.10"
 
 # Root package has minimal dependencies - most live in workspace packages
 dependencies = [
@@ -31,6 +31,7 @@ dev = [
     "pre-commit>=4.0.1",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "honcho>=2.0.0",
 ]
 
 [build-system]
@@ -53,6 +54,7 @@ members = [
 shared = { workspace = true }
 surrealdb-service = { workspace = true }
 file-manager = { workspace = true }
+job-queue = { workspace = true }
 llm-manager = { workspace = true }
 ingestion = { workspace = true }
 ontology-extraction = { workspace = true }
@@ -106,6 +108,8 @@ ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+addopts = "--import-mode=importlib"
