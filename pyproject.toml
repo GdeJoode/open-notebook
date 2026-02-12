@@ -115,3 +115,6 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "--import-mode=importlib"
+markers = [
+    "integration: Cross-package integration tests (no DB, no LLM, no heavy models)",
+]

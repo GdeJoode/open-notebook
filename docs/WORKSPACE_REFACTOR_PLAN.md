@@ -3913,7 +3913,8 @@ This plan focuses on implementing the workspace structure with ingestion and ext
 7. **Step 7a**: packages/ontology-manager — ✅ Done (188 tests)
 8. **Step 7b**: pipelines/ontology-extraction (refactored to pure LLM) — ✅ Done (32 tests)
 9. **Step 7c**: pipelines/entity-filtering (expanded) — ✅ Done (469 tests)
-10. **Step 8**: Source-Centric File Management — ✅ Done (68 tests)
+10. **Step 8 (file-mgmt)**: Source-Centric File Management — ✅ Done (68 tests)
+11. **Step 8 (integration)**: Cross-Package Integration Tests — ✅ Done (40 tests)
     - Added `SourceFolder` and `PipelineCacheEntry` models to packages/shared
     - Added `SourceFolderRepository` and `PipelineCacheRepository` to packages/surrealdb-service
     - Added `SourceFolderService`, `PipelineCacheService`, `DuplicateDetector` services to packages/file-manager
@@ -4881,69 +4882,33 @@ class OpenIEExtractor:
 
 ---
 
-## Step 8: Integration Testing
+## Step 8: Integration Testing — ✅ Done (40 tests)
 
-**Goal**: Verify all components work together in the complete pipeline flow.
+**Goal**: Verify cross-package contracts work correctly without SurrealDB, LLMs, or heavy ML models.
 
-### 8.1 Integration Test Scenarios
+**Constraints**: No running SurrealDB, no LLM calls, no heavy ML models. Real filesystem I/O,
+real Python processing (entity-filtering stages 1-4), mocked repositories only.
 
-| Test | Description | Components |
-|------|-------------|------------|
-| E2E-1 | Ingest PDF → Extract entities → Verify in DB | ingestion, ontology-extraction, surrealdb-service |
-| E2E-2 | File manager stores files in correct KB | file-manager, surrealdb-service |
-| E2E-3 | LLM manager routes tasks correctly | llm-manager, all pipelines |
-| E2E-4 | Standalone mode works without database | ingestion, ontology-extraction |
-| E2E-5 | Connected mode persists all data | All components |
+### 8.1 Test Suite Overview
 
-### 8.2 Test Implementation Tasks
+| File | Tests | What it validates |
+|------|-------|-------------------|
+| `tests/integration/conftest.py` | — | Shared fixtures: mock repos, model factories, realistic extraction data |
+| `test_data_model_compatibility.py` | 8 | Pydantic model JSON round-trips and Liskov compliance |
+| `test_extraction_to_filtering.py` | 8 | ExtractionResult → FilteringWorkflow → FilteredResult (real stages 1-4) |
+| `test_source_folder_pipeline_cache.py` | 8 | SourceFolderService + PipelineCacheService on real filesystem |
+| `test_pipeline_cache_versioning.py` | 4 | Multi-version save/load/archive cycles |
+| `test_ingestion_export_into_source_folder.py` | 5 | DocumentExporter writes into source folder structure |
+| `test_source_folders_api_integration.py` | 7 | Router → real services → mock repos → real filesystem |
 
-- [ ] 8.2.1 Create test fixtures (sample PDF, ontology)
-- [ ] 8.2.2 Write E2E test: ingest → extract → verify
-- [ ] 8.2.3 Write standalone mode tests for each pipeline
-- [ ] 8.2.4 Write connected mode integration tests
-- [ ] 8.2.5 Write API endpoint tests
-- [ ] 8.2.6 Verify Docker compose brings up all services
-- [ ] 8.2.7 Performance benchmarks for ingestion
+### 8.2 Running
 
-### 8.3 Integration Test Example
+```bash
+# Run only integration tests
+uv run pytest tests/integration/ -v -m integration
 
-```python
-# tests/integration/test_pipeline_flow.py
-import pytest
-from ingestion import IngestionService
-from ontology_extraction import ExtractionService
-from surrealdb_service import SurrealDBClient, SourceRepository, EntityRepository
-
-@pytest.mark.asyncio
-async def test_ingest_and_extract_pdf():
-    # Setup
-    client = SurrealDBClient("ws://localhost:8000/rpc")
-    await client.connect()
-
-    source_repo = SourceRepository(client)
-    entity_repo = EntityRepository(client)
-
-    ingestion = IngestionService(source_repo=source_repo, ...)
-    extraction = ExtractionService(entity_repo=entity_repo, ...)
-
-    # Ingest
-    result = await ingestion.ingest(
-        file_path="tests/fixtures/sample.pdf",
-        knowledge_base_id="test-kb",
-    )
-    assert result.chunks_created > 0
-
-    # Extract
-    extract_result = await extraction.extract(source_id=result.source_id)
-    assert len(extract_result.entities) > 0
-
-    # Verify in database
-    source = await source_repo.get(result.source_id)
-    assert source is not None
-    assert source.status == "extracted"
-
-    entities = await entity_repo.list_for_source(result.source_id)
-    assert len(entities) == len(extract_result.entities)
+# Exclude integration tests from unit test runs
+uv run pytest packages/ pipelines/ -m "not integration" -q
 ```
 
 ---
@@ -4958,10 +4923,10 @@ async def test_ingest_and_extract_pdf():
 ├── Step 6: ingestion pipeline (62 tests)
 ├── Step 7a: ontology-manager package (188 tests)
 ├── Step 7b: ontology-extraction refactored to pure LLM (32 tests)
-└── Step 7c: entity-filtering pipeline (469 tests, 13-stage pipeline)
+├── Step 7c: entity-filtering pipeline (469 tests, 13-stage pipeline)
+└── Step 8: Cross-package integration tests (40 tests, no DB/LLM/models)
 
 REMAINING:
-├── Step 8: Integration testing across pipelines
 ├── Step 9: Remaining pipelines
 │   ├── web-scraper
 │   ├── summarization (TreeKG/RAPTOR — edge predictor already accepts hierarchy_graph)
