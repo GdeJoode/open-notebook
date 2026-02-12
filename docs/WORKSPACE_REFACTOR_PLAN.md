@@ -37,7 +37,7 @@
 | pipelines/ontology-extraction | ✅ Done (refactored) | 32 | `9867089` |
 | pipelines/entity-filtering | ✅ Done (expanded) | 469 | `134a871` |
 | pipelines/web-scraper | 📦 Scaffolded | 0 | — |
-| pipelines/summarization | 📦 Scaffolded | 0 | — |
+| pipelines/summarization | ✅ Done | 76 | (pending) |
 | pipelines/enrichment | 📦 Scaffolded | 0 | — |
 | pipelines/embeddings | 📦 Scaffolded | 0 | — |
 | pipelines/retrieval | 📦 Scaffolded | 0 | — |
@@ -2828,36 +2828,57 @@ local_index_mode:
 **Purpose**: Generate summaries at various levels of abstraction.
 
 **What belongs here**:
-- [ ] RAPTOR hierarchical summarization
-- [ ] Simple LLM summarization
+- [x] RAPTOR hierarchical summarization
+- [x] Naive LLM summarization (single-pass / chunk-and-combine)
+- [x] TreeKG structure-aware summarization
+- [x] 8 future strategy stubs (Map-Reduce, Refine, Walking Tree, Extractive-Abstractive, Skeleton-of-Thought, Hybrid, DPR-Abs, Linked Entity)
+- [x] 3 enhancer stubs (Chain-of-Density, Self-Correction, Gist Tokens)
 - [ ] Multi-document summarization
 - [ ] Summary caching
 
 **Source files to migrate**:
 | Current Location | New Location | Notes |
 |-----------------|--------------|-------|
-| `open_notebook/processors/raptor/` | `pipelines/summarization/src/summarization/raptor/` | |
-| `open_notebook/graphs/treekg_summarizer.py` | `pipelines/summarization/src/summarization/treekg.py` | |
-| | | |
+| `open_notebook/processors/raptor/` | `pipelines/summarization/src/summarization/raptor/` | Done |
+| `open_notebook/graphs/treekg_summarizer.py` | `pipelines/summarization/src/summarization/treekg/` | Done |
 
 **Directory structure**:
 ```
 pipelines/summarization/
 ├── pyproject.toml
-├── README.md
-├── main.py                 # CLI entry point
 ├── ui.py                   # Streamlit UI entry point
 └── src/summarization/
     ├── __init__.py
-    ├── config.py           # SummarizationConfig
-    ├── simple.py           # Simple LLM summarization
-    ├── raptor/
-    │   ├── __init__.py
-    │   ├── tree_builder.py
+    ├── config.py           # SummarizationConfig + 8 sub-configs
+    ├── workflow.py          # Strategy routing orchestrator
+    ├── models/
+    │   └── result.py       # SummarizationStrategy enum, ChunkInput, SummarizationResult
+    ├── strategies/
+    │   └── base.py         # BaseSummarizationStrategy ABC
+    ├── naive/              # ✅ Implemented
+    │   └── strategy.py
+    ├── raptor/             # ✅ Implemented
+    │   ├── clustering.py
+    │   ├── strategy.py
     │   ├── summarizer.py
-    │   └── clustering.py
-    ├── multi_doc.py        # Multi-document summarization
-    └── cli.py              # CLI commands
+    │   └── tree_builder.py
+    ├── treekg/             # ✅ Implemented
+    │   ├── graph.py
+    │   ├── strategy.py
+    │   └── summarizer.py
+    ├── enhancers/          # Stubs (BaseEnhancer ABC)
+    │   ├── base.py
+    │   ├── chain_of_density.py
+    │   ├── self_correction.py
+    │   └── gist_tokens.py
+    ├── map_reduce/         # Stub
+    ├── refine/             # Stub
+    ├── walking_tree/       # Stub
+    ├── extractive_abstractive/  # Stub
+    ├── skeleton/           # Stub
+    ├── hybrid/             # Stub
+    ├── dpr_abs/            # Stub
+    └── linked_entity/      # Stub
 ```
 
 **CLI Commands**:
@@ -3925,8 +3946,14 @@ This plan focuses on implementing the workspace structure with ingestion and ext
     - Versioned pipeline cache with automatic timestamped archiving (never deletes)
     - Metadata-based duplicate detection (no content hashing)
 11. **Step 9**: Integration Testing — Pending
-12. **Step 10**: Remaining pipelines (web-scraper, summarization, enrichment, embeddings, retrieval)
-13. **Step 11**: Applications (app-main, chat, canvas)
+12. **Step 10a**: pipelines/summarization — ✅ Done (76 tests)
+    - 3 implemented strategies: Naive, TreeKG, RAPTOR
+    - 11 future strategy/enhancer stubs (all raise NotImplementedError)
+    - BaseEnhancer ABC for composable post-processing layers
+    - 8 new config dataclasses with sensible defaults
+    - Updated docs/SUMMARIZATION_APPROACHES.md with 4 combination recipes
+13. **Step 10b**: Remaining pipelines (web-scraper, enrichment, embeddings, retrieval)
+14. **Step 11**: Applications (app-main, chat, canvas)
 
 ---
 
