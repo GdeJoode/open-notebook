@@ -48,6 +48,8 @@ class TranscriptionExporter:
         transcription: TranscriptionResult,
         source_name: Optional[str] = None,
         export_subtitles: bool = True,
+        source_folder_path: Optional[Path] = None,
+        source_id: Optional[str] = None,
     ) -> dict[str, Path]:
         """
         Export a transcription to the standard directory structure.
@@ -58,6 +60,10 @@ class TranscriptionExporter:
             transcription: Transcription result to export
             source_name: Name for the output directory (defaults to source filename)
             export_subtitles: Whether to export SRT and VTT files
+            source_folder_path: If provided, use this pre-existing source folder
+                instead of creating a new directory.
+            source_id: If provided (with source_folder_path), prefix all output
+                files with this ID for global uniqueness.
 
         Returns:
             Dictionary of exported file paths
@@ -68,32 +74,43 @@ class TranscriptionExporter:
 
         logger.info(f"Exporting transcription: {source_name}")
 
-        # Create directories (no original_file for audio/video)
-        dirs = self.config.create_directories(source_name, include_original=False)
+        # File prefix for source-folder mode
+        prefix = f"{source_id}_" if source_id else ""
+
+        # Create directories
+        if source_folder_path is not None:
+            dirs = self.config.create_directories_in_source_folder(
+                source_folder_path, source_type="audio"
+            )
+            # In source-folder mode, transcription outputs go to transcription/ dir
+            output_dir = dirs.get("transcription", dirs["output"])
+        else:
+            dirs = self.config.create_directories(source_name, include_original=False)
+            output_dir = dirs["output"]
 
         exported_paths: dict[str, Path] = {
             "root": dirs["root"],
-            "output": dirs["output"],
+            "output": output_dir,
         }
 
         # Export markdown
-        markdown_path = dirs["output"] / "transcription.md"
+        markdown_path = output_dir / f"{prefix}transcription.md"
         markdown_path.write_text(transcription.to_markdown(), encoding="utf-8")
         exported_paths["markdown"] = markdown_path
         logger.debug(f"Exported markdown to: {markdown_path}")
 
         # Export plain text
-        text_path = dirs["output"] / "transcription.txt"
+        text_path = output_dir / f"{prefix}transcription.txt"
         text_path.write_text(transcription.to_plain_text(), encoding="utf-8")
         exported_paths["text"] = text_path
 
         # Export with timestamps
-        timestamps_path = dirs["output"] / "transcription_timestamps.txt"
+        timestamps_path = output_dir / f"{prefix}transcription_timestamps.txt"
         timestamps_path.write_text(transcription.to_text_with_timestamps(), encoding="utf-8")
         exported_paths["timestamps"] = timestamps_path
 
         # Export JSON
-        json_path = dirs["output"] / "transcription.json"
+        json_path = output_dir / f"{prefix}transcription.json"
         json_path.write_text(transcription.to_json(), encoding="utf-8")
         exported_paths["json"] = json_path
         logger.debug(f"Exported JSON to: {json_path}")
@@ -101,17 +118,17 @@ class TranscriptionExporter:
         # Export subtitles
         if export_subtitles:
             # SRT format
-            srt_path = dirs["output"] / "transcription.srt"
+            srt_path = output_dir / f"{prefix}transcription.srt"
             srt_path.write_text(transcription.to_srt(), encoding="utf-8")
             exported_paths["srt"] = srt_path
 
             # VTT format
-            vtt_path = dirs["output"] / "transcription.vtt"
+            vtt_path = output_dir / f"{prefix}transcription.vtt"
             vtt_path.write_text(transcription.to_vtt(), encoding="utf-8")
             exported_paths["vtt"] = vtt_path
 
         # Export metadata (source file info without storing the file)
-        metadata_path = dirs["output"] / "metadata.json"
+        metadata_path = output_dir / f"{prefix}metadata.json"
         metadata = self._generate_metadata(transcription)
         metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         exported_paths["metadata"] = metadata_path

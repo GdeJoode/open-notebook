@@ -121,3 +121,71 @@ class ElementType(str, Enum):
     HEADER = "header"
     FOOTER = "footer"
     UNKNOWN = "unknown"
+
+
+class FileStatus(str, Enum):
+    """Processing status for tracked files in the ingestion pipeline."""
+    PENDING = "pending"  # File uploaded but not yet processed
+    INGESTED = "ingested"  # File has been parsed/transcribed
+    ENTITIES_EXTRACTED = "entities_extracted"  # Named entities extracted
+    SUMMARIZED = "summarized"  # Summary generated
+    SAVED_IN_KB = "saved_in_kb"  # Saved to a knowledge base
+    SAVED_AS_PROJECT = "saved_as_project"  # Saved as standalone project
+    FAILED = "failed"  # Processing failed
+
+
+class StorageLocation(str, Enum):
+    """Type of storage location for files."""
+    KNOWLEDGE_BASE = "knowledge_base"
+    PROJECT = "project"
+    TEMP = "temp"
+
+
+class JobType(str, Enum):
+    """Types of background processing jobs."""
+    DOCUMENT_PARSE = "document_parse"  # Docling document processing
+    AUDIO_TRANSCRIBE = "audio_transcribe"  # WhisperX transcription
+    BATCH_PROCESS = "batch_process"  # Multiple files
+    CHUNK_EXTRACT = "chunk_extract"  # Semantic chunking
+    EMBEDDING_GENERATE = "embedding_generate"  # Vector embeddings
+    INSIGHT_EXTRACT = "insight_extract"  # LLM-based insights
+
+
+class JobStatus(str, Enum):
+    """Status of a background job."""
+    QUEUED = "queued"  # Job submitted, waiting for worker
+    PROCESSING = "processing"  # Worker is executing
+    COMPLETED = "completed"  # Successfully finished
+    FAILED = "failed"  # Error during processing
+    CANCELLED = "cancelled"  # Manually cancelled
+    RETRYING = "retrying"  # Failed, attempting retry
+
+
+class JobPriority(str, Enum):
+    """Priority levels for job queue."""
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class PipelineStep(str, Enum):
+    """Known pipeline processing steps for cache identification."""
+    DOCLING_PARSE = "docling_parse"
+    TRANSCRIPTION = "transcription"
+    RAPTOR_SUMMARIES = "raptor_summaries"
+    TREEKG_STRUCTURE = "treekg_structure"
+    OPENIE_EXTRACTION = "openie_extraction"
+    ENTITY_DEDUP = "entity_dedup"
+    EMBEDDINGS = "embeddings"
+    ENRICHMENT = "enrichment"
+    SUMMARIZATION = "summarization"
+
+
+class SourceType(str, Enum):
+    """Type of source being stored."""
+    DOCUMENT = "document"
+    AUDIO = "audio"
+    VIDEO = "video"
+    TEXT = "text"
+    URL = "url"

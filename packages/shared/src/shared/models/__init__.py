@@ -5,7 +5,13 @@ Pure Pydantic models without database operations.
 """
 
 from shared.models.base import ObjectModel, RecordModel
-from shared.models.file_tracking import KnowledgeBase, Project, TrackedFile
+from shared.models.file_tracking import (
+    KnowledgeBase,
+    PipelineCacheEntry,
+    Project,
+    SourceFolder,
+    TrackedFile,
+)
 from shared.models.jobs import (
     Job,
     JobConfig,
@@ -50,6 +56,8 @@ __all__ = [
     "TrackedFile",
     "Project",
     "KnowledgeBase",
+    "SourceFolder",
+    "PipelineCacheEntry",
     # Job models
     "Job",
     "JobConfig",

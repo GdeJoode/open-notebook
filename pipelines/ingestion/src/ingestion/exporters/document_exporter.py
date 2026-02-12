@@ -52,6 +52,8 @@ class DocumentExporter:
         source_name: Optional[str] = None,
         copy_original: bool = True,
         table_format: TableFormat = TableFormat.BOTH,
+        source_folder_path: Optional[Path] = None,
+        source_id: Optional[str] = None,
     ) -> dict[str, Path]:
         """
         Export a document to the standard directory structure.
@@ -61,6 +63,10 @@ class DocumentExporter:
             source_name: Name for the output directory (defaults to source filename)
             copy_original: Whether to copy the original file
             table_format: Format for table export (MD, CSV, or BOTH)
+            source_folder_path: If provided, use this pre-existing source folder
+                instead of creating a new directory.
+            source_id: If provided (with source_folder_path), prefix all output
+                files with this ID for global uniqueness.
 
         Returns:
             Dictionary of exported file paths
@@ -71,8 +77,16 @@ class DocumentExporter:
 
         logger.info(f"Exporting document: {source_name}")
 
+        # File prefix for source-folder mode
+        prefix = f"{source_id}_" if source_id else ""
+
         # Create directories
-        dirs = self.config.create_directories(source_name, include_original=copy_original)
+        if source_folder_path is not None:
+            dirs = self.config.create_directories_in_source_folder(
+                source_folder_path, source_type="document"
+            )
+        else:
+            dirs = self.config.create_directories(source_name, include_original=copy_original)
 
         exported_paths: dict[str, Path] = {
             "root": dirs["root"],
@@ -81,36 +95,42 @@ class DocumentExporter:
 
         # Copy original file
         if copy_original and document.source_path.exists():
-            original_dest = dirs["original"] / document.source_path.name
+            if source_folder_path is not None:
+                # In source-folder mode, original goes to original/ subdir
+                original_dir = source_folder_path / "original"
+                original_dir.mkdir(parents=True, exist_ok=True)
+                original_dest = original_dir / f"{prefix}{document.source_path.name}"
+            else:
+                original_dest = dirs["original"] / document.source_path.name
             shutil.copy2(document.source_path, original_dest)
             exported_paths["original"] = original_dest
             logger.debug(f"Copied original to: {original_dest}")
 
         # Export markdown
-        markdown_path = dirs["output"] / "document.md"
+        markdown_path = dirs["output"] / f"{prefix}document.md"
         markdown_content = self._generate_markdown(document)
         markdown_path.write_text(markdown_content, encoding="utf-8")
         exported_paths["markdown"] = markdown_path
         logger.debug(f"Exported markdown to: {markdown_path}")
 
         # Export JSON
-        json_path = dirs["output"] / "document.json"
+        json_path = dirs["output"] / f"{prefix}document.json"
         json_path.write_text(document.to_json(), encoding="utf-8")
         exported_paths["json"] = json_path
         logger.debug(f"Exported JSON to: {json_path}")
 
         # Export metadata
-        metadata_path = dirs["output"] / "metadata.json"
+        metadata_path = dirs["output"] / f"{prefix}metadata.json"
         metadata = self._generate_metadata(document)
         metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         exported_paths["metadata"] = metadata_path
 
         # Export images
-        image_paths = self._export_images(document, dirs["images"])
+        image_paths = self._export_images(document, dirs["images"], prefix=prefix)
         exported_paths["images"] = list(image_paths.values())
 
         # Export tables
-        table_paths = self._export_tables(document, dirs["tables"], table_format)
+        table_paths = self._export_tables(document, dirs["tables"], table_format, prefix=prefix)
         exported_paths["tables"] = list(table_paths.values())
 
         logger.info(
@@ -175,13 +195,14 @@ class DocumentExporter:
         self,
         document: ExtractedDocument,
         images_dir: Path,
+        prefix: str = "",
     ) -> dict[str, Path]:
         """Export all extracted images."""
         exported = {}
 
         for idx, image in enumerate(document.all_images, 1):
             # Generate filename
-            filename = f"image_{idx:03d}_page{image.page}.{image.format}"
+            filename = f"{prefix}image_{idx:03d}_page{image.page}.{image.format}"
             image_path = images_dir / filename
 
             # Export image
@@ -209,7 +230,7 @@ class DocumentExporter:
 
             # Write description file
             if image.description:
-                desc_path = images_dir / f"image_{idx:03d}_description.txt"
+                desc_path = images_dir / f"{prefix}image_{idx:03d}_description.txt"
                 desc_content = f"Classification: {image.classification}\n\n{image.description}"
                 desc_path.write_text(desc_content, encoding="utf-8")
 
@@ -220,12 +241,13 @@ class DocumentExporter:
         document: ExtractedDocument,
         tables_dir: Path,
         table_format: TableFormat,
+        prefix: str = "",
     ) -> dict[str, Path]:
         """Export all extracted tables."""
         exported = {}
 
         for idx, table in enumerate(document.all_tables, 1):
-            base_name = f"table_{idx:03d}_page{table.page}"
+            base_name = f"{prefix}table_{idx:03d}_page{table.page}"
 
             # Export Markdown
             if table_format in (TableFormat.MARKDOWN, TableFormat.BOTH):

@@ -1,7 +1,8 @@
 # Open Notebook - UV Workspace Refactoring Plan
 
-> **Status**: DRAFT - Edit this document to refine the architecture before implementation
+> **Status**: IN PROGRESS - Core packages and initial pipelines implemented
 > **Created**: 2025-01-25
+> **Last Updated**: 2026-02-12
 
 ## Table of Contents
 1. [Overview](#overview)
@@ -17,23 +18,33 @@
 ## Overview
 
 ### Goals
-- [ ] Split monolithic codebase into focused, reusable packages
-- [ ] Enable **independent operation** of each pipeline component
-- [ ] Provide **standalone Streamlit UIs** for running pipelines without the full app
+- [x] Split monolithic codebase into focused, reusable packages
+- [x] Enable **independent operation** of each pipeline component
+- [ ] Provide **standalone Streamlit UIs** for running pipelines without the full app *(deferred — architecture supports it but not building UIs now)*
 - [ ] Maintain a production-ready main application that integrates all pipelines
 - [ ] Support flexible Docker deployments (standalone pipelines, full app, or both)
 
-### Current Pain Points
-<!-- Add your specific pain points here -->
--
--
--
+### Current Status Summary
 
-### Success Criteria
-<!-- Define what "done" looks like -->
--
--
--
+| Component | Status | Tests | Commit |
+|-----------|--------|-------|--------|
+| packages/shared | ✅ Done | 86 | `7db8a90` |
+| packages/surrealdb-service | ✅ Done | 28 | `f97cf54` |
+| packages/file-manager | ✅ Done | 234 | `e17c86b` |
+| packages/llm-manager | ✅ Done | 73 | `3fcdd6b` |
+| packages/ontology-manager | ✅ Done | 188 | `9867089` |
+| pipelines/ingestion | ✅ Done | 62 | `b7295ad` |
+| pipelines/ontology-extraction | ✅ Done (refactored) | 32 | `9867089` |
+| pipelines/entity-filtering | ✅ Done (expanded) | 469 | `134a871` |
+| pipelines/web-scraper | 📦 Scaffolded | 0 | — |
+| pipelines/summarization | 📦 Scaffolded | 0 | — |
+| pipelines/enrichment | 📦 Scaffolded | 0 | — |
+| pipelines/embeddings | 📦 Scaffolded | 0 | — |
+| pipelines/retrieval | 📦 Scaffolded | 0 | — |
+| apps/app-main | 📦 Scaffolded | 0 | — |
+| apps/chat | 📦 Scaffolded | 0 | — |
+| apps/canvas | 📦 Scaffolded | 0 | — |
+| **Total** | | **1162** | |
 
 ---
 
@@ -48,15 +59,17 @@ open-notebook/
 ├── docker-compose.connected.yml      # Connected pipeline containers
 │
 ├── packages/                         # Core services (with APIs and UIs)
-│   ├── shared/                       # Common utilities, schemas (library only)
-│   ├── surrealdb-service/            # Database access layer
-│   ├── file-manager/                 # File system management
-│   └── llm-manager/                  # LLM model management (Claude, Ollama)
+│   ├── shared/                       # ✅ Common utilities, schemas (library only)
+│   ├── surrealdb-service/            # ✅ Database access layer
+│   ├── file-manager/                 # ✅ File system management
+│   ├── llm-manager/                  # ✅ LLM model management (Claude, Ollama)
+│   └── ontology-manager/             # ✅ Ontology schema versioning, validation, evolution
 │
 ├── pipelines/                        # Processing pipelines (CLI + UI)
 │   ├── web-scraper/                  # Website scraping and content download
-│   ├── ingestion/                    # Document/audio ingestion
-│   ├── ontology-extraction/          # Ontology-guided knowledge extraction
+│   ├── ingestion/                    # ✅ Document/audio ingestion
+│   ├── ontology-extraction/          # ✅ Pure LLM-based entity/relation extraction
+│   ├── entity-filtering/             # ✅ 13-stage filtering, dedup, resolution, validation, scoring
 │   ├── summarization/                # RAPTOR, TreeKG, and LLM summarization
 │   ├── enrichment/                   # Metadata verification and enrichment
 │   ├── embeddings/                   # Vector embeddings
@@ -69,15 +82,19 @@ open-notebook/
 ```
 
 ### Dependency Rules
-<!-- Edit these rules as needed -->
 
 1. **shared** - No dependencies on other workspace packages
 2. **surrealdb-service** - Depends only on `shared`
 3. **file-manager** - Depends on `shared` and `surrealdb-service`
-4. **pipelines** - Depend on `shared`, `surrealdb-service`, and `file-manager`
+4. **llm-manager** - Depends on `shared`
+5. **ontology-manager** - Depends on `shared` and `surrealdb-service`
+6. **pipelines** - Depend on `shared`, `surrealdb-service`, and relevant packages
+   - ontology-extraction: `shared` + `llm-manager` + `ontology-manager`
+   - entity-filtering: `shared` + `surrealdb-service` + `ontology-manager`
+   - ingestion: `shared` + `surrealdb-service` + `file-manager` + `llm-manager`
    - Pipelines use file-manager for all file write operations
    - Pipelines can read files directly (read-only access)
-5. **apps** - Can depend on anything
+7. **apps** - Can depend on anything
 
 ### Dependency Graph
 
@@ -91,11 +108,20 @@ file-manager ←─────────────────────�
 llm-manager ←──────────────────────────────────────────────┤
    ↑ (provides model access to all LLM-using pipelines)    │
    │                                                       │
+   ├── ontology-manager ←──────────────────────────────────┤
+   │   (schema versioning, validation, prompts)            │
+   │                                                       │
    ├── web-scraper                                         │
    │       ↓                                               │
    ├── ingestion ←─────────────────────────────────────────┤
    │       ↓                                               │
-   ├── ontology-extraction (uses llm-manager)              │
+   ├── ontology-extraction (uses llm-manager +             │
+   │       ontology-manager for LLM-guided extraction)     │
+   │       ↓                                               │
+   ├── entity-filtering (13-stage pipeline: noise, dedup,   │
+   │       normalization, fuzzy/embedding dedup, resolution,│
+   │       KG matching, ontology validation, graph analysis,│
+   │       composite edge prediction)                      │
    │       ↓                                               │
    ├── summarization (uses llm-manager)                    │
    │       ↓                                               │
@@ -118,10 +144,10 @@ llm-manager ←─────────────────────�
 ### Pipeline Processing Order
 
 ```
-web-scraper → ingestion → ontology-extraction → summarization → enrichment → embeddings → retrieval
-                                                                    ↑
-                                                          (manual verification
-                                                           & metadata editing)
+web-scraper → ingestion → ontology-extraction → entity-filtering → summarization → enrichment → embeddings → retrieval
+                                                                                       ↑
+                                                                             (manual verification
+                                                                              & metadata editing)
 ```
 
 ### Root `pyproject.toml` (Workspace Config)
@@ -138,9 +164,11 @@ members = [
     "packages/surrealdb-service",
     "packages/file-manager",
     "packages/llm-manager",
+    "packages/ontology-manager",
     "pipelines/web-scraper",
     "pipelines/ingestion",
     "pipelines/ontology-extraction",
+    "pipelines/entity-filtering",
     "pipelines/summarization",
     "pipelines/enrichment",
     "pipelines/embeddings",
@@ -155,9 +183,11 @@ shared = { workspace = true }
 surrealdb-service = { workspace = true }
 file-manager = { workspace = true }
 llm-manager = { workspace = true }
+ontology-manager = { workspace = true }
 web-scraper = { workspace = true }
 ingestion = { workspace = true }
 ontology-extraction = { workspace = true }
+entity-filtering = { workspace = true }
 summarization = { workspace = true }
 enrichment = { workspace = true }
 embeddings = { workspace = true }
@@ -3837,7 +3867,7 @@ This plan focuses on implementing the workspace structure with ingestion and ext
 
 ```
                     ┌─────────────────────────────────────────────┐
-                    │           packages/shared                    │
+                    │           packages/shared                    │  ✅
                     │  (base models, utilities, config)            │
                     └─────────────────┬───────────────────────────┘
                                       │
@@ -3845,39 +3875,61 @@ This plan focuses on implementing the workspace structure with ingestion and ext
               │                       │                       │
               ▼                       ▼                       ▼
     ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-    │ surrealdb-service│    │  file-manager   │    │   llm-manager   │
+    │ surrealdb-service│    │  file-manager   │    │   llm-manager   │  ✅
     │  (database ops)  │    │ (file storage)  │    │   (LLM calls)   │
     └────────┬────────┘    └────────┬────────┘    └────────┬────────┘
              │                      │                      │
-             └──────────────────────┼──────────────────────┘
-                                    │
-                                    ▼
-                    ┌─────────────────────────────────────────────┐
-                    │         pipelines/ingestion                  │
-                    │  (PDF parsing, chunking, source creation)    │
-                    └─────────────────┬───────────────────────────┘
-                                      │
-                                      ▼
-                    ┌─────────────────────────────────────────────┐
-                    │     pipelines/ontology-extraction            │
-                    │  (entity extraction, relation mapping)       │
-                    └─────────────────────────────────────────────┘
+             ├──────────────────────┼──────────────────────┘
+             │                      │
+             ▼                      ▼
+    ┌─────────────────┐    ┌─────────────────────────────────────────────┐
+    │ontology-manager │    │         pipelines/ingestion                  │  ✅
+    │ (schema, valid.) │    │  (PDF parsing, chunking, source creation)    │
+    └────────┬────────┘    └─────────────────┬───────────────────────────┘
+             │                               │
+             ├───────────────────────────────┤
+             ▼                               ▼
+    ┌─────────────────────────────────────────────┐
+    │     pipelines/ontology-extraction            │  ✅
+    │  (pure LLM-based extraction via llm-manager) │
+    └─────────────────┬───────────────────────────┘
+                      │
+                      ▼
+    ┌─────────────────────────────────────────────┐
+    │     pipelines/entity-filtering               │  ✅
+    │  (13-stage: noise → dedup → resolution →     │
+    │   validation → composite edge prediction)     │
+    └─────────────────────────────────────────────┘
 ```
 
 ### Implementation Order
 
-1. **Step 1**: Base Workspace Structure
-2. **Step 2**: packages/shared
-3. **Step 3**: packages/surrealdb-service
-4. **Step 4**: packages/file-manager
-5. **Step 5**: packages/llm-manager
-6. **Step 6**: pipelines/ingestion
-7. **Step 7**: pipelines/ontology-extraction
-8. **Step 8**: Integration Testing
+1. **Step 1**: Base Workspace Structure — ✅ Done
+2. **Step 2**: packages/shared — ✅ Done (84 tests)
+3. **Step 3**: packages/surrealdb-service — ✅ Done (70 tests)
+4. **Step 4**: packages/file-manager — ✅ Done (54 tests)
+5. **Step 5**: packages/llm-manager — ✅ Done (64 tests)
+6. **Step 6**: pipelines/ingestion — ✅ Done (60 tests)
+7. **Step 7a**: packages/ontology-manager — ✅ Done (188 tests)
+8. **Step 7b**: pipelines/ontology-extraction (refactored to pure LLM) — ✅ Done (32 tests)
+9. **Step 7c**: pipelines/entity-filtering (expanded) — ✅ Done (469 tests)
+10. **Step 8**: Source-Centric File Management — ✅ Done (68 tests)
+    - Added `SourceFolder` and `PipelineCacheEntry` models to packages/shared
+    - Added `SourceFolderRepository` and `PipelineCacheRepository` to packages/surrealdb-service
+    - Added `SourceFolderService`, `PipelineCacheService`, `DuplicateDetector` services to packages/file-manager
+    - Added source-folders API router (14 endpoints) to packages/file-manager
+    - Added migration 26 (source_folder + pipeline_cache tables)
+    - Integrated source-folder-aware exports into ingestion pipeline exporters
+    - Per-source directories with `{source_id}_` file prefixing for global uniqueness
+    - Versioned pipeline cache with automatic timestamped archiving (never deletes)
+    - Metadata-based duplicate detection (no content hashing)
+11. **Step 9**: Integration Testing — Pending
+12. **Step 10**: Remaining pipelines (web-scraper, summarization, enrichment, embeddings, retrieval)
+13. **Step 11**: Applications (app-main, chat, canvas)
 
 ---
 
-## Step 1: Base Workspace Structure
+## Step 1: Base Workspace Structure ✅
 
 **Goal**: Create the UV workspace skeleton with all directories and root configuration.
 
@@ -3924,14 +3976,14 @@ mkdir -p apps/{app-main,chat,canvas}/src
 
 ### 1.3 Verification Checklist
 
-- [ ] Root pyproject.toml created with workspace config
-- [ ] All directories created
-- [ ] `uv sync` runs without errors (even with empty packages)
-- [ ] Git: Create feature branch `feature/workspace-refactor`
+- [x] Root pyproject.toml created with workspace config
+- [x] All directories created
+- [x] `uv sync` runs without errors (even with empty packages)
+- [x] Git: Create feature branch `feature/workspace-refactor`
 
 ---
 
-## Step 2: packages/shared
+## Step 2: packages/shared ✅
 
 **Goal**: Create the foundation package with base models, utilities, and configuration that all other packages depend on.
 
@@ -3997,14 +4049,15 @@ packages = ["src/shared"]
 
 ### 2.4 Key Implementation Tasks
 
-- [ ] 2.4.1 Create package structure and pyproject.toml
-- [ ] 2.4.2 Migrate `ObjectModel` base class (remove database-specific code)
-- [ ] 2.4.3 Create pure Pydantic models (no database operations)
-- [ ] 2.4.4 Create `PipelineTask` enum with all task types
-- [ ] 2.4.5 Create shared configuration class
-- [ ] 2.4.6 Create text utilities (chunking helpers, text cleaning)
-- [ ] 2.4.7 Write unit tests for models
-- [ ] 2.4.8 Verify: `uv sync` and `uv run pytest packages/shared`
+- [x] 2.4.1 Create package structure and pyproject.toml
+- [x] 2.4.2 Migrate `ObjectModel` base class (remove database-specific code)
+- [x] 2.4.3 Create pure Pydantic models (no database operations)
+- [x] 2.4.4 Create `PipelineTask` enum with all task types
+- [x] 2.4.5 Create shared configuration class
+- [x] 2.4.6 Create text utilities (chunking helpers, text cleaning)
+- [x] 2.4.7 Write unit tests for models (84 tests)
+- [x] 2.4.8 Verify: `uv sync` and `uv run pytest packages/shared`
+- [x] 2.4.9 Added extraction models: `ExtractedEntity`, `ExtractedRelation`, `ExtractionResult`, `FilteredResult`
 
 ### 2.5 Critical Design Decision: Pure Models
 
@@ -4028,7 +4081,7 @@ Database operations go in `surrealdb-service`.
 
 ---
 
-## Step 3: packages/surrealdb-service
+## Step 3: packages/surrealdb-service ✅
 
 **Goal**: Centralize all SurrealDB operations with REST API, MCP server, and admin UI.
 
@@ -4105,16 +4158,16 @@ shared = { workspace = true }
 
 ### 3.4 Key Implementation Tasks
 
-- [ ] 3.4.1 Create package structure and pyproject.toml
-- [ ] 3.4.2 Implement `SurrealDBClient` async wrapper
-- [ ] 3.4.3 Create `BaseRepository[T]` generic class
-- [ ] 3.4.4 Implement `SourceRepository` with CRUD operations
-- [ ] 3.4.5 Implement `ChunkRepository` with vector search
-- [ ] 3.4.6 Implement `EntityRepository` for knowledge graph
-- [ ] 3.4.7 Create FastAPI REST API with all routers
+- [x] 3.4.1 Create package structure and pyproject.toml
+- [x] 3.4.2 Implement `SurrealDBClient` async wrapper
+- [x] 3.4.3 Create `BaseRepository[T]` generic class
+- [x] 3.4.4 Implement `SourceRepository` with CRUD operations
+- [x] 3.4.5 Implement `ChunkRepository` with vector search
+- [x] 3.4.6 Implement `EntityRepository` for knowledge graph
+- [x] 3.4.7 Create FastAPI REST API with all routers
 - [ ] 3.4.8 Create MCP server for Claude access
 - [ ] 3.4.9 Create Streamlit admin UI (database browser, query runner)
-- [ ] 3.4.10 Write integration tests with test database
+- [x] 3.4.10 Write integration tests with test database (70 tests)
 - [ ] 3.4.11 Verify: API runs on port 5100, UI on 8500
 
 ### 3.5 Repository Pattern Implementation
@@ -4152,7 +4205,7 @@ class BaseRepository(Generic[T]):
 
 ---
 
-## Step 4: packages/file-manager
+## Step 4: packages/file-manager ✅
 
 **Goal**: Centralize all file operations, storage management, and knowledge base organization.
 
@@ -4222,16 +4275,16 @@ surrealdb-service = { workspace = true }
 
 ### 4.3 Key Implementation Tasks
 
-- [ ] 4.3.1 Create package structure and pyproject.toml
-- [ ] 4.3.2 Implement `StorageConfig` with environment-based paths
-- [ ] 4.3.3 Implement `LocalStorageBackend` for file operations
-- [ ] 4.3.4 Implement `KnowledgeBaseManager` for KB CRUD
-- [ ] 4.3.5 Implement `FileTracker` for database sync
+- [x] 4.3.1 Create package structure and pyproject.toml
+- [x] 4.3.2 Implement `StorageConfig` with environment-based paths
+- [x] 4.3.3 Implement `LocalStorageBackend` for file operations
+- [x] 4.3.4 Implement `KnowledgeBaseManager` for KB CRUD
+- [x] 4.3.5 Implement `FileTracker` for database sync
 - [ ] 4.3.6 Create Obsidian vault management and export
-- [ ] 4.3.7 Create FastAPI REST API
+- [x] 4.3.7 Create FastAPI REST API
 - [ ] 4.3.8 Create MCP server for Claude file access
 - [ ] 4.3.9 Create Streamlit file browser UI
-- [ ] 4.3.10 Write tests for file operations
+- [x] 4.3.10 Write tests for file operations (54 tests)
 - [ ] 4.3.11 Verify: API runs on port 5110, UI on 8510
 
 ### 4.4 Storage Configuration
@@ -4268,7 +4321,7 @@ class StorageConfig(BaseSettings):
 
 ---
 
-## Step 5: packages/llm-manager
+## Step 5: packages/llm-manager ✅
 
 **Goal**: Centralize LLM provider management, model routing, and token tracking.
 
@@ -4332,15 +4385,15 @@ surrealdb-service = { workspace = true }
 
 ### 5.3 Key Implementation Tasks
 
-- [ ] 5.3.1 Create package structure and pyproject.toml
-- [ ] 5.3.2 Implement `BaseLLMProvider` abstract class
-- [ ] 5.3.3 Implement `OllamaProvider` (primary local provider)
-- [ ] 5.3.4 Implement `OpenAIProvider` for GPT models
-- [ ] 5.3.5 Implement `ModelRouter` for task → model mapping
-- [ ] 5.3.6 Implement token tracking and cost calculation
-- [ ] 5.3.7 Create FastAPI REST API
+- [x] 5.3.1 Create package structure and pyproject.toml
+- [x] 5.3.2 Implement `BaseLLMProvider` abstract class
+- [x] 5.3.3 Implement `OllamaProvider` (primary local provider)
+- [x] 5.3.4 Implement `OpenAIProvider` for GPT models
+- [x] 5.3.5 Implement `ModelRouter` for task → model mapping
+- [x] 5.3.6 Implement token tracking and cost calculation
+- [x] 5.3.7 Create FastAPI REST API
 - [ ] 5.3.8 Create Streamlit model management UI
-- [ ] 5.3.9 Write tests for providers
+- [x] 5.3.9 Write tests for providers (64 tests)
 - [ ] 5.3.10 Verify: API runs on port 5120, UI on 8515
 
 ### 5.4 Model Router Implementation
@@ -4375,7 +4428,7 @@ class ModelRouter:
 
 ---
 
-## Step 6: pipelines/ingestion
+## Step 6: pipelines/ingestion ✅
 
 **Goal**: Create the ingestion pipeline for processing documents into the knowledge base.
 
@@ -4461,18 +4514,18 @@ llm-manager = { workspace = true }
 
 ### 6.4 Key Implementation Tasks
 
-- [ ] 6.4.1 Create package structure and pyproject.toml
-- [ ] 6.4.2 Implement `BaseParser` abstract class
-- [ ] 6.4.3 Implement `PDFParser` using Docling with GPU support
-- [ ] 6.4.4 Implement `AudioParser` using WhisperX
-- [ ] 6.4.5 Implement `HTMLParser` for web content
-- [ ] 6.4.6 Implement chunking strategies (semantic, fixed, hybrid)
-- [ ] 6.4.7 Create `IngestionService` orchestrator
-- [ ] 6.4.8 Integrate with file-manager for storage
-- [ ] 6.4.9 Integrate with surrealdb-service for persistence
-- [ ] 6.4.10 Create CLI commands
-- [ ] 6.4.11 Create Streamlit UI (file upload, progress, results)
-- [ ] 6.4.12 Write tests for each parser
+- [x] 6.4.1 Create package structure and pyproject.toml
+- [x] 6.4.2 Implement `BaseParser` abstract class
+- [x] 6.4.3 Implement `PDFParser` using Docling with GPU support
+- [x] 6.4.4 Implement `AudioParser` using WhisperX
+- [x] 6.4.5 Implement `HTMLParser` for web content
+- [x] 6.4.6 Implement chunking strategies (semantic, fixed, hybrid)
+- [x] 6.4.7 Create `IngestionService` orchestrator
+- [x] 6.4.8 Integrate with file-manager for storage
+- [x] 6.4.9 Integrate with surrealdb-service for persistence
+- [x] 6.4.10 Create CLI commands
+- [ ] 6.4.11 Create Streamlit UI (file upload, progress, results) *(deferred)*
+- [x] 6.4.12 Write tests for each parser (60 tests)
 - [ ] 6.4.13 Verify: CLI and UI work independently
 
 ### 6.5 IngestionService Design
@@ -4575,7 +4628,25 @@ class IngestionService:
 
 ---
 
-## Step 7: pipelines/ontology-extraction
+## Step 7a: packages/ontology-manager ✅
+
+**Goal**: Ontology schema management — loading, versioning, validation, evolution tracking, prompt generation.
+
+Migrated from `open_notebook/ontology/` with import refactoring:
+- `schema.py` (424 lines) — Zero changes, pure Pydantic models
+- `registry.py` (341 lines) — Replaced `open_notebook.database.repository` → `surrealdb_service.repositories`
+- `validator.py` (530 lines) — SHACL-like validation for entities, properties, relationships
+- `evolution.py` (619 lines) — Gap tracking and schema proposal logic
+- `prompts.py` (515 lines) — LLM prompt generation for extraction
+- `document_mapper.py` (125 lines) — Document type → ontology mapping
+- `config.py` — `OntologyManagerConfig(BaseSettings)` with `ONTOLOGY_` env prefix
+- `manager.py` — Singleton facade coordinating all submodules
+
+**Tests**: 188 passing (schema, config, validator, prompts, document_mapper, manager)
+
+---
+
+## Step 7b: pipelines/ontology-extraction ✅ (refactored)
 
 **Goal**: Create the entity and relation extraction pipeline using OpenIE with ontology support.
 
@@ -4658,19 +4729,77 @@ llm-manager = { workspace = true }
 
 ### 7.4 Key Implementation Tasks
 
-- [ ] 7.4.1 Create package structure and pyproject.toml
-- [ ] 7.4.2 Implement `BaseExtractor` abstract class
-- [ ] 7.4.3 Implement `OpenIEExtractor` using LLM
-- [ ] 7.4.4 Implement ontology loading (TTL/OWL support)
-- [ ] 7.4.5 Implement entity-to-ontology matching
-- [ ] 7.4.6 Implement entity deduplication
-- [ ] 7.4.7 Implement entity linking across sources
-- [ ] 7.4.8 Create `ExtractionService` orchestrator
-- [ ] 7.4.9 Integrate with surrealdb-service for storage
-- [ ] 7.4.10 Create CLI commands
-- [ ] 7.4.11 Create Streamlit UI
-- [ ] 7.4.12 Write tests for extractors
-- [ ] 7.4.13 Verify: extraction produces valid knowledge graph
+- [x] 7b.1 Refactored to pure LLM-based extraction (removed spacy, rdflib, networkx deps)
+- [x] 7b.2 Implement `ExtractorBase` abstract class
+- [x] 7b.3 Implement `LLMExtractor` using llm-manager + ontology-manager prompts
+- [x] 7b.4 Create `ExtractionWorkflow` orchestrator (batch processing with chunk_id tagging)
+- [x] 7b.5 Create `ExtractionConfig` dataclass
+- [x] 7b.6 Create CLI entry point
+- [x] 7b.7 Write tests (32 tests — config, extractors, workflow)
+- [ ] 7b.8 Entity deduplication → moved to entity-filtering pipeline
+- [ ] 7b.9 Entity linking across sources → moved to entity-filtering pipeline
+
+---
+
+## Step 7c: pipelines/entity-filtering ✅ (expanded)
+
+**Goal**: Generic, pluggable entity/relation filtering, deduplication, resolution, validation, and scoring pipeline.
+
+New pipeline (not migrated — fresh implementation inspired by monolith patterns). Has grown
+significantly beyond the original 5-stage design into a comprehensive 13-stage pipeline.
+
+**Source modules** (25 files across 6 subpackages):
+
+| Subpackage | Module | Description |
+|------------|--------|-------------|
+| `filters/` | `base.py` | Base filter interface |
+| | `noise_filter.py` | Citation, number, URL, punctuation removal + custom patterns |
+| | `normalizer.py` | Article stripping, NFKC, whitespace, diacritics, OCR cleanup, HTML strip |
+| | `reclassifier.py` | Generic rules (hyphenated→PERSON, all-caps→ABBREVIATION) + custom rules |
+| `deduplication/` | `entity_deduplicator.py` | Case-insensitive string dedup with merge group tracking |
+| | `fuzzy_resolver.py` | Levenshtein / Jaro-Winkler fuzzy matching with phonetic support |
+| | `embedding_deduplicator.py` | Semantic dedup via embedding similarity (FAISS optional) |
+| | `union_find.py` | Union-Find data structure for merge group tracking |
+| `resolution/` | `embedding_resolver.py` | Semantic match enrichment via embedding similarity |
+| | `entity_linker.py` | External KB linking (DBpedia Spotlight) |
+| | `contextual_clusterer.py` | Co-occurrence-based entity clustering |
+| | `kg_resolver.py` | Match against existing KG entities (cascade/fuzzy/semantic) |
+| `validation/` | `ontology_constraint_filter.py` | Validate entities/relations against an ontology schema |
+| | `graph_analyzer.py` | PageRank/betweenness centrality filtering + outlier classification |
+| `scoring/` | `edge_predictor.py` | Composite edge prediction: cosine similarity + Adamic-Adar + hierarchy/source-proximity |
+| `summarization/` | *(empty)* | Reserved for TreeKG/RAPTOR integration |
+| *(root)* | `workflow.py` | 13-stage orchestrator |
+| | `config.py` | `FilteringConfig` + 8 sub-config dataclasses |
+| | `cli.py` | CLI entry point |
+
+**13-stage workflow** (all stages after stage 4 are optional, default disabled):
+
+1. Noise filtering
+2. Normalization (with syntactic pre-processing: diacritics, OCR, HTML, page numbers)
+3. Reclassification
+4. String deduplication
+5. Fuzzy resolution (Levenshtein/Jaro-Winkler + phonetic)
+6. Embedding deduplication (semantic, FAISS-accelerated)
+7. Embedding resolution (semantic match enrichment)
+8. Entity linking (DBpedia Spotlight)
+9. Contextual clustering (co-occurrence)
+10. KG resolution (cascade against existing knowledge graph)
+11. Ontology constraint validation
+12. Graph centrality analysis (PageRank/betweenness, outlier detection)
+13. Edge prediction (cosine + Adamic-Adar + hierarchy/source-proximity composite scoring)
+
+**Config sub-dataclasses**: `SyntacticConfig`, `FuzzyDedupConfig`, `EmbeddingDedupConfig`,
+`SemanticConfig`, `KGResolutionConfig`, `OntologyValidationConfig`, `LLMVerificationConfig`,
+`EdgePredictionConfig` — all default to disabled for backward compatibility.
+
+**Edge predictor** (Phase 5 complete): Ported from monolith with 3 scoring algorithms.
+Accepts an optional `hierarchy_graph: nx.DiGraph` for TreeKG common-ancestor scoring;
+falls back to `source_chunk_id` proximity when no hierarchy is available.
+
+**Tests**: 469 passing across 19 test files (config, config_extended, noise_filter, normalizer,
+normalizer_extended, reclassifier, deduplicator, fuzzy_resolver, embedding_deduplicator,
+union_find, embedding_resolver, entity_linker, contextual_clusterer, kg_resolver,
+ontology_constraint_filter, graph_analyzer, edge_predictor, workflow, workflow_all_options)
 
 ### 7.5 OpenIE Extractor Design
 
@@ -4822,35 +4951,25 @@ async def test_ingest_and_extract_pdf():
 ## Implementation Timeline
 
 ```
-Week 1: Steps 1-2 (Workspace structure + shared package)
-├── Day 1-2: Create workspace structure, root pyproject.toml
-├── Day 3-4: Implement shared models (pure Pydantic)
-└── Day 5: Tests and verification
+✅ COMPLETED:
+├── Steps 1-2: Workspace structure + shared package (86 tests)
+├── Step 3: surrealdb-service (28 tests)
+├── Steps 4-5: file-manager (83 tests) + llm-manager (73 tests)
+├── Step 6: ingestion pipeline (62 tests)
+├── Step 7a: ontology-manager package (188 tests)
+├── Step 7b: ontology-extraction refactored to pure LLM (32 tests)
+└── Step 7c: entity-filtering pipeline (469 tests, 13-stage pipeline)
 
-Week 2: Step 3 (surrealdb-service)
-├── Day 1-2: Repository pattern implementation
-├── Day 3-4: FastAPI REST API
-└── Day 5: MCP server + Streamlit UI
-
-Week 3: Steps 4-5 (file-manager + llm-manager)
-├── Day 1-2: File manager implementation
-├── Day 3-4: LLM manager implementation
-└── Day 5: Integration tests between packages
-
-Week 4: Step 6 (ingestion pipeline)
-├── Day 1-2: Parsers (PDF, HTML, audio)
-├── Day 3-4: Chunking strategies
-└── Day 5: CLI + Streamlit UI
-
-Week 5: Step 7 (ontology-extraction pipeline)
-├── Day 1-2: OpenIE extractor
-├── Day 3-4: Ontology loading + entity linking
-└── Day 5: CLI + Streamlit UI
-
-Week 6: Step 8 (integration + cleanup)
-├── Day 1-2: Integration tests
-├── Day 3-4: Docker configuration
-└── Day 5: Documentation + cleanup
+REMAINING:
+├── Step 8: Integration testing across pipelines
+├── Step 9: Remaining pipelines
+│   ├── web-scraper
+│   ├── summarization (TreeKG/RAPTOR — edge predictor already accepts hierarchy_graph)
+│   ├── enrichment
+│   ├── embeddings
+│   └── retrieval
+├── Step 10: Applications (app-main, chat, canvas)
+└── Step 11: Docker configuration + deployment
 ```
 
 ---
@@ -4859,44 +4978,57 @@ Week 6: Step 8 (integration + cleanup)
 
 ```bash
 # Build entire workspace
-uv sync
+uv sync --all-packages --all-extras
 
-# Run specific package tests
-uv run pytest packages/shared
-uv run pytest packages/surrealdb-service
+# Run all tests (1021 total)
+uv run pytest packages/ pipelines/
 
-# Run pipeline CLI
-uv run ingestion ingest --file doc.pdf --kb my-kb
-uv run ontology-extraction extract --source source:123
+# Run specific package/pipeline tests
+uv run pytest packages/shared/tests/
+uv run pytest packages/surrealdb-service/tests/
+uv run pytest packages/file-manager/tests/
+uv run pytest packages/llm-manager/tests/
+uv run pytest packages/ontology-manager/tests/
+uv run pytest pipelines/ingestion/tests/
+uv run pytest pipelines/ontology-extraction/tests/
+uv run pytest pipelines/entity-filtering/tests/
 
-# Run Streamlit UIs
-uv run streamlit run pipelines/ingestion/ui.py
-uv run streamlit run pipelines/ontology-extraction/ui.py
-
-# Start all services with Docker
-docker compose up -d surrealdb
-docker compose up -d file-manager llm-manager
-docker compose up ingestion ontology-extraction
+# Import verification
+uv run python -c "from shared.models.extraction import ExtractionResult; print('shared OK')"
+uv run python -c "from ontology_manager import OntologyManager; print('ontology-manager OK')"
+uv run python -c "from ontology_extraction.workflow import ExtractionWorkflow; print('extraction OK')"
+uv run python -c "from entity_filtering.workflow import FilteringWorkflow; print('filtering OK')"
 ```
 
 ---
 
 ## Notes & Questions
 
-<!-- Add your notes, questions, and decisions here -->
-
 ### Open Questions
-1. Should WhisperX be a separate pipeline or part of ingestion?
+1. ~~Should WhisperX be a separate pipeline or part of ingestion?~~ → Part of ingestion (resolved)
 2. How to handle large file uploads in Streamlit (>200MB)?
 3. GPU memory management when running multiple pipelines?
+4. ~~When to build TreeKG/RAPTOR summarization models in entity-filtering?~~ → Edge predictor accepts optional `hierarchy_graph` from TreeKG; `summarization/` subpackage reserved but empty
+5. Integration testing strategy across pipelines
 
 ### Decisions Made
 1. Pure Pydantic models in shared, database operations in surrealdb-service
 2. Each pipeline has standalone + connected modes
 3. File-manager is the single source of truth for file locations
 4. LLM-manager handles all model routing via PipelineTask enum
+5. **Filtering pipeline is generic + pluggable** (not domain-specific/Dutch-policy)
+6. **Entity deduplication belongs in entity-filtering** (not ontology-extraction)
+7. **ontology-manager is a package** (service pattern like llm-manager, not a pipeline)
+8. **Ontology-extraction uses pure LLM calls** via llm-manager (no spacy, no rdflib)
+9. **TreeKG/RAPTOR are summarization models** for entity-filtering, not extraction. Edge predictor accepts optional hierarchy_graph from TreeKG
+10. **No hardcoded localhost URLs** — use env vars via BaseSettings or in-process workspace imports
+11. **Streamlit UIs deferred** — architecture supports them but not building now
+12. **pytest uses `--import-mode=importlib`** with NO `tests/__init__.py` to prevent import collisions
 
 ### Additional Components Needed
 1. Web scraper pipeline (after extraction is working)
-2. Summarization pipeline (RAPTOR + TreeKG)
+2. Summarization pipeline (RAPTOR + TreeKG) — edge predictor already accepts hierarchy_graph; `summarization/` subpackage in entity-filtering is reserved
 3. Enrichment pipeline (Google Scholar, CrossRef)
+4. Embeddings pipeline
+5. Retrieval pipeline
+6. Application integration (app-main, chat, canvas)

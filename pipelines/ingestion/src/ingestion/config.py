@@ -122,7 +122,10 @@ class DoclingConfig:
                 AcceleratorOptions,
                 PdfPipelineOptions,
                 TableStructureOptions,
-                OcrOptions,
+                EasyOcrOptions,
+                TesseractOcrOptions,
+                TesseractCliOcrOptions,
+                RapidOcrOptions,
                 PictureDescriptionVlmOptions,
             )
         except ImportError:
@@ -146,12 +149,16 @@ class DoclingConfig:
             mode=self.table_mode.value,
         )
 
-        # OCR options
+        # OCR options - use specific class based on engine
         ocr_options = None
         if self.do_ocr and self.ocr_engine != OcrEngine.NONE:
-            ocr_options = OcrOptions(
-                lang=self.ocr_lang,
-            )
+            if self.ocr_engine == OcrEngine.EASYOCR:
+                ocr_options = EasyOcrOptions(lang=self.ocr_lang)
+            elif self.ocr_engine == OcrEngine.TESSERACT:
+                # Tesseract uses different language codes (3-letter)
+                ocr_options = TesseractCliOcrOptions(lang=self.ocr_lang)
+            elif self.ocr_engine == OcrEngine.RAPIDOCR:
+                ocr_options = RapidOcrOptions(lang=self.ocr_lang)
 
         # Picture description options
         picture_desc_options = None
@@ -187,12 +194,13 @@ class WhisperXConfig:
     - Language detection or specification
     """
     # Model Settings
-    model_size: WhisperModel = WhisperModel.LARGE
+    model_size: WhisperModel = WhisperModel.LARGE  # large-v3 for best quality
     language: Optional[str] = None  # None for auto-detect
 
     # Device
     device: AcceleratorDevice = AcceleratorDevice.AUTO
-    compute_type: str = "float16"  # float16, float32, int8
+    compute_type: str = "float16"  # float16 for GPU, int8 for lower memory
+    batch_size: int = 8  # Audio chunks processed at once (lower = less VRAM)
 
     # Diarization
     enable_diarization: bool = True
@@ -285,6 +293,39 @@ class OutputConfig:
 
         if include_original:
             dirs["original"] = self.get_original_dir(source_name)
+
+        for path in dirs.values():
+            path.mkdir(parents=True, exist_ok=True)
+
+        return dirs
+
+    def create_directories_in_source_folder(
+        self,
+        source_folder_path: Path,
+        source_type: str = "document",
+    ) -> dict[str, Path]:
+        """
+        Create ingestion subdirectory structure within a pre-existing source folder.
+
+        Used when a source folder already exists (created by file-manager) and
+        the ingestion pipeline needs to write outputs into it.
+
+        Args:
+            source_folder_path: Path to the existing source folder.
+            source_type: Type of source (affects which subdirs are created).
+
+        Returns:
+            Dictionary of directory paths created, matching create_directories() format.
+        """
+        dirs = {
+            "root": source_folder_path,
+            "output": source_folder_path / "ingestion",
+            "images": source_folder_path / "ingestion" / self.images_subdir,
+            "tables": source_folder_path / "ingestion" / self.tables_subdir,
+        }
+
+        if source_type in ("audio", "video"):
+            dirs["transcription"] = source_folder_path / "transcription"
 
         for path in dirs.values():
             path.mkdir(parents=True, exist_ok=True)
