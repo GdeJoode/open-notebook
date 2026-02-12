@@ -1,0 +1,451 @@
+# scholarly.yaml
+# Academic/Research ontology extending schema_core
+# For academic papers, theses, research data
+
+metadata:
+  name: "scholarly"
+  version: "1.0.0"
+  description: "Scholarly and academic research ontology based on Schema.org ScholarlyArticle"
+  extends: "schema_core"
+  namespaces:
+    schema: "https://schema.org/"
+    bibo: "http://purl.org/ontology/bibo/"
+    prism: "http://prismstandard.org/namespaces/basic/2.0/"
+    fabio: "http://purl.org/spar/fabio/"
+
+# =============================================================================
+# ENTITY TYPES
+# =============================================================================
+
+entity_types:
+  # ---------------------------------------------------------------------------
+  # ScholarlyArticle - Peer-reviewed academic papers
+  # ---------------------------------------------------------------------------
+  - name: "ScholarlyArticle"
+    description: "A scholarly article, such as a journal paper or conference paper"
+    schema_org: "https://schema.org/ScholarlyArticle"
+    parent_type: "Article"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Academic papers with DOI identifiers"
+      - "Journal articles, conference papers"
+      - "Documents with abstract, authors, references"
+      - "Papers mentioning peer review, journal names"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+        schema_org: "https://schema.org/name"
+      - name: "abstract"
+        data_type: "string"
+        required: true
+        schema_org: "https://schema.org/abstract"
+      - name: "doi"
+        data_type: "string"
+        description: "Digital Object Identifier"
+        schema_org: "https://schema.org/identifier"
+        validation_rules:
+          pattern: "^10\\.\\d{4,}/.*$"
+      - name: "arxivId"
+        data_type: "string"
+        description: "arXiv identifier (e.g., 2301.00001)"
+      - name: "pmid"
+        data_type: "string"
+        description: "PubMed ID"
+      - name: "pagination"
+        data_type: "string"
+        description: "Page range (e.g., '1-25')"
+        schema_org: "https://schema.org/pagination"
+        prism: "prism:pageRange"
+      - name: "volumeNumber"
+        data_type: "string"
+        schema_org: "https://schema.org/volumeNumber"
+        prism: "prism:volume"
+      - name: "issueNumber"
+        data_type: "string"
+        schema_org: "https://schema.org/issueNumber"
+        prism: "prism:number"
+      - name: "publicationType"
+        data_type: "enum"
+        enum_values: ["journal_article", "conference_paper", "preprint", "review", "meta_analysis", "case_study", "letter", "editorial"]
+        description: "Type of scholarly publication"
+      - name: "peerReviewed"
+        data_type: "boolean"
+        description: "Whether the article is peer-reviewed"
+      - name: "openAccess"
+        data_type: "boolean"
+        description: "Whether the article is open access"
+      - name: "citationCount"
+        data_type: "integer"
+        description: "Number of citations (snapshot)"
+        validation_rules:
+          min_value: 0
+      - name: "methodology"
+        data_type: "string"
+        description: "Research methodology used"
+      - name: "findings"
+        data_type: "array"
+        description: "Key findings or conclusions"
+
+  # ---------------------------------------------------------------------------
+  # Thesis - Academic thesis/dissertation
+  # ---------------------------------------------------------------------------
+  - name: "Thesis"
+    description: "An academic thesis or dissertation"
+    schema_org: "https://schema.org/Thesis"
+    parent_type: "CreativeWork"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "PhD thesis, Master's thesis, doctoral dissertation"
+      - "Academic work with advisor, institution"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+      - name: "abstract"
+        data_type: "string"
+      - name: "thesisType"
+        data_type: "enum"
+        enum_values: ["PhD", "Masters", "Bachelors", "Habilitation", "Other"]
+        required: true
+      - name: "defenseDate"
+        data_type: "date"
+        description: "Date of thesis defense"
+      - name: "department"
+        data_type: "string"
+        description: "Academic department"
+      - name: "numberOfPages"
+        data_type: "integer"
+
+  # ---------------------------------------------------------------------------
+  # Periodical - Journal or magazine
+  # ---------------------------------------------------------------------------
+  - name: "Periodical"
+    description: "A publication issued periodically (journal, magazine)"
+    schema_org: "https://schema.org/Periodical"
+    parent_type: "CreativeWork"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Journal names, magazine titles"
+      - "Publications with ISSN"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+      - name: "issn"
+        data_type: "string"
+        description: "International Standard Serial Number"
+        schema_org: "https://schema.org/issn"
+      - name: "impactFactor"
+        data_type: "float"
+        description: "Journal impact factor"
+        validation_rules:
+          min_value: 0.0
+      - name: "hIndex"
+        data_type: "integer"
+        description: "Journal h-index"
+        validation_rules:
+          min_value: 0
+      - name: "publisher"
+        data_type: "reference"
+        reference_type: "Organization"
+      - name: "subjectArea"
+        data_type: "array"
+        description: "Subject areas covered"
+
+  # ---------------------------------------------------------------------------
+  # ConferenceEvent - Academic conference
+  # ---------------------------------------------------------------------------
+  - name: "ConferenceEvent"
+    description: "An academic conference, symposium, or workshop"
+    parent_type: "Event"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Conferences, symposiums, workshops"
+      - "Events with proceedings, papers"
+      - "Academic gatherings with CFPs"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+      - name: "acronym"
+        data_type: "string"
+        description: "Conference acronym (e.g., 'NeurIPS', 'ACL')"
+      - name: "edition"
+        data_type: "string"
+        description: "Conference edition (e.g., '2024', '15th')"
+      - name: "conferenceType"
+        data_type: "enum"
+        enum_values: ["conference", "symposium", "workshop", "summit", "colloquium"]
+      - name: "acceptanceRate"
+        data_type: "float"
+        description: "Paper acceptance rate"
+        validation_rules:
+          min_value: 0.0
+          max_value: 1.0
+      - name: "proceedingsUrl"
+        data_type: "string"
+        description: "URL to proceedings"
+
+  # ---------------------------------------------------------------------------
+  # Researcher - Specialized Person for academia
+  # ---------------------------------------------------------------------------
+  - name: "Researcher"
+    description: "A researcher or academic"
+    parent_type: "Person"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Researchers, professors, scientists"
+      - "People with academic titles and affiliations"
+      - "Authors of scholarly articles"
+    properties:
+      - name: "orcid"
+        data_type: "string"
+        description: "ORCID identifier"
+        validation_rules:
+          pattern: "^\\d{4}-\\d{4}-\\d{4}-\\d{3}[\\dX]$"
+      - name: "googleScholarId"
+        data_type: "string"
+      - name: "researchGateId"
+        data_type: "string"
+      - name: "hIndex"
+        data_type: "integer"
+        description: "Researcher h-index"
+        validation_rules:
+          min_value: 0
+      - name: "citationCount"
+        data_type: "integer"
+        description: "Total citations (snapshot)"
+        validation_rules:
+          min_value: 0
+      - name: "researchInterests"
+        data_type: "array"
+        description: "Research interests/topics"
+
+  # ---------------------------------------------------------------------------
+  # ResearchOrganization - Universities, labs, institutes
+  # ---------------------------------------------------------------------------
+  - name: "ResearchOrganization"
+    description: "A research-focused organization (university, lab, institute)"
+    schema_org: "https://schema.org/ResearchOrganization"
+    parent_type: "Organization"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Universities, research institutes, labs"
+      - "Organizations producing scholarly work"
+    properties:
+      - name: "rorId"
+        data_type: "string"
+        description: "Research Organization Registry ID"
+      - name: "gridId"
+        data_type: "string"
+        description: "GRID identifier"
+      - name: "institutionType"
+        data_type: "enum"
+        enum_values: ["university", "research_institute", "government_lab", "corporate_lab", "think_tank", "other"]
+      - name: "ranking"
+        data_type: "integer"
+        description: "Academic ranking (if applicable)"
+
+  # ---------------------------------------------------------------------------
+  # EducationalOrganization
+  # ---------------------------------------------------------------------------
+  - name: "EducationalOrganization"
+    description: "An educational organization"
+    schema_org: "https://schema.org/EducationalOrganization"
+    parent_type: "Organization"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Schools, universities, colleges"
+      - "Educational institutions"
+    properties:
+      - name: "educationalLevel"
+        data_type: "enum"
+        enum_values: ["primary", "secondary", "undergraduate", "graduate", "postgraduate", "continuing_education"]
+
+  # ---------------------------------------------------------------------------
+  # ResearchProject
+  # ---------------------------------------------------------------------------
+  - name: "ResearchProject"
+    description: "A research project or study"
+    schema_org: "https://schema.org/ResearchProject"
+    parent_type: "Thing"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Research projects, studies, initiatives"
+      - "Funded research programs"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+      - name: "description"
+        data_type: "string"
+      - name: "startDate"
+        data_type: "date"
+      - name: "endDate"
+        data_type: "date"
+      - name: "status"
+        data_type: "enum"
+        enum_values: ["planned", "active", "completed", "suspended", "terminated"]
+      - name: "budget"
+        data_type: "object"
+        properties:
+          value: { data_type: "float" }
+          currency: { data_type: "string" }
+
+# =============================================================================
+# RELATIONSHIP TYPES
+# =============================================================================
+
+relationship_types:
+  # ---------------------------------------------------------------------------
+  # Academic-specific relationships
+  # ---------------------------------------------------------------------------
+  - name: "PUBLISHED_IN"
+    description: "Article published in a journal/periodical"
+    source_types: ["ScholarlyArticle"]
+    target_types: ["Periodical"]
+    cardinality: "many_to_one"
+    properties:
+      - name: "volumeNumber"
+        data_type: "string"
+      - name: "issueNumber"
+        data_type: "string"
+      - name: "pagination"
+        data_type: "string"
+
+  - name: "PRESENTED_AT"
+    description: "Paper presented at a conference"
+    source_types: ["ScholarlyArticle"]
+    target_types: ["ConferenceEvent"]
+    cardinality: "many_to_one"
+    properties:
+      - name: "presentationType"
+        data_type: "enum"
+        enum_values: ["oral", "poster", "keynote", "invited", "workshop"]
+
+  - name: "SUPERVISED_BY"
+    description: "Thesis supervised by (advisor relationship)"
+    source_types: ["Thesis"]
+    target_types: ["Researcher", "Person"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "role"
+        data_type: "enum"
+        enum_values: ["primary_advisor", "co-advisor", "committee_member", "external_examiner"]
+
+  - name: "AWARDED_TO"
+    description: "Thesis awarded to student"
+    source_types: ["Thesis"]
+    target_types: ["Person", "Researcher"]
+    cardinality: "many_to_one"
+
+  - name: "AWARDED_BY"
+    description: "Thesis/degree awarded by institution"
+    source_types: ["Thesis"]
+    target_types: ["EducationalOrganization", "ResearchOrganization"]
+    cardinality: "many_to_one"
+
+  - name: "COLLABORATES_WITH"
+    description: "Research collaboration between researchers"
+    source_types: ["Researcher", "Person"]
+    target_types: ["Researcher", "Person"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "collaborationType"
+        data_type: "string"
+      - name: "jointPublications"
+        data_type: "integer"
+
+  - name: "REVIEWS"
+    description: "Researcher reviews for a journal"
+    source_types: ["Researcher", "Person"]
+    target_types: ["Periodical"]
+    cardinality: "many_to_many"
+
+  - name: "EDITS"
+    description: "Researcher serves as editor for journal"
+    source_types: ["Researcher", "Person"]
+    target_types: ["Periodical"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "role"
+        data_type: "enum"
+        enum_values: ["editor_in_chief", "associate_editor", "guest_editor", "editorial_board"]
+
+  - name: "STUDIES"
+    description: "Research studies a topic/concept"
+    source_types: ["ScholarlyArticle", "Thesis", "ResearchProject"]
+    target_types: ["DefinedTerm"]
+    cardinality: "many_to_many"
+
+  - name: "USES_METHODOLOGY"
+    description: "Research uses a specific methodology"
+    source_types: ["ScholarlyArticle", "Thesis"]
+    target_types: ["DefinedTerm"]
+    cardinality: "many_to_many"
+
+  - name: "USES_DATASET"
+    description: "Research uses a dataset"
+    source_types: ["ScholarlyArticle", "Thesis"]
+    target_types: ["Dataset"]
+    cardinality: "many_to_many"
+
+  - name: "PRODUCES_DATASET"
+    description: "Research produces/creates a dataset"
+    source_types: ["ScholarlyArticle", "ResearchProject"]
+    target_types: ["Dataset"]
+    cardinality: "many_to_many"
+
+  - name: "PART_OF_PROJECT"
+    description: "Work is part of a research project"
+    source_types: ["ScholarlyArticle", "Dataset"]
+    target_types: ["ResearchProject"]
+    cardinality: "many_to_one"
+
+  - name: "PRINCIPAL_INVESTIGATOR"
+    description: "PI of a research project"
+    source_types: ["ResearchProject"]
+    target_types: ["Researcher", "Person"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "role"
+        data_type: "enum"
+        enum_values: ["PI", "Co-PI", "researcher", "consultant"]
+
+  - name: "REPLICATES"
+    description: "This study replicates another study"
+    source_types: ["ScholarlyArticle"]
+    target_types: ["ScholarlyArticle"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "replicationResult"
+        data_type: "enum"
+        enum_values: ["successful", "partial", "failed", "inconclusive"]
+
+  - name: "EXTENDS"
+    description: "This work extends/builds upon another"
+    source_types: ["ScholarlyArticle", "Thesis"]
+    target_types: ["ScholarlyArticle", "Thesis"]
+    cardinality: "many_to_many"
+
+  - name: "CONTRADICTS"
+    description: "This work contradicts findings of another"
+    source_types: ["ScholarlyArticle"]
+    target_types: ["ScholarlyArticle"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "contradictionType"
+        data_type: "string"
+        description: "Nature of the contradiction"
+
+  - name: "RETRACTED"
+    description: "Article has been retracted"
+    source_types: ["ScholarlyArticle"]
+    target_types: ["ScholarlyArticle"]
+    cardinality: "one_to_one"
+    properties:
+      - name: "retractionDate"
+        data_type: "date"
+      - name: "retractionReason"
+        data_type: "string"

@@ -5,9 +5,25 @@ Pure Pydantic models without database operations.
 """
 
 from shared.models.base import ObjectModel, RecordModel
+from shared.models.file_tracking import KnowledgeBase, Project, TrackedFile
+from shared.models.jobs import (
+    Job,
+    JobConfig,
+    JobListResponse,
+    JobProgress,
+    JobResult,
+    JobStatsResponse,
+    JobSubmitRequest,
+)
 from shared.models.llm import DefaultModels, Model, ModelTypeStr, ModelUsageRecord
 from shared.models.notebook import ChatMessage, ChatSession, Note, Notebook
 from shared.models.settings import ContentSettings
+from shared.models.extraction import (
+    ExtractedEntity,
+    ExtractedRelation,
+    ExtractionResult,
+    FilteredResult,
+)
 from shared.models.source import Asset, Chunk, Source, SourceEmbedding, SourceInsight
 
 __all__ = [
@@ -30,6 +46,23 @@ __all__ = [
     "SourceInsight",
     "SourceEmbedding",
     "Asset",
+    # File tracking models
+    "TrackedFile",
+    "Project",
+    "KnowledgeBase",
+    # Job models
+    "Job",
+    "JobConfig",
+    "JobProgress",
+    "JobResult",
+    "JobSubmitRequest",
+    "JobListResponse",
+    "JobStatsResponse",
     # Settings
     "ContentSettings",
+    # Extraction models
+    "ExtractedEntity",
+    "ExtractedRelation",
+    "ExtractionResult",
+    "FilteredResult",
 ]

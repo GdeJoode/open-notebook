@@ -56,8 +56,10 @@ surrealdb-service = { workspace = true }
 file-manager = { workspace = true }
 job-queue = { workspace = true }
 llm-manager = { workspace = true }
+ontology-manager = { workspace = true }
 ingestion = { workspace = true }
 ontology-extraction = { workspace = true }
+entity-filtering = { workspace = true }
 summarization = { workspace = true }
 enrichment = { workspace = true }
 embeddings = { workspace = true }

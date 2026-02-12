@@ -1,0 +1,699 @@
+# schema_core.yaml
+# Core ontology based on Schema.org with Dublin Core mappings
+# This is the base ontology - all others extend from this
+
+metadata:
+  name: "schema_core"
+  version: "1.0.0"
+  description: "Core Schema.org types with Dublin Core interoperability for knowledge graphs"
+  extends: null
+  namespaces:
+    schema: "https://schema.org/"
+    dc: "http://purl.org/dc/elements/1.1/"
+    dcterms: "http://purl.org/dc/terms/"
+    skos: "http://www.w3.org/2004/02/skos/core#"
+
+# =============================================================================
+# ENTITY TYPES
+# =============================================================================
+
+entity_types:
+  # ---------------------------------------------------------------------------
+  # Thing - Root type for all entities
+  # ---------------------------------------------------------------------------
+  - name: "Thing"
+    description: "The most generic type of item (Schema.org root)"
+    schema_org: "https://schema.org/Thing"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Any named entity that doesn't fit a more specific type"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+        schema_org: "https://schema.org/name"
+        dcterms: "dc:title"
+      - name: "description"
+        data_type: "string"
+        schema_org: "https://schema.org/description"
+        dcterms: "dc:description"
+      - name: "url"
+        data_type: "string"
+        schema_org: "https://schema.org/url"
+        dcterms: "dc:identifier"
+      - name: "identifier"
+        data_type: "string"
+        description: "Unique identifier (DOI, ISBN, ORCID, etc.)"
+        schema_org: "https://schema.org/identifier"
+        dcterms: "dc:identifier"
+      - name: "sameAs"
+        data_type: "array"
+        description: "URLs to equivalent entities in other systems"
+        schema_org: "https://schema.org/sameAs"
+        dcterms: "dc:relation"
+      - name: "alternateName"
+        data_type: "array"
+        description: "Alternative names or aliases"
+        schema_org: "https://schema.org/alternateName"
+
+  # ---------------------------------------------------------------------------
+  # CreativeWork - Base for all documents/content
+  # ---------------------------------------------------------------------------
+  - name: "CreativeWork"
+    description: "A creative work such as a document, article, book, or dataset"
+    schema_org: "https://schema.org/CreativeWork"
+    parent_type: "Thing"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Documents, articles, reports, publications"
+      - "Content with authors and publication dates"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+        schema_org: "https://schema.org/name"
+        dcterms: "dc:title"
+      - name: "headline"
+        data_type: "string"
+        description: "Title or headline of the work"
+        schema_org: "https://schema.org/headline"
+        dcterms: "dc:title"
+      - name: "abstract"
+        data_type: "string"
+        description: "Summary or abstract"
+        schema_org: "https://schema.org/abstract"
+        dcterms: "dcterms:abstract"
+      - name: "description"
+        data_type: "string"
+        schema_org: "https://schema.org/description"
+        dcterms: "dc:description"
+      - name: "datePublished"
+        data_type: "date"
+        schema_org: "https://schema.org/datePublished"
+        dcterms: "dc:date"
+      - name: "dateCreated"
+        data_type: "date"
+        schema_org: "https://schema.org/dateCreated"
+        dcterms: "dcterms:created"
+      - name: "dateModified"
+        data_type: "date"
+        schema_org: "https://schema.org/dateModified"
+        dcterms: "dcterms:modified"
+      - name: "language"
+        data_type: "string"
+        description: "ISO 639-1 language code (e.g., 'en', 'es')"
+        schema_org: "https://schema.org/inLanguage"
+        dcterms: "dc:language"
+      - name: "license"
+        data_type: "string"
+        description: "License URL or identifier"
+        schema_org: "https://schema.org/license"
+        dcterms: "dc:rights"
+      - name: "keywords"
+        data_type: "array"
+        description: "Keywords or tags"
+        schema_org: "https://schema.org/keywords"
+        dcterms: "dc:subject"
+      - name: "url"
+        data_type: "string"
+        schema_org: "https://schema.org/url"
+        dcterms: "dc:identifier"
+      - name: "identifier"
+        data_type: "string"
+        description: "DOI, ISBN, or other identifier"
+        schema_org: "https://schema.org/identifier"
+        dcterms: "dc:identifier"
+
+  # ---------------------------------------------------------------------------
+  # Article - General article type
+  # ---------------------------------------------------------------------------
+  - name: "Article"
+    description: "An article, such as a news article or blog post"
+    schema_org: "https://schema.org/Article"
+    parent_type: "CreativeWork"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "News articles, blog posts, magazine articles"
+      - "Online articles with publication dates"
+    properties:
+      - name: "articleBody"
+        data_type: "string"
+        schema_org: "https://schema.org/articleBody"
+      - name: "articleSection"
+        data_type: "string"
+        description: "Section of the publication"
+        schema_org: "https://schema.org/articleSection"
+      - name: "wordCount"
+        data_type: "integer"
+        schema_org: "https://schema.org/wordCount"
+
+  # ---------------------------------------------------------------------------
+  # Report - Generic report type
+  # ---------------------------------------------------------------------------
+  - name: "Report"
+    description: "A report, such as a research report or technical report"
+    schema_org: "https://schema.org/Report"
+    parent_type: "CreativeWork"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Technical reports, research reports, white papers"
+      - "Documents with structured findings or recommendations"
+    properties:
+      - name: "reportNumber"
+        data_type: "string"
+        description: "Report number or identifier"
+        schema_org: "https://schema.org/reportNumber"
+
+  # ---------------------------------------------------------------------------
+  # Book
+  # ---------------------------------------------------------------------------
+  - name: "Book"
+    description: "A book or monograph"
+    schema_org: "https://schema.org/Book"
+    parent_type: "CreativeWork"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Books, monographs, textbooks"
+      - "Publications with ISBN"
+    properties:
+      - name: "isbn"
+        data_type: "string"
+        description: "ISBN-10 or ISBN-13"
+        schema_org: "https://schema.org/isbn"
+        dcterms: "dc:identifier"
+      - name: "numberOfPages"
+        data_type: "integer"
+        schema_org: "https://schema.org/numberOfPages"
+      - name: "bookEdition"
+        data_type: "string"
+        schema_org: "https://schema.org/bookEdition"
+      - name: "bookFormat"
+        data_type: "enum"
+        enum_values: ["Hardcover", "Paperback", "EBook", "AudioBook"]
+        schema_org: "https://schema.org/bookFormat"
+
+  # ---------------------------------------------------------------------------
+  # WebPage
+  # ---------------------------------------------------------------------------
+  - name: "WebPage"
+    description: "A web page, such as a profile page or landing page"
+    schema_org: "https://schema.org/WebPage"
+    parent_type: "CreativeWork"
+    extraction_strategy: "hybrid"
+    extraction_hints:
+      - "Web pages, profile pages, landing pages"
+      - "URLs to online content"
+    properties:
+      - name: "url"
+        data_type: "string"
+        required: true
+        schema_org: "https://schema.org/url"
+      - name: "lastReviewed"
+        data_type: "date"
+        schema_org: "https://schema.org/lastReviewed"
+      - name: "primaryImageOfPage"
+        data_type: "string"
+        description: "URL of primary image"
+        schema_org: "https://schema.org/primaryImageOfPage"
+
+  # ---------------------------------------------------------------------------
+  # Dataset
+  # ---------------------------------------------------------------------------
+  - name: "Dataset"
+    description: "A dataset or data collection"
+    schema_org: "https://schema.org/Dataset"
+    parent_type: "CreativeWork"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Datasets, data collections, databases"
+      - "Research data with DOI"
+    properties:
+      - name: "distribution"
+        data_type: "string"
+        description: "URL to download the dataset"
+        schema_org: "https://schema.org/distribution"
+      - name: "temporalCoverage"
+        data_type: "string"
+        description: "Time period covered by the dataset"
+        schema_org: "https://schema.org/temporalCoverage"
+        dcterms: "dcterms:temporal"
+      - name: "spatialCoverage"
+        data_type: "string"
+        description: "Geographic area covered"
+        schema_org: "https://schema.org/spatialCoverage"
+        dcterms: "dcterms:spatial"
+      - name: "measurementTechnique"
+        data_type: "string"
+        schema_org: "https://schema.org/measurementTechnique"
+      - name: "variableMeasured"
+        data_type: "array"
+        description: "Variables measured in the dataset"
+        schema_org: "https://schema.org/variableMeasured"
+
+  # ---------------------------------------------------------------------------
+  # Person
+  # ---------------------------------------------------------------------------
+  - name: "Person"
+    description: "A person (alive, dead, fictional, or mythical)"
+    schema_org: "https://schema.org/Person"
+    parent_type: "Thing"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Look for names with titles (Dr., Prof., Mr., Ms.)"
+      - "Authors, researchers, contributors mentioned in documents"
+      - "People with organizational affiliations"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+        schema_org: "https://schema.org/name"
+        dcterms: "dc:creator"
+      - name: "givenName"
+        data_type: "string"
+        schema_org: "https://schema.org/givenName"
+      - name: "familyName"
+        data_type: "string"
+        schema_org: "https://schema.org/familyName"
+      - name: "additionalName"
+        data_type: "string"
+        description: "Middle name or additional names"
+        schema_org: "https://schema.org/additionalName"
+      - name: "honorificPrefix"
+        data_type: "string"
+        description: "Title (Dr., Prof., etc.)"
+        schema_org: "https://schema.org/honorificPrefix"
+      - name: "honorificSuffix"
+        data_type: "string"
+        description: "Suffix (PhD, MD, Jr., etc.)"
+        schema_org: "https://schema.org/honorificSuffix"
+      - name: "email"
+        data_type: "string"
+        schema_org: "https://schema.org/email"
+      - name: "jobTitle"
+        data_type: "string"
+        schema_org: "https://schema.org/jobTitle"
+      - name: "url"
+        data_type: "string"
+        description: "Personal website or profile URL"
+        schema_org: "https://schema.org/url"
+      - name: "sameAs"
+        data_type: "array"
+        description: "ORCID, LinkedIn, Twitter URLs"
+        schema_org: "https://schema.org/sameAs"
+
+  # ---------------------------------------------------------------------------
+  # Organization
+  # ---------------------------------------------------------------------------
+  - name: "Organization"
+    description: "An organization such as a company, institution, or government body"
+    schema_org: "https://schema.org/Organization"
+    parent_type: "Thing"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Look for Inc., Corp., LLC, Ltd., University, Institute"
+      - "Government agencies, NGOs, research centers"
+      - "Publishers, journals, conferences"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+        schema_org: "https://schema.org/name"
+        dcterms: "dc:publisher"
+      - name: "legalName"
+        data_type: "string"
+        schema_org: "https://schema.org/legalName"
+      - name: "alternateName"
+        data_type: "array"
+        description: "Acronyms, abbreviations, other names"
+        schema_org: "https://schema.org/alternateName"
+      - name: "url"
+        data_type: "string"
+        schema_org: "https://schema.org/url"
+      - name: "email"
+        data_type: "string"
+        schema_org: "https://schema.org/email"
+      - name: "foundingDate"
+        data_type: "date"
+        schema_org: "https://schema.org/foundingDate"
+      - name: "dissolutionDate"
+        data_type: "date"
+        schema_org: "https://schema.org/dissolutionDate"
+      - name: "organizationType"
+        data_type: "enum"
+        enum_values: ["Corporation", "Nonprofit", "Government", "Educational", "Research", "NGO", "Publisher", "Other"]
+        description: "Type of organization"
+
+  # ---------------------------------------------------------------------------
+  # Place
+  # ---------------------------------------------------------------------------
+  - name: "Place"
+    description: "A physical location"
+    schema_org: "https://schema.org/Place"
+    parent_type: "Thing"
+    extraction_strategy: "hybrid"
+    extraction_hints:
+      - "Cities, countries, regions, addresses"
+      - "Locations mentioned in publications"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+        schema_org: "https://schema.org/name"
+        dcterms: "dcterms:spatial"
+      - name: "address"
+        data_type: "string"
+        schema_org: "https://schema.org/address"
+      - name: "geo"
+        data_type: "object"
+        description: "Geographic coordinates"
+        properties:
+          latitude: { data_type: "float", min_value: -90, max_value: 90 }
+          longitude: { data_type: "float", min_value: -180, max_value: 180 }
+        schema_org: "https://schema.org/geo"
+      - name: "containedInPlace"
+        data_type: "reference"
+        reference_type: "Place"
+        description: "Parent location (city in country)"
+        schema_org: "https://schema.org/containedInPlace"
+
+  # ---------------------------------------------------------------------------
+  # Event
+  # ---------------------------------------------------------------------------
+  - name: "Event"
+    description: "An event, such as a conference or meeting"
+    schema_org: "https://schema.org/Event"
+    parent_type: "Thing"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Conferences, workshops, symposiums, meetings"
+      - "Events with dates and locations"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+        schema_org: "https://schema.org/name"
+      - name: "description"
+        data_type: "string"
+        schema_org: "https://schema.org/description"
+      - name: "startDate"
+        data_type: "date"
+        schema_org: "https://schema.org/startDate"
+        dcterms: "dcterms:temporal"
+      - name: "endDate"
+        data_type: "date"
+        schema_org: "https://schema.org/endDate"
+      - name: "eventStatus"
+        data_type: "enum"
+        enum_values: ["Scheduled", "Cancelled", "Postponed", "Rescheduled", "Completed"]
+        schema_org: "https://schema.org/eventStatus"
+      - name: "eventAttendanceMode"
+        data_type: "enum"
+        enum_values: ["Offline", "Online", "Mixed"]
+        schema_org: "https://schema.org/eventAttendanceMode"
+      - name: "url"
+        data_type: "string"
+        schema_org: "https://schema.org/url"
+
+  # ---------------------------------------------------------------------------
+  # DefinedTerm - Concepts, Topics, Keywords
+  # ---------------------------------------------------------------------------
+  - name: "DefinedTerm"
+    description: "A word, phrase, or concept with a specific definition (topics, keywords, controlled vocabulary)"
+    schema_org: "https://schema.org/DefinedTerm"
+    parent_type: "Thing"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Key concepts, topics, themes"
+      - "Technical terms with specific meanings"
+      - "Controlled vocabulary terms"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+        schema_org: "https://schema.org/name"
+        dcterms: "dc:subject"
+      - name: "description"
+        data_type: "string"
+        description: "Definition of the term"
+        schema_org: "https://schema.org/description"
+      - name: "termCode"
+        data_type: "string"
+        description: "Code in a controlled vocabulary"
+        schema_org: "https://schema.org/termCode"
+      - name: "inDefinedTermSet"
+        data_type: "string"
+        description: "The vocabulary this term belongs to"
+        schema_org: "https://schema.org/inDefinedTermSet"
+
+  # ---------------------------------------------------------------------------
+  # Grant - Funding
+  # ---------------------------------------------------------------------------
+  - name: "Grant"
+    description: "A grant or funding award"
+    schema_org: "https://schema.org/Grant"
+    parent_type: "Thing"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Funding sources, grant numbers"
+      - "Financial support acknowledgments"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+        schema_org: "https://schema.org/name"
+      - name: "identifier"
+        data_type: "string"
+        description: "Grant number or identifier"
+        schema_org: "https://schema.org/identifier"
+      - name: "amount"
+        data_type: "object"
+        description: "Funding amount"
+        properties:
+          value: { data_type: "float" }
+          currency: { data_type: "string" }
+
+# =============================================================================
+# RELATIONSHIP TYPES
+# =============================================================================
+
+relationship_types:
+  # ---------------------------------------------------------------------------
+  # Authorship & Attribution
+  # ---------------------------------------------------------------------------
+  - name: "AUTHORED_BY"
+    description: "The creator/author of a creative work"
+    schema_org: "https://schema.org/author"
+    dcterms: "dc:creator"
+    source_types: ["CreativeWork", "Article", "Report", "Book", "Dataset"]
+    target_types: ["Person", "Organization"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "role"
+        data_type: "enum"
+        enum_values: ["author", "co-author", "corresponding_author", "contributor"]
+      - name: "position"
+        data_type: "integer"
+        description: "Author position (1 = first author)"
+
+  - name: "PUBLISHED_BY"
+    description: "The publisher of a creative work"
+    schema_org: "https://schema.org/publisher"
+    dcterms: "dc:publisher"
+    source_types: ["CreativeWork", "Article", "Report", "Book"]
+    target_types: ["Organization"]
+    cardinality: "many_to_one"
+
+  - name: "EDITED_BY"
+    description: "The editor of a creative work"
+    schema_org: "https://schema.org/editor"
+    source_types: ["CreativeWork", "Book"]
+    target_types: ["Person"]
+    cardinality: "many_to_many"
+
+  - name: "FUNDED_BY"
+    description: "Funding source for the work"
+    schema_org: "https://schema.org/funder"
+    source_types: ["CreativeWork", "Dataset"]
+    target_types: ["Organization", "Grant"]
+    cardinality: "many_to_many"
+
+  # ---------------------------------------------------------------------------
+  # Citations & References
+  # ---------------------------------------------------------------------------
+  - name: "CITES"
+    description: "This work cites another work"
+    schema_org: "https://schema.org/citation"
+    dcterms: "dcterms:references"
+    source_types: ["CreativeWork", "Article", "Report", "Book"]
+    target_types: ["CreativeWork", "Article", "Report", "Book", "Dataset"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "citationContext"
+        data_type: "string"
+        description: "Context where the citation appears"
+
+  - name: "IS_BASED_ON"
+    description: "This work is based on or derived from another"
+    schema_org: "https://schema.org/isBasedOn"
+    dcterms: "dc:source"
+    source_types: ["CreativeWork"]
+    target_types: ["CreativeWork", "Dataset"]
+    cardinality: "many_to_many"
+
+  - name: "IS_PART_OF"
+    description: "This work is part of a larger work (article in journal, chapter in book)"
+    schema_org: "https://schema.org/isPartOf"
+    dcterms: "dcterms:isPartOf"
+    source_types: ["CreativeWork", "Article"]
+    target_types: ["CreativeWork", "Book"]
+    cardinality: "many_to_one"
+    properties:
+      - name: "volumeNumber"
+        data_type: "string"
+      - name: "issueNumber"
+        data_type: "string"
+      - name: "pagination"
+        data_type: "string"
+        description: "Page range (e.g., '123-145')"
+
+  # ---------------------------------------------------------------------------
+  # Topical & Conceptual
+  # ---------------------------------------------------------------------------
+  - name: "ABOUT"
+    description: "The primary subject/topic of a creative work"
+    schema_org: "https://schema.org/about"
+    dcterms: "dc:subject"
+    source_types: ["CreativeWork"]
+    target_types: ["DefinedTerm", "Thing"]
+    cardinality: "many_to_many"
+
+  - name: "MENTIONS"
+    description: "Entities mentioned in a creative work (weaker than ABOUT)"
+    schema_org: "https://schema.org/mentions"
+    source_types: ["CreativeWork"]
+    target_types: ["Person", "Organization", "Place", "Event", "Thing"]
+    cardinality: "many_to_many"
+
+  - name: "BROADER_THAN"
+    description: "This concept is broader than another (taxonomy hierarchy)"
+    skos: "http://www.w3.org/2004/02/skos/core#broader"
+    source_types: ["DefinedTerm"]
+    target_types: ["DefinedTerm"]
+    cardinality: "many_to_many"
+
+  - name: "RELATED_CONCEPT"
+    description: "Conceptually related terms"
+    skos: "http://www.w3.org/2004/02/skos/core#related"
+    source_types: ["DefinedTerm"]
+    target_types: ["DefinedTerm"]
+    cardinality: "many_to_many"
+
+  # ---------------------------------------------------------------------------
+  # Organizational
+  # ---------------------------------------------------------------------------
+  - name: "AFFILIATED_WITH"
+    description: "Person's organizational affiliation"
+    schema_org: "https://schema.org/affiliation"
+    source_types: ["Person"]
+    target_types: ["Organization"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "role"
+        data_type: "string"
+        description: "Role or position at organization"
+      - name: "startDate"
+        data_type: "date"
+      - name: "endDate"
+        data_type: "date"
+
+  - name: "WORKS_FOR"
+    description: "Employment relationship (current)"
+    schema_org: "https://schema.org/worksFor"
+    source_types: ["Person"]
+    target_types: ["Organization"]
+    cardinality: "many_to_one"
+
+  - name: "MEMBER_OF"
+    description: "Membership in an organization"
+    schema_org: "https://schema.org/memberOf"
+    source_types: ["Person", "Organization"]
+    target_types: ["Organization"]
+    cardinality: "many_to_many"
+
+  - name: "ALUMNI_OF"
+    description: "Educational institution alumni relationship"
+    schema_org: "https://schema.org/alumniOf"
+    source_types: ["Person"]
+    target_types: ["Organization"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "degree"
+        data_type: "string"
+        description: "Degree obtained (PhD, MSc, etc.)"
+      - name: "graduationYear"
+        data_type: "integer"
+
+  - name: "PARENT_ORGANIZATION"
+    description: "Parent organization (subsidiary relationship)"
+    schema_org: "https://schema.org/parentOrganization"
+    source_types: ["Organization"]
+    target_types: ["Organization"]
+    cardinality: "many_to_one"
+
+  # ---------------------------------------------------------------------------
+  # Events
+  # ---------------------------------------------------------------------------
+  - name: "PRESENTED_AT"
+    description: "Work was presented at an event"
+    source_types: ["CreativeWork"]
+    target_types: ["Event"]
+    cardinality: "many_to_one"
+
+  - name: "ATTENDED"
+    description: "Person attended an event"
+    schema_org: "https://schema.org/attendee"
+    source_types: ["Person"]
+    target_types: ["Event"]
+    cardinality: "many_to_many"
+
+  - name: "ORGANIZED_BY"
+    description: "Event organized by person/organization"
+    schema_org: "https://schema.org/organizer"
+    source_types: ["Event"]
+    target_types: ["Person", "Organization"]
+    cardinality: "many_to_many"
+
+  - name: "LOCATED_IN"
+    description: "Physical location of entity or event"
+    schema_org: "https://schema.org/location"
+    source_types: ["Event", "Organization"]
+    target_types: ["Place"]
+    cardinality: "many_to_one"
+
+  # ---------------------------------------------------------------------------
+  # Identity & Equivalence
+  # ---------------------------------------------------------------------------
+  - name: "SAME_AS"
+    description: "Identity relationship - same entity in different sources"
+    schema_org: "https://schema.org/sameAs"
+    source_types: ["*"]
+    target_types: ["*"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "confidence"
+        data_type: "float"
+        validation_rules:
+          min_value: 0.0
+          max_value: 1.0
+
+  - name: "RELATED_TO"
+    description: "Generic relationship (use sparingly, prefer specific relations)"
+    schema_org: "https://schema.org/relatedTo"
+    dcterms: "dc:relation"
+    source_types: ["*"]
+    target_types: ["*"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "relationType"
+        data_type: "string"
+        description: "Specify the nature of the relationship"

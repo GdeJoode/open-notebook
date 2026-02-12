@@ -1,0 +1,537 @@
+# social_profiles.yaml
+# Professional and Social Profile ontology extending schema_core
+# For LinkedIn profiles, ORCID, ResearchGate, professional networks
+
+metadata:
+  name: "social_profiles"
+  version: "1.0.0"
+  description: "Professional and social profile ontology for identity linking"
+  extends: "schema_core"
+  namespaces:
+    schema: "https://schema.org/"
+    foaf: "http://xmlns.com/foaf/0.1/"
+    vcard: "http://www.w3.org/2006/vcard/ns#"
+
+# =============================================================================
+# ENTITY TYPES
+# =============================================================================
+
+entity_types:
+  # ---------------------------------------------------------------------------
+  # LinkedInProfile - Professional networking profile
+  # ---------------------------------------------------------------------------
+  - name: "LinkedInProfile"
+    description: "A LinkedIn professional profile"
+    parent_type: "WebPage"
+    extraction_strategy: "structured"
+    extraction_hints:
+      - "LinkedIn URLs (linkedin.com/in/)"
+      - "Professional profiles with work history"
+      - "Business networking profiles"
+    properties:
+      - name: "profileUrl"
+        data_type: "string"
+        required: true
+        description: "Full LinkedIn profile URL"
+        validation_rules:
+          pattern: "^https?://(www\\.)?linkedin\\.com/in/[\\w-]+/?$"
+      - name: "vanityName"
+        data_type: "string"
+        description: "LinkedIn vanity URL name (e.g., 'johndoe')"
+      - name: "headline"
+        data_type: "string"
+        description: "Profile headline/tagline"
+      - name: "currentPosition"
+        data_type: "string"
+        description: "Current job title"
+      - name: "currentCompany"
+        data_type: "string"
+        description: "Current employer name"
+      - name: "location"
+        data_type: "string"
+        description: "Profile location"
+      - name: "connectionCount"
+        data_type: "integer"
+        description: "Number of connections (snapshot)"
+        validation_rules:
+          min_value: 0
+      - name: "industry"
+        data_type: "string"
+        description: "Industry classification"
+      - name: "summary"
+        data_type: "string"
+        description: "Profile summary/about section"
+      - name: "skills"
+        data_type: "array"
+        description: "Listed skills"
+      - name: "languages"
+        data_type: "array"
+        description: "Languages spoken"
+      - name: "verified"
+        data_type: "boolean"
+        description: "Whether profile has verification badge"
+      - name: "premium"
+        data_type: "boolean"
+        description: "Whether profile has premium features"
+      - name: "lastUpdated"
+        data_type: "date"
+        description: "When profile data was last fetched"
+
+  # ---------------------------------------------------------------------------
+  # LinkedInCompanyPage - Company/organization LinkedIn presence
+  # ---------------------------------------------------------------------------
+  - name: "LinkedInCompanyPage"
+    description: "A LinkedIn company or organization page"
+    parent_type: "WebPage"
+    extraction_strategy: "structured"
+    extraction_hints:
+      - "LinkedIn company URLs (linkedin.com/company/)"
+      - "Organization pages with employee counts"
+    properties:
+      - name: "pageUrl"
+        data_type: "string"
+        required: true
+        description: "Full LinkedIn company page URL"
+        validation_rules:
+          pattern: "^https?://(www\\.)?linkedin\\.com/company/[\\w-]+/?$"
+      - name: "companyName"
+        data_type: "string"
+        required: true
+      - name: "tagline"
+        data_type: "string"
+      - name: "industry"
+        data_type: "string"
+      - name: "companySize"
+        data_type: "string"
+        description: "Size range (e.g., '1001-5000 employees')"
+      - name: "headquarters"
+        data_type: "string"
+      - name: "founded"
+        data_type: "integer"
+        description: "Year founded"
+      - name: "specialties"
+        data_type: "array"
+      - name: "followerCount"
+        data_type: "integer"
+        validation_rules:
+          min_value: 0
+      - name: "employeeCount"
+        data_type: "integer"
+        description: "LinkedIn employee count"
+        validation_rules:
+          min_value: 0
+
+  # ---------------------------------------------------------------------------
+  # OrcidProfile - Academic identifier profile
+  # ---------------------------------------------------------------------------
+  - name: "OrcidProfile"
+    description: "An ORCID researcher profile"
+    parent_type: "WebPage"
+    extraction_strategy: "api"
+    extraction_hints:
+      - "ORCID URLs (orcid.org)"
+      - "Academic researcher identifiers"
+      - "16-digit ORCID iDs"
+    properties:
+      - name: "orcidId"
+        data_type: "string"
+        required: true
+        description: "ORCID iD (0000-0002-1825-0097 format)"
+        validation_rules:
+          pattern: "^\\d{4}-\\d{4}-\\d{4}-\\d{3}[\\dX]$"
+      - name: "profileUrl"
+        data_type: "string"
+        description: "Full ORCID profile URL"
+      - name: "givenNames"
+        data_type: "string"
+      - name: "familyName"
+        data_type: "string"
+      - name: "otherNames"
+        data_type: "array"
+        description: "Alternative names/aliases"
+      - name: "biography"
+        data_type: "string"
+      - name: "keywords"
+        data_type: "array"
+        description: "Research keywords"
+      - name: "workCount"
+        data_type: "integer"
+        description: "Number of works in ORCID record"
+        validation_rules:
+          min_value: 0
+      - name: "lastModified"
+        data_type: "datetime"
+        description: "When ORCID record was last modified"
+
+  # ---------------------------------------------------------------------------
+  # ResearchGateProfile - Academic social network profile
+  # ---------------------------------------------------------------------------
+  - name: "ResearchGateProfile"
+    description: "A ResearchGate researcher profile"
+    parent_type: "WebPage"
+    extraction_strategy: "structured"
+    extraction_hints:
+      - "ResearchGate URLs (researchgate.net)"
+      - "Academic profiles with RG Score"
+    properties:
+      - name: "profileUrl"
+        data_type: "string"
+        required: true
+        description: "Full ResearchGate profile URL"
+      - name: "rgScore"
+        data_type: "float"
+        description: "ResearchGate score"
+        validation_rules:
+          min_value: 0.0
+      - name: "hIndex"
+        data_type: "integer"
+        description: "h-index on ResearchGate"
+        validation_rules:
+          min_value: 0
+      - name: "citations"
+        data_type: "integer"
+        description: "Total citations"
+        validation_rules:
+          min_value: 0
+      - name: "reads"
+        data_type: "integer"
+        description: "Total reads"
+        validation_rules:
+          min_value: 0
+      - name: "recommendations"
+        data_type: "integer"
+        description: "Number of recommendations"
+        validation_rules:
+          min_value: 0
+      - name: "publications"
+        data_type: "integer"
+        description: "Number of publications"
+        validation_rules:
+          min_value: 0
+      - name: "institution"
+        data_type: "string"
+        description: "Current institution"
+      - name: "department"
+        data_type: "string"
+      - name: "disciplines"
+        data_type: "array"
+        description: "Research disciplines"
+
+  # ---------------------------------------------------------------------------
+  # GoogleScholarProfile - Google Scholar citation profile
+  # ---------------------------------------------------------------------------
+  - name: "GoogleScholarProfile"
+    description: "A Google Scholar citation profile"
+    parent_type: "WebPage"
+    extraction_strategy: "structured"
+    extraction_hints:
+      - "Google Scholar URLs (scholar.google.com)"
+      - "Citation profiles with h-index"
+    properties:
+      - name: "profileUrl"
+        data_type: "string"
+        required: true
+        description: "Full Google Scholar profile URL"
+      - name: "scholarId"
+        data_type: "string"
+        description: "Google Scholar user ID"
+      - name: "affiliation"
+        data_type: "string"
+        description: "Listed affiliation"
+      - name: "verifiedEmail"
+        data_type: "string"
+        description: "Verified email domain"
+      - name: "interests"
+        data_type: "array"
+        description: "Research interests/labels"
+      - name: "citations"
+        data_type: "integer"
+        description: "Total citations"
+        validation_rules:
+          min_value: 0
+      - name: "hIndex"
+        data_type: "integer"
+        description: "h-index"
+        validation_rules:
+          min_value: 0
+      - name: "i10Index"
+        data_type: "integer"
+        description: "i10-index"
+        validation_rules:
+          min_value: 0
+      - name: "citationsSince"
+        data_type: "integer"
+        description: "Citations since specific year"
+      - name: "hIndexSince"
+        data_type: "integer"
+        description: "h-index since specific year"
+
+  # ---------------------------------------------------------------------------
+  # TwitterProfile - Twitter/X profile for public figures
+  # ---------------------------------------------------------------------------
+  - name: "TwitterProfile"
+    description: "A Twitter/X profile"
+    parent_type: "WebPage"
+    extraction_strategy: "api"
+    extraction_hints:
+      - "Twitter/X URLs (twitter.com, x.com)"
+      - "Social media handles starting with @"
+    properties:
+      - name: "profileUrl"
+        data_type: "string"
+        required: true
+        description: "Full Twitter profile URL"
+      - name: "username"
+        data_type: "string"
+        required: true
+        description: "Twitter handle (without @)"
+      - name: "displayName"
+        data_type: "string"
+      - name: "bio"
+        data_type: "string"
+      - name: "location"
+        data_type: "string"
+      - name: "website"
+        data_type: "string"
+      - name: "followerCount"
+        data_type: "integer"
+        validation_rules:
+          min_value: 0
+      - name: "followingCount"
+        data_type: "integer"
+        validation_rules:
+          min_value: 0
+      - name: "tweetCount"
+        data_type: "integer"
+        validation_rules:
+          min_value: 0
+      - name: "verified"
+        data_type: "boolean"
+      - name: "joinedDate"
+        data_type: "date"
+
+  # ---------------------------------------------------------------------------
+  # GitHubProfile - Developer profile
+  # ---------------------------------------------------------------------------
+  - name: "GitHubProfile"
+    description: "A GitHub developer profile"
+    parent_type: "WebPage"
+    extraction_strategy: "api"
+    extraction_hints:
+      - "GitHub URLs (github.com)"
+      - "Developer profiles with repositories"
+    properties:
+      - name: "profileUrl"
+        data_type: "string"
+        required: true
+        description: "Full GitHub profile URL"
+      - name: "username"
+        data_type: "string"
+        required: true
+      - name: "name"
+        data_type: "string"
+      - name: "bio"
+        data_type: "string"
+      - name: "company"
+        data_type: "string"
+      - name: "location"
+        data_type: "string"
+      - name: "email"
+        data_type: "string"
+      - name: "website"
+        data_type: "string"
+      - name: "followerCount"
+        data_type: "integer"
+        validation_rules:
+          min_value: 0
+      - name: "followingCount"
+        data_type: "integer"
+        validation_rules:
+          min_value: 0
+      - name: "publicRepos"
+        data_type: "integer"
+        validation_rules:
+          min_value: 0
+      - name: "publicGists"
+        data_type: "integer"
+        validation_rules:
+          min_value: 0
+      - name: "contributionsLastYear"
+        data_type: "integer"
+        description: "Contribution count in last year"
+      - name: "joinedDate"
+        data_type: "date"
+
+  # ---------------------------------------------------------------------------
+  # SemanticScholarProfile - AI2 semantic scholar profile
+  # ---------------------------------------------------------------------------
+  - name: "SemanticScholarProfile"
+    description: "A Semantic Scholar author profile"
+    parent_type: "WebPage"
+    extraction_strategy: "api"
+    extraction_hints:
+      - "Semantic Scholar URLs (semanticscholar.org)"
+      - "Author profiles with semantic analysis"
+    properties:
+      - name: "profileUrl"
+        data_type: "string"
+        required: true
+      - name: "authorId"
+        data_type: "string"
+        description: "Semantic Scholar author ID"
+      - name: "name"
+        data_type: "string"
+      - name: "aliases"
+        data_type: "array"
+      - name: "affiliations"
+        data_type: "array"
+      - name: "paperCount"
+        data_type: "integer"
+        validation_rules:
+          min_value: 0
+      - name: "citationCount"
+        data_type: "integer"
+        validation_rules:
+          min_value: 0
+      - name: "hIndex"
+        data_type: "integer"
+        validation_rules:
+          min_value: 0
+
+# =============================================================================
+# RELATIONSHIP TYPES
+# =============================================================================
+
+relationship_types:
+  # ---------------------------------------------------------------------------
+  # Identity linking relationships
+  # ---------------------------------------------------------------------------
+  - name: "HAS_PROFILE"
+    description: "Person has a social/professional profile"
+    source_types: ["Person"]
+    target_types: ["LinkedInProfile", "OrcidProfile", "ResearchGateProfile", "GoogleScholarProfile", "TwitterProfile", "GitHubProfile", "SemanticScholarProfile"]
+    cardinality: "one_to_many"
+    properties:
+      - name: "verified"
+        data_type: "boolean"
+        description: "Whether link is verified"
+      - name: "primaryProfile"
+        data_type: "boolean"
+        description: "Whether this is the primary profile for this platform"
+
+  - name: "SAME_AS"
+    description: "Two profiles represent the same person/entity"
+    source_types: ["LinkedInProfile", "OrcidProfile", "ResearchGateProfile", "GoogleScholarProfile", "TwitterProfile", "GitHubProfile", "SemanticScholarProfile"]
+    target_types: ["LinkedInProfile", "OrcidProfile", "ResearchGateProfile", "GoogleScholarProfile", "TwitterProfile", "GitHubProfile", "SemanticScholarProfile"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "confidence"
+        data_type: "float"
+        description: "Confidence in identity match"
+        validation_rules:
+          min_value: 0.0
+          max_value: 1.0
+      - name: "matchMethod"
+        data_type: "enum"
+        enum_values: ["exact_name", "email_match", "orcid_link", "manual", "algorithmic"]
+
+  - name: "ORGANIZATION_HAS_PAGE"
+    description: "Organization has a LinkedIn/social page"
+    source_types: ["Organization"]
+    target_types: ["LinkedInCompanyPage"]
+    cardinality: "one_to_many"
+
+  # ---------------------------------------------------------------------------
+  # Professional relationships from profiles
+  # ---------------------------------------------------------------------------
+  - name: "LINKEDIN_CONNECTION"
+    description: "LinkedIn connection between profiles"
+    source_types: ["LinkedInProfile"]
+    target_types: ["LinkedInProfile"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "connectionDegree"
+        data_type: "integer"
+        description: "Degree of connection (1st, 2nd, 3rd)"
+        validation_rules:
+          min_value: 1
+          max_value: 3
+
+  - name: "FOLLOWS"
+    description: "One profile follows another"
+    source_types: ["TwitterProfile", "GitHubProfile", "ResearchGateProfile"]
+    target_types: ["TwitterProfile", "GitHubProfile", "ResearchGateProfile"]
+    cardinality: "many_to_many"
+
+  - name: "COAUTHOR_ON_PLATFORM"
+    description: "Co-authorship detected on academic platform"
+    source_types: ["GoogleScholarProfile", "ResearchGateProfile", "SemanticScholarProfile", "OrcidProfile"]
+    target_types: ["GoogleScholarProfile", "ResearchGateProfile", "SemanticScholarProfile", "OrcidProfile"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "sharedPublications"
+        data_type: "integer"
+        description: "Number of shared publications"
+      - name: "platform"
+        data_type: "string"
+        description: "Platform where co-authorship detected"
+
+  - name: "WORKS_AT_VIA_LINKEDIN"
+    description: "Employment relationship from LinkedIn"
+    source_types: ["LinkedInProfile"]
+    target_types: ["LinkedInCompanyPage", "Organization"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "position"
+        data_type: "string"
+      - name: "startDate"
+        data_type: "date"
+      - name: "endDate"
+        data_type: "date"
+      - name: "current"
+        data_type: "boolean"
+
+  - name: "ENDORSES_SKILL"
+    description: "LinkedIn skill endorsement"
+    source_types: ["LinkedInProfile"]
+    target_types: ["LinkedInProfile"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "skill"
+        data_type: "string"
+        description: "Skill being endorsed"
+
+  # ---------------------------------------------------------------------------
+  # Content relationships
+  # ---------------------------------------------------------------------------
+  - name: "PROFILE_LINKS_TO"
+    description: "Profile links to external content"
+    source_types: ["LinkedInProfile", "TwitterProfile", "GitHubProfile"]
+    target_types: ["WebPage", "Article", "ScholarlyArticle"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "linkType"
+        data_type: "enum"
+        enum_values: ["shared", "authored", "mentioned", "website"]
+
+  - name: "CITES_WORK_ON_PLATFORM"
+    description: "Scholar profile cites work"
+    source_types: ["GoogleScholarProfile", "SemanticScholarProfile"]
+    target_types: ["ScholarlyArticle"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "citationCount"
+        data_type: "integer"
+        description: "Number of citations"
+
+  - name: "CONTRIBUTES_TO_REPO"
+    description: "GitHub profile contributes to repository"
+    source_types: ["GitHubProfile"]
+    target_types: ["SoftwareSourceCode"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "role"
+        data_type: "enum"
+        enum_values: ["owner", "maintainer", "contributor", "collaborator"]
+      - name: "commits"
+        data_type: "integer"

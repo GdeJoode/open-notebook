@@ -1,35 +1,33 @@
 [project]
-name = "ontology-extraction"
+name = "entity-filtering"
 version = "0.1.0"
-description = "Ontology-guided entity and relation extraction via LLM"
+description = "Generic entity/relation filtering, deduplication, and scoring pipeline"
 requires-python = ">=3.10"
 dependencies = [
     "shared",
     "surrealdb-service",
-    "llm-manager",
-    "ontology-manager",
-    "httpx>=0.27.0",
+    "networkx>=3.0",
     "loguru>=0.7.2",
+    "httpx>=0.27.0",
 ]
 
 [project.optional-dependencies]
+embeddings = ["numpy>=1.24.0"]
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "pytest-cov>=4.0.0"]
 
 [project.scripts]
-ontology-extraction = "ontology_extraction.cli:main"
+entity-filtering = "entity_filtering.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ontology_extraction"]
+packages = ["src/entity_filtering"]
 
 [tool.uv.sources]
 shared = { workspace = true }
 surrealdb-service = { workspace = true }
-llm-manager = { workspace = true }
-ontology-manager = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

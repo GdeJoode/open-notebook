@@ -1,0 +1,348 @@
+# Base Ontology for Open Notebook
+# Defines core entity types that are extended by domain-specific ontologies
+
+metadata:
+  name: base
+  version: "1.0.0"
+  description: "Core entity types for Open Notebook knowledge graph"
+  authors:
+    - "Open Notebook Team"
+  license: "MIT"
+  created: "2025-12-01"
+  updated: "2025-12-12"
+
+prefixes:
+  schema: "https://schema.org/"
+  dc: "http://purl.org/dc/elements/1.1/"
+  skos: "http://www.w3.org/2004/02/skos/core#"
+  wd: "http://www.wikidata.org/entity/"
+
+entity_types:
+  Person:
+    name: Person
+    description: "A human individual - authors, experts, researchers, or mentioned people"
+    schema_org_type: "schema:Person"
+    extraction_hints:
+      - "Look for names with titles (Dr., Prof., Mr., Ms.)"
+      - "Names mentioned with roles or positions"
+      - "Authors of papers or documents"
+      - "Experts quoted in the text"
+    examples:
+      - "Dr. Jane Smith"
+      - "Prof. John Doe"
+      - "Albert Einstein"
+    properties:
+      - name: name
+        description: "Full name of the person"
+        data_type: string
+        extraction_strategy: direct
+        schema_org_mapping: "schema:name"
+        validation:
+          required: true
+          min_length: 2
+          max_length: 200
+      - name: orcid
+        description: "ORCID identifier for researchers"
+        data_type: string
+        extraction_strategy: lookup
+        schema_org_mapping: "schema:identifier"
+        validation:
+          pattern: "^\\d{4}-\\d{4}-\\d{4}-\\d{3}[\\dX]$"
+        examples:
+          - "0000-0001-2345-6789"
+      - name: email
+        description: "Email address"
+        data_type: email
+        extraction_strategy: direct
+        schema_org_mapping: "schema:email"
+      - name: expertise_areas
+        description: "Areas of expertise or specialization"
+        data_type: array
+        extraction_strategy: inferred
+        schema_org_mapping: "schema:knowsAbout"
+      - name: current_position
+        description: "Current job title or role"
+        data_type: string
+        extraction_strategy: direct
+        schema_org_mapping: "schema:jobTitle"
+      - name: h_index
+        description: "H-index for academic researchers"
+        data_type: integer
+        extraction_strategy: lookup
+        validation:
+          min_value: 0
+          max_value: 300
+
+  Organization:
+    name: Organization
+    description: "A group or institution - companies, universities, governments, NGOs"
+    schema_org_type: "schema:Organization"
+    extraction_hints:
+      - "Look for company names, university names, government agencies"
+      - "Institutions mentioned with locations or abbreviations"
+      - "Publishers, affiliations, or funding bodies"
+    examples:
+      - "Stanford University"
+      - "Google Inc."
+      - "World Health Organization"
+    properties:
+      - name: name
+        description: "Official name of the organization"
+        data_type: string
+        extraction_strategy: direct
+        schema_org_mapping: "schema:name"
+        validation:
+          required: true
+          min_length: 2
+          max_length: 300
+      - name: org_type
+        description: "Type of organization"
+        data_type: enum
+        extraction_strategy: inferred
+        schema_org_mapping: "schema:additionalType"
+        validation:
+          allowed_values:
+            - university
+            - research_institute
+            - think_tank
+            - advisory_body
+            - government
+            - ngo
+            - company
+            - international_org
+            - other
+      - name: ror_id
+        description: "Research Organization Registry ID"
+        data_type: string
+        extraction_strategy: lookup
+        schema_org_mapping: "schema:identifier"
+        examples:
+          - "https://ror.org/00f54p054"
+      - name: country
+        description: "Country where headquarters is located"
+        data_type: string
+        extraction_strategy: inferred
+        schema_org_mapping: "schema:addressCountry"
+      - name: city
+        description: "City where headquarters is located"
+        data_type: string
+        extraction_strategy: inferred
+      - name: website
+        description: "Official website URL"
+        data_type: url
+        extraction_strategy: lookup
+        schema_org_mapping: "schema:url"
+
+  Location:
+    name: Location
+    description: "A geographic place - cities, countries, regions, addresses, landmarks"
+    schema_org_type: "schema:Place"
+    extraction_hints:
+      - "Look for place names with geographic context"
+      - "Cities, countries, regions mentioned in text"
+      - "Addresses or landmarks"
+    examples:
+      - "New York City"
+      - "United States"
+      - "Mount Everest"
+    properties:
+      - name: name
+        description: "Name of the location"
+        data_type: string
+        extraction_strategy: direct
+        schema_org_mapping: "schema:name"
+        validation:
+          required: true
+          min_length: 1
+          max_length: 200
+      - name: location_type
+        description: "Type of location"
+        data_type: enum
+        extraction_strategy: inferred
+        validation:
+          allowed_values:
+            - city
+            - country
+            - region
+            - address
+            - landmark
+            - other
+      - name: country
+        description: "Country the location is in"
+        data_type: string
+        extraction_strategy: inferred
+        schema_org_mapping: "schema:addressCountry"
+      - name: latitude
+        description: "Latitude coordinate"
+        data_type: float
+        extraction_strategy: lookup
+        schema_org_mapping: "schema:latitude"
+      - name: longitude
+        description: "Longitude coordinate"
+        data_type: float
+        extraction_strategy: lookup
+        schema_org_mapping: "schema:longitude"
+
+  Event:
+    name: Event
+    description: "A time-bound occurrence - conferences, meetings, historical events"
+    schema_org_type: "schema:Event"
+    extraction_hints:
+      - "Look for named events with dates or time periods"
+      - "Conferences, summits, meetings mentioned"
+      - "Historical events or significant occurrences"
+    examples:
+      - "World Economic Forum 2025"
+      - "COP28 Climate Conference"
+      - "The Great Depression"
+    properties:
+      - name: name
+        description: "Name of the event"
+        data_type: string
+        extraction_strategy: direct
+        schema_org_mapping: "schema:name"
+        validation:
+          required: true
+          min_length: 2
+          max_length: 300
+      - name: start_date
+        description: "When the event started or occurred"
+        data_type: date
+        extraction_strategy: direct
+        schema_org_mapping: "schema:startDate"
+      - name: end_date
+        description: "When the event ended"
+        data_type: date
+        extraction_strategy: direct
+        schema_org_mapping: "schema:endDate"
+      - name: location
+        description: "Where the event took place"
+        data_type: reference
+        reference_type: Location
+        extraction_strategy: direct
+        schema_org_mapping: "schema:location"
+
+  Concept:
+    name: Concept
+    description: "An abstract idea, theory, or theme - not tied to specific entities"
+    schema_org_type: "schema:Intangible"
+    extraction_hints:
+      - "Look for abstract ideas, theories, or principles"
+      - "Concepts discussed or analyzed in the text"
+      - "Themes or frameworks mentioned"
+    examples:
+      - "Sustainable Development"
+      - "Machine Learning"
+      - "Democratic Theory"
+    properties:
+      - name: name
+        description: "Name of the concept"
+        data_type: string
+        extraction_strategy: direct
+        schema_org_mapping: "schema:name"
+        validation:
+          required: true
+          min_length: 2
+          max_length: 200
+      - name: description
+        description: "Brief description of the concept"
+        data_type: text
+        extraction_strategy: inferred
+        schema_org_mapping: "schema:description"
+      - name: domain
+        description: "Knowledge domain the concept belongs to"
+        data_type: string
+        extraction_strategy: inferred
+
+relationship_types:
+  WORKS_FOR:
+    name: WORKS_FOR
+    description: "A person works for an organization"
+    domain:
+      - Person
+    range:
+      - Organization
+    cardinality: many-to-many
+    schema_org_mapping: "schema:worksFor"
+    extraction_hints:
+      - "Look for employment relationships"
+      - "'works at', 'employed by', 'affiliated with'"
+    properties:
+      - name: role
+        description: "The person's role at the organization"
+        data_type: string
+        extraction_strategy: direct
+      - name: department
+        description: "Department or division"
+        data_type: string
+        extraction_strategy: direct
+      - name: is_current
+        description: "Whether this is a current position"
+        data_type: boolean
+        extraction_strategy: inferred
+        default_value: true
+
+  LOCATED_IN:
+    name: LOCATED_IN
+    description: "An entity is located in a place"
+    domain:
+      - Organization
+      - Event
+    range:
+      - Location
+    cardinality: many-to-one
+    schema_org_mapping: "schema:location"
+    extraction_hints:
+      - "Look for 'based in', 'located in', 'headquartered in'"
+      - "Events 'held in', 'took place in'"
+
+  PARTICIPATED_IN:
+    name: PARTICIPATED_IN
+    description: "A person or organization participated in an event"
+    domain:
+      - Person
+      - Organization
+    range:
+      - Event
+    cardinality: many-to-many
+    schema_org_mapping: "schema:participant"
+    extraction_hints:
+      - "Look for 'attended', 'participated in', 'spoke at'"
+    properties:
+      - name: role
+        description: "Role in the event (speaker, attendee, organizer)"
+        data_type: string
+        extraction_strategy: direct
+
+  RELATED_TO:
+    name: RELATED_TO
+    description: "General relationship between entities"
+    domain:
+      - Person
+      - Organization
+      - Location
+      - Event
+      - Concept
+    range:
+      - Person
+      - Organization
+      - Location
+      - Event
+      - Concept
+    cardinality: many-to-many
+    symmetric: true
+    schema_org_mapping: "schema:relatedTo"
+    extraction_hints:
+      - "Look for connections, associations, or mentions together"
+    properties:
+      - name: relationship_type
+        description: "Nature of the relationship"
+        data_type: string
+        extraction_strategy: inferred
+      - name: strength
+        description: "Strength of the relationship (0-1)"
+        data_type: float
+        extraction_strategy: inferred
+        validation:
+          min_value: 0.0
+          max_value: 1.0

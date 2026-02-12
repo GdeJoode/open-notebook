@@ -1,0 +1,409 @@
+# policy.yaml
+# Policy and Government Documents ontology extending schema_core
+# For policy briefs, legislation, government reports, regulatory documents
+
+metadata:
+  name: "policy"
+  version: "1.0.0"
+  description: "Policy, legislative, and government document ontology"
+  extends: "schema_core"
+  namespaces:
+    schema: "https://schema.org/"
+    dc: "http://purl.org/dc/elements/1.1/"
+    eli: "http://data.europa.eu/eli/ontology#"  # European Legislation Identifier
+    metalex: "http://www.metalex.eu/metalex/2008-05-02#"
+
+# =============================================================================
+# ENTITY TYPES
+# =============================================================================
+
+entity_types:
+  # ---------------------------------------------------------------------------
+  # PolicyBrief - Concise policy analysis documents
+  # ---------------------------------------------------------------------------
+  - name: "PolicyBrief"
+    description: "A concise document summarizing policy issues and recommendations"
+    parent_type: "Report"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Policy briefs, policy papers, issue briefs"
+      - "Documents with executive summary and recommendations"
+      - "Think tank publications, policy analysis"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+        schema_org: "https://schema.org/name"
+      - name: "abstract"
+        data_type: "string"
+        schema_org: "https://schema.org/abstract"
+      - name: "policyArea"
+        data_type: "array"
+        description: "Policy domains addressed (e.g., healthcare, education, environment)"
+      - name: "targetAudience"
+        data_type: "array"
+        description: "Intended audience (e.g., legislators, executives, public)"
+      - name: "recommendations"
+        data_type: "array"
+        description: "Key policy recommendations"
+      - name: "evidenceBase"
+        data_type: "string"
+        description: "Type of evidence supporting recommendations"
+      - name: "urgency"
+        data_type: "enum"
+        enum_values: ["immediate", "short_term", "medium_term", "long_term"]
+      - name: "jurisdiction"
+        data_type: "string"
+        description: "Geographic/political jurisdiction addressed"
+
+  # ---------------------------------------------------------------------------
+  # Legislation - Laws, statutes, regulations
+  # ---------------------------------------------------------------------------
+  - name: "Legislation"
+    description: "A law, statute, regulation, or legal instrument"
+    schema_org: "https://schema.org/Legislation"
+    parent_type: "CreativeWork"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Laws, acts, statutes, regulations"
+      - "Documents with legal citations, sections, articles"
+      - "Official government legislative documents"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+        description: "Official title of the legislation"
+      - name: "legislationIdentifier"
+        data_type: "string"
+        description: "Official identifier (e.g., Public Law 117-58)"
+        schema_org: "https://schema.org/legislationIdentifier"
+      - name: "legislationType"
+        data_type: "enum"
+        enum_values: ["act", "statute", "regulation", "ordinance", "directive", "executive_order", "treaty", "amendment"]
+        schema_org: "https://schema.org/legislationType"
+      - name: "legislationDate"
+        data_type: "date"
+        description: "Date of enactment or publication"
+        schema_org: "https://schema.org/legislationDate"
+      - name: "legislationDateVersion"
+        data_type: "date"
+        description: "Date of this version (for consolidated texts)"
+      - name: "inForce"
+        data_type: "boolean"
+        description: "Whether currently in force"
+      - name: "jurisdiction"
+        data_type: "reference"
+        reference_type: "AdministrativeArea"
+        schema_org: "https://schema.org/legislationJurisdiction"
+      - name: "legislationPassedBy"
+        data_type: "reference"
+        reference_type: "GovernmentOrganization"
+        schema_org: "https://schema.org/legislationPassedBy"
+
+  # ---------------------------------------------------------------------------
+  # GovernmentReport - Official government publications
+  # ---------------------------------------------------------------------------
+  - name: "GovernmentReport"
+    description: "An official report published by a government entity"
+    parent_type: "Report"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Government reports, white papers, official publications"
+      - "Documents from government agencies, ministries"
+      - "Official statistics, policy evaluations"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+      - name: "abstract"
+        data_type: "string"
+      - name: "reportNumber"
+        data_type: "string"
+        description: "Official report number/identifier"
+      - name: "reportType"
+        data_type: "enum"
+        enum_values: ["annual_report", "evaluation", "audit", "inquiry", "statistical", "white_paper", "green_paper", "impact_assessment"]
+      - name: "fiscalYear"
+        data_type: "string"
+        description: "Fiscal year covered (if applicable)"
+      - name: "mandatedBy"
+        data_type: "reference"
+        reference_type: "Legislation"
+        description: "Legislation requiring this report"
+
+  # ---------------------------------------------------------------------------
+  # GovernmentOrganization - Government bodies and agencies
+  # ---------------------------------------------------------------------------
+  - name: "GovernmentOrganization"
+    description: "A governmental body, agency, or department"
+    schema_org: "https://schema.org/GovernmentOrganization"
+    parent_type: "Organization"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Government agencies, departments, ministries"
+      - "Official government bodies"
+      - "Regulatory agencies, commissions"
+    properties:
+      - name: "organizationType"
+        data_type: "enum"
+        enum_values: ["ministry", "department", "agency", "commission", "bureau", "office", "authority", "legislature", "judiciary", "executive"]
+      - name: "jurisdiction"
+        data_type: "reference"
+        reference_type: "AdministrativeArea"
+      - name: "parentOrganization"
+        data_type: "reference"
+        reference_type: "GovernmentOrganization"
+      - name: "foundingDate"
+        data_type: "date"
+      - name: "dissolutionDate"
+        data_type: "date"
+
+  # ---------------------------------------------------------------------------
+  # AdministrativeArea - Jurisdictions and political divisions
+  # ---------------------------------------------------------------------------
+  - name: "AdministrativeArea"
+    description: "A political or administrative geographic area"
+    schema_org: "https://schema.org/AdministrativeArea"
+    parent_type: "Place"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Countries, states, provinces, municipalities"
+      - "Political divisions, jurisdictions"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+      - name: "isoCode"
+        data_type: "string"
+        description: "ISO 3166 code (country or subdivision)"
+      - name: "administrativeLevel"
+        data_type: "enum"
+        enum_values: ["supranational", "national", "regional", "state", "provincial", "municipal", "local"]
+      - name: "containedIn"
+        data_type: "reference"
+        reference_type: "AdministrativeArea"
+
+  # ---------------------------------------------------------------------------
+  # PublicOfficial - Politicians, civil servants
+  # ---------------------------------------------------------------------------
+  - name: "PublicOfficial"
+    description: "An elected or appointed government official"
+    parent_type: "Person"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Politicians, ministers, commissioners"
+      - "Elected officials, civil servants"
+      - "Government appointees"
+    properties:
+      - name: "currentPosition"
+        data_type: "string"
+        description: "Current official position"
+      - name: "party"
+        data_type: "string"
+        description: "Political party affiliation"
+      - name: "termStart"
+        data_type: "date"
+      - name: "termEnd"
+        data_type: "date"
+
+  # ---------------------------------------------------------------------------
+  # ThinkTank - Policy research organizations
+  # ---------------------------------------------------------------------------
+  - name: "ThinkTank"
+    description: "A policy research and advocacy organization"
+    parent_type: "Organization"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Think tanks, policy institutes"
+      - "Research organizations focused on policy"
+      - "Advocacy organizations"
+    properties:
+      - name: "policyFocus"
+        data_type: "array"
+        description: "Primary policy areas"
+      - name: "politicalLeaning"
+        data_type: "enum"
+        enum_values: ["left", "center_left", "center", "center_right", "right", "libertarian", "nonpartisan"]
+      - name: "transparency_rating"
+        data_type: "string"
+        description: "Transparency/credibility rating if available"
+
+  # ---------------------------------------------------------------------------
+  # PublicConsultation - Policy consultation processes
+  # ---------------------------------------------------------------------------
+  - name: "PublicConsultation"
+    description: "A public consultation or comment period on policy"
+    parent_type: "Event"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Public consultations, comment periods"
+      - "Stakeholder engagement processes"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+      - name: "consultationTopic"
+        data_type: "string"
+      - name: "openDate"
+        data_type: "date"
+      - name: "closeDate"
+        data_type: "date"
+      - name: "responsesReceived"
+        data_type: "integer"
+      - name: "relatedLegislation"
+        data_type: "reference"
+        reference_type: "Legislation"
+
+# =============================================================================
+# RELATIONSHIP TYPES
+# =============================================================================
+
+relationship_types:
+  # ---------------------------------------------------------------------------
+  # Legislative relationships
+  # ---------------------------------------------------------------------------
+  - name: "AMENDS"
+    description: "Legislation amends another piece of legislation"
+    source_types: ["Legislation"]
+    target_types: ["Legislation"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "amendmentType"
+        data_type: "enum"
+        enum_values: ["textual", "repeal", "extension", "revision"]
+      - name: "effectiveDate"
+        data_type: "date"
+
+  - name: "REPEALS"
+    description: "Legislation repeals another piece of legislation"
+    source_types: ["Legislation"]
+    target_types: ["Legislation"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "repealType"
+        data_type: "enum"
+        enum_values: ["full", "partial"]
+      - name: "effectiveDate"
+        data_type: "date"
+
+  - name: "IMPLEMENTS"
+    description: "Legislation implements a directive or treaty"
+    source_types: ["Legislation"]
+    target_types: ["Legislation"]
+    cardinality: "many_to_many"
+
+  - name: "SUPERSEDES"
+    description: "New version supersedes previous version"
+    source_types: ["Legislation", "GovernmentReport", "PolicyBrief"]
+    target_types: ["Legislation", "GovernmentReport", "PolicyBrief"]
+    cardinality: "one_to_one"
+
+  # ---------------------------------------------------------------------------
+  # Policy document relationships
+  # ---------------------------------------------------------------------------
+  - name: "ADDRESSES_POLICY"
+    description: "Document addresses a policy area"
+    source_types: ["PolicyBrief", "GovernmentReport", "Legislation"]
+    target_types: ["DefinedTerm"]
+    cardinality: "many_to_many"
+
+  - name: "RECOMMENDS"
+    description: "Policy brief recommends action"
+    source_types: ["PolicyBrief", "GovernmentReport"]
+    target_types: ["Legislation", "GovernmentOrganization"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "recommendationType"
+        data_type: "enum"
+        enum_values: ["enact", "amend", "repeal", "fund", "establish", "abolish"]
+      - name: "priority"
+        data_type: "enum"
+        enum_values: ["high", "medium", "low"]
+
+  - name: "EVALUATES"
+    description: "Report evaluates a program or legislation"
+    source_types: ["GovernmentReport", "PolicyBrief"]
+    target_types: ["Legislation", "GovernmentOrganization"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "evaluationType"
+        data_type: "enum"
+        enum_values: ["impact", "process", "outcome", "cost_benefit"]
+      - name: "finding"
+        data_type: "enum"
+        enum_values: ["effective", "partially_effective", "ineffective", "mixed"]
+
+  # ---------------------------------------------------------------------------
+  # Organizational relationships
+  # ---------------------------------------------------------------------------
+  - name: "REGULATES"
+    description: "Agency regulates an area or organization type"
+    source_types: ["GovernmentOrganization"]
+    target_types: ["DefinedTerm", "Organization"]
+    cardinality: "many_to_many"
+
+  - name: "OVERSEES"
+    description: "Organization oversees another organization"
+    source_types: ["GovernmentOrganization"]
+    target_types: ["GovernmentOrganization", "Organization"]
+    cardinality: "many_to_many"
+
+  - name: "SPONSORS"
+    description: "Official sponsors legislation"
+    source_types: ["PublicOfficial"]
+    target_types: ["Legislation"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "sponsorType"
+        data_type: "enum"
+        enum_values: ["primary", "co-sponsor", "supporter"]
+
+  - name: "HOLDS_OFFICE"
+    description: "Official holds position in organization"
+    source_types: ["PublicOfficial"]
+    target_types: ["GovernmentOrganization"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "position"
+        data_type: "string"
+      - name: "startDate"
+        data_type: "date"
+      - name: "endDate"
+        data_type: "date"
+
+  - name: "CONSULTS_ON"
+    description: "Consultation relates to legislation or policy"
+    source_types: ["PublicConsultation"]
+    target_types: ["Legislation", "PolicyBrief"]
+    cardinality: "many_to_many"
+
+  - name: "SUBMITS_TO"
+    description: "Organization submits to consultation"
+    source_types: ["Organization", "Person"]
+    target_types: ["PublicConsultation"]
+    cardinality: "many_to_many"
+
+  # ---------------------------------------------------------------------------
+  # Think tank relationships
+  # ---------------------------------------------------------------------------
+  - name: "ADVOCATES_FOR"
+    description: "Think tank advocates for policy position"
+    source_types: ["ThinkTank"]
+    target_types: ["DefinedTerm", "Legislation"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "position"
+        data_type: "enum"
+        enum_values: ["support", "oppose", "modify"]
+
+  - name: "TESTIFIES_ON"
+    description: "Expert testifies on policy matter"
+    source_types: ["Person", "PublicOfficial"]
+    target_types: ["Legislation", "PublicConsultation"]
+    cardinality: "many_to_many"
+    properties:
+      - name: "testimony_date"
+        data_type: "date"
+      - name: "position"
+        data_type: "enum"
+        enum_values: ["support", "oppose", "neutral", "expert"]
