@@ -13,6 +13,9 @@ dependencies = [
 
 [project.optional-dependencies]
 embeddings = ["numpy>=1.24.0"]
+fuzzy = ["jellyfish>=1.0.0"]
+faiss = ["numpy>=1.24.0", "faiss-cpu>=1.7.0"]
+ontology = ["ontology-manager"]
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "pytest-cov>=4.0.0"]
 
 [project.scripts]
@@ -28,6 +31,7 @@ packages = ["src/entity_filtering"]
 [tool.uv.sources]
 shared = { workspace = true }
 surrealdb-service = { workspace = true }
+ontology-manager = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

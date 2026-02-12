@@ -2,8 +2,9 @@
 Entity normalizer.
 
 Handles text normalization: article stripping, whitespace collapsing,
-unicode normalization. Merges entities that normalize to the same form,
-keeping the most frequent surface form as canonical.
+unicode normalization, diacritics removal, OCR artifact cleanup, HTML tag
+stripping, and page-number filtering.  Merges entities that normalize to
+the same form, keeping the most frequent surface form as canonical.
 """
 
 import re
@@ -24,6 +25,9 @@ _DEFAULT_ARTICLES: List[str] = [
 ]
 
 
+_PAGE_NUMBER_RE = re.compile(r"^(page|p\.?|pp\.?)\s*\d+", re.IGNORECASE)
+
+
 class EntityNormalizer:
     """Normalizes entity text and merges equivalent surface forms.
 
@@ -31,6 +35,13 @@ class EntityNormalizer:
         strip_articles: Whether to remove leading articles.
         custom_articles: Additional leading article strings to strip.
         normalize_whitespace: Whether to collapse whitespace.
+        remove_diacritics: Whether to strip diacritics/accents (e.g. e->e).
+        ocr_cleanup_enabled: Whether to remove common OCR artifacts.
+        ocr_artifact_patterns: Custom regex patterns for OCR artifact removal.
+            Each pattern is applied via ``re.sub(pattern, "", text)``.
+        html_strip_enabled: Whether to strip HTML tags from entity text.
+        page_number_filter: Whether to drop entities that are just page
+            numbers (e.g. "Page 1", "p. 42").
     """
 
     def __init__(
@@ -38,12 +49,26 @@ class EntityNormalizer:
         strip_articles: bool = True,
         custom_articles: Optional[List[str]] = None,
         normalize_whitespace: bool = True,
+        remove_diacritics: bool = False,
+        ocr_cleanup_enabled: bool = False,
+        ocr_artifact_patterns: Optional[List[str]] = None,
+        html_strip_enabled: bool = False,
+        page_number_filter: bool = False,
     ) -> None:
         self._strip_articles = strip_articles
         self._normalize_ws = normalize_whitespace
         self._articles = list(_DEFAULT_ARTICLES)
         if custom_articles:
             self._articles.extend(custom_articles)
+
+        self._remove_diacritics = remove_diacritics
+        self._ocr_cleanup = ocr_cleanup_enabled
+        self._ocr_patterns: List[re.Pattern[str]] = []
+        if ocr_artifact_patterns:
+            for pat in ocr_artifact_patterns:
+                self._ocr_patterns.append(re.compile(pat))
+        self._html_strip = html_strip_enabled
+        self._page_number_filter = page_number_filter
 
     def normalize(
         self, entities: List[Dict[str, Any]]
@@ -60,6 +85,23 @@ class EntityNormalizer:
         Returns:
             Deduplicated list after normalization.
         """
+        # Filter out page-number-only entities before grouping
+        if self._page_number_filter:
+            filtered: List[Dict[str, Any]] = []
+            page_dropped = 0
+            for entity in entities:
+                raw = entity.get("text", "").strip()
+                if _PAGE_NUMBER_RE.match(raw):
+                    page_dropped += 1
+                else:
+                    filtered.append(entity)
+            if page_dropped:
+                logger.debug(
+                    "Normalizer dropped {} page-number entities",
+                    page_dropped,
+                )
+            entities = filtered
+
         # Group entities by normalized key
         groups: Dict[str, List[Dict[str, Any]]] = {}
         for entity in entities:
@@ -93,6 +135,22 @@ class EntityNormalizer:
         """Produce a normalized key from raw entity text."""
         # Unicode normalization (NFKC)
         text = unicodedata.normalize("NFKC", text)
+
+        # HTML tag stripping (before any whitespace handling)
+        if self._html_strip:
+            text = re.sub(r"<[^>]+>", "", text)
+
+        # OCR artifact cleanup
+        if self._ocr_cleanup:
+            for pattern in self._ocr_patterns:
+                text = pattern.sub("", text)
+
+        # Diacritics removal (NFD decompose, strip combining marks)
+        if self._remove_diacritics:
+            text = unicodedata.normalize("NFD", text)
+            text = "".join(
+                ch for ch in text if unicodedata.category(ch) != "Mn"
+            )
 
         # Strip leading/trailing whitespace
         text = text.strip()

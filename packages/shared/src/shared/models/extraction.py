@@ -67,3 +67,19 @@ class FilteredResult(ExtractionResult):
         default_factory=list,
         description="New relations predicted by edge scoring",
     )
+    validation_report: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Report from ontology/graph validation stage",
+    )
+    linked_entities: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Entity linking results (entity text -> link metadata)",
+    )
+    llm_verification_results: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Results from LLM triple verification stage",
+    )
+    kg_resolution_report: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="KG entity resolution statistics",
+    )
