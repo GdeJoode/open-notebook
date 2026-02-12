@@ -70,7 +70,7 @@ open-notebook/
 │   ├── ingestion/                    # ✅ Document/audio ingestion
 │   ├── ontology-extraction/          # ✅ Pure LLM-based entity/relation extraction
 │   ├── entity-filtering/             # ✅ 13-stage filtering, dedup, resolution, validation, scoring
-│   ├── summarization/                # RAPTOR, TreeKG, and LLM summarization
+│   ├── summarization/                # ✅ RAPTOR, TreeKG, Naive + 11 future stubs
 │   ├── enrichment/                   # Metadata verification and enrichment
 │   ├── embeddings/                   # Vector embeddings
 │   └── retrieval/                    # Search and retrieval
@@ -89,9 +89,10 @@ open-notebook/
 4. **llm-manager** - Depends on `shared`
 5. **ontology-manager** - Depends on `shared` and `surrealdb-service`
 6. **pipelines** - Depend on `shared`, `surrealdb-service`, and relevant packages
+   - ingestion: `shared` + `surrealdb-service` + `file-manager` + `llm-manager`
    - ontology-extraction: `shared` + `llm-manager` + `ontology-manager`
    - entity-filtering: `shared` + `surrealdb-service` + `ontology-manager`
-   - ingestion: `shared` + `surrealdb-service` + `file-manager` + `llm-manager`
+   - summarization: `shared` + `llm-manager`
    - Pipelines use file-manager for all file write operations
    - Pipelines can read files directly (read-only access)
 7. **apps** - Can depend on anything
@@ -118,12 +119,16 @@ llm-manager ←─────────────────────�
    ├── ontology-extraction (uses llm-manager +             │
    │       ontology-manager for LLM-guided extraction)     │
    │       ↓                                               │
-   ├── entity-filtering (13-stage pipeline: noise, dedup,   │
+   ├── entity-filtering (13-stage pipeline: noise, dedup,  │
    │       normalization, fuzzy/embedding dedup, resolution,│
    │       KG matching, ontology validation, graph analysis,│
    │       composite edge prediction)                      │
    │       ↓                                               │
-   ├── summarization (uses llm-manager)                    │
+   ├── summarization ✅ (shared + llm-manager;             │
+   │       3 implemented: Naive, TreeKG, RAPTOR;           │
+   │       11 stubs: Map-Reduce, Refine, Walking Tree,     │
+   │       Extractive-Abstractive, Skeleton-of-Thought,    │
+   │       Hybrid, DPR-Abs, Linked Entity + 3 enhancers)   │
    │       ↓                                               │
    ├── enrichment (external APIs: Scholar, CrossRef, etc.) │
    │       ↓                                               │
@@ -3920,6 +3925,13 @@ This plan focuses on implementing the workspace structure with ingestion and ext
     │     pipelines/entity-filtering               │  ✅
     │  (13-stage: noise → dedup → resolution →     │
     │   validation → composite edge prediction)     │
+    └─────────────────┬───────────────────────────┘
+                      │
+                      ▼
+    ┌─────────────────────────────────────────────┐
+    │     pipelines/summarization                  │  ✅
+    │  (shared + llm-manager; Naive, TreeKG,       │
+    │   RAPTOR + 11 future stubs + enhancers)      │
     └─────────────────────────────────────────────┘
 ```
 
