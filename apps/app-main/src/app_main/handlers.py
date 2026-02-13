@@ -235,190 +235,60 @@ async def _handle_embed_single_item(payload: Dict[str, Any]) -> Dict[str, Any]:
     item_id = payload["item_id"]
     item_type = payload["item_type"]
 
-    try:
-        from open_notebook.database.repository import ensure_record_id, repo_query
-        from open_notebook.domain.models import model_manager
-        from open_notebook.domain.notebook import Note, Source, SourceInsight
+    from app_main.dependencies import get_embedding_service
 
-        EMBEDDING_MODEL = await model_manager.get_embedding_model()
-        if not EMBEDDING_MODEL:
-            raise ValueError("No embedding model configured.")
+    service = await get_embedding_service()
 
-        chunks_created = 0
+    if item_type == "source":
+        result = await service.embed_source(item_id)
+    elif item_type == "note":
+        result = await service.embed_note(item_id)
+    elif item_type == "insight":
+        result = await service.embed_insight(item_id)
+    else:
+        raise ValueError(f"Invalid item_type: {item_type}")
 
-        if item_type == "source":
-            source = await Source.get(item_id)
-            if not source:
-                raise ValueError(f"Source '{item_id}' not found")
-            await source.vectorize()
-
-            chunks_result = await repo_query(
-                "SELECT VALUE count() FROM source_embedding WHERE source = $source_id GROUP ALL",
-                {"source_id": ensure_record_id(item_id)},
-            )
-            if chunks_result and isinstance(chunks_result[0], dict):
-                chunks_created = chunks_result[0].get("count", 0)
-            elif chunks_result and isinstance(chunks_result[0], int):
-                chunks_created = chunks_result[0]
-
-        elif item_type == "note":
-            note = await Note.get(item_id)
-            if not note:
-                raise ValueError(f"Note '{item_id}' not found")
-            await note.save()
-
-        elif item_type == "insight":
-            insight = await SourceInsight.get(item_id)
-            if not insight:
-                raise ValueError(f"Insight '{item_id}' not found")
-            embedding = (await EMBEDDING_MODEL.aembed([insight.content]))[0]
-            await repo_query(
-                "UPDATE $insight_id SET embedding = $embedding",
-                {"insight_id": ensure_record_id(item_id), "embedding": embedding},
-            )
-        else:
-            raise ValueError(f"Invalid item_type: {item_type}")
-
-        processing_time = time.time() - start_time
-        return {
-            "success": True,
-            "item_id": item_id,
-            "item_type": item_type,
-            "chunks_created": chunks_created,
-            "processing_time": processing_time,
-        }
-
-    except Exception as e:
-        logger.error(f"Embedding failed for {item_type} {item_id}: {e}")
-        raise
+    processing_time = time.time() - start_time
+    return {
+        "success": True,
+        "item_id": item_id,
+        "item_type": item_type,
+        "chunks_created": result.embeddings_created,
+        "processing_time": processing_time,
+    }
 
 
 async def _handle_rebuild_embeddings(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Rebuild embeddings for sources, notes, and/or insights."""
     start_time = time.time()
 
-    try:
-        from open_notebook.database.repository import ensure_record_id, repo_query
-        from open_notebook.domain.models import model_manager
-        from open_notebook.domain.notebook import Note, Source, SourceInsight
+    from app_main.dependencies import get_embedding_service
 
-        mode = payload.get("mode", "existing")
-        include_sources = payload.get("include_sources", True)
-        include_notes = payload.get("include_notes", True)
-        include_insights = payload.get("include_insights", True)
+    service = await get_embedding_service()
 
-        EMBEDDING_MODEL = await model_manager.get_embedding_model()
-        if not EMBEDDING_MODEL:
-            raise ValueError("No embedding model configured.")
+    mode = payload.get("mode", "existing")
+    include_sources = payload.get("include_sources", True)
+    include_notes = payload.get("include_notes", True)
+    include_insights = payload.get("include_insights", True)
 
-        # Collect items
-        items: Dict[str, list] = {"sources": [], "notes": [], "insights": []}
+    result = await service.rebuild_embeddings(
+        include_sources=include_sources,
+        include_notes=include_notes,
+        include_insights=include_insights,
+        mode=mode,
+    )
 
-        if include_sources:
-            if mode == "existing":
-                result = await repo_query(
-                    "RETURN array::distinct("
-                    "SELECT VALUE source.id FROM source_embedding "
-                    "WHERE embedding != none AND array::len(embedding) > 0)"
-                )
-                items["sources"] = [str(i) for i in result] if result else []
-            else:
-                result = await repo_query(
-                    "SELECT id FROM source WHERE full_text != none"
-                )
-                items["sources"] = [str(i["id"]) for i in result] if result else []
+    processing_time = time.time() - start_time
+    processed = result.sources_processed + result.notes_processed + result.insights_processed
+    total = processed + len(result.errors)
 
-        if include_notes:
-            if mode == "existing":
-                result = await repo_query(
-                    "SELECT id FROM note WHERE embedding != none AND array::len(embedding) > 0"
-                )
-            else:
-                result = await repo_query(
-                    "SELECT id FROM note WHERE content != none"
-                )
-            items["notes"] = [str(i["id"]) for i in result] if result else []
-
-        if include_insights:
-            if mode == "existing":
-                result = await repo_query(
-                    "SELECT id FROM source_insight WHERE embedding != none AND array::len(embedding) > 0"
-                )
-            else:
-                result = await repo_query("SELECT id FROM source_insight")
-            items["insights"] = [str(i["id"]) for i in result] if result else []
-
-        total = sum(len(v) for v in items.values())
-        if total == 0:
-            return {
-                "success": True,
-                "total_items": 0,
-                "processed_items": 0,
-                "failed_items": 0,
-                "processing_time": time.time() - start_time,
-            }
-
-        sources_ok = notes_ok = insights_ok = failed = 0
-
-        for sid in items["sources"]:
-            try:
-                source = await Source.get(sid)
-                if source:
-                    await source.vectorize()
-                    sources_ok += 1
-                else:
-                    failed += 1
-            except Exception as e:
-                logger.error(f"Failed to re-embed source {sid}: {e}")
-                failed += 1
-
-        for nid in items["notes"]:
-            try:
-                note = await Note.get(nid)
-                if note:
-                    await note.save()
-                    notes_ok += 1
-                else:
-                    failed += 1
-            except Exception as e:
-                logger.error(f"Failed to re-embed note {nid}: {e}")
-                failed += 1
-
-        for iid in items["insights"]:
-            try:
-                insight = await SourceInsight.get(iid)
-                if insight:
-                    emb = (await EMBEDDING_MODEL.aembed([insight.content]))[0]
-                    await repo_query(
-                        "UPDATE $iid SET embedding = $embedding",
-                        {"iid": ensure_record_id(iid), "embedding": emb},
-                    )
-                    insights_ok += 1
-                else:
-                    failed += 1
-            except Exception as e:
-                logger.error(f"Failed to re-embed insight {iid}: {e}")
-                failed += 1
-
-        processing_time = time.time() - start_time
-        processed = sources_ok + notes_ok + insights_ok
-
-        logger.info(
-            f"Rebuild complete: {processed}/{total} items, "
-            f"{failed} failed, {processing_time:.2f}s"
-        )
-
-        return {
-            "success": True,
-            "total_items": total,
-            "processed_items": processed,
-            "failed_items": failed,
-            "sources_processed": sources_ok,
-            "notes_processed": notes_ok,
-            "insights_processed": insights_ok,
-            "processing_time": processing_time,
-        }
-
-    except Exception as e:
-        logger.error(f"Rebuild embeddings failed: {e}")
-        raise
+    return {
+        "success": True,
+        "total_items": total,
+        "processed_items": processed,
+        "failed_items": len(result.errors),
+        "sources_processed": result.sources_processed,
+        "notes_processed": result.notes_processed,
+        "insights_processed": result.insights_processed,
+        "processing_time": processing_time,
+    }

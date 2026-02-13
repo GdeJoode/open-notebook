@@ -249,53 +249,86 @@ class EmbeddingService:
         include_sources: bool = True,
         include_notes: bool = True,
         include_insights: bool = True,
+        mode: str = "all",
     ) -> RebuildResult:
-        """Rebuild embeddings across the knowledge base."""
+        """Rebuild embeddings across the knowledge base.
+
+        Args:
+            include_sources: Whether to re-embed sources.
+            include_notes: Whether to re-embed notes.
+            include_insights: Whether to re-embed insights.
+            mode: "all" to embed every item, "existing" to only re-embed
+                  items that already have embeddings.
+        """
+        from surrealdb_service.connection import execute_query
+
         rebuild_result = RebuildResult()
 
         if include_sources:
-            sources = await self.source_repo.get_all()
-            for source in sources:
-                if not source.id:
-                    continue
+            if mode == "existing":
+                rows = await execute_query(
+                    "RETURN array::distinct("
+                    "SELECT VALUE source.id FROM source_embedding "
+                    "WHERE embedding != NONE AND array::len(embedding) > 0)"
+                )
+                source_ids = [str(r) for r in rows] if rows else []
+            else:
+                sources = await self.source_repo.get_all()
+                source_ids = [s.id for s in sources if s.id]
+
+            for sid in source_ids:
                 try:
-                    result = await self.embed_source(source.id)
+                    result = await self.embed_source(sid)
                     rebuild_result.sources_processed += 1
                     rebuild_result.total_embeddings += result.embeddings_created
                 except Exception as e:
-                    error_msg = f"Failed to embed source {source.id}: {e}"
+                    error_msg = f"Failed to embed source {sid}: {e}"
                     logger.error(error_msg)
                     rebuild_result.errors.append(error_msg)
 
         if include_notes:
-            from surrealdb_service.repositories.notebook import NoteRepository
-            note_repo = NoteRepository(self.source_repo.config)
-            notes = await note_repo.get_all()
-            for note in notes:
-                if not note.id or not note.content:
-                    continue
+            if mode == "existing":
+                rows = await execute_query(
+                    "SELECT id FROM note "
+                    "WHERE embedding != NONE AND array::len(embedding) > 0"
+                )
+                note_ids = [str(r["id"]) for r in rows] if rows else []
+            else:
+                from surrealdb_service.repositories.notebook import NoteRepository
+                note_repo = NoteRepository(self.source_repo.config)
+                notes = await note_repo.get_all()
+                note_ids = [n.id for n in notes if n.id and n.content]
+
+            for nid in note_ids:
                 try:
-                    result = await self.embed_note(note.id)
+                    result = await self.embed_note(nid)
                     rebuild_result.notes_processed += 1
                     rebuild_result.total_embeddings += result.embeddings_created
                 except Exception as e:
-                    error_msg = f"Failed to embed note {note.id}: {e}"
+                    error_msg = f"Failed to embed note {nid}: {e}"
                     logger.error(error_msg)
                     rebuild_result.errors.append(error_msg)
 
         if include_insights:
-            from surrealdb_service.repositories.source import SourceInsightRepository
-            insight_repo = SourceInsightRepository(self.source_repo.config)
-            insights = await insight_repo.get_all()
-            for insight in insights:
-                if not insight.id or not insight.content:
-                    continue
+            if mode == "existing":
+                rows = await execute_query(
+                    "SELECT id FROM source_insight "
+                    "WHERE embedding != NONE AND array::len(embedding) > 0"
+                )
+                insight_ids = [str(r["id"]) for r in rows] if rows else []
+            else:
+                from surrealdb_service.repositories.source import SourceInsightRepository
+                insight_repo = SourceInsightRepository(self.source_repo.config)
+                insights = await insight_repo.get_all()
+                insight_ids = [i.id for i in insights if i.id and i.content]
+
+            for iid in insight_ids:
                 try:
-                    result = await self.embed_insight(insight.id)
+                    result = await self.embed_insight(iid)
                     rebuild_result.insights_processed += 1
                     rebuild_result.total_embeddings += result.embeddings_created
                 except Exception as e:
-                    error_msg = f"Failed to embed insight {insight.id}: {e}"
+                    error_msg = f"Failed to embed insight {iid}: {e}"
                     logger.error(error_msg)
                     rebuild_result.errors.append(error_msg)
 

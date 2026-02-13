@@ -6,6 +6,7 @@ Provides repository and service instances via FastAPI's Depends() mechanism.
 
 from functools import lru_cache
 
+from esperanto import EmbeddingModel
 from llm_manager import ModelManager, get_model_manager
 from surrealdb_service.repositories import (
     ChatMessageRepository,
@@ -183,4 +184,45 @@ def get_insight_service() -> InsightService:
     return InsightService(
         insight_repo=get_insight_repo(),
         note_repo=get_note_repo(),
+    )
+
+
+# --- Embedding service factory (for handler / non-DI use) ---
+
+async def get_embedding_service():
+    """Create an EmbeddingService instance for handler use.
+
+    Resolves the default embedding model from the DB via ModelManager,
+    then creates the service with a SourceRepository.
+    """
+    from embeddings.service import EmbeddingService
+
+    mm = get_model_manager()
+
+    # Ensure defaults are loaded
+    defaults = mm.get_defaults()
+    if not defaults or not defaults.default_embedding_model:
+        defaults_repo = get_default_models_repo()
+        defaults = await defaults_repo.get()
+        mm.set_defaults(defaults)
+
+    model_id = defaults.default_embedding_model
+    if not model_id:
+        raise ValueError("No embedding model configured.")
+
+    model_repo = get_model_repo()
+    model = await model_repo.get(model_id)
+    if not model:
+        raise ValueError(f"Embedding model '{model_id}' not found in database.")
+
+    embedding_model = mm.get_model_from_config(model)
+    if not isinstance(embedding_model, EmbeddingModel):
+        raise TypeError(
+            f"Model '{model_id}' is not an EmbeddingModel, got {type(embedding_model)}"
+        )
+
+    source_repo = get_source_repo()
+    return EmbeddingService(
+        source_repo=source_repo,
+        embedding_model=embedding_model,
     )
