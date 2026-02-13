@@ -1,8 +1,8 @@
 # Open Notebook - UV Workspace Refactoring Plan
 
-> **Status**: IN PROGRESS - Core packages and initial pipelines implemented
+> **Status**: IN PROGRESS - All packages done (incl. job-queue), most pipelines done, enrichment/retrieval/chat/canvas/docker remaining
 > **Created**: 2025-01-25
-> **Last Updated**: 2026-02-12
+> **Last Updated**: 2026-02-13
 
 ## Table of Contents
 1. [Overview](#overview)
@@ -33,18 +33,20 @@
 | packages/file-manager | ✅ Done | 234 | `e17c86b` |
 | packages/llm-manager | ✅ Done | 73 | `3fcdd6b` |
 | packages/ontology-manager | ✅ Done | 188 | `9867089` |
-| pipelines/ingestion | ✅ Done | 62 | `b7295ad` |
+| packages/job-queue | ✅ Done (+ app-main integration) | 36 | `fb62e12` |
+| pipelines/ingestion | ✅ Done (+ content filter, regrouper) | 90 | `c25f116` |
 | pipelines/ontology-extraction | ✅ Done (refactored) | 32 | `9867089` |
 | pipelines/entity-filtering | ✅ Done (expanded) | 469 | `134a871` |
-| pipelines/web-scraper | 📦 Scaffolded | 0 | — |
-| pipelines/summarization | ✅ Done | 76 | (pending) |
+| pipelines/embeddings | ✅ Done (service + config) | 13 | `c25f116` |
+| pipelines/summarization | ✅ Stubs + architecture | 0 | `8308f97` |
+| pipelines/web-scraper | 🚚 Removed (separate app) | — | `fb62e12` |
 | pipelines/enrichment | 📦 Scaffolded | 0 | — |
-| pipelines/embeddings | 📦 Scaffolded | 0 | — |
 | pipelines/retrieval | 📦 Scaffolded | 0 | — |
-| apps/app-main | 📦 Scaffolded | 0 | — |
+| apps/app-main | ✅ API + job worker migrated | 0 | `fb62e12` |
 | apps/chat | 📦 Scaffolded | 0 | — |
 | apps/canvas | 📦 Scaffolded | 0 | — |
-| **Total** | | **1162** | |
+| tests/integration | ✅ Done | 40 | `33f2ebd` |
+| **Total** | | **1289** | |
 
 ---
 
@@ -63,22 +65,22 @@ open-notebook/
 │   ├── surrealdb-service/            # ✅ Database access layer
 │   ├── file-manager/                 # ✅ File system management
 │   ├── llm-manager/                  # ✅ LLM model management (Claude, Ollama)
-│   └── ontology-manager/             # ✅ Ontology schema versioning, validation, evolution
+│   ├── ontology-manager/             # ✅ Ontology schema versioning, validation, evolution
+│   └── job-queue/                    # ✅ Background job queue (asyncio + SurrealDB)
 │
 ├── pipelines/                        # Processing pipelines (CLI + UI)
-│   ├── web-scraper/                  # Website scraping and content download
 │   ├── ingestion/                    # ✅ Document/audio ingestion
 │   ├── ontology-extraction/          # ✅ Pure LLM-based entity/relation extraction
 │   ├── entity-filtering/             # ✅ 13-stage filtering, dedup, resolution, validation, scoring
-│   ├── summarization/                # ✅ RAPTOR, TreeKG, Naive + 11 future stubs
-│   ├── enrichment/                   # Metadata verification and enrichment
-│   ├── embeddings/                   # Vector embeddings
-│   └── retrieval/                    # Search and retrieval
+│   ├── summarization/                # ✅ Strategy stubs + three-tier architecture
+│   ├── enrichment/                   # 📦 Metadata verification and enrichment (scaffolded)
+│   ├── embeddings/                   # ✅ Vector embeddings (service + content filter)
+│   └── retrieval/                    # 📦 Search and retrieval (scaffolded)
 │
 └── apps/                             # User-facing applications
-    ├── app-main/                     # Production app (FastAPI + Next.js)
-    ├── chat/                         # Knowledge base chat interface
-    └── canvas/                       # Interactive note creation canvas
+    ├── app-main/                     # ✅ Production app (API + job worker migrated, needs tests)
+    ├── chat/                         # 📦 Knowledge base chat interface (scaffolded)
+    └── canvas/                       # 📦 Interactive note creation canvas (scaffolded)
 ```
 
 ### Dependency Rules
@@ -112,8 +114,8 @@ llm-manager ←─────────────────────�
    ├── ontology-manager ←──────────────────────────────────┤
    │   (schema versioning, validation, prompts)            │
    │                                                       │
-   ├── web-scraper                                         │
-   │       ↓                                               │
+   ├── job-queue (asyncio queue + SurrealDB persistence)   │
+   │                                                       │
    ├── ingestion ←─────────────────────────────────────────┤
    │       ↓                                               │
    ├── ontology-extraction (uses llm-manager +             │
@@ -149,7 +151,7 @@ llm-manager ←─────────────────────�
 ### Pipeline Processing Order
 
 ```
-web-scraper → ingestion → ontology-extraction → entity-filtering → summarization → enrichment → embeddings → retrieval
+ingestion → ontology-extraction → entity-filtering → summarization → enrichment → embeddings → retrieval
                                                                                        ↑
                                                                              (manual verification
                                                                               & metadata editing)
@@ -170,7 +172,7 @@ members = [
     "packages/file-manager",
     "packages/llm-manager",
     "packages/ontology-manager",
-    "pipelines/web-scraper",
+    # web-scraper removed — now a separate app
     "pipelines/ingestion",
     "pipelines/ontology-extraction",
     "pipelines/entity-filtering",
@@ -189,7 +191,7 @@ surrealdb-service = { workspace = true }
 file-manager = { workspace = true }
 llm-manager = { workspace = true }
 ontology-manager = { workspace = true }
-web-scraper = { workspace = true }
+# web-scraper removed — now a separate app
 ingestion = { workspace = true }
 ontology-extraction = { workspace = true }
 entity-filtering = { workspace = true }
@@ -3845,7 +3847,6 @@ docker compose -f docker-compose.standalone.yml up ingestion
 | file-manager | 8510 | 5110 |
 | llm-manager | 8515 | 5120 |
 | **Pipelines** | | |
-| web-scraper | 8520 | - |
 | ingestion | 8521 | - |
 | ontology-extraction | 8522 | - |
 | summarization | 8523 | - |
@@ -3964,8 +3965,10 @@ This plan focuses on implementing the workspace structure with ingestion and ext
     - BaseEnhancer ABC for composable post-processing layers
     - 8 new config dataclasses with sensible defaults
     - Updated docs/SUMMARIZATION_APPROACHES.md with 4 combination recipes
-13. **Step 10b**: Remaining pipelines (web-scraper, enrichment, embeddings, retrieval)
-14. **Step 11**: Applications (app-main, chat, canvas)
+13. **Step 10b**: Remaining pipelines (enrichment, retrieval) — scaffolded
+14. **Step 10c**: job-queue package — ✅ Done (36 tests, `fb62e12`)
+15. **Step 10d**: app-main job worker migration — ✅ Done (surreal_commands removed, `fb62e12`)
+16. **Step 11**: Applications (app-main tests, chat, canvas)
 
 ---
 
@@ -4958,22 +4961,35 @@ uv run pytest packages/ pipelines/ -m "not integration" -q
 ✅ COMPLETED:
 ├── Steps 1-2: Workspace structure + shared package (86 tests)
 ├── Step 3: surrealdb-service (28 tests)
-├── Steps 4-5: file-manager (83 tests) + llm-manager (73 tests)
-├── Step 6: ingestion pipeline (62 tests)
+├── Steps 4-5: file-manager (234 tests) + llm-manager (73 tests)
+├── Step 6: ingestion pipeline (90 tests incl. content filter + regrouper)
 ├── Step 7a: ontology-manager package (188 tests)
 ├── Step 7b: ontology-extraction refactored to pure LLM (32 tests)
 ├── Step 7c: entity-filtering pipeline (469 tests, 13-stage pipeline)
-└── Step 8: Cross-package integration tests (40 tests, no DB/LLM/models)
+├── Step 8: Cross-package integration tests (40 tests, no DB/LLM/models)
+├── Step 9a: embeddings pipeline — service, config, chunk-based embedding (13 tests)
+├── Step 9b: summarization — strategy stubs + three-tier architecture (0 tests)
+├── Step 9c: app-main — API routers + service layer migrated from monolith (0 tests)
+├── Step 9d: job-queue — asyncio PriorityQueue + SurrealDB, 36 tests
+├── Step 9e: app-main job worker — handlers, lifecycle, surreal_commands removed
+└── web-scraper removed from workspace (now a separate app)
 
 REMAINING:
-├── Step 9: Remaining pipelines
-│   ├── web-scraper
-│   ├── summarization (TreeKG/RAPTOR — edge predictor already accepts hierarchy_graph)
-│   ├── enrichment
-│   ├── embeddings
-│   └── retrieval
-├── Step 10: Applications (app-main, chat, canvas)
-└── Step 11: Docker configuration + deployment
+├── Pipelines — implementation of scaffolds/stubs
+│   ├── summarization — 8 strategy stubs + 3 enhancer stubs (raise NotImplementedError)
+│   ├── enrichment — full scaffold (empty: api/, lookups/, models/, verification/)
+│   ├── retrieval — full scaffold (empty: api/, graph/, vector/)
+│   └── embeddings — empty sub-scaffolds: api/, providers/
+├── Applications
+│   ├── app-main — tests, search_service.vector_search stub, monolith cutover
+│   ├── chat — full scaffold (empty: api/, api/routers/, services/)
+│   └── canvas — full scaffold (empty: api/, api/routers/, services/)
+├── Package sub-scaffolds (empty __init__.py only)
+│   ├── file-manager: files/, knowledge_base/, mcp/, obsidian/
+│   ├── llm-manager: mcp/
+│   ├── surrealdb-service: mcp/
+│   └── entity-filtering: summarization/ (placeholder for TreeKG/RAPTOR)
+└── Docker configuration + deployment
 ```
 
 ---
@@ -4984,8 +5000,8 @@ REMAINING:
 # Build entire workspace
 uv sync --all-packages --all-extras
 
-# Run all tests (1021 total)
-uv run pytest packages/ pipelines/
+# Run all tests (1289 total)
+uv run pytest packages/ pipelines/ tests/
 
 # Run specific package/pipeline tests
 uv run pytest packages/shared/tests/
@@ -4993,15 +5009,21 @@ uv run pytest packages/surrealdb-service/tests/
 uv run pytest packages/file-manager/tests/
 uv run pytest packages/llm-manager/tests/
 uv run pytest packages/ontology-manager/tests/
+uv run pytest packages/job-queue/tests/
 uv run pytest pipelines/ingestion/tests/
 uv run pytest pipelines/ontology-extraction/tests/
 uv run pytest pipelines/entity-filtering/tests/
+uv run pytest pipelines/embeddings/tests/
+uv run pytest tests/integration/
 
 # Import verification
 uv run python -c "from shared.models.extraction import ExtractionResult; print('shared OK')"
 uv run python -c "from ontology_manager import OntologyManager; print('ontology-manager OK')"
 uv run python -c "from ontology_extraction.workflow import ExtractionWorkflow; print('extraction OK')"
 uv run python -c "from entity_filtering.workflow import FilteringWorkflow; print('filtering OK')"
+uv run python -c "from embeddings.service import EmbeddingService; print('embeddings OK')"
+uv run python -c "from job_queue import JobService, JobQueue, JobWorker; print('job-queue OK')"
+uv run python -c "from ingestion.config import ContentFilterConfig; print('content filter OK')"
 ```
 
 ---
@@ -5013,7 +5035,8 @@ uv run python -c "from entity_filtering.workflow import FilteringWorkflow; print
 2. How to handle large file uploads in Streamlit (>200MB)?
 3. GPU memory management when running multiple pipelines?
 4. ~~When to build TreeKG/RAPTOR summarization models in entity-filtering?~~ → Edge predictor accepts optional `hierarchy_graph` from TreeKG; `summarization/` subpackage reserved but empty
-5. Integration testing strategy across pipelines
+5. ~~Integration testing strategy across pipelines~~ → 40 integration tests in `tests/integration/` (resolved)
+6. ~~Where should content filtering live?~~ → `is_content` flag set at extraction time in ChunkExtractor; all downstream consumers filter on the flag (resolved)
 
 ### Decisions Made
 1. Pure Pydantic models in shared, database operations in surrealdb-service
@@ -5028,11 +5051,54 @@ uv run python -c "from entity_filtering.workflow import FilteringWorkflow; print
 10. **No hardcoded localhost URLs** — use env vars via BaseSettings or in-process workspace imports
 11. **Streamlit UIs deferred** — architecture supports them but not building now
 12. **pytest uses `--import-mode=importlib`** with NO `tests/__init__.py` to prevent import collisions
+13. **Content classification at extraction time** — `is_content` flag on Chunk set by ChunkExtractor; regrouper, summarizer, embeddings, entity-filtering all filter on the flag rather than reimplementing filter logic
+14. **Embeddings use structural chunks** — EmbeddingService uses DB chunks from ingestion pipeline (with text-split fallback for legacy sources); each SourceEmbedding links to its Chunk via `chunk_id`
 
 ### Additional Components Needed
-1. Web scraper pipeline (after extraction is working)
-2. Summarization pipeline (RAPTOR + TreeKG) — edge predictor already accepts hierarchy_graph; `summarization/` subpackage in entity-filtering is reserved
-3. Enrichment pipeline (Google Scholar, CrossRef)
-4. Embeddings pipeline
-5. Retrieval pipeline
-6. Application integration (app-main, chat, canvas)
+1. ~~Web scraper pipeline~~ 🚚 Removed from workspace — separate app
+2. Summarization pipeline — real RAPTOR/TreeKG implementation (strategy stubs + architecture exist)
+3. Enrichment pipeline (Google Scholar, CrossRef) (scaffolded)
+4. ~~Embeddings pipeline~~ ✅ Done — EmbeddingService with batched chunk-based embedding
+5. Retrieval pipeline (scaffolded)
+6. ~~Job queue package~~ ✅ Done — asyncio PriorityQueue + SurrealDB, 36 tests, integrated into app-main
+7. Application integration — app-main tests + frontend, chat, canvas
+
+### Open Stubs & Scaffolds Inventory
+
+**Full scaffolds** (empty directory trees, only `__init__.py`):
+
+| Component | Empty Directories | Notes |
+|-----------|-------------------|-------|
+| `pipelines/enrichment/` | `api/`, `lookups/`, `models/`, `verification/` | All empty — needs full implementation |
+| `pipelines/retrieval/` | `api/`, `graph/`, `vector/` | All empty — needs full implementation |
+| `apps/chat/` | `api/`, `api/routers/`, `services/` | All empty — needs full implementation |
+| `apps/canvas/` | `api/`, `api/routers/`, `services/` | All empty — needs full implementation |
+
+**Partial stubs** (some code, some empty directories):
+
+| Component | Empty Directories | Implemented |
+|-----------|-------------------|-------------|
+| `packages/file-manager/` | `files/`, `knowledge_base/`, `mcp/`, `obsidian/` | Core API, storage, source-folders, operations all working (234 tests) |
+| `packages/llm-manager/` | `mcp/` | Core fully working (73 tests) |
+| `packages/surrealdb-service/` | `mcp/` | Core fully working (28 tests) |
+| `pipelines/embeddings/` | `api/`, `providers/` | `service.py` + `config.py` working (13 tests) |
+| `pipelines/entity-filtering/` | `summarization/` | Placeholder for TreeKG/RAPTOR migration; 13-stage pipeline fully working (469 tests) |
+
+**NotImplementedError stubs** (code files that raise NotImplementedError):
+
+| File | What it stubs |
+|------|---------------|
+| `summarization/map_reduce/strategy.py` | MapReduceSummarizer |
+| `summarization/refine/strategy.py` | RefineSummarizer |
+| `summarization/walking_tree/strategy.py` | WalkingTreeSummarizer |
+| `summarization/extractive_abstractive/strategy.py` | ExtractiveAbstractiveSummarizer |
+| `summarization/skeleton/strategy.py` | SkeletonOfThoughtSummarizer |
+| `summarization/hybrid/strategy.py` | HybridSummarizer |
+| `summarization/dpr_abs/strategy.py` | DPRAbsSummarizer |
+| `summarization/linked_entity/strategy.py` | LinkedEntitySummarizer |
+| `summarization/enhancers/gist_tokens.py` | GistTokensEnhancer |
+| `summarization/enhancers/chain_of_density.py` | ChainOfDensityEnhancer |
+| `summarization/enhancers/self_correction.py` | SelfCorrectionEnhancer |
+| `summarization/workflow.py` (3 branches) | MapReduce, Refine, WalkingTree strategy dispatch |
+| `entity-filtering/.../graph_analyzer.py` | `analyze()` method (graph analysis placeholder) |
+| `app-main/.../search_service.py` | `vector_search()` (needs graph migration) |
