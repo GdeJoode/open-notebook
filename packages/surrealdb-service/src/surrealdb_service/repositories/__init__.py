@@ -11,11 +11,20 @@ from surrealdb_service.repositories.file_tracking import (
     SourceFolderRepository,
     TrackedFileRepository,
 )
+from surrealdb_service.repositories.model import (
+    DefaultModelsRepository,
+    ModelRepository,
+)
 from surrealdb_service.repositories.notebook import (
     ChatMessageRepository,
     ChatSessionRepository,
     NoteRepository,
     NotebookRepository,
+)
+from surrealdb_service.repositories.podcast import (
+    EpisodeProfileRepository,
+    PodcastEpisodeRepository,
+    SpeakerProfileRepository,
 )
 from surrealdb_service.repositories.search import SearchRepository
 from surrealdb_service.repositories.settings import ContentSettingsRepository
@@ -24,6 +33,10 @@ from surrealdb_service.repositories.source import (
     SourceEmbeddingRepository,
     SourceInsightRepository,
     SourceRepository,
+)
+from surrealdb_service.repositories.transformation import (
+    DefaultPromptsRepository,
+    TransformationRepository,
 )
 
 __all__ = [
@@ -38,11 +51,18 @@ __all__ = [
     "KnowledgeBaseRepository",
     "SourceFolderRepository",
     "PipelineCacheRepository",
+    # Model
+    "ModelRepository",
+    "DefaultModelsRepository",
     # Notebook
     "NotebookRepository",
     "NoteRepository",
     "ChatSessionRepository",
     "ChatMessageRepository",
+    # Podcast
+    "SpeakerProfileRepository",
+    "EpisodeProfileRepository",
+    "PodcastEpisodeRepository",
     # Source
     "SourceRepository",
     "ChunkRepository",
@@ -52,4 +72,7 @@ __all__ = [
     "ContentSettingsRepository",
     # Search
     "SearchRepository",
+    # Transformation
+    "TransformationRepository",
+    "DefaultPromptsRepository",
 ]

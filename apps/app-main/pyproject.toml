@@ -2,12 +2,13 @@
 name = "app-main"
 version = "0.1.0"
 description = "Main application - FastAPI backend and orchestration"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "shared",
     "surrealdb-service",
     "file-manager",
     "llm-manager",
+    "job-queue",
     "ingestion",
     "ontology-extraction",
     "summarization",
@@ -16,6 +17,9 @@ dependencies = [
     "retrieval",
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
+    "langgraph>=0.2.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    "esperanto>=0.5.0",
 ]
 
 [project.optional-dependencies]
@@ -42,3 +46,4 @@ summarization = { workspace = true }
 enrichment = { workspace = true }
 embeddings = { workspace = true }
 retrieval = { workspace = true }
+job-queue = { workspace = true }

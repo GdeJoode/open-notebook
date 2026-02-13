@@ -23,6 +23,7 @@ from shared.models.jobs import (
 )
 from shared.models.llm import DefaultModels, Model, ModelTypeStr, ModelUsageRecord
 from shared.models.notebook import ChatMessage, ChatSession, Note, Notebook
+from shared.models.podcast import EpisodeProfile, PodcastEpisode, SpeakerProfile
 from shared.models.settings import ContentSettings
 from shared.models.extraction import (
     ExtractedEntity,
@@ -31,6 +32,7 @@ from shared.models.extraction import (
     FilteredResult,
 )
 from shared.models.source import Asset, Chunk, Source, SourceEmbedding, SourceInsight
+from shared.models.transformation import DefaultPrompts, Transformation
 
 __all__ = [
     # Base models
@@ -52,6 +54,13 @@ __all__ = [
     "SourceInsight",
     "SourceEmbedding",
     "Asset",
+    # Transformation models
+    "Transformation",
+    "DefaultPrompts",
+    # Podcast models
+    "SpeakerProfile",
+    "EpisodeProfile",
+    "PodcastEpisode",
     # File tracking models
     "TrackedFile",
     "Project",
