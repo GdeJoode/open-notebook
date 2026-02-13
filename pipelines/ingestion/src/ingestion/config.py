@@ -59,6 +59,13 @@ class WhisperModel(str, Enum):
     LARGE = "large-v3"
 
 
+class RegroupingStrategy(str, Enum):
+    """Chunk regrouping strategy."""
+    STRUCTURAL = "structural"      # Merge by section headings
+    SLIDING_WINDOW = "sliding_window"  # Fixed-size with overlap
+    NONE = "none"                  # Keep 1:1 (legacy)
+
+
 class DestinationType(str, Enum):
     """Where to store the processed content."""
     PROJECT = "project"
@@ -345,6 +352,18 @@ class OutputConfig:
 
 
 @dataclass
+class RegroupingConfig:
+    """Configuration for chunk regrouping."""
+    strategy: RegroupingStrategy = RegroupingStrategy.STRUCTURAL
+    target_tokens: int = 800          # ~3200 chars
+    max_tokens: int = 1200            # Hard ceiling
+    overlap_tokens: int = 100         # For sliding window
+    chars_per_token: float = 4.0      # Approximation
+    tables_as_standalone: bool = True  # Tables get own chunk
+    prepend_section_context: bool = True  # Prefix "Section: ..." on chunks
+
+
+@dataclass
 class IngestionConfig:
     """
     Main configuration for the ingestion pipeline.
@@ -353,12 +372,14 @@ class IngestionConfig:
     - DoclingConfig: Document parsing options
     - WhisperXConfig: Audio/video transcription options
     - OutputConfig: Directory structure
+    - RegroupingConfig: Chunk regrouping options
     - Destination handling
     """
     # Component configs
     docling: DoclingConfig = field(default_factory=DoclingConfig)
     whisperx: WhisperXConfig = field(default_factory=WhisperXConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    regrouping: RegroupingConfig = field(default_factory=RegroupingConfig)
 
     # Destination
     destination: DestinationType = DestinationType.ASK

@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from ingestion.config import RegroupingConfig, RegroupingStrategy
 from ingestion.models import ExtractedDocument, BoundingBox
 
 
@@ -86,6 +87,12 @@ class Chunk:
     # Additional metadata
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    # Section hierarchy from document structure
+    section_path: list[str] = field(default_factory=list)  # e.g. ["Chapter 1", "Section 1.2"]
+    section_level: int = 0  # Nesting depth in document
+    chunk_type: str = "original"       # "original" | "merged" | "table" | "overlap"
+    source_element_count: int = 1      # How many elements were merged
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -99,6 +106,10 @@ class Chunk:
             "section": self.section,
             "paragraph_number": self.paragraph_number,
             "metadata": self.metadata,
+            "section_path": self.section_path,
+            "section_level": self.section_level,
+            "chunk_type": self.chunk_type,
+            "source_element_count": self.source_element_count,
         }
 
 
@@ -119,6 +130,7 @@ class ChunkExtractor:
         max_chunk_size: int = 2000,
         include_tables: bool = True,
         include_images: bool = True,
+        regrouping_config: Optional[RegroupingConfig] = None,
     ):
         """
         Initialize the chunk extractor.
@@ -128,11 +140,13 @@ class ChunkExtractor:
             max_chunk_size: Maximum characters for a chunk (will split larger)
             include_tables: Include tables as chunks
             include_images: Include image captions as chunks
+            regrouping_config: Optional config for chunk regrouping
         """
         self.min_chunk_size = min_chunk_size
         self.max_chunk_size = max_chunk_size
         self.include_tables = include_tables
         self.include_images = include_images
+        self._regrouping_config = regrouping_config
 
     def extract(self, document: ExtractedDocument) -> list[Chunk]:
         """
@@ -176,6 +190,8 @@ class ChunkExtractor:
                         chapter=current_chapter,
                         section=current_section,
                         paragraph_number=paragraph_number,
+                        section_path=element.section_path,
+                        section_level=element.section_level,
                     )
                     chunks.append(chunk)
                     order += 1
@@ -189,6 +205,8 @@ class ChunkExtractor:
                         bbox=element.bbox,
                         chapter=current_chapter,
                         section=current_section,
+                        section_path=element.section_path,
+                        section_level=element.section_level,
                     )
                     chunks.extend(sub_chunks)
                     order += len(sub_chunks)
@@ -210,6 +228,9 @@ class ChunkExtractor:
                             chapter=current_chapter,
                             section=current_section,
                             metadata={"rows": table.num_rows, "cols": table.num_cols},
+                            section_path=table.section_path,
+                            section_level=table.section_level,
+                            chunk_type="table",
                         )
                         chunks.append(chunk)
                         order += 1
@@ -233,6 +254,15 @@ class ChunkExtractor:
                         order += 1
 
         logger.info(f"Extracted {len(chunks)} chunks from {len(document.pages)} pages")
+
+        # Regroup if configured
+        if self._regrouping_config and self._regrouping_config.strategy != RegroupingStrategy.NONE:
+            from ingestion.chunking.regrouper import ChunkRegrouper
+            regrouper = ChunkRegrouper(self._regrouping_config)
+            original_count = len(chunks)
+            chunks = regrouper.regroup(chunks)
+            logger.info(f"Regrouped {original_count} → {len(chunks)} chunks (strategy={self._regrouping_config.strategy.value})")
+
         return chunks
 
     def extract_from_docling(self, doc: Any, result: Any = None) -> list[Chunk]:
@@ -361,6 +391,9 @@ class ChunkExtractor:
         section: Optional[str] = None,
         paragraph_number: Optional[int] = None,
         metadata: Optional[dict] = None,
+        section_path: Optional[list[str]] = None,
+        section_level: int = 0,
+        chunk_type: str = "original",
     ) -> Chunk:
         """Create a single chunk."""
         positions = []
@@ -377,6 +410,9 @@ class ChunkExtractor:
             section=section,
             paragraph_number=paragraph_number,
             metadata=metadata or {},
+            section_path=section_path or [],
+            section_level=section_level,
+            chunk_type=chunk_type,
         )
 
     def _split_text(
@@ -388,6 +424,8 @@ class ChunkExtractor:
         bbox: Optional[BoundingBox],
         chapter: Optional[str] = None,
         section: Optional[str] = None,
+        section_path: Optional[list[str]] = None,
+        section_level: int = 0,
     ) -> list[Chunk]:
         """Split large text into smaller chunks."""
         chunks = []
@@ -410,6 +448,8 @@ class ChunkExtractor:
                         bbox=bbox,
                         chapter=chapter,
                         section=section,
+                        section_path=section_path,
+                        section_level=section_level,
                     )
                     chunks.append(chunk)
                     order += 1
@@ -425,6 +465,8 @@ class ChunkExtractor:
                 bbox=bbox,
                 chapter=chapter,
                 section=section,
+                section_path=section_path,
+                section_level=section_level,
             )
             chunks.append(chunk)
 
@@ -474,6 +516,7 @@ def extract_chunks(
     document: ExtractedDocument,
     min_chunk_size: int = 50,
     max_chunk_size: int = 2000,
+    regrouping_config: Optional[RegroupingConfig] = None,
 ) -> list[Chunk]:
     """
     Convenience function to extract chunks from a document.
@@ -482,6 +525,7 @@ def extract_chunks(
         document: Parsed document
         min_chunk_size: Minimum chunk size in characters
         max_chunk_size: Maximum chunk size in characters
+        regrouping_config: Optional config for chunk regrouping
 
     Returns:
         List of chunks
@@ -489,5 +533,6 @@ def extract_chunks(
     extractor = ChunkExtractor(
         min_chunk_size=min_chunk_size,
         max_chunk_size=max_chunk_size,
+        regrouping_config=regrouping_config,
     )
     return extractor.extract(document)

@@ -56,6 +56,15 @@ class Chunk(ObjectModel):
         description="Additional chunk metadata"
     )
 
+    # Section hierarchy from document structure
+    section_path: List[str] = Field(
+        default_factory=list,
+        description="Heading breadcrumb path e.g. ['Chapter 1', 'Section 1.2']"
+    )
+    section_level: int = Field(default=0, description="Nesting depth in document")
+    chunk_type: str = Field(default="original", description="original|merged|table|overlap")
+    source_element_count: int = Field(default=1, description="Elements merged into this chunk")
+
 
 class SourceInsight(ObjectModel):
     """
@@ -87,6 +96,7 @@ class SourceEmbedding(ObjectModel):
     content: str = Field(description="The text content that was embedded")
     order: int = Field(default=0, description="Order in the document")
     embedding: Optional[List[float]] = Field(None, description="Vector embedding")
+    chunk: Optional[str] = Field(None, description="Reference to the chunk record")
 
 
 class Source(ObjectModel):

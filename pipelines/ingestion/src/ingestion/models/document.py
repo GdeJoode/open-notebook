@@ -123,6 +123,9 @@ class ExtractedElement:
     bbox: Optional[BoundingBox] = None
     confidence: float = 1.0
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Section hierarchy from Docling
+    section_path: list[str] = field(default_factory=list)  # e.g. ["Chapter 1", "Section 1.2"]
+    section_level: int = 0  # Nesting depth in document
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -133,6 +136,8 @@ class ExtractedElement:
             "bbox": self.bbox.to_dict() if self.bbox else None,
             "confidence": self.confidence,
             "metadata": self.metadata,
+            "section_path": self.section_path,
+            "section_level": self.section_level,
         }
 
 

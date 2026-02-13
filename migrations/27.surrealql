@@ -1,0 +1,23 @@
+-- Migration 27: Chunk regrouping - section hierarchy and chunk references
+-- Adds section metadata to chunks for structural merging and
+-- links embeddings back to their source chunks.
+
+-- =============================================================================
+-- ADD SECTION HIERARCHY FIELDS TO CHUNK TABLE
+-- =============================================================================
+DEFINE FIELD IF NOT EXISTS section_path ON TABLE chunk TYPE option<array<string>> DEFAULT [];
+DEFINE FIELD IF NOT EXISTS section_level ON TABLE chunk TYPE option<int> DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS chunk_type ON TABLE chunk TYPE option<string> DEFAULT 'original';
+DEFINE FIELD IF NOT EXISTS source_element_count ON TABLE chunk TYPE option<int> DEFAULT 1;
+
+-- =============================================================================
+-- ADD CHUNK REFERENCE TO SOURCE_EMBEDDING
+-- =============================================================================
+DEFINE FIELD IF NOT EXISTS chunk ON TABLE source_embedding TYPE option<record<chunk>>;
+
+-- =============================================================================
+-- INDEXES FOR SECTION-BASED RETRIEVAL
+-- =============================================================================
+DEFINE INDEX IF NOT EXISTS idx_chunk_section_path ON TABLE chunk COLUMNS section_path;
+DEFINE INDEX IF NOT EXISTS idx_chunk_type ON TABLE chunk COLUMNS chunk_type;
+DEFINE INDEX IF NOT EXISTS idx_embedding_chunk ON TABLE source_embedding COLUMNS chunk;

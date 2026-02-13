@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from ingestion.chunking import Chunk, ChunkExtractor, ChunkPosition
+from ingestion.config import RegroupingConfig, RegroupingStrategy
 from ingestion.models import (
     BoundingBox,
     ElementType,
@@ -305,3 +306,115 @@ class TestChunkExtractor:
         assert len(chunks) == 2
         assert chunks[0].physical_page == 1
         assert chunks[1].physical_page == 2
+
+    def test_section_metadata_flow(self):
+        """Test section_path and section_level flow from elements to chunks."""
+        doc = ExtractedDocument(source_path=Path("/test.pdf"), page_count=1)
+
+        page = PageContent(page_number=1)
+        page.elements = [
+            ExtractedElement(
+                content="This paragraph has section metadata for testing purposes. " * 3,
+                element_type=ElementType.PARAGRAPH,
+                page=1,
+                section_path=["Chapter 1", "Introduction"],
+                section_level=2,
+            ),
+        ]
+        doc.pages = [page]
+
+        extractor = ChunkExtractor(min_chunk_size=50)
+        chunks = extractor.extract(doc)
+
+        assert len(chunks) == 1
+        assert chunks[0].section_path == ["Chapter 1", "Introduction"]
+        assert chunks[0].section_level == 2
+
+    def test_table_section_metadata(self):
+        """Test table chunks carry section metadata."""
+        doc = ExtractedDocument(source_path=Path("/test.pdf"), page_count=1)
+
+        page = PageContent(page_number=1)
+        page.tables = [
+            ExtractedTable(
+                content="| A | B |",
+                element_type=ElementType.TABLE,
+                page=1,
+                headers=["Column A", "Column B"],
+                rows=[["Value 1", "Value 2"], ["Value 3", "Value 4"]],
+                section_path=["Results"],
+                section_level=1,
+            ),
+        ]
+        doc.pages = [page]
+
+        extractor = ChunkExtractor(min_chunk_size=10, include_tables=True)
+        chunks = extractor.extract(doc)
+
+        assert len(chunks) == 1
+        assert chunks[0].section_path == ["Results"]
+        assert chunks[0].section_level == 1
+        assert chunks[0].chunk_type == "table"
+
+    def test_regrouping_integration(self):
+        """Test ChunkExtractor integrates regrouper when config provided."""
+        doc = ExtractedDocument(source_path=Path("/test.pdf"), page_count=1)
+
+        page = PageContent(page_number=1)
+        page.elements = [
+            ExtractedElement(
+                content="First paragraph under same section with enough text. " * 2,
+                element_type=ElementType.PARAGRAPH,
+                page=1,
+                section_path=["Methods"],
+                section_level=1,
+            ),
+            ExtractedElement(
+                content="Second paragraph under same section with enough text. " * 2,
+                element_type=ElementType.PARAGRAPH,
+                page=1,
+                section_path=["Methods"],
+                section_level=1,
+            ),
+        ]
+        doc.pages = [page]
+
+        config = RegroupingConfig(
+            strategy=RegroupingStrategy.STRUCTURAL,
+            target_tokens=800,  # Large enough to merge both
+            prepend_section_context=False,
+        )
+        extractor = ChunkExtractor(min_chunk_size=50, regrouping_config=config)
+        chunks = extractor.extract(doc)
+
+        # Both paragraphs should merge into one chunk
+        assert len(chunks) == 1
+        assert chunks[0].chunk_type == "merged"
+        assert chunks[0].source_element_count == 2
+
+    def test_no_regrouping_by_default(self):
+        """Test ChunkExtractor does not regroup when no config provided."""
+        doc = ExtractedDocument(source_path=Path("/test.pdf"), page_count=1)
+
+        page = PageContent(page_number=1)
+        page.elements = [
+            ExtractedElement(
+                content="First paragraph with sufficient text for extraction. " * 2,
+                element_type=ElementType.PARAGRAPH,
+                page=1,
+                section_path=["Methods"],
+            ),
+            ExtractedElement(
+                content="Second paragraph with sufficient text for extraction. " * 2,
+                element_type=ElementType.PARAGRAPH,
+                page=1,
+                section_path=["Methods"],
+            ),
+        ]
+        doc.pages = [page]
+
+        extractor = ChunkExtractor(min_chunk_size=50)
+        chunks = extractor.extract(doc)
+
+        assert len(chunks) == 2
+        assert all(c.chunk_type == "original" for c in chunks)

@@ -57,6 +57,8 @@ class DoclingParser:
         if self._initialized:
             return
 
+        logger.info("🔧 Initializing Docling document converter...")
+
         try:
             from docling.datamodel.base_models import InputFormat
             from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -65,17 +67,34 @@ class DoclingParser:
                 "Docling not installed. Install with: pip install docling>=2.58.0"
             )
 
+        # Log configuration
+        logger.info(f"📋 Configuration:")
+        logger.info(f"   • Device: {self.config.device.value}")
+        logger.info(f"   • OCR enabled: {self.config.do_ocr}")
+        if self.config.do_ocr:
+            logger.info(f"   • OCR engine: {self.config.ocr_engine.value}")
+            logger.info(f"   • OCR languages: {', '.join(self.config.ocr_lang)}")
+        logger.info(f"   • Table extraction: {self.config.do_table_structure}")
+        if self.config.do_table_structure:
+            logger.info(f"   • Table mode: {self.config.table_mode.value}")
+        logger.info(f"   • Image extraction: {self.config.generate_picture_images}")
+        logger.info(f"   • Image description (VLM): {self.config.do_picture_description}")
+        if self.config.do_picture_description:
+            logger.info(f"   • VLM model: {self.config.vlm_model}")
+
         # Get pipeline options from config
+        logger.info("⚙️ Building pipeline options...")
         pipeline_options = self.config.to_docling_options()
 
         # Create converter with format options
+        logger.info("🚀 Creating document converter...")
         self._converter = DocumentConverter(
             format_options={
                 InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
             }
         )
         self._initialized = True
-        logger.info(f"Docling parser initialized with device={self.config.device.value}")
+        logger.success(f"✅ Docling parser initialized successfully")
 
     def parse(self, source_path: Path) -> ExtractedDocument:
         """
@@ -90,18 +109,36 @@ class DoclingParser:
         self._ensure_initialized()
 
         start_time = time.time()
-        logger.info(f"Parsing document: {source_path}")
+        file_size_mb = source_path.stat().st_size / (1024 * 1024)
+        logger.info(f"📄 Starting document processing: {source_path.name}")
+        logger.info(f"   • File size: {file_size_mb:.2f} MB")
+        logger.info(f"   • File type: {source_path.suffix}")
 
         # Convert document
+        logger.info("🔍 Running Docling conversion pipeline...")
+        logger.info("   • Layout analysis...")
+        logger.info("   • Text extraction...")
+        if self.config.do_ocr:
+            logger.info(f"   • OCR processing ({self.config.ocr_engine.value})...")
+        if self.config.do_table_structure:
+            logger.info("   • Table structure recognition...")
+        if self.config.do_picture_description:
+            logger.info("   • Image analysis (VLM)...")
+
         result = self._converter.convert(str(source_path))
         doc = result.document
+
+        conversion_time = time.time() - start_time
+        logger.info(f"✅ Conversion completed in {conversion_time:.2f}s")
 
         # Get page count
         page_count = 0
         if hasattr(result, "input") and hasattr(result.input, "page_count"):
             page_count = result.input.page_count
+        logger.info(f"📑 Document has {page_count} pages")
 
         # Extract content
+        logger.info("📦 Extracting structured content...")
         pages = self._extract_pages(doc, result)
         all_tables = []
         all_images = []
@@ -110,7 +147,17 @@ class DoclingParser:
             all_tables.extend(page.tables)
             all_images.extend(page.images)
 
+        if all_tables:
+            logger.info(f"   • Found {len(all_tables)} tables")
+        if all_images:
+            logger.info(f"   • Found {len(all_images)} images")
+
+        # Count text elements
+        total_elements = sum(len(p.elements) for p in pages)
+        logger.info(f"   • Found {total_elements} text elements")
+
         # Export formats
+        logger.info("📝 Generating markdown export...")
         full_markdown = doc.export_to_markdown()
         full_text = self._extract_plain_text(doc)
 
@@ -137,10 +184,13 @@ class DoclingParser:
             },
         )
 
-        logger.info(
-            f"Document parsed: {page_count} pages, "
-            f"{len(all_tables)} tables, {len(all_images)} images "
-            f"in {extraction_time:.2f}s"
+        logger.success(
+            f"🎉 Document processed successfully!\n"
+            f"   • Pages: {page_count}\n"
+            f"   • Tables: {len(all_tables)}\n"
+            f"   • Images: {len(all_images)}\n"
+            f"   • Text elements: {total_elements}\n"
+            f"   • Total time: {extraction_time:.2f}s"
         )
 
         return extracted_doc
@@ -150,6 +200,7 @@ class DoclingParser:
         from docling_core.types.doc import TableItem, PictureItem
 
         pages_dict: dict[int, PageContent] = {}
+        heading_stack: list[tuple[str, int]] = []  # (heading_text, level)
 
         # Iterate through all items in document
         for item, level in doc.iterate_items():
@@ -161,15 +212,29 @@ class DoclingParser:
 
             page = pages_dict[page_num]
 
+            # Update heading stack on headings/titles
+            element_type = self._get_element_type(item)
+            if element_type in (ElementType.TITLE, ElementType.HEADING):
+                text = getattr(item, "text", "") or ""
+                # Pop headings at same or deeper level
+                while heading_stack and heading_stack[-1][1] >= level:
+                    heading_stack.pop()
+                heading_stack.append((text.strip(), level))
+
+            # Build section_path from stack
+            section_path = [h[0] for h in heading_stack]
+
             # Handle different item types
             if isinstance(item, TableItem):
                 table = self._extract_table(item, page_num)
+                table.section_path = section_path
+                table.section_level = level
                 page.tables.append(table)
             elif isinstance(item, PictureItem):
                 image = self._extract_image(item, page_num, result)
                 page.images.append(image)
             else:
-                element = self._extract_element(item, page_num)
+                element = self._extract_element(item, page_num, section_path, level)
                 if element:
                     page.elements.append(element)
 
@@ -190,7 +255,13 @@ class DoclingParser:
                     return prov.page_no
         return 1
 
-    def _extract_element(self, item: Any, page_num: int) -> Optional[ExtractedElement]:
+    def _extract_element(
+        self,
+        item: Any,
+        page_num: int,
+        section_path: Optional[list[str]] = None,
+        section_level: int = 0,
+    ) -> Optional[ExtractedElement]:
         """Extract a generic element (text, heading, etc.)."""
         # Get element type
         element_type = self._get_element_type(item)
@@ -219,6 +290,8 @@ class DoclingParser:
             element_type=element_type,
             page=page_num,
             bbox=bbox,
+            section_path=section_path or [],
+            section_level=section_level,
         )
 
     def _get_element_type(self, item: Any) -> Optional[ElementType]:
