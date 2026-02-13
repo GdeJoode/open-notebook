@@ -1,0 +1,336 @@
+# General Ontology for Open Notebook
+# Extends base ontology with Topic, Product, and Technology types
+
+metadata:
+  name: general
+  version: "1.0.0"
+  description: "Extended entity types for general knowledge extraction"
+  authors:
+    - "Open Notebook Team"
+  license: "MIT"
+  extends: base
+  created: "2025-12-01"
+  updated: "2025-12-12"
+
+prefixes:
+  schema: "https://schema.org/"
+  dc: "http://purl.org/dc/elements/1.1/"
+  skos: "http://www.w3.org/2004/02/skos/core#"
+  wd: "http://www.wikidata.org/entity/"
+
+entity_types:
+  Topic:
+    name: Topic
+    description: "A subject or theme - hierarchical topic taxonomy for organizing knowledge"
+    schema_org_type: "schema:DefinedTerm"
+    extraction_hints:
+      - "Look for subject areas, themes, or fields of study"
+      - "Keywords or key phrases representing the content"
+      - "Topics that the document discusses or analyzes"
+    examples:
+      - "Climate Change"
+      - "Machine Learning"
+      - "Healthcare Policy"
+    aliases:
+      - Subject
+      - Theme
+      - Category
+    properties:
+      - name: name
+        description: "Name of the topic"
+        data_type: string
+        extraction_strategy: direct
+        schema_org_mapping: "schema:name"
+        validation:
+          required: true
+          min_length: 2
+          max_length: 200
+      - name: level
+        description: "Hierarchical level of the topic"
+        data_type: enum
+        extraction_strategy: inferred
+        validation:
+          allowed_values:
+            - broad
+            - specific
+            - narrow
+      - name: domain
+        description: "Knowledge domain the topic belongs to"
+        data_type: string
+        extraction_strategy: inferred
+        examples:
+          - "Science"
+          - "Technology"
+          - "Politics"
+          - "Economics"
+      - name: wikidata_id
+        description: "Wikidata entity ID for the topic"
+        data_type: string
+        extraction_strategy: lookup
+        schema_org_mapping: "schema:sameAs"
+        examples:
+          - "Q7942"
+          - "Q11660"
+      - name: description
+        description: "Brief description of the topic"
+        data_type: text
+        extraction_strategy: inferred
+        schema_org_mapping: "schema:description"
+
+  Product:
+    name: Product
+    description: "A tangible or digital product, service, or commercial offering"
+    schema_org_type: "schema:Product"
+    extraction_hints:
+      - "Look for named products, services, or commercial offerings"
+      - "Brand names or trademarked products"
+      - "Software applications or platforms"
+    examples:
+      - "iPhone"
+      - "Microsoft Office"
+      - "Tesla Model 3"
+    properties:
+      - name: name
+        description: "Name of the product"
+        data_type: string
+        extraction_strategy: direct
+        schema_org_mapping: "schema:name"
+        validation:
+          required: true
+          min_length: 1
+          max_length: 200
+      - name: product_type
+        description: "Type of product"
+        data_type: enum
+        extraction_strategy: inferred
+        validation:
+          allowed_values:
+            - software
+            - hardware
+            - service
+            - platform
+            - physical_product
+            - other
+      - name: manufacturer
+        description: "Company or organization that makes the product"
+        data_type: reference
+        reference_type: Organization
+        extraction_strategy: inferred
+        schema_org_mapping: "schema:manufacturer"
+      - name: version
+        description: "Product version if applicable"
+        data_type: string
+        extraction_strategy: direct
+      - name: release_date
+        description: "When the product was released"
+        data_type: date
+        extraction_strategy: direct
+        schema_org_mapping: "schema:releaseDate"
+
+  Technology:
+    name: Technology
+    description: "A technology, framework, protocol, or technical methodology"
+    schema_org_type: "schema:TechArticle"
+    extraction_hints:
+      - "Look for named technologies, frameworks, or protocols"
+      - "Programming languages, databases, or platforms"
+      - "Technical standards or methodologies"
+    examples:
+      - "Kubernetes"
+      - "GraphQL"
+      - "Blockchain"
+      - "5G"
+    aliases:
+      - Framework
+      - Protocol
+      - Standard
+    properties:
+      - name: name
+        description: "Name of the technology"
+        data_type: string
+        extraction_strategy: direct
+        schema_org_mapping: "schema:name"
+        validation:
+          required: true
+          min_length: 1
+          max_length: 200
+      - name: tech_type
+        description: "Type of technology"
+        data_type: enum
+        extraction_strategy: inferred
+        validation:
+          allowed_values:
+            - programming_language
+            - framework
+            - library
+            - protocol
+            - database
+            - platform
+            - hardware
+            - standard
+            - methodology
+            - other
+      - name: domain
+        description: "Technical domain"
+        data_type: string
+        extraction_strategy: inferred
+        examples:
+          - "Web Development"
+          - "Machine Learning"
+          - "Networking"
+          - "Security"
+      - name: website
+        description: "Official website or documentation"
+        data_type: url
+        extraction_strategy: lookup
+        schema_org_mapping: "schema:url"
+      - name: version
+        description: "Current or mentioned version"
+        data_type: string
+        extraction_strategy: direct
+
+relationship_types:
+  DISCUSSES:
+    name: DISCUSSES
+    description: "A source discusses a topic"
+    domain:
+      - source
+    range:
+      - Topic
+    cardinality: many-to-many
+    schema_org_mapping: "schema:about"
+    extraction_hints:
+      - "Look for main themes or subjects covered"
+      - "Topics mentioned multiple times or in depth"
+    properties:
+      - name: relevance
+        description: "How relevant the topic is to the source (0-1)"
+        data_type: float
+        extraction_strategy: inferred
+        validation:
+          min_value: 0.0
+          max_value: 1.0
+      - name: is_primary
+        description: "Whether this is a primary topic"
+        data_type: boolean
+        extraction_strategy: inferred
+
+  BROADER_THAN:
+    name: BROADER_THAN
+    description: "Hierarchical topic relationship - parent to child"
+    domain:
+      - Topic
+    range:
+      - Topic
+    cardinality: many-to-many
+    transitive: true
+    inverse: narrower_than
+    schema_org_mapping: "skos:broader"
+    extraction_hints:
+      - "Look for general/specific topic relationships"
+      - "'is a type of', 'falls under', 'subcategory of'"
+
+  RELATED_TO_TOPIC:
+    name: RELATED_TO_TOPIC
+    description: "Associative relationship between topics"
+    domain:
+      - Topic
+    range:
+      - Topic
+    cardinality: many-to-many
+    symmetric: true
+    schema_org_mapping: "schema:relatedTo"
+    extraction_hints:
+      - "Look for topics mentioned together"
+      - "Topics that share context or domain"
+    properties:
+      - name: strength
+        description: "Strength of association (0-1)"
+        data_type: float
+        extraction_strategy: inferred
+        validation:
+          min_value: 0.0
+          max_value: 1.0
+
+  DEVELOPED_BY:
+    name: DEVELOPED_BY
+    description: "A product or technology was developed by an organization or person"
+    domain:
+      - Product
+      - Technology
+    range:
+      - Organization
+      - Person
+    cardinality: many-to-many
+    schema_org_mapping: "schema:creator"
+    extraction_hints:
+      - "Look for 'developed by', 'created by', 'built by'"
+      - "Company/person behind a product or technology"
+
+  COMPETES_WITH:
+    name: COMPETES_WITH
+    description: "Products or technologies that compete in the same market"
+    domain:
+      - Product
+      - Technology
+    range:
+      - Product
+      - Technology
+    cardinality: many-to-many
+    symmetric: true
+    extraction_hints:
+      - "Look for comparative mentions"
+      - "'vs', 'alternative to', 'competitor of'"
+
+  USES:
+    name: USES
+    description: "An entity uses a technology or product"
+    domain:
+      - Organization
+      - Person
+      - Product
+      - Technology
+    range:
+      - Technology
+      - Product
+    cardinality: many-to-many
+    schema_org_mapping: "schema:usesDevice"
+    extraction_hints:
+      - "Look for 'uses', 'built with', 'powered by'"
+      - "Technology stack mentions"
+    properties:
+      - name: purpose
+        description: "Why it's used"
+        data_type: string
+        extraction_strategy: inferred
+
+  MENTIONS:
+    name: MENTIONS
+    description: "A source mentions an entity"
+    domain:
+      - source
+    range:
+      - Person
+      - Organization
+      - Location
+      - Event
+      - Concept
+      - Topic
+      - Product
+      - Technology
+    cardinality: many-to-many
+    schema_org_mapping: "schema:mentions"
+    extraction_hints:
+      - "Any entity explicitly named in the source"
+    properties:
+      - name: context
+        description: "Context in which the entity is mentioned"
+        data_type: text
+        extraction_strategy: direct
+      - name: confidence
+        description: "Extraction confidence (0-1)"
+        data_type: float
+        extraction_strategy: computed
+        validation:
+          min_value: 0.0
+          max_value: 1.0

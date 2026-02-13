@@ -1,0 +1,261 @@
+"""
+Configuration for the entity filtering pipeline.
+
+All domain-specific behavior is injected via config, not hardcoded.
+Custom noise patterns, reclassification rules, and articles to strip
+are all provided as configuration values.
+
+Sub-configs group related settings for each pipeline stage. All extended
+stages default to disabled so the pipeline remains backward-compatible.
+"""
+
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+
+
+@dataclass
+class SyntacticConfig:
+    """Syntactic pre-processing options applied before any matching.
+
+    Attributes:
+        remove_diacritics: Normalize accented characters via unicodedata NFD
+            (e.g. e with acute -> e, u with diaeresis -> u).
+        ocr_cleanup_enabled: Remove common OCR artifacts from entity text.
+        ocr_artifact_patterns: Regex patterns matching OCR noise.
+        html_strip_enabled: Strip residual HTML tags from entity text.
+        page_number_filter: Discard entities that are bare page numbers.
+    """
+
+    remove_diacritics: bool = False
+    ocr_cleanup_enabled: bool = False
+    ocr_artifact_patterns: List[str] = field(default_factory=list)
+    html_strip_enabled: bool = False
+    page_number_filter: bool = False
+
+
+@dataclass
+class FuzzyDedupConfig:
+    """Fuzzy string-matching deduplication settings.
+
+    Attributes:
+        enabled: Whether to run fuzzy deduplication.
+        algorithm: Distance algorithm -- "levenshtein" or "jaro_winkler".
+        similarity_threshold: Minimum similarity (0-1) to consider a match.
+        phonetic_algorithm: Phonetic code -- "soundex", "metaphone", or "none".
+        phonetic_weight: Blend weight for phonetic similarity (0-1).
+        max_candidates_per_entity: Upper bound on comparisons per entity.
+    """
+
+    enabled: bool = False
+    algorithm: str = "levenshtein"
+    similarity_threshold: float = 0.85
+    phonetic_algorithm: str = "none"
+    phonetic_weight: float = 0.2
+    max_candidates_per_entity: int = 10
+
+
+@dataclass
+class EmbeddingDedupConfig:
+    """Embedding-based (semantic) deduplication settings.
+
+    Attributes:
+        enabled: Whether to run embedding deduplication.
+        similarity_threshold: Cosine similarity threshold for merging.
+        k_candidates: Number of nearest neighbours to consider.
+        embedding_model: Model identifier for the embedding provider.
+            ``None`` means use the pipeline default.
+        use_faiss: Use FAISS for approximate nearest-neighbour search.
+    """
+
+    enabled: bool = False
+    similarity_threshold: float = 0.90
+    k_candidates: int = 5
+    embedding_model: Optional[str] = None
+    use_faiss: bool = True
+
+
+@dataclass
+class SemanticConfig:
+    """Semantic enrichment and entity linking settings.
+
+    Attributes:
+        entity_linking_enabled: Whether to link entities to a knowledge base.
+        linking_provider: Provider name (e.g. "wikidata", "none").
+        linking_confidence_threshold: Minimum confidence for accepting a link.
+        contextual_clustering_enabled: Cluster entities by surrounding context.
+    """
+
+    entity_linking_enabled: bool = False
+    linking_provider: str = "none"
+    linking_confidence_threshold: float = 0.7
+    contextual_clustering_enabled: bool = False
+
+
+@dataclass
+class KGResolutionConfig:
+    """Knowledge-graph entity resolution settings.
+
+    Attributes:
+        enabled: Whether to resolve against an existing KG.
+        match_strategy: Resolution strategy -- "cascade", "fuzzy", or "semantic".
+        fuzzy_threshold: Fuzzy similarity threshold for candidate matching.
+        semantic_threshold: Embedding similarity threshold for candidate matching.
+        max_candidates: Maximum KG candidates evaluated per entity.
+        register_aliases: Store matched surface forms as aliases.
+        mark_new_entities: Flag entities not found in the KG as new.
+        use_alias_table: Consult the alias table during resolution.
+        centrality_aware: Adjust matching thresholds based on KG entity importance.
+        centrality_strictness: Amount to raise thresholds for important entities.
+        importance_threshold: Entity weight above which it is considered important.
+    """
+
+    enabled: bool = False
+    match_strategy: str = "cascade"
+    fuzzy_threshold: float = 0.85
+    semantic_threshold: float = 0.90
+    max_candidates: int = 100
+    register_aliases: bool = True
+    mark_new_entities: bool = True
+    use_alias_table: bool = True
+    centrality_aware: bool = False
+    centrality_strictness: float = 0.05
+    importance_threshold: float = 5.0
+
+
+@dataclass
+class OntologyValidationConfig:
+    """Ontology and graph-structure validation settings.
+
+    Attributes:
+        enabled: Whether to validate entities/relations against an ontology.
+        strict_mode: Reject entities not present in the ontology type system.
+        filter_invalid_entities: Drop entities with invalid types.
+        filter_invalid_relations: Drop relations with invalid predicates.
+        graph_centrality_enabled: Compute centrality scores and filter low-signal nodes.
+        centrality_min_score: Minimum centrality score for retaining an entity.
+        outlier_detection_enabled: Classify entities by extraction centrality + KG status.
+        outlier_centrality_low: Centrality score below which an entity is "low".
+    """
+
+    enabled: bool = False
+    strict_mode: bool = False
+    filter_invalid_entities: bool = True
+    filter_invalid_relations: bool = True
+    graph_centrality_enabled: bool = False
+    centrality_min_score: float = 0.01
+    outlier_detection_enabled: bool = False
+    outlier_centrality_low: float = 0.05
+
+
+@dataclass
+class LLMVerificationConfig:
+    """LLM-based verification and self-correction settings.
+
+    Attributes:
+        enabled: Whether to use an LLM for entity/relation verification.
+        verify_triples: Ask the LLM to verify extracted triples.
+        schema_alignment_enabled: Use the LLM to align types with the schema.
+        self_correction_enabled: Allow the LLM to iteratively refine results.
+        self_correction_max_iterations: Max self-correction rounds.
+        llm_model: Model identifier for the LLM provider.
+            ``None`` means use the pipeline default.
+    """
+
+    enabled: bool = False
+    verify_triples: bool = False
+    schema_alignment_enabled: bool = False
+    self_correction_enabled: bool = False
+    self_correction_max_iterations: int = 2
+    llm_model: Optional[str] = None
+
+
+@dataclass
+class EdgePredictionConfig:
+    """Edge (relation) prediction and scoring settings.
+
+    Attributes:
+        enabled: Whether to run edge prediction scoring.
+        cosine_weight: Weight for cosine similarity signal.
+        adamic_adar_weight: Weight for Adamic-Adar index signal.
+        common_ancestors_weight: Weight for common-ancestors signal.
+        similarity_threshold: Minimum combined score to emit a predicted edge.
+        k_neighbors: Number of neighbours for graph-based signals.
+    """
+
+    enabled: bool = False
+    cosine_weight: float = 0.6
+    adamic_adar_weight: float = 0.3
+    common_ancestors_weight: float = 0.1
+    similarity_threshold: float = 0.5
+    k_neighbors: int = 10
+
+
+@dataclass
+class FilteringConfig:
+    """Configuration for the entity filtering pipeline.
+
+    Attributes:
+        min_entity_length: Minimum character length for an entity to be kept.
+        custom_noise_patterns: Additional regex patterns to treat as noise.
+        strip_articles: Whether to strip leading articles during normalization.
+        custom_articles: Extra leading articles to strip (language-specific).
+        normalize_whitespace: Collapse multiple whitespace characters.
+        custom_reclassification_rules: Mapping of regex pattern to new label.
+        dedup_enabled: Whether to run deduplication.
+        dedup_similarity_threshold: Threshold for considering two entities
+            as duplicates (0.0-1.0).
+        edge_prediction_enabled: Whether to run edge prediction scoring.
+        treekg_enabled: Whether to run TreeKG summarization.
+        raptor_enabled: Whether to run RAPTOR summarization.
+        syntactic: Syntactic pre-processing sub-config.
+        fuzzy_dedup: Fuzzy deduplication sub-config.
+        embedding_dedup: Embedding deduplication sub-config.
+        semantic: Semantic enrichment sub-config.
+        kg_resolution: Knowledge-graph resolution sub-config.
+        ontology_validation: Ontology validation sub-config.
+        llm_verification: LLM verification sub-config.
+        edge_prediction: Edge prediction sub-config.
+    """
+
+    # Noise filtering
+    min_entity_length: int = 2
+    custom_noise_patterns: List[str] = field(default_factory=list)
+
+    # Normalization
+    strip_articles: bool = True
+    custom_articles: List[str] = field(default_factory=list)
+    normalize_whitespace: bool = True
+
+    # Reclassification
+    custom_reclassification_rules: Dict[str, str] = field(default_factory=dict)
+
+    # Deduplication
+    dedup_enabled: bool = True
+    dedup_similarity_threshold: float = 0.85
+
+    # Edge scoring
+    edge_prediction_enabled: bool = False
+
+    # Summarization (TreeKG/RAPTOR)
+    treekg_enabled: bool = False
+    raptor_enabled: bool = False
+
+    # Extended sub-configs (all disabled by default)
+    syntactic: SyntacticConfig = field(default_factory=SyntacticConfig)
+    fuzzy_dedup: FuzzyDedupConfig = field(default_factory=FuzzyDedupConfig)
+    embedding_dedup: EmbeddingDedupConfig = field(
+        default_factory=EmbeddingDedupConfig
+    )
+    semantic: SemanticConfig = field(default_factory=SemanticConfig)
+    kg_resolution: KGResolutionConfig = field(
+        default_factory=KGResolutionConfig
+    )
+    ontology_validation: OntologyValidationConfig = field(
+        default_factory=OntologyValidationConfig
+    )
+    llm_verification: LLMVerificationConfig = field(
+        default_factory=LLMVerificationConfig
+    )
+    edge_prediction: EdgePredictionConfig = field(
+        default_factory=EdgePredictionConfig
+    )

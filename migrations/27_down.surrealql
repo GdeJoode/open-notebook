@@ -1,0 +1,12 @@
+-- Migration 27 rollback: Remove chunk regrouping fields
+
+REMOVE INDEX IF EXISTS idx_embedding_chunk ON TABLE source_embedding;
+REMOVE INDEX IF EXISTS idx_chunk_type ON TABLE chunk;
+REMOVE INDEX IF EXISTS idx_chunk_section_path ON TABLE chunk;
+
+REMOVE FIELD IF EXISTS chunk ON TABLE source_embedding;
+
+REMOVE FIELD IF EXISTS source_element_count ON TABLE chunk;
+REMOVE FIELD IF EXISTS chunk_type ON TABLE chunk;
+REMOVE FIELD IF EXISTS section_level ON TABLE chunk;
+REMOVE FIELD IF EXISTS section_path ON TABLE chunk;

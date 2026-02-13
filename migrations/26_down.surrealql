@@ -1,0 +1,14 @@
+-- Migration 26 rollback: Remove source-centric file management tables
+
+-- Remove cascade delete event
+REMOVE EVENT IF EXISTS source_folder_delete ON TABLE source_folder;
+
+-- Remove tracked_file additions
+REMOVE INDEX IF EXISTS idx_tracked_file_source_folder ON TABLE tracked_file;
+REMOVE FIELD IF EXISTS source_folder_id ON TABLE tracked_file;
+
+-- Remove pipeline_cache table
+REMOVE TABLE IF EXISTS pipeline_cache;
+
+-- Remove source_folder table
+REMOVE TABLE IF EXISTS source_folder;

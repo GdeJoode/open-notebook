@@ -1,7 +1,7 @@
 [project]
 name = "open-notebook"
-version = "1.0.11"
-description = "An open source implementation of a research assistant, inspired by Google Notebook LM"
+version = "2.0.0"
+description = "Knowledge management system with modular RAG pipelines"
 authors = [
     {name = "Luis Novo", email = "lfnovo@gmail.com"}
 ]
@@ -10,43 +10,16 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.10"
+
+# Root package has minimal dependencies - most live in workspace packages
 dependencies = [
-    "fastapi>=0.104.0",
-    "uvicorn>=0.24.0",
     "pydantic>=2.9.2",
     "loguru>=0.7.2",
-    "langchain>=0.3.3",
-    "langgraph>=0.2.38",
-    "tiktoken>=0.8.0",
-    "langgraph-checkpoint-sqlite>=2.0.0",
-    "langchain-community>=0.3.3",
-    "langchain-openai>=0.2.3",
-    "langchain-anthropic>=0.2.3",
-    "langchain-ollama>=0.2.0",
-    "langchain-google-genai>=2.1.10",
-    "langchain-groq>=0.2.1",
-    "langchain_mistralai>=0.2.1",
-    "langchain_deepseek>=0.1.3",
-    "tomli>=2.0.2",
-    "groq>=0.12.0",
     "python-dotenv>=1.0.1",
-    "httpx[socks]>=0.27.0",
-    "nest-asyncio>=1.6.0",
-    "ai-prompter>=0.3",
-    "esperanto>=2.4.1",
-    "langchain-google-vertexai>=2.0.28",
-    "surrealdb>=1.0.4",
-    "surreal-commands>=1.0.13",
-    "podcast-creator>=0.7.0",
-    "docling[cuda12]>=2.58.0",
-    "content-core",
 ]
-
-[tool.setuptools]
-package-dir = {"open_notebook" = "open_notebook"}
-
 
 [project.optional-dependencies]
 dev = [
@@ -57,18 +30,51 @@ dev = [
     "ipywidgets>=8.1.5",
     "pre-commit>=4.0.1",
     "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "honcho>=2.0.0",
 ]
 
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[dependency-groups]
-dev = [
-    "pre-commit>=4.1.0",
-    "pytest-asyncio>=1.2.0",
-    "types-requests>=2.32.4.20250913",
+# ============================================================================
+# UV Workspace Configuration
+# ============================================================================
+
+[tool.uv.workspace]
+members = [
+    "packages/*",
+    "pipelines/*",
+    "apps/*",
 ]
+
+[tool.uv.sources]
+# Workspace packages (auto-resolved)
+shared = { workspace = true }
+surrealdb-service = { workspace = true }
+file-manager = { workspace = true }
+job-queue = { workspace = true }
+llm-manager = { workspace = true }
+ontology-manager = { workspace = true }
+ingestion = { workspace = true }
+ontology-extraction = { workspace = true }
+entity-filtering = { workspace = true }
+summarization = { workspace = true }
+enrichment = { workspace = true }
+embeddings = { workspace = true }
+retrieval = { workspace = true }
+web-scraper = { workspace = true }
+app-main = { workspace = true }
+chat = { workspace = true }
+canvas = { workspace = true }
+
+# ============================================================================
+# Tool Configuration
+# ============================================================================
+
+[tool.hatch.build.targets.wheel]
+packages = ["open_notebook"]
 
 [tool.isort]
 profile = "black"
@@ -90,14 +96,25 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # Streamlit files need nest_asyncio.apply() before imports
-"app_home.py" = ["E402"]
+"**/ui.py" = ["E402"]
 "pages/**/*.py" = ["E402"]
 
 [tool.mypy]
-# Exclude Streamlit UI pages from type checking
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+
 [[tool.mypy.overrides]]
 module = "pages.*"
 ignore_errors = true
 
-[tool.uv.sources]
-content-core = { path = "../../../repos/public/content-core", editable = true }
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "--import-mode=importlib"
+markers = [
+    "integration: Cross-package integration tests (no DB, no LLM, no heavy models)",
+]

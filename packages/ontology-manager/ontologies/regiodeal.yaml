@@ -1,0 +1,371 @@
+# regiodeal.yaml
+# Ontologie Regionaal Beleid Nederland
+# Voor Regio Deals, brede welvaart, regionale ontwikkeling documenten
+
+metadata:
+  name: "regiodeal"
+  version: "1.0.0"
+  description: "Ontologie voor Nederlands regionaal beleid, Regio Deals en brede welvaart"
+  extends: "policy"
+  namespaces:
+    schema: "https://schema.org/"
+    dc: "http://purl.org/dc/elements/1.1/"
+
+# =============================================================================
+# ENTITY TYPES
+# =============================================================================
+
+entity_types:
+  # ---------------------------------------------------------------------------
+  # Geografische entiteiten
+  # ---------------------------------------------------------------------------
+  - name: "Gemeente"
+    description: "Nederlandse gemeente als bestuurlijke eenheid"
+    parent_type: "AdministrativeArea"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Gemeente, gemeenten, plaatsnamen"
+      - "Bestuurlijke eenheid op lokaal niveau"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+      - name: "provincie"
+        data_type: "reference"
+        reference_type: "Provincie"
+
+  - name: "Provincie"
+    description: "Nederlandse provincie"
+    parent_type: "AdministrativeArea"
+    extraction_hints:
+      - "Een van de 12 provincies: Groningen, Fryslân, Drenthe, Overijssel, Flevoland, Gelderland, Utrecht, Noord-Holland, Zuid-Holland, Zeeland, Noord-Brabant, Limburg"
+
+  - name: "FunctioneleRegio"
+    description: "Samenwerkingsgebied of economische regio (niet-bestuurlijk)"
+    parent_type: "Place"
+    extraction_hints:
+      - "Parkstad, Achterhoek, Foodvalley, Brainport, Economic Board regio's"
+      - "Arbeidsmarktregio, COROP-gebied"
+
+  - name: "Wijk"
+    description: "Subgemeentelijk niveau: wijk, buurt, kern"
+    parent_type: "Place"
+    extraction_hints:
+      - "Wijknamen, buurten, kernen, dorpen binnen een gemeente"
+
+  - name: "Grensregio"
+    description: "Gebied aan landsgrens, vaak grensoverschrijdend"
+    parent_type: "Place"
+    extraction_hints:
+      - "Euregio, grensregio, grensoverschrijdend gebied"
+
+  # ---------------------------------------------------------------------------
+  # Organisaties en actoren
+  # ---------------------------------------------------------------------------
+  - name: "Ministerie"
+    description: "Nederlands ministerie of directoraat"
+    parent_type: "GovernmentOrganization"
+    extraction_hints:
+      - "Ministerie van BZK, EZK, VWS, LNV, I&W, etc."
+      - "RVO, Rijkswaterstaat, uitvoeringsorganisaties"
+
+  - name: "Kennisinstelling"
+    description: "Adviesraad, planbureau of kennisinstelling"
+    parent_type: "Organization"
+    extraction_hints:
+      - "CBS, PBL, SCP, RIVM, CPB"
+      - "Rli, ROB, SER, WRR, adviesraden"
+
+  - name: "Onderwijsinstelling"
+    description: "School, ROC, hogeschool of universiteit"
+    parent_type: "EducationalOrganization"
+    extraction_hints:
+      - "MBO, HBO, WO, ROC, universiteit, hogeschool"
+
+  - name: "Zorginstelling"
+    description: "Ziekenhuis, GGD, thuiszorgorganisatie"
+    parent_type: "Organization"
+    extraction_hints:
+      - "Ziekenhuis, huisarts, GGD, GGZ, thuiszorg"
+
+  - name: "Woningcorporatie"
+    description: "Woningcorporatie of woningbouwvereniging"
+    parent_type: "Organization"
+    extraction_hints:
+      - "Woningcorporatie, woningbouwvereniging, sociale huur"
+
+  - name: "EconomicBoard"
+    description: "Regionale economische samenwerkingsorganisatie"
+    parent_type: "Organization"
+    extraction_hints:
+      - "Economic Board, triple helix, regionale ontwikkelingsmaatschappij"
+
+  # ---------------------------------------------------------------------------
+  # Beleidsinstrumenten
+  # ---------------------------------------------------------------------------
+  - name: "RegioDeal"
+    description: "Regio Deal tussen Rijk en regio voor regionale ontwikkeling"
+    parent_type: "GovernmentService"
+    extraction_strategy: "llm"
+    extraction_hints:
+      - "Regio Deal, Regiodeal"
+      - "Afspraak tussen Rijk en regio, cofinanciering"
+      - "Tranche 1/2/3/4/5"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+      - name: "regio"
+        data_type: "reference"
+        reference_type: "FunctioneleRegio"
+      - name: "tranche"
+        data_type: "string"
+        description: "Tranchenummer (1e, 2e, 3e, 4e, 5e)"
+      - name: "rijksbijdrage"
+        data_type: "float"
+        description: "Bijdrage vanuit het Rijk in euro's"
+      - name: "regiobijdrage"
+        data_type: "float"
+        description: "Bijdrage vanuit de regio in euro's"
+      - name: "looptijd"
+        data_type: "string"
+        description: "Looptijd van de deal"
+      - name: "themas"
+        data_type: "array"
+        description: "Thema's waar de deal zich op richt"
+
+  - name: "NationaalProgramma"
+    description: "Langjarig nationaal beleidsprogramma"
+    parent_type: "GovernmentService"
+    extraction_hints:
+      - "NPVR, NPLV, Nationaal Programma Groningen"
+      - "Nationaal programma, rijksprogramma"
+
+  - name: "CityDeal"
+    description: "City Deal samenwerkingsverband tussen steden en Rijk"
+    parent_type: "GovernmentService"
+    extraction_hints:
+      - "City Deal, stedelijke samenwerking"
+
+  - name: "Woondeal"
+    description: "Woondeal voor woningbouwafspraken"
+    parent_type: "GovernmentService"
+    extraction_hints:
+      - "Woondeal, woningbouwafspraken"
+
+# =============================================================================
+# CONCEPTS - Brede Welvaart
+# =============================================================================
+
+concepts:
+  - name: "BredeWelvaart"
+    description: "Overkoepelend concept voor kwaliteit van leven in brede zin"
+    related_concepts:
+      - "MaterieleWelvaart"
+      - "Gezondheid"
+      - "WonenLeefomgeving"
+      - "ArbeidVrijeTijd"
+      - "OnderwijsOntwikkeling"
+      - "SocialeVerbondenheid"
+      - "VertrouwenInstituties"
+      - "Veiligheid"
+
+  - name: "MaterieleWelvaart"
+    description: "Inkomen, vermogen, werk, koopkracht"
+    indicators:
+      - "inkomen per hoofd"
+      - "werkloosheidspercentage"
+      - "armoede"
+      - "schulden"
+
+  - name: "Gezondheid"
+    description: "Levensverwachting, ziekte, leefstijl, zorggebruik"
+    indicators:
+      - "levensverwachting"
+      - "gezonde levensjaren"
+      - "overgewicht"
+
+  - name: "WonenLeefomgeving"
+    description: "Woningkwaliteit, woonomgeving, groen, veiligheid"
+    indicators:
+      - "woningtekort"
+      - "woontevredenheid"
+      - "afstand tot groen"
+
+  - name: "Vergrijzing"
+    description: "Toename aandeel ouderen in de bevolking"
+    related_concepts:
+      - "Ontgroening"
+      - "BevolkingsDaling"
+    causal_patterns:
+      - "Vergrijzing leidt tot minder draagvlak voor voorzieningen"
+      - "Vertrek jongeren versterkt vergrijzing"
+
+  - name: "BevolkingsDaling"
+    description: "Structurele afname van bevolkingsomvang (krimp)"
+    related_concepts:
+      - "Vergrijzing"
+      - "Leegstand"
+    causal_patterns:
+      - "Krimp leidt tot verschraling voorzieningen"
+      - "Krimp veroorzaakt leegstand"
+
+  - name: "VoorzieningenNiveau"
+    description: "Beschikbaarheid en bereikbaarheid van voorzieningen"
+    indicators:
+      - "afstand tot huisarts"
+      - "afstand tot basisschool"
+      - "OV-bereikbaarheid"
+
+  - name: "Leefbaarheid"
+    description: "Kwaliteit van woon- en leefomgeving"
+    related_concepts:
+      - "WonenLeefomgeving"
+      - "Veiligheid"
+      - "VoorzieningenNiveau"
+
+  - name: "Vitaliteit"
+    description: "Veerkracht en toekomstbestendigheid van een gebied"
+
+  - name: "SocialeInnovatie"
+    description: "Nieuwe vormen van samenwerking en maatschappelijke oplossingen"
+
+# =============================================================================
+# RELATIONSHIP TYPES
+# =============================================================================
+
+relationship_types:
+  # Structurele relaties
+  - name: "ONDERDEEL_VAN"
+    description: "Deel-geheel relatie (gemeente in provincie, project in programma)"
+    source_types: ["Gemeente", "FunctioneleRegio", "Wijk"]
+    target_types: ["Provincie", "FunctioneleRegio", "Gemeente"]
+
+  - name: "SAMENWERKING_MET"
+    description: "Partnerschap of samenwerkingsverband"
+    source_types: ["Organization", "Gemeente", "Provincie"]
+    target_types: ["Organization", "Gemeente", "Provincie"]
+
+  - name: "FINANCIERT"
+    description: "Financieringsrelatie"
+    source_types: ["Ministerie", "Provincie", "Gemeente"]
+    target_types: ["RegioDeal", "NationaalProgramma", "Project"]
+    properties:
+      - name: "bedrag"
+        data_type: "float"
+      - name: "type"
+        data_type: "enum"
+        enum_values: ["subsidie", "cofinanciering", "investering", "bijdrage"]
+
+  # Causale relaties
+  - name: "LEIDT_TOT"
+    description: "Oorzaak-gevolg relatie"
+    extraction_hints:
+      - "leidt tot, resulteert in, veroorzaakt, door"
+
+  - name: "VERSTERKT"
+    description: "Versterkende of vergrotende relatie"
+    extraction_hints:
+      - "versterkt, vergroot, vicieuze cirkel, spiraal"
+
+  - name: "VERMINDERT"
+    description: "Verminderende of remmende relatie"
+    extraction_hints:
+      - "vermindert, voorkomt, remt af, doorbreekt"
+
+  # Beleidsrelaties
+  - name: "RICHT_ZICH_OP"
+    description: "Doelstelling of focus"
+    source_types: ["RegioDeal", "NationaalProgramma", "CityDeal"]
+    target_types: ["FunctioneleRegio", "Gemeente", "Concept"]
+    extraction_hints:
+      - "richt zich op, beoogt, streeft naar, met als doel"
+
+  - name: "BOUWT_VOORT_OP"
+    description: "Voortzetting of opvolging"
+    extraction_hints:
+      - "bouwt voort op, vervolg op, in lijn met"
+
+  - name: "INVESTEERT_IN"
+    description: "Investering in thema of gebied"
+    extraction_hints:
+      - "investeert in, zet in op, besteedt aan"
+
+# =============================================================================
+# EXTRACTION PATTERNS
+# =============================================================================
+
+extraction_patterns:
+  - name: "RegioDealIdentificatie"
+    pattern: "(Regio\\s*Deal|Regiodeal)\\s+([\\w\\s\\-]+?)\\s*(I{1,3}|[1-5]e?|eerste|tweede|derde|vierde|vijfde)?"
+    description: "Identificeer Regio Deal naam en tranche"
+
+  - name: "PartnerExtractie"
+    signals:
+      - "in samenwerking met"
+      - "samen met"
+      - "partners zijn"
+      - "deelnemende partijen"
+      - "ondertekend door"
+      - "namens het Rijk"
+      - "regionale partners"
+
+  - name: "ProbleemBeschrijving"
+    signals:
+      - "kampt met"
+      - "uitdagingen op het gebied van"
+      - "problematiek rond"
+      - "achterstand in"
+      - "tekort aan"
+      - "stapeling van"
+
+  - name: "Doelstellingen"
+    signals:
+      - "doel is"
+      - "beoogt"
+      - "door in te zetten op"
+      - "investeren in"
+      - "versterken van"
+      - "verbeteren van"
+      - "realiseren van"
+
+  - name: "FinancieleBedragen"
+    pattern: "(€|EUR|euro)\\s*([\\d.,]+)\\s*(miljoen|miljard|mln|mrd)?"
+    description: "Extraheer financiële bedragen"
+
+# =============================================================================
+# CLAIM TYPES
+# =============================================================================
+
+claim_types:
+  - name: "Feitelijk"
+    description: "Feitelijke bewering over huidige of historische situatie"
+    indicators:
+      - "is"
+      - "zijn"
+      - "heeft"
+      - "telt"
+      - "bedraagt"
+
+  - name: "Causaal"
+    description: "Bewering over oorzaak-gevolg relatie"
+    indicators:
+      - "leidt tot"
+      - "veroorzaakt"
+      - "resulteert in"
+      - "door"
+
+  - name: "Normatief"
+    description: "Bewering over wat zou moeten"
+    indicators:
+      - "moet"
+      - "dient"
+      - "is nodig"
+      - "vereist"
+
+  - name: "Predictief"
+    description: "Voorspelling over toekomstige ontwikkeling"
+    indicators:
+      - "zal"
+      - "wordt verwacht"
+      - "naar verwachting"

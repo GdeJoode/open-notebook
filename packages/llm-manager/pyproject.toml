@@ -1,0 +1,55 @@
+[project]
+name = "llm-manager"
+version = "0.1.0"
+description = "LLM provider management, routing, and usage tracking"
+requires-python = ">=3.10"
+dependencies = [
+    "shared",
+    "surrealdb-service",
+    "esperanto>=2.4.1",
+    "httpx>=0.27.0",
+    "tiktoken>=0.8.0",
+    "fastapi>=0.104.0",
+    "mcp>=1.0.0",
+    "pydantic-settings>=2.0.0",
+    "loguru>=0.7.0",
+]
+
+[project.optional-dependencies]
+ui = ["streamlit>=1.30.0"]
+openai = ["langchain-openai>=0.2.3"]
+anthropic = ["langchain-anthropic>=0.2.3"]
+google = ["langchain-google-genai>=2.1.10"]
+all-providers = [
+    "langchain-openai>=0.2.3",
+    "langchain-anthropic>=0.2.3",
+    "langchain-google-genai>=2.1.10",
+    "langchain-groq>=0.2.1",
+    "langchain_mistralai>=0.2.1",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.25.0",
+]
+
+[project.scripts]
+llm-manager = "llm_manager.api.app:main"
+llm-manager-mcp = "llm_manager.mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_manager"]
+
+[tool.uv.sources]
+shared = { workspace = true }
+surrealdb-service = { workspace = true }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"

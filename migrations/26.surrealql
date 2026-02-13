@@ -1,0 +1,90 @@
+-- Migration 26: Source-centric file management
+-- Creates source_folder and pipeline_cache tables for per-source directory tracking
+-- and versioned pipeline output caching.
+
+-- =============================================================================
+-- SOURCE FOLDER TABLE
+-- =============================================================================
+DEFINE TABLE IF NOT EXISTS source_folder SCHEMAFULL;
+
+-- Identification
+DEFINE FIELD IF NOT EXISTS source_id ON TABLE source_folder TYPE string;
+DEFINE FIELD IF NOT EXISTS source_record_id ON TABLE source_folder TYPE option<record<source>>;
+DEFINE FIELD IF NOT EXISTS title ON TABLE source_folder TYPE string;
+DEFINE FIELD IF NOT EXISTS slug ON TABLE source_folder TYPE string;
+DEFINE FIELD IF NOT EXISTS folder_path ON TABLE source_folder TYPE string;
+
+-- Original file info
+DEFINE FIELD IF NOT EXISTS original_filename ON TABLE source_folder TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS original_file_path ON TABLE source_folder TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS file_size_bytes ON TABLE source_folder TYPE option<int>;
+DEFINE FIELD IF NOT EXISTS mime_type ON TABLE source_folder TYPE option<string>;
+
+-- Classification
+DEFINE FIELD IF NOT EXISTS source_type ON TABLE source_folder TYPE string DEFAULT "document";
+
+-- Statistics
+DEFINE FIELD IF NOT EXISTS total_cache_entries ON TABLE source_folder TYPE int DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS total_folder_size_bytes ON TABLE source_folder TYPE int DEFAULT 0;
+
+-- Metadata
+DEFINE FIELD IF NOT EXISTS metadata ON TABLE source_folder FLEXIBLE TYPE option<object>;
+
+-- Timestamps
+DEFINE FIELD IF NOT EXISTS created ON source_folder DEFAULT time::now() VALUE $before OR time::now();
+DEFINE FIELD IF NOT EXISTS updated ON source_folder DEFAULT time::now() VALUE time::now();
+
+-- Indexes for source_folder
+DEFINE INDEX IF NOT EXISTS idx_source_folder_source_id ON TABLE source_folder COLUMNS source_id UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_source_folder_source_record ON TABLE source_folder COLUMNS source_record_id;
+DEFINE INDEX IF NOT EXISTS idx_source_folder_mime_type ON TABLE source_folder COLUMNS mime_type;
+DEFINE INDEX IF NOT EXISTS idx_source_folder_path ON TABLE source_folder COLUMNS folder_path UNIQUE;
+
+-- =============================================================================
+-- PIPELINE CACHE TABLE
+-- =============================================================================
+DEFINE TABLE IF NOT EXISTS pipeline_cache SCHEMAFULL;
+
+-- References
+DEFINE FIELD IF NOT EXISTS source_folder_id ON TABLE pipeline_cache TYPE record<source_folder>;
+DEFINE FIELD IF NOT EXISTS source_id ON TABLE pipeline_cache TYPE string;
+
+-- Pipeline step info
+DEFINE FIELD IF NOT EXISTS pipeline_step ON TABLE pipeline_cache TYPE string;
+DEFINE FIELD IF NOT EXISTS version ON TABLE pipeline_cache TYPE int DEFAULT 1;
+DEFINE FIELD IF NOT EXISTS is_current ON TABLE pipeline_cache TYPE bool DEFAULT true;
+
+-- File info
+DEFINE FIELD IF NOT EXISTS file_path ON TABLE pipeline_cache TYPE string;
+DEFINE FIELD IF NOT EXISTS file_format ON TABLE pipeline_cache TYPE string DEFAULT "json";
+DEFINE FIELD IF NOT EXISTS file_size_bytes ON TABLE pipeline_cache TYPE option<int>;
+
+-- Processing metadata
+DEFINE FIELD IF NOT EXISTS processing_time_seconds ON TABLE pipeline_cache TYPE option<float>;
+DEFINE FIELD IF NOT EXISTS config_hash ON TABLE pipeline_cache TYPE option<string>;
+
+-- Metadata
+DEFINE FIELD IF NOT EXISTS metadata ON TABLE pipeline_cache FLEXIBLE TYPE option<object>;
+
+-- Timestamps
+DEFINE FIELD IF NOT EXISTS created ON pipeline_cache DEFAULT time::now() VALUE $before OR time::now();
+DEFINE FIELD IF NOT EXISTS updated ON pipeline_cache DEFAULT time::now() VALUE time::now();
+
+-- Indexes for pipeline_cache
+DEFINE INDEX IF NOT EXISTS idx_pipeline_cache_current ON TABLE pipeline_cache COLUMNS source_folder_id, pipeline_step, is_current;
+DEFINE INDEX IF NOT EXISTS idx_pipeline_cache_source ON TABLE pipeline_cache COLUMNS source_folder_id;
+
+-- =============================================================================
+-- ADD source_folder_id TO TRACKED FILE
+-- =============================================================================
+DEFINE FIELD IF NOT EXISTS source_folder_id ON TABLE tracked_file TYPE option<record<source_folder>>;
+DEFINE INDEX IF NOT EXISTS idx_tracked_file_source_folder ON TABLE tracked_file COLUMNS source_folder_id;
+
+-- =============================================================================
+-- CASCADE DELETE EVENT
+-- =============================================================================
+
+-- When a source_folder is deleted, remove all its pipeline_cache entries
+DEFINE EVENT IF NOT EXISTS source_folder_delete ON TABLE source_folder WHEN ($after == NONE) THEN {
+    DELETE pipeline_cache WHERE source_folder_id == $before.id;
+};
