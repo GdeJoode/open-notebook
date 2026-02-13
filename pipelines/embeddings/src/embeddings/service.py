@@ -1,0 +1,308 @@
+"""
+Embedding service for generating and storing vector embeddings.
+
+Uses structural chunks from the ingestion pipeline when available,
+falling back to simple text splitting for legacy sources or notes.
+"""
+
+import asyncio
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+from esperanto import EmbeddingModel
+from loguru import logger
+
+from embeddings.config import EmbeddingConfig
+from shared.models import Chunk, Source, SourceEmbedding
+from shared.utils.text import split_text
+from surrealdb_service.repositories.source import SourceRepository
+
+
+@dataclass
+class EmbeddingResult:
+    """Result of embedding a single source or note."""
+    id: str
+    embeddings_created: int
+    chunks_used: int
+    used_structural_chunks: bool
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RebuildResult:
+    """Result of a bulk rebuild operation."""
+    sources_processed: int = 0
+    notes_processed: int = 0
+    insights_processed: int = 0
+    total_embeddings: int = 0
+    errors: list[str] = field(default_factory=list)
+
+
+class EmbeddingService:
+    """
+    Core service for generating vector embeddings.
+
+    Uses structural chunks from the ingestion pipeline when available,
+    falling back to text splitting for legacy sources or notes.
+    """
+
+    def __init__(
+        self,
+        source_repo: SourceRepository,
+        embedding_model: EmbeddingModel,
+        config: Optional[EmbeddingConfig] = None,
+    ):
+        self.source_repo = source_repo
+        self.embedding_model = embedding_model
+        self.config = config or EmbeddingConfig()
+        self._semaphore = asyncio.Semaphore(self.config.max_concurrent)
+
+    async def embed_source(self, source_id: str) -> EmbeddingResult:
+        """
+        Embed a source using its stored chunks.
+
+        Flow:
+        1. Delete existing embeddings (idempotent re-embed)
+        2. Load chunks from DB (from ingestion pipeline)
+        3. If chunks exist, batch-embed them
+        4. If no chunks, fall back to text splitting on full_text
+        5. Store SourceEmbedding records
+        """
+        result = EmbeddingResult(
+            id=source_id,
+            embeddings_created=0,
+            chunks_used=0,
+            used_structural_chunks=False,
+        )
+
+        # 1. Delete existing embeddings for idempotency
+        await self.source_repo.delete_embeddings(source_id)
+
+        # 2. Try structural chunks first
+        chunks = await self.source_repo.get_chunks(source_id)
+
+        if chunks:
+            # 3a. Use structural chunks from ingestion pipeline
+            result.used_structural_chunks = True
+            result.chunks_used = len(chunks)
+            embeddings = await self._embed_chunks(source_id, chunks)
+            result.embeddings_created = len(embeddings)
+        else:
+            # 3b. Fall back to text splitting
+            source = await self.source_repo.get(source_id)
+            if not source or not source.full_text:
+                logger.warning(f"No text or chunks for source {source_id}")
+                return result
+
+            text_chunks = split_text(
+                source.full_text,
+                chunk_size=self.config.fallback_chunk_size,
+                chunk_overlap=self.config.fallback_chunk_overlap,
+            )
+            result.chunks_used = len(text_chunks)
+            embeddings = await self._embed_text_chunks(source_id, text_chunks)
+            result.embeddings_created = len(embeddings)
+
+        logger.info(
+            f"Embedded source {source_id}: {result.embeddings_created} embeddings "
+            f"from {result.chunks_used} chunks "
+            f"(structural={result.used_structural_chunks})"
+        )
+        return result
+
+    async def _embed_chunks(
+        self,
+        source_id: str,
+        chunks: List[Chunk],
+    ) -> List[SourceEmbedding]:
+        """Generate embeddings for structural chunks with chunk linkage."""
+        embeddings: List[SourceEmbedding] = []
+        batch_size = self.config.batch_size
+
+        for batch_start in range(0, len(chunks), batch_size):
+            batch = chunks[batch_start:batch_start + batch_size]
+            texts = [c.text for c in batch]
+
+            vectors = await self._embed_with_retry(texts)
+
+            for i, (chunk, vector) in enumerate(zip(batch, vectors)):
+                order = batch_start + i
+                chunk_id = chunk.id if hasattr(chunk, "id") and chunk.id else None
+                embedding = await self.source_repo.add_embedding(
+                    source_id=source_id,
+                    content=chunk.text,
+                    order=order,
+                    embedding=vector,
+                    chunk_id=chunk_id,
+                )
+                embeddings.append(embedding)
+
+        return embeddings
+
+    async def _embed_text_chunks(
+        self,
+        source_id: str,
+        text_chunks: List[str],
+    ) -> List[SourceEmbedding]:
+        """Generate embeddings for plain text chunks (fallback path)."""
+        embeddings: List[SourceEmbedding] = []
+        batch_size = self.config.batch_size
+
+        for batch_start in range(0, len(text_chunks), batch_size):
+            batch = text_chunks[batch_start:batch_start + batch_size]
+
+            vectors = await self._embed_with_retry(batch)
+
+            for i, (text, vector) in enumerate(zip(batch, vectors)):
+                order = batch_start + i
+                embedding = await self.source_repo.add_embedding(
+                    source_id=source_id,
+                    content=text,
+                    order=order,
+                    embedding=vector,
+                )
+                embeddings.append(embedding)
+
+        return embeddings
+
+    async def _embed_with_retry(self, texts: List[str]) -> List[List[float]]:
+        """Embed texts with retry logic and concurrency control."""
+        async with self._semaphore:
+            last_error = None
+            for attempt in range(self.config.retry_attempts + 1):
+                try:
+                    return (await self.embedding_model.aembed(texts))
+                except Exception as e:
+                    last_error = e
+                    if attempt < self.config.retry_attempts:
+                        logger.warning(
+                            f"Embedding attempt {attempt + 1} failed: {e}, retrying..."
+                        )
+                        await asyncio.sleep(
+                            self.config.retry_delay * (attempt + 1)
+                        )
+            raise RuntimeError(
+                f"Embedding failed after {self.config.retry_attempts + 1} attempts: {last_error}"
+            )
+
+    async def embed_note(self, note_id: str) -> EmbeddingResult:
+        """
+        Embed a note using simple text splitting.
+
+        Notes don't have structural chunks, so we always use text splitting
+        and store the embedding directly on the note record.
+        """
+        from surrealdb_service.repositories.notebook import NoteRepository
+
+        result = EmbeddingResult(
+            id=note_id,
+            embeddings_created=0,
+            chunks_used=0,
+            used_structural_chunks=False,
+        )
+
+        note_repo = NoteRepository(self.source_repo.config)
+        note = await note_repo.get(note_id)
+
+        if not note or not note.content:
+            logger.warning(f"No content for note {note_id}")
+            return result
+
+        # Embed the full note content as a single vector
+        vectors = await self._embed_with_retry([note.content])
+        if vectors:
+            note.embedding = vectors[0]
+            await note_repo.update(note_id, {"embedding": vectors[0]})
+            result.embeddings_created = 1
+            result.chunks_used = 1
+
+        return result
+
+    async def embed_insight(self, insight_id: str) -> EmbeddingResult:
+        """Embed a source insight."""
+        from surrealdb_service.repositories.source import SourceInsightRepository
+
+        result = EmbeddingResult(
+            id=insight_id,
+            embeddings_created=0,
+            chunks_used=0,
+            used_structural_chunks=False,
+        )
+
+        insight_repo = SourceInsightRepository(self.source_repo.config)
+        insight = await insight_repo.get(insight_id)
+
+        if not insight or not insight.content:
+            logger.warning(f"No content for insight {insight_id}")
+            return result
+
+        vectors = await self._embed_with_retry([insight.content])
+        if vectors:
+            await insight_repo.update(insight_id, {"embedding": vectors[0]})
+            result.embeddings_created = 1
+            result.chunks_used = 1
+
+        return result
+
+    async def rebuild_embeddings(
+        self,
+        include_sources: bool = True,
+        include_notes: bool = True,
+        include_insights: bool = True,
+    ) -> RebuildResult:
+        """Rebuild embeddings across the knowledge base."""
+        rebuild_result = RebuildResult()
+
+        if include_sources:
+            sources = await self.source_repo.get_all()
+            for source in sources:
+                if not source.id:
+                    continue
+                try:
+                    result = await self.embed_source(source.id)
+                    rebuild_result.sources_processed += 1
+                    rebuild_result.total_embeddings += result.embeddings_created
+                except Exception as e:
+                    error_msg = f"Failed to embed source {source.id}: {e}"
+                    logger.error(error_msg)
+                    rebuild_result.errors.append(error_msg)
+
+        if include_notes:
+            from surrealdb_service.repositories.notebook import NoteRepository
+            note_repo = NoteRepository(self.source_repo.config)
+            notes = await note_repo.get_all()
+            for note in notes:
+                if not note.id or not note.content:
+                    continue
+                try:
+                    result = await self.embed_note(note.id)
+                    rebuild_result.notes_processed += 1
+                    rebuild_result.total_embeddings += result.embeddings_created
+                except Exception as e:
+                    error_msg = f"Failed to embed note {note.id}: {e}"
+                    logger.error(error_msg)
+                    rebuild_result.errors.append(error_msg)
+
+        if include_insights:
+            from surrealdb_service.repositories.source import SourceInsightRepository
+            insight_repo = SourceInsightRepository(self.source_repo.config)
+            insights = await insight_repo.get_all()
+            for insight in insights:
+                if not insight.id or not insight.content:
+                    continue
+                try:
+                    result = await self.embed_insight(insight.id)
+                    rebuild_result.insights_processed += 1
+                    rebuild_result.total_embeddings += result.embeddings_created
+                except Exception as e:
+                    error_msg = f"Failed to embed insight {insight.id}: {e}"
+                    logger.error(error_msg)
+                    rebuild_result.errors.append(error_msg)
+
+        logger.info(
+            f"Rebuild complete: {rebuild_result.sources_processed} sources, "
+            f"{rebuild_result.notes_processed} notes, "
+            f"{rebuild_result.insights_processed} insights, "
+            f"{rebuild_result.total_embeddings} total embeddings"
+        )
+        return rebuild_result

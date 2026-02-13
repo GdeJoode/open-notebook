@@ -65,6 +65,11 @@ class Chunk(ObjectModel):
     chunk_type: str = Field(default="original", description="original|merged|table|overlap")
     source_element_count: int = Field(default=1, description="Elements merged into this chunk")
 
+    # Content relevance flag — set at extraction time.
+    # False for noise elements (page headers/footers, logos, stamps, etc.)
+    # Downstream consumers (regrouper, summarizer, embeddings) filter on this.
+    is_content: bool = Field(default=True, description="Whether this chunk is relevant content vs noise")
+
 
 class SourceInsight(ObjectModel):
     """

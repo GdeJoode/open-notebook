@@ -193,6 +193,7 @@ class SourceRepository(BaseRepository[Source]):
         content: str,
         order: int,
         embedding: List[float],
+        chunk_id: Optional[str] = None,
     ) -> SourceEmbedding:
         """
         Add an embedding to a source.
@@ -202,28 +203,39 @@ class SourceRepository(BaseRepository[Source]):
             content: Text content.
             order: Order in document.
             embedding: Embedding vector.
+            chunk_id: Optional reference to the chunk record.
 
         Returns:
             Created embedding.
         """
         try:
-            result = await execute_query(
+            params: Dict[str, Any] = {
+                "source_id": ensure_record_id(source_id),
+                "order": order,
+                "content": content,
+                "embedding": embedding,
+            }
+            if chunk_id:
+                params["chunk_id"] = ensure_record_id(chunk_id)
+                query = """
+                CREATE source_embedding CONTENT {
+                    "source": $source_id,
+                    "order": $order,
+                    "content": $content,
+                    "embedding": $embedding,
+                    "chunk": $chunk_id
+                }
                 """
+            else:
+                query = """
                 CREATE source_embedding CONTENT {
                     "source": $source_id,
                     "order": $order,
                     "content": $content,
                     "embedding": $embedding
                 }
-                """,
-                {
-                    "source_id": ensure_record_id(source_id),
-                    "order": order,
-                    "content": content,
-                    "embedding": embedding,
-                },
-                self.config,
-            )
+                """
+            result = await execute_query(query, params, self.config)
             if result:
                 return SourceEmbedding(**result[0])
             raise RuntimeError("Failed to create embedding")

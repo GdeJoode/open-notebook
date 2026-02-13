@@ -352,6 +352,27 @@ class OutputConfig:
 
 
 @dataclass
+class ContentFilterConfig:
+    """Configuration for classifying chunks as content vs noise at extraction time.
+
+    Used by ChunkExtractor to set is_content=False on noise elements.
+    Downstream consumers (regrouper, summarizer, embeddings, entity extraction)
+    filter on chunk.is_content rather than reimplementing filter logic.
+    """
+    enabled: bool = True
+    # Element types classified as noise (matched against element_type)
+    noise_element_types: list[str] = field(default_factory=lambda: [
+        "page_header", "page_footer", "footnote",
+    ])
+    # Image classifications classified as noise (matched against metadata.classification)
+    noise_image_classifications: list[str] = field(default_factory=lambda: [
+        "logo", "icon", "signature", "stamp", "qr_code", "bar_code",
+    ])
+    # Text shorter than this is classified as noise
+    min_text_length: int = 20
+
+
+@dataclass
 class RegroupingConfig:
     """Configuration for chunk regrouping."""
     strategy: RegroupingStrategy = RegroupingStrategy.STRUCTURAL
@@ -380,6 +401,7 @@ class IngestionConfig:
     whisperx: WhisperXConfig = field(default_factory=WhisperXConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     regrouping: RegroupingConfig = field(default_factory=RegroupingConfig)
+    content_filter: ContentFilterConfig = field(default_factory=ContentFilterConfig)
 
     # Destination
     destination: DestinationType = DestinationType.ASK

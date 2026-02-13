@@ -28,15 +28,31 @@ class ChunkRegrouper:
         self.config = config
 
     def regroup(self, chunks: list[Chunk]) -> list[Chunk]:
-        """Route to configured strategy."""
+        """Route to configured strategy.
+
+        Filters out noise chunks (is_content=False) before regrouping.
+        The is_content flag is set by ChunkExtractor at extraction time.
+        """
         if not chunks:
             return []
 
+        # Only regroup content chunks; noise was flagged by the extractor
+        content_chunks = [c for c in chunks if c.is_content]
+        if not content_chunks:
+            return []
+
+        noise_count = len(chunks) - len(content_chunks)
+        if noise_count:
+            logger.info(
+                f"Regrouper skipped {noise_count} noise chunks "
+                f"({len(content_chunks)} content chunks)"
+            )
+
         if self.config.strategy == RegroupingStrategy.STRUCTURAL:
-            return self._structural_merge(chunks)
+            return self._structural_merge(content_chunks)
         elif self.config.strategy == RegroupingStrategy.SLIDING_WINDOW:
-            return self._sliding_window(chunks)
-        return chunks  # NONE
+            return self._sliding_window(content_chunks)
+        return content_chunks  # NONE
 
     def _structural_merge(self, chunks: list[Chunk]) -> list[Chunk]:
         """Group by section_path, merge until target_tokens reached.

@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from ingestion.config import RegroupingConfig, RegroupingStrategy
+from ingestion.config import ContentFilterConfig, RegroupingConfig, RegroupingStrategy
 from ingestion.models import ExtractedDocument, BoundingBox
 
 
@@ -93,6 +93,10 @@ class Chunk:
     chunk_type: str = "original"       # "original" | "merged" | "table" | "overlap"
     source_element_count: int = 1      # How many elements were merged
 
+    # Content relevance flag — set at extraction time.
+    # False for noise elements (page headers/footers, logos, stamps, etc.)
+    is_content: bool = True
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -110,6 +114,7 @@ class Chunk:
             "section_level": self.section_level,
             "chunk_type": self.chunk_type,
             "source_element_count": self.source_element_count,
+            "is_content": self.is_content,
         }
 
 
@@ -131,6 +136,7 @@ class ChunkExtractor:
         include_tables: bool = True,
         include_images: bool = True,
         regrouping_config: Optional[RegroupingConfig] = None,
+        content_filter_config: Optional[ContentFilterConfig] = None,
     ):
         """
         Initialize the chunk extractor.
@@ -141,12 +147,50 @@ class ChunkExtractor:
             include_tables: Include tables as chunks
             include_images: Include image captions as chunks
             regrouping_config: Optional config for chunk regrouping
+            content_filter_config: Optional config for content classification
         """
         self.min_chunk_size = min_chunk_size
         self.max_chunk_size = max_chunk_size
         self.include_tables = include_tables
         self.include_images = include_images
         self._regrouping_config = regrouping_config
+        self._filter_config = content_filter_config or ContentFilterConfig()
+
+    def _classify_is_content(self, chunk: Chunk) -> bool:
+        """Determine if a chunk is relevant content or noise.
+
+        Returns False for noise elements (page headers/footers, logos, etc.)
+        so downstream consumers can filter on chunk.is_content.
+        """
+        cf = self._filter_config
+        if not cf.enabled:
+            return True
+        # Noise element types
+        if chunk.element_type in cf.noise_element_types:
+            return False
+        # Noise image classifications
+        if chunk.element_type == "picture":
+            classification = chunk.metadata.get("classification", "").lower()
+            if classification in cf.noise_image_classifications:
+                return False
+        # Too short to be meaningful
+        if len(chunk.text.strip()) < cf.min_text_length:
+            return False
+        return True
+
+    def _classify_chunks(self, chunks: list[Chunk]) -> list[Chunk]:
+        """Set is_content flag on all chunks. Returns the same list (mutated)."""
+        noise_count = 0
+        for chunk in chunks:
+            chunk.is_content = self._classify_is_content(chunk)
+            if not chunk.is_content:
+                noise_count += 1
+        if noise_count:
+            logger.info(
+                f"Content classification: {noise_count} noise chunks, "
+                f"{len(chunks) - noise_count} content chunks"
+            )
+        return chunks
 
     def extract(self, document: ExtractedDocument) -> list[Chunk]:
         """
@@ -255,6 +299,9 @@ class ChunkExtractor:
 
         logger.info(f"Extracted {len(chunks)} chunks from {len(document.pages)} pages")
 
+        # Classify chunks as content vs noise
+        self._classify_chunks(chunks)
+
         # Regroup if configured
         if self._regrouping_config and self._regrouping_config.strategy != RegroupingStrategy.NONE:
             from ingestion.chunking.regrouper import ChunkRegrouper
@@ -299,6 +346,7 @@ class ChunkExtractor:
             # Extract content based on type
             text = None
             element_type = "unknown"
+            metadata: dict[str, Any] = {}
 
             if isinstance(item, TextItem):
                 text = item.text
@@ -324,6 +372,11 @@ class ChunkExtractor:
                 if self.include_images:
                     text = getattr(item, "caption", None) or f"[Picture {idx}]"
                     element_type = "picture"
+                    # Store classification in metadata for content filtering
+                    classification = "unknown"
+                    if hasattr(item, "classification"):
+                        classification = str(item.classification).lower()
+                    metadata = {"classification": classification}
 
             else:
                 text = getattr(item, "text", None)
@@ -374,10 +427,15 @@ class ChunkExtractor:
                 chapter=current_chapter,
                 section=current_section,
                 paragraph_number=paragraph_counter[physical_page],
+                metadata=metadata,
             )
             chunks.append(chunk)
 
         logger.info(f"Extracted {len(chunks)} chunks from Docling document")
+
+        # Classify chunks as content vs noise
+        self._classify_chunks(chunks)
+
         return chunks
 
     def _create_chunk(
@@ -517,6 +575,7 @@ def extract_chunks(
     min_chunk_size: int = 50,
     max_chunk_size: int = 2000,
     regrouping_config: Optional[RegroupingConfig] = None,
+    content_filter_config: Optional[ContentFilterConfig] = None,
 ) -> list[Chunk]:
     """
     Convenience function to extract chunks from a document.
@@ -526,13 +585,15 @@ def extract_chunks(
         min_chunk_size: Minimum chunk size in characters
         max_chunk_size: Maximum chunk size in characters
         regrouping_config: Optional config for chunk regrouping
+        content_filter_config: Optional config for content classification
 
     Returns:
-        List of chunks
+        List of chunks (each has is_content flag set)
     """
     extractor = ChunkExtractor(
         min_chunk_size=min_chunk_size,
         max_chunk_size=max_chunk_size,
         regrouping_config=regrouping_config,
+        content_filter_config=content_filter_config,
     )
     return extractor.extract(document)
