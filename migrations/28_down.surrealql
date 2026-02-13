@@ -1,0 +1,2 @@
+-- Migration 28 rollback: Remove job table
+REMOVE TABLE IF EXISTS job;

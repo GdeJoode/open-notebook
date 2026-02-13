@@ -15,12 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from file_manager.api.routers import (
     files,
     jobs,
-    knowledge_bases,
-    projects,
     source_folders,
     storage,
-    tracked_files,
-    workspace,
 )
 from file_manager.config import get_config
 
@@ -62,26 +58,6 @@ def create_app() -> FastAPI:
 
     # Register routers
     app.include_router(
-        workspace.router,
-        prefix="/workspace",
-        tags=["Workspace"],
-    )
-    app.include_router(
-        projects.router,
-        prefix="/projects",
-        tags=["Projects"],
-    )
-    app.include_router(
-        knowledge_bases.router,
-        prefix="/knowledge-bases",
-        tags=["Knowledge Bases"],
-    )
-    app.include_router(
-        tracked_files.router,
-        prefix="/tracked-files",
-        tags=["Tracked Files"],
-    )
-    app.include_router(
         files.router,
         prefix="/files",
         tags=["Files"],
@@ -111,10 +87,6 @@ def create_app() -> FastAPI:
             "docs": "/docs",
             "endpoints": {
                 "health": "/health",
-                "workspace": "/workspace",
-                "projects": "/projects",
-                "knowledge_bases": "/knowledge-bases",
-                "tracked_files": "/tracked-files",
                 "files": "/files",
                 "storage": "/storage",
                 "jobs": "/jobs",

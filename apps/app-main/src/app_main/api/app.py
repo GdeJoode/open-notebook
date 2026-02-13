@@ -16,7 +16,7 @@ from open_notebook.database.async_migrate import AsyncMigrationManager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan event handler - runs DB migrations on startup."""
+    """Lifespan event handler - runs DB migrations and starts job worker."""
     logger.info("Starting API initialization...")
 
     try:
@@ -38,8 +38,17 @@ async def lifespan(app: FastAPI):
         logger.exception(e)
         raise RuntimeError(f"Failed to run database migrations: {e}") from e
 
+    # Register job handlers and start the background worker
+    import app_main.handlers  # noqa: F401 — triggers @registry.register()
+
+    from app_main.services.command_service import start_worker, stop_worker
+
+    await start_worker()
     logger.success("API initialization completed successfully")
+
     yield
+
+    await stop_worker()
     logger.info("API shutdown complete")
 
 

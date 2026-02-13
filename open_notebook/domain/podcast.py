@@ -111,22 +111,27 @@ class PodcastEpisode(ObjectModel):
         default_factory=dict, description="Generated outline"
     )
     command: Optional[Union[str, RecordID]] = Field(
-        default=None, description="Link to surreal-commands job"
+        default=None, description="Link to background job"
     )
 
     class Config:
         arbitrary_types_allowed = True
 
     async def get_job_status(self) -> Optional[str]:
-        """Get the status of the associated command"""
+        """Get the status of the associated job."""
         if not self.command:
             return None
 
         try:
-            from surreal_commands import get_command_status
+            from open_notebook.database.repository import ensure_record_id, repo_query
 
-            status = await get_command_status(str(self.command))
-            return status.status if status else "unknown"
+            rows = await repo_query(
+                "SELECT status FROM $job_id",
+                {"job_id": ensure_record_id(str(self.command))},
+            )
+            if rows and isinstance(rows[0], dict):
+                return rows[0].get("status", "unknown")
+            return "unknown"
         except Exception:
             return "unknown"
 

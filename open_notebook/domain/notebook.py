@@ -226,44 +226,49 @@ class Source(ObjectModel):
         return str(value) if value else None
 
     async def get_status(self) -> Optional[str]:
-        """Get the processing status of the associated command"""
+        """Get the processing status of the associated job."""
         if not self.command:
             return None
 
         try:
-            from surreal_commands import get_command_status
+            from open_notebook.database.repository import ensure_record_id, repo_query
 
-            status = await get_command_status(str(self.command))
-            return status.status if status else "unknown"
+            rows = await repo_query(
+                "SELECT status FROM $job_id",
+                {"job_id": ensure_record_id(str(self.command))},
+            )
+            if rows and isinstance(rows[0], dict):
+                return rows[0].get("status", "unknown")
+            return "unknown"
         except Exception as e:
-            logger.warning(f"Failed to get command status for {self.command}: {e}")
+            logger.warning(f"Failed to get job status for {self.command}: {e}")
             return "unknown"
 
     async def get_processing_progress(self) -> Optional[Dict[str, Any]]:
-        """Get detailed processing information for the associated command"""
+        """Get detailed processing information for the associated job."""
         if not self.command:
             return None
 
         try:
-            from surreal_commands import get_command_status
+            from open_notebook.database.repository import ensure_record_id, repo_query
 
-            status_result = await get_command_status(str(self.command))
-            if not status_result:
+            rows = await repo_query(
+                "SELECT status, result, error_message, started_at, completed_at FROM $job_id",
+                {"job_id": ensure_record_id(str(self.command))},
+            )
+            if not rows or not isinstance(rows[0], dict):
                 return None
 
-            # Extract execution metadata if available
-            result = getattr(status_result, "result", None)
-            execution_metadata = result.get("execution_metadata", {}) if isinstance(result, dict) else {}
-
+            job = rows[0]
             return {
-                "status": status_result.status,
-                "started_at": execution_metadata.get("started_at"),
-                "completed_at": execution_metadata.get("completed_at"),
-                "error": getattr(status_result, "error_message", None),
-                "result": result,
+                "status": job.get("status"),
+                "started_at": job.get("started_at"),
+                "completed_at": job.get("completed_at"),
+                "error": job.get("error_message"),
+                "result": job.get("result"),
             }
         except Exception as e:
-            logger.warning(f"Failed to get command progress for {self.command}: {e}")
+            logger.warning(f"Failed to get job progress for {self.command}: {e}")
             return None
 
     async def get_context(

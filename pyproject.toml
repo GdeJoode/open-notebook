@@ -64,7 +64,6 @@ summarization = { workspace = true }
 enrichment = { workspace = true }
 embeddings = { workspace = true }
 retrieval = { workspace = true }
-web-scraper = { workspace = true }
 app-main = { workspace = true }
 chat = { workspace = true }
 canvas = { workspace = true }

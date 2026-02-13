@@ -1,0 +1,29 @@
+-- Migration 28: Job queue table
+-- Background job tracking with status, priority, retry support.
+
+-- =============================================================================
+-- JOB TABLE
+-- =============================================================================
+DEFINE TABLE IF NOT EXISTS job SCHEMAFULL;
+
+DEFINE FIELD IF NOT EXISTS job_type ON TABLE job TYPE string;
+DEFINE FIELD IF NOT EXISTS status ON TABLE job TYPE string DEFAULT "queued";
+DEFINE FIELD IF NOT EXISTS priority ON TABLE job TYPE string DEFAULT "normal";
+DEFINE FIELD IF NOT EXISTS payload ON TABLE job TYPE object DEFAULT {};
+DEFINE FIELD IF NOT EXISTS result ON TABLE job TYPE option<object>;
+DEFINE FIELD IF NOT EXISTS error_message ON TABLE job TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS retry_count ON TABLE job TYPE int DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS max_retries ON TABLE job TYPE int DEFAULT 2;
+DEFINE FIELD IF NOT EXISTS source_id ON TABLE job TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS created ON TABLE job TYPE option<datetime> DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated ON TABLE job TYPE option<datetime> DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS started_at ON TABLE job TYPE option<datetime>;
+DEFINE FIELD IF NOT EXISTS completed_at ON TABLE job TYPE option<datetime>;
+
+-- =============================================================================
+-- INDEXES
+-- =============================================================================
+DEFINE INDEX IF NOT EXISTS idx_job_status ON TABLE job COLUMNS status;
+DEFINE INDEX IF NOT EXISTS idx_job_type ON TABLE job COLUMNS job_type;
+DEFINE INDEX IF NOT EXISTS idx_job_source ON TABLE job COLUMNS source_id;
+DEFINE INDEX IF NOT EXISTS idx_job_created ON TABLE job COLUMNS created;
