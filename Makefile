@@ -1,4 +1,4 @@
-.PHONY: run frontend check ruff database lint api start-all stop-all status clean-cache worker worker-start worker-stop worker-restart
+.PHONY: run frontend check ruff database lint api start-all stop-all status clean-cache
 .PHONY: docker-buildx-prepare docker-buildx-clean docker-buildx-reset
 .PHONY: docker-push docker-push-latest docker-release tag export-docs
 
@@ -124,63 +124,42 @@ full:
 
 
 api:
-	uv run run_api.py
-
-# === Worker Management ===
-.PHONY: worker worker-start worker-stop worker-restart
-
-worker: worker-start
-
-worker-start:
-	@echo "Starting surreal-commands worker..."
-	uv run --env-file .env surreal-commands-worker --import-modules commands
-
-worker-stop:
-	@echo "Stopping surreal-commands worker..."
-	pkill -f "surreal-commands-worker" || true
-
-worker-restart: worker-stop
-	@sleep 2
-	@$(MAKE) worker-start
+	uv run app-main
 
 # === Service Management ===
 start-all:
-	@echo "🚀 Starting Open Notebook (Database + API + Worker + Frontend)..."
-	@echo "📊 Starting SurrealDB..."
+	@echo "Starting Open Notebook (Database + API + Frontend)..."
+	@echo "Starting SurrealDB..."
 	@docker compose up -d surrealdb
+	@echo "Waiting for SurrealDB..."
 	@sleep 3
-	@echo "🔧 Starting API backend..."
-	@uv run run_api.py &
-	@sleep 3
-	@echo "⚙️ Starting background worker..."
-	@uv run --env-file .env surreal-commands-worker --import-modules commands &
+	@echo "Starting API backend (includes background worker)..."
+	@uv run app-main &
 	@sleep 2
-	@echo "🌐 Starting Next.js frontend..."
-	@echo "✅ All services started!"
-	@echo "📱 Frontend: http://localhost:3000"
-	@echo "🔗 API: http://localhost:5055"
-	@echo "📚 API Docs: http://localhost:5055/docs"
+	@echo "Starting Next.js frontend..."
+	@echo ""
+	@echo "All services started!"
+	@echo "  Frontend: http://localhost:3000"
+	@echo "  API:      http://localhost:5055"
+	@echo "  API Docs: http://localhost:5055/docs"
+	@echo ""
 	cd frontend && npm run dev
 
 stop-all:
-	@echo "🛑 Stopping all Open Notebook services..."
+	@echo "Stopping all Open Notebook services..."
 	@pkill -f "next dev" || true
-	@pkill -f "surreal-commands-worker" || true
-	@pkill -f "run_api.py" || true
-	@pkill -f "uvicorn api.main:app" || true
+	@pkill -f "app_main.api.app" || true
 	@docker compose down
-	@echo "✅ All services stopped!"
+	@echo "All services stopped."
 
 status:
-	@echo "📊 Open Notebook Service Status:"
-	@echo "Database (SurrealDB):"
-	@docker compose ps surrealdb 2>/dev/null || echo "  ❌ Not running"
-	@echo "API Backend:"
-	@pgrep -f "run_api.py\|uvicorn api.main:app" >/dev/null && echo "  ✅ Running" || echo "  ❌ Not running"
-	@echo "Background Worker:"
-	@pgrep -f "surreal-commands-worker" >/dev/null && echo "  ✅ Running" || echo "  ❌ Not running"
-	@echo "Next.js Frontend:"
-	@pgrep -f "next dev" >/dev/null && echo "  ✅ Running" || echo "  ❌ Not running"
+	@echo "Open Notebook Service Status:"
+	@echo "  Database (SurrealDB):"
+	@docker compose ps surrealdb 2>/dev/null || echo "    Not running"
+	@echo "  API Backend + Worker:"
+	@pgrep -f "app_main.api.app" >/dev/null && echo "    Running" || echo "    Not running"
+	@echo "  Next.js Frontend:"
+	@pgrep -f "next dev" >/dev/null && echo "    Running" || echo "    Not running"
 
 # === Documentation Export ===
 export-docs:

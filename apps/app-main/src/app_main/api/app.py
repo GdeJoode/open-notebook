@@ -156,11 +156,17 @@ app = create_app()
 
 def main():
     """Entry point for the app-main script."""
+    import os
+
     import uvicorn
+
+    host = os.getenv("API_HOST", "127.0.0.1")
+    port = int(os.getenv("API_PORT", "5055"))
+    reload = os.getenv("API_RELOAD", "true").lower() == "true"
 
     uvicorn.run(
         "app_main.api.app:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
+        host=host,
+        port=port,
+        reload=reload,
     )

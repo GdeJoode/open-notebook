@@ -125,6 +125,71 @@ class TestAsyncMigrationRunner:
         mock_bump.assert_awaited_once_with(3, None)
 
     @pytest.mark.asyncio
+    async def test_run_all_handles_already_exists(self):
+        """Migrations that fail with 'already exists' should be skipped and marked applied."""
+        up = {
+            1: AsyncMigration(1, "UP 1"),
+            2: AsyncMigration(2, "DEFINE TABLE chunk SCHEMAFULL"),
+            3: AsyncMigration(3, "UP 3"),
+        }
+        runner = AsyncMigrationRunner(up=up, down={})
+
+        bumped_versions: list[int] = []
+
+        async def mock_execute(sql, params=None, config=None):
+            if "chunk" in sql:
+                raise RuntimeError("The table 'chunk' already exists")
+            return []
+
+        async def mock_bump(version, config=None):
+            bumped_versions.append(version)
+
+        with (
+            patch(
+                "surrealdb_service.migrations._get_latest_version",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "surrealdb_service.migrations.execute_query",
+                side_effect=mock_execute,
+            ),
+            patch(
+                "surrealdb_service.migrations._bump_version",
+                side_effect=mock_bump,
+            ),
+        ):
+            await runner.run_all()
+
+        # All three versions should be bumped, including the skipped one
+        assert bumped_versions == [1, 2, 3]
+
+    @pytest.mark.asyncio
+    async def test_run_all_raises_non_exists_errors(self):
+        """Non-'already exists' RuntimeErrors should still propagate."""
+        up = {1: AsyncMigration(1, "BAD SQL")}
+        runner = AsyncMigrationRunner(up=up, down={})
+
+        with (
+            patch(
+                "surrealdb_service.migrations._get_latest_version",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "surrealdb_service.migrations.execute_query",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("syntax error"),
+            ),
+            patch(
+                "surrealdb_service.migrations._bump_version",
+                new_callable=AsyncMock,
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="syntax error"):
+                await runner.run_all()
+
+    @pytest.mark.asyncio
     async def test_run_one_up(self):
         up = {1: AsyncMigration(1, "UP 1"), 2: AsyncMigration(2, "UP 2")}
         runner = AsyncMigrationRunner(up=up, down={})

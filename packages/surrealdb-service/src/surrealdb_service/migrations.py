@@ -143,13 +143,27 @@ class AsyncMigrationRunner:
         self.config = config
 
     async def run_all(self) -> None:
-        """Run every pending *up* migration in version order."""
+        """Run every pending *up* migration in version order.
+
+        Migrations that fail with "already exists" errors are treated as
+        already-applied and marked in ``_sbl_migrations`` so they won't be
+        retried.  This handles existing databases whose tables were created
+        outside the current tracking system.
+        """
         current = await _get_latest_version(self.config)
         for version in sorted(self.up):
             if version <= current:
                 continue
             logger.info(f"Running migration {version}")
-            await execute_query(self.up[version].sql, config=self.config)
+            try:
+                await execute_query(self.up[version].sql, config=self.config)
+            except RuntimeError as exc:
+                if "already exists" in str(exc).lower():
+                    logger.warning(
+                        f"Migration {version} skipped (already applied): {exc}"
+                    )
+                else:
+                    raise
             await _bump_version(version, self.config)
 
     async def run_one_up(self) -> None:
@@ -158,7 +172,15 @@ class AsyncMigrationRunner:
         if pending:
             version = pending[0]
             logger.info(f"Running migration {version}")
-            await execute_query(self.up[version].sql, config=self.config)
+            try:
+                await execute_query(self.up[version].sql, config=self.config)
+            except RuntimeError as exc:
+                if "already exists" in str(exc).lower():
+                    logger.warning(
+                        f"Migration {version} skipped (already applied): {exc}"
+                    )
+                else:
+                    raise
             await _bump_version(version, self.config)
 
     async def run_one_down(self) -> None:
