@@ -28,26 +28,25 @@
 
 | Component | Status | Tests | Commit |
 |-----------|--------|-------|--------|
-| packages/shared | ✅ Done | 86 | `7db8a90` |
-| packages/surrealdb-service | ✅ Done | 28 | `f97cf54` |
+| packages/shared | ✅ Done | 101 | `9a341f8` |
+| packages/surrealdb-service | ✅ Done | 43 | `9a341f8` |
 | packages/file-manager | ✅ Done | 234 | `e17c86b` |
 | packages/llm-manager | ✅ Done | 73 | `3fcdd6b` |
 | packages/ontology-manager | ✅ Done | 188 | `9867089` |
 | packages/job-queue | ✅ Done (+ app-main integration) | 36 | `fb62e12` |
-| pipelines/ingestion | ✅ Done (+ content filter, regrouper) | 90 | `c25f116` |
+| pipelines/ingestion | ✅ Done (+ content filter, regrouper) | 107 | `c25f116` |
 | pipelines/ontology-extraction | ✅ Done (refactored) | 32 | `9867089` |
-| pipelines/entity-filtering | ✅ Done (expanded) | 469 | `134a871` |
-| pipelines/embeddings | ✅ Done (service + provider abstractions) | 141 | `d7435da` |
+| pipelines/entity-filtering | ✅ Done (expanded) | 434 | `134a871` |
+| pipelines/embeddings | ✅ Done (service + provider abstractions) | 28 | `d7435da` |
 | pipelines/summarization | ✅ Stubs + architecture (3 real, 8 stubs) | 0 | `8308f97` |
 | pipelines/web-scraper | 🚚 Removed (separate app) | — | `fb62e12` |
 | pipelines/enrichment | 📦 Scaffolded | 0 | — |
 | pipelines/retrieval | 📦 Scaffolded | 0 | — |
-| apps/app-main (services) | ✅ 12 services + routers + tests | 192 | `4051f89` |
-| apps/app-main (monolith decoupling) | ✅ 0 monolith imports (M1-M4 resolved, M5-M7 stubbed) | 43 new | — |
+| apps/app-main | ✅ 12 services + routers + 0 monolith imports | 205 | `9a341f8` |
 | apps/chat | 📦 Scaffolded | 0 | — |
 | apps/canvas | 📦 Scaffolded | 0 | — |
 | tests/integration | ✅ Done | 40 | `33f2ebd` |
-| **Total** | | **~1619** | |
+| **Total** | | **~1,521** | |
 
 ---
 
@@ -58,8 +57,9 @@ open-notebook/
 ├── pyproject.toml                    # Workspace root
 ├── uv.lock                           # Shared lockfile
 ├── docker-compose.yml                # Production deployment
-├── docker-compose.standalone.yml     # Standalone pipeline containers
-├── docker-compose.connected.yml      # Connected pipeline containers
+├── docker-compose.dev.yml            # Development environment
+├── docker-compose.full.yml           # Full stack deployment
+├── docker-compose.single.yml         # Single-container deployment
 │
 ├── packages/                         # Core services (with APIs and UIs)
 │   ├── shared/                       # ✅ Common utilities, schemas (library only)
@@ -79,7 +79,7 @@ open-notebook/
 │   └── retrieval/                    # 📦 Search and retrieval (scaffolded)
 │
 └── apps/                             # User-facing applications
-    ├── app-main/                     # ✅ 12 services, 192 tests, 7 monolith imports remain
+    ├── app-main/                     # ✅ 12 services, 205 tests, 0 monolith imports
     ├── chat/                         # 📦 Knowledge base chat interface (scaffolded)
     └── canvas/                       # 📦 Interactive note creation canvas (scaffolded)
 ```
@@ -162,28 +162,15 @@ ingestion → ontology-extraction → entity-filtering → summarization → enr
 
 ```toml
 [project]
-name = "open-notebook-workspace"
+name = "open-notebook"
 version = "2.0.0"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.10"
 
 [tool.uv.workspace]
 members = [
-    "packages/shared",
-    "packages/surrealdb-service",
-    "packages/file-manager",
-    "packages/llm-manager",
-    "packages/ontology-manager",
-    # web-scraper removed — now a separate app
-    "pipelines/ingestion",
-    "pipelines/ontology-extraction",
-    "pipelines/entity-filtering",
-    "pipelines/summarization",
-    "pipelines/enrichment",
-    "pipelines/embeddings",
-    "pipelines/retrieval",
-    "apps/app-main",
-    "apps/chat",
-    "apps/canvas",
+    "packages/*",
+    "pipelines/*",
+    "apps/*",
 ]
 
 [tool.uv.sources]
@@ -192,7 +179,7 @@ surrealdb-service = { workspace = true }
 file-manager = { workspace = true }
 llm-manager = { workspace = true }
 ontology-manager = { workspace = true }
-# web-scraper removed — now a separate app
+job-queue = { workspace = true }
 ingestion = { workspace = true }
 ontology-extraction = { workspace = true }
 entity-filtering = { workspace = true }
@@ -200,6 +187,7 @@ summarization = { workspace = true }
 enrichment = { workspace = true }
 embeddings = { workspace = true }
 retrieval = { workspace = true }
+app-main = { workspace = true }
 chat = { workspace = true }
 canvas = { workspace = true }
 ```
@@ -3947,7 +3935,7 @@ This plan focuses on implementing the workspace structure with ingestion and ext
 6. **Step 6**: pipelines/ingestion — ✅ Done (60 tests)
 7. **Step 7a**: packages/ontology-manager — ✅ Done (188 tests)
 8. **Step 7b**: pipelines/ontology-extraction (refactored to pure LLM) — ✅ Done (32 tests)
-9. **Step 7c**: pipelines/entity-filtering (expanded) — ✅ Done (469 tests)
+9. **Step 7c**: pipelines/entity-filtering (expanded) — ✅ Done (434 tests)
 10. **Step 8 (file-mgmt)**: Source-Centric File Management — ✅ Done (68 tests)
 11. **Step 8 (integration)**: Cross-Package Integration Tests — ✅ Done (40 tests)
     - Added `SourceFolder` and `PipelineCacheEntry` models to packages/shared
@@ -3969,8 +3957,8 @@ This plan focuses on implementing the workspace structure with ingestion and ext
 13. **Step 10b**: Remaining pipelines (enrichment, retrieval) — scaffolded
 14. **Step 10c**: job-queue package — ✅ Done (36 tests, `fb62e12`)
 15. **Step 10d**: app-main job worker migration — ✅ Done (surreal_commands removed, `fb62e12`)
-16. **Step 10e**: embeddings provider abstractions + API router — ✅ Done (141 tests, `d7435da`)
-17. **Step 10f**: app-main services, routers, tests — ✅ Done (192 tests, `4051f89`)
+16. **Step 10e**: embeddings provider abstractions + API router — ✅ Done (28 tests, `d7435da`)
+17. **Step 10f**: app-main services, routers, tests — ✅ Done (205 tests, `9a341f8`)
     - 12 service classes with full DI via dependencies.py
     - SourceProcessingService replaces monolith source_graph (Docling/WhisperX/BS4)
     - KnowledgeGraphService, OntologyService, SummarizationService added
@@ -4970,20 +4958,20 @@ uv run pytest packages/ pipelines/ -m "not integration" -q
 
 ```
 ✅ COMPLETED:
-├── Steps 1-2: Workspace structure + shared package (86 tests)
-├── Step 3: surrealdb-service (28 tests)
+├── Steps 1-2: Workspace structure + shared package (101 tests)
+├── Step 3: surrealdb-service (43 tests)
 ├── Steps 4-5: file-manager (234 tests) + llm-manager (73 tests)
-├── Step 6: ingestion pipeline (90 tests incl. content filter + regrouper)
+├── Step 6: ingestion pipeline (107 tests incl. content filter + regrouper)
 ├── Step 7a: ontology-manager package (188 tests)
 ├── Step 7b: ontology-extraction refactored to pure LLM (32 tests)
-├── Step 7c: entity-filtering pipeline (469 tests, 13-stage pipeline)
+├── Step 7c: entity-filtering pipeline (434 tests, 13-stage pipeline)
 ├── Step 8: Cross-package integration tests (40 tests, no DB/LLM/models)
-├── Step 9a: embeddings pipeline — service + provider abstractions (141 tests)
+├── Step 9a: embeddings pipeline — service + provider abstractions (28 tests)
 ├── Step 9b: summarization — strategy stubs + three-tier architecture (0 tests)
 ├── Step 9c: app-main — API routers + service layer migrated from monolith (0 tests)
 ├── Step 9d: job-queue — asyncio PriorityQueue + SurrealDB, 36 tests
 ├── Step 9e: app-main job worker — handlers, lifecycle, surreal_commands removed
-├── Step 10a: app-main services + routers + tests (192 tests, 12 services)
+├── Step 10a: app-main services + routers + tests (205 tests, 12 services)
 │   ├── SourceProcessingService (Docling/WhisperX/BS4, replaces source_graph)
 │   ├── KnowledgeGraphService, OntologyService, SummarizationService
 │   ├── NotebookService, SourceService, NoteService, ChatService
@@ -4993,7 +4981,7 @@ uv run pytest packages/ pipelines/ -m "not integration" -q
 ├── Step 10b: MCP servers for file-manager, surrealdb-service, llm-manager
 ├── Step 10c: frontend scaffolds for knowledge-graph, ontologies, summaries
 ├── web-scraper removed from workspace (now a separate app)
-└── Total workspace tests: ~1619
+└── Total workspace tests: ~1,521
 
 ✅ MONOLITH DECOUPLING (0 import sites remaining):
 ├── M1: AsyncMigrationManager → surrealdb-service/migrations — ✅ RESOLVED
@@ -5030,7 +5018,7 @@ uv run pytest packages/ pipelines/ -m "not integration" -q
 # Build entire workspace
 uv sync --all-packages --all-extras
 
-# Run all tests (~1619 total)
+# Run all tests (~1,521 total)
 uv run pytest packages/ pipelines/ apps/app-main/tests/ tests/
 
 # Run specific package/pipeline tests
@@ -5093,10 +5081,10 @@ uv run python -c "from app_main.services.source_processing_service import Source
 1. ~~Web scraper pipeline~~ 🚚 Removed from workspace — separate app
 2. Summarization pipeline — real RAPTOR/TreeKG implementation (strategy stubs + architecture exist)
 3. Enrichment pipeline (Google Scholar, CrossRef) (scaffolded)
-4. ~~Embeddings pipeline~~ ✅ Done — EmbeddingService with provider abstractions, 141 tests
+4. ~~Embeddings pipeline~~ ✅ Done — EmbeddingService with provider abstractions, 28 tests
 5. Retrieval pipeline (scaffolded)
 6. ~~Job queue package~~ ✅ Done — asyncio PriorityQueue + SurrealDB, 36 tests, integrated into app-main
-7. ~~Application integration (app-main)~~ ✅ Done — 12 services, 192 tests, routers, DI, frontend scaffolds
+7. ~~Application integration (app-main)~~ ✅ Done — 12 services, 205 tests, routers, DI, frontend scaffolds
 8. ~~Monolith decoupling~~ ✅ Done — 0 monolith imports remain (M1-M4 resolved, M5-M7 stubbed)
 9. Application integration — chat, canvas (not started)
 
@@ -5146,9 +5134,9 @@ Files in `apps/app-main/` that still import from `open_notebook` (the monolith).
 |-----------|-------------------|-------------|
 | `packages/file-manager/` | `files/`, `knowledge_base/`, `mcp/`, `obsidian/` | Core API, storage, source-folders, operations all working (234 tests) |
 | `packages/llm-manager/` | `mcp/` | Core fully working (73 tests) |
-| `packages/surrealdb-service/` | `mcp/` | Core fully working (28 tests) |
-| `pipelines/embeddings/` | — | service + provider abstractions working (141 tests) |
-| `pipelines/entity-filtering/` | `summarization/` | Placeholder for TreeKG/RAPTOR migration; 13-stage pipeline fully working (469 tests) |
+| `packages/surrealdb-service/` | `mcp/` | Core + migrations fully working (43 tests) |
+| `pipelines/embeddings/` | — | service + provider abstractions working (28 tests) |
+| `pipelines/entity-filtering/` | `summarization/` | Placeholder for TreeKG/RAPTOR migration; 13-stage pipeline fully working (434 tests) |
 
 **NotImplementedError stubs** (code files that raise NotImplementedError):
 
