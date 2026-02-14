@@ -33,47 +33,19 @@ async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
     source_id = payload["source_id"]
 
     try:
-        from open_notebook.domain.notebook import Source
-        from open_notebook.domain.transformation import Transformation
+        from app_main.dependencies import get_source_processing_service
 
         logger.info(f"Starting source processing for source: {source_id}")
 
-        content_state = payload["content_state"]
-        notebook_ids = payload.get("notebook_ids", [])
-        transformation_ids = payload.get("transformations", [])
-        embed = payload.get("embed", False)
-
-        # Load transformations
-        transformations = []
-        for trans_id in transformation_ids:
-            transformation = await Transformation.get(trans_id)
-            if not transformation:
-                raise ValueError(f"Transformation '{trans_id}' not found")
-            transformations.append(transformation)
-
-        # Verify source exists
-        source = await Source.get(source_id)
-        if not source:
-            raise ValueError(f"Source '{source_id}' not found")
-
-        # Import and run source graph
-        from open_notebook.graphs.source import source_graph
-
-        result = await source_graph.ainvoke(
-            {
-                "content_state": content_state,
-                "notebook_ids": notebook_ids,
-                "apply_transformations": transformations,
-                "embed": embed,
-                "source_id": source_id,
-            }
+        service = get_source_processing_service()
+        result = await service.process_source(
+            source_id=source_id,
+            content_state=payload["content_state"],
+            apply_transformations=bool(payload.get("transformations")),
+            embed=payload.get("embed", False),
+            notebook_ids=payload.get("notebook_ids", []),
+            transformation_ids=payload.get("transformations", []) or None,
         )
-
-        processed_source = result["source"]
-        embedded_chunks = (
-            await processed_source.get_embedded_chunks() if embed else 0
-        )
-        insights_list = await processed_source.get_insights()
 
         processing_time = time.time() - start_time
         logger.info(
@@ -82,9 +54,9 @@ async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         return {
             "success": True,
-            "source_id": str(processed_source.id),
-            "embedded_chunks": embedded_chunks,
-            "insights_created": len(insights_list),
+            "source_id": result["source_id"],
+            "embedded_chunks": result["embedded_chunks"],
+            "insights_created": result["insights_created"],
             "processing_time": processing_time,
         }
 

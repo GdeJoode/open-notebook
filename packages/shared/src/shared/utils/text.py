@@ -207,3 +207,54 @@ def count_tokens_estimate(text: str) -> int:
     # Rough estimate: words * 1.3
     word_count = len(text.split())
     return int(word_count * 1.3)
+
+
+# ---------------------------------------------------------------------------
+# Thinking-content utilities (migrated from open_notebook.utils.text_utils)
+# ---------------------------------------------------------------------------
+
+# Pattern for matching thinking content in AI responses
+THINK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+def parse_thinking_content(content: str) -> tuple[str, str]:
+    """
+    Parse message content to extract thinking content from <think> tags.
+
+    Args:
+        content: The original message content.
+
+    Returns:
+        Tuple of (thinking_content, cleaned_content).
+    """
+    if not isinstance(content, str):
+        return "", str(content) if content is not None else ""
+
+    # Limit processing for very large content (100KB limit)
+    if len(content) > 100000:
+        return "", content
+
+    thinking_matches = THINK_PATTERN.findall(content)
+
+    if not thinking_matches:
+        return "", content
+
+    thinking_content = "\n\n".join(match.strip() for match in thinking_matches)
+    cleaned_content = THINK_PATTERN.sub("", content)
+    cleaned_content = re.sub(r"\n\s*\n\s*\n", "\n\n", cleaned_content).strip()
+
+    return thinking_content, cleaned_content
+
+
+def clean_thinking_content(content: str) -> str:
+    """
+    Remove thinking content from AI responses, returning only the cleaned content.
+
+    Args:
+        content: The original message content with potential <think> tags.
+
+    Returns:
+        Content with <think> blocks removed and whitespace cleaned.
+    """
+    _, cleaned_content = parse_thinking_content(content)
+    return cleaned_content

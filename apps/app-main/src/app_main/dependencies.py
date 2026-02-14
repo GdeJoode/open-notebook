@@ -15,6 +15,7 @@ from surrealdb_service.repositories import (
     ContentSettingsRepository,
     DefaultModelsRepository,
     DefaultPromptsRepository,
+    EntityRepository,
     EpisodeProfileRepository,
     ModelRepository,
     NoteRepository,
@@ -25,6 +26,7 @@ from surrealdb_service.repositories import (
     SourceInsightRepository,
     SourceRepository,
     SpeakerProfileRepository,
+    SummaryRepository,
     TransformationRepository,
 )
 from surrealdb_service.connection import execute_query
@@ -39,6 +41,10 @@ from app_main.services.transformation_service import TransformationService
 from app_main.services.podcast_service import PodcastService
 from app_main.services.settings_service import SettingsService
 from app_main.services.insight_service import InsightService
+from app_main.services.knowledge_graph_service import KnowledgeGraphService
+from app_main.services.ontology_service import OntologyService
+from app_main.services.source_processing_service import SourceProcessingService
+from app_main.services.summarization_service import SummarizationService
 
 
 # --- Repository providers ---
@@ -111,6 +117,14 @@ def get_podcast_episode_repo() -> PodcastEpisodeRepository:
     return PodcastEpisodeRepository()
 
 
+def get_entity_repo() -> EntityRepository:
+    return EntityRepository()
+
+
+def get_summary_repo() -> SummaryRepository:
+    return SummaryRepository()
+
+
 # --- Service providers ---
 
 def get_notebook_service() -> NotebookService:
@@ -127,6 +141,15 @@ def get_source_service() -> SourceService:
         chunk_repo=get_chunk_repo(),
         insight_repo=get_insight_repo(),
         embedding_repo=get_embedding_repo(),
+    )
+
+
+def get_source_processing_service() -> SourceProcessingService:
+    return SourceProcessingService(
+        source_repo=get_source_repo(),
+        chunk_repo=get_chunk_repo(),
+        settings_repo=get_settings_repo(),
+        transformation_repo=get_transformation_repo(),
     )
 
 
@@ -184,6 +207,22 @@ def get_insight_service() -> InsightService:
     return InsightService(
         insight_repo=get_insight_repo(),
         note_repo=get_note_repo(),
+    )
+
+
+def get_ontology_service() -> OntologyService:
+    return OntologyService()
+
+
+def get_knowledge_graph_service() -> KnowledgeGraphService:
+    return KnowledgeGraphService(
+        entity_repo=get_entity_repo(),
+    )
+
+
+def get_summarization_service() -> SummarizationService:
+    return SummarizationService(
+        summary_repo=get_summary_repo(),
     )
 
 

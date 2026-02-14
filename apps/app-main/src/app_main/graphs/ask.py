@@ -11,7 +11,7 @@ from typing_extensions import TypedDict
 
 from surrealdb_service.repositories import SearchRepository
 from app_main.graphs.utils import provision_langchain_model
-from open_notebook.utils import clean_thinking_content
+from shared.utils.text import clean_thinking_content
 
 
 class SubGraphState(TypedDict):

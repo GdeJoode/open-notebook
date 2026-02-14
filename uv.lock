@@ -289,11 +289,13 @@ name = "app-main"
 version = "0.1.0"
 source = { editable = "apps/app-main" }
 dependencies = [
+    { name = "beautifulsoup4" },
     { name = "embeddings" },
     { name = "enrichment" },
     { name = "esperanto" },
     { name = "fastapi" },
     { name = "file-manager" },
+    { name = "httpx" },
     { name = "ingestion" },
     { name = "job-queue" },
     { name = "langgraph" },
@@ -314,11 +316,13 @@ ui = [
 
 [package.metadata]
 requires-dist = [
+    { name = "beautifulsoup4", specifier = ">=4.12.0" },
     { name = "embeddings", editable = "pipelines/embeddings" },
     { name = "enrichment", editable = "pipelines/enrichment" },
     { name = "esperanto", specifier = ">=0.5.0" },
     { name = "fastapi", specifier = ">=0.104.0" },
     { name = "file-manager", editable = "packages/file-manager" },
+    { name = "httpx", specifier = ">=0.25.0" },
     { name = "ingestion", editable = "pipelines/ingestion" },
     { name = "job-queue", editable = "packages/job-queue" },
     { name = "langgraph", specifier = ">=0.2.0" },
