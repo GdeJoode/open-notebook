@@ -93,15 +93,18 @@ def create_app() -> FastAPI:
         embedding_rebuild,
         episode_profiles,
         insights,
+        knowledge_graph,
         models,
         notebooks,
         notes,
+        ontologies,
         podcasts,
         search,
         settings,
         source_chat,
         sources,
         speaker_profiles,
+        summaries,
         transformations,
     )
 
@@ -132,6 +135,11 @@ def create_app() -> FastAPI:
     )
     application.include_router(chat.router, prefix="/api", tags=["chat"])
     application.include_router(source_chat.router, prefix="/api", tags=["source-chat"])
+    application.include_router(ontologies.router, prefix="/api", tags=["ontologies"])
+    application.include_router(
+        knowledge_graph.router, prefix="/api", tags=["knowledge-graph"]
+    )
+    application.include_router(summaries.router, prefix="/api", tags=["summaries"])
 
     @application.get("/")
     async def root():

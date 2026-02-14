@@ -171,6 +171,199 @@ class EntityRepository:
             )
             return False
 
+    async def list_entities(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        entity_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List entities with pagination and optional type filter.
+
+        Args:
+            limit: Maximum number of entities to return.
+            offset: Number of entities to skip.
+            entity_type: Optional entity type filter.
+
+        Returns:
+            A list of entity dictionaries.
+        """
+        try:
+            if entity_type:
+                return await execute_query(
+                    "SELECT id, name, entity_type, weight "
+                    "FROM entity WHERE entity_type = $entity_type "
+                    "ORDER BY name LIMIT $limit START $offset",
+                    {"entity_type": entity_type, "limit": limit, "offset": offset},
+                    self.config,
+                )
+            return await execute_query(
+                "SELECT id, name, entity_type, weight "
+                "FROM entity ORDER BY name LIMIT $limit START $offset",
+                {"limit": limit, "offset": offset},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"Failed to list entities: {e}")
+            return []
+
+    async def count_entities(
+        self, entity_type: Optional[str] = None
+    ) -> int:
+        """Count entities with optional type filter.
+
+        Args:
+            entity_type: Optional entity type filter.
+
+        Returns:
+            Total count of matching entities.
+        """
+        try:
+            if entity_type:
+                result = await execute_query(
+                    "SELECT count() AS total FROM entity "
+                    "WHERE entity_type = $entity_type GROUP ALL",
+                    {"entity_type": entity_type},
+                    self.config,
+                )
+            else:
+                result = await execute_query(
+                    "SELECT count() AS total FROM entity GROUP ALL",
+                    {},
+                    self.config,
+                )
+            if result:
+                return result[0].get("total", 0)
+            return 0
+        except Exception as e:
+            logger.error(f"Failed to count entities: {e}")
+            return 0
+
+    async def get_entity_detail(
+        self, entity_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get a single entity with its relations.
+
+        Args:
+            entity_id: The entity record ID.
+
+        Returns:
+            Entity dict with a ``relations`` list, or None.
+        """
+        if not entity_id:
+            return None
+        try:
+            eid = ensure_record_id(entity_id)
+            result = await execute_query(
+                "SELECT * FROM entity WHERE id = $id",
+                {"id": eid},
+                self.config,
+            )
+            if not result:
+                return None
+
+            entity = result[0]
+
+            # Get relations where this entity is source or target
+            relations = await execute_query(
+                "SELECT id, in AS source, out AS target, relation_type "
+                "FROM relation WHERE in = $id OR out = $id",
+                {"id": eid},
+                self.config,
+            )
+            entity["relations"] = relations or []
+            return entity
+        except Exception as e:
+            logger.error(f"Failed to get entity detail '{entity_id}': {e}")
+            return None
+
+    async def get_entity_types_summary(self) -> List[Dict[str, Any]]:
+        """Get entity counts grouped by type.
+
+        Returns:
+            List of dicts with ``entity_type`` and ``count`` keys.
+        """
+        try:
+            return await execute_query(
+                "SELECT entity_type, count() AS count "
+                "FROM entity GROUP BY entity_type ORDER BY count DESC",
+                {},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"Failed to get entity types summary: {e}")
+            return []
+
+    async def search_entities(
+        self, query: str, limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """Search entities by name using string containment.
+
+        Args:
+            query: Search text.
+            limit: Maximum results.
+
+        Returns:
+            Matching entity dicts.
+        """
+        try:
+            return await execute_query(
+                "SELECT id, name, entity_type, weight "
+                "FROM entity WHERE string::contains(string::lowercase(name), "
+                "string::lowercase($query)) LIMIT $limit",
+                {"query": query, "limit": limit},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"Failed to search entities for '{query}': {e}")
+            return []
+
+    async def get_all_entities_and_relations(
+        self,
+        entity_type: Optional[str] = None,
+        limit: int = 5000,
+    ) -> Dict[str, Any]:
+        """Get raw nodes and edges for graph visualization.
+
+        Args:
+            entity_type: Optional type filter.
+            limit: Max nodes.
+
+        Returns:
+            Dict with ``nodes`` and ``edges`` lists.
+        """
+        try:
+            if entity_type:
+                nodes = await execute_query(
+                    "SELECT id, name, entity_type, weight "
+                    "FROM entity WHERE entity_type = $entity_type LIMIT $limit",
+                    {"entity_type": entity_type, "limit": limit},
+                    self.config,
+                )
+            else:
+                nodes = await execute_query(
+                    "SELECT id, name, entity_type, weight "
+                    "FROM entity LIMIT $limit",
+                    {"limit": limit},
+                    self.config,
+                )
+
+            if not nodes:
+                return {"nodes": [], "edges": []}
+
+            # Get all edges connecting the retrieved nodes
+            node_ids = [n["id"] for n in nodes]
+            edges = await execute_query(
+                "SELECT id, in AS source, out AS target, relation_type "
+                "FROM relation WHERE in INSIDE $ids AND out INSIDE $ids",
+                {"ids": node_ids},
+                self.config,
+            )
+
+            return {"nodes": nodes or [], "edges": edges or []}
+        except Exception as e:
+            logger.error(f"Failed to get graph data: {e}")
+            return {"nodes": [], "edges": []}
+
     async def get_entity_with_embedding(
         self, entity_id: str
     ) -> Optional[Dict[str, Any]]:

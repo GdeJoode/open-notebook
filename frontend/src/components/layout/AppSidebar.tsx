@@ -38,7 +38,9 @@ import {
   Menu,
   FileText,
   Plus,
-  Wrench,
+  Network,
+  Share2,
+  AlignLeft,
 } from 'lucide-react'
 
 const navigation = [
@@ -56,18 +58,25 @@ const navigation = [
     ],
   },
   {
+    title: 'Analyze',
+    items: [
+      { name: 'Ontologies', href: '/ontologies', icon: Network },
+      { name: 'Knowledge Graph', href: '/knowledge-graph', icon: Share2 },
+      { name: 'Summaries', href: '/summaries', icon: AlignLeft },
+    ],
+  },
+  {
     title: 'Create',
     items: [
       { name: 'Podcasts', href: '/podcasts', icon: Mic },
     ],
   },
   {
-    title: 'Manage',
+    title: 'Configure',
     items: [
       { name: 'Models', href: '/models', icon: Bot },
       { name: 'Transformations', href: '/transformations', icon: Shuffle },
       { name: 'Settings', href: '/settings', icon: Settings },
-      { name: 'Advanced', href: '/advanced', icon: Wrench },
     ],
   },
 ] as const

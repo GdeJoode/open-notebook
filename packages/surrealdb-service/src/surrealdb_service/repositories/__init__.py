@@ -27,6 +27,7 @@ from surrealdb_service.repositories.podcast import (
     SpeakerProfileRepository,
 )
 from surrealdb_service.repositories.search import SearchRepository
+from surrealdb_service.repositories.summary import SummaryRepository
 from surrealdb_service.repositories.settings import ContentSettingsRepository
 from surrealdb_service.repositories.source import (
     ChunkRepository,
@@ -72,6 +73,8 @@ __all__ = [
     "ContentSettingsRepository",
     # Search
     "SearchRepository",
+    # Summary
+    "SummaryRepository",
     # Transformation
     "TransformationRepository",
     "DefaultPromptsRepository",

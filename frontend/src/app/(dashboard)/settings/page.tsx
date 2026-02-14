@@ -2,8 +2,11 @@
 
 import { AppShell } from '@/components/layout/AppShell'
 import { SettingsForm } from './components/SettingsForm'
+import { SystemInfo } from '../advanced/components/SystemInfo'
+import { RebuildEmbeddings } from '../advanced/components/RebuildEmbeddings'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RefreshCw } from 'lucide-react'
 
 export default function SettingsPage() {
@@ -20,7 +23,19 @@ export default function SettingsPage() {
                 <RefreshCw className="h-4 w-4" />
               </Button>
             </div>
-            <SettingsForm />
+            <Tabs defaultValue="general">
+              <TabsList>
+                <TabsTrigger value="general">General</TabsTrigger>
+                <TabsTrigger value="advanced">Advanced</TabsTrigger>
+              </TabsList>
+              <TabsContent value="general" className="mt-6">
+                <SettingsForm />
+              </TabsContent>
+              <TabsContent value="advanced" className="mt-6 space-y-6">
+                <SystemInfo />
+                <RebuildEmbeddings />
+              </TabsContent>
+            </Tabs>
           </div>
         </div>
       </div>
