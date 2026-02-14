@@ -43,6 +43,7 @@ from app_main.services.settings_service import SettingsService
 from app_main.services.insight_service import InsightService
 from app_main.services.knowledge_graph_service import KnowledgeGraphService
 from app_main.services.ontology_service import OntologyService
+from app_main.services.context_service import ContextService
 from app_main.services.source_processing_service import SourceProcessingService
 from app_main.services.summarization_service import SummarizationService
 
@@ -141,6 +142,15 @@ def get_source_service() -> SourceService:
         chunk_repo=get_chunk_repo(),
         insight_repo=get_insight_repo(),
         embedding_repo=get_embedding_repo(),
+    )
+
+
+def get_context_service() -> ContextService:
+    return ContextService(
+        source_repo=get_source_repo(),
+        insight_repo=get_insight_repo(),
+        notebook_repo=get_notebook_repo(),
+        note_repo=get_note_repo(),
     )
 
 

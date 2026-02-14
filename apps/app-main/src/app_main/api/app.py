@@ -10,8 +10,7 @@ from loguru import logger
 
 from app_main.api.auth import PasswordAuthMiddleware
 
-# Import migration manager from monolith until migrated to surrealdb-service
-from open_notebook.database.async_migrate import AsyncMigrationManager
+from surrealdb_service.migrations import AsyncMigrationManager
 
 
 @asynccontextmanager

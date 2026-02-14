@@ -19,13 +19,9 @@ router = APIRouter(tags=["context"])
 
 def _token_count(content: str) -> int:
     """Estimate token count for a string."""
-    try:
-        from open_notebook.utils import token_count
+    from shared.utils import token_count
 
-        return token_count(content)
-    except ImportError:
-        # Fallback: ~4 chars per token
-        return len(content) // 4
+    return token_count(content)
 
 
 @router.post("/notebooks/{notebook_id}/context", response_model=ContextResponse)

@@ -567,12 +567,9 @@ async def build_context(
                     continue
 
         char_count = len(total_content)
-        try:
-            from open_notebook.utils import token_count
+        from shared.utils import token_count
 
-            estimated_tokens = token_count(total_content) if total_content else 0
-        except ImportError:
-            estimated_tokens = char_count // 4
+        estimated_tokens = token_count(total_content) if total_content else 0
 
         return BuildContextResponse(
             context=context_data,

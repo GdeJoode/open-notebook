@@ -12,12 +12,9 @@ def _get_model_manager() -> ModelManager:
 
 def _token_count(content: str) -> int:
     """Count tokens in content."""
-    try:
-        from open_notebook.utils import token_count
-        return token_count(content)
-    except ImportError:
-        # Fallback: rough estimate
-        return len(content) // 4
+    from shared.utils import token_count
+
+    return token_count(content)
 
 
 async def provision_langchain_model(

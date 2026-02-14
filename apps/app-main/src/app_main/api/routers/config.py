@@ -55,7 +55,7 @@ def get_latest_version_cached(
         return _version_cache["latest_version"], _version_cache["has_update"]
 
     try:
-        from open_notebook.utils.version_utils import (
+        from shared.utils.version import (
             compare_versions,
             get_version_from_github,
         )

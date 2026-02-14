@@ -188,6 +188,29 @@ def extract_title(text: str, max_length: int = 100) -> Optional[str]:
     return None
 
 
+def token_count(text: str) -> int:
+    """
+    Count tokens using tiktoken's ``o200k_base`` encoding.
+
+    Falls back to :func:`count_tokens_estimate` when tiktoken is not installed.
+
+    Args:
+        text: The input text.
+
+    Returns:
+        Token count.
+    """
+    if not text:
+        return 0
+    try:
+        import tiktoken
+
+        encoding = tiktoken.get_encoding("o200k_base")
+        return len(encoding.encode(text))
+    except ImportError:
+        return count_tokens_estimate(text)
+
+
 def count_tokens_estimate(text: str) -> int:
     """
     Estimate token count for text (rough approximation).

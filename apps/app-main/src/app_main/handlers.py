@@ -73,111 +73,20 @@ async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @registry.register(JobType.BATCH_PROCESS)
 async def handle_generate_podcast(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate a podcast episode."""
-    start_time = time.time()
+    """Generate a podcast episode.
 
-    try:
-        from pathlib import Path
-
-        from pydantic import BaseModel
-
-        from open_notebook.config import DATA_FOLDER
-        from open_notebook.database.repository import ensure_record_id, repo_query
-        from open_notebook.domain.podcast import (
-            EpisodeProfile,
-            PodcastEpisode,
-            SpeakerProfile,
-        )
-
-        def full_model_dump(model):
-            if isinstance(model, BaseModel):
-                return model.model_dump()
-            elif isinstance(model, dict):
-                return {k: full_model_dump(v) for k, v in model.items()}
-            elif isinstance(model, list):
-                return [full_model_dump(item) for item in model]
-            return model
-
-        episode_name = payload["episode_name"]
-        logger.info(f"Starting podcast generation for episode: {episode_name}")
-
-        # Load profiles
-        episode_profile = await EpisodeProfile.get_by_name(payload["episode_profile"])
-        if not episode_profile:
-            raise ValueError(f"Episode profile '{payload['episode_profile']}' not found")
-
-        speaker_profile = await SpeakerProfile.get_by_name(
-            episode_profile.speaker_config
-        )
-        if not speaker_profile:
-            raise ValueError(
-                f"Speaker profile '{episode_profile.speaker_config}' not found"
-            )
-
-        # Load all profiles for podcast-creator config
-        episode_profiles = await repo_query("SELECT * FROM episode_profile")
-        speaker_profiles = await repo_query("SELECT * FROM speaker_profile")
-        episode_profiles_dict = {p["name"]: p for p in episode_profiles}
-        speaker_profiles_dict = {p["name"]: p for p in speaker_profiles}
-
-        # Generate briefing
-        briefing = episode_profile.default_briefing
-        if payload.get("briefing_suffix"):
-            briefing += f"\n\nAdditional instructions: {payload['briefing_suffix']}"
-
-        # Create episode record
-        episode = PodcastEpisode(
-            name=episode_name,
-            episode_profile=full_model_dump(episode_profile.model_dump()),
-            speaker_profile=full_model_dump(speaker_profile.model_dump()),
-            briefing=briefing,
-            content=payload["content"],
-            audio_file=None,
-            transcript=None,
-            outline=None,
-        )
-        await episode.save()
-
-        # Configure and run podcast-creator
-        from podcast_creator import configure, create_podcast
-
-        configure("speakers_config", {"profiles": speaker_profiles_dict})
-        configure("episode_config", {"profiles": episode_profiles_dict})
-
-        output_dir = Path(f"{DATA_FOLDER}/podcasts/episodes/{episode_name}")
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        result = await create_podcast(
-            content=payload["content"],
-            briefing=briefing,
-            episode_name=episode_name,
-            output_dir=str(output_dir),
-            speaker_config=speaker_profile.name,
-            episode_profile=episode_profile.name,
-        )
-
-        episode.audio_file = (
-            str(result.get("final_output_file_path")) if result else None
-        )
-        episode.transcript = {
-            "transcript": full_model_dump(result["transcript"]) if result else None
-        }
-        episode.outline = full_model_dump(result["outline"]) if result else None
-        await episode.save()
-
-        processing_time = time.time() - start_time
-        logger.info(f"Generated podcast {episode.id} in {processing_time:.2f}s")
-
-        return {
-            "success": True,
-            "episode_id": str(episode.id),
-            "audio_file_path": str(result.get("final_output_file_path")) if result else None,
-            "processing_time": processing_time,
-        }
-
-    except Exception as e:
-        logger.error(f"Podcast generation failed: {e}")
-        raise
+    Temporarily disabled — podcast pipeline has not been migrated to the
+    workspace yet.  Returns a clean error so callers get a structured
+    response rather than an import crash.
+    """
+    logger.warning(
+        "Podcast generation requested but is temporarily disabled "
+        "(pending workspace migration)"
+    )
+    return {
+        "success": False,
+        "error": "Podcast generation temporarily disabled",
+    }
 
 
 # ---------------------------------------------------------------------------

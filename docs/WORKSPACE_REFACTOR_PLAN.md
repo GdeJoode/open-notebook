@@ -1,8 +1,8 @@
 # Open Notebook - UV Workspace Refactoring Plan
 
-> **Status**: IN PROGRESS - All packages done (incl. job-queue), most pipelines done, enrichment/retrieval/chat/canvas/docker remaining
+> **Status**: IN PROGRESS — Packages + pipelines done, app-main services + tests migrated, **0 monolith imports remain** in app-main (M1-M4 resolved, M5-M7 stubbed — podcast not core)
 > **Created**: 2025-01-25
-> **Last Updated**: 2026-02-13
+> **Last Updated**: 2026-02-14
 
 ## Table of Contents
 1. [Overview](#overview)
@@ -37,16 +37,17 @@
 | pipelines/ingestion | ✅ Done (+ content filter, regrouper) | 90 | `c25f116` |
 | pipelines/ontology-extraction | ✅ Done (refactored) | 32 | `9867089` |
 | pipelines/entity-filtering | ✅ Done (expanded) | 469 | `134a871` |
-| pipelines/embeddings | ✅ Done (service + config) | 13 | `c25f116` |
-| pipelines/summarization | ✅ Stubs + architecture | 0 | `8308f97` |
+| pipelines/embeddings | ✅ Done (service + provider abstractions) | 141 | `d7435da` |
+| pipelines/summarization | ✅ Stubs + architecture (3 real, 8 stubs) | 0 | `8308f97` |
 | pipelines/web-scraper | 🚚 Removed (separate app) | — | `fb62e12` |
 | pipelines/enrichment | 📦 Scaffolded | 0 | — |
 | pipelines/retrieval | 📦 Scaffolded | 0 | — |
-| apps/app-main | ✅ API + job worker migrated | 0 | `fb62e12` |
+| apps/app-main (services) | ✅ 12 services + routers + tests | 192 | `4051f89` |
+| apps/app-main (monolith decoupling) | ✅ 0 monolith imports (M1-M4 resolved, M5-M7 stubbed) | 43 new | — |
 | apps/chat | 📦 Scaffolded | 0 | — |
 | apps/canvas | 📦 Scaffolded | 0 | — |
 | tests/integration | ✅ Done | 40 | `33f2ebd` |
-| **Total** | | **1289** | |
+| **Total** | | **~1619** | |
 
 ---
 
@@ -78,7 +79,7 @@ open-notebook/
 │   └── retrieval/                    # 📦 Search and retrieval (scaffolded)
 │
 └── apps/                             # User-facing applications
-    ├── app-main/                     # ✅ Production app (API + job worker migrated, needs tests)
+    ├── app-main/                     # ✅ 12 services, 192 tests, 7 monolith imports remain
     ├── chat/                         # 📦 Knowledge base chat interface (scaffolded)
     └── canvas/                       # 📦 Interactive note creation canvas (scaffolded)
 ```
@@ -3968,7 +3969,17 @@ This plan focuses on implementing the workspace structure with ingestion and ext
 13. **Step 10b**: Remaining pipelines (enrichment, retrieval) — scaffolded
 14. **Step 10c**: job-queue package — ✅ Done (36 tests, `fb62e12`)
 15. **Step 10d**: app-main job worker migration — ✅ Done (surreal_commands removed, `fb62e12`)
-16. **Step 11**: Applications (app-main tests, chat, canvas)
+16. **Step 10e**: embeddings provider abstractions + API router — ✅ Done (141 tests, `d7435da`)
+17. **Step 10f**: app-main services, routers, tests — ✅ Done (192 tests, `4051f89`)
+    - 12 service classes with full DI via dependencies.py
+    - SourceProcessingService replaces monolith source_graph (Docling/WhisperX/BS4)
+    - KnowledgeGraphService, OntologyService, SummarizationService added
+    - text utilities (clean_thinking_content, parse_thinking_content) migrated to shared
+    - Frontend pages + API clients for knowledge-graph, ontologies, summaries (`4051f89`)
+18. **Step 10g**: MCP servers for file-manager, surrealdb-service, llm-manager — ✅ Done
+19. **Step 11**: Monolith decoupling — ✅ Done (0 monolith imports remain)
+20. **Step 12**: Applications (chat, canvas) — not started
+21. **Step 13**: Docker configuration + deployment — not started
 
 ---
 
@@ -4967,21 +4978,40 @@ uv run pytest packages/ pipelines/ -m "not integration" -q
 ├── Step 7b: ontology-extraction refactored to pure LLM (32 tests)
 ├── Step 7c: entity-filtering pipeline (469 tests, 13-stage pipeline)
 ├── Step 8: Cross-package integration tests (40 tests, no DB/LLM/models)
-├── Step 9a: embeddings pipeline — service, config, chunk-based embedding (13 tests)
+├── Step 9a: embeddings pipeline — service + provider abstractions (141 tests)
 ├── Step 9b: summarization — strategy stubs + three-tier architecture (0 tests)
 ├── Step 9c: app-main — API routers + service layer migrated from monolith (0 tests)
 ├── Step 9d: job-queue — asyncio PriorityQueue + SurrealDB, 36 tests
 ├── Step 9e: app-main job worker — handlers, lifecycle, surreal_commands removed
-└── web-scraper removed from workspace (now a separate app)
+├── Step 10a: app-main services + routers + tests (192 tests, 12 services)
+│   ├── SourceProcessingService (Docling/WhisperX/BS4, replaces source_graph)
+│   ├── KnowledgeGraphService, OntologyService, SummarizationService
+│   ├── NotebookService, SourceService, NoteService, ChatService
+│   ├── SearchService, ModelService, TransformationService, PodcastService
+│   ├── SettingsService, InsightService, EmbeddingService factory
+│   └── text utilities migrated to shared/utils/text.py
+├── Step 10b: MCP servers for file-manager, surrealdb-service, llm-manager
+├── Step 10c: frontend scaffolds for knowledge-graph, ontologies, summaries
+├── web-scraper removed from workspace (now a separate app)
+└── Total workspace tests: ~1619
 
-REMAINING:
-├── Pipelines — implementation of scaffolds/stubs
+✅ MONOLITH DECOUPLING (0 import sites remaining):
+├── M1: AsyncMigrationManager → surrealdb-service/migrations — ✅ RESOLVED
+├── M2: token_count → shared/utils/text                       — ✅ RESOLVED
+├── M3: version_utils → shared/utils/version                  — ✅ RESOLVED
+├── M4: ContextBuilder → app_main/services/context_service    — ✅ RESOLVED
+├── M5: Podcast domain models (handlers.py)                   — ✅ STUBBED (niet noodzakelijk)
+├── M6: ensure_record_id + repo_query (handlers.py)           — ✅ STUBBED (niet noodzakelijk)
+├── M7: DATA_FOLDER config (handlers.py)                      — ✅ STUBBED (niet noodzakelijk)
+└── 0 monolith imports in packages/, pipelines/, or apps/
+
+📦 SCAFFOLDS (not yet implemented):
+├── Pipelines
 │   ├── summarization — 8 strategy stubs + 3 enhancer stubs (raise NotImplementedError)
 │   ├── enrichment — full scaffold (empty: api/, lookups/, models/, verification/)
-│   ├── retrieval — full scaffold (empty: api/, graph/, vector/)
-│   └── embeddings — empty sub-scaffolds: api/, providers/
+│   └── retrieval — full scaffold (empty: api/, graph/, vector/)
 ├── Applications
-│   ├── app-main — tests, search_service.vector_search stub, monolith cutover
+│   ├── app-main — search_service.vector_search() stub
 │   ├── chat — full scaffold (empty: api/, api/routers/, services/)
 │   └── canvas — full scaffold (empty: api/, api/routers/, services/)
 ├── Package sub-scaffolds (empty __init__.py only)
@@ -5000,8 +5030,8 @@ REMAINING:
 # Build entire workspace
 uv sync --all-packages --all-extras
 
-# Run all tests (1289 total)
-uv run pytest packages/ pipelines/ tests/
+# Run all tests (~1619 total)
+uv run pytest packages/ pipelines/ apps/app-main/tests/ tests/
 
 # Run specific package/pipeline tests
 uv run pytest packages/shared/tests/
@@ -5014,7 +5044,11 @@ uv run pytest pipelines/ingestion/tests/
 uv run pytest pipelines/ontology-extraction/tests/
 uv run pytest pipelines/entity-filtering/tests/
 uv run pytest pipelines/embeddings/tests/
+uv run pytest apps/app-main/tests/
 uv run pytest tests/integration/
+
+# Check remaining monolith imports
+grep -rn "from open_notebook\|import open_notebook" apps/app-main/src/ --include="*.py"
 
 # Import verification
 uv run python -c "from shared.models.extraction import ExtractionResult; print('shared OK')"
@@ -5024,6 +5058,7 @@ uv run python -c "from entity_filtering.workflow import FilteringWorkflow; print
 uv run python -c "from embeddings.service import EmbeddingService; print('embeddings OK')"
 uv run python -c "from job_queue import JobService, JobQueue, JobWorker; print('job-queue OK')"
 uv run python -c "from ingestion.config import ContentFilterConfig; print('content filter OK')"
+uv run python -c "from app_main.services.source_processing_service import SourceProcessingService; print('source-processing OK')"
 ```
 
 ---
@@ -5058,10 +5093,41 @@ uv run python -c "from ingestion.config import ContentFilterConfig; print('conte
 1. ~~Web scraper pipeline~~ 🚚 Removed from workspace — separate app
 2. Summarization pipeline — real RAPTOR/TreeKG implementation (strategy stubs + architecture exist)
 3. Enrichment pipeline (Google Scholar, CrossRef) (scaffolded)
-4. ~~Embeddings pipeline~~ ✅ Done — EmbeddingService with batched chunk-based embedding
+4. ~~Embeddings pipeline~~ ✅ Done — EmbeddingService with provider abstractions, 141 tests
 5. Retrieval pipeline (scaffolded)
 6. ~~Job queue package~~ ✅ Done — asyncio PriorityQueue + SurrealDB, 36 tests, integrated into app-main
-7. Application integration — app-main tests + frontend, chat, canvas
+7. ~~Application integration (app-main)~~ ✅ Done — 12 services, 192 tests, routers, DI, frontend scaffolds
+8. ~~Monolith decoupling~~ ✅ Done — 0 monolith imports remain (M1-M4 resolved, M5-M7 stubbed)
+9. Application integration — chat, canvas (not started)
+
+### Monolith Decoupling Tracker
+
+Files in `apps/app-main/` that still import from `open_notebook` (the monolith). Once all items here are resolved, the monolith can be removed from the dependency tree.
+
+**0 monolith imports remain in `packages/` or `pipelines/`** — only `apps/app-main/` has coupling.
+
+| ID | File | Monolith Import | Status | Resolution |
+|----|------|----------------|--------|------------|
+| M1 | `api/app.py` | `open_notebook.database.async_migrate.AsyncMigrationManager` | ✅ RESOLVED | Migrated to `surrealdb-service/migrations.py` with auto-discovery (15 tests) |
+| M2a | `api/routers/chat.py` | `open_notebook.utils.token_count` | ✅ RESOLVED | Migrated to `shared/utils/text.py` (5 tests) |
+| M2b | `api/routers/context.py` | `open_notebook.utils.token_count` | ✅ RESOLVED | Same as M2a |
+| M2c | `graphs/utils.py` | `open_notebook.utils.token_count` | ✅ RESOLVED | Same as M2a |
+| M3 | `api/routers/config.py` | `open_notebook.utils.version_utils` | ✅ RESOLVED | Migrated to `shared/utils/version.py` (10 tests) |
+| M4 | `graphs/source_chat.py` | `open_notebook.utils.context_builder.ContextBuilder` | ✅ RESOLVED | New `ContextService` in `app_main/services/context_service.py` (11 tests) |
+| M5 | `handlers.py` (podcast) | `open_notebook.domain.podcast` | ✅ STUBBED | Handler returns clean error; podcast pipeline not core (2 tests) |
+| M6 | `handlers.py` (podcast) | `open_notebook.database.repository` | ✅ STUBBED | Removed with M5 stub |
+| M7 | `handlers.py` (podcast) | `open_notebook.config.DATA_FOLDER` | ✅ STUBBED | Removed with M5 stub |
+
+**Previously resolved** (for reference):
+| ID | File | What was migrated | Commit |
+|----|------|-------------------|--------|
+| S1 | `handlers.py` (source) | source_graph → SourceProcessingService | `69d21f8` |
+| S2 | `graphs/transformation.py` | clean_thinking_content → shared/utils/text | `69d21f8` |
+| S3 | `graphs/ask.py` | clean_thinking_content → shared/utils/text | `69d21f8` |
+
+**All items resolved.** M1-M4 fully migrated, M5-M7 stubbed (podcast pipeline is non-core).
+
+---
 
 ### Open Stubs & Scaffolds Inventory
 
@@ -5081,7 +5147,7 @@ uv run python -c "from ingestion.config import ContentFilterConfig; print('conte
 | `packages/file-manager/` | `files/`, `knowledge_base/`, `mcp/`, `obsidian/` | Core API, storage, source-folders, operations all working (234 tests) |
 | `packages/llm-manager/` | `mcp/` | Core fully working (73 tests) |
 | `packages/surrealdb-service/` | `mcp/` | Core fully working (28 tests) |
-| `pipelines/embeddings/` | `api/`, `providers/` | `service.py` + `config.py` working (13 tests) |
+| `pipelines/embeddings/` | — | service + provider abstractions working (141 tests) |
 | `pipelines/entity-filtering/` | `summarization/` | Placeholder for TreeKG/RAPTOR migration; 13-stage pipeline fully working (469 tests) |
 
 **NotImplementedError stubs** (code files that raise NotImplementedError):
@@ -5101,4 +5167,4 @@ uv run python -c "from ingestion.config import ContentFilterConfig; print('conte
 | `summarization/enhancers/self_correction.py` | SelfCorrectionEnhancer |
 | `summarization/workflow.py` (3 branches) | MapReduce, Refine, WalkingTree strategy dispatch |
 | `entity-filtering/.../graph_analyzer.py` | `analyze()` method (graph analysis placeholder) |
-| `app-main/.../search_service.py` | `vector_search()` (needs graph migration) |
+| `app-main/.../search_service.py` | `vector_search()` (needs embedding model integration) |

@@ -28,6 +28,7 @@ from surrealdb_service.connection import (
     get_pool,
     parse_record_ids,
 )
+from surrealdb_service.migrations import AsyncMigrationManager
 from surrealdb_service.repositories import (
     BaseRepository,
     ChatMessageRepository,
@@ -46,6 +47,8 @@ from surrealdb_service.repositories import (
 __version__ = "0.1.0"
 
 __all__ = [
+    # Migrations
+    "AsyncMigrationManager",
     # Config
     "SurrealDBConfig",
     "get_config",

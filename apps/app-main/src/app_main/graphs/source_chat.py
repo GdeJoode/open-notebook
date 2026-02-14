@@ -13,8 +13,8 @@ from typing_extensions import TypedDict
 from shared.models import Source
 from shared.models.source import SourceInsight
 from app_main.config import LANGGRAPH_CHECKPOINT_FILE
+from app_main.dependencies import get_context_service
 from app_main.graphs.utils import provision_langchain_model
-from open_notebook.utils.context_builder import ContextBuilder
 
 
 class SourceChatState(TypedDict):
@@ -38,13 +38,15 @@ def call_model_with_source_context(
         new_loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(new_loop)
-            context_builder = ContextBuilder(
-                source_id=source_id,
-                include_insights=True,
-                include_notes=False,
-                max_tokens=50000,
+            svc = get_context_service()
+            return new_loop.run_until_complete(
+                svc.build_source_context(
+                    source_id=source_id,
+                    include_insights=True,
+                    include_notes=False,
+                    max_tokens=50000,
+                )
             )
-            return new_loop.run_until_complete(context_builder.build())
         finally:
             new_loop.close()
             asyncio.set_event_loop(None)
