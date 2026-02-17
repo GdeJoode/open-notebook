@@ -23,7 +23,7 @@ export function useVersionCheck() {
           if (!isDismissed) {
             // Show persistent toast notification
             toast.info(`Version ${config.latestVersion} available`, {
-              description: 'A new version of Open Notebook is available.',
+              description: 'A new version of Noesis is available.',
               duration: Infinity, // No auto-dismiss - user must manually dismiss
               action: {
                 label: 'View on GitHub',

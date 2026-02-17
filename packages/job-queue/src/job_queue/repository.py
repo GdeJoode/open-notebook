@@ -20,11 +20,35 @@ from surrealdb_service.repositories.base import BaseRepository
 class JobRepository(BaseRepository[Job]):
     """Repository for Job CRUD and status management."""
 
+    _schema_ensured: bool = False
+
     def __init__(self, config: Optional[SurrealDBConfig] = None):
         super().__init__(Job, config)
 
+    async def _ensure_flexible_payload(self) -> None:
+        """Ensure payload/result fields are FLEXIBLE so SurrealDB preserves nested data.
+
+        The job table is SCHEMAFULL, which means SurrealDB strips nested fields
+        from plain ``object`` columns. This runs once per process to apply the
+        FLEXIBLE flag, making it safe regardless of whether migration 30 has
+        been applied.
+        """
+        if JobRepository._schema_ensured:
+            return
+        try:
+            await execute_query(
+                "DEFINE FIELD OVERWRITE payload ON TABLE job FLEXIBLE TYPE object DEFAULT {};"
+                "DEFINE FIELD OVERWRITE result ON TABLE job FLEXIBLE TYPE option<object>;",
+                config=self.config,
+            )
+            JobRepository._schema_ensured = True
+            logger.debug("Ensured FLEXIBLE payload/result fields on job table")
+        except Exception as e:
+            logger.warning(f"Failed to ensure FLEXIBLE payload field: {e}")
+
     async def create_from_submission(self, submission: JobSubmitRequest) -> Job:
         """Create a job record from a submission request."""
+        await self._ensure_flexible_payload()
         data = {
             "job_type": submission.job_type.value,
             "status": JobStatus.QUEUED.value,
@@ -53,9 +77,9 @@ class JobRepository(BaseRepository[Job]):
         data: Dict[str, Any] = {"status": status.value}
 
         if status == JobStatus.PROCESSING:
-            data["started_at"] = datetime.now(timezone.utc).isoformat()
+            data["started_at"] = datetime.now(timezone.utc)
         elif status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
-            data["completed_at"] = datetime.now(timezone.utc).isoformat()
+            data["completed_at"] = datetime.now(timezone.utc)
 
         for key, value in fields.items():
             data[key] = value

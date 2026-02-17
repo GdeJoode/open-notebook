@@ -1,0 +1,14 @@
+-- Preprocessing result table for document analysis, classification, and chunk filtering
+DEFINE TABLE preprocessing_result SCHEMAFULL;
+
+DEFINE FIELD source_id ON preprocessing_result TYPE string;
+DEFINE FIELD naive_summary ON preprocessing_result TYPE string;
+DEFINE FIELD classification ON preprocessing_result FLEXIBLE TYPE object;
+DEFINE FIELD filtered_chunk_ids ON preprocessing_result TYPE array;
+DEFINE FIELD removed_chunk_ids ON preprocessing_result TYPE array;
+DEFINE FIELD total_chunks ON preprocessing_result TYPE int;
+DEFINE FIELD noise_stats ON preprocessing_result FLEXIBLE TYPE object;
+DEFINE FIELD structure_stats ON preprocessing_result FLEXIBLE TYPE object;
+DEFINE FIELD created ON preprocessing_result TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX idx_preprocessing_source ON preprocessing_result FIELDS source_id UNIQUE;

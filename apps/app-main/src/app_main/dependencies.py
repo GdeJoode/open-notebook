@@ -45,6 +45,7 @@ from app_main.services.knowledge_graph_service import KnowledgeGraphService
 from app_main.services.ontology_service import OntologyService
 from app_main.services.context_service import ContextService
 from app_main.services.source_processing_service import SourceProcessingService
+from app_main.services.preprocessing_service import PreprocessingService
 from app_main.services.summarization_service import SummarizationService
 
 
@@ -233,6 +234,62 @@ def get_knowledge_graph_service() -> KnowledgeGraphService:
 def get_summarization_service() -> SummarizationService:
     return SummarizationService(
         summary_repo=get_summary_repo(),
+    )
+
+
+def get_preprocessing_service() -> PreprocessingService:
+    return PreprocessingService(
+        chunk_repo=get_chunk_repo(),
+        language_model=None,  # resolved at call-time; see run endpoint
+    )
+
+
+async def get_preprocessing_service_with_llm() -> PreprocessingService:
+    """Create a PreprocessingService with the default transformation model.
+
+    Similar to ``get_embedding_service`` — resolves the configured language
+    model from the database via ModelManager.
+    """
+    from esperanto import LanguageModel as _LM
+    from fastapi import HTTPException
+
+    mm = get_model_manager()
+
+    defaults = mm.get_defaults()
+    if not defaults or not defaults.default_transformation_model:
+        defaults_repo = get_default_models_repo()
+        defaults = await defaults_repo.get()
+        mm.set_defaults(defaults)
+
+    model_id = getattr(defaults, "default_transformation_model", None)
+    if not model_id:
+        # Fallback: try the chat model
+        model_id = getattr(defaults, "default_chat_model", None)
+    if not model_id:
+        raise HTTPException(
+            status_code=422,
+            detail="No transformation or chat model configured. "
+            "Please set a default model in Settings → Models.",
+        )
+
+    model_repo = get_model_repo()
+    model = await model_repo.get(model_id)
+    if not model:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Model '{model_id}' not found in database.",
+        )
+
+    language_model = mm.get_model_from_config(model)
+    if not isinstance(language_model, _LM):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Model '{model_id}' is not a LanguageModel.",
+        )
+
+    return PreprocessingService(
+        chunk_repo=get_chunk_repo(),
+        language_model=language_model,
     )
 
 

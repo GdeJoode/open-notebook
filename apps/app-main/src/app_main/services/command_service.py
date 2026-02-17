@@ -55,7 +55,9 @@ _COMMAND_TO_JOB_TYPE: Dict[str, JobType] = {
     "process_source": JobType.DOCUMENT_PARSE,
     "generate_podcast": JobType.BATCH_PROCESS,
     "embed_single_item": JobType.EMBEDDING_GENERATE,
+    "embed_source": JobType.EMBEDDING_GENERATE,
     "rebuild_embeddings": JobType.EMBEDDING_GENERATE,
+    "run_summaries": JobType.INSIGHT_EXTRACT,
     "process_text": JobType.CHUNK_EXTRACT,
     "analyze_data": JobType.INSIGHT_EXTRACT,
 }

@@ -84,11 +84,11 @@ class SummarizationService:
 
         chunks = [
             ChunkInput(
-                text=c.content if hasattr(c, "content") else str(c.get("content", "")),
-                chunk_id=str(c.id if hasattr(c, "id") else c.get("id", "")),
-                order=c.order if hasattr(c, "order") else c.get("order", i),
+                text=c.text,
+                chunk_id=str(c.id or ""),
+                order=c.order,
             )
-            for i, c in enumerate(chunks_raw)
+            for c in chunks_raw
         ]
 
         # Build config

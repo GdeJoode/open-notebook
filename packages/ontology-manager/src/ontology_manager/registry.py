@@ -125,7 +125,7 @@ class OntologyRegistry:
     ) -> Optional[Ontology]:
         """Load ontology from database."""
         try:
-            from surrealdb_service.repositories import query as repo_query
+            from surrealdb_service.connection import execute_query
 
             if version:
                 query = """
@@ -143,7 +143,7 @@ class OntologyRegistry:
                 """
                 params = {"name": name}
 
-            result = await repo_query(query, params)
+            result = await execute_query(query, params)
             if result and len(result) > 0:
                 yaml_content = result[0].get("yaml_content")
                 if yaml_content:
@@ -193,7 +193,7 @@ class OntologyRegistry:
             True if successful
         """
         try:
-            from surrealdb_service.repositories import query as repo_query
+            from surrealdb_service.connection import execute_query
 
             import yaml
 
@@ -203,7 +203,7 @@ class OntologyRegistry:
 
             # Deactivate other versions if activating this one
             if activate:
-                await repo_query(
+                await execute_query(
                     """
                     UPDATE ontology_version
                     SET is_active = false
@@ -213,7 +213,7 @@ class OntologyRegistry:
                 )
 
             # Insert or update the version
-            await repo_query(
+            await execute_query(
                 """
                 INSERT INTO ontology_version {
                     name: $name,
@@ -251,10 +251,10 @@ class OntologyRegistry:
     async def activate_version(self, name: str, version: str) -> bool:
         """Activate a specific ontology version."""
         try:
-            from surrealdb_service.repositories import query as repo_query
+            from surrealdb_service.connection import execute_query
 
             # Deactivate all versions
-            await repo_query(
+            await execute_query(
                 """
                 UPDATE ontology_version
                 SET is_active = false
@@ -264,7 +264,7 @@ class OntologyRegistry:
             )
 
             # Activate the specified version
-            await repo_query(
+            await execute_query(
                 """
                 UPDATE ontology_version
                 SET is_active = true
@@ -288,9 +288,9 @@ class OntologyRegistry:
     async def list_versions(self, name: str) -> List[Dict]:
         """List all versions of an ontology."""
         try:
-            from surrealdb_service.repositories import query as repo_query
+            from surrealdb_service.connection import execute_query
 
-            result = await repo_query(
+            result = await execute_query(
                 """
                 SELECT name, version, is_active, created_at
                 FROM ontology_version
@@ -310,9 +310,9 @@ class OntologyRegistry:
 
         # From database
         try:
-            from surrealdb_service.repositories import query as repo_query
+            from surrealdb_service.connection import execute_query
 
-            result = await repo_query(
+            result = await execute_query(
                 "SELECT DISTINCT name FROM ontology_version", {}
             )
             if result:

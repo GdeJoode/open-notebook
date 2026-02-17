@@ -139,7 +139,7 @@ export function LoginForm() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <CardTitle>Open Notebook</CardTitle>
+          <CardTitle>Noesis</CardTitle>
           <CardDescription>
             Enter your password to access the application
           </CardDescription>

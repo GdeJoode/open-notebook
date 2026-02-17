@@ -51,7 +51,7 @@ export function ConnectionGuard({ children }: ConnectionGuardProps) {
       setError({
         type: 'api-unreachable',
         details: {
-          message: 'The Open Notebook API server could not be reached',
+          message: 'The Noesis API server could not be reached',
           technicalMessage: errorMessage,
           stack: err instanceof Error ? err.stack : undefined,
           attemptedUrl,

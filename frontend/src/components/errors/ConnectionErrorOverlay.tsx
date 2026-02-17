@@ -46,7 +46,7 @@ export function ConnectionErrorOverlay({
             </h1>
             <p className="text-muted-foreground">
               {isApiError
-                ? 'The Open Notebook API server could not be reached'
+                ? 'The Noesis API server could not be reached'
                 : 'The API server is running, but the database is not accessible'}
             </p>
           </div>
@@ -109,7 +109,7 @@ export function ConnectionErrorOverlay({
             rel="noopener noreferrer"
             className="text-primary hover:underline inline-flex items-center gap-1"
           >
-            Open Notebook Documentation
+            Noesis Documentation
             <ExternalLink className="w-4 h-4" />
           </a>
         </div>

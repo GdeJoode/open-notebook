@@ -1,0 +1,7 @@
+
+-- Migration 29: Fix command field type on source and episode tables
+-- The old schema referenced a non-existent 'command' table.
+-- The job-queue package uses the 'job' table instead.
+
+DEFINE FIELD OVERWRITE command ON source TYPE option<record<job>>;
+DEFINE FIELD OVERWRITE command ON episode TYPE option<record<job>>;

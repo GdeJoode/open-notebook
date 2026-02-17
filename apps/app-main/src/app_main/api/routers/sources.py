@@ -14,7 +14,7 @@ from fastapi import (
     Query,
     UploadFile,
 )
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from loguru import logger
 
 from app_main.api.schemas import (
@@ -98,6 +98,7 @@ def parse_source_form_data(
     embed: str = Form("false"),
     delete_source: str = Form("false"),
     async_processing: str = Form("false"),
+    processing_overrides: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
 ) -> tuple[SourceCreate, Optional[UploadFile]]:
     """Parse form data into SourceCreate model and return upload file."""
@@ -124,6 +125,13 @@ def parse_source_form_data(
         except json.JSONDecodeError:
             raise ValueError("Invalid JSON in transformations field")
 
+    overrides_dict = None
+    if processing_overrides:
+        try:
+            overrides_dict = json.loads(processing_overrides)
+        except json.JSONDecodeError:
+            raise ValueError("Invalid JSON in processing_overrides field")
+
     source_data = SourceCreate(
         type=type,
         notebook_id=notebook_id,
@@ -136,6 +144,7 @@ def parse_source_form_data(
         embed=embed_bool,
         delete_source=delete_source_bool,
         async_processing=async_processing_bool,
+        processing_overrides=overrides_dict,
     )
 
     return source_data, file
@@ -482,8 +491,7 @@ async def create_source(
                     "source_id": str(source.id),
                     "content_state": content_state,
                     "notebook_ids": source_data.notebooks,
-                    "transformations": transformation_ids,
-                    "embed": source_data.embed,
+                    "processing_overrides": source_data.processing_overrides,
                 }
 
                 command_id = await CommandService.submit_command_job(
@@ -493,7 +501,7 @@ async def create_source(
                 )
 
                 logger.info(
-                    f"Submitted async processing command: {command_id}"
+                    f"Submitted async extraction command: {command_id}"
                 )
 
                 # Update source with command reference
@@ -564,8 +572,7 @@ async def create_source(
                     "source_id": str(source.id),
                     "content_state": content_state,
                     "notebook_ids": source_data.notebooks,
-                    "transformations": transformation_ids,
-                    "embed": source_data.embed,
+                    "processing_overrides": source_data.processing_overrides,
                 }
 
                 command_id = await CommandService.submit_command_job(
@@ -1103,6 +1110,145 @@ async def retry_source_processing(
         )
 
 
+@router.post("/{source_id}/run-summaries")
+async def run_summaries(
+    source_id: str,
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Trigger summarization / insight extraction for a source."""
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        from app_main.services.command_service import CommandService
+
+        command_id = await CommandService.submit_command_job(
+            "open_notebook",
+            "run_summaries",
+            {"source_id": str(source.id)},
+        )
+        return {"command_id": command_id, "status": "queued"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering summaries for source {source_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error triggering summaries: {str(e)}",
+        )
+
+
+@router.post("/{source_id}/run-entities")
+async def run_entities(
+    source_id: str,
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Trigger entity extraction for a source (placeholder)."""
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        # Entity extraction via ontology pipeline is not yet wired.
+        # Return a stub response so the frontend can show "coming soon".
+        return {"command_id": None, "status": "not_available", "message": "Entity extraction not yet available"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering entities for source {source_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error triggering entities: {str(e)}",
+        )
+
+
+@router.post("/{source_id}/run-embed")
+async def run_embed(
+    source_id: str,
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Trigger embedding generation for a source."""
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        from app_main.services.command_service import CommandService
+
+        command_id = await CommandService.submit_command_job(
+            "open_notebook",
+            "embed_source",
+            {"source_id": str(source.id)},
+        )
+        return {"command_id": command_id, "status": "queued"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering embedding for source {source_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error triggering embedding: {str(e)}",
+        )
+
+
+@router.get("/{source_id}/processing-logs")
+async def get_processing_logs(
+    source_id: str,
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Get historical processing logs for a source (JSON array)."""
+    source = await source_svc.get(source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    from app_main.services.log_stream import get_log_stream
+
+    log_stream = get_log_stream()
+
+    # Try in-memory buffer first
+    entries = log_stream.get_entries(str(source.id))
+    if not entries:
+        # Fall back to persisted JSONL file
+        entries = log_stream.get_persisted_logs(str(source.id))
+
+    return [entry.to_dict() for entry in entries]
+
+
+@router.get("/{source_id}/logs")
+async def stream_source_logs(
+    source_id: str,
+    after: int = 0,
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Stream processing logs for a source via SSE.
+
+    Pass ``?after=N`` to skip the first N buffered entries (e.g. on
+    reconnection when the client already received them).
+    """
+    source = await source_svc.get(source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    from app_main.services.log_stream import get_log_stream
+
+    log_stream = get_log_stream()
+
+    async def event_generator():
+        async for entry in log_stream.subscribe(str(source.id), after=after):
+            yield entry.to_sse()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.delete("/{source_id}")
 async def delete_source(
     source_id: str,
@@ -1255,6 +1401,7 @@ async def get_source_chunks(
                     "element_type": getattr(chunk, "element_type", None),
                     "positions": getattr(chunk, "positions", None),
                     "metadata": getattr(chunk, "metadata", None),
+                    "is_content": getattr(chunk, "is_content", True),
                 }
             )
 
@@ -1347,4 +1494,89 @@ async def get_source_pdf(
         raise HTTPException(
             status_code=500,
             detail=f"Error serving PDF: {str(e)}",
+        )
+
+
+@router.get("/{source_id}/images/{filename}")
+async def get_source_image(
+    source_id: str,
+    filename: str,
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Serve an extracted image file from the ingestion output directory."""
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        # Security: only allow simple filenames (no path traversal)
+        if "/" in filename or "\\" in filename or ".." in filename:
+            raise HTTPException(
+                status_code=400, detail="Invalid filename"
+            )
+
+        output_dir = getattr(source, "output_directory", None)
+
+        # Fallback: derive from source file path + default ingestion output
+        if not output_dir and source.asset and source.asset.file_path:
+            stem = Path(source.asset.file_path).stem
+            candidate = Path("ingestion_output") / stem
+            if candidate.exists():
+                output_dir = str(candidate)
+
+        if not output_dir:
+            raise HTTPException(
+                status_code=404,
+                detail="No output directory for this source",
+            )
+
+        # Images are at: {output_directory}/output/extracted_info/images/{filename}
+        image_path = (
+            Path(output_dir) / "output" / "extracted_info" / "images" / filename
+        )
+
+        resolved = os.path.realpath(str(image_path))
+
+        # Security: ensure the resolved path is under the output directory
+        safe_root = os.path.realpath(str(output_dir))
+        if not resolved.startswith(safe_root):
+            raise HTTPException(
+                status_code=403, detail="Access to file denied"
+            )
+
+        if not os.path.exists(resolved):
+            raise HTTPException(
+                status_code=404, detail="Image file not found"
+            )
+
+        # Determine media type from extension
+        ext = Path(filename).suffix.lower().lstrip(".")
+        media_types = {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "gif": "image/gif",
+            "webp": "image/webp",
+            "svg": "image/svg+xml",
+            "bmp": "image/bmp",
+            "tiff": "image/tiff",
+            "tif": "image/tiff",
+        }
+        media_type = media_types.get(ext, "application/octet-stream")
+
+        return FileResponse(
+            path=resolved,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error serving image {filename} for source {source_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error serving image: {str(e)}",
         )

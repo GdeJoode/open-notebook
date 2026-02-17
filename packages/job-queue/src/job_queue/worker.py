@@ -106,7 +106,20 @@ class JobWorker:
         logger.info(f"Processing job {job_id} (type={job.job_type.value})")
 
         try:
-            result = await self._registry.execute(job.job_type, job.payload)
+            # Safety net: reconstruct payload from top-level fields if SCHEMAFULL stripped it
+            payload = dict(job.payload) if job.payload else {}
+            if "source_id" not in payload and hasattr(job, "source_id") and job.source_id:
+                payload["source_id"] = str(job.source_id)
+
+            # Warn if payload looks empty (SCHEMAFULL stripping likely occurred)
+            if not payload or (len(payload) <= 1 and "source_id" in payload):
+                logger.warning(
+                    f"Job {job_id} payload appears stripped by SCHEMAFULL schema. "
+                    "Ensure migration 30 has been applied or restart the server "
+                    "so the FLEXIBLE field override takes effect."
+                )
+
+            result = await self._registry.execute(job.job_type, payload)
             await self._repository.update_status(
                 job_id,
                 JobStatus.COMPLETED,

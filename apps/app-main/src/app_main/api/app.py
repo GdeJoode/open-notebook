@@ -54,8 +54,8 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     application = FastAPI(
-        title="Open Notebook API",
-        description="API for Open Notebook - Research Assistant",
+        title="Noesis API",
+        description="API for Noesis - Research Assistant",
         version="0.2.2",
         lifespan=lifespan,
     )
@@ -98,6 +98,7 @@ def create_app() -> FastAPI:
         notes,
         ontologies,
         podcasts,
+        preprocessing,
         search,
         settings,
         source_chat,
@@ -139,10 +140,13 @@ def create_app() -> FastAPI:
         knowledge_graph.router, prefix="/api", tags=["knowledge-graph"]
     )
     application.include_router(summaries.router, prefix="/api", tags=["summaries"])
+    application.include_router(
+        preprocessing.router, prefix="/api", tags=["preprocessing"]
+    )
 
     @application.get("/")
     async def root():
-        return {"message": "Open Notebook API is running"}
+        return {"message": "Noesis API is running"}
 
     @application.get("/health")
     async def health():

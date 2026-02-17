@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from app_main.services.log_stream import get_log_stream
 from shared.models import Asset, Source
 from shared.models.settings import ContentSettings
 from surrealdb_service.repositories import (
@@ -61,13 +62,17 @@ class SourceProcessingService:
         source_id: str,
         content_state: Dict[str, Any],
         *,
-        apply_transformations: bool = True,
-        embed: bool = True,
+        apply_transformations: bool = False,
+        embed: bool = False,
         notebook_ids: Optional[List[str]] = None,
         transformation_ids: Optional[List[str]] = None,
+        processing_overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Process a source through the full pipeline.
+        Extract content from a source and persist chunks.
+
+        This method only handles extraction. Embedding, summarization,
+        and entity extraction are triggered separately by the user.
 
         Args:
             source_id: ID of the source record to process.
@@ -75,61 +80,106 @@ class SourceProcessingService:
                 - ``{"file_path": "/path/to/file"}`` — process via IngestionWorkflow
                 - ``{"url": "https://..."}`` — extract web page content
                 - ``{"content": "raw text"}`` — wrap as single chunk
-            apply_transformations: Whether to run transformations afterwards.
-            embed: Whether to generate embeddings.
+            apply_transformations: Ignored (kept for backward compat).
+            embed: Ignored (kept for backward compat).
             notebook_ids: Optional notebook IDs (associations created by API layer).
-            transformation_ids: Explicit transformation IDs to apply.
-                If ``None`` and ``apply_transformations`` is ``True``,
-                falls back to default transformations.
+            transformation_ids: Ignored (kept for backward compat).
+            processing_overrides: Per-submission overrides merged on top of
+                the global ContentSettings.
 
         Returns:
-            Dict with ``source_id``, ``embedded_chunks``, ``insights_created``.
+            Dict with ``source_id`` and ``chunk_count``.
         """
+        log_stream = get_log_stream()
+
         # 1. Load source from DB
+        log_stream.emit(source_id, "Loading source record...")
+        source = await self.source_repo.get(source_id)
+        if source is None:
+            log_stream.emit(source_id, f"Source '{source_id}' not found", "ERROR")
+            log_stream.close(source_id)
+            raise ValueError(f"Source '{source_id}' not found")
+
+        # 2. Load settings and merge per-submission overrides
+        log_stream.emit(source_id, "Loading processing settings...")
+        content_settings = await self.settings_repo.get()
+        if processing_overrides:
+            settings_data = content_settings.model_dump()
+            settings_data.update(
+                {k: v for k, v in processing_overrides.items() if v is not None}
+            )
+            content_settings = ContentSettings(**settings_data)
+
+        # 3. Route to extraction method
+        method = "file" if "file_path" in content_state else (
+            "url" if "url" in content_state else "text"
+        )
+        log_stream.emit(source_id, f"Starting extraction (method: {method})...")
+        try:
+            extracted = await self._extract(content_state, content_settings, source_id=source_id)
+        except Exception as e:
+            log_stream.emit(source_id, f"Extraction failed: {e}", "ERROR")
+            log_stream.close(source_id)
+            raise
+
+        log_stream.emit(source_id, "Extraction completed successfully")
+
+        # 4. Update source record
+        log_stream.emit(source_id, "Updating source record...")
+        source = await self._update_source(source, extracted)
+
+        # 5. Replace chunks
+        chunk_count = 0
+        await self.chunk_repo.delete_by_source(source_id)
+        if extracted.chunks:
+            prepared = self._prepare_chunks_for_db(extracted.chunks, source_id)
+            log_stream.emit(source_id, f"Saving {len(prepared)} chunks...")
+            await self.chunk_repo.bulk_create(prepared)
+            chunk_count = len(prepared)
+            logger.info(f"Saved {chunk_count} chunks for source {source_id}")
+
+        log_stream.emit(
+            source_id,
+            f"Processing complete: {chunk_count} chunks created",
+        )
+        log_stream.close(source_id)
+
+        return {
+            "source_id": str(source.id),
+            "chunk_count": chunk_count,
+        }
+
+    async def embed_source(self, source_id: str) -> Dict[str, Any]:
+        """Generate embeddings for a source's chunks."""
         source = await self.source_repo.get(source_id)
         if source is None:
             raise ValueError(f"Source '{source_id}' not found")
 
-        # 2. Load settings
-        content_settings = await self.settings_repo.get()
-
-        # 3. Route to extraction method
-        extracted = await self._extract(content_state, content_settings)
-
-        # 4. Update source record
-        source = await self._update_source(source, extracted)
-
-        # 5. Replace chunks
-        await self.chunk_repo.delete_by_source(source_id)
-        if extracted.chunks:
-            prepared = self._prepare_chunks_for_db(extracted.chunks, source_id)
-            await self.chunk_repo.bulk_create(prepared)
-            logger.info(f"Saved {len(prepared)} chunks for source {source_id}")
-
-        # 6. Embed
-        if embed:
-            await self._embed(source_id)
-
-        # 7. Transform
-        if apply_transformations:
-            await self._run_transformations(
-                source,
-                transformation_ids=transformation_ids,
-            )
-
-        # 8. Gather stats
-        embedded_chunks = 0
-        if embed:
-            embedded_chunks = await self.source_repo.get_embedding_count(
-                source_id
-            )
-
-        insights_list = await self.source_repo.get_insights(source_id)
-
+        await self._embed(source_id)
+        embedded_chunks = await self.source_repo.get_embedding_count(source_id)
         return {
             "source_id": str(source.id),
             "embedded_chunks": embedded_chunks,
+        }
+
+    async def run_summaries(
+        self,
+        source_id: str,
+        transformation_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Run summarization transformations on a source."""
+        source = await self.source_repo.get(source_id)
+        if source is None:
+            raise ValueError(f"Source '{source_id}' not found")
+
+        count = await self._run_transformations(
+            source, transformation_ids=transformation_ids,
+        )
+        insights_list = await self.source_repo.get_insights(source_id)
+        return {
+            "source_id": str(source.id),
             "insights_created": len(insights_list),
+            "transformations_run": count,
         }
 
     # ------------------------------------------------------------------
@@ -140,6 +190,7 @@ class SourceProcessingService:
         self,
         content_state: Dict[str, Any],
         content_settings: ContentSettings,
+        source_id: str | None = None,
     ) -> ExtractionResult:
         """Route extraction based on content_state keys."""
         if "file_path" in content_state:
@@ -147,6 +198,7 @@ class SourceProcessingService:
                 file_path=content_state["file_path"],
                 content_settings=content_settings,
                 delete_source=content_state.get("delete_source", False),
+                source_id=source_id,
             )
         elif "url" in content_state:
             return await self._process_url(
@@ -169,6 +221,7 @@ class SourceProcessingService:
         file_path: str,
         content_settings: ContentSettings,
         delete_source: bool = False,
+        source_id: str | None = None,
     ) -> ExtractionResult:
         """
         Process a local file through the ingestion pipeline.
@@ -191,16 +244,50 @@ class SourceProcessingService:
         # Build IngestionConfig from ContentSettings
         config = self._build_ingestion_config(content_settings)
 
+        log_stream = get_log_stream()
+        emit_key = source_id or str(source_path)
+
         logger.info(
             f"Processing file via ingestion pipeline: {source_path.name}"
         )
+        log_stream.emit(emit_key, f"Processing file: {source_path.name}")
 
-        # IngestionWorkflow.process() is synchronous — run in thread pool
+        # IngestionWorkflow.process() is synchronous — run in thread pool.
+        # Bridge loguru logs from the ingestion pipeline into LogStreamService
+        # so the frontend can display verbose processing output.
         workflow = IngestionWorkflow(config)
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, workflow.process, source_path
+
+        def _loguru_to_stream(message: object) -> None:
+            """Forward ingestion/docling loguru logs to LogStreamService."""
+            record = message.record  # type: ignore[union-attr]
+            name = record.get("name", "")
+            # Only forward logs from the ingestion pipeline and docling
+            if not (
+                name.startswith("ingestion")
+                or "docling" in name.lower()
+            ):
+                return
+            level = record["level"].name
+            msg = str(record["message"]).strip()
+            if not msg:
+                return
+            try:
+                loop.call_soon_threadsafe(log_stream.emit, emit_key, msg, level)
+            except RuntimeError:
+                pass  # Loop closed — ignore
+
+        sink_id = logger.add(
+            _loguru_to_stream,
+            level="INFO",
+            format="{message}",
         )
+        try:
+            result = await loop.run_in_executor(
+                None, workflow.process, source_path
+            )
+        finally:
+            logger.remove(sink_id)
 
         if not result.success:
             raise RuntimeError(
@@ -296,6 +383,20 @@ class SourceProcessingService:
             TableMode.ACCURATE,
         )
 
+        # Map VLM model short names to HuggingFace repo IDs
+        vlm_model_map = {
+            "granite-docling-258m": "ibm-granite/granite-docling-258M",
+            "smoldocling-256m": "ds4sd/SmolDocling-256M-preview",
+        }
+        vlm_model = vlm_model_map.get(
+            content_settings.docling_vlm_model or "granite-docling-258m",
+            "ibm-granite/granite-docling-258M",
+        )
+
+        # Pipeline selection: "vlm" enables VLM features, "standard" disables them
+        pipeline = content_settings.docling_pipeline or "standard"
+        use_vlm = pipeline == "vlm"
+
         docling_cfg = DoclingConfig(
             device=device,
             do_ocr=True,
@@ -306,6 +407,9 @@ class SourceProcessingService:
             generate_picture_images=bool(
                 content_settings.docling_auto_export_images
             ),
+            do_picture_description=use_vlm,
+            do_picture_classification=use_vlm,
+            vlm_model=vlm_model,
         )
 
         return IngestionConfig(docling=docling_cfg)
@@ -317,6 +421,8 @@ class SourceProcessingService:
         """Convert ExtractedDocument pages/elements into chunk dicts."""
         chunks: List[Dict[str, Any]] = []
         order = 0
+        # Global image counter matching the exporter's enumerate(all_images, 1)
+        image_idx = 0
 
         for page in document.pages:
             # Text elements
@@ -372,6 +478,45 @@ class SourceProcessingService:
                             "has_spatial_data": len(positions) > 0,
                             "num_rows": table.num_rows,
                             "num_cols": table.num_cols,
+                        },
+                    }
+                )
+                order += 1
+
+            # Images — store filename reference, not base64 data
+            for image in page.images:
+                image_idx += 1
+                bbox = image.bbox
+                positions = []
+                if bbox and (bbox.width > 0 or bbox.height > 0):
+                    positions = [
+                        [bbox.page, bbox.x, bbox.x2, bbox.y, bbox.y2]
+                    ]
+
+                # Filename matches the exporter convention:
+                # image_{idx:03d}_page{page}.{format}
+                img_format = image.format or "png"
+                image_file = (
+                    f"image_{image_idx:03d}_page{image.page}.{img_format}"
+                )
+
+                chunks.append(
+                    {
+                        "text": image.description or image.content or f"[{image.classification}]",
+                        "order": order,
+                        "physical_page": page.page_number - 1,
+                        "printed_page": page.page_number,
+                        "chapter": None,
+                        "paragraph_number": None,
+                        "element_type": "image",
+                        "positions": positions,
+                        "metadata": {
+                            "has_spatial_data": len(positions) > 0,
+                            "classification": image.classification,
+                            "width": image.width,
+                            "height": image.height,
+                            "format": img_format,
+                            "image_file": image_file,
                         },
                     }
                 )
@@ -519,6 +664,11 @@ class SourceProcessingService:
         }
         if extracted.title:
             update_data["title"] = extracted.title
+
+        # Persist output directory so we can serve images later
+        output_dir = (extracted.metadata or {}).get("output_directory")
+        if output_dir:
+            update_data["output_directory"] = output_dir
 
         return await self.source_repo.update(source.id, update_data)
 

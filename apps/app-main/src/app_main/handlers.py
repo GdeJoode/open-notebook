@@ -28,41 +28,38 @@ registry = get_registry()
 
 @registry.register(JobType.DOCUMENT_PARSE)
 async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Process a source through the ingestion pipeline."""
+    """Extract content from a source (extraction only, no embed/transform)."""
     start_time = time.time()
     source_id = payload["source_id"]
 
     try:
         from app_main.dependencies import get_source_processing_service
 
-        logger.info(f"Starting source processing for source: {source_id}")
+        logger.info(f"Starting source extraction for source: {source_id}")
 
         service = get_source_processing_service()
         result = await service.process_source(
             source_id=source_id,
             content_state=payload["content_state"],
-            apply_transformations=bool(payload.get("transformations")),
-            embed=payload.get("embed", False),
             notebook_ids=payload.get("notebook_ids", []),
-            transformation_ids=payload.get("transformations", []) or None,
+            processing_overrides=payload.get("processing_overrides"),
         )
 
         processing_time = time.time() - start_time
         logger.info(
-            f"Successfully processed source {source_id} in {processing_time:.2f}s"
+            f"Successfully extracted source {source_id} in {processing_time:.2f}s"
         )
 
         return {
             "success": True,
             "source_id": result["source_id"],
-            "embedded_chunks": result["embedded_chunks"],
-            "insights_created": result["insights_created"],
+            "chunk_count": result["chunk_count"],
             "processing_time": processing_time,
         }
 
     except Exception as e:
         processing_time = time.time() - start_time
-        logger.error(f"Source processing failed: {e}")
+        logger.error(f"Source extraction failed: {e}")
         raise
 
 
@@ -90,7 +87,44 @@ async def handle_generate_podcast(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# EMBEDDING_GENERATE — embed_single_item + rebuild_embeddings
+# INSIGHT_EXTRACT — run_summaries / analyze_data
+# ---------------------------------------------------------------------------
+
+
+@registry.register(JobType.INSIGHT_EXTRACT)
+async def handle_insight_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Run summarization / insight extraction on a source."""
+    start_time = time.time()
+    command_name = payload.get("command_name", "run_summaries")
+    source_id = payload["source_id"]
+
+    try:
+        from app_main.dependencies import get_source_processing_service
+
+        logger.info(f"Starting summaries for source: {source_id}")
+        service = get_source_processing_service()
+        result = await service.run_summaries(
+            source_id=source_id,
+            transformation_ids=payload.get("transformation_ids"),
+        )
+
+        processing_time = time.time() - start_time
+        logger.info(
+            f"Summaries completed for source {source_id} in {processing_time:.2f}s"
+        )
+        return {
+            "success": True,
+            **result,
+            "processing_time": processing_time,
+        }
+
+    except Exception as e:
+        logger.error(f"Insight extraction failed for source {source_id}: {e}")
+        raise
+
+
+# ---------------------------------------------------------------------------
+# EMBEDDING_GENERATE — embed_single_item + embed_source + rebuild_embeddings
 # ---------------------------------------------------------------------------
 
 
@@ -99,15 +133,39 @@ async def handle_embedding(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Dispatch embedding jobs.
 
-    The payload's `command_name` distinguishes between embed_single_item
-    and rebuild_embeddings.
+    The payload's `command_name` distinguishes between embed_single_item,
+    embed_source, and rebuild_embeddings.
     """
     command_name = payload.get("command_name", "embed_single_item")
 
     if command_name == "rebuild_embeddings":
         return await _handle_rebuild_embeddings(payload)
+    elif command_name == "embed_source":
+        return await _handle_embed_source(payload)
     else:
         return await _handle_embed_single_item(payload)
+
+
+async def _handle_embed_source(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Embed all chunks for a source."""
+    start_time = time.time()
+    source_id = payload["source_id"]
+
+    from app_main.dependencies import get_source_processing_service
+
+    logger.info(f"Starting embedding for source: {source_id}")
+    service = get_source_processing_service()
+    result = await service.embed_source(source_id)
+
+    processing_time = time.time() - start_time
+    logger.info(
+        f"Embedding completed for source {source_id} in {processing_time:.2f}s"
+    )
+    return {
+        "success": True,
+        **result,
+        "processing_time": processing_time,
+    }
 
 
 async def _handle_embed_single_item(payload: Dict[str, Any]) -> Dict[str, Any]:

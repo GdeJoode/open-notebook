@@ -175,7 +175,7 @@ class DoclingConfig:
                 prompt=self.vlm_prompt,
             )
 
-        return PdfPipelineOptions(
+        kwargs: dict = dict(
             accelerator_options=accel_options,
             do_ocr=self.do_ocr,
             ocr_options=ocr_options,
@@ -185,8 +185,14 @@ class DoclingConfig:
             images_scale=self.images_scale,
             do_picture_classification=self.do_picture_classification,
             do_picture_description=self.do_picture_description,
-            picture_description_options=picture_desc_options,
         )
+
+        # Only pass picture_description_options when not None —
+        # docling requires a valid PictureDescriptionBaseOptions instance, not None.
+        if picture_desc_options is not None:
+            kwargs["picture_description_options"] = picture_desc_options
+
+        return PdfPipelineOptions(**kwargs)
 
 
 @dataclass

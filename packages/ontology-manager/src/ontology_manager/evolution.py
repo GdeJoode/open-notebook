@@ -135,7 +135,7 @@ class OntologyEvolutionAgent:
             The created or updated OntologyGap
         """
         try:
-            from surrealdb_service.repositories import query as repo_query
+            from surrealdb_service.connection import execute_query as repo_query
 
             # Check if gap already exists
             existing = await repo_query(
@@ -240,7 +240,7 @@ class OntologyEvolutionAgent:
     async def _maybe_create_proposal(self, gap: OntologyGap) -> Optional[SchemaProposal]:
         """Create a proposal if threshold reached and no existing proposal."""
         try:
-            from surrealdb_service.repositories import query as repo_query
+            from surrealdb_service.connection import execute_query as repo_query
 
             # Check if proposal already exists
             existing = await repo_query(
@@ -277,7 +277,7 @@ class OntologyEvolutionAgent:
             The created SchemaProposal or None
         """
         try:
-            from surrealdb_service.repositories import query as repo_query, ensure_record_id
+            from surrealdb_service.connection import execute_query as repo_query, ensure_record_id
 
             # Determine proposal type based on entity_type_guess
             proposal_type = ProposalType.NEW_ENTITY_TYPE
@@ -380,7 +380,7 @@ class OntologyEvolutionAgent:
             List of OntologyGap objects
         """
         try:
-            from surrealdb_service.repositories import query as repo_query
+            from surrealdb_service.connection import execute_query as repo_query
 
             query = """
                 SELECT * FROM ontology_gap
@@ -437,7 +437,7 @@ class OntologyEvolutionAgent:
             List of SchemaProposal objects
         """
         try:
-            from surrealdb_service.repositories import query as repo_query
+            from surrealdb_service.connection import execute_query as repo_query
 
             query = """
                 SELECT * FROM schema_proposal
@@ -487,7 +487,7 @@ class OntologyEvolutionAgent:
             True if successfully approved
         """
         try:
-            from surrealdb_service.repositories import query as repo_query, ensure_record_id
+            from surrealdb_service.connection import execute_query as repo_query, ensure_record_id
 
             await repo_query(
                 """
@@ -519,7 +519,7 @@ class OntologyEvolutionAgent:
             True if successfully rejected
         """
         try:
-            from surrealdb_service.repositories import query as repo_query, ensure_record_id
+            from surrealdb_service.connection import execute_query as repo_query, ensure_record_id
 
             await repo_query(
                 """
@@ -564,7 +564,7 @@ class OntologyEvolutionAgent:
             Dictionary with gap statistics
         """
         try:
-            from surrealdb_service.repositories import query as repo_query
+            from surrealdb_service.connection import execute_query as repo_query
 
             # Total gaps
             total_result = await repo_query(

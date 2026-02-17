@@ -1,9 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { PlusIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { AddSourceDialog } from './AddSourceDialog'
 
 interface AddSourceButtonProps {
   defaultNotebookId?: string
@@ -13,32 +12,31 @@ interface AddSourceButtonProps {
   iconOnly?: boolean
 }
 
-export function AddSourceButton({ 
-  defaultNotebookId, 
+export function AddSourceButton({
+  defaultNotebookId,
   variant = 'default',
   size = 'default',
   className,
   iconOnly = false
 }: AddSourceButtonProps) {
-  const [dialogOpen, setDialogOpen] = useState(false)
+  const router = useRouter()
+
+  const handleClick = () => {
+    const url = defaultNotebookId
+      ? `/sources/new?notebook=${defaultNotebookId}`
+      : '/sources/new'
+    router.push(url)
+  }
 
   return (
-    <>
-      <Button
-        onClick={() => setDialogOpen(true)}
-        variant={variant}
-        size={size}
-        className={className}
-      >
-        <PlusIcon className={iconOnly ? "h-4 w-4" : "h-4 w-4 mr-2"} />
-        {!iconOnly && "Add Source"}
-      </Button>
-
-      <AddSourceDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        defaultNotebookId={defaultNotebookId}
-      />
-    </>
+    <Button
+      onClick={handleClick}
+      variant={variant}
+      size={size}
+      className={className}
+    >
+      <PlusIcon className={iconOnly ? "h-4 w-4" : "h-4 w-4 mr-2"} />
+      {!iconOnly && "Add Source"}
+    </Button>
   )
 }

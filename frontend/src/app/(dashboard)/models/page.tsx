@@ -50,7 +50,7 @@ export default function ModelsPage() {
             <div>
               <h1 className="text-2xl font-bold">Model Management</h1>
               <p className="text-muted-foreground mt-1">
-                Configure AI models for different purposes across Open Notebook
+                Configure AI models for different purposes across Noesis
               </p>
             </div>
             <Button variant="outline" size="sm" onClick={handleRefresh}>

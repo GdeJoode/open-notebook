@@ -306,9 +306,15 @@ class ChunkRepository(BaseRepository[Chunk]):
             List of created chunks.
         """
         try:
+            prepared = []
+            for chunk in chunks:
+                c = dict(chunk)
+                if "source" in c and isinstance(c["source"], str):
+                    c["source"] = ensure_record_id(c["source"])
+                prepared.append(c)
             result = await execute_query(
                 "INSERT INTO chunk $chunks",
-                {"chunks": chunks},
+                {"chunks": prepared},
                 self.config,
             )
             return [Chunk(**item) for item in result] if result else []

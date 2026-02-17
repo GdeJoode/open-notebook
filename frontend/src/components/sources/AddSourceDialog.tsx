@@ -16,21 +16,19 @@ import { Button } from '@/components/ui/button'
 import { WizardContainer, WizardStep } from '@/components/ui/wizard-container'
 import { SourceTypeStep } from './steps/SourceTypeStep'
 import { NotebooksStep } from './steps/NotebooksStep'
-import { ProcessingStep } from './steps/ProcessingStep'
+import { ProcessingConfigStep } from './steps/ProcessingConfigStep'
 import { useNotebooks } from '@/lib/hooks/use-notebooks'
-import { useTransformations } from '@/lib/hooks/use-transformations'
 import { useCreateSource } from '@/lib/hooks/use-sources'
 import { useSettings } from '@/lib/hooks/use-settings'
-import { CreateSourceRequest } from '@/lib/types/api'
+import { CreateSourceRequest, SettingsResponse } from '@/lib/types/api'
 
 const createSourceSchema = z.object({
-  type: z.enum(['link', 'upload', 'text']),
+  type: z.enum(['link', 'upload', 'text', 'queue']),
   title: z.string().optional(),
   url: z.string().optional(),
   content: z.string().optional(),
   file: z.any().optional(),
   notebooks: z.array(z.string()).optional(),
-  transformations: z.array(z.string()).optional(),
   embed: z.boolean(),
   async_processing: z.boolean(),
 }).refine((data) => {
@@ -72,7 +70,7 @@ interface AddSourceDialogProps {
 const WIZARD_STEPS: readonly WizardStep[] = [
   { number: 1, title: 'Source & Content', description: 'Choose type and add content' },
   { number: 2, title: 'Organization', description: 'Select notebooks' },
-  { number: 3, title: 'Processing', description: 'Choose transformations and options' },
+  { number: 3, title: 'Processing', description: 'Configure processing options' },
 ]
 
 interface ProcessingState {
@@ -80,19 +78,19 @@ interface ProcessingState {
   progress?: number
 }
 
-export function AddSourceDialog({ 
-  open, 
-  onOpenChange, 
-  defaultNotebookId 
+export function AddSourceDialog({
+  open,
+  onOpenChange,
+  defaultNotebookId
 }: AddSourceDialogProps) {
-  // Simplified state management
+  // State management
   const [currentStep, setCurrentStep] = useState(1)
   const [processing, setProcessing] = useState(false)
   const [processingStatus, setProcessingStatus] = useState<ProcessingState | null>(null)
   const [selectedNotebooks, setSelectedNotebooks] = useState<string[]>(
     defaultNotebookId ? [defaultNotebookId] : []
   )
-  const [selectedTransformations, setSelectedTransformations] = useState<string[]>([])
+  const [processingOverrides, setProcessingOverrides] = useState<Record<string, unknown>>({})
 
   // Cleanup timeouts to prevent memory leaks
   const timeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -100,7 +98,6 @@ export function AddSourceDialog({
   // API hooks
   const createSource = useCreateSource()
   const { data: notebooks = [], isLoading: notebooksLoading } = useNotebooks()
-  const { data: transformations = [], isLoading: transformationsLoading } = useTransformations()
   const { data: settings } = useSettings()
 
   // Form setup
@@ -109,6 +106,7 @@ export function AddSourceDialog({
     handleSubmit,
     control,
     watch,
+    setValue: setFormValue,
     formState: { errors },
     reset,
   } = useForm<CreateSourceFormData>({
@@ -117,20 +115,12 @@ export function AddSourceDialog({
       notebooks: defaultNotebookId ? [defaultNotebookId] : [],
       embed: settings?.default_embedding_option === 'always' || settings?.default_embedding_option === 'ask',
       async_processing: true,
-      transformations: [],
     },
   })
 
-  // Initialize form values when settings and transformations are loaded
+  // Initialize form values when settings load
   useEffect(() => {
-    if (settings && transformations.length > 0) {
-      const defaultTransformations = transformations
-        .filter(t => t.apply_default)
-        .map(t => t.id)
-
-      setSelectedTransformations(defaultTransformations)
-
-      // Reset form with proper embed value based on settings
+    if (settings) {
       const embedValue = settings.default_embedding_option === 'always' ||
                          (settings.default_embedding_option === 'ask')
 
@@ -138,10 +128,9 @@ export function AddSourceDialog({
         notebooks: defaultNotebookId ? [defaultNotebookId] : [],
         embed: embedValue,
         async_processing: true,
-        transformations: [],
       })
     }
-  }, [settings, transformations, defaultNotebookId, reset])
+  }, [settings, defaultNotebookId, reset])
 
   // Cleanup effect
   useEffect(() => {
@@ -157,6 +146,7 @@ export function AddSourceDialog({
   const watchedContent = watch('content')
   const watchedFile = watch('file')
   const watchedTitle = watch('title')
+
 
   // Step validation - now reactive with watched values
   const isStepValid = (step: number): boolean => {
@@ -216,13 +206,6 @@ export function AddSourceDialog({
     setSelectedNotebooks(updated)
   }
 
-  const handleTransformationToggle = (transformationId: string) => {
-    const updated = selectedTransformations.includes(transformationId)
-      ? selectedTransformations.filter(id => id !== transformationId)
-      : [...selectedTransformations, transformationId]
-    setSelectedTransformations(updated)
-  }
-
   // Form submission
   const onSubmit = async (data: CreateSourceFormData) => {
     try {
@@ -230,18 +213,20 @@ export function AddSourceDialog({
       setProcessingStatus({ message: 'Submitting source for processing...' })
 
       const createRequest: CreateSourceRequest = {
-        type: data.type,
+        type: data.type as 'link' | 'upload' | 'text',
         notebooks: selectedNotebooks,
         url: data.type === 'link' ? data.url : undefined,
         content: data.type === 'text' ? data.content : undefined,
         title: data.title,
-        transformations: selectedTransformations,
         embed: data.embed,
         delete_source: false,
-        async_processing: true, // Always use async processing for frontend submissions
+        async_processing: true,
+        processing_overrides: Object.keys(processingOverrides).length > 0
+          ? processingOverrides as Partial<SettingsResponse>
+          : undefined,
       }
 
-      
+
       if (data.type === 'upload' && data.file) {
         const file = data.file instanceof FileList ? data.file[0] : data.file
         const requestWithFile = createRequest as CreateSourceRequest & { file?: File }
@@ -254,7 +239,7 @@ export function AddSourceDialog({
       handleClose()
     } catch (error) {
       console.error('Error creating source:', error)
-      setProcessingStatus({ 
+      setProcessingStatus({
         message: 'Error creating source. Please try again.',
       })
       timeoutRef.current = setTimeout(() => {
@@ -277,16 +262,7 @@ export function AddSourceDialog({
     setProcessing(false)
     setProcessingStatus(null)
     setSelectedNotebooks(defaultNotebookId ? [defaultNotebookId] : [])
-
-    // Reset to default transformations
-    if (transformations.length > 0) {
-      const defaultTransformations = transformations
-        .filter(t => t.apply_default)
-        .map(t => t.id)
-      setSelectedTransformations(defaultTransformations)
-    } else {
-      setSelectedTransformations([])
-    }
+    setProcessingOverrides({})
 
     onOpenChange(false)
   }
@@ -302,7 +278,7 @@ export function AddSourceDialog({
               Your source is being processed. This may take a few moments.
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="space-y-4 py-4">
             <div className="flex items-center gap-3">
               <LoaderIcon className="h-5 w-5 animate-spin text-primary" />
@@ -310,11 +286,11 @@ export function AddSourceDialog({
                 {processingStatus?.message || 'Processing...'}
               </span>
             </div>
-            
+
             {processingStatus?.progress && (
               <div className="w-full bg-muted rounded-full h-2">
-                <div 
-                  className="bg-primary h-2 rounded-full transition-all duration-300" 
+                <div
+                  className="bg-primary h-2 rounded-full transition-all duration-300"
                   style={{ width: `${processingStatus.progress}%` }}
                 />
               </div>
@@ -353,7 +329,7 @@ export function AddSourceDialog({
                 errors={errors}
               />
             )}
-            
+
             {currentStep === 2 && (
               <NotebooksStep
                 notebooks={notebooks}
@@ -362,25 +338,21 @@ export function AddSourceDialog({
                 loading={notebooksLoading}
               />
             )}
-            
+
             {currentStep === 3 && (
-              <ProcessingStep
-                // @ts-expect-error - Type inference issue with zod schema
-                control={control}
-                transformations={transformations}
-                selectedTransformations={selectedTransformations}
-                onToggleTransformation={handleTransformationToggle}
-                loading={transformationsLoading}
+              <ProcessingConfigStep
                 settings={settings}
+                overrides={processingOverrides}
+                onOverridesChange={setProcessingOverrides}
               />
             )}
           </WizardContainer>
 
           {/* Navigation */}
           <div className="flex justify-between items-center px-6 py-4 border-t border-border bg-muted">
-            <Button 
-              type="button" 
-              variant="outline" 
+            <Button
+              type="button"
+              variant="outline"
               onClick={handleClose}
             >
               Cancel

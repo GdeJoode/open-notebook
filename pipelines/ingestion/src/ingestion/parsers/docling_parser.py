@@ -402,8 +402,13 @@ class DoclingParser:
         """Extract image with classification and VLM description."""
         # Get classification
         classification = "unknown"
-        if hasattr(item, "classification"):
-            classification = str(item.classification)
+        if hasattr(item, "classification") and item.classification is not None:
+            cls = item.classification
+            # PictureClassificationClass is a Pydantic model with class_name/confidence
+            if hasattr(cls, "class_name"):
+                classification = str(cls.class_name)
+            else:
+                classification = str(cls)
         elif hasattr(item, "image_type"):
             classification = str(item.image_type)
 
@@ -422,9 +427,9 @@ class DoclingParser:
 
         if hasattr(item, "image"):
             img = item.image
-            if hasattr(img, "uri"):
-                # Base64 encoded
-                image_data = img.uri
+            if hasattr(img, "uri") and img.uri:
+                # Convert to str — Docling may return a Pydantic AnyUrl object
+                image_data = str(img.uri)
             if hasattr(img, "size"):
                 width, height = img.size
             if hasattr(img, "format"):

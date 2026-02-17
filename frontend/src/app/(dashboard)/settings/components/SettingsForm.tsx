@@ -663,7 +663,7 @@ export function SettingsForm() {
                 Help me choose
               </CollapsibleTrigger>
               <CollapsibleContent className="mt-2 text-sm text-muted-foreground space-y-2">
-                <p>Once your files are uploaded and processed, they are not required anymore. Most users should allow Open Notebook to delete uploaded files from the upload folder automatically. Choose <strong>no</strong>, ONLY if you are using Notebook as the primary storage location for those files (which you shouldn&apos;t be at all). This option will soon be deprecated in favor of always downloading the files.</p>
+                <p>Once your files are uploaded and processed, they are not required anymore. Most users should allow Noesis to delete uploaded files from the upload folder automatically. Choose <strong>no</strong>, ONLY if you are using Notebook as the primary storage location for those files (which you shouldn&apos;t be at all). This option will soon be deprecated in favor of always downloading the files.</p>
                 <p>• Choose <strong>yes</strong> (recommended) to automatically delete uploaded files after processing</p>
                 <p>• Choose <strong>no</strong> only if you need to keep the original files in the upload folder</p>
               </CollapsibleContent>

@@ -339,6 +339,9 @@ class SourceCreate(BaseModel):
     async_processing: bool = Field(
         False, description="Whether to process source asynchronously"
     )
+    processing_overrides: Optional[Dict[str, Any]] = Field(
+        None, description="Per-submission overrides for processing settings"
+    )
 
     @model_validator(mode="after")
     def validate_notebook_fields(self):

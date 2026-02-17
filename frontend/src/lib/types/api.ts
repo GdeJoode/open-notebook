@@ -130,6 +130,8 @@ export interface CreateSourceRequest {
   delete_source?: boolean
   // New async processing support
   async_processing?: boolean
+  // Per-submission processing config overrides
+  processing_overrides?: Partial<SettingsResponse>
 }
 
 export interface UpdateNoteRequest {

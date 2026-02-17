@@ -1,0 +1,4 @@
+-- Rollback migration 30: Remove flexible from payload and result
+
+DEFINE FIELD OVERWRITE payload ON TABLE job TYPE object DEFAULT {};
+DEFINE FIELD OVERWRITE result ON TABLE job TYPE option<object>;

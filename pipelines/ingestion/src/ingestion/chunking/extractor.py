@@ -374,8 +374,12 @@ class ChunkExtractor:
                     element_type = "picture"
                     # Store classification in metadata for content filtering
                     classification = "unknown"
-                    if hasattr(item, "classification"):
-                        classification = str(item.classification).lower()
+                    if hasattr(item, "classification") and item.classification is not None:
+                        cls = item.classification
+                        if hasattr(cls, "class_name"):
+                            classification = str(cls.class_name).lower()
+                        else:
+                            classification = str(cls).lower()
                     metadata = {"classification": classification}
 
             else:

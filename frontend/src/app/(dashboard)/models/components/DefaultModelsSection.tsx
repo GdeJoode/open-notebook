@@ -155,7 +155,7 @@ export function DefaultModelsSection({ models, defaults }: DefaultModelsSectionP
       <CardHeader>
         <CardTitle>Default Model Assignments</CardTitle>
         <CardDescription>
-          Configure which models to use for different purposes across Open Notebook
+          Configure which models to use for different purposes across Noesis
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -164,7 +164,7 @@ export function DefaultModelsSection({ models, defaults }: DefaultModelsSectionP
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
               Missing required models: {missingRequired.join(', ')}. 
-              Open Notebook may not function properly without these.
+              Noesis may not function properly without these.
             </AlertDescription>
           </Alert>
         )}

@@ -1,0 +1,5 @@
+
+-- Rollback migration 29: Restore original command field type
+
+DEFINE FIELD OVERWRITE command ON source TYPE option<record<command>>;
+DEFINE FIELD OVERWRITE command ON episode TYPE option<record<command>>;

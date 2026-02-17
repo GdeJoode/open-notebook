@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -22,7 +22,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { ThemeToggle } from '@/components/common/ThemeToggle'
-import { AddSourceDialog } from '@/components/sources/AddSourceDialog'
 import { CreateNotebookDialog } from '@/components/notebooks/CreateNotebookDialog'
 import { GeneratePodcastDialog } from '@/components/podcasts/GeneratePodcastDialog'
 import { Separator } from '@/components/ui/separator'
@@ -85,11 +84,11 @@ type CreateTarget = 'source' | 'notebook' | 'podcast'
 
 export function AppSidebar() {
   const pathname = usePathname()
+  const router = useRouter()
   const { logout } = useAuth()
   const { isCollapsed, toggleCollapse } = useSidebarStore()
 
   const [createMenuOpen, setCreateMenuOpen] = useState(false)
-  const [sourceDialogOpen, setSourceDialogOpen] = useState(false)
   const [notebookDialogOpen, setNotebookDialogOpen] = useState(false)
   const [podcastDialogOpen, setPodcastDialogOpen] = useState(false)
 
@@ -97,7 +96,7 @@ export function AppSidebar() {
     setCreateMenuOpen(false)
 
     if (target === 'source') {
-      setSourceDialogOpen(true)
+      router.push('/sources/new')
     } else if (target === 'notebook') {
       setNotebookDialogOpen(true)
     } else if (target === 'podcast') {
@@ -123,7 +122,7 @@ export function AppSidebar() {
             <div className="relative flex items-center justify-center w-full">
               <Image
                 src="/logo.svg"
-                alt="Open Notebook"
+                alt="Noesis"
                 width={32}
                 height={32}
                 className="transition-opacity group-hover:opacity-0"
@@ -140,9 +139,9 @@ export function AppSidebar() {
           ) : (
             <>
               <div className="flex items-center gap-2">
-                <Image src="/logo.svg" alt="Open Notebook" width={32} height={32} />
+                <Image src="/logo.svg" alt="Noesis" width={32} height={32} />
                 <span className="text-base font-medium text-sidebar-foreground">
-                  Open Notebook
+                  Noesis
                 </span>
               </div>
               <Button
@@ -344,7 +343,6 @@ export function AppSidebar() {
         </div>
       </div>
 
-      <AddSourceDialog open={sourceDialogOpen} onOpenChange={setSourceDialogOpen} />
       <CreateNotebookDialog
         open={notebookDialogOpen}
         onOpenChange={setNotebookDialogOpen}

@@ -1,0 +1,5 @@
+-- Migration 30: Allow arbitrary fields inside job payload and result objects
+-- SCHEMAFULL tables strip undefined nested fields, so payload contents were lost.
+
+DEFINE FIELD OVERWRITE payload ON TABLE job FLEXIBLE TYPE object DEFAULT {};
+DEFINE FIELD OVERWRITE result ON TABLE job FLEXIBLE TYPE option<object>;

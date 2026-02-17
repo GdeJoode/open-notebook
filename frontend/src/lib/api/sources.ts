@@ -61,6 +61,10 @@ export const sourcesApi = {
     formData.append('embed', String(data.embed ?? false))
     formData.append('delete_source', String(data.delete_source ?? false))
     formData.append('async_processing', String(data.async_processing ?? false))
+
+    if (data.processing_overrides && Object.keys(data.processing_overrides).length > 0) {
+      formData.append('processing_overrides', JSON.stringify(data.processing_overrides))
+    }
     
     const response = await apiClient.post<SourceResponse>('/sources', formData)
     return response.data
@@ -100,10 +104,38 @@ export const sourcesApi = {
     return response.data
   },
 
+  runSummaries: async (id: string) => {
+    const response = await apiClient.post<{ command_id: string | null; status: string }>(`/sources/${id}/run-summaries`)
+    return response.data
+  },
+
+  runEntities: async (id: string) => {
+    const response = await apiClient.post<{ command_id: string | null; status: string; message?: string }>(`/sources/${id}/run-entities`)
+    return response.data
+  },
+
+  runEmbed: async (id: string) => {
+    const response = await apiClient.post<{ command_id: string | null; status: string }>(`/sources/${id}/run-embed`)
+    return response.data
+  },
+
+  getProcessingLogs: async (id: string) => {
+    const response = await apiClient.get<Array<{ level: string; message: string; timestamp: number }>>(
+      `/sources/${id}/processing-logs`
+    )
+    return response.data
+  },
+
   downloadFile: async (id: string): Promise<AxiosResponse<Blob>> => {
     return apiClient.get(`/sources/${id}/download`, {
       responseType: 'blob',
     })
+  },
+
+  getImageUrl: async (sourceId: string, filename: string) => {
+    const { getApiUrl } = await import('@/lib/config')
+    const apiUrl = await getApiUrl()
+    return `${apiUrl}/api/sources/${sourceId}/images/${filename}`
   },
 
   getChunks: async (id: string) => {
@@ -119,6 +151,7 @@ export const sourcesApi = {
         element_type: string
         positions: number[][]
         metadata: Record<string, unknown>
+        is_content: boolean
       }>
       total_chunks: number
       has_spatial_data: boolean
