@@ -23,9 +23,16 @@ class NoteService:
         """Get a note by ID."""
         return await self.note_repo.get(note_id)
 
-    async def get_all(self, order_by: str = "updated desc") -> List[Note]:
-        """Get all notes."""
-        return await self.note_repo.get_all(order_by=order_by)
+    async def get_all(
+        self,
+        order_by: str = "updated desc",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Note]:
+        """Get all notes with pagination."""
+        return await self.note_repo.get_all(
+            order_by=order_by, limit=limit, offset=offset
+        )
 
     async def create(
         self,

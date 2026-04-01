@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
 from app_main.api.schemas import NotebookCreate, NotebookResponse, NotebookUpdate
@@ -31,11 +31,13 @@ def _notebook_dict_to_response(data: dict) -> NotebookResponse:
 async def list_notebooks(
     archived: Optional[bool] = None,
     order_by: str = "updated desc",
+    limit: int = Query(50, ge=1, le=100, description="Max notebooks to return"),
+    offset: int = Query(0, ge=0, description="Number of notebooks to skip"),
     notebook_service: NotebookService = Depends(get_notebook_service),
 ):
     """List all notebooks with source and note counts."""
     notebooks = await notebook_service.get_all_with_counts(
-        order_by=order_by, archived=archived,
+        order_by=order_by, archived=archived, limit=limit, offset=offset,
     )
     return [_notebook_dict_to_response(nb) for nb in notebooks]
 

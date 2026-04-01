@@ -147,3 +147,11 @@ class JobWorker:
                     JobStatus.FAILED,
                     error_message=str(e),
                 )
+                # Write to dead-letter table for post-mortem analysis
+                await self._repository.add_to_dead_letter(
+                    job_id=job_id,
+                    job_type=job.job_type.value,
+                    payload=payload,
+                    error_message=str(e),
+                    retry_count=job.retry_count,
+                )

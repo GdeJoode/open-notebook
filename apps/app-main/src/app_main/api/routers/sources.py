@@ -234,10 +234,6 @@ async def get_sources(
                 detail="sort_order must be 'asc' or 'desc'",
             )
 
-        from surrealdb_service.connection import execute_query, ensure_record_id
-
-        order_clause = f"ORDER BY {sort_by} {sort_order.upper()}"
-
         if notebook_id:
             notebook = await notebook_svc.get(notebook_id)
             if not notebook:
@@ -245,88 +241,27 @@ async def get_sources(
                     status_code=404, detail="Notebook not found"
                 )
 
-            query = f"""
-                SELECT id, asset, created, title, updated, topics, command,
-                (SELECT VALUE count() FROM source_insight
-                 WHERE source = $parent.id GROUP ALL)[0].count OR 0
-                 AS insights_count,
-                ((SELECT VALUE id FROM source_embedding
-                  WHERE source = $parent.id LIMIT 1)) != NONE AS embedded
-                FROM (select value in from reference where out=$notebook_id)
-                {order_clause}
-                LIMIT $limit START $offset
-            """
-            result = await execute_query(
-                query,
-                {
-                    "notebook_id": ensure_record_id(notebook_id),
-                    "limit": limit,
-                    "offset": offset,
-                },
-            )
-        else:
-            query = f"""
-                SELECT id, asset, created, title, updated, topics, command,
-                (SELECT VALUE count() FROM source_insight
-                 WHERE source = $parent.id GROUP ALL)[0].count OR 0
-                 AS insights_count,
-                ((SELECT VALUE id FROM source_embedding
-                  WHERE source = $parent.id LIMIT 1)) != NONE AS embedded
-                FROM source
-                {order_clause}
-                LIMIT $limit START $offset
-            """
-            result = await execute_query(
-                query, {"limit": limit, "offset": offset}
-            )
+        from surrealdb_service.repositories import SourceRepository
 
-        # Batch fetch command statuses
+        source_repo = SourceRepository()
+        result = await source_repo.list_with_metadata(
+            notebook_id=notebook_id,
+            order_by=sort_by,
+            order_dir=sort_order.upper(),
+            limit=limit,
+            offset=offset,
+        )
+
+        # Batch fetch command statuses in a single query
         command_ids = []
-        command_to_source: Dict[str, Any] = {}
         for row in result:
             command = row.get("command")
             if command:
-                cid = str(command)
-                command_ids.append(cid)
-                command_to_source[cid] = row["id"]
+                command_ids.append(str(command))
 
-        command_statuses: Dict[str, Any] = {}
-        if command_ids:
-            try:
-                from app_main.services.command_service import CommandService
-
-                semaphore = asyncio.Semaphore(10)
-
-                async def get_status_safe(command_id: str):
-                    async with semaphore:
-                        try:
-                            status = await CommandService.get_command_status(
-                                command_id
-                            )
-                            return (command_id, status)
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to get status for command "
-                                f"{command_id}: {e}"
-                            )
-                            return (command_id, None)
-
-                status_results = await asyncio.gather(
-                    *[get_status_safe(cid) for cid in command_ids],
-                    return_exceptions=True,
-                )
-
-                for sr in status_results:
-                    if isinstance(sr, Exception):
-                        continue
-                    if isinstance(sr, tuple) and len(sr) == 2:
-                        cmd_id, status = sr
-                        command_statuses[cmd_id] = status
-
-            except Exception as e:
-                logger.warning(
-                    f"Failed to batch fetch command statuses: {e}"
-                )
+        command_statuses = await source_repo.batch_get_command_status(
+            command_ids
+        )
 
         response_list = []
         for row in result:
@@ -336,20 +271,21 @@ async def get_sources(
             processing_info = None
 
             if command_id and command_id in command_statuses:
-                status_obj = command_statuses[command_id]
-                if status_obj and isinstance(status_obj, dict):
-                    status = status_obj.get("status")
-                    result_data = status_obj.get("result")
-                    execution_metadata = (
-                        result_data.get("execution_metadata", {})
-                        if isinstance(result_data, dict)
-                        else {}
-                    )
-                    processing_info = {
-                        "started_at": execution_metadata.get("started_at"),
-                        "completed_at": execution_metadata.get("completed_at"),
-                        "error": status_obj.get("error_message"),
-                    }
+                job = command_statuses[command_id]
+                status = job.get("status")
+                result_data = job.get("result")
+                execution_metadata = (
+                    result_data.get("execution_metadata", {})
+                    if isinstance(result_data, dict)
+                    else {}
+                )
+                processing_info = {
+                    "started_at": execution_metadata.get("started_at")
+                    or job.get("started_at"),
+                    "completed_at": execution_metadata.get("completed_at")
+                    or job.get("completed_at"),
+                    "error": job.get("error_message"),
+                }
             elif command_id:
                 status = "unknown"
 

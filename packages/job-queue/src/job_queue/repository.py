@@ -145,3 +145,34 @@ class JobRepository(BaseRepository[Job]):
             params={"source_id": source_id},
             order_by="created DESC",
         )
+
+    async def add_to_dead_letter(
+        self,
+        job_id: str,
+        job_type: str,
+        payload: Dict[str, Any],
+        error_message: str,
+        retry_count: int,
+    ) -> None:
+        """Record a permanently failed job in the dead-letter table."""
+        try:
+            await execute_query(
+                "CREATE dead_letter SET "
+                "job_id = $job_id, "
+                "job_type = $job_type, "
+                "payload = $payload, "
+                "error_message = $error_message, "
+                "retry_count = $retry_count, "
+                "failed_at = time::now()",
+                {
+                    "job_id": job_id,
+                    "job_type": job_type,
+                    "payload": payload,
+                    "error_message": error_message,
+                    "retry_count": retry_count,
+                },
+                self.config,
+            )
+            logger.info(f"Job {job_id} added to dead-letter queue")
+        except Exception as e:
+            logger.error(f"Failed to add job {job_id} to dead-letter: {e}")

@@ -29,19 +29,29 @@ class NotebookService:
         self.note_repo = note_repo
 
     async def get_all_with_counts(
-        self, order_by: str = "updated desc", archived: Optional[bool] = None,
+        self,
+        order_by: str = "updated desc",
+        archived: Optional[bool] = None,
+        limit: int = 50,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """Get all notebooks with source and note counts."""
+        where_clause = ""
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if archived is not None:
+            where_clause = "WHERE archived = $archived"
+            params["archived"] = archived
+
         query = f"""
             SELECT *,
             count(<-reference.in) as source_count,
             count(<-artifact.in) as note_count
             FROM notebook
+            {where_clause}
             ORDER BY {order_by}
+            LIMIT $limit START $offset
         """
-        result = await execute_query(query)
-        if archived is not None:
-            result = [nb for nb in result if nb.get("archived") == archived]
+        result = await execute_query(query, params)
         return result or []
 
     async def get_with_counts(self, notebook_id: str) -> Optional[Dict[str, Any]]:

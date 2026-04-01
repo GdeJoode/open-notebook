@@ -244,6 +244,94 @@ class SourceRepository(BaseRepository[Source]):
             raise
 
 
+    async def list_with_metadata(
+        self,
+        notebook_id: Optional[str] = None,
+        order_by: str = "updated",
+        order_dir: str = "DESC",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """
+        List sources with insight counts and embedding status.
+
+        Args:
+            notebook_id: Optional notebook filter.
+            order_by: Field to sort by (created or updated).
+            order_dir: Sort direction (ASC or DESC).
+            limit: Max results.
+            offset: Skip count.
+
+        Returns:
+            List of source dicts with metadata fields.
+        """
+        order_clause = f"ORDER BY {order_by} {order_dir}"
+
+        if notebook_id:
+            query = f"""
+                SELECT id, asset, created, title, updated, topics, command,
+                (SELECT VALUE count() FROM source_insight
+                 WHERE source = $parent.id GROUP ALL)[0].count OR 0
+                 AS insights_count,
+                ((SELECT VALUE id FROM source_embedding
+                  WHERE source = $parent.id LIMIT 1)) != NONE AS embedded
+                FROM (select value in from reference where out=$notebook_id)
+                {order_clause}
+                LIMIT $limit START $offset
+            """
+            return await execute_query(
+                query,
+                {
+                    "notebook_id": ensure_record_id(notebook_id),
+                    "limit": limit,
+                    "offset": offset,
+                },
+                self.config,
+            )
+        else:
+            query = f"""
+                SELECT id, asset, created, title, updated, topics, command,
+                (SELECT VALUE count() FROM source_insight
+                 WHERE source = $parent.id GROUP ALL)[0].count OR 0
+                 AS insights_count,
+                ((SELECT VALUE id FROM source_embedding
+                  WHERE source = $parent.id LIMIT 1)) != NONE AS embedded
+                FROM source
+                {order_clause}
+                LIMIT $limit START $offset
+            """
+            return await execute_query(
+                query, {"limit": limit, "offset": offset}, self.config
+            )
+
+    async def batch_get_command_status(
+        self, command_ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch job statuses for multiple command IDs in a single query.
+
+        Args:
+            command_ids: List of job record IDs.
+
+        Returns:
+            Dict mapping command_id -> job record dict.
+        """
+        if not command_ids:
+            return {}
+
+        try:
+            record_ids = [ensure_record_id(cid) for cid in command_ids]
+            result = await execute_query(
+                "SELECT * FROM job WHERE id IN $ids",
+                {"ids": record_ids},
+                self.config,
+            )
+            return {str(row["id"]): row for row in result} if result else {}
+        except Exception as e:
+            logger.error(f"Failed to batch fetch command statuses: {e}")
+            return {}
+
+
 class ChunkRepository(BaseRepository[Chunk]):
     """Repository for Chunk operations."""
 

@@ -1,0 +1,11 @@
+-- Dead-letter table for permanently failed jobs
+DEFINE TABLE dead_letter SCHEMAFULL;
+
+DEFINE FIELD job_id ON dead_letter TYPE string;
+DEFINE FIELD job_type ON dead_letter TYPE string;
+DEFINE FIELD payload ON dead_letter FLEXIBLE TYPE object DEFAULT {};
+DEFINE FIELD error_message ON dead_letter TYPE string;
+DEFINE FIELD retry_count ON dead_letter TYPE int DEFAULT 0;
+DEFINE FIELD failed_at ON dead_letter TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX idx_dead_letter_job ON dead_letter FIELDS job_id UNIQUE;

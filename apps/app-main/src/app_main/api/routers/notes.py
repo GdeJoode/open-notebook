@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
 from app_main.api.schemas import NoteCreate, NoteResponse, NoteUpdate
@@ -28,6 +28,8 @@ def _note_to_response(note) -> NoteResponse:
 @router.get("", response_model=list[NoteResponse])
 async def list_notes(
     notebook_id: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=100, description="Max notes to return"),
+    offset: int = Query(0, ge=0, description="Number of notes to skip"),
     note_service: NoteService = Depends(get_note_service),
     notebook_service: NotebookService = Depends(get_notebook_service),
 ):
@@ -37,8 +39,10 @@ async def list_notes(
         if not notebook:
             raise HTTPException(status_code=404, detail="Notebook not found")
         raw_notes = await notebook_service.get_notes(notebook_id)
+        # Apply pagination to notebook-filtered notes
+        paginated = raw_notes[offset : offset + limit]
         results = []
-        for raw in raw_notes:
+        for raw in paginated:
             results.append(
                 NoteResponse(
                     id=raw.get("id", ""),
@@ -51,7 +55,7 @@ async def list_notes(
             )
         return results
 
-    notes = await note_service.get_all()
+    notes = await note_service.get_all(limit=limit, offset=offset)
     return [_note_to_response(n) for n in notes]
 
 
