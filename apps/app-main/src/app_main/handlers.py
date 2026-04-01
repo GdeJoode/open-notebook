@@ -10,15 +10,56 @@ The old surreal_commands @command() pattern is replaced by
 """
 
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from pydantic import BaseModel
 
 from shared.types.enums import JobType
 
 from app_main.services.command_service import get_registry
 
 registry = get_registry()
+
+
+# ---------------------------------------------------------------------------
+# Payload schemas for validation
+# ---------------------------------------------------------------------------
+
+
+class DocumentParsePayload(BaseModel):
+    source_id: str
+    content_state: str
+    notebook_ids: List[str] = []
+    processing_overrides: Optional[Dict[str, Any]] = None
+
+
+class InsightExtractPayload(BaseModel):
+    source_id: str
+    command_name: str = "run_summaries"
+    transformation_ids: Optional[List[str]] = None
+
+
+class EntityExtractPayload(BaseModel):
+    source_id: str
+    ontology_name: str = "general"
+    extractor_type: str = "llm"
+    langextract_model_id: Optional[str] = None
+    langextract_model_url: Optional[str] = None
+    langextract_temperature: Optional[float] = None
+    langextract_use_schema_constraints: Optional[bool] = None
+    langextract_fence_output: Optional[bool] = None
+
+
+class EmbeddingPayload(BaseModel):
+    command_name: str = "embed_single_item"
+    source_id: Optional[str] = None
+    item_id: Optional[str] = None
+    item_type: Optional[str] = None
+    mode: str = "existing"
+    include_sources: bool = True
+    include_notes: bool = True
+    include_insights: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -29,25 +70,25 @@ registry = get_registry()
 @registry.register(JobType.DOCUMENT_PARSE)
 async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Extract content from a source (extraction only, no embed/transform)."""
+    validated = DocumentParsePayload(**payload)
     start_time = time.time()
-    source_id = payload["source_id"]
 
     try:
         from app_main.dependencies import get_source_processing_service
 
-        logger.info(f"Starting source extraction for source: {source_id}")
+        logger.info(f"Starting source extraction for source: {validated.source_id}")
 
         service = get_source_processing_service()
         result = await service.process_source(
-            source_id=source_id,
-            content_state=payload["content_state"],
-            notebook_ids=payload.get("notebook_ids", []),
-            processing_overrides=payload.get("processing_overrides"),
+            source_id=validated.source_id,
+            content_state=validated.content_state,
+            notebook_ids=validated.notebook_ids,
+            processing_overrides=validated.processing_overrides,
         )
 
         processing_time = time.time() - start_time
         logger.info(
-            f"Successfully extracted source {source_id} in {processing_time:.2f}s"
+            f"Successfully extracted source {validated.source_id} in {processing_time:.2f}s"
         )
 
         return {
@@ -58,7 +99,6 @@ async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        processing_time = time.time() - start_time
         logger.error(f"Source extraction failed: {e}")
         raise
 
@@ -94,23 +134,22 @@ async def handle_generate_podcast(payload: Dict[str, Any]) -> Dict[str, Any]:
 @registry.register(JobType.INSIGHT_EXTRACT)
 async def handle_insight_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Run summarization / insight extraction on a source."""
+    validated = InsightExtractPayload(**payload)
     start_time = time.time()
-    command_name = payload.get("command_name", "run_summaries")
-    source_id = payload["source_id"]
 
     try:
         from app_main.dependencies import get_source_processing_service
 
-        logger.info(f"Starting summaries for source: {source_id}")
+        logger.info(f"Starting summaries for source: {validated.source_id}")
         service = get_source_processing_service()
         result = await service.run_summaries(
-            source_id=source_id,
-            transformation_ids=payload.get("transformation_ids"),
+            source_id=validated.source_id,
+            transformation_ids=validated.transformation_ids,
         )
 
         processing_time = time.time() - start_time
         logger.info(
-            f"Summaries completed for source {source_id} in {processing_time:.2f}s"
+            f"Summaries completed for source {validated.source_id} in {processing_time:.2f}s"
         )
         return {
             "success": True,
@@ -119,7 +158,7 @@ async def handle_insight_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"Insight extraction failed for source {source_id}: {e}")
+        logger.error(f"Insight extraction failed for source {validated.source_id}: {e}")
         raise
 
 
@@ -131,15 +170,15 @@ async def handle_insight_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
 @registry.register(JobType.ENTITY_EXTRACT)
 async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Run ontology-guided entity extraction on a source."""
+    validated = EntityExtractPayload(**payload)
     start_time = time.time()
-    source_id = payload["source_id"]
 
     try:
         from app_main.dependencies import get_entity_extraction_service
 
-        logger.info(f"Starting entity extraction for source: {source_id}")
+        logger.info(f"Starting entity extraction for source: {validated.source_id}")
         service = get_entity_extraction_service()
-        # Collect langextract config overrides from payload
+        # Collect langextract config overrides from validated payload
         config_overrides = {}
         for key in (
             "langextract_model_id",
@@ -148,19 +187,20 @@ async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
             "langextract_use_schema_constraints",
             "langextract_fence_output",
         ):
-            if key in payload:
-                config_overrides[key] = payload[key]
+            value = getattr(validated, key, None)
+            if value is not None:
+                config_overrides[key] = value
 
         result = await service.run_extraction(
-            source_id=source_id,
-            ontology_name=payload.get("ontology_name", "general"),
-            extractor_type=payload.get("extractor_type", "llm"),
+            source_id=validated.source_id,
+            ontology_name=validated.ontology_name,
+            extractor_type=validated.extractor_type,
             config_overrides=config_overrides if config_overrides else None,
         )
 
         processing_time = time.time() - start_time
         logger.info(
-            f"Entity extraction completed for source {source_id} "
+            f"Entity extraction completed for source {validated.source_id} "
             f"in {processing_time:.2f}s"
         )
         return {
@@ -170,7 +210,7 @@ async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"Entity extraction failed for source {source_id}: {e}")
+        logger.error(f"Entity extraction failed for source {validated.source_id}: {e}")
         raise
 
 
@@ -187,11 +227,11 @@ async def handle_embedding(payload: Dict[str, Any]) -> Dict[str, Any]:
     The payload's `command_name` distinguishes between embed_single_item,
     embed_source, and rebuild_embeddings.
     """
-    command_name = payload.get("command_name", "embed_single_item")
+    validated = EmbeddingPayload(**payload)
 
-    if command_name == "rebuild_embeddings":
+    if validated.command_name == "rebuild_embeddings":
         return await _handle_rebuild_embeddings(payload)
-    elif command_name == "embed_source":
+    elif validated.command_name == "embed_source":
         return await _handle_embed_source(payload)
     else:
         return await _handle_embed_single_item(payload)

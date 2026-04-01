@@ -2,14 +2,28 @@
 FastAPI application factory for Open Notebook.
 """
 
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from loguru import logger
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app_main.api.auth import PasswordAuthMiddleware
+from app_main.exceptions import (
+    AuthenticationError,
+    ConfigurationError,
+    DatabaseOperationError,
+    ExternalServiceError,
+    FileOperationError,
+    InvalidInputError,
+    NotFoundError,
+    OpenNotebookError,
+    RateLimitError,
+)
 
 from surrealdb_service.migrations import AsyncMigrationManager
 
@@ -152,6 +166,72 @@ def create_app() -> FastAPI:
         preprocessing.router, prefix="/api", tags=["preprocessing"]
     )
 
+    # --- Exception Handlers ---
+    @application.exception_handler(NotFoundError)
+    async def not_found_handler(request: Request, exc: NotFoundError):
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @application.exception_handler(InvalidInputError)
+    async def invalid_input_handler(request: Request, exc: InvalidInputError):
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @application.exception_handler(AuthenticationError)
+    async def auth_error_handler(request: Request, exc: AuthenticationError):
+        return JSONResponse(status_code=401, content={"detail": str(exc)})
+
+    @application.exception_handler(RateLimitError)
+    async def rate_limit_handler(request: Request, exc: RateLimitError):
+        return JSONResponse(status_code=429, content={"detail": str(exc)})
+
+    @application.exception_handler(DatabaseOperationError)
+    async def db_error_handler(request: Request, exc: DatabaseOperationError):
+        logger.error(f"Database error: {exc}")
+        return JSONResponse(
+            status_code=500, content={"detail": "Database operation failed"}
+        )
+
+    @application.exception_handler(ExternalServiceError)
+    async def external_error_handler(
+        request: Request, exc: ExternalServiceError
+    ):
+        return JSONResponse(status_code=502, content={"detail": str(exc)})
+
+    @application.exception_handler(ConfigurationError)
+    async def config_error_handler(
+        request: Request, exc: ConfigurationError
+    ):
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    @application.exception_handler(FileOperationError)
+    async def file_error_handler(request: Request, exc: FileOperationError):
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    @application.exception_handler(OpenNotebookError)
+    async def generic_app_error_handler(
+        request: Request, exc: OpenNotebookError
+    ):
+        logger.error(f"Unhandled app error: {exc}")
+        return JSONResponse(
+            status_code=500, content={"detail": "Internal server error"}
+        )
+
+    # --- Request Logging Middleware ---
+    class RequestLoggingMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            if request.url.path in ("/health", "/"):
+                return await call_next(request)
+            start = time.monotonic()
+            response = await call_next(request)
+            duration = time.monotonic() - start
+            logger.info(
+                f"{request.method} {request.url.path} -> "
+                f"{response.status_code} ({duration:.3f}s)"
+            )
+            return response
+
+    application.add_middleware(RequestLoggingMiddleware)
+
+    # --- Routes ---
     @application.get("/")
     async def root():
         return {"message": "Noesis API is running"}
