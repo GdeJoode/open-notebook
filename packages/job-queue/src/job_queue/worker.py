@@ -46,13 +46,36 @@ class JobWorker:
         return self._running
 
     async def start(self) -> None:
-        """Start the processing loop as an asyncio task."""
+        """Start the processing loop as an asyncio task.
+
+        On startup, re-enqueues any jobs left in QUEUED, PROCESSING, or
+        RETRYING state from a previous run so they aren't lost.
+        """
         if self._running:
             logger.warning("Worker is already running")
             return
+
+        await self._reload_pending_jobs()
+
         self._running = True
         self._task = asyncio.create_task(self._process_loop())
         logger.info("Job worker started")
+
+    async def _reload_pending_jobs(self) -> None:
+        """Re-enqueue jobs that were in-flight when the worker last stopped."""
+        reloaded = 0
+        for status in (JobStatus.QUEUED, JobStatus.RETRYING, JobStatus.PROCESSING):
+            jobs = await self._repository.list_jobs(status=status, limit=200)
+            for job in jobs:
+                await self._queue.enqueue(str(job.id), job.priority)
+                reloaded += 1
+                # Reset PROCESSING jobs back to QUEUED so they're picked up cleanly
+                if status == JobStatus.PROCESSING:
+                    await self._repository.update_status(
+                        str(job.id), JobStatus.QUEUED
+                    )
+        if reloaded:
+            logger.info(f"Reloaded {reloaded} pending job(s) from database")
 
     async def stop(self, timeout: float = 30.0) -> None:
         """
@@ -82,7 +105,7 @@ class JobWorker:
         while self._running:
             try:
                 # Use wait_for so we can check _running periodically
-                job_id = await asyncio.wait_for(self._queue.dequeue(), timeout=1.0)
+                job_id = await asyncio.wait_for(self._queue.dequeue(), timeout=5.0)
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
