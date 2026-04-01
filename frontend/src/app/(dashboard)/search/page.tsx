@@ -21,6 +21,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { StreamingResponse } from '@/components/search/StreamingResponse'
 import { AdvancedModelsDialog } from '@/components/search/AdvancedModelsDialog'
 import { SaveToNotebooksDialog } from '@/components/search/SaveToNotebooksDialog'
+import { ErrorBanner } from '@/components/common/ErrorBanner'
 
 export default function SearchPage() {
   // Search state
@@ -211,6 +212,14 @@ export default function SearchPage() {
                       )}
                     </div>
                   </>
+                )}
+
+                {/* Error Banner */}
+                {ask.error && (
+                  <ErrorBanner
+                    message={ask.error}
+                    className="mt-4"
+                  />
                 )}
 
                 {/* Streaming Response */}
