@@ -162,6 +162,15 @@ class IngestionWorkflow:
 
         except Exception as e:
             logger.error(f"Document processing failed: {e}")
+            # Clean up partial output directory on failure
+            if result.output_directory and Path(result.output_directory).exists():
+                import shutil
+
+                try:
+                    shutil.rmtree(result.output_directory)
+                    logger.info(f"Cleaned up partial output: {result.output_directory}")
+                except Exception as cleanup_err:
+                    logger.warning(f"Failed to clean up partial output: {cleanup_err}")
             return result.complete(success=False, error=str(e))
 
     def _process_audio_video(
@@ -202,6 +211,15 @@ class IngestionWorkflow:
 
         except Exception as e:
             logger.error(f"Audio/video processing failed: {e}")
+            # Clean up partial output directory on failure
+            if result.output_directory and Path(result.output_directory).exists():
+                import shutil
+
+                try:
+                    shutil.rmtree(result.output_directory)
+                    logger.info(f"Cleaned up partial output: {result.output_directory}")
+                except Exception as cleanup_err:
+                    logger.warning(f"Failed to clean up partial output: {cleanup_err}")
             return result.complete(success=False, error=str(e))
 
     async def process_batch(

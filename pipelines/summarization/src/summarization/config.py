@@ -5,6 +5,7 @@ All strategy-specific behavior is injected via config dataclasses.
 Sub-configs group related settings for each strategy.
 """
 
+import os
 from dataclasses import dataclass, field
 
 
@@ -12,9 +13,15 @@ from dataclasses import dataclass, field
 class LLMConfig:
     """LLM provider settings shared by all strategies."""
 
-    model_name: str = "qwen2.5:14b"
-    provider: str = "ollama"
-    base_url: str = "http://localhost:11434"
+    model_name: str = field(
+        default_factory=lambda: os.getenv("SUMMARIZATION_MODEL", "qwen2.5:14b")
+    )
+    provider: str = field(
+        default_factory=lambda: os.getenv("SUMMARIZATION_PROVIDER", "ollama")
+    )
+    base_url: str = field(
+        default_factory=lambda: os.getenv("SUMMARIZATION_BASE_URL", "http://localhost:11434")
+    )
     temperature: float = 0.3
     max_tokens: int = 500
     timeout: int = 300

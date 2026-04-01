@@ -1,5 +1,6 @@
 """Configuration for the ontology-guided extraction pipeline."""
 
+import os
 from dataclasses import dataclass, field
 
 
@@ -23,8 +24,12 @@ class ExtractionConfig:
     extractor_type: str = "llm"
 
     # LangExtract-specific settings
-    langextract_model_id: str = "qwen2.5:latest"
-    langextract_model_url: str | None = "http://localhost:11434"
+    langextract_model_id: str = field(
+        default_factory=lambda: os.getenv("LANGEXTRACT_MODEL_ID", "qwen2.5:latest")
+    )
+    langextract_model_url: str | None = field(
+        default_factory=lambda: os.getenv("LANGEXTRACT_MODEL_URL", "http://localhost:11434")
+    )
     langextract_extraction_passes: int = 1
     langextract_max_workers: int = 4
     langextract_max_char_buffer: int = 5000
