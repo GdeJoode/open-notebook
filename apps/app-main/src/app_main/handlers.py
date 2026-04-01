@@ -29,7 +29,7 @@ registry = get_registry()
 
 class DocumentParsePayload(BaseModel):
     source_id: str
-    content_state: str
+    content_state: Dict[str, Any]
     notebook_ids: List[str] = []
     processing_overrides: Optional[Dict[str, Any]] = None
 
