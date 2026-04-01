@@ -89,7 +89,7 @@ export function useUpdateSource() {
       sourcesApi.update(id, data),
     onSuccess: (_, { id }) => {
       // Invalidate ALL sources queries (both general and notebook-specific)
-      queryClient.invalidateQueries({ queryKey: ['sources'] })
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources() })
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.source(id) })
       toast({
         title: 'Success',
@@ -114,7 +114,7 @@ export function useDeleteSource() {
     mutationFn: (id: string) => sourcesApi.delete(id),
     onSuccess: (_, id) => {
       // Invalidate ALL sources queries (both general and notebook-specific)
-      queryClient.invalidateQueries({ queryKey: ['sources'] })
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources() })
       // Also invalidate the specific source
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.source(id) })
       toast({
@@ -160,7 +160,7 @@ export function useFileUpload() {
 
 export function useSourceStatus(sourceId: string, enabled = true) {
   return useQuery({
-    queryKey: ['sources', sourceId, 'status'],
+    queryKey: QUERY_KEYS.sourceStatus(sourceId),
     queryFn: () => sourcesApi.status(sourceId),
     enabled: !!sourceId && enabled,
     refetchInterval: (query) => {
@@ -194,10 +194,10 @@ export function useRetrySource() {
     onSuccess: (result, sourceId) => {
       // Invalidate status query to refetch latest status
       queryClient.invalidateQueries({
-        queryKey: ['sources', sourceId, 'status']
+        queryKey: QUERY_KEYS.sourceStatus(sourceId)
       })
       // Invalidate ALL sources queries to refresh the UI
-      queryClient.invalidateQueries({ queryKey: ['sources'] })
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources() })
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.source(sourceId) })
 
       toast({
@@ -236,7 +236,7 @@ export function useAddSourcesToNotebook() {
     },
     onSuccess: (result, { notebookId, sourceIds }) => {
       // Invalidate ALL sources queries to refresh all lists
-      queryClient.invalidateQueries({ queryKey: ['sources'] })
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources() })
       // Specifically invalidate the notebook's sources
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources(notebookId) })
       // Invalidate each affected source
@@ -286,7 +286,7 @@ export function useRemoveSourceFromNotebook() {
     },
     onSuccess: (_, { notebookId, sourceId }) => {
       // Invalidate ALL sources queries to refresh all lists
-      queryClient.invalidateQueries({ queryKey: ['sources'] })
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources() })
       // Specifically invalidate the notebook's sources
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources(notebookId) })
       // Also invalidate the specific source
@@ -309,7 +309,7 @@ export function useRemoveSourceFromNotebook() {
 
 export function useSourceChunks(sourceId: string, enabled = true) {
   return useQuery({
-    queryKey: ['sources', sourceId, 'chunks'],
+    queryKey: QUERY_KEYS.sourceChunks(sourceId),
     queryFn: () => sourcesApi.getChunks(sourceId),
     enabled: !!sourceId && enabled,
     staleTime: 60 * 1000, // 1 minute - chunks don't change often

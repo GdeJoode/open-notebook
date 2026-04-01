@@ -21,6 +21,8 @@ export const QUERY_KEYS = {
   note: (id: string) => ['notes', id] as const,
   sources: (notebookId?: string) => ['sources', notebookId] as const,
   source: (id: string) => ['sources', id] as const,
+  sourceStatus: (id: string) => ['sources', id, 'status'] as const,
+  sourceChunks: (id: string) => ['sources', id, 'chunks'] as const,
   settings: ['settings'] as const,
   sourceChatSessions: (sourceId: string) => ['source-chat', sourceId, 'sessions'] as const,
   sourceChatSession: (sourceId: string, sessionId: string) => ['source-chat', sourceId, 'sessions', sessionId] as const,
