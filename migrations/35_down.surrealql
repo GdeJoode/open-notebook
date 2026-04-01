@@ -1,0 +1,1 @@
+DELETE FROM transformation WHERE name IN ["skeleton_of_thought", "chain_of_density", "self_correction", "linked_entity_summary"];

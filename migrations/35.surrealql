@@ -1,0 +1,103 @@
+-- Default prompt-based summarization transformations
+-- These are simple LLM prompt templates for insights that don't need
+-- the full summarization pipeline (no chunking/clustering/hierarchy).
+
+CREATE transformation SET
+  name = "skeleton_of_thought",
+  title = "Skeleton of Thought",
+  description = "Generates an outline of key points, then expands each point into a paragraph. Ensures comprehensive coverage without drift.",
+  prompt = "Analyseer de volgende tekst in twee stappen:
+
+STAP 1 - SKELET: Maak eerst een genummerde lijst van de 5-8 belangrijkste punten, argumenten of conclusies uit de tekst. Elk punt is één zin.
+
+STAP 2 - UITWERKING: Werk vervolgens elk punt uit in een korte alinea (2-3 zinnen) die het punt toelicht met specifieke details, voorbeelden of cijfers uit de tekst.
+
+Eindig met een korte conclusie die de kernboodschap samenvat.
+
+# TEKST:
+{text}",
+  apply_default = false,
+  created = time::now(),
+  updated = time::now();
+
+CREATE transformation SET
+  name = "chain_of_density",
+  title = "Chain of Density",
+  description = "Iteratively densifies a summary over 5 rounds, adding missing salient entities while keeping the word count constant (~100 words).",
+  prompt = "Je gaat de volgende tekst samenvatten via de Chain-of-Density methode.
+
+Schrijf 5 opeenvolgende samenvattingen van EXACT 100 woorden elk.
+Elke versie moet:
+- Alle informatie uit de vorige versie bevatten
+- 1-3 ontbrekende belangrijke entiteiten, feiten of relaties toevoegen
+- Minder belangrijke details vervangen door de nieuwe informatie
+- Precies 100 woorden lang zijn
+
+Formaat:
+Versie 1: [samenvatting]
+Ontbrekend: [wat is toegevoegd in volgende versie]
+
+Versie 2: [samenvatting]
+Ontbrekend: [wat is toegevoegd in volgende versie]
+
+...
+
+Versie 5: [definitieve samenvatting]
+
+# TEKST:
+{text}",
+  apply_default = false,
+  created = time::now(),
+  updated = time::now();
+
+CREATE transformation SET
+  name = "self_correction",
+  title = "Self-Correction Summary",
+  description = "Two-phase approach: first summarize, then critically evaluate and correct for factual accuracy, completeness, and coherence.",
+  prompt = "Analyseer de volgende tekst in twee fasen:
+
+FASE 1 - SAMENVATTING:
+Schrijf een beknopte samenvatting van de tekst (maximaal 200 woorden).
+
+FASE 2 - KRITISCHE EVALUATIE:
+Evalueer je eigen samenvatting op:
+1. Feitelijke juistheid: Staan er claims in die niet in de brontekst staan?
+2. Volledigheid: Ontbreken er belangrijke punten, cijfers of conclusies?
+3. Coherentie: Is de samenvatting logisch opgebouwd?
+
+Corrigeer vervolgens de samenvatting op basis van je evaluatie.
+
+DEFINITIEVE SAMENVATTING:
+[gecorrigeerde versie]
+
+CORRECTIERAPPORT:
+[wat is aangepast en waarom]
+
+# TEKST:
+{text}",
+  apply_default = false,
+  created = time::now(),
+  updated = time::now();
+
+CREATE transformation SET
+  name = "linked_entity_summary",
+  title = "Linked Entity Summary",
+  description = "For each significant entity (person, organization, concept), generates a focused mini-summary of how it appears and relates to other entities in the text.",
+  prompt = "Analyseer de volgende tekst en maak een entiteiten-overzicht.
+
+Voor elke belangrijke entiteit (persoon, organisatie, plaats, concept, wet/regeling) in de tekst:
+
+1. **Naam**: De officiële naam (en eventuele afkortingen)
+2. **Type**: Persoon / Organisatie / Concept / Wet / Plaats
+3. **Rol**: Hoe wordt deze entiteit besproken in de tekst? (1-2 zinnen)
+4. **Relaties**: Met welke andere entiteiten heeft deze entiteit een relatie? (naam + type relatie)
+5. **Kernfeiten**: Specifieke cijfers, data of feiten over deze entiteit uit de tekst
+
+Sorteer op relevantie (meest besproken entiteiten eerst).
+Neem alleen entiteiten op die minimaal 2x worden genoemd of een sleutelrol spelen.
+
+# TEKST:
+{text}",
+  apply_default = false,
+  created = time::now(),
+  updated = time::now();
