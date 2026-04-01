@@ -35,7 +35,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
-@router.get("", response_model=List[SourceListResponse])
+@router.get("/", response_model=List[SourceListResponse])
 async def get_sources(
     notebook_id: Optional[str] = Query(
         None, description="Filter by notebook ID"

@@ -148,7 +148,7 @@ def parse_source_form_data(
 # ---------------------------------------------------------------------------
 
 
-@router.post("", response_model=SourceResponse)
+@router.post("/", response_model=SourceResponse)
 async def create_source(
     form_data: tuple[SourceCreate, Optional[UploadFile]] = Depends(
         parse_source_form_data

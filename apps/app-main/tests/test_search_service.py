@@ -1,5 +1,7 @@
 """Tests for SearchService."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from app_main.services.search_service import SearchService
@@ -44,28 +46,46 @@ class TestSearchServiceVectorSearch:
             await service.vector_search("test")
 
     @pytest.mark.asyncio
-    async def test_vector_search_not_implemented(self, search_repo, model_manager):
-        """Even with a configured model, raises NotImplementedError (not yet migrated)."""
-        model_manager.get_defaults.return_value = make_default_models(
-            default_embedding_model="model:embed1",
-        )
-        service = SearchService(search_repo, model_manager)
+    async def test_vector_search_embeds_and_delegates(self, search_repo, model_manager):
+        """Vector search embeds the query and delegates to the repository."""
+        mock_embedding_model = AsyncMock()
+        mock_embedding_model.aembed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
 
-        with pytest.raises(NotImplementedError):
-            await service.vector_search("test query")
+        search_repo.vector_search.return_value = [
+            {"id": "source:1", "score": 0.8},
+        ]
+
+        service = SearchService(
+            search_repo, model_manager, embedding_model=mock_embedding_model,
+        )
+
+        result = await service.vector_search("test query", results=5)
+
+        mock_embedding_model.aembed.assert_called_once_with(["test query"])
+        search_repo.vector_search.assert_called_once_with(
+            [0.1, 0.2, 0.3], 5, True, True, 0.2,
+        )
+        assert len(result) == 1
 
 
 class TestSearchServiceHybridSearch:
 
     @pytest.mark.asyncio
-    async def test_hybrid_search_delegates(self, search_repo, model_manager):
+    async def test_hybrid_search_embeds_and_delegates(self, search_repo, model_manager):
+        """Hybrid search embeds the query and delegates to the repository."""
+        mock_embedding_model = AsyncMock()
+        mock_embedding_model.aembed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
+
         search_repo.hybrid_search.return_value = [{"id": "source:1"}]
-        service = SearchService(search_repo, model_manager)
-        embedding = [0.1, 0.2, 0.3]
 
-        result = await service.hybrid_search("test", embedding, results=5)
+        service = SearchService(
+            search_repo, model_manager, embedding_model=mock_embedding_model,
+        )
 
+        result = await service.hybrid_search("test", results=5)
+
+        mock_embedding_model.aembed.assert_called_once_with(["test"])
         search_repo.hybrid_search.assert_called_once_with(
-            "test", embedding, 5, True, True, 0.2,
+            "test", [0.1, 0.2, 0.3], 5, True, True, 0.2,
         )
         assert len(result) == 1
