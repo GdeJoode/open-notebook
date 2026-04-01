@@ -1,5 +1,5 @@
 """
-Search service - business logic for text and vector search.
+Search service - delegates to the retrieval pipeline.
 """
 
 from typing import Any, Dict, List, Optional
@@ -8,11 +8,16 @@ from esperanto import EmbeddingModel
 from loguru import logger
 
 from llm_manager import ModelManager
+from retrieval.service import RetrievalService
 from surrealdb_service.repositories import SearchRepository
 
 
 class SearchService:
-    """Service for search business logic."""
+    """Service for search business logic.
+
+    Resolves the embedding model from ModelManager, then delegates all
+    search operations to the retrieval pipeline's RetrievalService.
+    """
 
     def __init__(
         self,
@@ -23,42 +28,42 @@ class SearchService:
         self.search_repo = search_repo
         self.model_manager = model_manager
         self._embedding_model = embedding_model
+        self._retrieval: Optional[RetrievalService] = None
 
-    async def _get_embedding_model(self) -> EmbeddingModel:
-        """Resolve the default embedding model."""
-        if self._embedding_model is not None:
-            return self._embedding_model
+    async def _get_retrieval(self) -> RetrievalService:
+        """Get or create a RetrievalService with the resolved embedding model."""
+        if self._retrieval is not None:
+            return self._retrieval
 
+        embedding_model = self._embedding_model
+        if embedding_model is None:
+            embedding_model = await self._resolve_embedding_model()
+
+        self._retrieval = RetrievalService(
+            search_repo=self.search_repo,
+            embedding_model=embedding_model,
+        )
+        return self._retrieval
+
+    async def _resolve_embedding_model(self) -> Optional[EmbeddingModel]:
+        """Resolve the default embedding model from DB via ModelManager."""
         defaults = self.model_manager.get_defaults()
         if not defaults or not defaults.default_embedding_model:
-            raise ValueError(
-                "Vector search requires an embedding model. "
-                "Please configure one in the Models section."
-            )
+            return None
 
         from surrealdb_service.repositories import ModelRepository
 
         model_repo = ModelRepository()
         model_record = await model_repo.get(defaults.default_embedding_model)
         if not model_record:
-            raise ValueError(
-                f"Embedding model '{defaults.default_embedding_model}' not found."
-            )
+            return None
 
         model = self.model_manager.get_model_from_config(model_record)
         if not isinstance(model, EmbeddingModel):
-            raise TypeError(
-                f"Model '{defaults.default_embedding_model}' is not an EmbeddingModel."
-            )
+            return None
 
         self._embedding_model = model
         return model
-
-    async def _embed_query(self, text: str) -> List[float]:
-        """Embed a search query into a vector."""
-        model = await self._get_embedding_model()
-        vectors = await model.aembed([text])
-        return vectors[0]
 
     async def text_search(
         self,
@@ -68,7 +73,8 @@ class SearchService:
         include_notes: bool = True,
     ) -> List[Dict[str, Any]]:
         """Perform a text search."""
-        return await self.search_repo.text_search(
+        svc = await self._get_retrieval()
+        return await svc.text_search(
             keyword, results, include_sources, include_notes
         )
 
@@ -81,9 +87,9 @@ class SearchService:
         minimum_score: float = 0.2,
     ) -> List[Dict[str, Any]]:
         """Perform a vector search (embeds the query first)."""
-        embedding = await self._embed_query(keyword)
-        return await self.search_repo.vector_search(
-            embedding, results, include_sources, include_notes, minimum_score
+        svc = await self._get_retrieval()
+        return await svc.vector_search(
+            keyword, results, include_sources, include_notes, minimum_score
         )
 
     async def hybrid_search(
@@ -95,7 +101,7 @@ class SearchService:
         minimum_score: float = 0.2,
     ) -> List[Dict[str, Any]]:
         """Perform a hybrid text + vector search."""
-        embedding = await self._embed_query(keyword)
-        return await self.search_repo.hybrid_search(
-            keyword, embedding, results, include_sources, include_notes, minimum_score
+        svc = await self._get_retrieval()
+        return await svc.hybrid_search(
+            keyword, results, include_sources, include_notes, minimum_score
         )

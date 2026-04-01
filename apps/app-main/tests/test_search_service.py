@@ -1,6 +1,6 @@
-"""Tests for SearchService."""
+"""Tests for SearchService (delegates to RetrievalService)."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -12,9 +12,9 @@ class TestSearchServiceTextSearch:
 
     @pytest.mark.asyncio
     async def test_text_search_delegates(self, search_repo, model_manager):
-        search_repo.text_search.return_value = [
+        search_repo.text_search = AsyncMock(return_value=[
             {"id": "source:1", "title": "Result", "score": 0.9},
-        ]
+        ])
         service = SearchService(search_repo, model_manager)
 
         result = await service.text_search("python", results=5)
@@ -24,7 +24,7 @@ class TestSearchServiceTextSearch:
 
     @pytest.mark.asyncio
     async def test_text_search_with_filters(self, search_repo, model_manager):
-        search_repo.text_search.return_value = []
+        search_repo.text_search = AsyncMock(return_value=[])
         service = SearchService(search_repo, model_manager)
 
         await service.text_search(
@@ -37,13 +37,15 @@ class TestSearchServiceTextSearch:
 class TestSearchServiceVectorSearch:
 
     @pytest.mark.asyncio
-    async def test_vector_search_raises_without_model(self, search_repo, model_manager):
-        """When no embedding model is configured, raises ValueError."""
+    async def test_vector_search_falls_back_without_model(self, search_repo, model_manager):
+        """Without embedding model, vector search falls back to text search."""
         model_manager.get_defaults.return_value = make_default_models()
-        service = SearchService(search_repo, model_manager)
+        search_repo.text_search = AsyncMock(return_value=[{"id": "1"}])
 
-        with pytest.raises(ValueError, match="embedding model"):
-            await service.vector_search("test")
+        service = SearchService(search_repo, model_manager)
+        # Should fall back to text search, not raise
+        result = await service.vector_search("test")
+        assert len(result) == 1
 
     @pytest.mark.asyncio
     async def test_vector_search_embeds_and_delegates(self, search_repo, model_manager):
@@ -51,9 +53,9 @@ class TestSearchServiceVectorSearch:
         mock_embedding_model = AsyncMock()
         mock_embedding_model.aembed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
 
-        search_repo.vector_search.return_value = [
+        search_repo.vector_search = AsyncMock(return_value=[
             {"id": "source:1", "score": 0.8},
-        ]
+        ])
 
         service = SearchService(
             search_repo, model_manager, embedding_model=mock_embedding_model,
@@ -76,7 +78,7 @@ class TestSearchServiceHybridSearch:
         mock_embedding_model = AsyncMock()
         mock_embedding_model.aembed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
 
-        search_repo.hybrid_search.return_value = [{"id": "source:1"}]
+        search_repo.hybrid_search = AsyncMock(return_value=[{"id": "source:1"}])
 
         service = SearchService(
             search_repo, model_manager, embedding_model=mock_embedding_model,
@@ -86,6 +88,16 @@ class TestSearchServiceHybridSearch:
 
         mock_embedding_model.aembed.assert_called_once_with(["test"])
         search_repo.hybrid_search.assert_called_once_with(
-            "test", [0.1, 0.2, 0.3], 5, True, True, 0.2,
+            "test", [0.1, 0.2, 0.3], 5, True, True, 0.2, 0.5,
         )
         assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_hybrid_falls_back_without_model(self, search_repo, model_manager):
+        """Without embedding model, hybrid falls back to text search."""
+        model_manager.get_defaults.return_value = make_default_models()
+        search_repo.text_search = AsyncMock(return_value=[])
+
+        service = SearchService(search_repo, model_manager)
+        result = await service.hybrid_search("test")
+        assert result == []

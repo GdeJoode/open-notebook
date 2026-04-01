@@ -88,8 +88,21 @@ async def trigger_queries(state: ThreadState, config: RunnableConfig):
 
 async def provide_answer(state: SubGraphState, config: RunnableConfig) -> dict:
     payload = state
-    search_repo = SearchRepository()
-    results = await search_repo.vector_search(state["term"], 10, True, True)
+    from retrieval.service import RetrievalService
+
+    retrieval_svc = RetrievalService(SearchRepository())
+    # Try vector search (embeds the query text); falls back to text search
+    # if no embedding model is configured
+    try:
+        from app_main.dependencies import get_embedding_service
+
+        embed_svc = await get_embedding_service()
+        retrieval_svc = RetrievalService(
+            SearchRepository(), embedding_model=embed_svc.embedding_model
+        )
+        results = await retrieval_svc.vector_search(state["term"], 10)
+    except Exception:
+        results = await retrieval_svc.text_search(state["term"], 10)
     if len(results) == 0:
         return {"answers": []}
     payload["results"] = results
