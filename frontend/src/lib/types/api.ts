@@ -37,7 +37,16 @@ export interface SourceListResponse {
   // ADD: Async processing fields from Python API
   command_id?: string
   status?: string
-  processing_info?: Record<string, unknown>
+  processing_info?: ProcessingInfo
+}
+
+export interface ProcessingInfo {
+  started_at?: string
+  completed_at?: string
+  error?: string
+  retry?: boolean
+  queued?: boolean
+  [key: string]: unknown
 }
 
 export interface SourceDetailResponse extends SourceListResponse {
@@ -50,7 +59,7 @@ export type SourceResponse = SourceDetailResponse
 export interface SourceStatusResponse {
   status?: string
   message: string
-  processing_info?: Record<string, unknown>
+  processing_info?: ProcessingInfo
   command_id?: string
 }
 
@@ -150,10 +159,12 @@ export interface UpdateSourceRequest {
 }
 
 // Entity extraction result types
+export type EntityPropertyValue = string | number | boolean | string[] | null
+
 export interface ExtractedEntity {
   text: string
   label: string
-  properties: Record<string, unknown>
+  properties: Record<string, EntityPropertyValue>
   confidence: number
   source_chunk_id?: string
   source_grounding?: { start_pos: number; end_pos: number } | null
@@ -163,14 +174,23 @@ export interface ExtractedRelation {
   source_entity: string
   target_entity: string
   relation_type: string
-  properties: Record<string, unknown>
+  properties: Record<string, EntityPropertyValue>
   confidence: number
+}
+
+export interface ExtractionMetadata {
+  ontology_name?: string
+  extractor_type?: string
+  chunk_count?: number
+  total_entities?: number
+  total_relations?: number
+  [key: string]: unknown
 }
 
 export interface ExtractionResultResponse {
   entities: ExtractedEntity[]
   relations: ExtractedRelation[]
-  metadata: Record<string, unknown>
+  metadata: ExtractionMetadata
   entity_count: number
   relation_count: number
 }
@@ -274,13 +294,30 @@ export interface UpdateNotebookChatSessionRequest {
   model_override?: string | null
 }
 
+export interface ContextSourceEntry {
+  id: string
+  title?: string
+  full_text?: string
+  insights?: string[]
+  [key: string]: unknown
+}
+
+export interface ContextNoteEntry {
+  id: string
+  title?: string
+  content?: string
+  [key: string]: unknown
+}
+
+export interface ChatContext {
+  sources: ContextSourceEntry[]
+  notes: ContextNoteEntry[]
+}
+
 export interface SendNotebookChatMessageRequest {
   session_id: string
   message: string
-  context: {
-    sources: Array<Record<string, unknown>>
-    notes: Array<Record<string, unknown>>
-  }
+  context: ChatContext
   model_override?: string
 }
 
@@ -293,10 +330,7 @@ export interface BuildContextRequest {
 }
 
 export interface BuildContextResponse {
-  context: {
-    sources: Array<Record<string, unknown>>
-    notes: Array<Record<string, unknown>>
-  }
+  context: ChatContext
   token_count: number
   char_count: number
 }
