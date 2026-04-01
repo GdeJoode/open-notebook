@@ -216,6 +216,54 @@ export default function KnowledgeGraphPage() {
                 {selectedEntity.entity_type}
               </Badge>
 
+              {/* Properties: weight, confidence */}
+              <div className="mt-3 flex gap-3 text-xs text-muted-foreground">
+                {selectedEntity.weight > 0 && (
+                  <span>Weight: {selectedEntity.weight}</span>
+                )}
+                {typeof (selectedEntity as Record<string, unknown>).confidence === 'number' && (
+                  <span>Confidence: {((selectedEntity as Record<string, unknown>).confidence as number * 100).toFixed(0)}%</span>
+                )}
+              </div>
+
+              {/* Provenance: which sources contributed this entity */}
+              {Array.isArray((selectedEntity as Record<string, unknown>).source_ids) &&
+                ((selectedEntity as Record<string, unknown>).source_ids as string[]).length > 0 && (
+                <div className="mt-4">
+                  <h3 className="text-sm font-medium mb-2">Sources</h3>
+                  <div className="space-y-1">
+                    {((selectedEntity as Record<string, unknown>).source_ids as string[]).map((sid) => (
+                      <a
+                        key={sid}
+                        href={`/sources/${sid}`}
+                        className="block text-xs text-primary hover:underline truncate"
+                      >
+                        {sid}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Merge history: surface forms that were merged into this entity */}
+              {(() => {
+                const props = (selectedEntity as Record<string, unknown>).properties as Record<string, unknown> | undefined
+                const mergedFrom = props?.merged_from as string[] | undefined
+                if (!mergedFrom || mergedFrom.length === 0) return null
+                return (
+                  <div className="mt-4">
+                    <h3 className="text-sm font-medium mb-2">Merged From</h3>
+                    <div className="flex flex-wrap gap-1">
+                      {mergedFrom.map((variant) => (
+                        <Badge key={variant} variant="outline" className="text-xs">
+                          {variant}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+
               {selectedEntity.relations && selectedEntity.relations.length > 0 && (
                 <div className="mt-4">
                   <h3 className="text-sm font-medium mb-2">

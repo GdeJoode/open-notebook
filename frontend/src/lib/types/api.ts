@@ -105,6 +105,11 @@ export interface SettingsResponse {
   output_directory_path?: string
   file_operation?: 'copy' | 'move' | 'none'
   output_naming_scheme?: 'timestamp_prefix' | 'date_prefix' | 'datetime_suffix' | 'original'
+
+  // Vault Integration
+  vault_path?: string
+  vault_entities_folder?: string
+  vault_sync_on_startup?: boolean
 }
 
 export interface CreateNotebookRequest {

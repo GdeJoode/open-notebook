@@ -56,6 +56,10 @@ const settingsSchema = z.object({
   output_directory_path: z.string().optional(),
   file_operation: z.enum(['copy', 'move', 'none']).optional(),
   output_naming_scheme: z.enum(['timestamp_prefix', 'date_prefix', 'datetime_suffix', 'original']).optional(),
+  // Vault integration
+  vault_path: z.string().optional(),
+  vault_entities_folder: z.string().optional(),
+  vault_sync_on_startup: z.boolean().optional(),
 })
 
 type SettingsFormData = z.infer<typeof settingsSchema>
@@ -134,6 +138,9 @@ export function SettingsForm() {
         output_directory_path: settings.output_directory_path,
         file_operation: settings.file_operation as 'copy' | 'move' | 'none',
         output_naming_scheme: settings.output_naming_scheme as 'timestamp_prefix' | 'date_prefix' | 'datetime_suffix' | 'original',
+        vault_path: settings.vault_path ?? '',
+        vault_entities_folder: settings.vault_entities_folder ?? 'Entities',
+        vault_sync_on_startup: settings.vault_sync_on_startup ?? false,
       }
       reset(formData)
       setHasResetForm(true)
@@ -792,9 +799,77 @@ export function SettingsForm() {
         </CardContent>
       </Card>
 
+      {/* Vault Integration */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Vault Integration</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Connect to an Obsidian vault for bidirectional entity sync.
+            Entity notes in the vault are read for aliases; new entities
+            from extraction can be written back as note stubs.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-3">
+            <Label htmlFor="vault_path">Vault Path</Label>
+            <Controller
+              name="vault_path"
+              control={control}
+              render={({ field }) => (
+                <input
+                  {...field}
+                  type="text"
+                  placeholder="/home/user/Obsidian/MyVault"
+                  className="w-full px-3 py-2 border rounded-md"
+                  disabled={isLoading}
+                  value={field.value || ''}
+                />
+              )}
+            />
+            <p className="text-sm text-muted-foreground">Absolute path to your vault directory</p>
+          </div>
+
+          <div className="space-y-3">
+            <Label htmlFor="vault_entities_folder">Entities Folder</Label>
+            <Controller
+              name="vault_entities_folder"
+              control={control}
+              render={({ field }) => (
+                <input
+                  {...field}
+                  type="text"
+                  placeholder="Entities"
+                  className="w-full px-3 py-2 border rounded-md"
+                  disabled={isLoading}
+                  value={field.value || ''}
+                />
+              )}
+            />
+            <p className="text-sm text-muted-foreground">Subfolder within vault for entity notes (each .md = one entity)</p>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <Controller
+              name="vault_sync_on_startup"
+              control={control}
+              render={({ field }) => (
+                <input
+                  type="checkbox"
+                  checked={field.value || false}
+                  onChange={(e) => field.onChange(e.target.checked)}
+                  disabled={isLoading}
+                  className="rounded"
+                />
+              )}
+            />
+            <Label className="text-sm cursor-pointer">Sync vault on app startup</Label>
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="flex justify-end">
-        <Button 
-          type="submit" 
+        <Button
+          type="submit"
           disabled={!isDirty || updateSettings.isPending}
         >
           {updateSettings.isPending ? 'Saving...' : 'Save Settings'}

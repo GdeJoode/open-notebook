@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Network, Loader2, CheckCircle2, XCircle, Clock,
-  Play,
+  Play, Filter, ChevronDown,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -12,6 +12,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Slider } from '@/components/ui/slider'
 import {
   Select,
   SelectContent,
@@ -63,6 +65,23 @@ export function EntitiesTab({
   // Right pane: results
   const [extractionResult, setExtractionResult] = useState<ExtractionResultResponse | null>(null)
   const [activeResultTab, setActiveResultTab] = useState<'list' | 'visualization'>('list')
+
+  // Filtering options
+  const [filteringOptions, setFilteringOptions] = useState({
+    dedup_enabled: true,
+    fuzzy_dedup_enabled: true,
+    embedding_dedup_enabled: true,
+    edge_prediction_enabled: true,
+    dedup_similarity_threshold: 0.85,
+  })
+  const [filteringRunning, setFilteringRunning] = useState(false)
+  const [filteringStats, setFilteringStats] = useState<{
+    entities_before: number
+    entities_after: number
+    entities_removed: number
+    merge_groups: number
+    predicted_edges: number
+  } | null>(null)
 
   const selectedFile = files[selectedFileIndex] || null
   const selectedSourceId = selectedFile?.sourceId || sourceId
@@ -157,6 +176,22 @@ export function EntitiesTab({
     return () => clearInterval(interval)
   }, [])
 
+  // Run filtering on existing extraction result
+  const handleRunFiltering = async () => {
+    if (!selectedSourceId || filteringRunning) return
+    setFilteringRunning(true)
+    try {
+      const stats = await sourcesApi.runFiltering(selectedSourceId, filteringOptions)
+      setFilteringStats(stats)
+      // Refresh extraction result to show filtered data
+      await refreshResult()
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : 'Filtering failed')
+    } finally {
+      setFilteringRunning(false)
+    }
+  }
+
   // If extraction not complete, show locked state
   if (!extractionComplete) {
     return (
@@ -195,7 +230,7 @@ export function EntitiesTab({
             onSelect={setSelectedFileIndex}
           />
 
-          {/* Middle pane: extraction options */}
+          {/* Middle pane: extraction + filtering options */}
           <ExtractionOptionsPane
             extractorType={extractorType}
             onExtractorTypeChange={setExtractorType}
@@ -208,6 +243,12 @@ export function EntitiesTab({
             runError={runError}
             canRun={!!selectedSourceId && !running}
             onRun={handleRun}
+            hasExtractionResult={!!extractionResult}
+            filteringOptions={filteringOptions}
+            onFilteringOptionsChange={setFilteringOptions}
+            filteringRunning={filteringRunning}
+            filteringStats={filteringStats}
+            onRunFiltering={handleRunFiltering}
           />
 
           {/* Right pane: tabbed results */}
@@ -296,6 +337,22 @@ interface LangextractOptions {
   fence_output: boolean
 }
 
+interface FilteringOpts {
+  dedup_enabled: boolean
+  fuzzy_dedup_enabled: boolean
+  embedding_dedup_enabled: boolean
+  edge_prediction_enabled: boolean
+  dedup_similarity_threshold: number
+}
+
+interface FilteringStats {
+  entities_before: number
+  entities_after: number
+  entities_removed: number
+  merge_groups: number
+  predicted_edges: number
+}
+
 function ExtractionOptionsPane({
   extractorType,
   onExtractorTypeChange,
@@ -308,6 +365,12 @@ function ExtractionOptionsPane({
   runError,
   canRun,
   onRun,
+  hasExtractionResult,
+  filteringOptions,
+  onFilteringOptionsChange,
+  filteringRunning,
+  filteringStats,
+  onRunFiltering,
 }: {
   extractorType: 'llm' | 'langextract'
   onExtractorTypeChange: (v: 'llm' | 'langextract') => void
@@ -320,6 +383,12 @@ function ExtractionOptionsPane({
   runError: string | null
   canRun: boolean
   onRun: () => void
+  hasExtractionResult: boolean
+  filteringOptions: FilteringOpts
+  onFilteringOptionsChange: (v: FilteringOpts) => void
+  filteringRunning: boolean
+  filteringStats: FilteringStats | null
+  onRunFiltering: () => void
 }) {
   return (
     <div className="border rounded-md overflow-hidden flex flex-col min-h-0">
@@ -478,6 +547,109 @@ function ExtractionOptionsPane({
             </>
           )}
         </Button>
+
+        {/* Filtering options (shown after extraction has results) */}
+        {hasExtractionResult && (
+          <Collapsible>
+            <CollapsibleTrigger className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground w-full pt-2">
+              <Filter className="h-3 w-3" />
+              Filtering Options
+              <ChevronDown className="h-3 w-3 ml-auto" />
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-2 space-y-2.5">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="f-dedup"
+                  checked={filteringOptions.dedup_enabled}
+                  onCheckedChange={(c) => onFilteringOptionsChange({
+                    ...filteringOptions, dedup_enabled: !!c,
+                  })}
+                  disabled={filteringRunning}
+                />
+                <Label htmlFor="f-dedup" className="text-xs cursor-pointer">String dedup</Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="f-fuzzy"
+                  checked={filteringOptions.fuzzy_dedup_enabled}
+                  onCheckedChange={(c) => onFilteringOptionsChange({
+                    ...filteringOptions, fuzzy_dedup_enabled: !!c,
+                  })}
+                  disabled={filteringRunning}
+                />
+                <Label htmlFor="f-fuzzy" className="text-xs cursor-pointer">Fuzzy dedup</Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="f-embedding"
+                  checked={filteringOptions.embedding_dedup_enabled}
+                  onCheckedChange={(c) => onFilteringOptionsChange({
+                    ...filteringOptions, embedding_dedup_enabled: !!c,
+                  })}
+                  disabled={filteringRunning}
+                />
+                <Label htmlFor="f-embedding" className="text-xs cursor-pointer">Embedding dedup</Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="f-edges"
+                  checked={filteringOptions.edge_prediction_enabled}
+                  onCheckedChange={(c) => onFilteringOptionsChange({
+                    ...filteringOptions, edge_prediction_enabled: !!c,
+                  })}
+                  disabled={filteringRunning}
+                />
+                <Label htmlFor="f-edges" className="text-xs cursor-pointer">Edge prediction</Label>
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-[10px] text-muted-foreground">
+                  Similarity threshold: {filteringOptions.dedup_similarity_threshold.toFixed(2)}
+                </Label>
+                <Slider
+                  value={[filteringOptions.dedup_similarity_threshold]}
+                  onValueChange={([v]) => onFilteringOptionsChange({
+                    ...filteringOptions, dedup_similarity_threshold: v,
+                  })}
+                  min={0.5}
+                  max={1.0}
+                  step={0.05}
+                  disabled={filteringRunning}
+                  className="w-full"
+                />
+              </div>
+
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="w-full gap-2"
+                disabled={filteringRunning}
+                onClick={onRunFiltering}
+              >
+                {filteringRunning ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Filtering...
+                  </>
+                ) : (
+                  <>
+                    <Filter className="h-3.5 w-3.5" />
+                    Run Filtering
+                  </>
+                )}
+              </Button>
+
+              {filteringStats && (
+                <div className="text-[10px] text-muted-foreground space-y-0.5 pt-1 border-t">
+                  <p>{filteringStats.entities_before} → {filteringStats.entities_after} entities</p>
+                  <p>{filteringStats.entities_removed} removed, {filteringStats.merge_groups} merge groups</p>
+                  <p>{filteringStats.predicted_edges} predicted edges</p>
+                </div>
+              )}
+            </CollapsibleContent>
+          </Collapsible>
+        )}
       </div>
     </div>
   )
