@@ -5,7 +5,7 @@ Fetches source chunks, runs ExtractionWorkflow, optionally runs
 FilteringWorkflow for deduplication, and persists results to SurrealDB.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from surrealdb_service.connection import execute_query
@@ -26,6 +26,40 @@ class EntityExtractionService:
     def __init__(self, source_repo: SourceRepository):
         self._source_repo = source_repo
         self._persistence = EntityPersistenceService()
+
+    async def _embed_entities(
+        self, result: "ExtractionResult"
+    ) -> None:
+        """Embed entity texts and store vectors in entity properties.
+
+        This enables embedding-based deduplication in the FilteringWorkflow.
+        Runs in-place — modifies entity properties directly.
+        """
+        texts = [e.text for e in result.entities if e.text.strip()]
+        if not texts:
+            return
+
+        try:
+            from app_main.dependencies import get_embedding_service
+
+            embed_svc = await get_embedding_service()
+            # Batch embed all entity texts
+            vectors = await embed_svc.embedding_model.aembed(texts)
+
+            # Map vectors back to entities
+            text_to_vec = dict(zip(texts, vectors))
+            embedded = 0
+            for entity in result.entities:
+                vec = text_to_vec.get(entity.text)
+                if vec:
+                    entity.properties["embedding"] = vec
+                    embedded += 1
+
+            logger.info(f"Embedded {embedded}/{len(result.entities)} entities")
+        except Exception as e:
+            logger.warning(
+                f"Entity embedding failed (dedup will use string-only): {e}"
+            )
 
     async def run_extraction(
         self,
@@ -82,6 +116,10 @@ class EntityExtractionService:
             result.metadata = {}
         result.metadata["extractor_type"] = extractor_type
 
+        # 4b. Embed entity texts for semantic dedup
+        if result.entities:
+            await self._embed_entities(result)
+
         # 5. Optionally run filtering/deduplication
         filtered_entities = result.entities
         filtered_relations = result.relations
@@ -90,7 +128,28 @@ class EntityExtractionService:
 
         if run_filtering and (result.entities or result.relations):
             try:
-                f_config = filtering_config or FilteringConfig()
+                if filtering_config:
+                    f_config = filtering_config
+                else:
+                    # Default config: string dedup + fuzzy + embedding
+                    from entity_filtering.config import (
+                        EmbeddingDedupConfig,
+                        FuzzyDedupConfig,
+                    )
+
+                    f_config = FilteringConfig(
+                        dedup_enabled=True,
+                        fuzzy_dedup=FuzzyDedupConfig(
+                            enabled=True,
+                            algorithm="levenshtein",
+                            similarity_threshold=0.85,
+                        ),
+                        embedding_dedup=EmbeddingDedupConfig(
+                            enabled=True,
+                            similarity_threshold=0.90,
+                        ),
+                        edge_prediction_enabled=True,
+                    )
                 f_workflow = FilteringWorkflow(config=f_config)
 
                 filtered = await f_workflow.process(result)
@@ -187,6 +246,13 @@ class EntityExtractionService:
             relations=[ExtractedRelation(**r) for r in relation_dicts],
             metadata=row.get("metadata", {}),
         )
+
+        # Embed entities for semantic dedup (if not already embedded)
+        has_embeddings = any(
+            e.properties.get("embedding") for e in extraction.entities
+        )
+        if not has_embeddings:
+            await self._embed_entities(extraction)
 
         # Run filtering
         f_config = filtering_config or FilteringConfig()

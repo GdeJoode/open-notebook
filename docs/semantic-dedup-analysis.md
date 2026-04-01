@@ -202,7 +202,7 @@ Nieuwe bestanden:
 
 Benodigde packages: `hdbscan`, `umap-learn`, `rapidfuzz`
 
-Ollama model: `ollama pull qwen2.5:7b-instruct` (4.5 GB, goede NL ondersteuning)
+Ollama model: `qwen3.5:35b-a3b` (MoE, ~4-5 GB, 35B-klasse NL ondersteuning) — al beschikbaar
 
 #### Fase 3: Verrijking + Cascade (~2-3 dagen)
 
@@ -231,11 +231,18 @@ Benodigde packages: `qwikidata` of `SPARQLWrapper`
 
 ### Aanbevolen Ollama modellen voor matching
 
-| Model | Quant | VRAM | NL kwaliteit | Concurrent met embedding? |
-|-------|-------|------|--------------|--------------------------|
-| `qwen2.5:7b-instruct` | Q4_K_M | ~4.5 GB | Goed | ✅ Ja (~6 GB totaal) |
-| `llama3.1:8b-instruct` | Q4_K_M | ~5.0 GB | Goed | ✅ Ja (~6.5 GB totaal) |
-| `mistral-nemo:12b` | Q4_K_M | ~7.0 GB | Zeer goed | ⚠️ Krap (~8.5 GB totaal) |
+| Model | Architectuur | VRAM | NL kwaliteit | Concurrent met embedding? |
+|-------|-------------|------|--------------|--------------------------|
+| **`qwen3.5:35b-a3b`** | **MoE (35B total, 3B actief)** | **~4-5 GB** | **Zeer goed** | **✅ Ja (~5-6 GB totaal) — AANBEVOLEN** |
+| `qwen3.5:9b` | Dense | ~5-6 GB | Zeer goed | ✅ Ja (~7 GB totaal) |
+| `qwen2.5:7b-instruct` | Dense | ~4.5 GB | Goed | ✅ Ja (~6 GB totaal) |
+| `llama3.1:8b-instruct` | Dense | ~5.0 GB | Goed | ✅ Ja (~6.5 GB totaal) |
+
+**Primaire keuze: `qwen3.5:35b-a3b`** — MoE-architectuur geeft 35B-klasse kennisbasis
+(inclusief NL overheidsafkortingen) bij slechts ~3B actieve parameters per token.
+Dit betekent: snellere inference dan dense 9B, lager VRAM-gebruik, en meer
+ruimte voor het embedding model. Gebruik `qwen3.5:9b` als fallback bij
+inconsistente gestructureerde JSON-output van het MoE-model.
 
 ---
 
