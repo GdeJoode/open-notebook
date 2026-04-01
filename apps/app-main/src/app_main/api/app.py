@@ -61,6 +61,33 @@ async def lifespan(app: FastAPI):
     from app_main.services.command_service import start_worker, stop_worker
 
     await start_worker()
+
+    # Load vault dictionary into LLMMatcher (if any accepted imports exist)
+    try:
+        from app_main.services.vault_sync_service import VaultSyncService
+
+        vault_svc = VaultSyncService()
+        dictionary = await vault_svc.get_merged_dictionary()
+        if dictionary:
+            from entity_filtering.resolution.llm_matcher import LLMMatcher
+
+            LLMMatcher.set_abbreviations(dictionary)
+            logger.info(f"Loaded {len(dictionary)} vault dictionary entries")
+
+        # Optional: auto-sync vault on startup
+        from app_main.dependencies import get_settings_service
+
+        settings_svc = get_settings_service()
+        settings = await settings_svc.get()
+        if settings.vault_sync_on_startup and settings.vault_path:
+            stats = await vault_svc.scan_vault_entities(
+                settings.vault_path,
+                settings.vault_entities_folder or "Entities",
+            )
+            logger.info(f"Vault auto-sync at startup: {stats}")
+    except Exception as e:
+        logger.warning(f"Vault dictionary load skipped: {e}")
+
     logger.success("API initialization completed successfully")
 
     yield
@@ -128,6 +155,7 @@ def create_app() -> FastAPI:
         speaker_profiles,
         summaries,
         transformations,
+        vault,
     )
 
     application.include_router(auth.router, prefix="/api", tags=["auth"])
@@ -165,6 +193,7 @@ def create_app() -> FastAPI:
     application.include_router(
         preprocessing.router, prefix="/api", tags=["preprocessing"]
     )
+    application.include_router(vault.router, prefix="/api", tags=["vault"])
 
     # --- Exception Handlers ---
     @application.exception_handler(NotFoundError)

@@ -1,0 +1,19 @@
+-- Vault import: entities read from external vault, pending user review
+DEFINE TABLE vault_import SCHEMAFULL;
+DEFINE FIELD canonical_name ON vault_import TYPE string;
+DEFINE FIELD aliases ON vault_import FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD entity_type ON vault_import TYPE string DEFAULT "UNKNOWN";
+DEFINE FIELD source_file ON vault_import TYPE string;
+DEFINE FIELD status ON vault_import TYPE string DEFAULT "pending";
+DEFINE FIELD imported_at ON vault_import TYPE datetime DEFAULT time::now();
+DEFINE INDEX idx_vault_import_name ON vault_import FIELDS canonical_name UNIQUE;
+
+-- Vault export: entities discovered by extraction, pending write to vault
+DEFINE TABLE vault_export SCHEMAFULL;
+DEFINE FIELD canonical_name ON vault_export TYPE string;
+DEFINE FIELD aliases ON vault_export FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD entity_type ON vault_export TYPE string DEFAULT "UNKNOWN";
+DEFINE FIELD source_ids ON vault_export FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD status ON vault_export TYPE string DEFAULT "pending";
+DEFINE FIELD created_at ON vault_export TYPE datetime DEFAULT time::now();
+DEFINE INDEX idx_vault_export_name ON vault_export FIELDS canonical_name UNIQUE;

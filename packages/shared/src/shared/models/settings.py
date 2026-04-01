@@ -108,6 +108,17 @@ class ContentSettings(RecordModel):
         "./data/output", description="Directory path for final processed files"
     )
 
+    # Vault Integration (Obsidian or other)
+    vault_path: Optional[str] = Field(
+        None, description="Path to external vault directory (e.g. Obsidian vault)"
+    )
+    vault_entities_folder: Optional[str] = Field(
+        "Entities", description="Subfolder within vault for entity notes"
+    )
+    vault_sync_on_startup: Optional[bool] = Field(
+        False, description="Auto-scan vault for entity notes on app startup"
+    )
+
     # File Operations
     file_operation: Optional[Literal["copy", "move", "none"]] = Field(
         "copy", description="File operation: copy, move, or none"

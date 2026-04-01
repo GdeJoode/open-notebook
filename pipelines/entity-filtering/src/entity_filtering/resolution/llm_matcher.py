@@ -90,6 +90,25 @@ class LLMMatcher:
         custom_abbreviations: Additional abbreviations to include in prompt.
     """
 
+    # Class-level dictionary loaded from DB/vault at startup
+    _loaded_abbreviations: Dict[str, str] = {}
+
+    @classmethod
+    def set_abbreviations(cls, abbr: Dict[str, str]) -> None:
+        """Populate the class-level abbreviation dictionary from DB/vault.
+
+        Called at app startup and after vault imports are applied.
+        """
+        cls._loaded_abbreviations = dict(abbr)
+        logger.info(f"LLMMatcher: loaded {len(abbr)} abbreviations from DB")
+
+    @classmethod
+    def get_all_abbreviations(cls) -> Dict[str, str]:
+        """Get the full merged abbreviation dict (hardcoded + loaded)."""
+        merged = dict(_NL_ABBREVIATIONS)
+        merged.update(cls._loaded_abbreviations)
+        return merged
+
     def __init__(
         self,
         model: str = "qwen3.5:35b-a3b",
@@ -106,12 +125,15 @@ class LLMMatcher:
         self._confidence_threshold = confidence_threshold
         self._timeout = timeout
 
-        # Merge custom abbreviations
+        # Merge: hardcoded defaults → DB-loaded → per-instance custom
         all_abbr = dict(_NL_ABBREVIATIONS)
+        all_abbr.update(self._loaded_abbreviations)
         if custom_abbreviations:
             all_abbr.update(custom_abbreviations)
+        self._abbreviations = all_abbr
+
         self._system_prompt = _SYSTEM_PROMPT.format(
-            abbreviations=_format_abbreviations()
+            abbreviations=self._format_all_abbreviations()
         )
 
     async def match_pair(
@@ -192,6 +214,14 @@ class LLMMatcher:
             if r.get("match") and r.get("confidence", 0) >= self._confidence_threshold
         ]
 
+    def _format_all_abbreviations(self) -> str:
+        """Format the merged abbreviation dict for the system prompt."""
+        lines = []
+        for abbr, full in sorted(self._abbreviations.items()):
+            if abbr != full:  # Skip self-mappings
+                lines.append(f"- {abbr} = {full}")
+        return "\n".join(lines)
+
     def _check_abbreviation(
         self, text_a: str, text_b: str
     ) -> Optional[Dict[str, Any]]:
@@ -199,7 +229,7 @@ class LLMMatcher:
         a_upper = text_a.strip().upper()
         b_upper = text_b.strip().upper()
 
-        for abbr, full in _NL_ABBREVIATIONS.items():
+        for abbr, full in self._abbreviations.items():
             abbr_u = abbr.upper()
             full_u = full.upper()
 

@@ -1,0 +1,2 @@
+REMOVE TABLE vault_import;
+REMOVE TABLE vault_export;
