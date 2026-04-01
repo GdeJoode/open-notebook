@@ -4,6 +4,7 @@ import { AppShell } from '@/components/layout/AppShell'
 import { SettingsForm } from './components/SettingsForm'
 import { SystemInfo } from '../advanced/components/SystemInfo'
 import { RebuildEmbeddings } from '../advanced/components/RebuildEmbeddings'
+import { VaultSync } from '@/components/settings/VaultSync'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -26,10 +27,14 @@ export default function SettingsPage() {
             <Tabs defaultValue="general">
               <TabsList>
                 <TabsTrigger value="general">General</TabsTrigger>
+                <TabsTrigger value="vault">Vault</TabsTrigger>
                 <TabsTrigger value="advanced">Advanced</TabsTrigger>
               </TabsList>
               <TabsContent value="general" className="mt-6">
                 <SettingsForm />
+              </TabsContent>
+              <TabsContent value="vault" className="mt-6">
+                <VaultSync />
               </TabsContent>
               <TabsContent value="advanced" className="mt-6 space-y-6">
                 <SystemInfo />
