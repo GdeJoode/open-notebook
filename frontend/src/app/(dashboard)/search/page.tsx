@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { AppShell } from '@/components/layout/AppShell'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Input } from '@/components/ui/input'
@@ -24,6 +25,7 @@ import { SaveToNotebooksDialog } from '@/components/search/SaveToNotebooksDialog
 import { ErrorBanner } from '@/components/common/ErrorBanner'
 
 export default function SearchPage() {
+  const router = useRouter()
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
   const [searchType, setSearchType] = useState<'text' | 'vector'>('text')
@@ -150,8 +152,16 @@ export default function SearchPage() {
                 {/* Models Display */}
                 {!hasEmbeddingModel ? (
                   <div className="flex items-center gap-2 p-3 text-sm text-amber-600 dark:text-amber-500 bg-amber-50 dark:bg-amber-950/20 rounded-md">
-                    <AlertCircle className="h-4 w-4" />
-                    <span>You can&apos;t use this feature because you have no embedding model selected. Please set one up in the Models page.</span>
+                    <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                    <span>No embedding model configured. Ask and vector search require an embedding model.</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="ml-auto flex-shrink-0"
+                      onClick={() => router.push('/models')}
+                    >
+                      Configure Models
+                    </Button>
                   </div>
                 ) : (
                   <>
@@ -301,8 +311,14 @@ export default function SearchPage() {
                     <Label>Search Type</Label>
                     {!hasEmbeddingModel && (
                       <div className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-500">
-                        <AlertCircle className="h-4 w-4" />
-                        <span>Vector search requires an embedding model. Only text search is available.</span>
+                        <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                        <span>Vector search requires an embedding model.</span>
+                        <button
+                          onClick={() => router.push('/models')}
+                          className="underline hover:no-underline flex-shrink-0"
+                        >
+                          Configure
+                        </button>
                       </div>
                     )}
                     <RadioGroup

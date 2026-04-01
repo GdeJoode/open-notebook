@@ -231,7 +231,13 @@ export default function SourcesPage() {
         <EmptyState
           icon={FileText}
           title="No sources yet"
-          description="Sources from all notebooks will appear here"
+          description="Upload a document, paste a link, or enter text to get started. Sources are the foundation of your knowledge base."
+          action={
+            <Button onClick={() => router.push('/sources/new')}>
+              <Upload className="h-4 w-4 mr-2" />
+              Create your first source
+            </Button>
+          }
         />
       </AppShell>
     )
