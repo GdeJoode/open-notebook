@@ -4,19 +4,37 @@ import { useState } from 'react'
 import { AppShell } from '@/components/layout/AppShell'
 import { EmptyState } from '@/components/common/EmptyState'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
-import { useStrategies, useSummaries, useSummary } from '@/lib/hooks/use-summaries'
+import { useStrategies, useSummaries, useSummary, useGenerateSummary } from '@/lib/hooks/use-summaries'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Label } from '@/components/ui/label'
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion'
-import { AlignLeft, ArrowLeft, ChevronDown } from 'lucide-react'
+import { AlignLeft, ArrowLeft, Plus, Loader2 } from 'lucide-react'
 import type { SummaryListItem, StrategyInfo } from '@/lib/api/summaries'
+import { sourcesApi } from '@/lib/api/sources'
+import type { SourceListResponse } from '@/lib/types/api'
 import { formatDistanceToNow } from 'date-fns'
+import { useEffect } from 'react'
 
 export default function SummariesPage() {
   const [selectedSummaryId, setSelectedSummaryId] = useState<string | null>(null)
@@ -44,10 +62,109 @@ export default function SummariesPage() {
 function SummaryListView({ onSelect }: { onSelect: (id: string) => void }) {
   const { data: strategies, isLoading: loadingStrategies } = useStrategies()
   const { data: summaries, isLoading: loadingSummaries } = useSummaries()
+  const generateMutation = useGenerateSummary()
+  const [showGenerate, setShowGenerate] = useState(false)
+  const [selectedSource, setSelectedSource] = useState('')
+  const [selectedStrategy, setSelectedStrategy] = useState('')
+  const [sources, setSources] = useState<SourceListResponse[]>([])
+  const [loadingSources, setLoadingSources] = useState(false)
+
+  // Fetch sources when dialog opens
+  useEffect(() => {
+    if (showGenerate && sources.length === 0) {
+      setLoadingSources(true)
+      sourcesApi.list({ limit: 100 }).then(setSources).finally(() => setLoadingSources(false))
+    }
+  }, [showGenerate, sources.length])
+
+  const implementedStrategies = strategies?.filter((s: StrategyInfo) => s.implemented) ?? []
+
+  const handleGenerate = () => {
+    if (!selectedSource || !selectedStrategy) return
+    generateMutation.mutate(
+      { source_id: selectedSource, strategy: selectedStrategy },
+      {
+        onSuccess: (result) => {
+          setShowGenerate(false)
+          setSelectedSource('')
+          setSelectedStrategy('')
+          if (result?.id) onSelect(result.id)
+        },
+      }
+    )
+  }
 
   return (
     <>
-      <h1 className="text-2xl font-bold mb-6">Summaries</h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold">Summaries</h1>
+        <Button onClick={() => setShowGenerate(true)} disabled={implementedStrategies.length === 0}>
+          <Plus className="h-4 w-4 mr-2" />
+          Generate Summary
+        </Button>
+      </div>
+
+      {/* Generate dialog */}
+      <Dialog open={showGenerate} onOpenChange={setShowGenerate}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Generate Summary</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Source</Label>
+              {loadingSources ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading sources...
+                </div>
+              ) : (
+                <Select value={selectedSource} onValueChange={setSelectedSource}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sources.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.title || s.id}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label>Strategy</Label>
+              <Select value={selectedStrategy} onValueChange={setSelectedStrategy}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a strategy" />
+                </SelectTrigger>
+                <SelectContent>
+                  {implementedStrategies.map((s: StrategyInfo) => (
+                    <SelectItem key={s.name} value={s.name}>
+                      {s.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowGenerate(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleGenerate}
+              disabled={!selectedSource || !selectedStrategy || generateMutation.isPending}
+            >
+              {generateMutation.isPending ? (
+                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating...</>
+              ) : (
+                'Generate'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Strategies section */}
       <div className="mb-8">
