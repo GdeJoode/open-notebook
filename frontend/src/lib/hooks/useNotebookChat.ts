@@ -6,6 +6,9 @@ import { chatApi } from '@/lib/api/chat'
 import { QUERY_KEYS } from '@/lib/api/query-client'
 import {
   NotebookChatMessage,
+  NotebookChatSession,
+  NotebookChatSessionWithMessages,
+  CreateNotebookChatSessionRequest,
   UpdateNotebookChatSessionRequest,
   SourceListResponse,
   NoteResponse
@@ -26,13 +29,18 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
   const [charCount, setCharCount] = useState<number>(0)
 
   // Adapter bridges chatApi to the generic interface
-  const adapter: ChatApiAdapter<any, any> = useMemo(() => ({
+  const adapter: ChatApiAdapter<
+    NotebookChatSession,
+    NotebookChatSessionWithMessages,
+    CreateNotebookChatSessionRequest,
+    UpdateNotebookChatSessionRequest
+  > = useMemo(() => ({
     listSessions: () => chatApi.listSessions(notebookId),
     getSession: (sessionId: string) => chatApi.getSession(sessionId),
-    createSession: (data: Record<string, unknown>) =>
-      chatApi.createSession(data as any),
-    updateSession: (sessionId: string, data: Record<string, unknown>) =>
-      chatApi.updateSession(sessionId, data as UpdateNotebookChatSessionRequest),
+    createSession: (data: CreateNotebookChatSessionRequest) =>
+      chatApi.createSession(data),
+    updateSession: (sessionId: string, data: UpdateNotebookChatSessionRequest) =>
+      chatApi.updateSession(sessionId, data),
     deleteSession: (sessionId: string) => chatApi.deleteSession(sessionId),
   }), [notebookId])
 
@@ -46,6 +54,14 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
     queryKeys,
     enabled: !!notebookId,
   })
+
+  // Destructure for stable references in dependency arrays
+  const {
+    currentSessionId, currentSession, sessions, messages, loadingSessions,
+    setMessages, setCurrentSessionId, refetchCurrentSession, queryClient,
+    createSession: baseCreateSession, updateSession, deleteSession, switchSession,
+    refetchSessions,
+  } = base
 
   // Build context from sources and notes based on user selections
   const buildContext = useCallback(async () => {
@@ -87,7 +103,7 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
 
   // Send message (synchronous, no streaming)
   const sendMessage = useCallback(async (message: string, modelOverride?: string) => {
-    let sessionId = base.currentSessionId
+    let sessionId = currentSessionId
 
     // Auto-create session if none exists
     if (!sessionId) {
@@ -100,8 +116,8 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
           title: defaultTitle
         })
         sessionId = newSession.id
-        base.setCurrentSessionId(sessionId)
-        base.queryClient.invalidateQueries({
+        setCurrentSessionId(sessionId)
+        queryClient.invalidateQueries({
           queryKey: QUERY_KEYS.notebookChatSessions(notebookId)
         })
       } catch {
@@ -117,7 +133,7 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
       content: message,
       timestamp: new Date().toISOString()
     }
-    base.setMessages(prev => [...prev, userMessage])
+    setMessages(prev => [...prev, userMessage])
     setIsSending(true)
 
     try {
@@ -126,27 +142,27 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
         session_id: sessionId,
         message,
         context,
-        model_override: modelOverride ?? (base.currentSession?.model_override ?? undefined)
+        model_override: modelOverride ?? (currentSession?.model_override ?? undefined)
       })
 
-      base.setMessages(response.messages)
-      await base.refetchCurrentSession()
+      setMessages(response.messages)
+      await refetchCurrentSession()
     } catch (error) {
       console.error('Error sending message:', error)
       toast.error('Failed to send message')
-      base.setMessages(prev => prev.filter(msg => !msg.id.startsWith('temp-')))
+      setMessages(prev => prev.filter(msg => !msg.id.startsWith('temp-')))
     } finally {
       setIsSending(false)
     }
   }, [
     notebookId,
-    base.currentSessionId,
-    base.currentSession,
+    currentSessionId,
+    currentSession,
     buildContext,
-    base.refetchCurrentSession,
-    base.queryClient,
-    base.setCurrentSessionId,
-    base.setMessages,
+    refetchCurrentSession,
+    queryClient,
+    setCurrentSessionId,
+    setMessages,
   ])
 
   // Update token/char counts when context selections change
@@ -163,21 +179,21 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
 
   return {
     // State
-    sessions: base.sessions,
-    currentSession: base.currentSession || base.sessions.find((s: any) => s.id === base.currentSessionId),
-    currentSessionId: base.currentSessionId,
-    messages: base.messages,
+    sessions,
+    currentSession: currentSession || sessions.find(s => s.id === currentSessionId),
+    currentSessionId,
+    messages,
     isSending,
-    loadingSessions: base.loadingSessions,
+    loadingSessions,
     tokenCount,
     charCount,
 
     // Actions
-    createSession: (title?: string) => base.createSession({ notebook_id: notebookId, title }),
-    updateSession: base.updateSession,
-    deleteSession: base.deleteSession,
-    switchSession: base.switchSession,
+    createSession: (title?: string) => baseCreateSession({ notebook_id: notebookId, title } as CreateNotebookChatSessionRequest),
+    updateSession,
+    deleteSession,
+    switchSession,
     sendMessage,
-    refetchSessions: base.refetchSessions,
+    refetchSessions,
   }
 }

@@ -8,11 +8,16 @@ import { toast } from 'sonner'
  * Adapter interface for plugging in different chat API backends.
  * Both notebook chat and source chat implement this shape.
  */
-export interface ChatApiAdapter<TSession, TSessionWithMessages> {
+export interface ChatApiAdapter<
+  TSession,
+  TSessionWithMessages,
+  TCreateData = Record<string, unknown>,
+  TUpdateData = Record<string, unknown>,
+> {
   listSessions: () => Promise<TSession[]>
   getSession: (sessionId: string) => Promise<TSessionWithMessages>
-  createSession: (data: Record<string, unknown>) => Promise<TSession>
-  updateSession: (sessionId: string, data: Record<string, unknown>) => Promise<TSession>
+  createSession: (data: TCreateData) => Promise<TSession>
+  updateSession: (sessionId: string, data: TUpdateData) => Promise<TSession>
   deleteSession: (sessionId: string) => Promise<void>
 }
 
@@ -28,8 +33,13 @@ export interface ChatMessage {
   timestamp?: string
 }
 
-export interface UseBaseChatOptions<TSession, TSessionWithMessages> {
-  adapter: ChatApiAdapter<TSession, TSessionWithMessages>
+export interface UseBaseChatOptions<
+  TSession,
+  TSessionWithMessages,
+  TCreateData = Record<string, unknown>,
+  TUpdateData = Record<string, unknown>,
+> {
+  adapter: ChatApiAdapter<TSession, TSessionWithMessages, TCreateData, TUpdateData>
   queryKeys: BaseChatQueryKeys
   enabled: boolean
 }
@@ -37,11 +47,13 @@ export interface UseBaseChatOptions<TSession, TSessionWithMessages> {
 export function useBaseChat<
   TSession extends { id: string },
   TSessionWithMessages extends { messages?: ChatMessage[] },
+  TCreateData = Record<string, unknown>,
+  TUpdateData = Record<string, unknown>,
 >({
   adapter,
   queryKeys,
   enabled,
-}: UseBaseChatOptions<TSession, TSessionWithMessages>) {
+}: UseBaseChatOptions<TSession, TSessionWithMessages, TCreateData, TUpdateData>) {
   const queryClient = useQueryClient()
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -83,7 +95,7 @@ export function useBaseChat<
 
   // Create session mutation
   const createSessionMutation = useMutation({
-    mutationFn: (data: Record<string, unknown>) => adapter.createSession(data),
+    mutationFn: (data: TCreateData) => adapter.createSession(data),
     onSuccess: (newSession) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.sessions })
       setCurrentSessionId(newSession.id)
@@ -96,7 +108,7 @@ export function useBaseChat<
 
   // Update session mutation
   const updateSessionMutation = useMutation({
-    mutationFn: ({ sessionId, data }: { sessionId: string; data: Record<string, unknown> }) =>
+    mutationFn: ({ sessionId, data }: { sessionId: string; data: TUpdateData }) =>
       adapter.updateSession(sessionId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.sessions })
@@ -131,12 +143,12 @@ export function useBaseChat<
   }, [])
 
   const createSession = useCallback(
-    (data: Record<string, unknown>) => createSessionMutation.mutate(data),
+    (data: TCreateData) => createSessionMutation.mutate(data),
     [createSessionMutation]
   )
 
   const updateSession = useCallback(
-    (sessionId: string, data: Record<string, unknown>) =>
+    (sessionId: string, data: TUpdateData) =>
       updateSessionMutation.mutate({ sessionId, data }),
     [updateSessionMutation]
   )
