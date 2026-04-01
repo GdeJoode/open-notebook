@@ -10,6 +10,7 @@ export interface PipelineStep {
   label: string
   phase: 'config' | 'pipeline'
   status: StepStatus
+  description?: string
 }
 
 interface PipelineStepperProps {
@@ -81,6 +82,7 @@ function StepIndicator({
       type="button"
       onClick={isClickable ? onClick : undefined}
       disabled={!isClickable}
+      title={step.description}
       className={cn(
         'flex items-center gap-2 px-3 py-2 rounded-md transition-colors text-sm whitespace-nowrap',
         isClickable ? 'cursor-pointer' : 'cursor-not-allowed',

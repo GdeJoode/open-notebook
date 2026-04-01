@@ -61,11 +61,11 @@ const STEP_LABELS = [
   { id: 1, label: 'Input', phase: 'config' as const },
   { id: 2, label: 'Organize', phase: 'config' as const },
   { id: 3, label: 'Config', phase: 'config' as const },
-  { id: 4, label: 'Extract', phase: 'pipeline' as const },
-  { id: 5, label: 'Preprocess', phase: 'pipeline' as const },
-  { id: 6, label: 'Summaries', phase: 'pipeline' as const },
-  { id: 7, label: 'Entities', phase: 'pipeline' as const },
-  { id: 8, label: 'Embed', phase: 'pipeline' as const },
+  { id: 4, label: 'Extract', phase: 'pipeline' as const, description: 'Required — parses document into text chunks' },
+  { id: 5, label: 'Preprocess', phase: 'pipeline' as const, description: 'Optional — classify content and filter noise' },
+  { id: 6, label: 'Summaries', phase: 'pipeline' as const, description: 'Optional — generate AI summaries using various strategies' },
+  { id: 7, label: 'Entities', phase: 'pipeline' as const, description: 'Optional — extract people, organizations, concepts for the knowledge graph' },
+  { id: 8, label: 'Embed', phase: 'pipeline' as const, description: 'Optional — create vector embeddings for semantic search' },
   { id: 9, label: 'Done', phase: 'pipeline' as const },
 ]
 
