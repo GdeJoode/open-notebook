@@ -1,5 +1,4 @@
 import asyncio
-import sqlite3
 from typing import Annotated, Dict, List, Optional
 
 from ai_prompter import Prompter
@@ -16,6 +15,8 @@ from app_main.config import LANGGRAPH_CHECKPOINT_FILE
 from app_main.dependencies import get_context_service
 from app_main.graphs.utils import provision_langchain_model
 
+MODEL_INVOKE_TIMEOUT = 300  # seconds
+
 
 class SourceChatState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -27,38 +28,20 @@ class SourceChatState(TypedDict):
     context_indicators: Optional[Dict[str, List[str]]]
 
 
-def call_model_with_source_context(
+async def call_model_with_source_context(
     state: SourceChatState, config: RunnableConfig
 ) -> dict:
     source_id = state.get("source_id")
     if not source_id:
         raise ValueError("source_id is required in state")
 
-    def build_context():
-        new_loop = asyncio.new_event_loop()
-        try:
-            asyncio.set_event_loop(new_loop)
-            svc = get_context_service()
-            return new_loop.run_until_complete(
-                svc.build_source_context(
-                    source_id=source_id,
-                    include_insights=True,
-                    include_notes=False,
-                    max_tokens=50000,
-                )
-            )
-        finally:
-            new_loop.close()
-            asyncio.set_event_loop(None)
-
-    try:
-        asyncio.get_running_loop()
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(build_context)
-            context_data = future.result()
-    except RuntimeError:
-        context_data = build_context()
+    svc = get_context_service()
+    context_data = await svc.build_source_context(
+        source_id=source_id,
+        include_insights=True,
+        include_notes=False,
+        max_tokens=50000,
+    )
 
     source = None
     insights = []
@@ -95,41 +78,17 @@ def call_model_with_source_context(
     system_prompt = Prompter(prompt_template="source_chat").render(data=prompt_data)
     payload = [SystemMessage(content=system_prompt)] + state.get("messages", [])
 
-    def run_in_new_loop():
-        new_loop = asyncio.new_event_loop()
-        try:
-            asyncio.set_event_loop(new_loop)
-            return new_loop.run_until_complete(
-                provision_langchain_model(
-                    str(payload),
-                    config.get("configurable", {}).get("model_id")
-                    or state.get("model_override"),
-                    "chat",
-                    max_tokens=8192,
-                )
-            )
-        finally:
-            new_loop.close()
-            asyncio.set_event_loop(None)
+    model_id = (
+        config.get("configurable", {}).get("model_id")
+        or state.get("model_override")
+    )
+    model = await provision_langchain_model(
+        str(payload), model_id, "chat", max_tokens=8192
+    )
 
-    try:
-        asyncio.get_running_loop()
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(run_in_new_loop)
-            model = future.result()
-    except RuntimeError:
-        model = asyncio.run(
-            provision_langchain_model(
-                str(payload),
-                config.get("configurable", {}).get("model_id")
-                or state.get("model_override"),
-                "chat",
-                max_tokens=8192,
-            )
-        )
-
-    ai_message = model.invoke(payload)
+    ai_message = await asyncio.wait_for(
+        model.ainvoke(payload), timeout=MODEL_INVOKE_TIMEOUT
+    )
 
     return {
         "messages": ai_message,
@@ -180,11 +139,7 @@ def _format_source_context(context_data: Dict) -> str:
     return "\n".join(context_parts)
 
 
-conn = sqlite3.connect(
-    LANGGRAPH_CHECKPOINT_FILE,
-    check_same_thread=False,
-)
-memory = SqliteSaver(conn)
+memory = SqliteSaver.from_conn_string(LANGGRAPH_CHECKPOINT_FILE)
 
 source_chat_state = StateGraph(SourceChatState)
 source_chat_state.add_node("source_chat_agent", call_model_with_source_context)

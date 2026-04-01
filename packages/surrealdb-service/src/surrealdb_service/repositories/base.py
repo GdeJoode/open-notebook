@@ -2,6 +2,7 @@
 Base repository with generic CRUD operations.
 """
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
 
@@ -16,6 +17,24 @@ from surrealdb_service.connection import (
     execute_query,
     parse_record_ids,
 )
+
+# Patterns for validating SurrealDB identifiers to prevent injection
+_RECORD_ID_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*:[a-zA-Z0-9_\-⟨⟩]+$")
+_TABLE_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _validate_record_id(value: str) -> str:
+    """Validate that a string looks like a SurrealDB record ID (table:id)."""
+    if not _RECORD_ID_RE.match(value):
+        raise ValueError(f"Invalid record ID format: {value!r}")
+    return value
+
+
+def _validate_table_name(value: str) -> str:
+    """Validate that a string is a safe SurrealDB table/relationship name."""
+    if not _TABLE_NAME_RE.match(value):
+        raise ValueError(f"Invalid table/relationship name: {value!r}")
+    return value
 
 T = TypeVar("T", bound=ObjectModel)
 R = TypeVar("R", bound=RecordModel)
@@ -321,6 +340,11 @@ class BaseRepository(Generic[T]):
         """
         if data is None:
             data = {}
+
+        # Validate identifiers to prevent SurrealQL injection
+        _validate_record_id(source_id)
+        _validate_table_name(relationship)
+        _validate_record_id(target_id)
 
         query = f"RELATE {source_id}->{relationship}->{target_id} CONTENT $data"
 

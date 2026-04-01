@@ -1,5 +1,6 @@
 """Orchestrator that processes batches of text chunks for extraction."""
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -105,7 +106,25 @@ class ExtractionWorkflow:
                 if additional_context is not None:
                     extra_kwargs["additional_context"] = additional_context
 
-                result = await extractor.extract(text, ontology, **extra_kwargs)
+                try:
+                    coro = extractor.extract(text, ontology, **extra_kwargs)
+                    if self._config.extraction_timeout > 0:
+                        result = await asyncio.wait_for(
+                            coro, timeout=self._config.extraction_timeout
+                        )
+                    else:
+                        result = await coro
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Extraction timed out for chunk {chunk_id} "
+                        f"after {self._config.extraction_timeout}s, skipping"
+                    )
+                    continue
+                except Exception as e:
+                    logger.error(
+                        f"Extraction failed for chunk {chunk_id}: {e}"
+                    )
+                    continue
 
                 # Tag entities with chunk_id
                 for entity in result.entities:

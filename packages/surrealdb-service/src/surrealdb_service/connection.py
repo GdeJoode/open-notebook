@@ -2,6 +2,7 @@
 SurrealDB connection management.
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
@@ -61,35 +62,133 @@ async def db_connection(
 
 class ConnectionPool:
     """
-    Simple connection pool for SurrealDB.
+    Async connection pool for SurrealDB using asyncio.Queue.
 
-    Note: This is a basic implementation. For production, consider using
-    a more sophisticated connection pool or the built-in connection management.
+    Reuses connections across requests to avoid the overhead of
+    opening and closing a connection per query.
     """
 
-    def __init__(self, config: Optional[SurrealDBConfig] = None):
+    def __init__(
+        self,
+        config: Optional[SurrealDBConfig] = None,
+        max_size: int = 10,
+    ):
         self.config = config or get_config()
-        self._connections: List[AsyncSurreal] = []
+        self._max_size = max_size
+        self._pool: asyncio.Queue[AsyncSurreal] = asyncio.Queue(maxsize=max_size)
+        self._size = 0
+        self._lock = asyncio.Lock()
+
+    async def _create_connection(self) -> AsyncSurreal:
+        """Create and authenticate a new SurrealDB connection."""
+        db = AsyncSurreal(self.config.url)
+        await db.signin(
+            {
+                "username": self.config.username,
+                "password": self.config.password,
+            }
+        )
+        await db.use(self.config.namespace, self.config.database)
+        return db
+
+    async def _health_check(self, conn: AsyncSurreal) -> bool:
+        """Check if a connection is still alive."""
+        try:
+            await conn.query("SELECT 1")
+            return True
+        except Exception:
+            return False
 
     @asynccontextmanager
     async def acquire(self) -> AsyncGenerator[AsyncSurreal, None]:
-        """Acquire a connection from the pool."""
-        # For now, just create a new connection each time
-        # A full implementation would reuse connections
-        async with db_connection(self.config) as conn:
+        """Acquire a connection from the pool, creating one if needed."""
+        conn: Optional[AsyncSurreal] = None
+
+        # Try to reuse an existing connection
+        while not self._pool.empty():
+            try:
+                candidate = self._pool.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if await self._health_check(candidate):
+                conn = candidate
+                break
+            else:
+                # Dead connection — discard and decrement size
+                async with self._lock:
+                    self._size -= 1
+                try:
+                    await candidate.close()
+                except Exception:
+                    pass
+
+        # Create a new connection if none available
+        if conn is None:
+            async with self._lock:
+                if self._size < self._max_size:
+                    self._size += 1
+                    create_new = True
+                else:
+                    create_new = False
+
+            if create_new:
+                conn = await self._create_connection()
+            else:
+                # Pool exhausted — wait for one to be returned
+                conn = await self._pool.get()
+                if not await self._health_check(conn):
+                    try:
+                        await conn.close()
+                    except Exception:
+                        pass
+                    conn = await self._create_connection()
+
+        try:
             yield conn
+        finally:
+            # Return connection to pool
+            try:
+                self._pool.put_nowait(conn)
+            except asyncio.QueueFull:
+                # Pool is full — close the excess connection
+                async with self._lock:
+                    self._size -= 1
+                try:
+                    await conn.close()
+                except Exception:
+                    pass
+
+    async def close_all(self) -> None:
+        """Close all pooled connections. Call during app shutdown."""
+        while not self._pool.empty():
+            try:
+                conn = self._pool.get_nowait()
+                await conn.close()
+            except Exception:
+                pass
+        async with self._lock:
+            self._size = 0
+        logger.info("Connection pool closed")
 
 
 # Global pool instance
 _pool: Optional[ConnectionPool] = None
 
 
-def get_pool() -> ConnectionPool:
+def get_pool(config: Optional[SurrealDBConfig] = None) -> ConnectionPool:
     """Get the global connection pool."""
     global _pool
     if _pool is None:
-        _pool = ConnectionPool()
+        _pool = ConnectionPool(config=config)
     return _pool
+
+
+async def close_pool() -> None:
+    """Shut down the global connection pool."""
+    global _pool
+    if _pool is not None:
+        await _pool.close_all()
+        _pool = None
 
 
 async def execute_query(
@@ -98,7 +197,7 @@ async def execute_query(
     config: Optional[SurrealDBConfig] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Execute a SurrealQL query.
+    Execute a SurrealQL query using the connection pool.
 
     Args:
         query: The SurrealQL query string.
@@ -111,7 +210,8 @@ async def execute_query(
     Raises:
         RuntimeError: If query execution fails.
     """
-    async with db_connection(config) as connection:
+    pool = get_pool(config)
+    async with pool.acquire() as connection:
         try:
             result = parse_record_ids(await connection.query(query, params))
             if isinstance(result, str):

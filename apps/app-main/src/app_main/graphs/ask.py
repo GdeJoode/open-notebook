@@ -1,3 +1,4 @@
+import asyncio
 import operator
 from typing import Annotated, List
 
@@ -12,6 +13,8 @@ from typing_extensions import TypedDict
 from surrealdb_service.repositories import SearchRepository
 from app_main.graphs.utils import provision_langchain_model
 from shared.utils.text import clean_thinking_content
+
+MODEL_INVOKE_TIMEOUT = 300  # seconds
 
 
 class SubGraphState(TypedDict):
@@ -57,7 +60,9 @@ async def call_model_with_messages(state: ThreadState, config: RunnableConfig) -
         max_tokens=2000,
         structured=dict(type="json"),
     )
-    ai_message = await model.ainvoke(system_prompt)
+    ai_message = await asyncio.wait_for(
+        model.ainvoke(system_prompt), timeout=MODEL_INVOKE_TIMEOUT
+    )
 
     message_content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
     cleaned_content = clean_thinking_content(message_content)
@@ -97,7 +102,9 @@ async def provide_answer(state: SubGraphState, config: RunnableConfig) -> dict:
         "tools",
         max_tokens=2000,
     )
-    ai_message = await model.ainvoke(system_prompt)
+    ai_message = await asyncio.wait_for(
+        model.ainvoke(system_prompt), timeout=MODEL_INVOKE_TIMEOUT
+    )
     ai_content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
     return {"answers": [clean_thinking_content(ai_content)]}
 
@@ -110,7 +117,9 @@ async def write_final_answer(state: ThreadState, config: RunnableConfig) -> dict
         "tools",
         max_tokens=2000,
     )
-    ai_message = await model.ainvoke(system_prompt)
+    ai_message = await asyncio.wait_for(
+        model.ainvoke(system_prompt), timeout=MODEL_INVOKE_TIMEOUT
+    )
     final_content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
     return {"final_answer": clean_thinking_content(final_content)}
 

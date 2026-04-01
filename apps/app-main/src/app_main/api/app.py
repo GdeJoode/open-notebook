@@ -52,6 +52,10 @@ async def lifespan(app: FastAPI):
     yield
 
     await stop_worker()
+
+    from surrealdb_service.connection import close_pool
+
+    await close_pool()
     logger.info("API shutdown complete")
 
 

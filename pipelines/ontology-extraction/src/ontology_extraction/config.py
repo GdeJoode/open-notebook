@@ -16,6 +16,9 @@ class ExtractionConfig:
     include_claims: bool = True
     confidence_threshold: float = 0.5
 
+    # Per-chunk extraction timeout in seconds (0 = no timeout)
+    extraction_timeout: int = 300
+
     # Extractor selection: "llm" (default) or "langextract"
     extractor_type: str = "llm"
 
