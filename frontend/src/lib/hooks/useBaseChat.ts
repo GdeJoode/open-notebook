@@ -23,7 +23,7 @@ export interface BaseChatQueryKeys {
 
 export interface ChatMessage {
   id: string
-  type: string
+  type: 'human' | 'ai'
   content: string
   timestamp?: string
 }
