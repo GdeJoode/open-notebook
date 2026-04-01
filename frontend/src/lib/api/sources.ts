@@ -125,6 +125,26 @@ export const sourcesApi = {
     return response.data
   },
 
+  runFiltering: async (id: string, options?: {
+    dedup_enabled?: boolean
+    dedup_similarity_threshold?: number
+    fuzzy_dedup_enabled?: boolean
+    fuzzy_similarity_threshold?: number
+    embedding_dedup_enabled?: boolean
+    embedding_similarity_threshold?: number
+    edge_prediction_enabled?: boolean
+  }) => {
+    const response = await apiClient.post<{
+      source_id: string
+      entities_before: number
+      entities_after: number
+      entities_removed: number
+      merge_groups: number
+      predicted_edges: number
+    }>(`/sources/${id}/run-filtering`, options || {})
+    return response.data
+  },
+
   runEmbed: async (id: string) => {
     const response = await apiClient.post<{ command_id: string | null; status: string }>(`/sources/${id}/run-embed`)
     return response.data
