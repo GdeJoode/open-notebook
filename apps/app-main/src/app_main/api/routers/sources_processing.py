@@ -29,6 +29,16 @@ class RunEntitiesRequest(BaseModel):
     langextract_fence_output: Optional[bool] = None
 
 
+class RunFilteringRequest(BaseModel):
+    dedup_enabled: bool = True
+    dedup_similarity_threshold: float = 0.85
+    fuzzy_dedup_enabled: bool = False
+    fuzzy_similarity_threshold: float = 0.85
+    embedding_dedup_enabled: bool = False
+    embedding_similarity_threshold: float = 0.90
+    edge_prediction_enabled: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -152,6 +162,65 @@ async def get_extraction_result(
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching extraction result: {str(e)}",
+        )
+
+
+@router.post("/{source_id}/run-filtering")
+async def run_filtering(
+    source_id: str,
+    body: RunFilteringRequest = RunFilteringRequest(),
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Run entity filtering/deduplication on existing extraction results.
+
+    Fetches the raw extraction_result, runs the FilteringWorkflow with
+    the specified config, persists filtered entities to the KG tables,
+    and returns filtering statistics.
+    """
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        from entity_filtering.config import (
+            EmbeddingDedupConfig,
+            FilteringConfig,
+            FuzzyDedupConfig,
+        )
+
+        from app_main.dependencies import get_entity_extraction_service
+
+        service = get_entity_extraction_service()
+
+        f_config = FilteringConfig(
+            dedup_enabled=body.dedup_enabled,
+            dedup_similarity_threshold=body.dedup_similarity_threshold,
+            fuzzy_dedup=FuzzyDedupConfig(
+                enabled=body.fuzzy_dedup_enabled,
+                similarity_threshold=body.fuzzy_similarity_threshold,
+            ),
+            embedding_dedup=EmbeddingDedupConfig(
+                enabled=body.embedding_dedup_enabled,
+                similarity_threshold=body.embedding_similarity_threshold,
+            ),
+            edge_prediction_enabled=body.edge_prediction_enabled,
+        )
+
+        result = await service.run_filtering_only(
+            source_id=str(source.id),
+            filtering_config=f_config,
+        )
+
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error running filtering for source {source_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error running filtering: {str(e)}",
         )
 
 

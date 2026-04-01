@@ -1,0 +1,153 @@
+"""
+Service for persisting filtered extraction results to the knowledge graph.
+
+Takes a FilteredResult from the entity-filtering pipeline and upserts
+entities into the ``entity`` table and relations into the ``relation``
+table in SurrealDB, making them visible on the Knowledge Graph page.
+"""
+
+from typing import Any, Dict, List
+
+from loguru import logger
+from surrealdb_service.connection import execute_query
+
+
+class EntityPersistenceService:
+    """Persists filtered entities and relations to the KG tables."""
+
+    async def persist_filtered_result(
+        self,
+        source_id: str,
+        entities: List[Dict[str, Any]],
+        relations: List[Dict[str, Any]],
+        merge_groups: List[List[str]] | None = None,
+    ) -> Dict[str, Any]:
+        """Upsert entities and create relations in the knowledge graph.
+
+        Args:
+            source_id: Source record ID (for provenance tracking).
+            entities: Filtered entity dicts (text, label, confidence, properties).
+            relations: Filtered relation dicts (source_entity, target_entity, relation_type, confidence).
+            merge_groups: Optional dedup merge groups for provenance.
+
+        Returns:
+            Dict with ``entities_upserted`` and ``relations_created`` counts.
+        """
+        entities_upserted = 0
+        relations_created = 0
+
+        # Build merge group lookup: entity text → group members
+        merge_lookup: Dict[str, List[str]] = {}
+        if merge_groups:
+            for group in merge_groups:
+                for member in group:
+                    merge_lookup[member] = group
+
+        # 1. Upsert entities
+        for entity in entities:
+            text = entity.get("text", "")
+            label = entity.get("label", "UNKNOWN")
+            confidence = entity.get("confidence", 0.5)
+            properties = entity.get("properties", {})
+
+            if not text.strip():
+                continue
+
+            # Build entity properties for storage (exclude embedding to save space)
+            stored_props = {
+                k: v for k, v in properties.items()
+                if k != "embedding" and v is not None
+            }
+
+            # Add merge history if available
+            if text in merge_lookup:
+                stored_props["merged_from"] = merge_lookup[text]
+
+            try:
+                # Upsert: find by name+type, update or create
+                result = await execute_query(
+                    """
+                    LET $existing = (SELECT * FROM entity
+                        WHERE name = $name AND entity_type = $entity_type
+                        LIMIT 1);
+                    IF array::len($existing) > 0 THEN {
+                        UPDATE $existing[0].id SET
+                            weight = weight + 1,
+                            confidence = math::max(confidence, $confidence),
+                            source_ids = array::union(source_ids, [$source_id]),
+                            properties = object::extend(properties, $properties),
+                            updated = time::now();
+                        RETURN $existing[0].id;
+                    } ELSE {
+                        CREATE entity SET
+                            name = $name,
+                            entity_type = $entity_type,
+                            weight = 1,
+                            confidence = $confidence,
+                            source_ids = [$source_id],
+                            properties = $properties,
+                            created = time::now(),
+                            updated = time::now();
+                    } END
+                    """,
+                    {
+                        "name": text,
+                        "entity_type": label,
+                        "confidence": confidence,
+                        "source_id": source_id,
+                        "properties": stored_props,
+                    },
+                )
+                entities_upserted += 1
+            except Exception as e:
+                logger.warning(f"Failed to upsert entity '{text}': {e}")
+
+        # 2. Create relations
+        for rel in relations:
+            src_text = rel.get("source_entity", "")
+            tgt_text = rel.get("target_entity", "")
+            rel_type = rel.get("relation_type", "RELATED")
+            confidence = rel.get("confidence", 0.5)
+            properties = rel.get("properties", {})
+
+            if not src_text or not tgt_text:
+                continue
+
+            try:
+                await execute_query(
+                    """
+                    LET $src = (SELECT id FROM entity WHERE name = $src_name LIMIT 1);
+                    LET $tgt = (SELECT id FROM entity WHERE name = $tgt_name LIMIT 1);
+                    IF array::len($src) > 0 AND array::len($tgt) > 0 THEN {
+                        RELATE $src[0].id->relation->$tgt[0].id SET
+                            relation_type = $rel_type,
+                            confidence = $confidence,
+                            source_id = $source_id,
+                            properties = $properties,
+                            created = time::now();
+                    } END
+                    """,
+                    {
+                        "src_name": src_text,
+                        "tgt_name": tgt_text,
+                        "rel_type": rel_type,
+                        "confidence": confidence,
+                        "source_id": source_id,
+                        "properties": properties,
+                    },
+                )
+                relations_created += 1
+            except Exception as e:
+                logger.warning(
+                    f"Failed to create relation {src_text} -> {tgt_text}: {e}"
+                )
+
+        logger.info(
+            f"Persisted to KG: {entities_upserted} entities, "
+            f"{relations_created} relations for source {source_id}"
+        )
+
+        return {
+            "entities_upserted": entities_upserted,
+            "relations_created": relations_created,
+        }

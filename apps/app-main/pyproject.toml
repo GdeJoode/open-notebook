@@ -14,6 +14,7 @@ dependencies = [
     "summarization",
     "enrichment",
     "embeddings",
+    "entity-filtering",
     "retrieval",
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
@@ -54,5 +55,6 @@ ontology-extraction = { workspace = true }
 summarization = { workspace = true }
 enrichment = { workspace = true }
 embeddings = { workspace = true }
+entity-filtering = { workspace = true }
 retrieval = { workspace = true }
 job-queue = { workspace = true }

@@ -1,11 +1,11 @@
 """
-Service bridging the app layer to the ontology-extraction pipeline.
+Service bridging the app layer to the ontology-extraction and entity-filtering pipelines.
 
-Fetches source chunks, runs ExtractionWorkflow, and persists results
-to the ``extraction_result`` SurrealDB table.
+Fetches source chunks, runs ExtractionWorkflow, optionally runs
+FilteringWorkflow for deduplication, and persists results to SurrealDB.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from loguru import logger
 from surrealdb_service.connection import execute_query
@@ -14,12 +14,18 @@ from surrealdb_service.repositories import SourceRepository
 from ontology_extraction.config import ExtractionConfig
 from ontology_extraction.workflow import ExtractionWorkflow
 
+from entity_filtering.config import FilteringConfig
+from entity_filtering.workflow import FilteringWorkflow
+
+from app_main.services.entity_persistence_service import EntityPersistenceService
+
 
 class EntityExtractionService:
     """Runs ontology-guided entity extraction on a source's chunks."""
 
     def __init__(self, source_repo: SourceRepository):
         self._source_repo = source_repo
+        self._persistence = EntityPersistenceService()
 
     async def run_extraction(
         self,
@@ -27,15 +33,19 @@ class EntityExtractionService:
         ontology_name: str = "general",
         extractor_type: str = "llm",
         config_overrides: Dict[str, Any] | None = None,
+        run_filtering: bool = True,
+        filtering_config: Optional[FilteringConfig] = None,
     ) -> Dict[str, Any]:
         """
-        Run entity extraction for a source.
+        Run entity extraction and optional filtering for a source.
 
         1. Fetch chunks via SourceRepository.
         2. Build ExtractionConfig and ExtractionWorkflow.
         3. Run extraction.
-        4. Persist results to ``extraction_result`` table.
-        5. Return summary dict.
+        4. Optionally run FilteringWorkflow for dedup/enrichment.
+        5. Persist raw results to ``extraction_result`` table.
+        6. Persist filtered entities to KG tables (entity, relation).
+        7. Return summary dict.
         """
         logger.info(f"Starting entity extraction for source: {source_id}")
 
@@ -67,17 +77,65 @@ class EntityExtractionService:
         # 4. Run extraction
         result = await workflow.extract(chunk_dicts)
 
-        # 5. Persist to SurrealDB (upsert pattern from preprocessing_service)
-        # Store extractor_type in metadata so the frontend can choose visualization
+        # Store extractor_type in metadata
         if not hasattr(result, "metadata") or result.metadata is None:
             result.metadata = {}
         result.metadata["extractor_type"] = extractor_type
+
+        # 5. Optionally run filtering/deduplication
+        filtered_entities = result.entities
+        filtered_relations = result.relations
+        merge_groups = None
+        filtering_stats = {}
+
+        if run_filtering and (result.entities or result.relations):
+            try:
+                f_config = filtering_config or FilteringConfig()
+                f_workflow = FilteringWorkflow(config=f_config)
+
+                filtered = await f_workflow.process(result)
+
+                merge_groups = filtered.merged_entity_groups
+                all_relations = [
+                    r.model_dump() for r in filtered.relations
+                ] + [
+                    r.model_dump() for r in filtered.predicted_edges
+                ]
+
+                filtering_stats = {
+                    "entities_before": len(result.entities),
+                    "entities_after": len(filtered.entities),
+                    "entities_removed": len(filtered.removed_entities),
+                    "merge_groups": len(merge_groups) if merge_groups else 0,
+                    "predicted_edges": len(filtered.predicted_edges),
+                }
+                result.metadata["filtering"] = filtering_stats
+
+                logger.info(
+                    f"Filtering complete for source {source_id}: "
+                    f"{filtering_stats}"
+                )
+
+                # 6. Persist filtered entities to KG
+                await self._persistence.persist_filtered_result(
+                    source_id=source_id,
+                    entities=[e.model_dump() for e in filtered.entities],
+                    relations=all_relations,
+                    merge_groups=merge_groups,
+                )
+
+            except Exception as e:
+                logger.error(f"Filtering failed for source {source_id}: {e}")
+                # Fall through — raw results will still be saved
+
+        # 7. Persist raw extraction results
         await self._save_result(source_id, result)
 
         summary = {
             "source_id": source_id,
             "entity_count": result.entity_count,
             "relation_count": result.relation_count,
+            **filtering_stats,
         }
         logger.info(
             f"Entity extraction completed for source {source_id}: "
@@ -85,10 +143,95 @@ class EntityExtractionService:
         )
         return summary
 
+    async def run_filtering_only(
+        self,
+        source_id: str,
+        filtering_config: Optional[FilteringConfig] = None,
+    ) -> Dict[str, Any]:
+        """Run filtering on an existing extraction result without re-extracting.
+
+        Fetches the raw extraction_result, runs FilteringWorkflow, and
+        persists filtered entities to the KG tables.
+        """
+        # Fetch existing extraction result
+        rows = await execute_query(
+            "SELECT * FROM extraction_result WHERE source_id = $source_id LIMIT 1",
+            {"source_id": source_id},
+        )
+        if not rows:
+            raise ValueError(f"No extraction result found for source {source_id}")
+
+        row = rows[0]
+        entity_dicts = row.get("entities", [])
+        relation_dicts = row.get("relations", [])
+
+        if not entity_dicts:
+            return {
+                "source_id": source_id,
+                "entities_before": 0,
+                "entities_after": 0,
+                "entities_removed": 0,
+                "merge_groups": 0,
+                "predicted_edges": 0,
+            }
+
+        # Reconstruct ExtractionResult for the FilteringWorkflow
+        from shared.models.extraction import (
+            ExtractedEntity,
+            ExtractedRelation,
+            ExtractionResult,
+        )
+
+        extraction = ExtractionResult(
+            entities=[ExtractedEntity(**e) for e in entity_dicts],
+            relations=[ExtractedRelation(**r) for r in relation_dicts],
+            metadata=row.get("metadata", {}),
+        )
+
+        # Run filtering
+        f_config = filtering_config or FilteringConfig()
+        f_workflow = FilteringWorkflow(config=f_config)
+        filtered = await f_workflow.process(extraction)
+
+        # Persist to KG
+        all_relations = [
+            r.model_dump() for r in filtered.relations
+        ] + [
+            r.model_dump() for r in filtered.predicted_edges
+        ]
+        await self._persistence.persist_filtered_result(
+            source_id=source_id,
+            entities=[e.model_dump() for e in filtered.entities],
+            relations=all_relations,
+            merge_groups=filtered.merged_entity_groups,
+        )
+
+        stats = {
+            "source_id": source_id,
+            "entities_before": len(entity_dicts),
+            "entities_after": len(filtered.entities),
+            "entities_removed": len(filtered.removed_entities),
+            "merge_groups": len(filtered.merged_entity_groups)
+            if filtered.merged_entity_groups
+            else 0,
+            "predicted_edges": len(filtered.predicted_edges),
+        }
+
+        # Update extraction_result metadata with filtering stats
+        metadata = row.get("metadata", {})
+        metadata["filtering"] = stats
+        await execute_query(
+            "UPDATE extraction_result SET metadata = $metadata "
+            "WHERE source_id = $source_id",
+            {"source_id": source_id, "metadata": metadata},
+        )
+
+        logger.info(f"Filtering-only completed for source {source_id}: {stats}")
+        return stats
+
     async def _save_result(self, source_id: str, result) -> None:
         """Persist extraction result to SurrealDB."""
         try:
-            # Upsert: delete existing, then create
             await execute_query(
                 "DELETE FROM extraction_result WHERE source_id = $source_id",
                 {"source_id": source_id},
