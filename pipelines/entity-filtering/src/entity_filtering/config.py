@@ -170,6 +170,42 @@ class LLMVerificationConfig:
 
 
 @dataclass
+class SemanticBlockingConfig:
+    """UMAP + HDBSCAN semantic blocking settings.
+
+    Attributes:
+        enabled: Whether to run semantic blocking before pairwise dedup.
+        umap_n_components: UMAP target dimensions (lower = faster, less precise).
+        min_cluster_size: Minimum entities to form a block (2 = allow pairs).
+        min_samples: HDBSCAN density parameter (1 = permissive).
+    """
+
+    enabled: bool = False
+    umap_n_components: int = 20
+    min_cluster_size: int = 2
+    min_samples: int = 1
+
+
+@dataclass
+class LLMMatcherConfig:
+    """LLM-based entity matching settings.
+
+    Attributes:
+        enabled: Whether to run LLM matching on candidate pairs.
+        model: Ollama model name for matching.
+        base_url: Ollama API endpoint.
+        confidence_threshold: Minimum LLM confidence to accept a match.
+        timeout: HTTP timeout per LLM request in seconds.
+    """
+
+    enabled: bool = False
+    model: str = "qwen3.5:35b-a3b"
+    base_url: str = "http://localhost:11434"
+    confidence_threshold: float = 0.7
+    timeout: int = 60
+
+
+@dataclass
 class EdgePredictionConfig:
     """Edge (relation) prediction and scoring settings.
 
@@ -255,6 +291,12 @@ class FilteringConfig:
     )
     llm_verification: LLMVerificationConfig = field(
         default_factory=LLMVerificationConfig
+    )
+    semantic_blocking: SemanticBlockingConfig = field(
+        default_factory=SemanticBlockingConfig
+    )
+    llm_matcher: LLMMatcherConfig = field(
+        default_factory=LLMMatcherConfig
     )
     edge_prediction: EdgePredictionConfig = field(
         default_factory=EdgePredictionConfig

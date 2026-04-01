@@ -37,6 +37,8 @@ from entity_filtering.resolution.kg_resolver import (
     EntityRepositoryProtocol,
     KGResolver,
 )
+from entity_filtering.deduplication.semantic_blocker import SemanticBlocker
+from entity_filtering.resolution.llm_matcher import LLMMatcher
 from entity_filtering.scoring.edge_predictor import EdgePredictor
 from entity_filtering.validation.graph_analyzer import GraphAnalyzer
 from entity_filtering.validation.ontology_constraint_filter import (
@@ -174,6 +176,25 @@ class FilteringWorkflow:
                 outlier_centrality_low=self._config.ontology_validation.outlier_centrality_low,
             )
 
+        # Semantic blocking
+        self._semantic_blocker: Optional[SemanticBlocker] = None
+        if self._config.semantic_blocking.enabled:
+            self._semantic_blocker = SemanticBlocker(
+                umap_n_components=self._config.semantic_blocking.umap_n_components,
+                min_cluster_size=self._config.semantic_blocking.min_cluster_size,
+                min_samples=self._config.semantic_blocking.min_samples,
+            )
+
+        # LLM-based matcher
+        self._llm_matcher: Optional[LLMMatcher] = None
+        if self._config.llm_matcher.enabled:
+            self._llm_matcher = LLMMatcher(
+                model=self._config.llm_matcher.model,
+                base_url=self._config.llm_matcher.base_url,
+                confidence_threshold=self._config.llm_matcher.confidence_threshold,
+                timeout=self._config.llm_matcher.timeout,
+            )
+
         self._edge_predictor = EdgePredictor()
 
     async def process(
@@ -276,6 +297,24 @@ class FilteringWorkflow:
                 len(deduped_entities),
                 len(emb_groups),
             )
+
+        # ------------------------------------------------------------------
+        # Stage 6b: LLM matching (optional)
+        # ------------------------------------------------------------------
+        if self._llm_matcher is not None and len(deduped_entities) >= 2:
+            llm_merge_groups = await self._run_llm_matching(deduped_entities)
+            if llm_merge_groups:
+                merge_groups.extend(llm_merge_groups)
+                # Re-deduplicate with merge decisions applied
+                deduped_entities, extra_groups = self._deduplicator.deduplicate(
+                    deduped_entities
+                )
+                merge_groups.extend(extra_groups)
+                logger.debug(
+                    "After LLM matching: {} entities, {} new merge groups",
+                    len(deduped_entities),
+                    len(llm_merge_groups),
+                )
 
         # ------------------------------------------------------------------
         # Stage 7: Embedding resolution (optional enrichment)
@@ -422,3 +461,76 @@ class FilteringWorkflow:
         )
 
         return result
+
+    async def _run_llm_matching(
+        self, entities: list[dict[str, Any]]
+    ) -> list[list[str]]:
+        """Generate candidate pairs and run LLM matching.
+
+        Uses semantic blocking if available, otherwise falls back to
+        pairwise comparison on entities with embeddings.
+
+        Returns merge groups (list of [entity_a_text, entity_b_text] pairs).
+        """
+        from entity_filtering.deduplication.union_find import UnionFind
+
+        assert self._llm_matcher is not None
+
+        # Generate candidate pairs using semantic blocking or brute force
+        if self._semantic_blocker is not None:
+            blocks = self._semantic_blocker.block(entities)
+        else:
+            blocks = [entities]  # Single block = all pairs
+
+        # Collect candidate pairs from within each block
+        candidate_pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for block in blocks:
+            for i in range(len(block)):
+                for j in range(i + 1, len(block)):
+                    # Skip pairs with identical text (already deduped by string dedup)
+                    if block[i].get("text", "").strip().lower() != block[j].get("text", "").strip().lower():
+                        candidate_pairs.append((block[i], block[j]))
+
+        if not candidate_pairs:
+            return []
+
+        logger.info(
+            f"LLM matcher: {len(candidate_pairs)} candidate pairs "
+            f"from {len(blocks)} blocks"
+        )
+
+        # Run LLM matching
+        results = await self._llm_matcher.match_batch(candidate_pairs)
+        match_indices = self._llm_matcher.filter_matches(results)
+
+        if not match_indices:
+            return []
+
+        # Build merge groups via UnionFind
+        uf = UnionFind()
+        for idx in match_indices:
+            a_text = candidate_pairs[idx][0].get("text", "")
+            b_text = candidate_pairs[idx][1].get("text", "")
+            uf.union(a_text, b_text)
+
+            # Normalize the matched entity's text to canonical form
+            # (the LLM decided they're the same, so mark for merging)
+            a_entity = candidate_pairs[idx][0]
+            b_entity = candidate_pairs[idx][1]
+            # Store match info in properties for provenance
+            a_entity.setdefault("properties", {})["llm_match"] = b_text
+            b_entity.setdefault("properties", {})["llm_match"] = a_text
+
+        all_texts = set()
+        for idx in match_indices:
+            all_texts.add(candidate_pairs[idx][0].get("text", ""))
+            all_texts.add(candidate_pairs[idx][1].get("text", ""))
+
+        groups = uf.get_groups(list(all_texts))
+        merge_groups = [members for members in groups.values() if len(members) > 1]
+
+        logger.info(
+            f"LLM matcher: {len(match_indices)} matches → "
+            f"{len(merge_groups)} merge groups"
+        )
+        return merge_groups
