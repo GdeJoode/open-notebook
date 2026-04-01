@@ -48,7 +48,10 @@ import {
   Database,
   AlertCircle,
   MessageSquare,
+  Network,
+  GitGraph,
 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { formatDistanceToNow } from 'date-fns'
 import { toast } from 'sonner'
 import { SourceInsightDialog } from '@/components/source/SourceInsightDialog'
@@ -69,6 +72,7 @@ export function SourceDetailContent({
   onChatClick,
   onClose
 }: SourceDetailContentProps) {
+  const router = useRouter()
   const [source, setSource] = useState<SourceDetailResponse | null>(null)
   const [insights, setInsights] = useState<SourceInsightResponse[]>([])
   const [transformations, setTransformations] = useState<Transformation[]>([])
@@ -366,6 +370,18 @@ export function SourceDetailContent({
               {getSourceType()}
             </Badge>
 
+            {/* Promoted actions */}
+            {(source.entity_count ?? 0) > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => router.push('/knowledge-graph')}
+              >
+                <GitGraph className="h-4 w-4 mr-2" />
+                Knowledge Graph
+              </Button>
+            )}
+
             {/* Chat with source button - only in modal */}
             {showChatButton && onChatClick && (
               <Button variant="outline" size="sm" onClick={onChatClick}>
@@ -415,6 +431,40 @@ export function SourceDetailContent({
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+        </div>
+      </div>
+
+      {/* Processing Status Bar */}
+      <div className="px-2 pb-3">
+        <div className="flex flex-wrap gap-2 text-xs">
+          <Badge variant={chunksData?.total_chunks ? "default" : "secondary"} className="gap-1">
+            {chunksData?.total_chunks ? (
+              <><CheckCircle className="h-3 w-3" /> {chunksData.total_chunks} chunks</>
+            ) : (
+              "Not extracted"
+            )}
+          </Badge>
+          <Badge variant={source.embedded ? "default" : "secondary"} className="gap-1">
+            {source.embedded ? (
+              <><CheckCircle className="h-3 w-3" /> Embedded</>
+            ) : (
+              "Not embedded"
+            )}
+          </Badge>
+          <Badge variant={(source.entity_count ?? 0) > 0 ? "default" : "secondary"} className="gap-1">
+            {(source.entity_count ?? 0) > 0 ? (
+              <><CheckCircle className="h-3 w-3" /> {source.entity_count} entities</>
+            ) : (
+              "No entities"
+            )}
+          </Badge>
+          <Badge variant={insights.length > 0 ? "default" : "secondary"} className="gap-1">
+            {insights.length > 0 ? (
+              <><CheckCircle className="h-3 w-3" /> {insights.length} insights</>
+            ) : (
+              "No insights"
+            )}
+          </Badge>
         </div>
       </div>
 
