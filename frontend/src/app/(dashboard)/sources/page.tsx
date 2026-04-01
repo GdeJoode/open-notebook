@@ -1,8 +1,10 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { sourcesApi } from '@/lib/api/sources'
+import { QUERY_KEYS } from '@/lib/api/query-client'
 import { SourceListResponse } from '@/lib/types/api'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { EmptyState } from '@/components/common/EmptyState'
@@ -15,11 +17,9 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
+const PAGE_SIZE = 30
+
 export default function SourcesPage() {
-  const [sources, setSources] = useState<SourceListResponse[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [sortBy, setSortBy] = useState<'created' | 'updated'>('updated')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
@@ -28,66 +28,39 @@ export default function SourcesPage() {
     source: null
   })
   const router = useRouter()
+  const queryClient = useQueryClient()
   const tableRef = useRef<HTMLTableElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
-  const offsetRef = useRef(0)
-  const loadingMoreRef = useRef(false)
-  const hasMoreRef = useRef(true)
-  const PAGE_SIZE = 30
 
-  const fetchSources = useCallback(async (reset = false) => {
-    try {
-      // Check flags before proceeding
-      if (!reset && (loadingMoreRef.current || !hasMoreRef.current)) {
-        return
-      }
-
-      if (reset) {
-        setLoading(true)
-        offsetRef.current = 0
-        setSources([])
-        hasMoreRef.current = true
-      } else {
-        loadingMoreRef.current = true
-        setLoadingMore(true)
-      }
-
-      const data = await sourcesApi.list({
+  const {
+    data,
+    isLoading,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: [...QUERY_KEYS.sources(), sortBy, sortOrder] as const,
+    queryFn: ({ pageParam = 0 }) =>
+      sourcesApi.list({
         limit: PAGE_SIZE,
-        offset: offsetRef.current,
+        offset: pageParam as number,
         sort_by: sortBy,
         sort_order: sortOrder,
-      })
+      }),
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length === PAGE_SIZE
+        ? allPages.reduce((sum, page) => sum + page.length, 0)
+        : undefined,
+    initialPageParam: 0,
+  })
 
-      if (reset) {
-        setSources(data)
-      } else {
-        setSources(prev => [...prev, ...data])
-      }
-
-      // Check if we have more data
-      const hasMoreData = data.length === PAGE_SIZE
-      hasMoreRef.current = hasMoreData
-      offsetRef.current += data.length
-    } catch (err) {
-      console.error('Failed to fetch sources:', err)
-      setError('Failed to load sources')
-      toast.error('Failed to load sources')
-    } finally {
-      setLoading(false)
-      setLoadingMore(false)
-      loadingMoreRef.current = false
-    }
-  }, [sortBy, sortOrder])
-
-  // Initial load and when sort changes
-  useEffect(() => {
-    fetchSources(true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortBy, sortOrder])
+  const sources = useMemo(
+    () => data?.pages.flat() ?? [],
+    [data]
+  )
 
   useEffect(() => {
-    // Focus the table when component mounts or sources change
     if (sources.length > 0 && tableRef.current) {
       tableRef.current.focus()
     }
@@ -102,7 +75,6 @@ export default function SourcesPage() {
           e.preventDefault()
           setSelectedIndex((prev) => {
             const newIndex = Math.min(prev + 1, sources.length - 1)
-            // Scroll to keep selected row visible
             setTimeout(() => scrollToSelectedRow(newIndex), 0)
             return newIndex
           })
@@ -111,7 +83,6 @@ export default function SourcesPage() {
           e.preventDefault()
           setSelectedIndex((prev) => {
             const newIndex = Math.max(prev - 1, 0)
-            // Scroll to keep selected row visible
             setTimeout(() => scrollToSelectedRow(newIndex), 0)
             return newIndex
           })
@@ -144,7 +115,6 @@ export default function SourcesPage() {
     const scrollContainer = scrollContainerRef.current
     if (!scrollContainer) return
 
-    // Find the selected row element
     const rows = scrollContainer.querySelectorAll('tbody tr')
     const selectedRow = rows[index] as HTMLElement
     if (!selectedRow) return
@@ -152,17 +122,14 @@ export default function SourcesPage() {
     const containerRect = scrollContainer.getBoundingClientRect()
     const rowRect = selectedRow.getBoundingClientRect()
 
-    // Check if row is above visible area
     if (rowRect.top < containerRect.top) {
       selectedRow.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
-    // Check if row is below visible area
-    else if (rowRect.bottom > containerRect.bottom) {
+    } else if (rowRect.bottom > containerRect.bottom) {
       selectedRow.scrollIntoView({ behavior: 'smooth', block: 'end' })
     }
   }
 
-  // Set up scroll listener after sources are loaded
+  // Infinite scroll trigger
   useEffect(() => {
     const scrollContainer = scrollContainerRef.current
     if (!scrollContainer) return
@@ -170,9 +137,7 @@ export default function SourcesPage() {
     let scrollTimeout: NodeJS.Timeout | null = null
 
     const handleScroll = () => {
-      if (scrollTimeout) {
-        clearTimeout(scrollTimeout)
-      }
+      if (scrollTimeout) clearTimeout(scrollTimeout)
 
       scrollTimeout = setTimeout(() => {
         if (!scrollContainerRef.current) return
@@ -180,30 +145,25 @@ export default function SourcesPage() {
         const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current
         const distanceFromBottom = scrollHeight - scrollTop - clientHeight
 
-        // Load more when within 200px of the bottom
-        if (distanceFromBottom < 200 && !loadingMoreRef.current && hasMoreRef.current) {
-          fetchSources(false)
+        if (distanceFromBottom < 200 && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage()
         }
       }, 100)
     }
 
     scrollContainer.addEventListener('scroll', handleScroll)
-    handleScroll() // Check on mount
+    handleScroll()
 
     return () => {
       scrollContainer.removeEventListener('scroll', handleScroll)
-      if (scrollTimeout) {
-        clearTimeout(scrollTimeout)
-      }
+      if (scrollTimeout) clearTimeout(scrollTimeout)
     }
-  }, [fetchSources, sources.length])
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage])
 
   const toggleSort = (field: 'created' | 'updated') => {
     if (sortBy === field) {
-      // Toggle order if clicking the same field
       setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')
     } else {
-      // Switch to new field with default desc order
       setSortBy(field)
       setSortOrder('desc')
     }
@@ -227,7 +187,7 @@ export default function SourcesPage() {
   }, [router])
 
   const handleDeleteClick = useCallback((e: React.MouseEvent, source: SourceListResponse) => {
-    e.stopPropagation() // Prevent row click
+    e.stopPropagation()
     setDeleteDialog({ open: true, source })
   }, [])
 
@@ -237,8 +197,7 @@ export default function SourcesPage() {
     try {
       await sourcesApi.delete(deleteDialog.source.id)
       toast.success('Source deleted successfully')
-      // Remove the deleted source from the list
-      setSources(prev => prev.filter(s => s.id !== deleteDialog.source?.id))
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources() })
       setDeleteDialog({ open: false, source: null })
     } catch (err) {
       console.error('Failed to delete source:', err)
@@ -246,7 +205,7 @@ export default function SourcesPage() {
     }
   }
 
-  if (loading) {
+  if (isLoading) {
     return (
       <AppShell>
         <div className="flex h-full items-center justify-center">
@@ -260,7 +219,7 @@ export default function SourcesPage() {
     return (
       <AppShell>
         <div className="flex h-full items-center justify-center">
-          <p className="text-red-500">{error}</p>
+          <p className="text-red-500">Failed to load sources</p>
         </div>
       </AppShell>
     )
@@ -396,7 +355,7 @@ export default function SourcesPage() {
                   </td>
                 </tr>
               ))}
-              {loadingMore && (
+              {isFetchingNextPage && (
                 <tr>
                   <td colSpan={6} className="h-16 text-center">
                     <div className="flex items-center justify-center">
