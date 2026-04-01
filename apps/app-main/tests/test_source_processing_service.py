@@ -552,16 +552,13 @@ class TestProcessSource:
             )
 
     @pytest.mark.asyncio
-    async def test_embed_calls_embedding_service(
+    async def test_embed_flag_is_ignored(
         self, service, source_repo, chunk_repo
     ):
+        """embed= param is kept for backward compat but ignored by process_source."""
         with patch(
             "app_main.dependencies.get_embedding_service",
-            new_callable=AsyncMock,
         ) as mock_get_embed:
-            mock_embed_svc = AsyncMock()
-            mock_get_embed.return_value = mock_embed_svc
-
             await service.process_source(
                 source_id="source:test1",
                 content_state={"content": "Hello"},
@@ -569,7 +566,8 @@ class TestProcessSource:
                 apply_transformations=False,
             )
 
-            mock_embed_svc.embed_source.assert_awaited_once_with("source:test1")
+            # Embedding is now triggered separately, not inline
+            mock_get_embed.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_embed_skipped_when_false(self, service):
@@ -594,42 +592,21 @@ class TestProcessSource:
             )
 
     @pytest.mark.asyncio
-    async def test_transformations_invoked(
+    async def test_transformation_flags_are_ignored(
         self, service, transformation_repo
     ):
-        import sys
-
-        from shared.models.transformation import Transformation
-
-        t = Transformation(
-            id="transformation:t1",
-            name="summarize",
-            title="Summary",
-            description="Summarize",
-            prompt="Summarize: {text}",
-            created=_NOW,
-            updated=_NOW,
+        """apply_transformations and transformation_ids are kept for backward
+        compat but ignored by process_source (transformations triggered separately)."""
+        await service.process_source(
+            source_id="source:test1",
+            content_state={"content": "Long text to summarize"},
+            apply_transformations=True,
+            embed=False,
+            transformation_ids=["transformation:t1"],
         )
-        transformation_repo.get = AsyncMock(return_value=t)
 
-        mock_graph = MagicMock()
-        mock_graph.ainvoke = AsyncMock(return_value={"output": "summary"})
-
-        # Inject a fake module so the lazy import resolves to our mock
-        fake_module = MagicMock()
-        fake_module.graph = mock_graph
-        with patch.dict(
-            sys.modules, {"app_main.graphs.transformation": fake_module}
-        ):
-            await service.process_source(
-                source_id="source:test1",
-                content_state={"content": "Long text to summarize"},
-                apply_transformations=True,
-                embed=False,
-                transformation_ids=["transformation:t1"],
-            )
-
-            mock_graph.ainvoke.assert_awaited_once()
+        # Transformation repo should not be consulted during extraction
+        transformation_repo.get.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_transformations_when_no_content(
