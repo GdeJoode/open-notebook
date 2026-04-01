@@ -149,6 +149,7 @@ class JobType(str, Enum):
     CHUNK_EXTRACT = "chunk_extract"  # Semantic chunking
     EMBEDDING_GENERATE = "embedding_generate"  # Vector embeddings
     INSIGHT_EXTRACT = "insight_extract"  # LLM-based insights
+    ENTITY_EXTRACT = "entity_extract"  # Ontology-guided entity extraction
 
 
 class JobStatus(str, Enum):

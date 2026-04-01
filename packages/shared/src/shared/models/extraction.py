@@ -22,6 +22,10 @@ class ExtractedEntity(BaseModel):
     source_chunk_id: Optional[str] = Field(
         default=None, description="ID of the chunk this entity was extracted from"
     )
+    source_grounding: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Source grounding info (char offsets, alignment status) from LangExtract",
+    )
 
 
 class ExtractedRelation(BaseModel):

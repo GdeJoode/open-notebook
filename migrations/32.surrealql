@@ -1,0 +1,12 @@
+-- Extraction result table for ontology-guided entity/relation extraction
+DEFINE TABLE extraction_result SCHEMAFULL;
+
+DEFINE FIELD source_id ON extraction_result TYPE string;
+DEFINE FIELD entities ON extraction_result FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD relations ON extraction_result FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD metadata ON extraction_result FLEXIBLE TYPE object DEFAULT {};
+DEFINE FIELD entity_count ON extraction_result TYPE int DEFAULT 0;
+DEFINE FIELD relation_count ON extraction_result TYPE int DEFAULT 0;
+DEFINE FIELD created ON extraction_result TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX idx_extraction_source ON extraction_result FIELDS source_id UNIQUE;

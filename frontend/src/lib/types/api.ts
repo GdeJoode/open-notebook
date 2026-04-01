@@ -29,6 +29,8 @@ export interface SourceListResponse {
   embedded: boolean
   embedded_chunks: number            // ADD: From Python API
   insights_count: number
+  entity_count: number
+  relation_count: number
   created: string
   updated: string
   file_available?: boolean
@@ -145,6 +147,42 @@ export interface UpdateSourceRequest {
   type?: 'link' | 'upload' | 'text'
   url?: string
   content?: string
+}
+
+// Entity extraction result types
+export interface ExtractedEntity {
+  text: string
+  label: string
+  properties: Record<string, unknown>
+  confidence: number
+  source_chunk_id?: string
+  source_grounding?: { start_pos: number; end_pos: number } | null
+}
+
+export interface ExtractedRelation {
+  source_entity: string
+  target_entity: string
+  relation_type: string
+  properties: Record<string, unknown>
+  confidence: number
+}
+
+export interface ExtractionResultResponse {
+  entities: ExtractedEntity[]
+  relations: ExtractedRelation[]
+  metadata: Record<string, unknown>
+  entity_count: number
+  relation_count: number
+}
+
+export interface RunEntitiesOptions {
+  ontology_name?: string
+  extractor_type?: 'llm' | 'langextract'
+  langextract_model_id?: string
+  langextract_model_url?: string
+  langextract_temperature?: number
+  langextract_use_schema_constraints?: boolean
+  langextract_fence_output?: boolean
 }
 
 export interface APIError {

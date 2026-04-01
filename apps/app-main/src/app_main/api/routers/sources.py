@@ -27,6 +27,8 @@ from app_main.api.schemas import (
     SourceStatusResponse,
     SourceUpdate,
 )
+from pydantic import BaseModel
+
 from app_main.config import UPLOADS_FOLDER
 from app_main.dependencies import (
     get_notebook_service,
@@ -744,7 +746,7 @@ async def get_source(
 
         embedded_chunks = await source_svc.get_embedding_count(source_id)
 
-        # Get associated notebooks
+        # Get associated notebooks + counts
         from surrealdb_service.connection import execute_query, ensure_record_id
 
         notebooks_query = await execute_query(
@@ -756,6 +758,26 @@ async def get_source(
             if notebooks_query
             else []
         )
+
+        # Get insights count
+        insights_rows = await execute_query(
+            "SELECT VALUE count() FROM source_insight "
+            "WHERE source = $source_id GROUP ALL",
+            {"source_id": ensure_record_id(source.id or source_id)},
+        )
+        insights_count = insights_rows[0] if insights_rows else 0
+
+        # Get extraction result counts
+        extraction_rows = await execute_query(
+            "SELECT entity_count, relation_count FROM extraction_result "
+            "WHERE source_id = $source_id LIMIT 1",
+            {"source_id": str(source.id or source_id)},
+        )
+        entity_count = 0
+        relation_count = 0
+        if extraction_rows:
+            entity_count = extraction_rows[0].get("entity_count", 0) or 0
+            relation_count = extraction_rows[0].get("relation_count", 0) or 0
 
         return SourceResponse(
             id=source.id or "",
@@ -772,6 +794,9 @@ async def get_source(
             full_text=source.full_text,
             embedded=embedded_chunks > 0,
             embedded_chunks=embedded_chunks,
+            insights_count=insights_count,
+            entity_count=entity_count,
+            relation_count=relation_count,
             file_available=_is_source_file_available(source.asset),
             created=str(source.created),
             updated=str(source.updated),
@@ -1139,20 +1164,54 @@ async def run_summaries(
         )
 
 
+class RunEntitiesRequest(BaseModel):
+    ontology_name: str = "general"
+    extractor_type: str = "llm"  # "llm" or "langextract"
+    # LangExtract-specific options (forwarded when extractor_type == "langextract")
+    langextract_model_id: Optional[str] = None
+    langextract_model_url: Optional[str] = None
+    langextract_temperature: Optional[float] = None
+    langextract_use_schema_constraints: Optional[bool] = None
+    langextract_fence_output: Optional[bool] = None
+
+
 @router.post("/{source_id}/run-entities")
 async def run_entities(
     source_id: str,
+    body: RunEntitiesRequest = RunEntitiesRequest(),
     source_svc: SourceService = Depends(get_source_service),
 ):
-    """Trigger entity extraction for a source (placeholder)."""
+    """Trigger ontology-guided entity extraction for a source."""
     try:
         source = await source_svc.get(source_id)
         if not source:
             raise HTTPException(status_code=404, detail="Source not found")
 
-        # Entity extraction via ontology pipeline is not yet wired.
-        # Return a stub response so the frontend can show "coming soon".
-        return {"command_id": None, "status": "not_available", "message": "Entity extraction not yet available"}
+        from app_main.services.command_service import CommandService
+
+        command_payload = {
+            "source_id": str(source.id),
+            "ontology_name": body.ontology_name,
+            "extractor_type": body.extractor_type,
+        }
+        # Forward langextract options if provided
+        for field_name in (
+            "langextract_model_id",
+            "langextract_model_url",
+            "langextract_temperature",
+            "langextract_use_schema_constraints",
+            "langextract_fence_output",
+        ):
+            val = getattr(body, field_name, None)
+            if val is not None:
+                command_payload[field_name] = val
+
+        command_id = await CommandService.submit_command_job(
+            "open_notebook",
+            "run_entities",
+            command_payload,
+        )
+        return {"command_id": command_id, "status": "queued"}
     except HTTPException:
         raise
     except Exception as e:
@@ -1160,6 +1219,51 @@ async def run_entities(
         raise HTTPException(
             status_code=500,
             detail=f"Error triggering entities: {str(e)}",
+        )
+
+
+@router.get("/{source_id}/extraction-result")
+async def get_extraction_result(
+    source_id: str,
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Get full extraction result (entities, relations, metadata) for a source."""
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        from surrealdb_service.connection import execute_query
+
+        rows = await execute_query(
+            "SELECT * FROM extraction_result WHERE source_id = $source_id LIMIT 1",
+            {"source_id": str(source.id)},
+        )
+        if not rows:
+            return {
+                "entities": [],
+                "relations": [],
+                "metadata": {},
+                "entity_count": 0,
+                "relation_count": 0,
+            }
+        row = rows[0]
+        return {
+            "entities": row.get("entities", []),
+            "relations": row.get("relations", []),
+            "metadata": row.get("metadata", {}),
+            "entity_count": row.get("entity_count", 0),
+            "relation_count": row.get("relation_count", 0),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error fetching extraction result for source {source_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching extraction result: {str(e)}",
         )
 
 

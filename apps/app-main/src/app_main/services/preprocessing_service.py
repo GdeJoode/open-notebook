@@ -126,12 +126,21 @@ a JSON object with exactly this structure:
 
 ## Summary instructions
 
-Write the summary using **markdown formatting** for readability:
-- Use **bold** for key terms, names, and important concepts.
-- Use headings (##, ###) to separate major sections if the document covers distinct topics.
-- Use bullet points or numbered lists for enumerating findings, arguments, or conclusions.
+The summary MUST use markdown formatting inside the JSON string value. This is safe \
+and expected — markdown characters do not break JSON strings. Use newlines (\\n) for \
+line breaks within the string.
+
+Required markdown elements:
+- **Bold** for key terms, names, and important concepts
+- ## or ### headings to separate sections (e.g. "## Overview\\n\\n", "## Key Arguments\\n\\n")
+- Bullet points (- ) or numbered lists for enumerating findings, arguments, or conclusions
 - The summary should be 2-4 paragraphs and capture the document's purpose, main content, \
 key arguments, and conclusions.
+
+Example of a correctly formatted summary value in JSON:
+"summary": "## Overview\\n\\n**John Smith** presents a comprehensive analysis of \\
+market dynamics...\\n\\n## Key Findings\\n\\n- **Finding 1**: The market shows...\\n\\
+- **Finding 2**: Regional differences...\\n\\n## Conclusions\\n\\nThe study concludes..."
 
 ## Document type assessment
 

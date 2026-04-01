@@ -23,7 +23,7 @@ class LLMExtractor(ExtractorBase):
         self._llm_model = llm_model
         self._confidence_threshold = confidence_threshold
 
-    async def extract(self, text: str, ontology: Ontology) -> ExtractionResult:
+    async def extract(self, text: str, ontology: Ontology, **kwargs) -> ExtractionResult:
         """Extract entities and relations using LLM with ontology-guided prompts."""
         generator = OntologyPromptGenerator(ontology)
         system_prompt = generator.generate_combined_extraction_prompt(

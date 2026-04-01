@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { FileText, Loader2, CheckCircle2, XCircle, RotateCw, Clock, ArrowRight, Image as ImageIcon, Table2 as TableIcon } from 'lucide-react'
+import { FileText, Loader2, CheckCircle2, XCircle, RotateCw, Clock, ArrowRight, Image as ImageIcon, Table2 as TableIcon, Copy, CheckCircle } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -432,6 +432,29 @@ function ResultsPane({
   loadingChunks?: boolean
   imageBaseUrl?: string | null
 }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopyText = useCallback(async () => {
+    if (!fullText) return
+    try {
+      await navigator.clipboard.writeText(fullText)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Fallback for older browsers
+      const ta = document.createElement('textarea')
+      ta.value = fullText
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }, [fullText])
+
   return (
     <Tabs defaultValue="text" className="border rounded-md overflow-hidden flex flex-col min-h-0 gap-0">
       <div className="px-3 py-2 border-b bg-muted/50 shrink-0">
@@ -460,14 +483,41 @@ function ResultsPane({
               </div>
             )}
             {fullText ? (
-              <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
-                {fullText.slice(0, 3000)}
-                {fullText.length > 3000 && (
-                  <span className="text-muted-foreground/60">
-                    {'\n\n'}... ({(fullText.length / 1000).toFixed(0)}k characters total)
+              <>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-muted-foreground/70">
+                    {fullText.length > 3000
+                      ? `Showing preview (${(fullText.length / 1000).toFixed(0)}k chars total)`
+                      : `${fullText.length.toLocaleString()} characters`}
                   </span>
-                )}
-              </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-xs gap-1"
+                    onClick={handleCopyText}
+                  >
+                    {copied ? (
+                      <>
+                        <CheckCircle className="h-3 w-3 text-green-500" />
+                        Copied!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3 w-3" />
+                        Copy full text
+                      </>
+                    )}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
+                  {fullText.slice(0, 3000)}
+                  {fullText.length > 3000 && (
+                    <span className="text-muted-foreground/60">
+                      {'\n\n'}... (truncated preview)
+                    </span>
+                  )}
+                </p>
+              </>
             ) : status === 'completed' && !loadingText ? (
               <p className="text-xs text-muted-foreground italic">No text content available.</p>
             ) : status === 'failed' ? (

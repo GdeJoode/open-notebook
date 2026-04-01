@@ -124,6 +124,57 @@ async def handle_insight_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# ENTITY_EXTRACT — run_entities (ontology-guided extraction)
+# ---------------------------------------------------------------------------
+
+
+@registry.register(JobType.ENTITY_EXTRACT)
+async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Run ontology-guided entity extraction on a source."""
+    start_time = time.time()
+    source_id = payload["source_id"]
+
+    try:
+        from app_main.dependencies import get_entity_extraction_service
+
+        logger.info(f"Starting entity extraction for source: {source_id}")
+        service = get_entity_extraction_service()
+        # Collect langextract config overrides from payload
+        config_overrides = {}
+        for key in (
+            "langextract_model_id",
+            "langextract_model_url",
+            "langextract_temperature",
+            "langextract_use_schema_constraints",
+            "langextract_fence_output",
+        ):
+            if key in payload:
+                config_overrides[key] = payload[key]
+
+        result = await service.run_extraction(
+            source_id=source_id,
+            ontology_name=payload.get("ontology_name", "general"),
+            extractor_type=payload.get("extractor_type", "llm"),
+            config_overrides=config_overrides if config_overrides else None,
+        )
+
+        processing_time = time.time() - start_time
+        logger.info(
+            f"Entity extraction completed for source {source_id} "
+            f"in {processing_time:.2f}s"
+        )
+        return {
+            "success": True,
+            **result,
+            "processing_time": processing_time,
+        }
+
+    except Exception as e:
+        logger.error(f"Entity extraction failed for source {source_id}: {e}")
+        raise
+
+
+# ---------------------------------------------------------------------------
 # EMBEDDING_GENERATE — embed_single_item + embed_source + rebuild_embeddings
 # ---------------------------------------------------------------------------
 

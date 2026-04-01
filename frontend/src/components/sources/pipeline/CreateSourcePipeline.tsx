@@ -572,11 +572,7 @@ export function CreateSourcePipeline() {
     if (!sourceId) return
     setManualStatuses(prev => ({ ...prev, 7: 'running' }))
     try {
-      const result = await sourcesApi.runEntities(sourceId)
-      if (result.status === 'not_available') {
-        setManualStatuses(prev => ({ ...prev, 7: 'pending' }))
-        toast({ title: 'Not Available', description: result.message || 'Entity extraction is not yet available.' })
-      }
+      await sourcesApi.runEntities(sourceId)
     } catch {
       setManualStatuses(prev => ({ ...prev, 7: 'failed' }))
     }
@@ -596,11 +592,13 @@ export function CreateSourcePipeline() {
   useEffect(() => {
     if (!sourceData) return
     const hasInsights = (sourceData.insights_count || 0) > 0
+    const hasEntities = (sourceData.entity_count || 0) > 0
     const hasEmbeddings = (sourceData.embedded_chunks || 0) > 0
 
     setManualStatuses(prev => {
       const next = { ...prev }
       if (hasInsights && prev[6] === 'running') next[6] = 'completed'
+      if (hasEntities && prev[7] === 'running') next[7] = 'completed'
       if (hasEmbeddings && prev[8] === 'running') next[8] = 'completed'
       return next
     })
@@ -633,11 +631,11 @@ export function CreateSourcePipeline() {
       />
 
       <div className="flex-1 overflow-hidden flex flex-col">
-        <div className={activeTab === 4 || activeTab === 5 || activeTab === 6
+        <div className={activeTab === 4 || activeTab === 5 || activeTab === 6 || activeTab === 7
           ? "flex-1 flex flex-col min-h-0 px-6 py-6"
           : "flex-1 overflow-y-auto max-w-3xl mx-auto w-full px-6 py-6"
         }>
-          <form onSubmit={handleSubmit(onSubmit)} className={activeTab === 4 || activeTab === 5 || activeTab === 6 ? "flex-1 flex flex-col min-h-0" : undefined}>
+          <form onSubmit={handleSubmit(onSubmit)} className={activeTab === 4 || activeTab === 5 || activeTab === 6 || activeTab === 7 ? "flex-1 flex flex-col min-h-0" : undefined}>
             {/* Config tabs */}
             {activeTab === 1 && (
               <SourceTypeStep
@@ -750,8 +748,27 @@ export function CreateSourcePipeline() {
             {activeTab === 7 && (
               <EntitiesTab
                 status={pipelineStatuses[7]}
-                errorMessage={statusData?.message}
                 extractionComplete={pipelineStatuses[4] === 'completed'}
+                sourceId={sourceId}
+                files={multiSources.length > 1
+                  ? multiSources.map(s => ({
+                      name: s.fileName || s.title,
+                      sourceId: s.id || undefined,
+                      status: s.status,
+                    }))
+                  : [{
+                      name: selectedType === 'upload'
+                        ? (watchedFile instanceof FileList ? watchedFile[0]?.name : (watchedFile as File)?.name) || 'File'
+                        : selectedType === 'link'
+                          ? watchedUrl || 'URL'
+                          : watchedTitle || 'Text',
+                      sourceId: sourceId,
+                      status: pipelineStatuses[4] === 'completed' ? 'completed'
+                        : pipelineStatuses[4] === 'failed' ? 'failed'
+                        : pipelineStatuses[4] === 'running' ? 'processing'
+                        : 'pending',
+                    }]
+                }
                 onStart={handleStartEntities}
               />
             )}

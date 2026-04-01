@@ -47,6 +47,7 @@ from app_main.services.context_service import ContextService
 from app_main.services.source_processing_service import SourceProcessingService
 from app_main.services.preprocessing_service import PreprocessingService
 from app_main.services.summarization_service import SummarizationService
+from app_main.services.entity_extraction_service import EntityExtractionService
 
 
 # --- Repository providers ---
@@ -235,6 +236,10 @@ def get_summarization_service() -> SummarizationService:
     return SummarizationService(
         summary_repo=get_summary_repo(),
     )
+
+
+def get_entity_extraction_service() -> EntityExtractionService:
+    return EntityExtractionService(source_repo=get_source_repo())
 
 
 def get_preprocessing_service() -> PreprocessingService:

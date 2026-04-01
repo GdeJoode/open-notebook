@@ -58,6 +58,7 @@ _COMMAND_TO_JOB_TYPE: Dict[str, JobType] = {
     "embed_source": JobType.EMBEDDING_GENERATE,
     "rebuild_embeddings": JobType.EMBEDDING_GENERATE,
     "run_summaries": JobType.INSIGHT_EXTRACT,
+    "run_entities": JobType.ENTITY_EXTRACT,
     "process_text": JobType.CHUNK_EXTRACT,
     "analyze_data": JobType.INSIGHT_EXTRACT,
 }

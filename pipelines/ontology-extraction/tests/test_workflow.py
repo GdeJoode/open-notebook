@@ -127,7 +127,7 @@ class TestExtractionWorkflowExtract:
 
         call_count = 0
 
-        async def side_effect(text, ontology):
+        async def side_effect(text, ontology, **kwargs):
             nonlocal call_count
             call_count += 1
             return ExtractionResult(

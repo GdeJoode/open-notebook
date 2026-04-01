@@ -369,6 +369,9 @@ class SourceResponse(BaseModel):
     full_text: Optional[str]
     embedded: bool
     embedded_chunks: int
+    insights_count: int = 0
+    entity_count: int = 0
+    relation_count: int = 0
     file_available: Optional[bool] = None
     created: str
     updated: str

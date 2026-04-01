@@ -4,6 +4,7 @@ FastAPI application factory for Open Notebook.
 
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
@@ -11,6 +12,9 @@ from loguru import logger
 from app_main.api.auth import PasswordAuthMiddleware
 
 from surrealdb_service.migrations import AsyncMigrationManager
+
+# Load .env file so all env vars (API keys, HF_TOKEN, etc.) are available
+load_dotenv()
 
 
 @asynccontextmanager

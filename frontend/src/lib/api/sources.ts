@@ -1,13 +1,15 @@
 import type { AxiosResponse } from 'axios'
 
 import apiClient from './client'
-import { 
-  SourceListResponse, 
-  SourceDetailResponse, 
+import {
+  SourceListResponse,
+  SourceDetailResponse,
   SourceResponse,
   SourceStatusResponse,
-  CreateSourceRequest, 
-  UpdateSourceRequest 
+  CreateSourceRequest,
+  UpdateSourceRequest,
+  ExtractionResultResponse,
+  RunEntitiesOptions,
 } from '@/lib/types/api'
 
 export const sourcesApi = {
@@ -109,8 +111,17 @@ export const sourcesApi = {
     return response.data
   },
 
-  runEntities: async (id: string) => {
-    const response = await apiClient.post<{ command_id: string | null; status: string; message?: string }>(`/sources/${id}/run-entities`)
+  runEntities: async (id: string, options?: RunEntitiesOptions) => {
+    const response = await apiClient.post<{ command_id: string | null; status: string }>(
+      `/sources/${id}/run-entities`, options || {}
+    )
+    return response.data
+  },
+
+  getExtractionResult: async (id: string): Promise<ExtractionResultResponse> => {
+    const response = await apiClient.get<ExtractionResultResponse>(
+      `/sources/${id}/extraction-result`
+    )
     return response.data
   },
 

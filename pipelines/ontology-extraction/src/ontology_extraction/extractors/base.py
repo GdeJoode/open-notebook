@@ -10,6 +10,6 @@ class ExtractorBase(ABC):
     """Base class for all ontology-guided extractors."""
 
     @abstractmethod
-    async def extract(self, text: str, ontology: Ontology) -> ExtractionResult:
+    async def extract(self, text: str, ontology: Ontology, **kwargs) -> ExtractionResult:
         """Extract entities and relations from text using the given ontology."""
         ...

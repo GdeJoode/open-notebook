@@ -213,7 +213,7 @@ function UploadSection({
             type="file"
             multiple
             {...register('file')}
-            accept=".pdf,.doc,.docx,.txt,.md,.epub"
+            accept=".pdf,.doc,.docx,.txt,.md,.epub,.mp3,.wav,.m4a,.flac,.ogg,.wma"
           />
         </div>
         <FolderUploadButton
@@ -263,7 +263,7 @@ function UploadSection({
       )}
 
       <p className="text-xs text-muted-foreground">
-        Supported formats: PDF, DOC, DOCX, TXT, MD, EPUB
+        Supported formats: PDF, DOC, DOCX, TXT, MD, EPUB, MP3, WAV, M4A, FLAC, OGG, WMA
       </p>
       {errors.file && (
         <p className="text-sm text-destructive mt-1">{errors.file.message}</p>
@@ -279,7 +279,7 @@ function FolderUploadButton({ onFiles }: { onFiles: (files: File[]) => void }) {
     input.setAttribute('webkitdirectory', '')
     input.setAttribute('directory', '')
     input.multiple = true
-    input.accept = '.pdf,.doc,.docx,.txt,.md,.epub'
+    input.accept = '.pdf,.doc,.docx,.txt,.md,.epub,.mp3,.wav,.m4a,.flac,.ogg,.wma'
     input.onchange = () => {
       if (input.files && input.files.length > 0) {
         const files: File[] = []
