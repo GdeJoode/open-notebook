@@ -1,18 +1,17 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { toast } from 'sonner'
 import { chatApi } from '@/lib/api/chat'
 import { QUERY_KEYS } from '@/lib/api/query-client'
 import {
   NotebookChatMessage,
-  CreateNotebookChatSessionRequest,
   UpdateNotebookChatSessionRequest,
   SourceListResponse,
   NoteResponse
 } from '@/lib/types/api'
 import { ContextSelections } from '@/app/(dashboard)/notebooks/[id]/page'
+import { useBaseChat, ChatApiAdapter } from './useBaseChat'
 
 interface UseNotebookChatParams {
   notebookId: string
@@ -22,114 +21,39 @@ interface UseNotebookChatParams {
 }
 
 export function useNotebookChat({ notebookId, sources, notes, contextSelections }: UseNotebookChatParams) {
-  const queryClient = useQueryClient()
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<NotebookChatMessage[]>([])
   const [isSending, setIsSending] = useState(false)
   const [tokenCount, setTokenCount] = useState<number>(0)
   const [charCount, setCharCount] = useState<number>(0)
 
-  // Fetch sessions for this notebook
-  const {
-    data: sessions = [],
-    isLoading: loadingSessions,
-    refetch: refetchSessions
-  } = useQuery({
-    queryKey: QUERY_KEYS.notebookChatSessions(notebookId),
-    queryFn: () => chatApi.listSessions(notebookId),
-    enabled: !!notebookId
-  })
+  // Adapter bridges chatApi to the generic interface
+  const adapter: ChatApiAdapter<any, any> = useMemo(() => ({
+    listSessions: () => chatApi.listSessions(notebookId),
+    getSession: (sessionId: string) => chatApi.getSession(sessionId),
+    createSession: (data: Record<string, unknown>) =>
+      chatApi.createSession(data as any),
+    updateSession: (sessionId: string, data: Record<string, unknown>) =>
+      chatApi.updateSession(sessionId, data as UpdateNotebookChatSessionRequest),
+    deleteSession: (sessionId: string) => chatApi.deleteSession(sessionId),
+  }), [notebookId])
 
-  // Fetch current session with messages
-  const {
-    data: currentSession,
-    refetch: refetchCurrentSession
-  } = useQuery({
-    queryKey: QUERY_KEYS.notebookChatSession(currentSessionId!),
-    queryFn: () => chatApi.getSession(currentSessionId!),
-    enabled: !!notebookId && !!currentSessionId
-  })
+  const queryKeys = useMemo(() => ({
+    sessions: QUERY_KEYS.notebookChatSessions(notebookId),
+    session: (sessionId: string) => QUERY_KEYS.notebookChatSession(sessionId),
+  }), [notebookId])
 
-  // Update messages when current session changes
-  useEffect(() => {
-    if (currentSession?.messages) {
-      setMessages(currentSession.messages)
-    }
-  }, [currentSession])
-
-  // Auto-select most recent session when sessions are loaded
-  useEffect(() => {
-    if (sessions.length > 0 && !currentSessionId) {
-      // Sessions are sorted by created date desc from API
-      const mostRecentSession = sessions[0]
-      setCurrentSessionId(mostRecentSession.id)
-    }
-  }, [sessions, currentSessionId])
-
-  // Create session mutation
-  const createSessionMutation = useMutation({
-    mutationFn: (data: CreateNotebookChatSessionRequest) =>
-      chatApi.createSession(data),
-    onSuccess: (newSession) => {
-      queryClient.invalidateQueries({
-        queryKey: QUERY_KEYS.notebookChatSessions(notebookId)
-      })
-      setCurrentSessionId(newSession.id)
-      toast.success('Chat session created')
-    },
-    onError: () => {
-      toast.error('Failed to create chat session')
-    }
-  })
-
-  // Update session mutation
-  const updateSessionMutation = useMutation({
-    mutationFn: ({ sessionId, data }: {
-      sessionId: string
-      data: UpdateNotebookChatSessionRequest
-    }) => chatApi.updateSession(sessionId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: QUERY_KEYS.notebookChatSessions(notebookId)
-      })
-      queryClient.invalidateQueries({
-        queryKey: QUERY_KEYS.notebookChatSession(currentSessionId!)
-      })
-      toast.success('Session updated')
-    },
-    onError: () => {
-      toast.error('Failed to update session')
-    }
-  })
-
-  // Delete session mutation
-  const deleteSessionMutation = useMutation({
-    mutationFn: (sessionId: string) =>
-      chatApi.deleteSession(sessionId),
-    onSuccess: (_, deletedId) => {
-      queryClient.invalidateQueries({
-        queryKey: QUERY_KEYS.notebookChatSessions(notebookId)
-      })
-      if (currentSessionId === deletedId) {
-        setCurrentSessionId(null)
-        setMessages([])
-      }
-      toast.success('Session deleted')
-    },
-    onError: () => {
-      toast.error('Failed to delete session')
-    }
+  const base = useBaseChat({
+    adapter,
+    queryKeys,
+    enabled: !!notebookId,
   })
 
   // Build context from sources and notes based on user selections
   const buildContext = useCallback(async () => {
-    // Build context_config mapping IDs to selection modes
     const context_config: { sources: Record<string, string>, notes: Record<string, string> } = {
       sources: {},
       notes: {}
     }
 
-    // Map source selections
     sources.forEach(source => {
       const mode = contextSelections.sources[source.id]
       if (mode === 'insights') {
@@ -141,7 +65,6 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
       }
     })
 
-    // Map note selections
     notes.forEach(note => {
       const mode = contextSelections.notes[note.id]
       if (mode === 'full') {
@@ -151,13 +74,11 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
       }
     })
 
-    // Call API to build context with actual content
     const response = await chatApi.buildContext({
       notebook_id: notebookId,
       context_config
     })
 
-    // Store token and char counts
     setTokenCount(response.token_count)
     setCharCount(response.char_count)
 
@@ -166,7 +87,7 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
 
   // Send message (synchronous, no streaming)
   const sendMessage = useCallback(async (message: string, modelOverride?: string) => {
-    let sessionId = currentSessionId
+    let sessionId = base.currentSessionId
 
     // Auto-create session if none exists
     if (!sessionId) {
@@ -179,8 +100,8 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
           title: defaultTitle
         })
         sessionId = newSession.id
-        setCurrentSessionId(sessionId)
-        queryClient.invalidateQueries({
+        base.setCurrentSessionId(sessionId)
+        base.queryClient.invalidateQueries({
           queryKey: QUERY_KEYS.notebookChatSessions(notebookId)
         })
       } catch {
@@ -196,66 +117,37 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
       content: message,
       timestamp: new Date().toISOString()
     }
-    setMessages(prev => [...prev, userMessage])
+    base.setMessages(prev => [...prev, userMessage])
     setIsSending(true)
 
     try {
-      // Build context and send message
       const context = await buildContext()
       const response = await chatApi.sendMessage({
         session_id: sessionId,
         message,
         context,
-        model_override: modelOverride ?? (currentSession?.model_override ?? undefined)
+        model_override: modelOverride ?? (base.currentSession?.model_override ?? undefined)
       })
 
-      // Update messages with API response
-      setMessages(response.messages)
-
-      // Refetch current session to get updated data
-      await refetchCurrentSession()
+      base.setMessages(response.messages)
+      await base.refetchCurrentSession()
     } catch (error) {
       console.error('Error sending message:', error)
       toast.error('Failed to send message')
-      // Remove optimistic message on error
-      setMessages(prev => prev.filter(msg => !msg.id.startsWith('temp-')))
+      base.setMessages(prev => prev.filter(msg => !msg.id.startsWith('temp-')))
     } finally {
       setIsSending(false)
     }
   }, [
     notebookId,
-    currentSessionId,
-    currentSession,
+    base.currentSessionId,
+    base.currentSession,
     buildContext,
-    refetchCurrentSession,
-    queryClient
+    base.refetchCurrentSession,
+    base.queryClient,
+    base.setCurrentSessionId,
+    base.setMessages,
   ])
-
-  // Switch session
-  const switchSession = useCallback((sessionId: string) => {
-    setCurrentSessionId(sessionId)
-  }, [])
-
-  // Create session
-  const createSession = useCallback((title?: string) => {
-    return createSessionMutation.mutate({
-      notebook_id: notebookId,
-      title
-    })
-  }, [createSessionMutation, notebookId])
-
-  // Update session
-  const updateSession = useCallback((sessionId: string, data: UpdateNotebookChatSessionRequest) => {
-    return updateSessionMutation.mutate({
-      sessionId,
-      data
-    })
-  }, [updateSessionMutation])
-
-  // Delete session
-  const deleteSession = useCallback((sessionId: string) => {
-    return deleteSessionMutation.mutate(sessionId)
-  }, [deleteSessionMutation])
 
   // Update token/char counts when context selections change
   useEffect(() => {
@@ -271,21 +163,21 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
 
   return {
     // State
-    sessions,
-    currentSession: currentSession || sessions.find(s => s.id === currentSessionId),
-    currentSessionId,
-    messages,
+    sessions: base.sessions,
+    currentSession: base.currentSession || base.sessions.find((s: any) => s.id === base.currentSessionId),
+    currentSessionId: base.currentSessionId,
+    messages: base.messages,
     isSending,
-    loadingSessions,
+    loadingSessions: base.loadingSessions,
     tokenCount,
     charCount,
 
     // Actions
-    createSession,
-    updateSession,
-    deleteSession,
-    switchSession,
+    createSession: (title?: string) => base.createSession({ notebook_id: notebookId, title }),
+    updateSession: base.updateSession,
+    deleteSession: base.deleteSession,
+    switchSession: base.switchSession,
     sendMessage,
-    refetchSessions
+    refetchSessions: base.refetchSessions,
   }
 }

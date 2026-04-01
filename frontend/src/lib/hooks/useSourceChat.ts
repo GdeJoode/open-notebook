@@ -1,103 +1,46 @@
 'use client'
 
-import { useState, useCallback, useRef, useEffect } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState, useCallback, useRef, useMemo } from 'react'
 import { toast } from 'sonner'
 import { sourceChatApi } from '@/lib/api/source-chat'
+import { QUERY_KEYS } from '@/lib/api/query-client'
 import {
-  SourceChatSession,
   SourceChatMessage,
   SourceChatContextIndicator,
   CreateSourceChatSessionRequest,
-  UpdateSourceChatSessionRequest
+  UpdateSourceChatSessionRequest,
 } from '@/lib/types/api'
+import { useBaseChat, ChatApiAdapter } from './useBaseChat'
 
 export function useSourceChat(sourceId: string) {
-  const queryClient = useQueryClient()
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<SourceChatMessage[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [contextIndicators, setContextIndicators] = useState<SourceChatContextIndicator | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
-  // Fetch sessions
-  const { data: sessions = [], isLoading: loadingSessions, refetch: refetchSessions } = useQuery<SourceChatSession[]>({
-    queryKey: ['sourceChatSessions', sourceId],
-    queryFn: () => sourceChatApi.listSessions(sourceId),
-    enabled: !!sourceId
-  })
+  const adapter: ChatApiAdapter<any, any> = useMemo(() => ({
+    listSessions: () => sourceChatApi.listSessions(sourceId),
+    getSession: (sessionId: string) => sourceChatApi.getSession(sourceId, sessionId),
+    createSession: (data: Record<string, unknown>) =>
+      sourceChatApi.createSession(sourceId, data as Omit<CreateSourceChatSessionRequest, 'source_id'>),
+    updateSession: (sessionId: string, data: Record<string, unknown>) =>
+      sourceChatApi.updateSession(sourceId, sessionId, data as UpdateSourceChatSessionRequest),
+    deleteSession: (sessionId: string) => sourceChatApi.deleteSession(sourceId, sessionId),
+  }), [sourceId])
 
-  // Fetch current session with messages
-  const { data: currentSession, refetch: refetchCurrentSession } = useQuery({
-    queryKey: ['sourceChatSession', sourceId, currentSessionId],
-    queryFn: () => sourceChatApi.getSession(sourceId, currentSessionId!),
-    enabled: !!sourceId && !!currentSessionId
-  })
+  const queryKeys = useMemo(() => ({
+    sessions: QUERY_KEYS.sourceChatSessions(sourceId),
+    session: (sessionId: string) => QUERY_KEYS.sourceChatSession(sourceId, sessionId),
+  }), [sourceId])
 
-  // Update messages when session changes
-  useEffect(() => {
-    if (currentSession?.messages) {
-      setMessages(currentSession.messages)
-    }
-  }, [currentSession])
-
-  // Auto-select most recent session when sessions are loaded
-  useEffect(() => {
-    if (sessions.length > 0 && !currentSessionId) {
-      // Find most recent session (sessions are sorted by created date desc from API)
-      const mostRecentSession = sessions[0]
-      setCurrentSessionId(mostRecentSession.id)
-    }
-  }, [sessions, currentSessionId])
-
-  // Create session mutation
-  const createSessionMutation = useMutation({
-    mutationFn: (data: Omit<CreateSourceChatSessionRequest, 'source_id'>) => 
-      sourceChatApi.createSession(sourceId, data),
-    onSuccess: (newSession) => {
-      queryClient.invalidateQueries({ queryKey: ['sourceChatSessions', sourceId] })
-      setCurrentSessionId(newSession.id)
-      toast.success('Chat session created')
-    },
-    onError: () => {
-      toast.error('Failed to create chat session')
-    }
-  })
-
-  // Update session mutation
-  const updateSessionMutation = useMutation({
-    mutationFn: ({ sessionId, data }: { sessionId: string, data: UpdateSourceChatSessionRequest }) =>
-      sourceChatApi.updateSession(sourceId, sessionId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['sourceChatSessions', sourceId] })
-      queryClient.invalidateQueries({ queryKey: ['sourceChatSession', sourceId, currentSessionId] })
-      toast.success('Session updated')
-    },
-    onError: () => {
-      toast.error('Failed to update session')
-    }
-  })
-
-  // Delete session mutation
-  const deleteSessionMutation = useMutation({
-    mutationFn: (sessionId: string) => 
-      sourceChatApi.deleteSession(sourceId, sessionId),
-    onSuccess: (_, deletedId) => {
-      queryClient.invalidateQueries({ queryKey: ['sourceChatSessions', sourceId] })
-      if (currentSessionId === deletedId) {
-        setCurrentSessionId(null)
-        setMessages([])
-      }
-      toast.success('Session deleted')
-    },
-    onError: () => {
-      toast.error('Failed to delete session')
-    }
+  const base = useBaseChat({
+    adapter,
+    queryKeys,
+    enabled: !!sourceId,
   })
 
   // Send message with streaming
   const sendMessage = useCallback(async (message: string, modelOverride?: string) => {
-    let sessionId = currentSessionId
+    let sessionId = base.currentSessionId
 
     // Auto-create session if none exists
     if (!sessionId) {
@@ -105,8 +48,8 @@ export function useSourceChat(sourceId: string) {
         const defaultTitle = message.length > 30 ? `${message.substring(0, 30)}...` : message
         const newSession = await sourceChatApi.createSession(sourceId, { title: defaultTitle })
         sessionId = newSession.id
-        setCurrentSessionId(sessionId)
-        queryClient.invalidateQueries({ queryKey: ['sourceChatSessions', sourceId] })
+        base.setCurrentSessionId(sessionId)
+        base.queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sourceChatSessions(sourceId) })
       } catch (error) {
         console.error('Failed to create chat session:', error)
         toast.error('Failed to create chat session')
@@ -121,7 +64,7 @@ export function useSourceChat(sourceId: string) {
       content: message,
       timestamp: new Date().toISOString()
     }
-    setMessages(prev => [...prev, userMessage])
+    base.setMessages(prev => [...prev, userMessage])
     setIsStreaming(true)
 
     try {
@@ -149,9 +92,8 @@ export function useSourceChat(sourceId: string) {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6))
-              
+
               if (data.type === 'ai_message') {
-                // Create AI message on first content chunk to avoid empty bubble
                 if (!aiMessage) {
                   aiMessage = {
                     id: `ai-${Date.now()}`,
@@ -159,10 +101,10 @@ export function useSourceChat(sourceId: string) {
                     content: data.content || '',
                     timestamp: new Date().toISOString()
                   }
-                  setMessages(prev => [...prev, aiMessage!])
+                  base.setMessages(prev => [...prev, aiMessage!])
                 } else {
                   aiMessage.content += data.content || ''
-                  setMessages(prev =>
+                  base.setMessages(prev =>
                     prev.map(msg => msg.id === aiMessage!.id
                       ? { ...msg, content: aiMessage!.content }
                       : msg
@@ -183,14 +125,12 @@ export function useSourceChat(sourceId: string) {
     } catch (error) {
       console.error('Error sending message:', error)
       toast.error('Failed to send message')
-      // Remove optimistic messages on error
-      setMessages(prev => prev.filter(msg => !msg.id.startsWith('temp-')))
+      base.setMessages(prev => prev.filter(msg => !msg.id.startsWith('temp-')))
     } finally {
       setIsStreaming(false)
-      // Refetch session to get persisted messages
-      refetchCurrentSession()
+      base.refetchCurrentSession()
     }
-  }, [sourceId, currentSessionId, refetchCurrentSession, queryClient])
+  }, [sourceId, base.currentSessionId, base.refetchCurrentSession, base.queryClient, base.setCurrentSessionId, base.setMessages])
 
   // Cancel streaming
   const cancelStreaming = useCallback(() => {
@@ -200,44 +140,30 @@ export function useSourceChat(sourceId: string) {
     }
   }, [])
 
-  // Switch session
+  // Override switchSession to also clear context indicators
   const switchSession = useCallback((sessionId: string) => {
-    setCurrentSessionId(sessionId)
+    base.switchSession(sessionId)
     setContextIndicators(null)
-  }, [])
-
-  // Create session
-  const createSession = useCallback((data: Omit<CreateSourceChatSessionRequest, 'source_id'>) => {
-    return createSessionMutation.mutate(data)
-  }, [createSessionMutation])
-
-  // Update session
-  const updateSession = useCallback((sessionId: string, data: UpdateSourceChatSessionRequest) => {
-    return updateSessionMutation.mutate({ sessionId, data })
-  }, [updateSessionMutation])
-
-  // Delete session
-  const deleteSession = useCallback((sessionId: string) => {
-    return deleteSessionMutation.mutate(sessionId)
-  }, [deleteSessionMutation])
+  }, [base.switchSession])
 
   return {
     // State
-    sessions,
-    currentSession: sessions.find(s => s.id === currentSessionId),
-    currentSessionId,
-    messages,
+    sessions: base.sessions,
+    currentSession: base.sessions.find((s: any) => s.id === base.currentSessionId),
+    currentSessionId: base.currentSessionId,
+    messages: base.messages,
     isStreaming,
     contextIndicators,
-    loadingSessions,
-    
+    loadingSessions: base.loadingSessions,
+
     // Actions
-    createSession,
-    updateSession,
-    deleteSession,
+    createSession: (data: Omit<CreateSourceChatSessionRequest, 'source_id'>) =>
+      base.createSession(data as Record<string, unknown>),
+    updateSession: base.updateSession,
+    deleteSession: base.deleteSession,
     switchSession,
     sendMessage,
     cancelStreaming,
-    refetchSessions
+    refetchSessions: base.refetchSessions,
   }
 }
