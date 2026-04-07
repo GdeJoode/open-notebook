@@ -5,6 +5,7 @@ import { SettingsForm } from './components/SettingsForm'
 import { SystemInfo } from '../advanced/components/SystemInfo'
 import { RebuildEmbeddings } from '../advanced/components/RebuildEmbeddings'
 import { VaultSync } from '@/components/settings/VaultSync'
+import { ZoteroSettings } from '@/components/settings/ZoteroSettings'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -28,6 +29,7 @@ export default function SettingsPage() {
               <TabsList>
                 <TabsTrigger value="general">General</TabsTrigger>
                 <TabsTrigger value="vault">Vault</TabsTrigger>
+                <TabsTrigger value="zotero">Zotero</TabsTrigger>
                 <TabsTrigger value="advanced">Advanced</TabsTrigger>
               </TabsList>
               <TabsContent value="general" className="mt-6">
@@ -35,6 +37,9 @@ export default function SettingsPage() {
               </TabsContent>
               <TabsContent value="vault" className="mt-6">
                 <VaultSync />
+              </TabsContent>
+              <TabsContent value="zotero" className="mt-6">
+                <ZoteroSettings />
               </TabsContent>
               <TabsContent value="advanced" className="mt-6 space-y-6">
                 <SystemInfo />
