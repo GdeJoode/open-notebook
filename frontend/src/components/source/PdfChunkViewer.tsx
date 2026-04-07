@@ -353,9 +353,12 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
         setPagesInfo(data.pages)
 
         // Jump to first page that has chunks
-        const firstChunkPage = chunks.find(c => c.positions?.length > 0)?.physical_page ?? 1
-        setCurrentPage(firstChunkPage)
-        setPageInput(String(firstChunkPage))
+        // physical_page may be 0-indexed; positions[0][0] is 1-based from Docling
+        const firstChunkWithPos = chunks.find(c => c.positions?.length > 0)
+        const firstPage = firstChunkWithPos?.positions?.[0]?.[0]
+          ?? Math.max(1, (firstChunkWithPos?.physical_page ?? 0) + 1)
+        setCurrentPage(firstPage)
+        setPageInput(String(firstPage))
       } catch (err) {
         if (!cancelled) setError('Failed to load PDF info')
       } finally {
@@ -448,7 +451,7 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
     setSelectedChunkIndex(index)
     const chunk = chunks[index]
     if (chunk?.positions?.length > 0) {
-      const chunkPage = chunk.positions[0][0]
+      const chunkPage = Math.max(1, chunk.positions[0][0])
       if (chunkPage !== currentPage) {
         setCurrentPage(chunkPage)
         setPageInput(String(chunkPage))
