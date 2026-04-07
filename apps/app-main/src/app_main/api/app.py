@@ -157,6 +157,7 @@ def create_app() -> FastAPI:
         summaries,
         transformations,
         vault,
+        zotero,
     )
 
     application.include_router(auth.router, prefix="/api", tags=["auth"])
@@ -198,6 +199,7 @@ def create_app() -> FastAPI:
     application.include_router(
         resolution_log.router, prefix="/api", tags=["resolution-log"]
     )
+    application.include_router(zotero.router, prefix="/api", tags=["zotero"])
 
     # --- Exception Handlers ---
     @application.exception_handler(NotFoundError)

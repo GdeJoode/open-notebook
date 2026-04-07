@@ -67,6 +67,7 @@ retrieval = { workspace = true }
 app-main = { workspace = true }
 chat = { workspace = true }
 canvas = { workspace = true }
+zotero-integration = { workspace = true }
 
 # ============================================================================
 # Tool Configuration

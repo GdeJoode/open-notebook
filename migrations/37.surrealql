@@ -1,0 +1,31 @@
+-- Migration 37: Zotero integration fields and tables
+-- Adds Zotero tracking fields to source, plus sync state and config tables.
+
+-- Zotero fields on existing source table
+DEFINE FIELD zotero_key ON source TYPE option<string>;
+DEFINE FIELD zotero_version ON source TYPE option<int>;
+DEFINE FIELD zotero_synced_at ON source TYPE option<datetime>;
+
+DEFINE INDEX idx_source_zotero_key ON source FIELDS zotero_key;
+
+-- Zotero sync state — tracks library version for incremental sync
+DEFINE TABLE zotero_sync_state SCHEMAFULL;
+DEFINE FIELD library_version ON zotero_sync_state TYPE int DEFAULT 0;
+DEFINE FIELD last_sync ON zotero_sync_state TYPE datetime DEFAULT time::now();
+DEFINE FIELD items_pushed ON zotero_sync_state TYPE int DEFAULT 0;
+DEFINE FIELD items_pulled ON zotero_sync_state TYPE int DEFAULT 0;
+DEFINE FIELD conflicts ON zotero_sync_state TYPE int DEFAULT 0;
+DEFINE FIELD status ON zotero_sync_state TYPE string DEFAULT "idle";
+-- status: idle, syncing, error
+
+-- Zotero config — stores per-user credentials (single record expected)
+DEFINE TABLE zotero_config SCHEMAFULL;
+DEFINE FIELD library_id ON zotero_config TYPE string;
+DEFINE FIELD api_key ON zotero_config TYPE string;
+DEFINE FIELD library_type ON zotero_config TYPE string DEFAULT "user";
+DEFINE FIELD default_collection ON zotero_config TYPE option<string>;
+DEFINE FIELD auto_push ON zotero_config TYPE bool DEFAULT false;
+DEFINE FIELD sync_interval_minutes ON zotero_config TYPE int DEFAULT 15;
+DEFINE FIELD enabled ON zotero_config TYPE bool DEFAULT false;
+DEFINE FIELD created ON zotero_config TYPE datetime DEFAULT time::now();
+DEFINE FIELD updated ON zotero_config TYPE datetime DEFAULT time::now();

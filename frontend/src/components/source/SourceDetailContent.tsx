@@ -54,6 +54,7 @@ import {
   ScanSearch,
   BrainCircuit,
   Settings2,
+  BookMarked,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { formatDistanceToNow } from 'date-fns'
@@ -71,6 +72,7 @@ import { PdfChunkViewer } from '@/components/source/PdfChunkViewer'
 import { PipelineConfigPanel } from '@/components/sources/pipeline/PipelineConfigPanel'
 import { DEFAULT_PIPELINE_CONFIG, type DoclingPipelineConfig } from '@/lib/api/sources'
 import { useSourceChunks } from '@/lib/hooks/use-sources'
+import { useZoteroStatus, useZoteroPush } from '@/lib/hooks/use-zotero'
 
 interface SourceDetailContentProps {
   sourceId: string
@@ -105,6 +107,10 @@ export function SourceDetailContent({
   const [isReprocessing, setIsReprocessing] = useState(false)
   // Fetch chunks data
   const { data: chunksData, isLoading: chunksLoading } = useSourceChunks(sourceId)
+
+  // Zotero integration
+  const { data: zoteroStatus } = useZoteroStatus()
+  const zoteroPush = useZoteroPush()
 
   const fetchSource = useCallback(async () => {
     try {
@@ -514,6 +520,19 @@ export function SourceDetailContent({
                   <Database className="mr-2 h-4 w-4" />
                   {isEmbedding ? 'Embedding...' : source.embedded ? 'Already Embedded' : 'Embed Content'}
                 </DropdownMenuItem>
+                {zoteroStatus?.connected && (
+                  <DropdownMenuItem
+                    onClick={() => zoteroPush.mutate({ sourceId })}
+                    disabled={zoteroPush.isPending || !!(source as unknown as Record<string, unknown>).zotero_key}
+                  >
+                    <BookMarked className="mr-2 h-4 w-4" />
+                    {zoteroPush.isPending
+                      ? 'Pushing...'
+                      : (source as unknown as Record<string, unknown>).zotero_key
+                        ? 'In Zotero'
+                        : 'Push to Zotero'}
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="text-destructive"
@@ -559,6 +578,11 @@ export function SourceDetailContent({
               "No insights"
             )}
           </Badge>
+          {!!(source as unknown as Record<string, unknown>).zotero_key && (
+            <Badge variant="default" className="gap-1 bg-red-700">
+              <BookMarked className="h-3 w-3" /> Zotero
+            </Badge>
+          )}
         </div>
       </div>
 

@@ -1,0 +1,16 @@
+[project]
+name = "zotero-integration"
+version = "0.1.0"
+description = "Zotero integration for open-notebook — bidirectional sync, duplicate detection, cloud file upload"
+requires-python = ">=3.10"
+dependencies = [
+    "pyzotero>=1.6.0",
+    "loguru>=0.7.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.21.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

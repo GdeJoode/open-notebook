@@ -1,0 +1,8 @@
+-- Migration 37 rollback: Remove Zotero integration
+
+REMOVE INDEX idx_source_zotero_key ON TABLE source;
+REMOVE FIELD zotero_key ON TABLE source;
+REMOVE FIELD zotero_version ON TABLE source;
+REMOVE FIELD zotero_synced_at ON TABLE source;
+REMOVE TABLE zotero_sync_state;
+REMOVE TABLE zotero_config;
