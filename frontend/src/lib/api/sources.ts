@@ -150,6 +150,11 @@ export const sourcesApi = {
     return response.data
   },
 
+  runPreprocessing: async (id: string) => {
+    const response = await apiClient.post<Record<string, unknown>>('/preprocessing/run', { source_id: id })
+    return response.data
+  },
+
   getProcessingLogs: async (id: string) => {
     const response = await apiClient.get<Array<{ level: string; message: string; timestamp: number }>>(
       `/sources/${id}/processing-logs`

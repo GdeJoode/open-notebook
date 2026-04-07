@@ -1,5 +1,5 @@
 import apiClient from './client'
-import { Model, CreateModelRequest, ModelDefaults, ProviderAvailability } from '@/lib/types/models'
+import { Model, CreateModelRequest, ModelDefaults, ModelStatus, ProviderAvailability } from '@/lib/types/models'
 
 export const modelsApi = {
   list: async () => {
@@ -34,5 +34,10 @@ export const modelsApi = {
   getProviders: async () => {
     const response = await apiClient.get<ProviderAvailability>('/models/providers')
     return response.data
-  }
+  },
+
+  getStatus: async () => {
+    const response = await apiClient.get<ModelStatus>('/models/status')
+    return response.data
+  },
 }

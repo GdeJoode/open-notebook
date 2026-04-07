@@ -28,3 +28,16 @@ export interface ProviderAvailability {
   unavailable: string[]
   supported_types: Record<string, string[]>
 }
+
+export interface ModelStatusIssue {
+  type: 'ollama_unreachable' | 'model_unavailable' | 'provider_unavailable' | 'no_defaults'
+  message: string
+  model_name?: string | null
+  provider?: string | null
+  default_slot?: string | null
+}
+
+export interface ModelStatus {
+  valid: boolean
+  issues: ModelStatusIssue[]
+}

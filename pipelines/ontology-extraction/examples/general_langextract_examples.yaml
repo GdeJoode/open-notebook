@@ -1,0 +1,30 @@
+# LangExtract few-shot examples for the "general" ontology.
+# These override/supplement auto-generated examples from the ontology schema.
+prompt_description: >
+  Extract all named entities (people, organizations, locations, dates, topics,
+  events) and their attributes from the given text. Be thorough and precise.
+
+examples:
+  - text: >
+      Dr. Maria Chen, a senior researcher at the Broad Institute in Cambridge,
+      published a groundbreaking study on CRISPR gene editing in Nature on
+      March 15, 2024.
+    extractions:
+      - extraction_class: "Person"
+        extraction_text: "Dr. Maria Chen"
+        attributes:
+          role: "senior researcher"
+          affiliation: "Broad Institute"
+      - extraction_class: "Organization"
+        extraction_text: "Broad Institute"
+        attributes:
+          location: "Cambridge"
+          type: "research_institute"
+      - extraction_class: "Topic"
+        extraction_text: "CRISPR gene editing"
+      - extraction_class: "Date"
+        extraction_text: "March 15, 2024"
+      - extraction_class: "Publication"
+        extraction_text: "Nature"
+        attributes:
+          type: "journal"

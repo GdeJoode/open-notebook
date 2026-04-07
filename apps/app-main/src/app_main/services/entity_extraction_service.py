@@ -93,10 +93,22 @@ class EntityExtractionService:
                 "relation_count": 0,
             }
 
-        # 2. Convert to workflow format
-        chunk_dicts = [
-            {"text": c.text, "id": str(c.id)} for c in chunks if c.text
-        ]
+        # 2. Convert to workflow format — include structural metadata for
+        #    section-aware entity extraction (stap 2D).
+        chunk_dicts = []
+        for c in chunks:
+            if not c.text:
+                continue
+            d: Dict[str, Any] = {"text": c.text, "id": str(c.id)}
+            # Carry document structure through to extraction
+            d["section_path"] = c.section_path or []
+            d["section_level"] = c.section_level
+            d["physical_page"] = c.physical_page
+            d["element_type"] = c.element_type
+            d["source_id"] = source_id
+            if c.section_path:
+                d["section_heading"] = c.section_path[-1]
+            chunk_dicts.append(d)
 
         # 3. Build config and workflow
         config_kwargs: Dict[str, Any] = {
@@ -181,6 +193,7 @@ class EntityExtractionService:
                     entities=[e.model_dump() for e in filtered.entities],
                     relations=all_relations,
                     merge_groups=merge_groups,
+                    match_candidates=[c.model_dump() for c in filtered.match_candidates] if filtered.match_candidates else None,
                 )
 
             except Exception as e:
@@ -270,6 +283,7 @@ class EntityExtractionService:
             entities=[e.model_dump() for e in filtered.entities],
             relations=all_relations,
             merge_groups=filtered.merged_entity_groups,
+            match_candidates=[c.model_dump() for c in filtered.match_candidates] if filtered.match_candidates else None,
         )
 
         stats = {

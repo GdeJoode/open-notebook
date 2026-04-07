@@ -10,6 +10,40 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+class ExtractionContext(BaseModel):
+    """Document structure context for an extracted entity or relation.
+
+    Preserved from Docling output through the chunking pipeline so that
+    downstream matching can use section headings, page numbers, and
+    surrounding text for disambiguation.
+    """
+
+    section_heading: Optional[str] = Field(
+        default=None,
+        description="Innermost heading under which the mention appears",
+    )
+    section_path: List[str] = Field(
+        default_factory=list,
+        description="Full heading breadcrumb, e.g. ['Chapter 1', 'Section 1.2']",
+    )
+    section_level: int = Field(
+        default=0, description="Nesting depth in the document structure"
+    )
+    page_number: Optional[int] = Field(
+        default=None, description="Physical page number (0-indexed)"
+    )
+    element_type: Optional[str] = Field(
+        default=None, description="Source element type (paragraph, title, table, …)"
+    )
+    surrounding_text: Optional[str] = Field(
+        default=None,
+        description="~200 char window around the mention for disambiguation",
+    )
+    source_document: Optional[str] = Field(
+        default=None, description="Source record ID the chunk belongs to"
+    )
+
+
 class ExtractedEntity(BaseModel):
     """An entity extracted from text."""
 
@@ -26,6 +60,10 @@ class ExtractedEntity(BaseModel):
         default=None,
         description="Source grounding info (char offsets, alignment status) from LangExtract",
     )
+    extraction_context: Optional[ExtractionContext] = Field(
+        default=None,
+        description="Document structure context from the source chunk",
+    )
 
 
 class ExtractedRelation(BaseModel):
@@ -39,6 +77,36 @@ class ExtractedRelation(BaseModel):
     source_chunk_id: Optional[str] = Field(
         default=None, description="ID of the chunk this relation was extracted from"
     )
+    extraction_context: Optional[ExtractionContext] = Field(
+        default=None,
+        description="Document structure context from the source chunk",
+    )
+
+
+class MatchCandidate(BaseModel):
+    """A match decision between two entities, stored before merging.
+
+    Separates the matching phase from the merging phase (stap 2C) and
+    carries provenance with a reasoning trace (stap 2B).
+    """
+
+    entity_a_text: str
+    entity_b_text: str
+    entity_a_label: str = "UNKNOWN"
+    entity_b_label: str = "UNKNOWN"
+    match: bool = False
+    confidence: float = 0.0
+    match_method: str = Field(description="e.g. embedding_similarity, llm_match, fuzzy, abbreviation")
+    match_reasoning: str = ""
+    iterations: int = Field(default=1, description="Number of matching iterations (1=single-pass)")
+    # Section context from extraction
+    source_section_a: Optional[str] = None
+    source_section_b: Optional[str] = None
+    source_document_a: Optional[str] = None
+    source_document_b: Optional[str] = None
+    matched_by_model: Optional[str] = None
+    # Review status: pending, auto_accepted, accepted, rejected
+    status: str = "pending"
 
 
 class ExtractionResult(BaseModel):
@@ -66,6 +134,10 @@ class FilteredResult(ExtractionResult):
     merged_entity_groups: List[List[str]] = Field(
         default_factory=list,
         description="Groups of entity texts that were merged during dedup",
+    )
+    match_candidates: List[MatchCandidate] = Field(
+        default_factory=list,
+        description="All match decisions with provenance (stap 2C/2B)",
     )
     predicted_edges: List[ExtractedRelation] = Field(
         default_factory=list,

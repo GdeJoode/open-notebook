@@ -175,7 +175,9 @@ export function PreprocessingTab({
         (data.chunks as ChunkEntry[]).sort((a, b) => a.order - b.order)
       )
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Preprocessing failed')
+      const axiosErr = e as { response?: { data?: { detail?: string } }; message?: string }
+      const detail = axiosErr?.response?.data?.detail
+      setError(detail || axiosErr?.message || 'Preprocessing failed')
     } finally {
       setRunning(false)
     }

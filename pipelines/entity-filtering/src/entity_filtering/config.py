@@ -196,6 +196,10 @@ class LLMMatcherConfig:
         base_url: Ollama API endpoint.
         confidence_threshold: Minimum LLM confidence to accept a match.
         timeout: HTTP timeout per LLM request in seconds.
+        agentic_enabled: Enable iterative reasoning for uncertain matches.
+        agentic_lower_threshold: Below this → reject without iteration.
+        agentic_upper_threshold: Above this → accept without iteration.
+        agentic_max_iterations: Max extra context-fetch rounds (1-2 recommended).
     """
 
     enabled: bool = False
@@ -203,6 +207,10 @@ class LLMMatcherConfig:
     base_url: str = "http://localhost:11434"
     confidence_threshold: float = 0.7
     timeout: int = 60
+    agentic_enabled: bool = False
+    agentic_lower_threshold: float = 0.3
+    agentic_upper_threshold: float = 0.8
+    agentic_max_iterations: int = 2
 
 
 @dataclass

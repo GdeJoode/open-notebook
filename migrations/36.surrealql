@@ -1,0 +1,40 @@
+-- Migration 36: resolution_log table for entity match decisions
+-- Stores match candidates separately from merges, enabling review and rollback.
+
+DEFINE TABLE resolution_log SCHEMAFULL;
+
+-- Which entities were compared
+DEFINE FIELD entity_a_text ON resolution_log TYPE string;
+DEFINE FIELD entity_b_text ON resolution_log TYPE string;
+DEFINE FIELD entity_a_label ON resolution_log TYPE string DEFAULT "UNKNOWN";
+DEFINE FIELD entity_b_label ON resolution_log TYPE string DEFAULT "UNKNOWN";
+
+-- Match decision
+DEFINE FIELD match ON resolution_log TYPE bool DEFAULT false;
+DEFINE FIELD confidence ON resolution_log TYPE float DEFAULT 0.0;
+DEFINE FIELD match_method ON resolution_log TYPE string;
+DEFINE FIELD match_reasoning ON resolution_log TYPE string DEFAULT "";
+DEFINE FIELD iterations ON resolution_log TYPE int DEFAULT 1;
+
+-- Provenance: source documents and sections
+DEFINE FIELD source_document_a ON resolution_log TYPE option<string>;
+DEFINE FIELD source_document_b ON resolution_log TYPE option<string>;
+DEFINE FIELD source_section_a ON resolution_log TYPE option<string>;
+DEFINE FIELD source_section_b ON resolution_log TYPE option<string>;
+
+-- Model and timing
+DEFINE FIELD matched_by_model ON resolution_log TYPE option<string>;
+DEFINE FIELD match_timestamp ON resolution_log TYPE datetime DEFAULT time::now();
+
+-- Review workflow
+DEFINE FIELD status ON resolution_log TYPE string DEFAULT "pending";
+-- status: pending (awaiting review), accepted, rejected, auto_accepted
+DEFINE FIELD reviewed_at ON resolution_log TYPE option<datetime>;
+
+-- Link to source extraction
+DEFINE FIELD source_id ON resolution_log TYPE option<string>;
+
+-- Indexes for common queries
+DEFINE INDEX idx_resolution_status ON resolution_log FIELDS status;
+DEFINE INDEX idx_resolution_source ON resolution_log FIELDS source_id;
+DEFINE INDEX idx_resolution_method ON resolution_log FIELDS match_method;

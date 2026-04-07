@@ -50,6 +50,9 @@ import {
   MessageSquare,
   Network,
   GitGraph,
+  Play,
+  ScanSearch,
+  BrainCircuit,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { formatDistanceToNow } from 'date-fns'
@@ -83,6 +86,7 @@ export function SourceDetailContent({
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [isEmbedding, setIsEmbedding] = useState(false)
+  const [isRunningPipeline, setIsRunningPipeline] = useState<string | null>(null)
   const [isDownloadingFile, setIsDownloadingFile] = useState(false)
   const [fileAvailable, setFileAvailable] = useState<boolean | null>(null)
   const [selectedInsight, setSelectedInsight] = useState<SourceInsightResponse | null>(null)
@@ -200,6 +204,52 @@ export function SourceDetailContent({
       toast.error('Failed to embed content')
     } finally {
       setIsEmbedding(false)
+    }
+  }
+
+  const handleRunSummaries = async () => {
+    if (!source) return
+    try {
+      setIsRunningPipeline('summaries')
+      await sourcesApi.runSummaries(sourceId)
+      toast.success('Summaries generation started')
+      await fetchSource()
+      fetchInsights()
+    } catch (err) {
+      console.error('Failed to run summaries:', err)
+      toast.error('Failed to start summaries')
+    } finally {
+      setIsRunningPipeline(null)
+    }
+  }
+
+  const handleRunEntities = async () => {
+    if (!source) return
+    try {
+      setIsRunningPipeline('entities')
+      await sourcesApi.runEntities(sourceId)
+      toast.success('Entity extraction started')
+      await fetchSource()
+    } catch (err) {
+      console.error('Failed to run entity extraction:', err)
+      toast.error('Failed to start entity extraction')
+    } finally {
+      setIsRunningPipeline(null)
+    }
+  }
+
+  const handleRunPreprocessing = async () => {
+    if (!source) return
+    try {
+      setIsRunningPipeline('preprocessing')
+      await sourcesApi.runPreprocessing(sourceId)
+      toast.success('Preprocessing completed')
+      await fetchSource()
+    } catch (err) {
+      console.error('Failed to run preprocessing:', err)
+      toast.error('Failed to run preprocessing')
+    } finally {
+      setIsRunningPipeline(null)
     }
   }
 
@@ -413,6 +463,27 @@ export function SourceDetailContent({
                     <DropdownMenuSeparator />
                   </>
                 )}
+                <DropdownMenuItem
+                  onClick={handleRunPreprocessing}
+                  disabled={!source.full_text || isRunningPipeline === 'preprocessing'}
+                >
+                  <ScanSearch className="mr-2 h-4 w-4" />
+                  {isRunningPipeline === 'preprocessing' ? 'Preprocessing...' : 'Run Preprocessing'}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={handleRunSummaries}
+                  disabled={!source.full_text || isRunningPipeline === 'summaries'}
+                >
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  {isRunningPipeline === 'summaries' ? 'Generating...' : 'Generate Summaries'}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={handleRunEntities}
+                  disabled={!source.full_text || isRunningPipeline === 'entities'}
+                >
+                  <BrainCircuit className="mr-2 h-4 w-4" />
+                  {isRunningPipeline === 'entities' ? 'Extracting...' : 'Extract Entities'}
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={handleEmbedContent}
                   disabled={isEmbedding || source.embedded}

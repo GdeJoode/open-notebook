@@ -8,7 +8,7 @@ edge prediction) into a single pipeline that transforms an
 ExtractionResult into a FilteredResult.
 """
 
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from loguru import logger
 from shared.models.extraction import (
@@ -16,6 +16,7 @@ from shared.models.extraction import (
     ExtractedRelation,
     ExtractionResult,
     FilteredResult,
+    MatchCandidate,
 )
 
 from entity_filtering.config import FilteringConfig
@@ -193,9 +194,67 @@ class FilteringWorkflow:
                 base_url=self._config.llm_matcher.base_url,
                 confidence_threshold=self._config.llm_matcher.confidence_threshold,
                 timeout=self._config.llm_matcher.timeout,
+                agentic_enabled=self._config.llm_matcher.agentic_enabled,
+                agentic_lower_threshold=self._config.llm_matcher.agentic_lower_threshold,
+                agentic_upper_threshold=self._config.llm_matcher.agentic_upper_threshold,
+                agentic_max_iterations=self._config.llm_matcher.agentic_max_iterations,
+                context_provider=self._fetch_agentic_context if self._config.llm_matcher.agentic_enabled else None,
             )
 
         self._edge_predictor = EdgePredictor()
+
+        # Cache for agentic context — populated during processing
+        self._current_entities: list[dict[str, Any]] = []
+
+    async def _fetch_agentic_context(
+        self,
+        entity_a: Dict[str, Any],
+        entity_b: Dict[str, Any],
+    ) -> str:
+        """Fetch additional context for uncertain LLM matches (stap 2E).
+
+        Provides:
+        - Co-occurring entities (same source chunk)
+        - Surrounding text from extraction context
+        - Existing cluster/match info from properties
+        """
+        parts: list[str] = []
+
+        text_a = entity_a.get("text", "")
+        text_b = entity_b.get("text", "")
+        chunk_a = entity_a.get("source_chunk_id")
+        chunk_b = entity_b.get("source_chunk_id")
+
+        # 1. Co-occurring entities in the same chunks
+        for label, chunk_id, text in [("A", chunk_a, text_a), ("B", chunk_b, text_b)]:
+            if not chunk_id:
+                continue
+            co_entities = [
+                e.get("text", "")
+                for e in self._current_entities
+                if e.get("source_chunk_id") == chunk_id and e.get("text", "") != text
+            ]
+            if co_entities:
+                parts.append(
+                    f"Entiteiten in hetzelfde fragment als {label}: "
+                    + ", ".join(co_entities[:10])
+                )
+
+        # 2. Surrounding text from extraction context
+        for label, entity in [("A", entity_a), ("B", entity_b)]:
+            ctx = entity.get("extraction_context") or {}
+            if isinstance(ctx, dict) and ctx.get("surrounding_text"):
+                parts.append(f"Omringende tekst {label}: {ctx['surrounding_text'][:200]}")
+
+        # 3. Existing match info (if entity was already matched by embedding/fuzzy)
+        for label, entity in [("A", entity_a), ("B", entity_b)]:
+            props = entity.get("properties", {})
+            if props.get("llm_match"):
+                parts.append(f"{label} eerder gematcht met: {props['llm_match']}")
+            if props.get("cluster_id"):
+                parts.append(f"{label} cluster: {props['cluster_id']}")
+
+        return "\n".join(parts) if parts else ""
 
     async def process(
         self, extraction_result: ExtractionResult
@@ -301,8 +360,12 @@ class FilteringWorkflow:
         # ------------------------------------------------------------------
         # Stage 6b: LLM matching (optional)
         # ------------------------------------------------------------------
+        # Populate entity cache for agentic context provider (stap 2E)
+        self._current_entities = deduped_entities
+        all_match_candidates: list[MatchCandidate] = []
         if self._llm_matcher is not None and len(deduped_entities) >= 2:
-            llm_merge_groups = await self._run_llm_matching(deduped_entities)
+            llm_merge_groups, llm_candidates = await self._run_llm_matching(deduped_entities)
+            all_match_candidates.extend(llm_candidates)
             if llm_merge_groups:
                 merge_groups.extend(llm_merge_groups)
                 # Re-deduplicate with merge decisions applied
@@ -431,6 +494,7 @@ class FilteringWorkflow:
             relations=result_relations,
             removed_entities=removed_entities,
             merged_entity_groups=merge_groups,
+            match_candidates=all_match_candidates,
             predicted_edges=predicted_relations,
             linked_entities=linked_entities,
             kg_resolution_report=kg_resolution_report,
@@ -464,13 +528,15 @@ class FilteringWorkflow:
 
     async def _run_llm_matching(
         self, entities: list[dict[str, Any]]
-    ) -> list[list[str]]:
+    ) -> tuple[list[list[str]], list[MatchCandidate]]:
         """Generate candidate pairs and run LLM matching.
 
         Uses semantic blocking if available, otherwise falls back to
         pairwise comparison on entities with embeddings.
 
-        Returns merge groups (list of [entity_a_text, entity_b_text] pairs).
+        Returns:
+            (merge_groups, match_candidates) — merge groups for dedup,
+            and all match decisions with provenance for the resolution log.
         """
         from entity_filtering.deduplication.union_find import UnionFind
 
@@ -492,7 +558,7 @@ class FilteringWorkflow:
                         candidate_pairs.append((block[i], block[j]))
 
         if not candidate_pairs:
-            return []
+            return [], []
 
         logger.info(
             f"LLM matcher: {len(candidate_pairs)} candidate pairs "
@@ -501,10 +567,36 @@ class FilteringWorkflow:
 
         # Run LLM matching
         results = await self._llm_matcher.match_batch(candidate_pairs)
+
+        # Build MatchCandidate records for all decisions (stap 2C/2B)
+        match_candidates: list[MatchCandidate] = []
+        for (a, b), res in zip(candidate_pairs, results):
+            is_match = res.get("match", False)
+            conf = res.get("confidence", 0.0)
+            candidate = MatchCandidate(
+                entity_a_text=a.get("text", ""),
+                entity_b_text=b.get("text", ""),
+                entity_a_label=a.get("label", "UNKNOWN"),
+                entity_b_label=b.get("label", "UNKNOWN"),
+                match=is_match,
+                confidence=conf,
+                match_method=res.get("match_method", "llm_match"),
+                match_reasoning=res.get("reasoning", ""),
+                iterations=res.get("iterations", 1),
+                source_section_a=res.get("source_section_a"),
+                source_section_b=res.get("source_section_b"),
+                source_document_a=res.get("source_document_a"),
+                source_document_b=res.get("source_document_b"),
+                matched_by_model=res.get("matched_by_model"),
+                # Auto-accept high-confidence matches; flag uncertain ones for review
+                status="auto_accepted" if (is_match and conf >= self._llm_matcher._confidence_threshold) else "pending",
+            )
+            match_candidates.append(candidate)
+
         match_indices = self._llm_matcher.filter_matches(results)
 
         if not match_indices:
-            return []
+            return [], match_candidates
 
         # Build merge groups via UnionFind
         uf = UnionFind()
@@ -513,11 +605,8 @@ class FilteringWorkflow:
             b_text = candidate_pairs[idx][1].get("text", "")
             uf.union(a_text, b_text)
 
-            # Normalize the matched entity's text to canonical form
-            # (the LLM decided they're the same, so mark for merging)
             a_entity = candidate_pairs[idx][0]
             b_entity = candidate_pairs[idx][1]
-            # Store match info in properties for provenance
             a_entity.setdefault("properties", {})["llm_match"] = b_text
             b_entity.setdefault("properties", {})["llm_match"] = a_text
 
@@ -531,6 +620,7 @@ class FilteringWorkflow:
 
         logger.info(
             f"LLM matcher: {len(match_indices)} matches → "
-            f"{len(merge_groups)} merge groups"
+            f"{len(merge_groups)} merge groups, "
+            f"{len(match_candidates)} candidates logged"
         )
-        return merge_groups
+        return merge_groups, match_candidates

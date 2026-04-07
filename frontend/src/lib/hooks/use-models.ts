@@ -1,13 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { modelsApi } from '@/lib/api/models'
 import { useToast } from '@/lib/hooks/use-toast'
-import { CreateModelRequest, ModelDefaults } from '@/lib/types/models'
+import { CreateModelRequest, ModelDefaults, ModelStatus } from '@/lib/types/models'
 
 export const MODEL_QUERY_KEYS = {
   models: ['models'] as const,
   model: (id: string) => ['models', id] as const,
   defaults: ['models', 'defaults'] as const,
   providers: ['models', 'providers'] as const,
+  status: ['models', 'status'] as const,
 }
 
 export function useModels() {
@@ -106,5 +107,15 @@ export function useProviders() {
   return useQuery({
     queryKey: MODEL_QUERY_KEYS.providers,
     queryFn: () => modelsApi.getProviders(),
+  })
+}
+
+export function useModelStatus(enabled = true) {
+  return useQuery({
+    queryKey: MODEL_QUERY_KEYS.status,
+    queryFn: () => modelsApi.getStatus(),
+    enabled,
+    staleTime: Infinity,
+    retry: false,
   })
 }

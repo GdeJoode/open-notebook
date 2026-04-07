@@ -452,6 +452,10 @@ class PreprocessingService:
             return response.content[:2000], DocumentClassification(
                 document_type="other", domain="other"
             )
+        except RuntimeError as e:
+            # Ollama API errors (e.g. out of memory)
+            logger.error(f"LLM runtime error: {e}")
+            raise ValueError(str(e)) from e
 
     async def _save_result(self, result: PreprocessingResult) -> None:
         """Persist preprocessing result to SurrealDB."""

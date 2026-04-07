@@ -116,6 +116,11 @@ class LLMMatcher:
         confidence_threshold: float = 0.7,
         timeout: int = 60,
         custom_abbreviations: Optional[Dict[str, str]] = None,
+        agentic_enabled: bool = False,
+        agentic_lower_threshold: float = 0.3,
+        agentic_upper_threshold: float = 0.8,
+        agentic_max_iterations: int = 2,
+        context_provider: Optional[Any] = None,
     ) -> None:
         if not _HTTPX:
             raise ImportError("httpx is required for LLMMatcher")
@@ -124,6 +129,13 @@ class LLMMatcher:
         self._base_url = base_url.rstrip("/")
         self._confidence_threshold = confidence_threshold
         self._timeout = timeout
+
+        # Agentic matching config (stap 2E)
+        self._agentic_enabled = agentic_enabled
+        self._agentic_lower = agentic_lower_threshold
+        self._agentic_upper = agentic_upper_threshold
+        self._agentic_max_iter = agentic_max_iterations
+        self._context_provider = context_provider  # callable for fetching extra context
 
         # Merge: hardcoded defaults → DB-loaded → per-instance custom
         all_abbr = dict(_NL_ABBREVIATIONS)
@@ -135,6 +147,26 @@ class LLMMatcher:
         self._system_prompt = _SYSTEM_PROMPT.format(
             abbreviations=self._format_all_abbreviations()
         )
+
+    @staticmethod
+    def _format_context(entity: Dict[str, Any]) -> str:
+        """Build a short context string from extraction_context if available."""
+        ctx = entity.get("extraction_context") or entity.get("properties", {}).get("extraction_context")
+        if not ctx:
+            return ""
+        if isinstance(ctx, dict):
+            parts = []
+            if ctx.get("source_document"):
+                parts.append(f"bron: {ctx['source_document']}")
+            section = ctx.get("section_heading") or (
+                ctx["section_path"][-1] if ctx.get("section_path") else None
+            )
+            if section:
+                parts.append(f"sectie: {section}")
+            if ctx.get("page_number") is not None:
+                parts.append(f"pagina: {ctx['page_number']}")
+            return ", ".join(parts)
+        return ""
 
     async def match_pair(
         self,
@@ -164,18 +196,75 @@ class LLMMatcher:
         if abbr_match is not None:
             return abbr_match
 
-        user_prompt = (
-            f'Entiteit A: "{text_a}" (type: {type_a})\n'
-            f'Entiteit B: "{text_b}" (type: {type_b})\n\n'
-            f"Zijn dit dezelfde entiteit?"
-        )
+        # Build prompt with section context when available (stap 2D)
+        ctx_a = self._format_context(entity_a)
+        ctx_b = self._format_context(entity_b)
+
+        lines_a = f'Entiteit A: "{text_a}" (type: {type_a})'
+        if ctx_a:
+            lines_a += f"\n  Context: {ctx_a}"
+
+        lines_b = f'Entiteit B: "{text_b}" (type: {type_b})'
+        if ctx_b:
+            lines_b += f"\n  Context: {ctx_b}"
+
+        user_prompt = f"{lines_a}\n{lines_b}\n\nZijn dit dezelfde entiteit?"
 
         try:
             result = await self._call_ollama(user_prompt)
+            iterations = 1
+
+            # Agentic loop: if uncertain and context provider available,
+            # fetch additional context and re-evaluate (stap 2E)
+            if (
+                self._agentic_enabled
+                and self._context_provider
+                and self._agentic_lower < result.get("confidence", 0) < self._agentic_upper
+            ):
+                for extra_round in range(self._agentic_max_iter):
+                    iterations += 1
+                    logger.debug(
+                        f"Agentic iteration {iterations} for '{text_a}' vs '{text_b}' "
+                        f"(confidence={result.get('confidence', 0):.2f})"
+                    )
+                    try:
+                        extra_context = await self._context_provider(entity_a, entity_b)
+                    except Exception as ctx_err:
+                        logger.warning(f"Context fetch failed: {ctx_err}")
+                        break
+
+                    if not extra_context:
+                        break
+
+                    # Re-prompt with additional context
+                    enriched_prompt = (
+                        f"{user_prompt}\n\n"
+                        f"Aanvullende context:\n{extra_context}\n\n"
+                        f"Herbeoordeel op basis van de aanvullende context."
+                    )
+                    result = await self._call_ollama(enriched_prompt)
+
+                    # If now confident enough, stop iterating
+                    conf = result.get("confidence", 0)
+                    if conf >= self._agentic_upper or conf <= self._agentic_lower:
+                        break
+
+            result["match_method"] = "llm_match"
+            result["matched_by_model"] = self._model
+            result["iterations"] = iterations
+            # Carry section context for provenance
+            ctx_a = entity_a.get("extraction_context") or {}
+            ctx_b = entity_b.get("extraction_context") or {}
+            if isinstance(ctx_a, dict):
+                result["source_section_a"] = ctx_a.get("section_heading")
+                result["source_document_a"] = ctx_a.get("source_document")
+            if isinstance(ctx_b, dict):
+                result["source_section_b"] = ctx_b.get("section_heading")
+                result["source_document_b"] = ctx_b.get("source_document")
             return result
         except Exception as e:
             logger.warning(f"LLM match failed for '{text_a}' vs '{text_b}': {e}")
-            return {"match": False, "confidence": 0.0, "reasoning": f"error: {e}"}
+            return {"match": False, "confidence": 0.0, "reasoning": f"error: {e}", "match_method": "llm_match"}
 
     async def match_batch(
         self,

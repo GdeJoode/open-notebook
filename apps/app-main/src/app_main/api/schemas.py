@@ -103,6 +103,23 @@ class ProviderAvailabilityResponse(BaseModel):
     )
 
 
+class ModelStatusIssue(BaseModel):
+    type: Literal["ollama_unreachable", "model_unavailable", "provider_unavailable", "no_defaults"] = Field(
+        ..., description="Issue type"
+    )
+    message: str = Field(..., description="Human-readable issue description")
+    model_name: Optional[str] = Field(None, description="Affected model name")
+    provider: Optional[str] = Field(None, description="Affected provider")
+    default_slot: Optional[str] = Field(None, description="Affected default slot name")
+
+
+class ModelStatusResponse(BaseModel):
+    valid: bool = Field(..., description="Whether model configuration is valid")
+    issues: List[ModelStatusIssue] = Field(
+        default_factory=list, description="List of configuration issues"
+    )
+
+
 # Transformations API schemas
 class TransformationCreate(BaseModel):
     name: str = Field(..., description="Transformation name")

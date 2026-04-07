@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from ontology_manager import get_ontology_manager
 from shared.models.extraction import (
+    ExtractionContext,
     ExtractedEntity,
     ExtractedRelation,
     ExtractionResult,
@@ -126,13 +127,32 @@ class ExtractionWorkflow:
                     )
                     continue
 
-                # Tag entities with chunk_id
+                # Build extraction context from chunk metadata
+                ctx = None
+                section_path = chunk.get("section_path", [])
+                if section_path or chunk.get("physical_page") is not None:
+                    # Build a ~200 char surrounding_text snippet
+                    raw_text = text.strip()
+                    surrounding = raw_text[:200] if len(raw_text) > 200 else raw_text
+                    ctx = ExtractionContext(
+                        section_heading=section_path[-1] if section_path else None,
+                        section_path=section_path,
+                        section_level=chunk.get("section_level", 0),
+                        page_number=chunk.get("physical_page"),
+                        element_type=chunk.get("element_type"),
+                        surrounding_text=surrounding,
+                        source_document=chunk.get("source_id"),
+                    )
+
+                # Tag entities with chunk_id and extraction context
                 for entity in result.entities:
                     entity.source_chunk_id = chunk_id
+                    entity.extraction_context = ctx
                     all_entities.append(entity)
 
                 for relation in result.relations:
                     relation.source_chunk_id = chunk_id
+                    relation.extraction_context = ctx
                     all_relations.append(relation)
 
             logger.info(

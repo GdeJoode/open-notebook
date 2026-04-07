@@ -91,7 +91,8 @@ class WhisperXTranscriber:
             hf_token = self.config.hf_token or os.getenv("HF_TOKEN")
             if hf_token:
                 try:
-                    self._diarize_model = whisperx.DiarizationPipeline(
+                    from whisperx.diarize import DiarizationPipeline
+                    self._diarize_model = DiarizationPipeline(
                         use_auth_token=hf_token,
                         device=device,
                     )
