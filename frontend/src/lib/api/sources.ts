@@ -196,10 +196,26 @@ export const sourcesApi = {
   },
 
   getPdfUrl: async (id: string) => {
-    // For react-pdf-highlighter PdfLoader, we need an absolute URL
-    // because it loads PDFs directly in the browser, not through axios
     const { getApiUrl } = await import('@/lib/config')
     const apiUrl = await getApiUrl()
     return `${apiUrl}/api/sources/${id}/pdf`
+  },
+
+  getPagePreviewUrl: async (id: string, page: number, dpi = 150) => {
+    const { getApiUrl } = await import('@/lib/config')
+    const apiUrl = await getApiUrl()
+    return `${apiUrl}/api/sources/${id}/page-preview?page=${page}&dpi=${dpi}`
+  },
+
+  getPageCount: async (id: string) => {
+    const response = await apiClient.get<{
+      page_count: number
+      pages: Array<{
+        page_number: number
+        width: number
+        height: number
+      }>
+    }>(`/sources/${id}/page-count`)
+    return response.data
   },
 }

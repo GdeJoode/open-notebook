@@ -214,6 +214,28 @@ class LLMMatcherConfig:
 
 
 @dataclass
+class IncrementalResolutionConfig:
+    """Incremental entity resolution settings.
+
+    Assigns new entities to existing clusters based on embedding
+    similarity and periodically repairs cluster quality.
+
+    Attributes:
+        enabled: Whether to run incremental cluster resolution.
+        similarity_threshold: Minimum cosine similarity to assign to a cluster.
+        coherence_threshold: Minimum internal coherence before splitting.
+        merge_threshold: Maximum inter-cluster similarity before merging.
+        repair_enabled: Run cluster repair after resolution.
+    """
+
+    enabled: bool = False
+    similarity_threshold: float = 0.85
+    coherence_threshold: float = 0.70
+    merge_threshold: float = 0.92
+    repair_enabled: bool = True
+
+
+@dataclass
 class EdgePredictionConfig:
     """Edge (relation) prediction and scoring settings.
 
@@ -305,6 +327,9 @@ class FilteringConfig:
     )
     llm_matcher: LLMMatcherConfig = field(
         default_factory=LLMMatcherConfig
+    )
+    incremental_resolution: IncrementalResolutionConfig = field(
+        default_factory=IncrementalResolutionConfig
     )
     edge_prediction: EdgePredictionConfig = field(
         default_factory=EdgePredictionConfig

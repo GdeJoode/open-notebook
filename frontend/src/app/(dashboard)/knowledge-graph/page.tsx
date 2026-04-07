@@ -19,8 +19,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Share2, Search, X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Share2, Search, X, ChevronLeft, ChevronRight, GitMerge } from 'lucide-react'
 import type { Entity, EntityDetail } from '@/lib/api/knowledge-graph'
+import { ResolutionLogTab } from './components/ResolutionLogTab'
 
 const SigmaGraphView = dynamic(
   () => import('./components/SigmaGraphView'),
@@ -114,6 +115,10 @@ export default function KnowledgeGraphPage() {
               <TabsList>
                 <TabsTrigger value="table">Table</TabsTrigger>
                 <TabsTrigger value="graph">Graph</TabsTrigger>
+                <TabsTrigger value="resolution">
+                  <GitMerge className="h-3.5 w-3.5 mr-1.5" />
+                  Resolution Log
+                </TabsTrigger>
               </TabsList>
 
               <TabsContent value="table" className="flex-1 overflow-auto mt-4">
@@ -192,6 +197,10 @@ export default function KnowledgeGraphPage() {
                   entityTypeFilter={entityTypeFilter}
                   onNodeClick={handleEntityClick}
                 />
+              </TabsContent>
+
+              <TabsContent value="resolution" className="flex-1 overflow-auto mt-4">
+                <ResolutionLogTab />
               </TabsContent>
             </Tabs>
           </div>

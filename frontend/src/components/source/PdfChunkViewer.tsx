@@ -3,159 +3,51 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Loader2, AlertCircle } from 'lucide-react'
-import dynamic from 'next/dynamic'
-import { v4 as uuid } from 'uuid'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Loader2,
+  AlertCircle,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  EyeOff,
+} from 'lucide-react'
+import { sourcesApi } from '@/lib/api/sources'
 
-// Dynamically import react-pdf-highlighter components to prevent SSR issues
-// The library uses pdfjs-dist which requires browser APIs
-const PdfLoader = dynamic(
-  () => import('react-pdf-highlighter').then((mod) => mod.PdfLoader),
-  { ssr: false }
-)
-const PdfHighlighter = dynamic(
-  () => import('react-pdf-highlighter').then((mod) => mod.PdfHighlighter),
-  { ssr: false }
-)
-const Highlight = dynamic(
-  () => import('react-pdf-highlighter').then((mod) => mod.Highlight),
-  { ssr: false }
-)
-const AreaHighlight = dynamic(
-  () => import('react-pdf-highlighter').then((mod) => mod.AreaHighlight),
-  { ssr: false }
-)
-const Popup = dynamic(
-  () => import('react-pdf-highlighter').then((mod) => mod.Popup),
-  { ssr: false }
-)
+// ---------------------------------------------------------------------------
+// Element type color scheme (matches Docling Studio)
+// ---------------------------------------------------------------------------
 
-// Import the IHighlight type (types don't need dynamic import)
-import type { IHighlight } from 'react-pdf-highlighter'
+const ELEMENT_COLORS: Record<string, string> = {
+  title: '#EF4444',
+  section_header: '#F97316',
+  text: '#3B82F6',
+  paragraph: '#3B82F6',
+  table: '#8B5CF6',
+  picture: '#22C55E',
+  list_item: '#06B6D4',
+  list: '#06B6D4',
+  formula: '#EC4899',
+  code: '#14B8A6',
+  caption: '#EAB308',
+  heading: '#F97316',
+  page_header: '#9CA3AF',
+  page_footer: '#9CA3AF',
+  footnote: '#9CA3AF',
+}
 
-// Custom styles for PDF viewer and highlights
-// Following ragflow's pattern for container and highlight styling
-const pdfViewerStyles = `
-  /* Container must properly constrain the PdfHighlighter */
-  .pdf-viewer-container {
-    width: 100%;
-    height: 100%;
-    position: relative;
-    overflow: hidden;
-    /* Ensure the container creates a proper stacking context */
-    isolation: isolate;
-  }
+const DEFAULT_COLOR = '#6B7280'
 
-  /* The PdfLoader creates a wrapper div that needs sizing */
-  .pdf-viewer-container > div {
-    width: 100% !important;
-    height: 100% !important;
-    position: relative !important;
-  }
+function getElementColor(elementType: string): string {
+  const key = elementType.toLowerCase().replace(/\s+/g, '_')
+  return ELEMENT_COLORS[key] ?? DEFAULT_COLOR
+}
 
-  /* Fix PdfHighlighter positioning within container */
-  .pdf-viewer-container .PdfHighlighter {
-    position: absolute !important;
-    top: 0 !important;
-    left: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
-    width: 100% !important;
-    height: 100% !important;
-    overflow: auto !important;
-    overflow-x: hidden !important;
-  }
-
-  /* Ensure pdfViewer container inside PdfHighlighter is properly sized */
-  .pdf-viewer-container .pdfViewer {
-    padding-top: 0 !important;
-    padding-bottom: 10px !important;
-  }
-
-  /* Show clear page breaks between pages */
-  .pdf-viewer-container .page {
-    margin-bottom: 20px !important;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
-    border: 1px solid #ccc !important;
-    position: relative !important;
-  }
-
-  /* Add page number indicator on each page */
-  .pdf-viewer-container .page::after {
-    content: "Page " attr(data-page-number);
-    position: absolute;
-    bottom: -18px;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 11px;
-    color: #666;
-    background: #f5f5f5;
-    padding: 2px 8px;
-    border-radius: 3px;
-    z-index: 10;
-  }
-
-  /* Ensure highlight layer is visible and properly positioned */
-  .PdfHighlighter__highlight-layer {
-    position: absolute !important;
-    z-index: 3 !important;
-    left: 0 !important;
-    top: 0 !important;
-    pointer-events: auto !important;
-  }
-
-  /* Highlight component - must be visible */
-  .Highlight {
-    position: absolute !important;
-  }
-
-  /* Highlight parts container */
-  .Highlight__parts {
-    opacity: 1 !important;
-  }
-
-  /* Highlight styling - make highlights very visible with solid yellow */
-  .Highlight__part {
-    cursor: pointer !important;
-    position: absolute !important;
-    background: rgba(255, 226, 143, 1) !important;
-    opacity: 1 !important;
-    mix-blend-mode: multiply !important;
-    transition: background 0.3s !important;
-    z-index: 3 !important;
-  }
-
-  /* Active/scrolled-to highlight - orange color */
-  .Highlight--scrolledTo .Highlight__part {
-    background: rgba(255, 140, 0, 1) !important;
-  }
-
-  /* Area highlight styling */
-  .AreaHighlight {
-    border: 2px solid #ff9800 !important;
-    background-color: rgba(255, 226, 143, 0.8) !important;
-    opacity: 1 !important;
-    mix-blend-mode: multiply !important;
-  }
-
-  .AreaHighlight__part {
-    cursor: pointer !important;
-    position: absolute !important;
-    background: rgba(255, 226, 143, 1) !important;
-    transition: background 0.3s !important;
-  }
-
-  .AreaHighlight--scrolledTo .AreaHighlight__part {
-    background: rgba(255, 140, 0, 1) !important;
-  }
-
-  /* Text layer should allow highlights to show through */
-  .textLayer {
-    z-index: 2 !important;
-    opacity: 1 !important;
-    mix-blend-mode: multiply !important;
-  }
-`
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 interface Chunk {
   id: string
@@ -170,217 +62,425 @@ interface Chunk {
   metadata: Record<string, unknown>
 }
 
+interface PageInfo {
+  page_number: number
+  width: number   // PDF points
+  height: number  // PDF points
+}
+
+interface BboxRect {
+  x: number
+  y: number
+  w: number
+  h: number
+  chunkIndex: number
+  elementType: string
+  text: string
+}
+
 interface PdfChunkViewerProps {
-  pdfUrl: string
+  sourceId: string
   chunks: Chunk[]
 }
 
-const HighlightPopup = ({
-  comment,
-}: {
-  comment: { text: string; emoji: string }
-}) =>
-  comment.text ? (
-    <div className="bg-popover p-2 rounded shadow-md border text-sm">
-      {comment.emoji} {comment.text}
-    </div>
-  ) : null
+// ---------------------------------------------------------------------------
+// BboxOverlay — canvas overlay matching Docling Studio approach
+// ---------------------------------------------------------------------------
 
-/**
- * Build highlights from chunk positions.
- *
- * Positions format from backend: [page_num, x_left, x_right, y_top, y_bottom]
- * - page_num: 1-based page number from Docling (matches PDF.js 1-based indexing)
- * - All coordinates are NORMALIZED (0-1 range), origin is TOPLEFT.
- *
- * For react-pdf-highlighter (following ragflow's pattern):
- * - x1, y1, x2, y2 = absolute pixel coordinates at scale=1
- * - width/height = page dimensions (used as reference for scaling formula)
- * - Library formula: viewportX = (viewportWidth * x) / boundingRect.width
- */
-function buildChunkHighlights(
-  chunk: Chunk | null,
-  pageSize: { width: number; height: number }
-): IHighlight[] {
-  if (!chunk?.positions || chunk.positions.length === 0) {
-    return []
-  }
-
-  return chunk.positions.map((pos, index) => {
-    const [pageNumber, xLeft, xRight, yTopRaw, yBottomRaw] = pos
-
-    // Ensure yTop < yBottom (smaller y = higher on page in TOPLEFT coordinates)
-    const yTop = Math.min(yTopRaw, yBottomRaw)
-    const yBottom = Math.max(yTopRaw, yBottomRaw)
-
-    // Convert normalized (0-1) coordinates to absolute pixel coordinates
-    const x1 = xLeft * pageSize.width
-    const y1 = yTop * pageSize.height
-    const x2 = xRight * pageSize.width
-    const y2 = yBottom * pageSize.height
-
-    const boundingRect = {
-      x1,
-      y1,
-      x2,
-      y2,
-      width: pageSize.width,
-      height: pageSize.height,
-    }
-
-    return {
-      id: `${chunk.id}-${index}`,
-      comment: {
-        text: '',
-        emoji: '',
-      },
-      content: {
-        text: chunk.text?.substring(0, 100) || '',
-      },
-      position: {
-        boundingRect,
-        rects: [boundingRect],
-        pageNumber: pageNumber, // Docling already uses 1-based page numbers
-      },
-    }
-  })
+interface BboxOverlayProps {
+  imgRef: React.RefObject<HTMLImageElement | null>
+  pageInfo: PageInfo
+  rects: BboxRect[]
+  highlightedChunkIndex: number | null
+  onHoverChunk: (index: number | null) => void
+  onClickChunk: (index: number) => void
+  showOverlay: boolean
+  hiddenTypes: Set<string>
 }
 
-export function PdfChunkViewer({ pdfUrl, chunks }: PdfChunkViewerProps) {
-  const [selectedChunkIndex, setSelectedChunkIndex] = useState<number>(0)
-  const [pageSize, setPageSize] = useState({ width: 612, height: 792 }) // US Letter default
-  const [pdfError, setPdfError] = useState<string | null>(null)
-  const [isClient, setIsClient] = useState(false)
-  const scrollToRef = useRef<(highlight: IHighlight) => void>(() => {})
+function BboxOverlay({
+  imgRef,
+  pageInfo,
+  rects,
+  highlightedChunkIndex,
+  onHoverChunk,
+  onClickChunk,
+  showOverlay,
+  hiddenTypes,
+}: BboxOverlayProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [tooltip, setTooltip] = useState<{
+    x: number
+    y: number
+    type: string
+    text: string
+    color: string
+  } | null>(null)
 
-  const selectedChunk = chunks[selectedChunkIndex] || null
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current
+    const img = imgRef.current
+    if (!canvas || !img || !showOverlay) return
 
-  // Mark when we're on the client side and inject styles
+    const dpr = window.devicePixelRatio || 1
+    const displayW = img.clientWidth
+    const displayH = img.clientHeight
+
+    canvas.width = displayW * dpr
+    canvas.height = displayH * dpr
+    canvas.style.width = `${displayW}px`
+    canvas.style.height = `${displayH}px`
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, displayW, displayH)
+
+    // Scale: PDF points → display pixels
+    const sx = displayW / pageInfo.width
+    const sy = displayH / pageInfo.height
+
+    for (const rect of rects) {
+      if (hiddenTypes.has(rect.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
+
+      const x = rect.x * sx
+      const y = rect.y * sy
+      const w = rect.w * sx
+      const h = rect.h * sy
+      const color = getElementColor(rect.elementType)
+      const isHighlighted = rect.chunkIndex === highlightedChunkIndex
+      const isDimmed = highlightedChunkIndex !== null && !isHighlighted
+
+      ctx.strokeStyle = isDimmed ? color + '40' : color
+      ctx.lineWidth = isHighlighted ? 3 : 2
+      ctx.fillStyle = isHighlighted ? color + '40' : isDimmed ? color + '08' : color + '20'
+
+      ctx.beginPath()
+      ctx.rect(x, y, w, h)
+      ctx.fill()
+      ctx.stroke()
+    }
+  }, [imgRef, pageInfo, rects, highlightedChunkIndex, showOverlay, hiddenTypes])
+
+  // Redraw on any state change
+  useEffect(() => { draw() }, [draw])
+
+  // ResizeObserver for responsive redraw
   useEffect(() => {
-    setIsClient(true)
+    const img = imgRef.current
+    if (!img) return
+    const observer = new ResizeObserver(() => draw())
+    observer.observe(img)
+    return () => observer.disconnect()
+  }, [imgRef, draw])
 
-    // Load react-pdf-highlighter CSS via link element (avoids TypeScript issues with CSS imports)
-    const linkId = 'react-pdf-highlighter-css'
-    if (!document.getElementById(linkId)) {
-      const link = document.createElement('link')
-      link.id = linkId
-      link.rel = 'stylesheet'
-      link.href = '/react-pdf-highlighter-style.css'
-      document.head.appendChild(link)
-    }
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current
+      const img = imgRef.current
+      if (!canvas || !img || !showOverlay) return
 
-    // Inject custom PDF viewer and highlight styles
-    const styleId = 'pdf-chunk-viewer-styles'
-    if (!document.getElementById(styleId)) {
-      const style = document.createElement('style')
-      style.id = styleId
-      style.textContent = pdfViewerStyles
-      document.head.appendChild(style)
-    }
-  }, [])
+      const rect = canvas.getBoundingClientRect()
+      const mx = e.clientX - rect.left
+      const my = e.clientY - rect.top
 
-  // Build highlights whenever selected chunk or page size changes
-  // Following ragflow's pattern: compute highlights in parent, pass to child
-  const highlights = useMemo(() => {
-    const result = buildChunkHighlights(selectedChunk, pageSize)
-    if (selectedChunk?.positions?.length) {
-      const numPositions = selectedChunk.positions.length
-      // pos format: [pageNumber, xLeft, xRight, yTop, yBottom] - all normalized 0-1
-      // Log all positions to understand multi-position chunks
-      const positionsSummary = selectedChunk.positions.map((pos, idx) => ({
-        idx,
-        page: pos[0],
-        xLeft: `${(pos[1] * 100).toFixed(1)}%`,
-        xRight: `${(pos[2] * 100).toFixed(1)}%`,
-        yTop: `${(pos[3] * 100).toFixed(1)}%`,
-        yBottom: `${(pos[4] * 100).toFixed(1)}%`,
-        heightPct: `${((pos[4] - pos[3]) * 100).toFixed(1)}%`,
-      }))
+      const sx = img.clientWidth / pageInfo.width
+      const sy = img.clientHeight / pageInfo.height
 
-      // Debug: log raw positions for troubleshooting
-      console.log(`Chunk ${selectedChunkIndex}: raw positions =`, selectedChunk.positions)
-      console.log(`Chunk ${selectedChunkIndex}: positions summary =`, positionsSummary)
-
-      // Find the topmost position (lowest yTop on lowest page)
-      const sortedPositions = [...selectedChunk.positions].sort((a, b) => {
-        if (a[0] !== b[0]) return a[0] - b[0] // page number
-        return a[3] - b[3] // yTop
-      })
-      const topmostPos = sortedPositions[0]
-
-      console.log(`[PdfChunkViewer] Chunk #${selectedChunkIndex + 1} (order: ${selectedChunk.order})`, {
-        text: selectedChunk.text?.substring(0, 40) + '...',
-        numPositions,
-        positions: positionsSummary,
-        // Y coordinates: yTop should be smaller for text higher on page (TOPLEFT)
-        // If yTop is ~0.05, text is near page top
-        // If yTop is ~0.90, text is near page bottom
-        topmostPosition: {
-          page: topmostPos[0],
-          yTop: `${(topmostPos[3] * 100).toFixed(1)}%`,
-          yBottom: `${(topmostPos[4] * 100).toFixed(1)}%`,
-        },
-        pageSize,
-      })
-    } else {
-      console.log(`[PdfChunkViewer] Chunk #${selectedChunkIndex + 1} has no position data`)
-    }
-    return result
-  }, [selectedChunk, pageSize, selectedChunkIndex])
-
-  // Scroll to the topmost highlight when highlights change
-  // For chunks with multiple positions, we want to scroll to the one highest on the page
-  // (lowest y1 value since y increases downward in TOPLEFT coordinates)
-  useEffect(() => {
-    if (highlights.length > 0 && scrollToRef.current) {
-      // Find the topmost highlight (lowest y1 on the lowest page number)
-      const sortedHighlights = [...highlights].sort((a, b) => {
-        // First sort by page number
-        const pageA = a.position.pageNumber
-        const pageB = b.position.pageNumber
-        if (pageA !== pageB) return pageA - pageB
-        // Then by y1 (top position) - smaller y1 = higher on page
-        return a.position.boundingRect.y1 - b.position.boundingRect.y1
-      })
-      const topmostHighlight = sortedHighlights[0]
-
-      // Small delay to ensure the PDF viewer has finished rendering
-      const timeoutId = setTimeout(() => {
-        if (scrollToRef.current) {
-          scrollToRef.current(topmostHighlight)
+      // Hit-test against all rects (reverse order for topmost match)
+      for (let i = rects.length - 1; i >= 0; i--) {
+        const r = rects[i]
+        if (hiddenTypes.has(r.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
+        const rx = r.x * sx
+        const ry = r.y * sy
+        const rw = r.w * sx
+        const rh = r.h * sy
+        if (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh) {
+          onHoverChunk(r.chunkIndex)
+          setTooltip({
+            x: Math.min(mx, img.clientWidth - 280),
+            y: Math.max(my - 60, 0),
+            type: r.elementType,
+            text: r.text.substring(0, 150),
+            color: getElementColor(r.elementType),
+          })
+          return
         }
-      }, 50)
-      return () => clearTimeout(timeoutId)
-    }
-  }, [highlights])
-
-  // Callback to update page size from PDF document
-  const handleSetPageSize = useCallback((width: number, height: number) => {
-    setPageSize((prev) => {
-      if (prev.width !== width || prev.height !== height) {
-        return { width, height }
       }
-      return prev
+      onHoverChunk(null)
+      setTooltip(null)
+    },
+    [imgRef, pageInfo, rects, showOverlay, hiddenTypes, onHoverChunk]
+  )
+
+  const handleMouseLeave = useCallback(() => {
+    onHoverChunk(null)
+    setTooltip(null)
+  }, [onHoverChunk])
+
+  const handleClick = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current
+      const img = imgRef.current
+      if (!canvas || !img) return
+
+      const rect = canvas.getBoundingClientRect()
+      const mx = e.clientX - rect.left
+      const my = e.clientY - rect.top
+
+      const sx = img.clientWidth / pageInfo.width
+      const sy = img.clientHeight / pageInfo.height
+
+      for (let i = rects.length - 1; i >= 0; i--) {
+        const r = rects[i]
+        if (hiddenTypes.has(r.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
+        const rx = r.x * sx
+        const ry = r.y * sy
+        const rw = r.w * sx
+        const rh = r.h * sy
+        if (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh) {
+          onClickChunk(r.chunkIndex)
+          return
+        }
+      }
+    },
+    [imgRef, pageInfo, rects, hiddenTypes, onClickChunk]
+  )
+
+  if (!showOverlay) return null
+
+  return (
+    <>
+      <canvas
+        ref={canvasRef}
+        className="absolute top-0 left-0 cursor-crosshair"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+        onClick={handleClick}
+      />
+      {tooltip && (
+        <div
+          className="absolute z-20 max-w-[280px] rounded-md border bg-popover/95 backdrop-blur-sm p-2 shadow-lg pointer-events-none"
+          style={{ left: tooltip.x, top: tooltip.y }}
+        >
+          <div className="flex items-center gap-1.5 mb-1">
+            <span
+              className="inline-block w-2.5 h-2.5 rounded-full"
+              style={{ backgroundColor: tooltip.color }}
+            />
+            <span className="text-xs font-semibold uppercase tracking-wide">
+              {tooltip.type}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground line-clamp-3">{tooltip.text}</p>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Legend bar
+// ---------------------------------------------------------------------------
+
+interface LegendBarProps {
+  typeCounts: Record<string, number>
+  hiddenTypes: Set<string>
+  onToggle: (type: string) => void
+}
+
+function LegendBar({ typeCounts, hiddenTypes, onToggle }: LegendBarProps) {
+  const types = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])
+  if (types.length === 0) return null
+
+  return (
+    <div className="absolute top-2 left-2 right-2 z-10 flex flex-wrap gap-1.5 rounded-lg bg-background/80 backdrop-blur-md border p-2 pointer-events-auto">
+      {types.map(([type, count]) => {
+        const key = type.toLowerCase().replace(/\s+/g, '_')
+        const hidden = hiddenTypes.has(key)
+        const color = getElementColor(type)
+        return (
+          <button
+            key={type}
+            onClick={() => onToggle(key)}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-opacity ${
+              hidden ? 'opacity-35' : 'opacity-100'
+            }`}
+          >
+            <span
+              className="inline-block w-2 h-2 rounded-full"
+              style={{ backgroundColor: color }}
+            />
+            <span>{type}</span>
+            <span className="text-muted-foreground">({count})</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
+export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageInput, setPageInput] = useState('1')
+  const [pageCount, setPageCount] = useState(0)
+  const [pagesInfo, setPagesInfo] = useState<PageInfo[]>([])
+  const [previewUrl, setPreviewUrl] = useState<string>('')
+  const [imgLoaded, setImgLoaded] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [selectedChunkIndex, setSelectedChunkIndex] = useState<number | null>(null)
+  const [hoveredChunkIndex, setHoveredChunkIndex] = useState<number | null>(null)
+  const [showOverlay, setShowOverlay] = useState(true)
+  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set())
+  const imgRef = useRef<HTMLImageElement>(null)
+  const chunkListRef = useRef<HTMLDivElement>(null)
+
+  const highlightedIndex = hoveredChunkIndex ?? selectedChunkIndex
+
+  // Load page count and dimensions on mount
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const data = await sourcesApi.getPageCount(sourceId)
+        if (cancelled) return
+        setPageCount(data.page_count)
+        setPagesInfo(data.pages)
+
+        // Jump to first page that has chunks
+        const firstChunkPage = chunks.find(c => c.positions?.length > 0)?.physical_page ?? 1
+        setCurrentPage(firstChunkPage)
+        setPageInput(String(firstChunkPage))
+      } catch (err) {
+        if (!cancelled) setError('Failed to load PDF info')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [sourceId, chunks])
+
+  // Update preview URL when page changes
+  useEffect(() => {
+    let cancelled = false
+    setImgLoaded(false)
+    ;(async () => {
+      try {
+        const url = await sourcesApi.getPagePreviewUrl(sourceId, currentPage, 150)
+        if (!cancelled) setPreviewUrl(url)
+      } catch {
+        if (!cancelled) setError('Failed to load page preview')
+      }
+    })()
+    return () => { cancelled = true }
+  }, [sourceId, currentPage])
+
+  // Get current page info
+  const currentPageInfo = useMemo(
+    () => pagesInfo.find(p => p.page_number === currentPage) ?? { page_number: currentPage, width: 595, height: 842 },
+    [pagesInfo, currentPage]
+  )
+
+  // Build bounding box rects for current page (in PDF points, TOPLEFT)
+  const pageRects = useMemo(() => {
+    const rects: BboxRect[] = []
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci]
+      if (!chunk.positions) continue
+      for (const pos of chunk.positions) {
+        const [pageNum, xLeft, xRight, yTopNorm, yBottomNorm] = pos
+        if (pageNum !== currentPage) continue
+
+        // Positions are stored normalized (0-1). Convert to PDF points.
+        const yTop = Math.min(yTopNorm, yBottomNorm)
+        const yBottom = Math.max(yTopNorm, yBottomNorm)
+
+        rects.push({
+          x: xLeft * currentPageInfo.width,
+          y: yTop * currentPageInfo.height,
+          w: (xRight - xLeft) * currentPageInfo.width,
+          h: (yBottom - yTop) * currentPageInfo.height,
+          chunkIndex: ci,
+          elementType: chunk.element_type || 'unknown',
+          text: chunk.text || '',
+        })
+      }
+    }
+    return rects
+  }, [chunks, currentPage, currentPageInfo])
+
+  // Element type counts for legend
+  const typeCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const rect of pageRects) {
+      counts[rect.elementType] = (counts[rect.elementType] || 0) + 1
+    }
+    return counts
+  }, [pageRects])
+
+  // Chunks visible on current page (for sidebar)
+  const pageChunks = useMemo(() => {
+    const indices: number[] = []
+    const seen = new Set<number>()
+    for (const rect of pageRects) {
+      if (!seen.has(rect.chunkIndex)) {
+        seen.add(rect.chunkIndex)
+        indices.push(rect.chunkIndex)
+      }
+    }
+    return indices
+  }, [pageRects])
+
+  // Scroll chunk list to highlighted chunk
+  useEffect(() => {
+    if (highlightedIndex === null || !chunkListRef.current) return
+    const el = chunkListRef.current.querySelector(`[data-chunk-index="${highlightedIndex}"]`)
+    if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [highlightedIndex])
+
+  // Navigate to page of selected chunk
+  const handleSelectChunk = useCallback((index: number) => {
+    setSelectedChunkIndex(index)
+    const chunk = chunks[index]
+    if (chunk?.positions?.length > 0) {
+      const chunkPage = chunk.positions[0][0]
+      if (chunkPage !== currentPage) {
+        setCurrentPage(chunkPage)
+        setPageInput(String(chunkPage))
+      }
+    }
+  }, [chunks, currentPage])
+
+  const handlePageNav = useCallback((delta: number) => {
+    const next = Math.max(1, Math.min(pageCount, currentPage + delta))
+    setCurrentPage(next)
+    setPageInput(String(next))
+  }, [currentPage, pageCount])
+
+  const handlePageInputSubmit = useCallback(() => {
+    const p = parseInt(pageInput, 10)
+    if (!isNaN(p) && p >= 1 && p <= pageCount) {
+      setCurrentPage(p)
+    } else {
+      setPageInput(String(currentPage))
+    }
+  }, [pageInput, pageCount, currentPage])
+
+  const toggleType = useCallback((type: string) => {
+    setHiddenTypes(prev => {
+      const next = new Set(prev)
+      if (next.has(type)) next.delete(type)
+      else next.add(type)
+      return next
     })
   }, [])
 
-  if (chunks.length === 0) {
-    return (
-      <Alert>
-        <AlertCircle className="h-4 w-4" />
-        <AlertDescription>
-          No chunks available for this source. Chunks are extracted automatically when documents are processed with Docling.
-        </AlertDescription>
-      </Alert>
-    )
-  }
-
-  // Check if ANY chunk has positions (to decide whether to show PDF viewer at all)
-  const anyChunkHasPositions = chunks.some(c => c.positions && c.positions.length > 0)
-  const selectedChunkHasPositions = selectedChunk?.positions && selectedChunk.positions.length > 0
-
-  // Don't render PDF viewer until we're on the client side (SSR safety)
-  if (!isClient) {
+  if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -388,199 +488,180 @@ export function PdfChunkViewer({ pdfUrl, chunks }: PdfChunkViewerProps) {
     )
   }
 
+  if (error) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription>{error}</AlertDescription>
+      </Alert>
+    )
+  }
+
+  if (chunks.length === 0) {
+    return (
+      <Alert>
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription>
+          No chunks available. Chunks are extracted when documents are processed with Docling.
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
   return (
     <div className="flex h-full border rounded-lg overflow-hidden bg-background">
-      {/* Left Pane - Chunk List */}
-      <div className="w-1/3 border-r bg-muted/30 flex flex-col">
-        <div className="p-4 border-b bg-background flex-shrink-0">
-          <h3 className="font-semibold text-sm">
-            Document Chunks ({chunks.length})
+      {/* Left Pane — Chunk List */}
+      <div className="w-80 min-w-[280px] border-r bg-muted/30 flex flex-col">
+        <div className="p-3 border-b bg-background flex-shrink-0">
+          <h3 className="font-semibold text-sm mb-1">
+            Elements on Page {currentPage}
           </h3>
-          <p className="text-xs text-muted-foreground mt-1">
-            Click a chunk to view its location in the PDF
+          <p className="text-xs text-muted-foreground">
+            {pageChunks.length} elements · {chunks.length} total
           </p>
         </div>
         <ScrollArea className="flex-1 min-h-0">
-          <div className="p-2 space-y-2">
-            {chunks.map((chunk, idx) => (
-              <div
-                key={chunk.id || idx}
-                onClick={() => setSelectedChunkIndex(idx)}
-                className={`
-                  p-3 rounded-md cursor-pointer border transition-all
-                  ${
-                    idx === selectedChunkIndex
-                      ? 'border-primary bg-primary/10 shadow-sm'
-                      : 'border-border hover:border-primary/50 hover:bg-muted/50'
-                  }
-                `}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    {chunk.element_type}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    #{idx + 1}
-                  </span>
-                </div>
-                <div className="text-sm line-clamp-3 mb-2">
-                  {chunk.text}
-                </div>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  {chunk.chapter && (
-                    <span className="truncate max-w-[150px]" title={chunk.chapter}>
-                      {chunk.chapter}
-                    </span>
-                  )}
-                  {chunk.positions && chunk.positions.length > 0 && (
-                    <span>
-                      Page {chunk.physical_page}
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
+          <div className="p-2 space-y-1.5" ref={chunkListRef}>
+            {pageChunks.length === 0 ? (
+              <p className="text-xs text-muted-foreground p-3">
+                No elements with position data on this page.
+              </p>
+            ) : (
+              pageChunks.map((ci) => {
+                const chunk = chunks[ci]
+                const color = getElementColor(chunk.element_type)
+                const isSelected = ci === selectedChunkIndex
+                const isHovered = ci === hoveredChunkIndex
+                return (
+                  <div
+                    key={chunk.id || ci}
+                    data-chunk-index={ci}
+                    onClick={() => handleSelectChunk(ci)}
+                    onMouseEnter={() => setHoveredChunkIndex(ci)}
+                    onMouseLeave={() => setHoveredChunkIndex(null)}
+                    className={`
+                      p-2.5 rounded-md cursor-pointer border transition-all text-sm
+                      ${isSelected
+                        ? 'border-primary bg-primary/10 shadow-sm'
+                        : isHovered
+                          ? 'border-primary/50 bg-muted/50'
+                          : 'border-transparent hover:border-border'
+                      }
+                    `}
+                    style={isSelected || isHovered ? { borderLeftColor: color, borderLeftWidth: 3 } : undefined}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span
+                        className="inline-block w-2 h-2 rounded-full flex-shrink-0"
+                        style={{ backgroundColor: color }}
+                      />
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                        {chunk.element_type}
+                      </Badge>
+                      {chunk.chapter && (
+                        <span className="text-[10px] text-muted-foreground truncate ml-auto max-w-[120px]" title={chunk.chapter}>
+                          {chunk.chapter}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs line-clamp-2 text-muted-foreground">
+                      {chunk.text}
+                    </p>
+                  </div>
+                )
+              })
+            )}
           </div>
         </ScrollArea>
       </div>
 
-      {/* Right Pane - PDF Viewer with Highlights */}
-      <div className="flex-1 bg-background flex flex-col">
-        <div className="p-4 border-b flex-shrink-0">
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold text-sm">
-              PDF Viewer
-            </h3>
-            {selectedChunk && (
-              <div className="text-xs text-muted-foreground">
-                Page {selectedChunk.physical_page}
-                {selectedChunk.printed_page && selectedChunk.printed_page !== selectedChunk.physical_page && (
-                  <span> (Printed: {selectedChunk.printed_page})</span>
-                )}
-              </div>
-            )}
+      {/* Right Pane — PDF Page + Canvas Overlay */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Page navigation bar */}
+        <div className="p-2 border-b flex items-center gap-2 flex-shrink-0 bg-background">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0"
+            disabled={currentPage <= 1}
+            onClick={() => handlePageNav(-1)}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <div className="flex items-center gap-1 text-sm">
+            <Input
+              className="w-12 h-7 text-center text-xs p-0"
+              value={pageInput}
+              onChange={(e) => setPageInput(e.target.value)}
+              onBlur={handlePageInputSubmit}
+              onKeyDown={(e) => e.key === 'Enter' && handlePageInputSubmit()}
+            />
+            <span className="text-muted-foreground text-xs">/ {pageCount}</span>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0"
+            disabled={currentPage >= pageCount}
+            onClick={() => handlePageNav(1)}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+
+          <div className="ml-auto">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 text-xs"
+              onClick={() => setShowOverlay(!showOverlay)}
+            >
+              {showOverlay ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+              {showOverlay ? 'Hide' : 'Show'} boxes
+            </Button>
           </div>
         </div>
 
-        <div className="flex-1 min-h-0 relative">
-          {anyChunkHasPositions ? (
-            <div className="absolute inset-0 pdf-viewer-container">
-              {/* Overlay message when selected chunk has no positions */}
-              {!selectedChunkHasPositions && (
-                <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80">
-                  <Alert className="max-w-md">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertDescription>
-                      This chunk has no spatial position data. Select a chunk with position data to see it highlighted in the PDF.
-                    </AlertDescription>
-                  </Alert>
-                </div>
-              )}
-              <PdfLoader
-                url={pdfUrl}
-                beforeLoad={
-                  <div className="flex items-center justify-center h-full">
-                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                  </div>
-                }
-                onError={(error) => {
-                  console.error('PDF Loading Error:', error)
-                  setPdfError(error?.message || 'Unknown error')
-                }}
-                errorMessage={
-                  <div className="flex items-center justify-center h-full p-4">
-                    <Alert variant="destructive" className="max-w-md">
-                      <AlertCircle className="h-4 w-4" />
-                      <AlertDescription>
-                        Failed to load PDF. Please check the console for details.
-                        {pdfError && (
-                          <span className="text-xs mt-2 block font-mono break-all">Error: {pdfError}</span>
-                        )}
-                      </AlertDescription>
-                    </Alert>
-                  </div>
-                }
-                workerSrc="/pdfjs-dist/pdf.worker.min.js"
-              >
-                {(pdfDocument) => {
-                  // Get page size from first page (following ragflow's pattern)
-                  // Safety check: ensure pdfDocument and getPage exist
-                  if (pdfDocument && typeof pdfDocument.getPage === 'function') {
-                    pdfDocument.getPage(1).then((page) => {
-                      const viewport = page.getViewport({ scale: 1 })
-                      handleSetPageSize(viewport.width, viewport.height)
-                    }).catch((err) => {
-                      console.error('Error getting page:', err)
-                    })
-                  }
+        {/* Page viewer */}
+        <div className="flex-1 min-h-0 overflow-auto bg-muted/20 flex items-start justify-center p-4">
+          <div className="relative inline-block shadow-lg border rounded" style={{ pointerEvents: 'auto' }}>
+            {/* Server-rendered page image */}
+            {previewUrl && (
+              <img
+                ref={imgRef}
+                src={previewUrl}
+                alt={`Page ${currentPage}`}
+                className="block max-w-full h-auto"
+                style={{ maxHeight: 'calc(100vh - 200px)' }}
+                onLoad={() => setImgLoaded(true)}
+                onError={() => setError(`Failed to render page ${currentPage}`)}
+              />
+            )}
 
-                  return (
-                    <PdfHighlighter
-                      pdfDocument={pdfDocument}
-                      pdfScaleValue="auto"
-                      enableAreaSelection={() => false}
-                      onScrollChange={() => {}}
-                      scrollRef={(scrollTo) => {
-                        scrollToRef.current = scrollTo
-                      }}
-                      onSelectionFinished={() => null}
-                      highlightTransform={(
-                        highlight,
-                        index,
-                        setTip,
-                        hideTip,
-                        _viewportToScaled,
-                        _screenshot,
-                        isScrolledTo
-                      ) => {
-                        const isTextHighlight = !Boolean(
-                          highlight.content && highlight.content.image
-                        )
+            {!imgLoaded && previewUrl && (
+              <div className="flex items-center justify-center w-[595px] h-[842px]">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            )}
 
-                        const component = isTextHighlight ? (
-                          <Highlight
-                            isScrolledTo={isScrolledTo}
-                            position={highlight.position}
-                            comment={highlight.comment}
-                          />
-                        ) : (
-                          <AreaHighlight
-                            isScrolledTo={isScrolledTo}
-                            highlight={highlight}
-                            onChange={() => {}}
-                          />
-                        )
+            {/* Legend */}
+            {imgLoaded && showOverlay && (
+              <LegendBar typeCounts={typeCounts} hiddenTypes={hiddenTypes} onToggle={toggleType} />
+            )}
 
-                        return (
-                          <Popup
-                            popupContent={<HighlightPopup {...highlight} />}
-                            onMouseOver={(popupContent) =>
-                              setTip(highlight, () => popupContent)
-                            }
-                            onMouseOut={hideTip}
-                            key={index}
-                          >
-                            {component}
-                          </Popup>
-                        )
-                      }}
-                      highlights={highlights}
-                    />
-                  )
-                }}
-              </PdfLoader>
-            </div>
-          ) : (
-            <div className="flex items-center justify-center h-full">
-              <Alert className="max-w-md">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  No spatial position data available for this chunk. Position data is extracted
-                  automatically when PDFs are processed with Docling.
-                </AlertDescription>
-              </Alert>
-            </div>
-          )}
+            {/* Canvas overlay */}
+            {imgLoaded && (
+              <BboxOverlay
+                imgRef={imgRef}
+                pageInfo={currentPageInfo}
+                rects={pageRects}
+                highlightedChunkIndex={highlightedIndex}
+                onHoverChunk={setHoveredChunkIndex}
+                onClickChunk={handleSelectChunk}
+                showOverlay={showOverlay}
+                hiddenTypes={hiddenTypes}
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>

@@ -1,10 +1,11 @@
 """Sources files sub-router — file download, PDF serving, and image endpoints."""
 
+import io
 import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from loguru import logger
 
@@ -182,6 +183,116 @@ async def get_source_pdf(
             status_code=500,
             detail=f"Error serving PDF: {str(e)}",
         )
+
+
+@router.get("/{source_id}/page-preview")
+async def get_page_preview(
+    source_id: str,
+    page: int = Query(1, ge=1, description="1-based page number"),
+    dpi: int = Query(150, ge=72, le=300, description="Render DPI"),
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Render a single PDF page as a PNG image for the document viewer.
+
+    Uses pypdfium2 (already installed as a Docling dependency) to
+    rasterize pages server-side, avoiding pdf.js complexity on the
+    frontend.
+    """
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="pypdfium2 not installed — cannot render page previews",
+        )
+
+    try:
+        source = await source_svc.get(source_id)
+        if not source or not source.asset or not source.asset.file_path:
+            raise HTTPException(status_code=404, detail="PDF file not found")
+
+        file_path = source.asset.file_path
+        safe_root = os.path.realpath(UPLOADS_FOLDER)
+        resolved_path = os.path.realpath(file_path)
+
+        if not resolved_path.startswith(safe_root):
+            raise HTTPException(status_code=403, detail="Access to file denied")
+        if not os.path.exists(resolved_path):
+            raise HTTPException(status_code=404, detail="PDF file has been deleted")
+        if not resolved_path.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Source file is not a PDF")
+
+        pdf = pdfium.PdfDocument(resolved_path)
+        if page > len(pdf):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Page {page} not found (document has {len(pdf)} pages)",
+            )
+
+        pdf_page = pdf[page - 1]  # 0-indexed
+        scale = dpi / 72  # PDF points are 1/72 inch
+        bitmap = pdf_page.render(scale=scale)
+        pil_image = bitmap.to_pil()
+
+        buf = io.BytesIO()
+        pil_image.save(buf, format="PNG", optimize=True)
+        buf.seek(0)
+
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error rendering page preview for source {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error rendering page: {str(e)}")
+
+
+@router.get("/{source_id}/page-count")
+async def get_page_count(
+    source_id: str,
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Return the number of pages and page dimensions for a PDF source."""
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        raise HTTPException(status_code=501, detail="pypdfium2 not installed")
+
+    try:
+        source = await source_svc.get(source_id)
+        if not source or not source.asset or not source.asset.file_path:
+            raise HTTPException(status_code=404, detail="PDF file not found")
+
+        file_path = source.asset.file_path
+        safe_root = os.path.realpath(UPLOADS_FOLDER)
+        resolved_path = os.path.realpath(file_path)
+
+        if not resolved_path.startswith(safe_root):
+            raise HTTPException(status_code=403, detail="Access to file denied")
+        if not os.path.exists(resolved_path):
+            raise HTTPException(status_code=404, detail="PDF file has been deleted")
+
+        pdf = pdfium.PdfDocument(resolved_path)
+        pages = []
+        for i in range(len(pdf)):
+            p = pdf[i]
+            pages.append({
+                "page_number": i + 1,
+                "width": p.get_width(),
+                "height": p.get_height(),
+            })
+
+        return {"page_count": len(pdf), "pages": pages}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting page count for source {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{source_id}/images/{filename}")

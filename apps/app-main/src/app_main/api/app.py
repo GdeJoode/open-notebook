@@ -148,6 +148,7 @@ def create_app() -> FastAPI:
         ontologies,
         podcasts,
         preprocessing,
+        resolution_log,
         search,
         settings,
         source_chat,
@@ -194,6 +195,9 @@ def create_app() -> FastAPI:
         preprocessing.router, prefix="/api", tags=["preprocessing"]
     )
     application.include_router(vault.router, prefix="/api", tags=["vault"])
+    application.include_router(
+        resolution_log.router, prefix="/api", tags=["resolution-log"]
+    )
 
     # --- Exception Handlers ---
     @application.exception_handler(NotFoundError)

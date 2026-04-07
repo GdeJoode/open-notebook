@@ -39,6 +39,10 @@ from entity_filtering.resolution.kg_resolver import (
     KGResolver,
 )
 from entity_filtering.deduplication.semantic_blocker import SemanticBlocker
+from entity_filtering.resolution.incremental_resolver import (
+    EntityCluster,
+    IncrementalResolver,
+)
 from entity_filtering.resolution.llm_matcher import LLMMatcher
 from entity_filtering.scoring.edge_predictor import EdgePredictor
 from entity_filtering.validation.graph_analyzer import GraphAnalyzer
@@ -57,10 +61,12 @@ class FilteringWorkflow:
     4.  Deduplication -- merge entities with identical normalized text
     5.  Fuzzy resolution (optional) -- merge near-duplicate names
     6.  Embedding dedup (optional) -- merge semantically similar entities
+    6b. LLM matching (optional) -- LLM-based entity pair evaluation
     7.  Embedding resolution (optional) -- semantic match enrichment
     8.  Entity linking (optional) -- link to external KBs (DBpedia)
     9.  Contextual clustering (optional) -- cluster by co-occurrence
     10. KG resolution (optional) -- match against existing KG entities
+    10b.Incremental resolution (optional) -- assign to existing clusters
     11. Ontology constraint filter (optional) -- validate against ontology
     12. Graph centrality analysis (optional) -- filter low-centrality entities
     13. Edge prediction (optional) -- discover implicit relations
@@ -201,10 +207,26 @@ class FilteringWorkflow:
                 context_provider=self._fetch_agentic_context if self._config.llm_matcher.agentic_enabled else None,
             )
 
+        # Incremental cluster resolution
+        self._incremental_resolver: Optional[IncrementalResolver] = None
+        if self._config.incremental_resolution.enabled:
+            self._incremental_resolver = IncrementalResolver(
+                similarity_threshold=self._config.incremental_resolution.similarity_threshold,
+                coherence_threshold=self._config.incremental_resolution.coherence_threshold,
+                merge_threshold=self._config.incremental_resolution.merge_threshold,
+            )
+
         self._edge_predictor = EdgePredictor()
 
         # Cache for agentic context — populated during processing
         self._current_entities: list[dict[str, Any]] = []
+
+        # Existing clusters for incremental resolution (injected externally)
+        self._existing_clusters: list[EntityCluster] = []
+
+    def set_existing_clusters(self, clusters: list[EntityCluster]) -> None:
+        """Inject existing KG clusters for incremental resolution."""
+        self._existing_clusters = clusters
 
     async def _fetch_agentic_context(
         self,
@@ -433,6 +455,47 @@ class FilteringWorkflow:
             )
 
         # ------------------------------------------------------------------
+        # Stage 10b: Incremental cluster resolution (optional)
+        # ------------------------------------------------------------------
+        incremental_report: Optional[dict[str, Any]] = None
+        if self._incremental_resolver is not None:
+            clusters, assignments = self._incremental_resolver.resolve_incremental(
+                deduped_entities, list(self._existing_clusters)
+            )
+            # Tag entities with their cluster assignment
+            assignment_map = {a["entity_text"]: a for a in assignments}
+            for ent in deduped_entities:
+                info = assignment_map.get(ent.get("text", ""))
+                if info:
+                    ent.setdefault("properties", {})["cluster_id"] = info["cluster_id"]
+                    ent["properties"]["cluster_action"] = info["action"]
+                    ent["properties"]["cluster_score"] = info["score"]
+
+            # Optionally repair clusters
+            if self._config.incremental_resolution.repair_enabled:
+                clusters, repair_report = self._incremental_resolver.repair_clusters(clusters)
+                incremental_report = {
+                    "assignments": len(assignments),
+                    "assigned": sum(1 for a in assignments if a["action"] == "assigned"),
+                    "new_clusters": sum(1 for a in assignments if a["action"] == "new"),
+                    "repair": repair_report,
+                }
+            else:
+                incremental_report = {
+                    "assignments": len(assignments),
+                    "assigned": sum(1 for a in assignments if a["action"] == "assigned"),
+                    "new_clusters": sum(1 for a in assignments if a["action"] == "new"),
+                }
+
+            # Store updated clusters back for potential re-use
+            self._existing_clusters = clusters
+            logger.debug(
+                "After incremental resolution: {} assignments, {} clusters",
+                len(assignments),
+                len(clusters),
+            )
+
+        # ------------------------------------------------------------------
         # Stage 11: Ontology constraint filter (optional)
         # ------------------------------------------------------------------
         validation_report: Optional[dict[str, Any]] = None
@@ -509,6 +572,7 @@ class FilteringWorkflow:
                     "removed_count": len(removed_entities),
                     "merge_groups": len(merge_groups),
                     "predicted_edges": len(predicted_relations),
+                    **({"incremental_resolution": incremental_report} if incremental_report else {}),
                 },
             },
         )

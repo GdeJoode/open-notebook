@@ -90,21 +90,8 @@ export function SourceDetailContent({
   const [isDownloadingFile, setIsDownloadingFile] = useState(false)
   const [fileAvailable, setFileAvailable] = useState<boolean | null>(null)
   const [selectedInsight, setSelectedInsight] = useState<SourceInsightResponse | null>(null)
-  const [pdfUrl, setPdfUrl] = useState<string>('')
-
   // Fetch chunks data
   const { data: chunksData, isLoading: chunksLoading } = useSourceChunks(sourceId)
-
-  // Fetch PDF URL on mount
-  useEffect(() => {
-    // Get absolute PDF URL for react-pdf-highlighter
-    sourcesApi.getPdfUrl(sourceId).then((url) => {
-      console.log('=== PDF URL Fetched ===')
-      console.log('Source ID:', sourceId)
-      console.log('PDF URL:', url)
-      setPdfUrl(url)
-    })
-  }, [sourceId])
 
   const fetchSource = useCallback(async () => {
     try {
@@ -747,10 +734,10 @@ export function SourceDetailContent({
                 <div className="flex items-center justify-center py-12">
                   <LoadingSpinner />
                 </div>
-              ) : chunksData && chunksData.chunks.length > 0 && pdfUrl ? (
+              ) : chunksData && chunksData.chunks.length > 0 ? (
                 <div className="h-full">
                   <PdfChunkViewer
-                    pdfUrl={pdfUrl}
+                    sourceId={sourceId}
                     chunks={chunksData.chunks}
                   />
                 </div>
