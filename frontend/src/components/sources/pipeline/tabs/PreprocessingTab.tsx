@@ -29,9 +29,11 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import ReactMarkdown from 'react-markdown'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { preprocessingApi, type PreprocessingResult, type DocumentClassification } from '@/lib/api/preprocessing'
-import { sourcesApi } from '@/lib/api/sources'
+import { sourcesApi, DEFAULT_PIPELINE_CONFIG, type DoclingPipelineConfig } from '@/lib/api/sources'
+import { PipelineConfigPanel } from '../PipelineConfigPanel'
 import type { StepStatus } from '../PipelineStepper'
 import type { FileEntry } from './ExtractionTab'
 
@@ -99,6 +101,10 @@ export function PreprocessingTab({
   // Right pane: chunks
   const [chunks, setChunks] = useState<ChunkEntry[]>([])
   const [loadingChunks, setLoadingChunks] = useState(false)
+
+  // Pipeline config
+  const [pipelineConfig, setPipelineConfig] = useState<DoclingPipelineConfig>({ ...DEFAULT_PIPELINE_CONFIG })
+  const [reprocessing, setReprocessing] = useState(false)
 
   // UI state
   const [running, setRunning] = useState(false)
@@ -206,6 +212,23 @@ export function PreprocessingTab({
     }
   }, [selectedSourceId, editedClassification, editedFilteredIds, editedRemovedIds])
 
+  // Reprocess with pipeline config
+  const handleReprocess = useCallback(async () => {
+    if (!selectedSourceId) return
+    setReprocessing(true)
+    setError(null)
+    try {
+      await sourcesApi.reprocess(selectedSourceId, pipelineConfig)
+      toast.success('Reprocessing started — document will be re-ingested with new settings')
+    } catch (e: unknown) {
+      const axiosErr = e as { response?: { data?: { detail?: string } }; message?: string }
+      const detail = axiosErr?.response?.data?.detail
+      setError(detail || axiosErr?.message || 'Reprocessing failed')
+    } finally {
+      setReprocessing(false)
+    }
+  }, [selectedSourceId, pipelineConfig])
+
   // Classification field updaters
   const updateField = <K extends keyof DocumentClassification>(
     field: K,
@@ -307,6 +330,18 @@ export function PreprocessingTab({
             <span className="text-sm">{error}</span>
           </div>
         )}
+
+        {/* Pipeline Configuration (collapsible) */}
+        <div className="mb-3 shrink-0">
+          <PipelineConfigPanel
+            config={pipelineConfig}
+            onChange={setPipelineConfig}
+            onReprocess={handleReprocess}
+            reprocessing={reprocessing}
+            collapsible={true}
+            defaultOpen={false}
+          />
+        </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_2fr] gap-3 flex-1 min-h-0">
           {/* Left pane: file list */}

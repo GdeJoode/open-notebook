@@ -12,6 +12,32 @@ import {
   RunEntitiesOptions,
 } from '@/lib/types/api'
 
+export interface DoclingPipelineConfig {
+  docling_ocr_engine?: string
+  docling_ocr_languages?: string[]
+  docling_table_mode?: string
+  docling_pipeline?: string
+  docling_vlm_model?: string
+  docling_auto_export_images?: boolean
+  docling_image_scale?: number
+  docling_chunking_enabled?: boolean
+  docling_chunking_method?: string
+  docling_chunking_max_tokens?: number
+}
+
+export const DEFAULT_PIPELINE_CONFIG: DoclingPipelineConfig = {
+  docling_ocr_engine: 'easyocr',
+  docling_ocr_languages: ['en', 'nl'],
+  docling_table_mode: 'accurate',
+  docling_pipeline: 'vlm',
+  docling_vlm_model: 'granite-docling-258m',
+  docling_auto_export_images: true,
+  docling_image_scale: 2.0,
+  docling_chunking_enabled: true,
+  docling_chunking_method: 'hybrid',
+  docling_chunking_max_tokens: 512,
+}
+
 export const sourcesApi = {
   list: async (params?: {
     notebook_id?: string
@@ -147,6 +173,15 @@ export const sourcesApi = {
 
   runEmbed: async (id: string) => {
     const response = await apiClient.post<{ command_id: string | null; status: string }>(`/sources/${id}/run-embed`)
+    return response.data
+  },
+
+  reprocess: async (id: string, overrides?: DoclingPipelineConfig) => {
+    const response = await apiClient.post<{
+      command_id: string | null
+      status: string
+      overrides_applied: string[]
+    }>(`/sources/${id}/reprocess`, overrides || {})
     return response.data
   },
 

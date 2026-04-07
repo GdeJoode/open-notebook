@@ -1,11 +1,11 @@
 """Sources processing sub-router — pipeline triggering endpoints."""
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app_main.dependencies import get_source_service
 from app_main.services.source_service import SourceService
@@ -16,6 +16,33 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Request models
 # ---------------------------------------------------------------------------
+
+
+class ReprocessRequest(BaseModel):
+    """Per-document Docling pipeline configuration for reprocessing.
+
+    All fields default to maximum quality settings. Any field set to None
+    uses the global default from ContentSettings.
+    """
+    # OCR
+    docling_ocr_engine: Optional[str] = Field("easyocr", description="OCR engine: easyocr, rapidocr, tesseract")
+    docling_ocr_languages: Optional[list[str]] = Field(["en", "nl"], description="OCR languages")
+
+    # Table extraction
+    docling_table_mode: Optional[str] = Field("accurate", description="Table structure mode: accurate or fast")
+
+    # VLM pipeline
+    docling_pipeline: Optional[str] = Field("vlm", description="Pipeline: vlm (max) or standard")
+    docling_vlm_model: Optional[str] = Field("granite-docling-258m", description="VLM model")
+
+    # Image extraction
+    docling_auto_export_images: Optional[bool] = Field(True, description="Export extracted images")
+    docling_image_scale: Optional[float] = Field(2.0, description="Image scale factor (0.5-2.0)")
+
+    # Chunking
+    docling_chunking_enabled: Optional[bool] = Field(True, description="Enable chunking")
+    docling_chunking_method: Optional[str] = Field("hybrid", description="Chunking method: hybrid or hierarchical")
+    docling_chunking_max_tokens: Optional[int] = Field(512, description="Max tokens per chunk")
 
 
 class RunEntitiesRequest(BaseModel):
@@ -250,6 +277,100 @@ async def run_embed(
         raise HTTPException(
             status_code=500,
             detail=f"Error triggering embedding: {str(e)}",
+        )
+
+
+@router.post("/{source_id}/reprocess")
+async def reprocess_source(
+    source_id: str,
+    body: ReprocessRequest = ReprocessRequest(),
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Re-run Docling ingestion with per-document pipeline overrides.
+
+    Accepts configurable options for OCR, table extraction, VLM, images,
+    and chunking. All defaults are set to maximum quality.
+    """
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        # Build content_state from existing source asset
+        content_state: Dict[str, Any] = {}
+        if source.asset and source.asset.file_path:
+            content_state = {
+                "file_path": source.asset.file_path,
+                "delete_source": False,
+            }
+        elif source.asset and source.asset.url:
+            content_state = {"url": source.asset.url}
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Source has no file or URL to reprocess",
+            )
+
+        # Build processing_overrides from the request body
+        overrides = {
+            k: v
+            for k, v in body.model_dump().items()
+            if v is not None
+        }
+
+        # Get notebook associations
+        from surrealdb_service.connection import execute_query, ensure_record_id
+
+        references = await execute_query(
+            "SELECT VALUE out FROM reference WHERE in = $source_id",
+            {"source_id": ensure_record_id(source_id)},
+        )
+        notebook_ids = [str(ref) for ref in references] if references else []
+
+        from app_main.services.command_service import CommandService
+
+        command_args = {
+            "source_id": str(source.id),
+            "content_state": content_state,
+            "notebook_ids": notebook_ids,
+            "transformations": [],
+            "embed": True,
+            "processing_overrides": overrides,
+        }
+
+        command_id = await CommandService.submit_command_job(
+            "open_notebook",
+            "process_source",
+            command_args,
+        )
+
+        logger.info(
+            f"Submitted reprocess command: {command_id} "
+            f"for source {source_id} with overrides: {list(overrides.keys())}"
+        )
+
+        # Update source with new command ID
+        await execute_query(
+            "UPDATE $source_id SET command = $command_id",
+            {
+                "source_id": ensure_record_id(source_id),
+                "command_id": ensure_record_id(f"command:{command_id}"),
+            },
+        )
+
+        return {
+            "command_id": command_id,
+            "status": "queued",
+            "overrides_applied": list(overrides.keys()),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reprocessing source {source_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error reprocessing: {str(e)}",
         )
 
 

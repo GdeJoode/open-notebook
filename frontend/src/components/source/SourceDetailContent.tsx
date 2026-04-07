@@ -53,13 +53,23 @@ import {
   Play,
   ScanSearch,
   BrainCircuit,
+  Settings2,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { formatDistanceToNow } from 'date-fns'
 import { toast } from 'sonner'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { SourceInsightDialog } from '@/components/source/SourceInsightDialog'
 import { NotebookAssociations } from '@/components/source/NotebookAssociations'
 import { PdfChunkViewer } from '@/components/source/PdfChunkViewer'
+import { PipelineConfigPanel } from '@/components/sources/pipeline/PipelineConfigPanel'
+import { DEFAULT_PIPELINE_CONFIG, type DoclingPipelineConfig } from '@/lib/api/sources'
 import { useSourceChunks } from '@/lib/hooks/use-sources'
 
 interface SourceDetailContentProps {
@@ -90,6 +100,9 @@ export function SourceDetailContent({
   const [isDownloadingFile, setIsDownloadingFile] = useState(false)
   const [fileAvailable, setFileAvailable] = useState<boolean | null>(null)
   const [selectedInsight, setSelectedInsight] = useState<SourceInsightResponse | null>(null)
+  const [showReprocessDialog, setShowReprocessDialog] = useState(false)
+  const [reprocessConfig, setReprocessConfig] = useState<DoclingPipelineConfig>({ ...DEFAULT_PIPELINE_CONFIG })
+  const [isReprocessing, setIsReprocessing] = useState(false)
   // Fetch chunks data
   const { data: chunksData, isLoading: chunksLoading } = useSourceChunks(sourceId)
 
@@ -222,6 +235,22 @@ export function SourceDetailContent({
       toast.error('Failed to start entity extraction')
     } finally {
       setIsRunningPipeline(null)
+    }
+  }
+
+  const handleReprocess = async () => {
+    if (!source) return
+    try {
+      setIsReprocessing(true)
+      await sourcesApi.reprocess(sourceId, reprocessConfig)
+      toast.success('Reprocessing started — document will be re-ingested')
+      setShowReprocessDialog(false)
+      await fetchSource()
+    } catch (err) {
+      console.error('Failed to reprocess:', err)
+      toast.error('Failed to start reprocessing')
+    } finally {
+      setIsReprocessing(false)
     }
   }
 
@@ -450,6 +479,13 @@ export function SourceDetailContent({
                     <DropdownMenuSeparator />
                   </>
                 )}
+                <DropdownMenuItem
+                  onClick={() => setShowReprocessDialog(true)}
+                  disabled={!source.asset?.file_path}
+                >
+                  <Settings2 className="mr-2 h-4 w-4" />
+                  Reprocess Document...
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={handleRunPreprocessing}
                   disabled={!source.full_text || isRunningPipeline === 'preprocessing'}
@@ -914,6 +950,25 @@ export function SourceDetailContent({
         }}
         insight={selectedInsight ?? undefined}
       />
+
+      {/* Reprocess Dialog */}
+      <Dialog open={showReprocessDialog} onOpenChange={setShowReprocessDialog}>
+        <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Reprocess Document</DialogTitle>
+            <DialogDescription>
+              Re-run Docling ingestion with different pipeline settings. This will replace existing chunks and extracted content.
+            </DialogDescription>
+          </DialogHeader>
+          <PipelineConfigPanel
+            config={reprocessConfig}
+            onChange={setReprocessConfig}
+            onReprocess={handleReprocess}
+            reprocessing={isReprocessing}
+            collapsible={false}
+          />
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
