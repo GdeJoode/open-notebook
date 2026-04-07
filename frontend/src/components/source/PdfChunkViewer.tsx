@@ -84,6 +84,39 @@ interface PdfChunkViewerProps {
 }
 
 // ---------------------------------------------------------------------------
+// Detect page numbering convention and coordinate format from chunk data.
+// Runs once per chunk set.
+// ---------------------------------------------------------------------------
+
+function analyzeChunkFormat(chunks: Chunk[], totalPages: number) {
+  let hasNormalized = true   // all coords in 0-1 range
+  let maxPageNum = 0
+
+  for (const chunk of chunks) {
+    if (!chunk.positions) continue
+    for (const pos of chunk.positions) {
+      const [pageNum, xLeft, xRight, yTop, yBottom] = pos
+      if (pageNum > maxPageNum) maxPageNum = pageNum
+      if (xLeft > 1.0 || xRight > 1.0 || yTop > 1.0 || yBottom > 1.0) {
+        hasNormalized = false
+      }
+    }
+  }
+
+  // If max page number in positions < totalPages, positions are likely 0-based
+  // (e.g., a 10-page doc with max position page=9 means 0-based)
+  // If max page number == totalPages, positions are 1-based.
+  const pagesAreZeroBased = totalPages > 0 && maxPageNum < totalPages && maxPageNum === totalPages - 1
+
+  return { isNormalized: hasNormalized, pagesAreZeroBased }
+}
+
+// Convert a position's page number to a 1-based page for the viewer
+function toViewerPage(positionPage: number, zeroBased: boolean): number {
+  return zeroBased ? positionPage + 1 : Math.max(1, positionPage)
+}
+
+// ---------------------------------------------------------------------------
 // BboxOverlay — canvas overlay matching Docling Studio approach
 // ---------------------------------------------------------------------------
 
@@ -126,6 +159,8 @@ function BboxOverlay({
     const displayW = img.clientWidth
     const displayH = img.clientHeight
 
+    if (displayW === 0 || displayH === 0) return // image not rendered yet
+
     canvas.width = displayW * dpr
     canvas.height = displayH * dpr
     canvas.style.width = `${displayW}px`
@@ -136,7 +171,7 @@ function BboxOverlay({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, displayW, displayH)
 
-    // Scale: PDF points → display pixels
+    // Scale: PDF points → display pixels (same as Docling Studio bboxScaling.ts)
     const sx = displayW / pageInfo.width
     const sy = displayH / pageInfo.height
 
@@ -162,10 +197,9 @@ function BboxOverlay({
     }
   }, [imgRef, pageInfo, rects, highlightedChunkIndex, showOverlay, hiddenTypes])
 
-  // Redraw on any state change, with a small delay to ensure img dimensions are available
+  // Redraw on state change + retry after a frame for timing
   useEffect(() => {
     draw()
-    // Retry after a frame in case img dimensions weren't ready
     const raf = requestAnimationFrame(() => draw())
     return () => cancelAnimationFrame(raf)
   }, [draw])
@@ -185,14 +219,13 @@ function BboxOverlay({
       const img = imgRef.current
       if (!canvas || !img || !showOverlay) return
 
-      const rect = canvas.getBoundingClientRect()
-      const mx = e.clientX - rect.left
-      const my = e.clientY - rect.top
+      const canvasRect = canvas.getBoundingClientRect()
+      const mx = e.clientX - canvasRect.left
+      const my = e.clientY - canvasRect.top
 
       const sx = img.clientWidth / pageInfo.width
       const sy = img.clientHeight / pageInfo.height
 
-      // Hit-test against all rects (reverse order for topmost match)
       for (let i = rects.length - 1; i >= 0; i--) {
         const r = rects[i]
         if (hiddenTypes.has(r.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
@@ -229,9 +262,9 @@ function BboxOverlay({
       const img = imgRef.current
       if (!canvas || !img) return
 
-      const rect = canvas.getBoundingClientRect()
-      const mx = e.clientX - rect.left
-      const my = e.clientY - rect.top
+      const canvasRect = canvas.getBoundingClientRect()
+      const mx = e.clientX - canvasRect.left
+      const my = e.clientY - canvasRect.top
 
       const sx = img.clientWidth / pageInfo.width
       const sy = img.clientHeight / pageInfo.height
@@ -342,6 +375,7 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
   const [hoveredChunkIndex, setHoveredChunkIndex] = useState<number | null>(null)
   const [showOverlay, setShowOverlay] = useState(true)
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set())
+  const [chunkFormat, setChunkFormat] = useState<{ isNormalized: boolean; pagesAreZeroBased: boolean }>({ isNormalized: true, pagesAreZeroBased: false })
   const imgRef = useRef<HTMLImageElement>(null)
   const chunkListRef = useRef<HTMLDivElement>(null)
 
@@ -357,18 +391,19 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
         setPageCount(data.page_count)
         setPagesInfo(data.pages)
 
+        // Analyze chunk format now that we know total page count
+        const format = analyzeChunkFormat(chunks, data.page_count)
+        setChunkFormat(format)
+
         // Jump to first page that has chunks
-        // Determine first page with chunks. Page numbers may be 0-based or 1-based.
         const firstChunkWithPos = chunks.find(c => c.positions?.length > 0)
-        let firstPage = 1
         if (firstChunkWithPos?.positions?.length) {
-          const posPage = firstChunkWithPos.positions[0][0]
-          // If page number is 0, it's 0-indexed → convert to 1-based
-          firstPage = posPage === 0 ? 1 : posPage
+          const rawPage = firstChunkWithPos.positions[0][0]
+          const viewerPage = toViewerPage(rawPage, format.pagesAreZeroBased)
+          setCurrentPage(viewerPage)
+          setPageInput(String(viewerPage))
         }
-        setCurrentPage(firstPage)
-        setPageInput(String(firstPage))
-      } catch (err) {
+      } catch {
         if (!cancelled) setError('Failed to load PDF info')
       } finally {
         if (!cancelled) setLoading(false)
@@ -398,22 +433,9 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
     [pagesInfo, currentPage]
   )
 
-  // Detect coordinate format: if any position coordinate > 1.0, they're
-  // raw PDF points; otherwise they're normalized 0-1.
-  const isNormalized = useMemo(() => {
-    for (const chunk of chunks) {
-      if (!chunk.positions) continue
-      for (const pos of chunk.positions) {
-        const [, xLeft, xRight, yTop, yBottom] = pos
-        if (xLeft > 1.0 || xRight > 1.0 || yTop > 1.0 || yBottom > 1.0) {
-          return false
-        }
-      }
-    }
-    return true
-  }, [chunks])
-
   // Build bounding box rects for current page (in PDF points, TOPLEFT)
+  // Positions format: [pageNum, xLeft, xRight, yTop, yBottom]
+  // Coordinates may be normalized (0-1) or raw PDF points — detected once via analyzeChunkFormat
   const pageRects = useMemo(() => {
     const rects: BboxRect[] = []
     const pw = currentPageInfo.width
@@ -423,17 +445,16 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
       const chunk = chunks[ci]
       if (!chunk.positions) continue
       for (const pos of chunk.positions) {
-        const [pageNum, xLeft, xRight, yTopRaw, yBottomRaw] = pos
+        const [rawPageNum, xLeft, xRight, yTopRaw, yBottomRaw] = pos
 
-        // Match page: positions may use 0-based or 1-based page numbers
-        if (pageNum !== currentPage && pageNum !== currentPage - 1) continue
-        // If 0-based matched, only accept if it didn't also match as 1-based
-        if (pageNum === currentPage - 1 && pageNum === currentPage) continue
+        // Convert position page number to 1-based viewer page
+        const viewerPage = toViewerPage(rawPageNum, chunkFormat.pagesAreZeroBased)
+        if (viewerPage !== currentPage) continue
 
         const yTop = Math.min(yTopRaw, yBottomRaw)
         const yBottom = Math.max(yTopRaw, yBottomRaw)
 
-        if (isNormalized) {
+        if (chunkFormat.isNormalized) {
           // Normalized 0-1 → convert to PDF points
           rects.push({
             x: xLeft * pw,
@@ -445,7 +466,7 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
             text: chunk.text || '',
           })
         } else {
-          // Already in PDF points (from source_processing_service)
+          // Already in PDF points
           rects.push({
             x: xLeft,
             y: yTop,
@@ -459,7 +480,7 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
       }
     }
     return rects
-  }, [chunks, currentPage, currentPageInfo, isNormalized])
+  }, [chunks, currentPage, currentPageInfo, chunkFormat])
 
   // Element type counts for legend
   const typeCounts = useMemo(() => {
@@ -495,13 +516,14 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
     setSelectedChunkIndex(index)
     const chunk = chunks[index]
     if (chunk?.positions?.length > 0) {
-      const chunkPage = Math.max(1, chunk.positions[0][0])
-      if (chunkPage !== currentPage) {
-        setCurrentPage(chunkPage)
-        setPageInput(String(chunkPage))
+      const rawPage = chunk.positions[0][0]
+      const viewerPage = toViewerPage(rawPage, chunkFormat.pagesAreZeroBased)
+      if (viewerPage !== currentPage) {
+        setCurrentPage(viewerPage)
+        setPageInput(String(viewerPage))
       }
     }
-  }, [chunks, currentPage])
+  }, [chunks, currentPage, chunkFormat])
 
   const handlePageNav = useCallback((delta: number) => {
     const next = Math.max(1, Math.min(pageCount, currentPage + delta))
@@ -670,7 +692,7 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
 
         {/* Page viewer */}
         <div className="flex-1 min-h-0 overflow-auto bg-muted/20 flex items-start justify-center p-4">
-          <div className="relative inline-block shadow-lg border rounded" style={{ pointerEvents: 'auto' }}>
+          <div className="relative inline-block shadow-lg border rounded">
             {/* Server-rendered page image */}
             {previewUrl && (
               <img
