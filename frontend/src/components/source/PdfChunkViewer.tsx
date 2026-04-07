@@ -162,8 +162,13 @@ function BboxOverlay({
     }
   }, [imgRef, pageInfo, rects, highlightedChunkIndex, showOverlay, hiddenTypes])
 
-  // Redraw on any state change
-  useEffect(() => { draw() }, [draw])
+  // Redraw on any state change, with a small delay to ensure img dimensions are available
+  useEffect(() => {
+    draw()
+    // Retry after a frame in case img dimensions weren't ready
+    const raf = requestAnimationFrame(() => draw())
+    return () => cancelAnimationFrame(raf)
+  }, [draw])
 
   // ResizeObserver for responsive redraw
   useEffect(() => {
@@ -353,10 +358,14 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
         setPagesInfo(data.pages)
 
         // Jump to first page that has chunks
-        // physical_page may be 0-indexed; positions[0][0] is 1-based from Docling
+        // Determine first page with chunks. Page numbers may be 0-based or 1-based.
         const firstChunkWithPos = chunks.find(c => c.positions?.length > 0)
-        const firstPage = firstChunkWithPos?.positions?.[0]?.[0]
-          ?? Math.max(1, (firstChunkWithPos?.physical_page ?? 0) + 1)
+        let firstPage = 1
+        if (firstChunkWithPos?.positions?.length) {
+          const posPage = firstChunkWithPos.positions[0][0]
+          // If page number is 0, it's 0-indexed → convert to 1-based
+          firstPage = posPage === 0 ? 1 : posPage
+        }
         setCurrentPage(firstPage)
         setPageInput(String(firstPage))
       } catch (err) {
@@ -389,33 +398,68 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
     [pagesInfo, currentPage]
   )
 
+  // Detect coordinate format: if any position coordinate > 1.0, they're
+  // raw PDF points; otherwise they're normalized 0-1.
+  const isNormalized = useMemo(() => {
+    for (const chunk of chunks) {
+      if (!chunk.positions) continue
+      for (const pos of chunk.positions) {
+        const [, xLeft, xRight, yTop, yBottom] = pos
+        if (xLeft > 1.0 || xRight > 1.0 || yTop > 1.0 || yBottom > 1.0) {
+          return false
+        }
+      }
+    }
+    return true
+  }, [chunks])
+
   // Build bounding box rects for current page (in PDF points, TOPLEFT)
   const pageRects = useMemo(() => {
     const rects: BboxRect[] = []
+    const pw = currentPageInfo.width
+    const ph = currentPageInfo.height
+
     for (let ci = 0; ci < chunks.length; ci++) {
       const chunk = chunks[ci]
       if (!chunk.positions) continue
       for (const pos of chunk.positions) {
-        const [pageNum, xLeft, xRight, yTopNorm, yBottomNorm] = pos
-        if (pageNum !== currentPage) continue
+        const [pageNum, xLeft, xRight, yTopRaw, yBottomRaw] = pos
 
-        // Positions are stored normalized (0-1). Convert to PDF points.
-        const yTop = Math.min(yTopNorm, yBottomNorm)
-        const yBottom = Math.max(yTopNorm, yBottomNorm)
+        // Match page: positions may use 0-based or 1-based page numbers
+        if (pageNum !== currentPage && pageNum !== currentPage - 1) continue
+        // If 0-based matched, only accept if it didn't also match as 1-based
+        if (pageNum === currentPage - 1 && pageNum === currentPage) continue
 
-        rects.push({
-          x: xLeft * currentPageInfo.width,
-          y: yTop * currentPageInfo.height,
-          w: (xRight - xLeft) * currentPageInfo.width,
-          h: (yBottom - yTop) * currentPageInfo.height,
-          chunkIndex: ci,
-          elementType: chunk.element_type || 'unknown',
-          text: chunk.text || '',
-        })
+        const yTop = Math.min(yTopRaw, yBottomRaw)
+        const yBottom = Math.max(yTopRaw, yBottomRaw)
+
+        if (isNormalized) {
+          // Normalized 0-1 → convert to PDF points
+          rects.push({
+            x: xLeft * pw,
+            y: yTop * ph,
+            w: (xRight - xLeft) * pw,
+            h: (yBottom - yTop) * ph,
+            chunkIndex: ci,
+            elementType: chunk.element_type || 'unknown',
+            text: chunk.text || '',
+          })
+        } else {
+          // Already in PDF points (from source_processing_service)
+          rects.push({
+            x: xLeft,
+            y: yTop,
+            w: xRight - xLeft,
+            h: yBottom - yTop,
+            chunkIndex: ci,
+            elementType: chunk.element_type || 'unknown',
+            text: chunk.text || '',
+          })
+        }
       }
     }
     return rects
-  }, [chunks, currentPage, currentPageInfo])
+  }, [chunks, currentPage, currentPageInfo, isNormalized])
 
   // Element type counts for legend
   const typeCounts = useMemo(() => {
