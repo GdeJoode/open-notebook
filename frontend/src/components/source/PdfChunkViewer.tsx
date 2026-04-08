@@ -94,6 +94,7 @@ interface BboxRect {
   chunkIndex: number
   elementType: string
   text: string
+  isContent: boolean
 }
 
 interface PdfChunkViewerProps {
@@ -195,14 +196,25 @@ function BboxOverlay({
         const color = getElementColor(rect.elementType)
         const isHighlighted = rect.chunkIndex === highlightedChunkIndex
         const isDimmed = highlightedChunkIndex !== null && !isHighlighted
+        const isNoise = !rect.isContent
 
-        ctx.strokeStyle = isDimmed ? color + '40' : color
-        ctx.lineWidth = isHighlighted ? 3 : 2
-        ctx.fillStyle = isHighlighted ? color + '40' : isDimmed ? color + '08' : color + '20'
+        if (isNoise) {
+          // Noise chunks: gray dashed outline, very faint fill
+          ctx.strokeStyle = '#9CA3AF80'
+          ctx.lineWidth = 1
+          ctx.setLineDash([4, 4])
+          ctx.fillStyle = '#9CA3AF08'
+        } else {
+          ctx.strokeStyle = isDimmed ? color + '40' : color
+          ctx.lineWidth = isHighlighted ? 3 : 2
+          ctx.fillStyle = isHighlighted ? color + '40' : isDimmed ? color + '08' : color + '20'
+          ctx.setLineDash([])
+        }
         ctx.beginPath()
         ctx.rect(x, y, w, h)
         ctx.fill()
         ctx.stroke()
+        if (isNoise) ctx.setLineDash([])
       }
     }
 
@@ -489,9 +501,9 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
         const yTop = Math.min(yA, yB), yBottom = Math.max(yA, yB)
 
         if (chunkFormat.isNormalized) {
-          rects.push({ x: xLeft * pw, y: yTop * ph, w: (xRight - xLeft) * pw, h: (yBottom - yTop) * ph, chunkIndex: ci, elementType: chunk.element_type || 'unknown', text: chunk.text || '' })
+          rects.push({ x: xLeft * pw, y: yTop * ph, w: (xRight - xLeft) * pw, h: (yBottom - yTop) * ph, chunkIndex: ci, elementType: chunk.element_type || 'unknown', text: chunk.text || '', isContent: chunk.is_content !== false })
         } else {
-          rects.push({ x: xLeft, y: yTop, w: xRight - xLeft, h: yBottom - yTop, chunkIndex: ci, elementType: chunk.element_type || 'unknown', text: chunk.text || '' })
+          rects.push({ x: xLeft, y: yTop, w: xRight - xLeft, h: yBottom - yTop, chunkIndex: ci, elementType: chunk.element_type || 'unknown', text: chunk.text || '', isContent: chunk.is_content !== false })
         }
       }
     }

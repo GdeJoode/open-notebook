@@ -575,7 +575,7 @@ async def get_source_chunks(
         )
 
 
-@router.patch("/{source_id}/chunks/{chunk_id}")
+@router.patch("/{source_id}/chunks/{chunk_id:path}")
 async def update_chunk(
     source_id: str,
     chunk_id: str,
@@ -609,7 +609,7 @@ async def update_chunk(
         raise HTTPException(status_code=500, detail=f"Error updating chunk: {str(e)}")
 
 
-@router.delete("/{source_id}/chunks/{chunk_id}")
+@router.delete("/{source_id}/chunks/{chunk_id:path}")
 async def delete_chunk(
     source_id: str,
     chunk_id: str,
