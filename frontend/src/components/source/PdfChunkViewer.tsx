@@ -159,7 +159,12 @@ function BboxOverlay({
     const displayW = img.clientWidth
     const displayH = img.clientHeight
 
-    if (displayW === 0 || displayH === 0) return // image not rendered yet
+    if (displayW === 0 || displayH === 0) {
+      console.log('[BboxOverlay] draw skipped: img dimensions 0')
+      return
+    }
+
+    console.log('[BboxOverlay] draw:', { displayW, displayH, rectsCount: rects.length, pageInfo, showOverlay })
 
     canvas.width = displayW * dpr
     canvas.height = displayH * dpr
@@ -174,6 +179,7 @@ function BboxOverlay({
     // Scale: PDF points → display pixels (same as Docling Studio bboxScaling.ts)
     const sx = displayW / pageInfo.width
     const sy = displayH / pageInfo.height
+    console.log(`[BboxOverlay] scale: sx=${sx.toFixed(4)} sy=${sy.toFixed(4)}, rects=${rects.length}`)
 
     for (const rect of rects) {
       if (hiddenTypes.has(rect.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
@@ -292,6 +298,7 @@ function BboxOverlay({
       <canvas
         ref={canvasRef}
         className="absolute top-0 left-0 cursor-crosshair"
+        style={{ zIndex: 5 }}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
         onClick={handleClick}
@@ -363,6 +370,8 @@ function LegendBar({ typeCounts, hiddenTypes, onToggle }: LegendBarProps) {
 // ---------------------------------------------------------------------------
 
 export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
+  console.log('[PdfChunkViewer] RENDER', { sourceId, chunkCount: chunks.length, firstChunkPositions: chunks[0]?.positions })
+
   const [currentPage, setCurrentPage] = useState(1)
   const [pageInput, setPageInput] = useState('1')
   const [pageCount, setPageCount] = useState(0)
@@ -394,6 +403,21 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
         // Analyze chunk format now that we know total page count
         const format = analyzeChunkFormat(chunks, data.page_count)
         setChunkFormat(format)
+
+        // Debug: log format detection and sample positions
+        const samplesWithPos = chunks.filter(c => c.positions?.length > 0).slice(0, 3)
+        console.log('[PdfChunkViewer] Format detection:', {
+          totalPages: data.page_count,
+          pagesAreZeroBased: format.pagesAreZeroBased,
+          isNormalized: format.isNormalized,
+          samplePositions: samplesWithPos.map(c => ({
+            text: c.text?.substring(0, 30),
+            physical_page: c.physical_page,
+            positions: c.positions,
+            element_type: c.element_type,
+          })),
+          pageDimensions: data.pages.slice(0, 2),
+        })
 
         // Jump to first page that has chunks
         const firstChunkWithPos = chunks.find(c => c.positions?.length > 0)
@@ -451,11 +475,19 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
         const viewerPage = toViewerPage(rawPageNum, chunkFormat.pagesAreZeroBased)
         if (viewerPage !== currentPage) continue
 
-        const yTop = Math.min(yTopRaw, yBottomRaw)
-        const yBottom = Math.max(yTopRaw, yBottomRaw)
+        // Fix broken Y coordinates: BoundingBox.from_docling may have used
+        // page_height=1.0 (default) instead of the real height, producing
+        // y = 1.0 - rawY which gives large negative values.
+        // Recovery: add real page height to get correct TOPLEFT Y.
+        let yA = yTopRaw
+        let yB = yBottomRaw
+        if (yA < 0) yA = ph + yA
+        if (yB < 0) yB = ph + yB
+
+        const yTop = Math.min(yA, yB)
+        const yBottom = Math.max(yA, yB)
 
         if (chunkFormat.isNormalized) {
-          // Normalized 0-1 → convert to PDF points
           rects.push({
             x: xLeft * pw,
             y: yTop * ph,
@@ -466,7 +498,6 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
             text: chunk.text || '',
           })
         } else {
-          // Already in PDF points
           rects.push({
             x: xLeft,
             y: yTop,
@@ -479,6 +510,20 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
         }
       }
     }
+    // Debug: log page rects with explicit values
+    if (rects.length > 0) {
+      const s = rects.slice(0, 3)
+      console.log(`[PdfChunkViewer] pageRects: ${rects.length} rects, page=${currentPage}, pageSize=${pw}x${ph}, normalized=${chunkFormat.isNormalized}`)
+      for (const r of s) {
+        console.log(`  rect: x=${r.x.toFixed(1)} y=${r.y.toFixed(1)} w=${r.w.toFixed(1)} h=${r.h.toFixed(1)} [${r.elementType}]`)
+      }
+      // Also log raw positions for first 3 chunks on this page
+      const rawSamples = chunks.filter(c => c.positions?.some(p => toViewerPage(p[0], chunkFormat.pagesAreZeroBased) === currentPage)).slice(0, 3)
+      for (const c of rawSamples) {
+        console.log(`  raw pos: [${c.positions[0].map(v => typeof v === 'number' ? v.toFixed(2) : v).join(', ')}] "${c.text?.substring(0, 30)}"`)
+      }
+    }
+
     return rects
   }, [chunks, currentPage, currentPageInfo, chunkFormat])
 
