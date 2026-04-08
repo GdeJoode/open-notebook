@@ -394,7 +394,7 @@ class SourceProcessingService:
         )
 
         # Pipeline selection: "vlm" enables VLM features, "standard" disables them
-        pipeline = content_settings.docling_pipeline or "standard"
+        pipeline = content_settings.docling_pipeline or "vlm"
         use_vlm = pipeline == "vlm"
 
         docling_cfg = DoclingConfig(

@@ -26,7 +26,7 @@ class ContentSettings(RecordModel):
 
     # Pipeline Settings (content-core)
     docling_pipeline: Optional[Literal["auto", "standard", "vlm"]] = Field(
-        "standard", description="Docling processing pipeline (standard=GPU OCR, vlm=Vision-Language Model)"
+        "vlm", description="Docling processing pipeline (standard=GPU OCR, vlm=Vision-Language Model)"
     )
 
     # VLM Settings (content-core) - used when pipeline=vlm

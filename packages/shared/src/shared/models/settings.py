@@ -37,7 +37,7 @@ class ContentSettings(RecordModel):
 
     # Pipeline Settings
     docling_pipeline: Optional[Literal["auto", "standard", "vlm"]] = Field(
-        "standard", description="Docling processing pipeline"
+        "vlm", description="Docling processing pipeline"
     )
 
     # VLM Settings (used when pipeline=vlm)
