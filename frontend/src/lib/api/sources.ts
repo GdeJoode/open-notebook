@@ -209,6 +209,32 @@ export const sourcesApi = {
     return `${apiUrl}/api/sources/${sourceId}/images/${filename}`
   },
 
+  updateChunk: async (sourceId: string, chunkId: string, data: {
+    text?: string
+    element_type?: string
+    positions?: number[][]
+    is_content?: boolean
+    chapter?: string | null
+  }) => {
+    const response = await apiClient.patch(`/sources/${sourceId}/chunks/${chunkId}`, data)
+    return response.data
+  },
+
+  deleteChunk: async (sourceId: string, chunkId: string) => {
+    await apiClient.delete(`/sources/${sourceId}/chunks/${chunkId}`)
+  },
+
+  createChunk: async (sourceId: string, data: {
+    text: string
+    element_type?: string
+    physical_page: number
+    positions?: number[][]
+    is_content?: boolean
+  }) => {
+    const response = await apiClient.post(`/sources/${sourceId}/chunks`, data)
+    return response.data
+  },
+
   getChunks: async (id: string) => {
     const response = await apiClient.get<{
       chunks: Array<{

@@ -6,6 +6,14 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Loader2,
   AlertCircle,
@@ -13,8 +21,16 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
+  Pencil,
+  Trash2,
+  Check,
+  X,
+  Plus,
+  Square,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { sourcesApi } from '@/lib/api/sources'
+import { useUpdateChunk, useDeleteChunk, useCreateChunk } from '@/lib/hooks/use-sources'
 
 // ---------------------------------------------------------------------------
 // Element type color scheme (matches Docling Studio)
@@ -38,6 +54,7 @@ const ELEMENT_COLORS: Record<string, string> = {
   footnote: '#9CA3AF',
 }
 
+const ELEMENT_TYPES = Object.keys(ELEMENT_COLORS)
 const DEFAULT_COLOR = '#6B7280'
 
 function getElementColor(elementType: string): string {
@@ -60,12 +77,13 @@ interface Chunk {
   element_type: string
   positions: number[][]
   metadata: Record<string, unknown>
+  is_content?: boolean
 }
 
 interface PageInfo {
   page_number: number
-  width: number   // PDF points
-  height: number  // PDF points
+  width: number
+  height: number
 }
 
 interface BboxRect {
@@ -84,12 +102,11 @@ interface PdfChunkViewerProps {
 }
 
 // ---------------------------------------------------------------------------
-// Detect page numbering convention and coordinate format from chunk data.
-// Runs once per chunk set.
+// Format detection
 // ---------------------------------------------------------------------------
 
 function analyzeChunkFormat(chunks: Chunk[], totalPages: number) {
-  let hasNormalized = true   // all coords in 0-1 range
+  let hasNormalized = true
   let maxPageNum = 0
 
   for (const chunk of chunks) {
@@ -103,21 +120,16 @@ function analyzeChunkFormat(chunks: Chunk[], totalPages: number) {
     }
   }
 
-  // If max page number in positions < totalPages, positions are likely 0-based
-  // (e.g., a 10-page doc with max position page=9 means 0-based)
-  // If max page number == totalPages, positions are 1-based.
   const pagesAreZeroBased = totalPages > 0 && maxPageNum < totalPages && maxPageNum === totalPages - 1
-
   return { isNormalized: hasNormalized, pagesAreZeroBased }
 }
 
-// Convert a position's page number to a 1-based page for the viewer
 function toViewerPage(positionPage: number, zeroBased: boolean): number {
   return zeroBased ? positionPage + 1 : Math.max(1, positionPage)
 }
 
 // ---------------------------------------------------------------------------
-// BboxOverlay — canvas overlay matching Docling Studio approach
+// BboxOverlay — canvas overlay with optional drawing mode
 // ---------------------------------------------------------------------------
 
 interface BboxOverlayProps {
@@ -129,42 +141,37 @@ interface BboxOverlayProps {
   onClickChunk: (index: number) => void
   showOverlay: boolean
   hiddenTypes: Set<string>
+  drawingMode: boolean
+  drawnRect: { x: number; y: number; w: number; h: number } | null
+  onDrawComplete: (rect: { x: number; y: number; w: number; h: number }) => void
 }
 
 function BboxOverlay({
-  imgRef,
-  pageInfo,
-  rects,
-  highlightedChunkIndex,
-  onHoverChunk,
-  onClickChunk,
-  showOverlay,
-  hiddenTypes,
+  imgRef, pageInfo, rects, highlightedChunkIndex, onHoverChunk, onClickChunk,
+  showOverlay, hiddenTypes, drawingMode, drawnRect, onDrawComplete,
 }: BboxOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const drawStartRef = useRef<{ x: number; y: number } | null>(null)
+  const [tempRect, setTempRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const [tooltip, setTooltip] = useState<{
-    x: number
-    y: number
-    type: string
-    text: string
-    color: string
+    x: number; y: number; type: string; text: string; color: string
   } | null>(null)
+
+  const getScale = useCallback(() => {
+    const img = imgRef.current
+    if (!img) return { sx: 1, sy: 1 }
+    return { sx: img.clientWidth / pageInfo.width, sy: img.clientHeight / pageInfo.height }
+  }, [imgRef, pageInfo])
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
     const img = imgRef.current
-    if (!canvas || !img || !showOverlay) return
+    if (!canvas || !img) return
 
     const dpr = window.devicePixelRatio || 1
     const displayW = img.clientWidth
     const displayH = img.clientHeight
-
-    if (displayW === 0 || displayH === 0) {
-      console.log('[BboxOverlay] draw skipped: img dimensions 0')
-      return
-    }
-
-    console.log('[BboxOverlay] draw:', { displayW, displayH, rectsCount: rects.length, pageInfo, showOverlay })
+    if (displayW === 0 || displayH === 0) return
 
     canvas.width = displayW * dpr
     canvas.height = displayH * dpr
@@ -176,41 +183,52 @@ function BboxOverlay({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, displayW, displayH)
 
-    // Scale: PDF points → display pixels (same as Docling Studio bboxScaling.ts)
-    const sx = displayW / pageInfo.width
-    const sy = displayH / pageInfo.height
-    console.log(`[BboxOverlay] scale: sx=${sx.toFixed(4)} sy=${sy.toFixed(4)}, rects=${rects.length}`)
+    if (!showOverlay && !drawingMode) return
 
-    for (const rect of rects) {
-      if (hiddenTypes.has(rect.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
+    const { sx, sy } = getScale()
 
-      const x = rect.x * sx
-      const y = rect.y * sy
-      const w = rect.w * sx
-      const h = rect.h * sy
-      const color = getElementColor(rect.elementType)
-      const isHighlighted = rect.chunkIndex === highlightedChunkIndex
-      const isDimmed = highlightedChunkIndex !== null && !isHighlighted
+    // Draw existing rects
+    if (showOverlay) {
+      for (const rect of rects) {
+        if (hiddenTypes.has(rect.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
+        const x = rect.x * sx, y = rect.y * sy, w = rect.w * sx, h = rect.h * sy
+        const color = getElementColor(rect.elementType)
+        const isHighlighted = rect.chunkIndex === highlightedChunkIndex
+        const isDimmed = highlightedChunkIndex !== null && !isHighlighted
 
-      ctx.strokeStyle = isDimmed ? color + '40' : color
-      ctx.lineWidth = isHighlighted ? 3 : 2
-      ctx.fillStyle = isHighlighted ? color + '40' : isDimmed ? color + '08' : color + '20'
+        ctx.strokeStyle = isDimmed ? color + '40' : color
+        ctx.lineWidth = isHighlighted ? 3 : 2
+        ctx.fillStyle = isHighlighted ? color + '40' : isDimmed ? color + '08' : color + '20'
+        ctx.beginPath()
+        ctx.rect(x, y, w, h)
+        ctx.fill()
+        ctx.stroke()
+      }
+    }
 
+    // Draw saved drawn rect (amber)
+    const activeRect = tempRect || drawnRect
+    if (activeRect) {
+      const x = activeRect.x * sx, y = activeRect.y * sy
+      const w = activeRect.w * sx, h = activeRect.h * sy
+      ctx.strokeStyle = '#F59E0B'
+      ctx.lineWidth = 2
+      ctx.setLineDash([6, 3])
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.15)'
       ctx.beginPath()
       ctx.rect(x, y, w, h)
       ctx.fill()
       ctx.stroke()
+      ctx.setLineDash([])
     }
-  }, [imgRef, pageInfo, rects, highlightedChunkIndex, showOverlay, hiddenTypes])
+  }, [imgRef, pageInfo, rects, highlightedChunkIndex, showOverlay, hiddenTypes, getScale, drawingMode, drawnRect, tempRect])
 
-  // Redraw on state change + retry after a frame for timing
   useEffect(() => {
     draw()
     const raf = requestAnimationFrame(() => draw())
     return () => cancelAnimationFrame(raf)
   }, [draw])
 
-  // ResizeObserver for responsive redraw
   useEffect(() => {
     const img = imgRef.current
     if (!img) return
@@ -219,103 +237,119 @@ function BboxOverlay({
     return () => observer.disconnect()
   }, [imgRef, draw])
 
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const canvas = canvasRef.current
-      const img = imgRef.current
-      if (!canvas || !img || !showOverlay) return
+  // Mouse-to-PDF-points conversion
+  const toPdfPoint = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current
+    if (!canvas) return { x: 0, y: 0 }
+    const r = canvas.getBoundingClientRect()
+    const { sx, sy } = getScale()
+    return { x: (e.clientX - r.left) / sx, y: (e.clientY - r.top) / sy }
+  }, [getScale])
 
-      const canvasRect = canvas.getBoundingClientRect()
-      const mx = e.clientX - canvasRect.left
-      const my = e.clientY - canvasRect.top
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!drawingMode) return
+    const pt = toPdfPoint(e)
+    drawStartRef.current = pt
+    setTempRect(null)
+  }, [drawingMode, toPdfPoint])
 
-      const sx = img.clientWidth / pageInfo.width
-      const sy = img.clientHeight / pageInfo.height
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Drawing mode: preview rectangle
+    if (drawingMode && drawStartRef.current) {
+      const pt = toPdfPoint(e)
+      const s = drawStartRef.current
+      setTempRect({
+        x: Math.min(s.x, pt.x), y: Math.min(s.y, pt.y),
+        w: Math.abs(pt.x - s.x), h: Math.abs(pt.y - s.y),
+      })
+      return
+    }
 
-      for (let i = rects.length - 1; i >= 0; i--) {
-        const r = rects[i]
-        if (hiddenTypes.has(r.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
-        const rx = r.x * sx
-        const ry = r.y * sy
-        const rw = r.w * sx
-        const rh = r.h * sy
-        if (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh) {
-          onHoverChunk(r.chunkIndex)
-          setTooltip({
-            x: Math.min(mx, img.clientWidth - 280),
-            y: Math.max(my - 60, 0),
-            type: r.elementType,
-            text: r.text.substring(0, 150),
-            color: getElementColor(r.elementType),
-          })
-          return
-        }
+    // Normal mode: hover detection
+    if (!showOverlay) return
+    const canvas = canvasRef.current
+    const img = imgRef.current
+    if (!canvas || !img) return
+
+    const cr = canvas.getBoundingClientRect()
+    const mx = e.clientX - cr.left, my = e.clientY - cr.top
+    const { sx, sy } = getScale()
+
+    for (let i = rects.length - 1; i >= 0; i--) {
+      const r = rects[i]
+      if (hiddenTypes.has(r.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
+      const rx = r.x * sx, ry = r.y * sy, rw = r.w * sx, rh = r.h * sy
+      if (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh) {
+        onHoverChunk(r.chunkIndex)
+        setTooltip({
+          x: Math.min(mx, img.clientWidth - 280), y: Math.max(my - 60, 0),
+          type: r.elementType, text: r.text.substring(0, 150), color: getElementColor(r.elementType),
+        })
+        return
       }
-      onHoverChunk(null)
-      setTooltip(null)
-    },
-    [imgRef, pageInfo, rects, showOverlay, hiddenTypes, onHoverChunk]
-  )
-
-  const handleMouseLeave = useCallback(() => {
+    }
     onHoverChunk(null)
     setTooltip(null)
-  }, [onHoverChunk])
+  }, [imgRef, pageInfo, rects, showOverlay, hiddenTypes, onHoverChunk, drawingMode, toPdfPoint, getScale])
 
-  const handleClick = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const canvas = canvasRef.current
-      const img = imgRef.current
-      if (!canvas || !img) return
+  const handleMouseUp = useCallback(() => {
+    if (drawingMode && tempRect && tempRect.w > 5 && tempRect.h > 5) {
+      onDrawComplete(tempRect)
+      setTempRect(null)
+    }
+    drawStartRef.current = null
+  }, [drawingMode, tempRect, onDrawComplete])
 
-      const canvasRect = canvas.getBoundingClientRect()
-      const mx = e.clientX - canvasRect.left
-      const my = e.clientY - canvasRect.top
+  const handleMouseLeave = useCallback(() => {
+    if (!drawingMode) {
+      onHoverChunk(null)
+      setTooltip(null)
+    }
+    drawStartRef.current = null
+    setTempRect(null)
+  }, [drawingMode, onHoverChunk])
 
-      const sx = img.clientWidth / pageInfo.width
-      const sy = img.clientHeight / pageInfo.height
+  const handleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (drawingMode) return
+    const canvas = canvasRef.current
+    const img = imgRef.current
+    if (!canvas || !img) return
 
-      for (let i = rects.length - 1; i >= 0; i--) {
-        const r = rects[i]
-        if (hiddenTypes.has(r.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
-        const rx = r.x * sx
-        const ry = r.y * sy
-        const rw = r.w * sx
-        const rh = r.h * sy
-        if (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh) {
-          onClickChunk(r.chunkIndex)
-          return
-        }
+    const cr = canvas.getBoundingClientRect()
+    const mx = e.clientX - cr.left, my = e.clientY - cr.top
+    const { sx, sy } = getScale()
+
+    for (let i = rects.length - 1; i >= 0; i--) {
+      const r = rects[i]
+      if (hiddenTypes.has(r.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
+      const rx = r.x * sx, ry = r.y * sy, rw = r.w * sx, rh = r.h * sy
+      if (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh) {
+        onClickChunk(r.chunkIndex)
+        return
       }
-    },
-    [imgRef, pageInfo, rects, hiddenTypes, onClickChunk]
-  )
-
-  if (!showOverlay) return null
+    }
+  }, [imgRef, rects, hiddenTypes, onClickChunk, drawingMode, getScale])
 
   return (
     <>
       <canvas
         ref={canvasRef}
-        className="absolute top-0 left-0 cursor-crosshair"
+        className={`absolute top-0 left-0 ${drawingMode ? 'cursor-crosshair' : 'cursor-pointer'}`}
         style={{ zIndex: 5 }}
+        onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
         onClick={handleClick}
       />
-      {tooltip && (
+      {tooltip && !drawingMode && (
         <div
           className="absolute z-20 max-w-[280px] rounded-md border bg-popover/95 backdrop-blur-sm p-2 shadow-lg pointer-events-none"
           style={{ left: tooltip.x, top: tooltip.y }}
         >
           <div className="flex items-center gap-1.5 mb-1">
-            <span
-              className="inline-block w-2.5 h-2.5 rounded-full"
-              style={{ backgroundColor: tooltip.color }}
-            />
-            <span className="text-xs font-semibold uppercase tracking-wide">
-              {tooltip.type}
-            </span>
+            <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: tooltip.color }} />
+            <span className="text-xs font-semibold uppercase tracking-wide">{tooltip.type}</span>
           </div>
           <p className="text-xs text-muted-foreground line-clamp-3">{tooltip.text}</p>
         </div>
@@ -328,34 +362,19 @@ function BboxOverlay({
 // Legend bar
 // ---------------------------------------------------------------------------
 
-interface LegendBarProps {
-  typeCounts: Record<string, number>
-  hiddenTypes: Set<string>
-  onToggle: (type: string) => void
-}
-
-function LegendBar({ typeCounts, hiddenTypes, onToggle }: LegendBarProps) {
+function LegendBar({ typeCounts, hiddenTypes, onToggle }: {
+  typeCounts: Record<string, number>; hiddenTypes: Set<string>; onToggle: (type: string) => void
+}) {
   const types = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])
   if (types.length === 0) return null
-
   return (
     <div className="absolute top-2 left-2 right-2 z-10 flex flex-wrap gap-1.5 rounded-lg bg-background/80 backdrop-blur-md border p-2 pointer-events-auto">
       {types.map(([type, count]) => {
         const key = type.toLowerCase().replace(/\s+/g, '_')
-        const hidden = hiddenTypes.has(key)
-        const color = getElementColor(type)
         return (
-          <button
-            key={type}
-            onClick={() => onToggle(key)}
-            className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-opacity ${
-              hidden ? 'opacity-35' : 'opacity-100'
-            }`}
-          >
-            <span
-              className="inline-block w-2 h-2 rounded-full"
-              style={{ backgroundColor: color }}
-            />
+          <button key={type} onClick={() => onToggle(key)}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-opacity ${hiddenTypes.has(key) ? 'opacity-35' : 'opacity-100'}`}>
+            <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: getElementColor(type) }} />
             <span>{type}</span>
             <span className="text-muted-foreground">({count})</span>
           </button>
@@ -370,8 +389,6 @@ function LegendBar({ typeCounts, hiddenTypes, onToggle }: LegendBarProps) {
 // ---------------------------------------------------------------------------
 
 export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
-  console.log('[PdfChunkViewer] RENDER', { sourceId, chunkCount: chunks.length, firstChunkPositions: chunks[0]?.positions })
-
   const [currentPage, setCurrentPage] = useState(1)
   const [pageInput, setPageInput] = useState('1')
   const [pageCount, setPageCount] = useState(0)
@@ -385,12 +402,27 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
   const [showOverlay, setShowOverlay] = useState(true)
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set())
   const [chunkFormat, setChunkFormat] = useState<{ isNormalized: boolean; pagesAreZeroBased: boolean }>({ isNormalized: true, pagesAreZeroBased: false })
+
+  // Editing state
+  const [editingChunkId, setEditingChunkId] = useState<string | null>(null)
+  const [editText, setEditText] = useState('')
+  const [editType, setEditType] = useState('')
+  const [drawingMode, setDrawingMode] = useState(false)
+  const [drawnRect, setDrawnRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [newChunkText, setNewChunkText] = useState('')
+  const [newChunkType, setNewChunkType] = useState('paragraph')
+
   const imgRef = useRef<HTMLImageElement>(null)
   const chunkListRef = useRef<HTMLDivElement>(null)
-
   const highlightedIndex = hoveredChunkIndex ?? selectedChunkIndex
 
-  // Load page count and dimensions on mount
+  // Mutations
+  const updateChunk = useUpdateChunk(sourceId)
+  const deleteChunk = useDeleteChunk(sourceId)
+  const createChunk = useCreateChunk(sourceId)
+
+  // Load page count on mount
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -399,27 +431,9 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
         if (cancelled) return
         setPageCount(data.page_count)
         setPagesInfo(data.pages)
-
-        // Analyze chunk format now that we know total page count
         const format = analyzeChunkFormat(chunks, data.page_count)
         setChunkFormat(format)
 
-        // Debug: log format detection and sample positions
-        const samplesWithPos = chunks.filter(c => c.positions?.length > 0).slice(0, 3)
-        console.log('[PdfChunkViewer] Format detection:', {
-          totalPages: data.page_count,
-          pagesAreZeroBased: format.pagesAreZeroBased,
-          isNormalized: format.isNormalized,
-          samplePositions: samplesWithPos.map(c => ({
-            text: c.text?.substring(0, 30),
-            physical_page: c.physical_page,
-            positions: c.positions,
-            element_type: c.element_type,
-          })),
-          pageDimensions: data.pages.slice(0, 2),
-        })
-
-        // Jump to first page that has chunks
         const firstChunkWithPos = chunks.find(c => c.positions?.length > 0)
         if (firstChunkWithPos?.positions?.length) {
           const rawPage = firstChunkWithPos.positions[0][0]
@@ -451,236 +465,304 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
     return () => { cancelled = true }
   }, [sourceId, currentPage])
 
-  // Get current page info
   const currentPageInfo = useMemo(
     () => pagesInfo.find(p => p.page_number === currentPage) ?? { page_number: currentPage, width: 595, height: 842 },
     [pagesInfo, currentPage]
   )
 
-  // Build bounding box rects for current page (in PDF points, TOPLEFT)
-  // Positions format: [pageNum, xLeft, xRight, yTop, yBottom]
-  // Coordinates may be normalized (0-1) or raw PDF points — detected once via analyzeChunkFormat
+  // Build bounding box rects
   const pageRects = useMemo(() => {
     const rects: BboxRect[] = []
-    const pw = currentPageInfo.width
-    const ph = currentPageInfo.height
+    const pw = currentPageInfo.width, ph = currentPageInfo.height
 
     for (let ci = 0; ci < chunks.length; ci++) {
       const chunk = chunks[ci]
       if (!chunk.positions) continue
       for (const pos of chunk.positions) {
         const [rawPageNum, xLeft, xRight, yTopRaw, yBottomRaw] = pos
-
-        // Convert position page number to 1-based viewer page
         const viewerPage = toViewerPage(rawPageNum, chunkFormat.pagesAreZeroBased)
         if (viewerPage !== currentPage) continue
 
-        // Fix broken Y coordinates: BoundingBox.from_docling may have used
-        // page_height=1.0 (default) instead of the real height, producing
-        // y = 1.0 - rawY which gives large negative values.
-        // Recovery: add real page height to get correct TOPLEFT Y.
-        let yA = yTopRaw
-        let yB = yBottomRaw
+        let yA = yTopRaw, yB = yBottomRaw
         if (yA < 0) yA = ph + yA
         if (yB < 0) yB = ph + yB
-
-        const yTop = Math.min(yA, yB)
-        const yBottom = Math.max(yA, yB)
+        const yTop = Math.min(yA, yB), yBottom = Math.max(yA, yB)
 
         if (chunkFormat.isNormalized) {
-          rects.push({
-            x: xLeft * pw,
-            y: yTop * ph,
-            w: (xRight - xLeft) * pw,
-            h: (yBottom - yTop) * ph,
-            chunkIndex: ci,
-            elementType: chunk.element_type || 'unknown',
-            text: chunk.text || '',
-          })
+          rects.push({ x: xLeft * pw, y: yTop * ph, w: (xRight - xLeft) * pw, h: (yBottom - yTop) * ph, chunkIndex: ci, elementType: chunk.element_type || 'unknown', text: chunk.text || '' })
         } else {
-          rects.push({
-            x: xLeft,
-            y: yTop,
-            w: xRight - xLeft,
-            h: yBottom - yTop,
-            chunkIndex: ci,
-            elementType: chunk.element_type || 'unknown',
-            text: chunk.text || '',
-          })
+          rects.push({ x: xLeft, y: yTop, w: xRight - xLeft, h: yBottom - yTop, chunkIndex: ci, elementType: chunk.element_type || 'unknown', text: chunk.text || '' })
         }
       }
     }
-    // Debug: log page rects with explicit values
-    if (rects.length > 0) {
-      const s = rects.slice(0, 3)
-      console.log(`[PdfChunkViewer] pageRects: ${rects.length} rects, page=${currentPage}, pageSize=${pw}x${ph}, normalized=${chunkFormat.isNormalized}`)
-      for (const r of s) {
-        console.log(`  rect: x=${r.x.toFixed(1)} y=${r.y.toFixed(1)} w=${r.w.toFixed(1)} h=${r.h.toFixed(1)} [${r.elementType}]`)
-      }
-      // Also log raw positions for first 3 chunks on this page
-      const rawSamples = chunks.filter(c => c.positions?.some(p => toViewerPage(p[0], chunkFormat.pagesAreZeroBased) === currentPage)).slice(0, 3)
-      for (const c of rawSamples) {
-        console.log(`  raw pos: [${c.positions[0].map(v => typeof v === 'number' ? v.toFixed(2) : v).join(', ')}] "${c.text?.substring(0, 30)}"`)
-      }
-    }
-
     return rects
   }, [chunks, currentPage, currentPageInfo, chunkFormat])
 
-  // Element type counts for legend
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = {}
-    for (const rect of pageRects) {
-      counts[rect.elementType] = (counts[rect.elementType] || 0) + 1
-    }
+    for (const rect of pageRects) counts[rect.elementType] = (counts[rect.elementType] || 0) + 1
     return counts
   }, [pageRects])
 
-  // Chunks visible on current page (for sidebar)
   const pageChunks = useMemo(() => {
-    const indices: number[] = []
-    const seen = new Set<number>()
+    const indices: number[] = [], seen = new Set<number>()
     for (const rect of pageRects) {
-      if (!seen.has(rect.chunkIndex)) {
-        seen.add(rect.chunkIndex)
-        indices.push(rect.chunkIndex)
-      }
+      if (!seen.has(rect.chunkIndex)) { seen.add(rect.chunkIndex); indices.push(rect.chunkIndex) }
     }
     return indices
   }, [pageRects])
 
-  // Scroll chunk list to highlighted chunk
   useEffect(() => {
     if (highlightedIndex === null || !chunkListRef.current) return
     const el = chunkListRef.current.querySelector(`[data-chunk-index="${highlightedIndex}"]`)
     if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [highlightedIndex])
 
-  // Navigate to page of selected chunk
   const handleSelectChunk = useCallback((index: number) => {
     setSelectedChunkIndex(index)
     const chunk = chunks[index]
     if (chunk?.positions?.length > 0) {
       const rawPage = chunk.positions[0][0]
       const viewerPage = toViewerPage(rawPage, chunkFormat.pagesAreZeroBased)
-      if (viewerPage !== currentPage) {
-        setCurrentPage(viewerPage)
-        setPageInput(String(viewerPage))
-      }
+      if (viewerPage !== currentPage) { setCurrentPage(viewerPage); setPageInput(String(viewerPage)) }
     }
   }, [chunks, currentPage, chunkFormat])
 
   const handlePageNav = useCallback((delta: number) => {
     const next = Math.max(1, Math.min(pageCount, currentPage + delta))
-    setCurrentPage(next)
-    setPageInput(String(next))
+    setCurrentPage(next); setPageInput(String(next))
   }, [currentPage, pageCount])
 
   const handlePageInputSubmit = useCallback(() => {
     const p = parseInt(pageInput, 10)
-    if (!isNaN(p) && p >= 1 && p <= pageCount) {
-      setCurrentPage(p)
-    } else {
-      setPageInput(String(currentPage))
-    }
+    if (!isNaN(p) && p >= 1 && p <= pageCount) setCurrentPage(p)
+    else setPageInput(String(currentPage))
   }, [pageInput, pageCount, currentPage])
 
   const toggleType = useCallback((type: string) => {
-    setHiddenTypes(prev => {
-      const next = new Set(prev)
-      if (next.has(type)) next.delete(type)
-      else next.add(type)
-      return next
-    })
+    setHiddenTypes(prev => { const next = new Set(prev); next.has(type) ? next.delete(type) : next.add(type); return next })
   }, [])
 
-  if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    )
+  // --- Editing handlers ---
+
+  const startEdit = (chunk: Chunk) => {
+    setEditingChunkId(chunk.id)
+    setEditText(chunk.text)
+    setEditType(chunk.element_type)
+    setDrawnRect(null)
+    setDrawingMode(false)
   }
 
-  if (error) {
-    return (
-      <Alert variant="destructive">
-        <AlertCircle className="h-4 w-4" />
-        <AlertDescription>{error}</AlertDescription>
-      </Alert>
-    )
+  const cancelEdit = () => {
+    setEditingChunkId(null)
+    setEditText('')
+    setEditType('')
+    setDrawingMode(false)
+    setDrawnRect(null)
   }
 
-  if (chunks.length === 0) {
-    return (
-      <Alert>
-        <AlertCircle className="h-4 w-4" />
-        <AlertDescription>
-          No chunks available. Chunks are extracted when documents are processed with Docling.
-        </AlertDescription>
-      </Alert>
-    )
+  const saveEdit = (chunk: Chunk) => {
+    const data: Record<string, unknown> = {}
+    if (editText !== chunk.text) data.text = editText
+    if (editType !== chunk.element_type) data.element_type = editType
+
+    // If bbox was drawn, convert to position format
+    if (drawnRect) {
+      const pw = currentPageInfo.width, ph = currentPageInfo.height
+      const pageNum = chunkFormat.pagesAreZeroBased ? currentPage - 1 : currentPage
+      if (chunkFormat.isNormalized) {
+        data.positions = [[pageNum, drawnRect.x / pw, (drawnRect.x + drawnRect.w) / pw, drawnRect.y / ph, (drawnRect.y + drawnRect.h) / ph]]
+      } else {
+        data.positions = [[pageNum, drawnRect.x, drawnRect.x + drawnRect.w, drawnRect.y, drawnRect.y + drawnRect.h]]
+      }
+    }
+
+    if (Object.keys(data).length === 0) { cancelEdit(); return }
+
+    updateChunk.mutate({ chunkId: chunk.id, data }, {
+      onSuccess: () => { toast.success('Chunk updated'); cancelEdit() },
+      onError: () => toast.error('Failed to update chunk'),
+    })
   }
+
+  const handleDelete = (chunk: Chunk) => {
+    if (!confirm(`Delete this chunk?\n\n"${chunk.text.substring(0, 100)}..."`)) return
+    deleteChunk.mutate(chunk.id, {
+      onSuccess: () => { toast.success('Chunk deleted'); setSelectedChunkIndex(null) },
+      onError: () => toast.error('Failed to delete chunk'),
+    })
+  }
+
+  const handleToggleContent = (chunk: Chunk) => {
+    updateChunk.mutate({ chunkId: chunk.id, data: { is_content: !(chunk.is_content ?? true) } }, {
+      onSuccess: () => toast.success(chunk.is_content ? 'Marked as noise' : 'Marked as content'),
+    })
+  }
+
+  const handleCreateChunk = () => {
+    if (!newChunkText.trim()) return
+    const data: Parameters<typeof createChunk.mutate>[0] = {
+      text: newChunkText,
+      element_type: newChunkType,
+      physical_page: currentPage - 1,
+      is_content: true,
+    }
+    if (drawnRect) {
+      const pw = currentPageInfo.width, ph = currentPageInfo.height
+      const pageNum = chunkFormat.pagesAreZeroBased ? currentPage - 1 : currentPage
+      if (chunkFormat.isNormalized) {
+        data.positions = [[pageNum, drawnRect.x / pw, (drawnRect.x + drawnRect.w) / pw, drawnRect.y / ph, (drawnRect.y + drawnRect.h) / ph]]
+      } else {
+        data.positions = [[pageNum, drawnRect.x, drawnRect.x + drawnRect.w, drawnRect.y, drawnRect.y + drawnRect.h]]
+      }
+    }
+    createChunk.mutate(data, {
+      onSuccess: () => {
+        toast.success('Chunk created')
+        setShowAddForm(false); setNewChunkText(''); setNewChunkType('paragraph')
+        setDrawingMode(false); setDrawnRect(null)
+      },
+      onError: () => toast.error('Failed to create chunk'),
+    })
+  }
+
+  // --- Render ---
+
+  if (loading) return <div className="flex h-full items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
+  if (error) return <Alert variant="destructive"><AlertCircle className="h-4 w-4" /><AlertDescription>{error}</AlertDescription></Alert>
+  if (chunks.length === 0 && !showAddForm) return <Alert><AlertCircle className="h-4 w-4" /><AlertDescription>No chunks available.</AlertDescription></Alert>
 
   return (
     <div className="flex h-full border rounded-lg overflow-hidden bg-background">
       {/* Left Pane — Chunk List */}
       <div className="w-80 min-w-[280px] border-r bg-muted/30 flex flex-col">
-        <div className="p-3 border-b bg-background flex-shrink-0">
-          <h3 className="font-semibold text-sm mb-1">
-            Elements on Page {currentPage}
-          </h3>
-          <p className="text-xs text-muted-foreground">
-            {pageChunks.length} elements · {chunks.length} total
-          </p>
+        <div className="p-3 border-b bg-background flex-shrink-0 flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-sm">Elements on Page {currentPage}</h3>
+            <p className="text-xs text-muted-foreground">{pageChunks.length} elements · {chunks.length} total</p>
+          </div>
+          <Button
+            variant="ghost" size="sm" className="h-7 w-7 p-0"
+            onClick={() => { setShowAddForm(!showAddForm); if (!showAddForm) { setDrawingMode(true); setDrawnRect(null) } else { setDrawingMode(false) } }}
+            title="Add chunk"
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
         </div>
+
         <ScrollArea className="flex-1 min-h-0">
           <div className="p-2 space-y-1.5" ref={chunkListRef}>
-            {pageChunks.length === 0 ? (
-              <p className="text-xs text-muted-foreground p-3">
-                No elements with position data on this page.
-              </p>
+            {/* Add chunk form */}
+            {showAddForm && (
+              <div className="p-2.5 rounded-md border border-amber-500 bg-amber-50/50 dark:bg-amber-950/20 space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <Square className="h-3.5 w-3.5 text-amber-600" />
+                  <span className="text-xs font-semibold text-amber-700 dark:text-amber-400">New Chunk</span>
+                </div>
+                <Textarea
+                  value={newChunkText} onChange={(e) => setNewChunkText(e.target.value)}
+                  placeholder="Enter chunk text..." className="text-xs min-h-[60px]" rows={3}
+                />
+                <Select value={newChunkType} onValueChange={setNewChunkType}>
+                  <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {ELEMENT_TYPES.map(t => <SelectItem key={t} value={t} className="text-xs">{t}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">
+                  {drawnRect ? `Bbox: ${drawnRect.x.toFixed(0)},${drawnRect.y.toFixed(0)} ${drawnRect.w.toFixed(0)}x${drawnRect.h.toFixed(0)}` : 'Draw a bounding box on the PDF (optional)'}
+                </p>
+                <div className="flex gap-1.5">
+                  <Button size="sm" className="h-7 flex-1 gap-1 text-xs" onClick={handleCreateChunk} disabled={!newChunkText.trim() || createChunk.isPending}>
+                    {createChunk.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />} Save
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setShowAddForm(false); setDrawingMode(false); setDrawnRect(null) }}>
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {pageChunks.length === 0 && !showAddForm ? (
+              <p className="text-xs text-muted-foreground p-3">No elements with position data on this page.</p>
             ) : (
               pageChunks.map((ci) => {
                 const chunk = chunks[ci]
                 const color = getElementColor(chunk.element_type)
                 const isSelected = ci === selectedChunkIndex
                 const isHovered = ci === hoveredChunkIndex
+                const isEditing = editingChunkId === chunk.id
+                const isNoise = chunk.is_content === false
+
                 return (
                   <div
                     key={chunk.id || ci}
                     data-chunk-index={ci}
-                    onClick={() => handleSelectChunk(ci)}
-                    onMouseEnter={() => setHoveredChunkIndex(ci)}
-                    onMouseLeave={() => setHoveredChunkIndex(null)}
-                    className={`
-                      p-2.5 rounded-md cursor-pointer border transition-all text-sm
-                      ${isSelected
-                        ? 'border-primary bg-primary/10 shadow-sm'
-                        : isHovered
-                          ? 'border-primary/50 bg-muted/50'
-                          : 'border-transparent hover:border-border'
-                      }
-                    `}
-                    style={isSelected || isHovered ? { borderLeftColor: color, borderLeftWidth: 3 } : undefined}
+                    onClick={() => !isEditing && handleSelectChunk(ci)}
+                    onMouseEnter={() => !isEditing && setHoveredChunkIndex(ci)}
+                    onMouseLeave={() => !isEditing && setHoveredChunkIndex(null)}
+                    className={`p-2.5 rounded-md border transition-all text-sm ${isNoise ? 'opacity-40' : ''} ${
+                      isEditing ? 'border-amber-500 bg-amber-50/50 dark:bg-amber-950/20'
+                        : isSelected ? 'border-primary bg-primary/10 shadow-sm cursor-pointer'
+                        : isHovered ? 'border-primary/50 bg-muted/50 cursor-pointer'
+                        : 'border-transparent hover:border-border cursor-pointer'
+                    }`}
+                    style={!isEditing && (isSelected || isHovered) ? { borderLeftColor: color, borderLeftWidth: 3 } : undefined}
                   >
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <span
-                        className="inline-block w-2 h-2 rounded-full flex-shrink-0"
-                        style={{ backgroundColor: color }}
-                      />
-                      <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                        {chunk.element_type}
-                      </Badge>
-                      {chunk.chapter && (
-                        <span className="text-[10px] text-muted-foreground truncate ml-auto max-w-[120px]" title={chunk.chapter}>
-                          {chunk.chapter}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs line-clamp-2 text-muted-foreground">
-                      {chunk.text}
-                    </p>
+                    {isEditing ? (
+                      /* Editing mode */
+                      <div className="space-y-2">
+                        <Textarea value={editText} onChange={(e) => setEditText(e.target.value)} className="text-xs min-h-[80px]" rows={4} />
+                        <Select value={editType} onValueChange={setEditType}>
+                          <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {ELEMENT_TYPES.map(t => <SelectItem key={t} value={t} className="text-xs">{t}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                        <div className="flex items-center gap-1.5">
+                          <Button size="sm" variant={drawingMode ? 'default' : 'outline'} className="h-7 gap-1 text-xs"
+                            onClick={() => { setDrawingMode(!drawingMode); if (!drawingMode) setDrawnRect(null) }}>
+                            <Square className="h-3 w-3" /> {drawingMode ? 'Drawing...' : 'Edit bbox'}
+                          </Button>
+                          {drawnRect && <span className="text-[10px] text-muted-foreground">New bbox set</span>}
+                        </div>
+                        <div className="flex gap-1.5">
+                          <Button size="sm" className="h-7 flex-1 gap-1 text-xs" onClick={() => saveEdit(chunk)} disabled={updateChunk.isPending}>
+                            {updateChunk.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />} Save
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={cancelEdit}>
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Display mode */
+                      <>
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="inline-block w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">{chunk.element_type}</Badge>
+                          {chunk.chapter && (
+                            <span className="text-[10px] text-muted-foreground truncate ml-auto max-w-[80px]" title={chunk.chapter}>{chunk.chapter}</span>
+                          )}
+                          {/* Action buttons — visible when selected */}
+                          {isSelected && (
+                            <div className="flex items-center gap-0.5 ml-auto">
+                              <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={(e) => { e.stopPropagation(); startEdit(chunk) }} title="Edit">
+                                <Pencil className="h-3 w-3" />
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={(e) => { e.stopPropagation(); handleToggleContent(chunk) }}
+                                title={isNoise ? 'Mark as content' : 'Mark as noise'}>
+                                {isNoise ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-5 w-5 p-0 text-destructive" onClick={(e) => { e.stopPropagation(); handleDelete(chunk) }} title="Delete">
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                        <p className="text-xs line-clamp-2 text-muted-foreground">{chunk.text}</p>
+                      </>
+                    )}
                   </div>
                 )
               })
@@ -691,88 +773,47 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
 
       {/* Right Pane — PDF Page + Canvas Overlay */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Page navigation bar */}
         <div className="p-2 border-b flex items-center gap-2 flex-shrink-0 bg-background">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0"
-            disabled={currentPage <= 1}
-            onClick={() => handlePageNav(-1)}
-          >
+          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={currentPage <= 1} onClick={() => handlePageNav(-1)}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <div className="flex items-center gap-1 text-sm">
-            <Input
-              className="w-12 h-7 text-center text-xs p-0"
-              value={pageInput}
-              onChange={(e) => setPageInput(e.target.value)}
-              onBlur={handlePageInputSubmit}
-              onKeyDown={(e) => e.key === 'Enter' && handlePageInputSubmit()}
-            />
+            <Input className="w-12 h-7 text-center text-xs p-0" value={pageInput}
+              onChange={(e) => setPageInput(e.target.value)} onBlur={handlePageInputSubmit}
+              onKeyDown={(e) => e.key === 'Enter' && handlePageInputSubmit()} />
             <span className="text-muted-foreground text-xs">/ {pageCount}</span>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0"
-            disabled={currentPage >= pageCount}
-            onClick={() => handlePageNav(1)}
-          >
+          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={currentPage >= pageCount} onClick={() => handlePageNav(1)}>
             <ChevronRight className="h-4 w-4" />
           </Button>
-
+          {drawingMode && (
+            <Badge variant="default" className="bg-amber-600 text-xs ml-2">Drawing bbox — click and drag on PDF</Badge>
+          )}
           <div className="ml-auto">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1 text-xs"
-              onClick={() => setShowOverlay(!showOverlay)}
-            >
+            <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => setShowOverlay(!showOverlay)}>
               {showOverlay ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
               {showOverlay ? 'Hide' : 'Show'} boxes
             </Button>
           </div>
         </div>
 
-        {/* Page viewer */}
         <div className="flex-1 min-h-0 overflow-auto bg-muted/20 flex items-start justify-center p-4">
           <div className="relative inline-block shadow-lg border rounded">
-            {/* Server-rendered page image */}
             {previewUrl && (
-              <img
-                ref={imgRef}
-                src={previewUrl}
-                alt={`Page ${currentPage}`}
-                className="block max-w-full h-auto"
-                style={{ maxHeight: 'calc(100vh - 200px)' }}
-                onLoad={() => setImgLoaded(true)}
-                onError={() => setError(`Failed to render page ${currentPage}`)}
-              />
+              <img ref={imgRef} src={previewUrl} alt={`Page ${currentPage}`}
+                className="block max-w-full h-auto" style={{ maxHeight: 'calc(100vh - 200px)' }}
+                onLoad={() => setImgLoaded(true)} onError={() => setError(`Failed to render page ${currentPage}`)} />
             )}
-
             {!imgLoaded && previewUrl && (
-              <div className="flex items-center justify-center w-[595px] h-[842px]">
-                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-              </div>
+              <div className="flex items-center justify-center w-[595px] h-[842px]"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
             )}
-
-            {/* Legend */}
-            {imgLoaded && showOverlay && (
-              <LegendBar typeCounts={typeCounts} hiddenTypes={hiddenTypes} onToggle={toggleType} />
-            )}
-
-            {/* Canvas overlay */}
+            {imgLoaded && showOverlay && <LegendBar typeCounts={typeCounts} hiddenTypes={hiddenTypes} onToggle={toggleType} />}
             {imgLoaded && (
               <BboxOverlay
-                imgRef={imgRef}
-                pageInfo={currentPageInfo}
-                rects={pageRects}
-                highlightedChunkIndex={highlightedIndex}
-                onHoverChunk={setHoveredChunkIndex}
-                onClickChunk={handleSelectChunk}
-                showOverlay={showOverlay}
-                hiddenTypes={hiddenTypes}
+                imgRef={imgRef} pageInfo={currentPageInfo} rects={pageRects}
+                highlightedChunkIndex={highlightedIndex} onHoverChunk={setHoveredChunkIndex}
+                onClickChunk={handleSelectChunk} showOverlay={showOverlay} hiddenTypes={hiddenTypes}
+                drawingMode={drawingMode} drawnRect={drawnRect} onDrawComplete={setDrawnRect}
               />
             )}
           </div>

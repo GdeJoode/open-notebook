@@ -312,6 +312,42 @@ export function useSourceChunks(sourceId: string, enabled = true) {
     queryKey: QUERY_KEYS.sourceChunks(sourceId),
     queryFn: () => sourcesApi.getChunks(sourceId),
     enabled: !!sourceId && enabled,
-    staleTime: 60 * 1000, // 1 minute - chunks don't change often
+    staleTime: 60 * 1000,
+  })
+}
+
+export function useUpdateChunk(sourceId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ chunkId, data }: {
+      chunkId: string
+      data: { text?: string; element_type?: string; positions?: number[][]; is_content?: boolean; chapter?: string | null }
+    }) => sourcesApi.updateChunk(sourceId, chunkId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sourceChunks(sourceId) })
+    },
+  })
+}
+
+export function useDeleteChunk(sourceId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (chunkId: string) => sourcesApi.deleteChunk(sourceId, chunkId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sourceChunks(sourceId) })
+    },
+  })
+}
+
+export function useCreateChunk(sourceId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (data: {
+      text: string; element_type?: string; physical_page: number;
+      positions?: number[][]; is_content?: boolean
+    }) => sourcesApi.createChunk(sourceId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sourceChunks(sourceId) })
+    },
   })
 }

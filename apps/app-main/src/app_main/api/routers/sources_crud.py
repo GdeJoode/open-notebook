@@ -7,6 +7,8 @@ from loguru import logger
 
 from app_main.api.schemas import (
     AssetModel,
+    ChunkCreate,
+    ChunkUpdate,
     CreateSourceInsightRequest,
     SourceInsightResponse,
     SourceListResponse,
@@ -16,10 +18,12 @@ from app_main.api.schemas import (
 )
 from app_main.config import UPLOADS_FOLDER
 from app_main.dependencies import (
+    get_chunk_repo,
     get_notebook_service,
     get_source_service,
     get_transformation_service,
 )
+from surrealdb_service.repositories.source import ChunkRepository
 from app_main.exceptions import InvalidInputError
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
@@ -569,3 +573,111 @@ async def get_source_chunks(
             status_code=500,
             detail=f"Error fetching chunks: {str(e)}",
         )
+
+
+@router.patch("/{source_id}/chunks/{chunk_id}")
+async def update_chunk(
+    source_id: str,
+    chunk_id: str,
+    body: ChunkUpdate,
+    chunk_repo: ChunkRepository = Depends(get_chunk_repo),
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Update a chunk's text, element type, positions, or content flag."""
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        chunk = await chunk_repo.get(chunk_id)
+        if not chunk:
+            raise HTTPException(status_code=404, detail="Chunk not found")
+        if str(chunk.source) != str(source_id) and str(chunk.source) != str(source.id):
+            raise HTTPException(status_code=403, detail="Chunk does not belong to this source")
+
+        update_data = body.model_dump(exclude_unset=True)
+        if not update_data:
+            return chunk.model_dump()
+
+        updated = await chunk_repo.update(chunk_id, update_data)
+        return updated.model_dump()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating chunk {chunk_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error updating chunk: {str(e)}")
+
+
+@router.delete("/{source_id}/chunks/{chunk_id}")
+async def delete_chunk(
+    source_id: str,
+    chunk_id: str,
+    chunk_repo: ChunkRepository = Depends(get_chunk_repo),
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Delete a single chunk."""
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        chunk = await chunk_repo.get(chunk_id)
+        if not chunk:
+            raise HTTPException(status_code=404, detail="Chunk not found")
+        if str(chunk.source) != str(source_id) and str(chunk.source) != str(source.id):
+            raise HTTPException(status_code=403, detail="Chunk does not belong to this source")
+
+        await chunk_repo.delete(chunk_id)
+        return {"message": "Chunk deleted"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting chunk {chunk_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting chunk: {str(e)}")
+
+
+@router.post("/{source_id}/chunks")
+async def create_chunk(
+    source_id: str,
+    body: ChunkCreate,
+    chunk_repo: ChunkRepository = Depends(get_chunk_repo),
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Create a new manual chunk for a source."""
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        # Compute next order value
+        from surrealdb_service.connection import ensure_record_id
+        existing = await chunk_repo.get_by_source(str(source.id))
+        max_order = max((c.order for c in existing), default=-1)
+
+        chunk_data = {
+            "source": ensure_record_id(str(source.id)),
+            "text": body.text,
+            "element_type": body.element_type,
+            "physical_page": body.physical_page,
+            "printed_page": body.physical_page + 1,
+            "positions": body.positions,
+            "is_content": body.is_content,
+            "chapter": body.chapter,
+            "order": max_order + 1,
+            "chunk_type": "manual",
+            "source_element_count": 1,
+            "section_path": [],
+            "section_level": 0,
+            "metadata": {**body.metadata, "manual": True},
+        }
+
+        created = await chunk_repo.create(chunk_data)
+        return created.model_dump()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating chunk for source {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating chunk: {str(e)}")

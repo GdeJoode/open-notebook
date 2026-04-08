@@ -9,6 +9,28 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+# Chunk schemas
+class ChunkUpdate(BaseModel):
+    """Partial update for a chunk."""
+    text: Optional[str] = None
+    element_type: Optional[str] = None
+    positions: Optional[List[List[float]]] = None
+    is_content: Optional[bool] = None
+    chapter: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class ChunkCreate(BaseModel):
+    """Create a new manual chunk."""
+    text: str = Field(..., description="Chunk text content")
+    element_type: str = Field("paragraph", description="Element type")
+    physical_page: int = Field(..., description="Physical page number")
+    positions: List[List[float]] = Field(default_factory=list, description="Bounding box positions")
+    is_content: bool = Field(True, description="Whether this is content (vs noise)")
+    chapter: Optional[str] = Field(None, description="Chapter/section heading")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 # Notebook schemas
 class NotebookCreate(BaseModel):
     name: str = Field(..., description="Name of the notebook")
