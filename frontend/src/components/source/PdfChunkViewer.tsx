@@ -424,6 +424,7 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
 
   const imgRef = useRef<HTMLImageElement>(null)
   const chunkListRef = useRef<HTMLDivElement>(null)
+  const initialPageSetRef = useRef(false)
   const highlightedIndex = hoveredChunkIndex ?? selectedChunkIndex
 
   // Mutations
@@ -443,12 +444,16 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
         const format = analyzeChunkFormat(chunks, data.page_count)
         setChunkFormat(format)
 
-        const firstChunkWithPos = chunks.find(c => c.positions?.length > 0)
-        if (firstChunkWithPos?.positions?.length) {
-          const rawPage = firstChunkWithPos.positions[0][0]
-          const viewerPage = toViewerPage(rawPage, format.pagesAreZeroBased)
-          setCurrentPage(viewerPage)
-          setPageInput(String(viewerPage))
+        // Only set initial page on first load, not after mutation refetch
+        if (!initialPageSetRef.current) {
+          initialPageSetRef.current = true
+          const firstChunkWithPos = chunks.find(c => c.positions?.length > 0)
+          if (firstChunkWithPos?.positions?.length) {
+            const rawPage = firstChunkWithPos.positions[0][0]
+            const viewerPage = toViewerPage(rawPage, format.pagesAreZeroBased)
+            setCurrentPage(viewerPage)
+            setPageInput(String(viewerPage))
+          }
         }
       } catch {
         if (!cancelled) setError('Failed to load PDF info')
