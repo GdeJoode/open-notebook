@@ -1,0 +1,2 @@
+-- Migration 38: Add is_content field to chunk table
+DEFINE FIELD is_content ON chunk TYPE bool DEFAULT true;

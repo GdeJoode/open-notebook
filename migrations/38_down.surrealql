@@ -1,0 +1,2 @@
+-- Migration 38 rollback
+REMOVE FIELD is_content ON TABLE chunk;
