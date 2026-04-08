@@ -199,22 +199,19 @@ function BboxOverlay({
         const isNoise = !rect.isContent
 
         if (isNoise) {
-          // Noise chunks: gray dashed outline, very faint fill
-          ctx.strokeStyle = '#9CA3AF80'
-          ctx.lineWidth = 1
-          ctx.setLineDash([4, 4])
-          ctx.fillStyle = '#9CA3AF08'
+          // Noise chunks: same style as normal but in gray
+          ctx.strokeStyle = isDimmed ? '#9CA3AF40' : '#9CA3AF'
+          ctx.lineWidth = isHighlighted ? 3 : 2
+          ctx.fillStyle = isHighlighted ? '#9CA3AF40' : isDimmed ? '#9CA3AF08' : '#9CA3AF20'
         } else {
           ctx.strokeStyle = isDimmed ? color + '40' : color
           ctx.lineWidth = isHighlighted ? 3 : 2
           ctx.fillStyle = isHighlighted ? color + '40' : isDimmed ? color + '08' : color + '20'
-          ctx.setLineDash([])
         }
         ctx.beginPath()
         ctx.rect(x, y, w, h)
         ctx.fill()
         ctx.stroke()
-        if (isNoise) ctx.setLineDash([])
       }
     }
 
