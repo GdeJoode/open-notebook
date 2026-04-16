@@ -38,7 +38,7 @@ SURREALDB_PASS = os.getenv("SURREALDB_PASS", os.getenv("SURREAL_PASSWORD", "root
 # ---------------------------------------------------------------------------
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", os.getenv("OLLAMA_API_BASE", "http://localhost:11434"))
-OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "mxbai-embed-large")
 OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "llama3.1:8b-instruct-q4_0")
 
 # ---------------------------------------------------------------------------
@@ -73,6 +73,19 @@ async def get_db() -> AsyncGenerator:
         await db.close()
 
 
+def _parse_ids(obj: Any) -> Any:
+    """Recursively convert RecordID objects to strings."""
+    from surrealdb import RecordID
+
+    if isinstance(obj, dict):
+        return {k: _parse_ids(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_parse_ids(item) for item in obj]
+    elif isinstance(obj, RecordID):
+        return str(obj)
+    return obj
+
+
 async def execute(
     query: str,
     params: Optional[Dict[str, Any]] = None,
@@ -80,15 +93,22 @@ async def execute(
     """Execute a SurrealQL query and return results.
 
     Convenience wrapper around get_db() for one-shot queries.
-    For multiple queries in sequence, use get_db() directly.
+    RecordID objects are automatically converted to strings.
     """
     async with get_db() as db:
         result = await db.query(query, params)
-        # SurrealDB returns a list of result sets (one per statement)
+        result = _parse_ids(result)
+        # Normalize: always return a list of dicts
         if isinstance(result, list):
-            # Flatten: return the result of the last statement
-            return result[-1] if result else []
-        return result
+            # SurrealDB may return nested lists (one per statement)
+            # or a flat list of dicts
+            if result and isinstance(result[0], list):
+                # Nested: take the last statement's results
+                return result[-1] if result else []
+            return result
+        elif isinstance(result, dict):
+            return [result]
+        return []
 
 
 async def embed_texts(texts: List[str], model: str = "") -> List[List[float]]:
@@ -115,7 +135,8 @@ async def embed_texts(texts: List[str], model: str = "") -> List[List[float]]:
             resp.raise_for_status()
             data = resp.json()
             # Ollama /api/embed returns {"embeddings": [[...]]}
-            emb = data.get("embeddings", [[]])[0]
+            embs = data.get("embeddings", [[]])
+            emb = embs[0] if embs else []
             embeddings.append(emb)
 
     return embeddings

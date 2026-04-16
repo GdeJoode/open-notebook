@@ -145,7 +145,7 @@ async def link_decisions(
         params["desc"] = description
 
     query = (
-        "RELATE $from->caused->$to SET "
+        f"RELATE {decision_a}->caused->{decision_b} SET "
         "relationship_type = $rel_type, "
         "confidence = $confidence"
     )
