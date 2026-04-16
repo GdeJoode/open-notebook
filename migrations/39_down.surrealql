@@ -1,0 +1,3 @@
+REMOVE TABLE entity_alias;
+REMOVE TABLE relation;
+REMOVE TABLE entity;

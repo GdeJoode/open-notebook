@@ -1,0 +1,44 @@
+-- Migration 40: Decision intelligence table + causal edges
+-- Part of the semantic intelligence layer (Phase 4)
+
+-- ============================================================================
+-- decision: decisions as first-class objects
+-- ============================================================================
+
+DEFINE TABLE decision SCHEMAFULL;
+
+DEFINE FIELD category ON decision TYPE string;
+DEFINE FIELD scenario ON decision TYPE option<string>;
+DEFINE FIELD reasoning ON decision TYPE string;
+DEFINE FIELD outcome ON decision TYPE option<string>;
+DEFINE FIELD confidence ON decision TYPE float DEFAULT 1.0;
+DEFINE FIELD timestamp ON decision TYPE datetime DEFAULT time::now();
+
+-- Provenance
+DEFINE FIELD source_documents ON decision FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD related_entities ON decision FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD extraction_method ON decision TYPE string DEFAULT "manual";
+DEFINE FIELD provenance_chain ON decision FLEXIBLE TYPE array DEFAULT [];
+
+-- Embedding for precedent search
+DEFINE FIELD embedding ON decision FLEXIBLE TYPE array;
+
+-- Metadata
+DEFINE FIELD properties ON decision FLEXIBLE TYPE object DEFAULT {};
+DEFINE FIELD status ON decision TYPE string DEFAULT "active";
+DEFINE FIELD created_at ON decision TYPE datetime DEFAULT time::now();
+
+-- Indexes
+DEFINE INDEX idx_decision_category ON decision FIELDS category;
+DEFINE INDEX idx_decision_status ON decision FIELDS status;
+
+-- ============================================================================
+-- caused: causal edges between decisions
+-- ============================================================================
+
+DEFINE TABLE caused SCHEMAFULL TYPE RELATION FROM decision TO decision;
+
+DEFINE FIELD relationship_type ON caused TYPE string DEFAULT "caused";
+DEFINE FIELD description ON caused TYPE option<string>;
+DEFINE FIELD confidence ON caused TYPE float DEFAULT 1.0;
+DEFINE FIELD created_at ON caused TYPE datetime DEFAULT time::now();

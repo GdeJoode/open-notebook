@@ -1,0 +1,87 @@
+-- Migration 39: Canonical entity graph — entity, relation, entity_alias tables
+-- Part of the semantic intelligence layer (Phase 0.5)
+--
+-- entity: canonical entities with provenance, embeddings, graph scores
+-- relation: typed edges between entities (stored as RELATE table)
+-- entity_alias: surface forms that map to a canonical entity
+
+-- ============================================================================
+-- entity: canonical entity records
+-- ============================================================================
+
+DEFINE TABLE entity SCHEMAFULL;
+
+-- Identity
+DEFINE FIELD canonical_name ON entity TYPE string;
+DEFINE FIELD entity_type ON entity TYPE string;
+DEFINE FIELD description ON entity TYPE option<string>;
+
+-- Provenance (Phase 3)
+DEFINE FIELD source_documents ON entity FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD extracted_at ON entity TYPE datetime DEFAULT time::now();
+DEFINE FIELD extraction_method ON entity TYPE string DEFAULT "llm";
+DEFINE FIELD confidence ON entity TYPE float DEFAULT 1.0;
+DEFINE FIELD provenance_chain ON entity FLEXIBLE TYPE array DEFAULT [];
+
+-- Properties (flexible key-value for domain-specific attributes)
+DEFINE FIELD properties ON entity FLEXIBLE TYPE object DEFAULT {};
+
+-- Embedding for semantic search
+DEFINE FIELD embedding ON entity FLEXIBLE TYPE array;
+
+-- Graph algorithm scores (Phase 1 — written by graph_algorithms.py)
+DEFINE FIELD pagerank ON entity TYPE option<float>;
+DEFINE FIELD betweenness ON entity TYPE option<float>;
+DEFINE FIELD community_id ON entity TYPE option<int>;
+
+-- Status
+DEFINE FIELD status ON entity TYPE string DEFAULT "active";
+DEFINE FIELD merged_into ON entity TYPE option<string>;
+DEFINE FIELD created_at ON entity TYPE datetime DEFAULT time::now();
+DEFINE FIELD updated_at ON entity TYPE datetime DEFAULT time::now();
+
+-- Indexes
+DEFINE INDEX idx_entity_name ON entity FIELDS canonical_name;
+DEFINE INDEX idx_entity_type ON entity FIELDS entity_type;
+DEFINE INDEX idx_entity_status ON entity FIELDS status;
+DEFINE INDEX idx_entity_name_type ON entity FIELDS canonical_name, entity_type UNIQUE;
+
+-- ============================================================================
+-- entity_alias: surface forms → canonical entity mapping
+-- ============================================================================
+
+DEFINE TABLE entity_alias SCHEMAFULL;
+
+DEFINE FIELD alias_text ON entity_alias TYPE string;
+DEFINE FIELD canonical_entity ON entity_alias TYPE record<entity>;
+DEFINE FIELD source_document ON entity_alias TYPE option<string>;
+DEFINE FIELD confidence ON entity_alias TYPE float DEFAULT 1.0;
+DEFINE FIELD created_at ON entity_alias TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX idx_alias_text ON entity_alias FIELDS alias_text;
+DEFINE INDEX idx_alias_entity ON entity_alias FIELDS canonical_entity;
+
+-- ============================================================================
+-- relation: typed directed edges between entities
+-- Uses SurrealDB RELATE syntax: entity -[relation]-> entity
+-- ============================================================================
+
+DEFINE TABLE relation SCHEMAFULL TYPE RELATION FROM entity TO entity;
+
+DEFINE FIELD relation_type ON relation TYPE string;
+DEFINE FIELD properties ON relation FLEXIBLE TYPE object DEFAULT {};
+
+-- Provenance
+DEFINE FIELD source_documents ON relation FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD extracted_at ON relation TYPE datetime DEFAULT time::now();
+DEFINE FIELD extraction_method ON relation TYPE string DEFAULT "llm";
+DEFINE FIELD confidence ON relation TYPE float DEFAULT 1.0;
+DEFINE FIELD provenance_chain ON relation FLEXIBLE TYPE array DEFAULT [];
+
+-- Status
+DEFINE FIELD status ON relation TYPE string DEFAULT "active";
+DEFINE FIELD created_at ON relation TYPE datetime DEFAULT time::now();
+
+-- Indexes
+DEFINE INDEX idx_relation_type ON relation FIELDS relation_type;
+DEFINE INDEX idx_relation_status ON relation FIELDS status;
