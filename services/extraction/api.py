@@ -524,8 +524,8 @@ async def extract(req: ExtractRequest):
         output_file=str(output_path),
         ontology=ontology_name,
         chunks_processed=len(chunks),
-        entities=[EntityResult(**e) for e in unique_entities],
-        relations=[RelationResult(**r) for r in unique_relations],
+        entities=[EntityResult(**e) for e in unique_entities if e.get("name") and e.get("type")],
+        relations=[RelationResult(**r) for r in unique_relations if r.get("source") and r.get("target") and r.get("type")],
         unique_entity_count=len(unique_entities),
         unique_relation_count=len(unique_relations),
         entities_written=ents_written,
@@ -969,3 +969,74 @@ async def merge(req: MergeRequest):
 
     finally:
         await db.close()
+
+
+# ===========================================================================
+# Vocabulary management endpoints
+# ===========================================================================
+
+
+@app.get("/vocabularies")
+async def get_vocabularies():
+    """List loaded vocabularies with entry counts."""
+    from vocabulary_manager import list_vocabs
+    return {"vocabularies": list_vocabs()}
+
+
+@app.post("/vocabularies/refresh")
+async def refresh_vocabularies():
+    """Download/refresh all external vocabularies to local YAML files."""
+    from vocabulary_manager import refresh_all
+    t0 = time.time()
+    results = await refresh_all()
+    return {
+        "refreshed": results,
+        "total_entries": sum(results.values()),
+        "processing_seconds": round(time.time() - t0, 2),
+    }
+
+
+# ===========================================================================
+# Entity validation endpoints
+# ===========================================================================
+
+
+@app.post("/validate")
+async def validate_endpoint(
+    entity_type: Optional[str] = None,
+    use_api: bool = True,
+    apply_changes: bool = True,
+):
+    """Validate all active entities against external vocabularies.
+
+    Checks SurrealDB cache → local YAML → external APIs (if enabled).
+    Reclassifies wrong types, flags generic terms and misclassified persons.
+    """
+    from entity_validator import validate_entities
+
+    t0 = time.time()
+
+    where = "WHERE status = 'active'"
+    if entity_type:
+        where += f" AND entity_type = '{entity_type}'"
+    entities = await _db_query(f"SELECT * FROM entity {where};")
+
+    if not entities:
+        return {"message": "No entities to validate", "total": 0}
+
+    results = await validate_entities(entities, use_api=use_api, apply_changes=apply_changes)
+
+    by_status = {}
+    for r in results:
+        by_status.setdefault(r.status, []).append(r.to_dict())
+
+    return {
+        "total_entities": len(entities),
+        "results_by_status": {k: len(v) for k, v in by_status.items()},
+        "validated": by_status.get("validated", []),
+        "reclassified": by_status.get("reclassified", []),
+        "enriched": by_status.get("enriched", []),
+        "flagged_generic": by_status.get("flagged_generic", []),
+        "unvalidated": by_status.get("unvalidated", []),
+        "processing_seconds": round(time.time() - t0, 2),
+    }

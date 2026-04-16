@@ -8,8 +8,13 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # Copy ontology YAML files
 COPY packages/ontology-manager/ontologies /app/ontologies
 
-# Copy the service API
+# Copy the service API and modules
 COPY services/extraction/api.py /app/api.py
+COPY services/extraction/vocabulary_manager.py /app/vocabulary_manager.py
+COPY services/extraction/entity_validator.py /app/entity_validator.py
+
+# Create vocabularies directory (populated via POST /vocabularies/refresh)
+RUN mkdir -p /app/vocabularies
 
 EXPOSE 8103
 
@@ -32,5 +37,8 @@ ENV SURREALDB_PASS="root"
 # Ontology
 ENV ONTOLOGY_DIR="/app/ontologies"
 ENV DEFAULT_ONTOLOGY="regiodeal"
+
+# Vocabularies
+ENV VOCAB_DIR="/app/vocabularies"
 
 CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8103"]

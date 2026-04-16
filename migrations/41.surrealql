@@ -1,0 +1,20 @@
+-- Migration 41: Reference entity cache for external vocabulary validation
+-- Caches validated entities from TOOI, CBS, OpenAlex, ROR, Wikidata
+-- to avoid repeated API calls.
+
+DEFINE TABLE reference_entity SCHEMAFULL;
+
+DEFINE FIELD canonical_name ON reference_entity TYPE string;
+DEFINE FIELD entity_type ON reference_entity TYPE string;
+DEFINE FIELD source_vocabulary ON reference_entity TYPE string;
+DEFINE FIELD external_uri ON reference_entity TYPE option<string>;
+DEFINE FIELD external_id ON reference_entity TYPE option<string>;
+DEFINE FIELD aliases ON reference_entity FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD properties ON reference_entity FLEXIBLE TYPE object DEFAULT {};
+DEFINE FIELD parent_name ON reference_entity TYPE option<string>;
+DEFINE FIELD last_validated ON reference_entity TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX idx_ref_name ON reference_entity FIELDS canonical_name;
+DEFINE INDEX idx_ref_type ON reference_entity FIELDS entity_type;
+DEFINE INDEX idx_ref_source ON reference_entity FIELDS source_vocabulary;
+DEFINE INDEX idx_ref_name_source ON reference_entity FIELDS canonical_name, source_vocabulary UNIQUE;
