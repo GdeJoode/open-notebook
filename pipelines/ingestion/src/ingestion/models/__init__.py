@@ -9,6 +9,7 @@ Provides structured data models for:
 """
 
 from .document import (
+    AnnotationInfo,
     ElementType,
     BoundingBox,
     ExtractedElement,
@@ -31,6 +32,7 @@ from .source import (
 
 __all__ = [
     # Document models
+    "AnnotationInfo",
     "ElementType",
     "BoundingBox",
     "ExtractedElement",

@@ -11,7 +11,7 @@ import uuid
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
 import numpy as np
-from esperanto import LanguageModel
+from esperanto import AIFactory
 from loguru import logger
 
 from summarization.config import SummarizationConfig
@@ -54,19 +54,27 @@ class RaptorStrategy(BaseSummarizationStrategy):
     # LLM helpers
     # ------------------------------------------------------------------
 
-    def _get_model(self, max_tokens: int) -> LanguageModel:
-        return LanguageModel(
+    def _get_model(self, max_tokens: int):
+        return AIFactory.create_language(
+            self._llm_config.provider,
             model_name=self._llm_config.model_name,
-            api_base=self._llm_config.base_url,
-            temperature=self._llm_config.temperature,
-            max_tokens=max_tokens,
+            config={
+                "base_url": self._llm_config.base_url,
+                "temperature": self._llm_config.temperature,
+                "max_tokens": max_tokens,
+                "num_ctx": self._llm_config.num_ctx,
+            },
         )
 
     async def _call_llm(self, prompt: str, max_tokens: int = 200) -> str:
         model = self._get_model(max_tokens)
-        messages = [{"role": "user", "content": prompt}]
-        response = await model.achat(messages)
-        return response.text
+        prompt = self.apply_output_instructions(prompt)
+        messages = [
+            {"role": "system", "content": self.get_system_prompt()},
+            {"role": "user", "content": prompt},
+        ]
+        response = await model.achat_complete(messages)
+        return self.normalize_response(response.content)
 
     # ------------------------------------------------------------------
     # Embedding helpers
@@ -162,16 +170,16 @@ class RaptorStrategy(BaseSummarizationStrategy):
                 num_input_chunks=0,
             )
 
-        # Single chunk — no clustering needed
+        # Single chunk — no clustering needed, use full token budget
         if len(chunks) == 1:
             text = chunks[0].text.strip()
             prompt = (
-                "Provide a concise summary of the following text.\n\n"
+                "Provide a comprehensive summary of the following text.\n\n"
                 f"TEXT:\n{text}"
             )
             summary = await self._call_llm(
                 prompt,
-                max_tokens=self._raptor_config.summarization_max_tokens,
+                max_tokens=self._llm_config.max_tokens,
             )
             node = SummaryNode(
                 text=summary,
@@ -336,7 +344,7 @@ class RaptorStrategy(BaseSummarizationStrategy):
                 )
                 document_summary = await self._call_llm(
                     prompt,
-                    max_tokens=self._raptor_config.summarization_max_tokens,
+                    max_tokens=self._llm_config.max_tokens,
                 )
                 current_layer += 1
                 root_node = SummaryNode(

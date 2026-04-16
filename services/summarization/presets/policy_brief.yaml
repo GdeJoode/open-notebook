@@ -1,0 +1,73 @@
+name: policy_brief
+description: Policy documents, government reports, advisory briefs, beleidsstukken
+
+detect:
+  keywords:
+    - beleid
+    - beleidsbrief
+    - kabinet
+    - minister
+    - kamerbrief
+    - coalitie
+    - motie
+    - amendement
+    - rijksoverheid
+    - gemeente
+    - provincie
+    - policy
+    - regulation
+    - legislation
+    - governance
+    - stakeholder
+    - implementation
+    - recommendation
+    - commissie
+    - bestuursakkoord
+    - decentralisatie
+    - regio
+  patterns:
+    - "minister[- ]president"
+    - "Tweede Kamer|Eerste Kamer"
+    - "EU|OECD|VNG|IPO"
+    - "artikel \\d+"
+    - "wetgeving|regelgeving"
+    - "begrotings"
+  transcription_boost: false
+
+system_prompt: >
+  You are a policy analyst specializing in government documents and
+  public administration. You extract policy positions, stakeholder
+  impacts, and implementation details. Write clearly for a professional
+  audience. Only report what the document actually states. Do not expand
+  abbreviations or acronyms unless the document itself does so. Never
+  add information not present in the source. IMPORTANT: You MUST write
+  your entire response in the same
+  language as the source material. If the source is in Dutch, write in
+  Dutch. If in English, write in English. This includes section headers.
+
+output_instructions: |
+  IMPORTANT: Write everything in the same language as the input text,
+  including all section headers.
+
+  Structure your summary with these sections (translate headers to match
+  the source language):
+
+  ## Policy Context
+  The background and problem statement that motivates this document.
+
+  ## Key Policy Positions
+  The main policy proposals, positions, or recommendations.
+  Be specific about what is proposed and by whom.
+
+  ## Stakeholder Impact
+  Which parties are affected and how (governments, citizens, sectors).
+
+  ## Implementation
+  Proposed implementation approach, timeline, and resources.
+
+  ## Financial Implications
+  Budget, funding sources, or financial consequences if discussed.
+
+  ## Political Considerations
+  Political dynamics, coalition positions, or parliamentary context
+  if relevant.

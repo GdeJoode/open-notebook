@@ -10,7 +10,7 @@ import uuid
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from esperanto import LanguageModel
+from esperanto import AIFactory
 from loguru import logger
 
 from summarization.config import SummarizationConfig
@@ -43,19 +43,27 @@ class TreeKGStrategy(BaseSummarizationStrategy):
     # LLM helpers
     # ------------------------------------------------------------------
 
-    def _get_model(self, max_tokens: int) -> LanguageModel:
-        return LanguageModel(
+    def _get_model(self, max_tokens: int):
+        return AIFactory.create_language(
+            self._llm_config.provider,
             model_name=self._llm_config.model_name,
-            api_base=self._llm_config.base_url,
-            temperature=self._llm_config.temperature,
-            max_tokens=max_tokens,
+            config={
+                "base_url": self._llm_config.base_url,
+                "temperature": self._llm_config.temperature,
+                "max_tokens": max_tokens,
+                "num_ctx": self._llm_config.num_ctx,
+            },
         )
 
     async def _call_llm(self, prompt: str, max_tokens: int = 500) -> str:
         model = self._get_model(max_tokens)
-        messages = [{"role": "user", "content": prompt}]
-        response = await model.achat(messages)
-        return response.text
+        prompt = self.apply_output_instructions(prompt)
+        messages = [
+            {"role": "system", "content": self.get_system_prompt()},
+            {"role": "user", "content": prompt},
+        ]
+        response = await model.achat_complete(messages)
+        return self.normalize_response(response.content)
 
     # ------------------------------------------------------------------
     # Section tree construction

@@ -66,6 +66,36 @@ class BoundingBox:
         """Area of bounding box."""
         return self.width * self.height
 
+    def overlap_ratio(self, other: "BoundingBox") -> float:
+        """Calculate intersection-over-minimum-area overlap with another bbox.
+
+        Returns a value between 0.0 (no overlap) and 1.0 (full overlap).
+        Uses the smaller area as denominator so a small highlight fully
+        inside a large chunk still scores 1.0.
+        """
+        if self.page != other.page:
+            return 0.0
+        ix1 = max(self.x, other.x)
+        iy1 = max(self.y, other.y)
+        ix2 = min(self.x2, other.x2)
+        iy2 = min(self.y2, other.y2)
+        if ix2 <= ix1 or iy2 <= iy1:
+            return 0.0
+        intersection = (ix2 - ix1) * (iy2 - iy1)
+        min_area = min(self.area, other.area)
+        if min_area <= 0:
+            return 0.0
+        return intersection / min_area
+
+    @staticmethod
+    def union(a: "BoundingBox", b: "BoundingBox") -> "BoundingBox":
+        """Create the smallest bbox that contains both a and b."""
+        x = min(a.x, b.x)
+        y = min(a.y, b.y)
+        x2 = max(a.x2, b.x2)
+        y2 = max(a.y2, b.y2)
+        return BoundingBox(x=x, y=y, width=x2 - x, height=y2 - y, page=a.page)
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -107,6 +137,37 @@ class BoundingBox:
 
 
 @dataclass
+class AnnotationInfo:
+    """
+    PDF annotation attached to an extracted element.
+
+    Represents highlights, underlines, strikeouts, sticky notes, ink
+    annotations, and freetext annotations extracted via PyMuPDF.
+    """
+    type: str  # "highlight", "underline", "strikeout", "squiggly", "sticky_note", "ink", "freetext"
+    color: list[float] = field(default_factory=list)  # RGB [0.0-1.0]
+    color_name: str = ""  # "yellow", "green", "red", "blue", "pink", "orange", "purple"
+    comment: str = ""  # Text content of sticky note or popup comment
+    highlighted_text: str = ""  # The text covered by the annotation
+    handwritten_text: str = ""  # VLM-recognized text if the annotation was handwritten
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary."""
+        d: dict[str, Any] = {
+            "type": self.type,
+            "color": self.color,
+            "color_name": self.color_name,
+        }
+        if self.comment:
+            d["comment"] = self.comment
+        if self.highlighted_text:
+            d["highlighted_text"] = self.highlighted_text
+        if self.handwritten_text:
+            d["handwritten_text"] = self.handwritten_text
+        return d
+
+
+@dataclass
 class ExtractedElement:
     """
     Base class for extracted document elements.
@@ -116,6 +177,8 @@ class ExtractedElement:
     - Type classification
     - Optional bounding box for spatial location
     - Page number for organization
+    - Annotations from PDF markup (highlights, notes, etc.)
+    - Source indicating how the content was extracted
     """
     content: str
     element_type: ElementType
@@ -124,12 +187,16 @@ class ExtractedElement:
     confidence: float = 1.0
     metadata: dict[str, Any] = field(default_factory=dict)
     # Section hierarchy from Docling
-    section_path: list[str] = field(default_factory=list)  # e.g. ["Chapter 1", "Section 1.2"]
-    section_level: int = 0  # Nesting depth in document
+    section_path: list[str] = field(default_factory=list)
+    section_level: int = 0
+    # Annotations from PDF markup
+    annotations: list[AnnotationInfo] = field(default_factory=list)
+    # How the content was extracted
+    source: str = "native"  # "native", "ocr", "vlm_handwriting"
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
-        return {
+        d = {
             "content": self.content,
             "type": self.element_type.value,
             "page": self.page,
@@ -139,6 +206,11 @@ class ExtractedElement:
             "section_path": self.section_path,
             "section_level": self.section_level,
         }
+        if self.annotations:
+            d["annotations"] = [a.to_dict() for a in self.annotations]
+        if self.source != "native":
+            d["source"] = self.source
+        return d
 
 
 @dataclass

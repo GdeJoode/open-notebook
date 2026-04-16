@@ -3,7 +3,7 @@
 import uuid
 from typing import List
 
-from esperanto import LanguageModel
+from esperanto import AIFactory
 from loguru import logger
 
 from summarization.config import SummarizationConfig
@@ -30,13 +30,17 @@ class NaiveLLMStrategy(BaseSummarizationStrategy):
         self._llm_config = config.llm
         self._naive_config = config.naive
 
-    def _get_model(self) -> LanguageModel:
+    def _get_model(self):
         """Create an Esperanto LanguageModel from config."""
-        return LanguageModel(
+        return AIFactory.create_language(
+            self._llm_config.provider,
             model_name=self._llm_config.model_name,
-            api_base=self._llm_config.base_url,
-            temperature=self._llm_config.temperature,
-            max_tokens=self._naive_config.summarization_max_tokens,
+            config={
+                "base_url": self._llm_config.base_url,
+                "temperature": self._llm_config.temperature,
+                "max_tokens": self._naive_config.summarization_max_tokens,
+                "num_ctx": self._llm_config.num_ctx,
+            },
         )
 
     def _split_into_windows(self, text: str) -> List[str]:
@@ -61,9 +65,13 @@ class NaiveLLMStrategy(BaseSummarizationStrategy):
     async def _call_llm(self, prompt: str) -> str:
         """Send a prompt to the LLM and return the response text."""
         model = self._get_model()
-        messages = [{"role": "user", "content": prompt}]
-        response = await model.achat(messages)
-        return response.text
+        prompt = self.apply_output_instructions(prompt)
+        messages = [
+            {"role": "system", "content": self.get_system_prompt()},
+            {"role": "user", "content": prompt},
+        ]
+        response = await model.achat_complete(messages)
+        return self.normalize_response(response.content)
 
     async def summarize(self, chunks: List[ChunkInput]) -> SummarizationResult:
         """Run naive summarization on the provided chunks."""

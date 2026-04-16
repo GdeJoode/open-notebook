@@ -11,6 +11,94 @@ services:
     pull_policy: always
     user: root
     restart: always
+  docling:
+    build:
+      context: .
+      dockerfile: services/docling/Dockerfile
+    ports:
+      - "8100:8100"
+    volumes:
+      - ./docling_input:/data/input
+      - ./docling_output:/data/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - DOCLING_DEVICE=cuda
+      - DOCLING_NUM_THREADS=4
+      - DOCLING_DO_OCR=true
+      - DOCLING_OCR_ENGINE=easyocr
+      - DOCLING_OCR_LANG=en
+      - DOCLING_DO_TABLE_STRUCTURE=true
+      - DOCLING_TABLE_MODE=accurate
+      - DOCLING_GENERATE_PAGE_IMAGES=false
+      - DOCLING_GENERATE_PICTURE_IMAGES=true
+      - DOCLING_IMAGES_SCALE=2.0
+      - DOCLING_DO_PICTURE_CLASSIFICATION=true
+      - DOCLING_DO_PICTURE_DESCRIPTION=true
+      - DOCLING_VLM_MODEL=HuggingFaceTB/SmolVLM-256M-Instruct
+      - DOCLING_DO_FORMULA_EXTRACTION=true
+      - DOCLING_DO_CODE_ENRICHMENT=true
+      - DOCLING_ORGANIZE_BY_PAGE=true
+      - VLM_PROVIDER=ollama
+      - VLM_MODEL=granite3.2-vision
+      - VLM_BASE_URL=http://host.docker.internal:11434
+      - VLM_TIMEOUT=120
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
+  summarization:
+    build:
+      context: .
+      dockerfile: services/summarization/Dockerfile
+    ports:
+      - "8101:8101"
+    volumes:
+      - ./summarization_data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - SUMMARIZATION_PROVIDER=ollama
+      - SUMMARIZATION_MODEL=llama3.1:8b-instruct-q4_0
+      - SUMMARIZATION_BASE_URL=http://host.docker.internal:11434
+      - SUMMARIZATION_TEMPERATURE=0.1
+      - SUMMARIZATION_MAX_TOKENS=3000
+      - EMBEDDING_PROVIDER=ollama
+      - EMBEDDING_MODEL=nomic-embed-text
+      - EMBEDDING_BASE_URL=http://host.docker.internal:11434
+      - LLM_API_KEY=
+    restart: always
+  whisperx:
+    build:
+      context: .
+      dockerfile: services/whisperx/Dockerfile
+    ports:
+      - "8102:8102"
+    volumes:
+      - ./whisperx_data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - WHISPERX_MODEL=large-v3
+      - WHISPERX_LANGUAGE=
+      - WHISPERX_DEVICE=cuda
+      - WHISPERX_COMPUTE_TYPE=float16
+      - WHISPERX_BATCH_SIZE=16
+      - WHISPERX_DIARIZATION=true
+      - WHISPERX_MIN_SPEAKERS=
+      - WHISPERX_MAX_SPEAKERS=
+      - WHISPERX_WORD_TIMESTAMPS=true
+      - HF_TOKEN=${HF_TOKEN:-}
+    restart: always
   open_notebook:
     build:
       context: .

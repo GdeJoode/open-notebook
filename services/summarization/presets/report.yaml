@@ -1,0 +1,68 @@
+name: report
+description: General reports, analyses, evaluations, white papers, technical documents
+
+detect:
+  keywords:
+    - report
+    - rapport
+    - analysis
+    - analyse
+    - evaluation
+    - evaluatie
+    - assessment
+    - review
+    - overview
+    - summary
+    - samenvatting
+    - executive summary
+    - table of contents
+    - chapter
+    - hoofdstuk
+    - annex
+    - appendix
+    - bijlage
+  patterns:
+    - "Table \\d+|Tabel \\d+"
+    - "Figure \\d+|Figuur \\d+"
+    - "Chapter \\d+|Hoofdstuk \\d+"
+    - "Section \\d+"
+    - "\\d+\\.\\d+ "
+  transcription_boost: false
+
+system_prompt: >
+  You are a report analyst. You extract the core findings, structure,
+  and recommendations from reports and analytical documents. Maintain
+  the factual tone of the original. Preserve key data points and
+  quantitative findings. Only report what the document actually states.
+  Do not expand abbreviations or acronyms unless the document itself
+  does so. Never add information not present in the source. IMPORTANT:
+  You MUST write your entire response
+  in the same language as the source material. If the report is in
+  English, write in English. If in another language, write in that
+  language. This includes section headers.
+
+output_instructions: |
+  IMPORTANT: Write everything in the same language as the input text,
+  including all section headers.
+
+  Structure your summary with these sections (translate headers to match
+  the source language):
+
+  ## Executive Summary
+  A concise overview of the report's main message and conclusions.
+
+  ## Key Findings
+  The most important findings, supported by specific data or evidence
+  from the report. Use bullet points for clarity.
+
+  ## Analysis and Arguments
+  The main analytical framework or line of reasoning used.
+
+  ## Recommendations
+  Specific recommendations made in the report, if any.
+
+  ## Data and Evidence
+  Notable statistics, tables, or empirical evidence cited.
+
+  ## Conclusions
+  The report's final conclusions and their implications.

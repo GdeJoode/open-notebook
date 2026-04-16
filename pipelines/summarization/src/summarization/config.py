@@ -14,7 +14,7 @@ class LLMConfig:
     """LLM provider settings shared by all strategies."""
 
     model_name: str = field(
-        default_factory=lambda: os.getenv("SUMMARIZATION_MODEL", "qwen2.5:14b")
+        default_factory=lambda: os.getenv("SUMMARIZATION_MODEL", "llama3.1:8b-instruct-q4_0")
     )
     provider: str = field(
         default_factory=lambda: os.getenv("SUMMARIZATION_PROVIDER", "ollama")
@@ -23,8 +23,11 @@ class LLMConfig:
         default_factory=lambda: os.getenv("SUMMARIZATION_BASE_URL", "http://localhost:11434")
     )
     temperature: float = 0.3
-    max_tokens: int = 500
+    max_tokens: int = 3000
     timeout: int = 300
+    num_ctx: int = field(
+        default_factory=lambda: int(os.getenv("SUMMARIZATION_NUM_CTX", "32768"))
+    )
 
 
 @dataclass
@@ -36,7 +39,7 @@ class RaptorConfig:
     reduction_dimension: int = 10
     cluster_threshold: float = 0.1
     max_tokens_per_cluster: int = 3500
-    summarization_max_tokens: int = 200
+    summarization_max_tokens: int = 500
     use_pca_fallback: bool = False
 
 
@@ -143,6 +146,11 @@ class SummarizationConfig:
     """
 
     strategy: str = "naive"
+
+    # Prompt customization (optional — overrides default system message / appends to prompts)
+    system_prompt: str = ""
+    output_instructions: str = ""
+
     llm: LLMConfig = field(default_factory=LLMConfig)
     raptor: RaptorConfig = field(default_factory=RaptorConfig)
     treekg: TreeKGConfig = field(default_factory=TreeKGConfig)
