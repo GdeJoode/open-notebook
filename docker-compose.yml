@@ -99,6 +99,29 @@ services:
       - WHISPERX_WORD_TIMESTAMPS=true
       - HF_TOKEN=${HF_TOKEN:-}
     restart: always
+  extraction:
+    build:
+      context: .
+      dockerfile: services/extraction/Dockerfile
+    ports:
+      - "8103:8103"
+    volumes:
+      - ./docling_output:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - EXTRACTION_MODEL=llama3.1:8b-instruct-q4_0
+      - EXTRACTION_NUM_CTX=8192
+      - EXTRACTION_CHUNK_SIZE=4000
+      - EMBEDDING_MODEL=mxbai-embed-large
+      - SURREALDB_URL=ws://host.docker.internal:8000/rpc
+      - SURREALDB_NS=open_notebook
+      - SURREALDB_DB=open_notebook
+      - SURREALDB_USER=root
+      - SURREALDB_PASS=root
+      - DEFAULT_ONTOLOGY=regiodeal
+    restart: always
   open_notebook:
     build:
       context: .
