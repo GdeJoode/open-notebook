@@ -150,6 +150,7 @@ def create_app() -> FastAPI:
         preprocessing,
         resolution_log,
         search,
+        services_proxy,
         settings,
         source_chat,
         sources,
@@ -200,6 +201,9 @@ def create_app() -> FastAPI:
         resolution_log.router, prefix="/api", tags=["resolution-log"]
     )
     application.include_router(zotero.router, prefix="/api", tags=["zotero"])
+    application.include_router(
+        services_proxy.router, prefix="/api", tags=["services"]
+    )
 
     # --- Exception Handlers ---
     @application.exception_handler(NotFoundError)
