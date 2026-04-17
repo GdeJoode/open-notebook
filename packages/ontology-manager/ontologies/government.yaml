@@ -1,0 +1,201 @@
+# government.yaml
+# Overheidsorganisaties, geografie en personen
+# Basis-ontologie voor alle Nederlandse beleidsdocumenten
+
+metadata:
+  name: "government"
+  version: "1.0.0"
+  description: "Nederlandse overheidsorganisaties, bestuurlijke geografie en personen"
+  extends: "schema_core"
+
+entity_types:
+  # ---------------------------------------------------------------------------
+  # Geografie
+  # ---------------------------------------------------------------------------
+  - name: "Gemeente"
+    description: "Nederlandse gemeente als bestuurlijke eenheid"
+    parent_type: "AdministrativeArea"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Gemeente, gemeenten, plaatsnamen"
+      - "NIET: personen (wethouders, burgemeesters)"
+    properties:
+      - name: "name"
+        data_type: "string"
+        required: true
+      - name: "provincie"
+        data_type: "reference"
+        reference_type: "Provincie"
+      - name: "cbs_code"
+        data_type: "string"
+
+  - name: "Provincie"
+    description: "Nederlandse provincie"
+    parent_type: "AdministrativeArea"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Groningen, Fryslân, Drenthe, Overijssel, Flevoland, Gelderland, Utrecht, Noord-Holland, Zuid-Holland, Zeeland, Noord-Brabant, Limburg"
+
+  - name: "FunctioneleRegio"
+    description: "Samenwerkingsgebied of economische regio (niet-bestuurlijk)"
+    parent_type: "Place"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Parkstad, Achterhoek, Foodvalley, Brainport"
+      - "Arbeidsmarktregio, COROP-gebied"
+      - "NIET: thema's, pijlers, activiteiten"
+
+  - name: "Wijk"
+    description: "Subgemeentelijk niveau: wijk, buurt, kern, dorp, stadsdeel"
+    parent_type: "Place"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Wijknamen, buurten, kernen, dorpen binnen een gemeente"
+
+  - name: "Grensregio"
+    description: "Gebied aan landsgrens, grensoverschrijdend"
+    parent_type: "Place"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Euregio, grensregio, grensoverschrijdend gebied"
+
+  - name: "Land"
+    description: "Land of staat (buitenland)"
+    parent_type: "Place"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Duitsland, België, buitenlandse staten"
+
+  - name: "BuitenlandseRegio"
+    description: "Regio in het buitenland"
+    parent_type: "Place"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Nedersaksen, Nordrhein-Westfalen, Vlaanderen"
+
+  # ---------------------------------------------------------------------------
+  # Organisaties
+  # ---------------------------------------------------------------------------
+  - name: "Ministerie"
+    description: "Nederlands ministerie"
+    parent_type: "GovernmentOrganization"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Ministerie van BZK, EZK, VWS, LNV, I&W, etc."
+      - "NIET: personen (ministers, staatssecretarissen)"
+    aliases:
+      BZK: "Ministerie van Binnenlandse Zaken en Koninkrijksrelaties"
+      EZK: "Ministerie van Economische Zaken en Klimaat"
+      EZ: "Ministerie van Economische Zaken"
+      LNV: "Ministerie van Landbouw, Natuur en Voedselkwaliteit"
+      LVVN: "Ministerie van Landbouw, Visserij, Voedselzekerheid en Natuur"
+      VWS: "Ministerie van Volksgezondheid, Welzijn en Sport"
+      OCW: "Ministerie van Onderwijs, Cultuur en Wetenschap"
+      SZW: "Ministerie van Sociale Zaken en Werkgelegenheid"
+      IenW: "Ministerie van Infrastructuur en Waterstaat"
+      JenV: "Ministerie van Justitie en Veiligheid"
+      VRO: "Ministerie van Volkshuisvesting en Ruimtelijke Ordening"
+      KGG: "Ministerie van Klimaat en Groene Groei"
+      Fin: "Ministerie van Financiën"
+      Def: "Ministerie van Defensie"
+
+  - name: "Uitvoeringsorganisatie"
+    description: "Rijksuitvoeringsorganisatie, agentschap of ZBO"
+    parent_type: "GovernmentOrganization"
+    graph_relevance: "active"
+    extraction_hints:
+      - "RVO, Rijkswaterstaat, DUO, UWV, SVB, CBS, RIVM, PBL, SCP"
+
+  - name: "Kennisinstelling"
+    description: "Adviesraad, planbureau of kennisinstelling"
+    parent_type: "Organization"
+    graph_relevance: "active"
+    extraction_hints:
+      - "PBL, SCP, CPB, RIVM, CBS, Rli, ROB, SER, WRR"
+
+  - name: "Onderwijsinstelling"
+    description: "School, ROC, hogeschool of universiteit"
+    parent_type: "EducationalOrganization"
+    graph_relevance: "active"
+    extraction_hints:
+      - "MBO, HBO, WO, ROC, universiteit, hogeschool"
+
+  - name: "Zorginstelling"
+    description: "Ziekenhuis, GGD, thuiszorgorganisatie"
+    parent_type: "Organization"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Ziekenhuis, GGD, GGZ, thuiszorg"
+
+  - name: "Woningcorporatie"
+    description: "Woningcorporatie of woningbouwvereniging"
+    parent_type: "Organization"
+    graph_relevance: "active"
+
+  - name: "EconomicBoard"
+    description: "Regionale economische samenwerkingsorganisatie"
+    parent_type: "Organization"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Economic Board, triple helix, ontwikkelingsmaatschappij"
+
+  - name: "InternationaleOrganisatie"
+    description: "Internationale of supranationale organisatie"
+    parent_type: "Organization"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Europese Unie, EU, VN, OESO, Raad van Europa"
+
+  # ---------------------------------------------------------------------------
+  # Personen (contextual — metadata, niet als graaf-node)
+  # ---------------------------------------------------------------------------
+  - name: "Bewindspersoon"
+    description: "Minister of staatssecretaris"
+    parent_type: "Person"
+    graph_relevance: "contextual"
+    extraction_hints:
+      - "Minister van ..., staatssecretaris van ..."
+
+  - name: "Bestuurder"
+    description: "Wethouder, burgemeester, gedeputeerde, CdK"
+    parent_type: "Person"
+    graph_relevance: "contextual"
+    extraction_hints:
+      - "Wethouder, burgemeester, gedeputeerde"
+
+  - name: "Ambtenaar"
+    description: "Benoemde ambtenaar, directeur, programmaleider"
+    parent_type: "Person"
+    graph_relevance: "contextual"
+    extraction_hints:
+      - "Alleen als bij naam genoemd"
+
+# ---------------------------------------------------------------------------
+# Relaties
+# ---------------------------------------------------------------------------
+
+relationship_types:
+  - name: "ONDERDEEL_VAN"
+    description: "Bestuurlijke deel-geheel relatie"
+    source_types: ["Gemeente", "Wijk", "FunctioneleRegio"]
+    target_types: ["Provincie", "Gemeente", "FunctioneleRegio"]
+
+  - name: "SAMENWERKING_MET"
+    description: "Partnerschap of samenwerkingsverband"
+    source_types: ["Organization", "Gemeente", "Provincie"]
+    target_types: ["Organization", "Gemeente", "Provincie"]
+
+  - name: "IS_BESTUURDER_VAN"
+    description: "Bestuurder van organisatie of gebied"
+    source_types: ["Bestuurder", "Bewindspersoon"]
+    target_types: ["Gemeente", "Provincie", "Ministerie"]
+
+  - name: "WERKT_GRENSOVERSCHRIJDEND_MET"
+    description: "Grensoverschrijdende samenwerking"
+    source_types: ["Grensregio", "Gemeente", "Provincie"]
+    target_types: ["BuitenlandseRegio", "Land", "InternationaleOrganisatie"]
+
+extraction_rules:
+  - "Classify persons as Bewindspersoon, Bestuurder, or Ambtenaar — NEVER as Gemeente or Ministerie"
+  - "If an abbreviation is used (BZK, IZA), also include the full name"
+  - "Do not extract generic terms like inwoners, jongeren, bedrijfsleven, overheden"

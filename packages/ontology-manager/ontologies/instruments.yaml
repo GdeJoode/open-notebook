@@ -1,0 +1,177 @@
+# instruments.yaml
+# Beleidsinstrumentarium: juridisch, kennis, financieel, samenwerking
+#
+# De vier klassieke instrumentcategorieën van de overheid.
+# Deals en akkoorden zijn een apart bestand (deals.yaml) omdat
+# die een eigen hiërarchie en properties hebben.
+
+metadata:
+  name: "instruments"
+  version: "1.0.0"
+  description: "Beleidsinstrumentarium: wetten, kennis, geld en samenwerking"
+  extends: "government"
+
+entity_types:
+  # ---------------------------------------------------------------------------
+  # 1. JURIDISCH INSTRUMENTARIUM
+  # ---------------------------------------------------------------------------
+  - name: "Wet"
+    description: "Formele wet aangenomen door Eerste en Tweede Kamer"
+    parent_type: "Legislation"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Omgevingswet, Woningwet, Gemeentewet, Wet maatschappelijke ondersteuning"
+      - "Formele wetsnaam, vaak met 'Wet' in de titel"
+    properties:
+      - name: "naam"
+        data_type: "string"
+        required: true
+      - name: "inwerkingtreding"
+        data_type: "date"
+      - name: "status"
+        data_type: "enum"
+        enum_values: ["vigerende", "ingetrokken", "in_voorbereiding"]
+
+  - name: "AMvB"
+    description: "Algemene Maatregel van Bestuur"
+    parent_type: "Legislation"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Besluit, AMvB, Algemene Maatregel van Bestuur"
+
+  - name: "Verordening"
+    description: "Gemeentelijke of provinciale verordening"
+    parent_type: "Legislation"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Verordening, gemeentelijke regels, provinciale verordening"
+
+  - name: "Beleidsregel"
+    description: "Beleidsregel of richtlijn"
+    parent_type: "Legislation"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Beleidsregel, richtlijn, kader, leidraad"
+
+  # ---------------------------------------------------------------------------
+  # 2. KENNIS INSTRUMENTARIUM
+  # ---------------------------------------------------------------------------
+  - name: "Onderzoek"
+    description: "Onderzoeksrapport, studie of verkenning"
+    parent_type: "CreativeWork"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Onderzoek, studie, verkenning, analyse"
+      - "Rapport van PBL, SCP, CBS, CPB"
+
+  - name: "Monitor"
+    description: "Periodieke monitoring of meting"
+    parent_type: "CreativeWork"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Monitor Brede Welvaart, Regionale Monitor, dashboard"
+      - "Periodieke meting, voortgangsrapportage"
+
+  - name: "Evaluatie"
+    description: "Beleidsevaluatie of effectmeting"
+    parent_type: "CreativeWork"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Evaluatie, effectmeting, doorlichting, review"
+
+  - name: "Advies"
+    description: "Adviesrapport van adviesraad of commissie"
+    parent_type: "CreativeWork"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Advies van Rli, ROB, SER, WRR"
+      - "Aanbeveling, adviesrapport"
+
+  - name: "Beleidsnota"
+    description: "Kamerbrief, visiedocument of beleidsnotitie"
+    parent_type: "CreativeWork"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Kamerbrief, visie, nota, white paper"
+      - "Strategie, actieplan, agenda"
+
+  # ---------------------------------------------------------------------------
+  # 3. FINANCIEEL INSTRUMENTARIUM
+  # ---------------------------------------------------------------------------
+  - name: "Subsidieregeling"
+    description: "Subsidieregeling of financieringsinstrument"
+    parent_type: "GovernmentService"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Subsidie, regeling, SPUK, specifieke uitkering"
+      - "Financieringsinstrument, stimuleringsregeling"
+    properties:
+      - name: "budget"
+        data_type: "float"
+      - name: "looptijd"
+        data_type: "string"
+
+  - name: "Fonds"
+    description: "Overheidsfonds of investeringsfonds"
+    parent_type: "GovernmentService"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Gemeenschapsfonds, Groeifonds, Nationaal Groeifonds"
+      - "Regio Envelop, Just Transition Fund"
+
+  - name: "Investering"
+    description: "Publieke investering in infrastructuur of voorzieningen"
+    parent_type: "GovernmentService"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Investering, cofinanciering, bijdrage"
+
+  # ---------------------------------------------------------------------------
+  # 4. SAMENWERKINGSINSTRUMENTARIUM
+  # Deals en akkoorden — zie deals.yaml voor de volle hiërarchie
+  # Hier alleen de basis-referentie
+  # ---------------------------------------------------------------------------
+  - name: "Convenant"
+    description: "Niet-juridisch bindende afspraak tussen partijen"
+    parent_type: "GovernmentService"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Convenant, intentieverklaring, samenwerkingsovereenkomst"
+
+  - name: "Bestuursakkoord"
+    description: "Akkoord tussen bestuurslagen (Rijk, provincies, gemeenten)"
+    parent_type: "GovernmentService"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Bestuursakkoord, interbestuurlijk programma, IBP"
+
+# ---------------------------------------------------------------------------
+# Relaties
+# ---------------------------------------------------------------------------
+
+relationship_types:
+  - name: "FINANCIERT"
+    description: "Financieringsrelatie"
+    source_types: ["Ministerie", "Provincie", "Gemeente", "Subsidieregeling", "Fonds"]
+    target_types: ["*"]
+    properties:
+      - name: "bedrag"
+        data_type: "float"
+      - name: "type"
+        data_type: "enum"
+        enum_values: ["subsidie", "cofinanciering", "investering", "bijdrage"]
+
+  - name: "VALT_ONDER"
+    description: "Valt onder verantwoordelijkheid of portefeuille van"
+    source_types: ["Subsidieregeling", "Fonds", "Onderzoek", "Monitor"]
+    target_types: ["Ministerie", "Uitvoeringsorganisatie"]
+
+  - name: "EVALUEERT"
+    description: "Evaluatie of monitoring van beleid/programma"
+    source_types: ["Evaluatie", "Monitor", "Onderzoek"]
+    target_types: ["*"]
+
+  - name: "GEBASEERD_OP"
+    description: "Beleid of instrument gebaseerd op wet, advies of onderzoek"
+    source_types: ["*"]
+    target_types: ["Wet", "Advies", "Onderzoek", "Evaluatie"]

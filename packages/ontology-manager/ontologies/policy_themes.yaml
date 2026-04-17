@@ -1,0 +1,94 @@
+# policy_themes.yaml
+# Beleidsthema's, brede welvaart en thematische concepten
+
+metadata:
+  name: "policy_themes"
+  version: "1.0.0"
+  description: "Brede welvaart thema's, beleidsthema's en indicatoren"
+
+entity_types:
+  - name: "BeleidsThema"
+    description: "Overkoepelend beleidsthema"
+    parent_type: "Concept"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Brede welvaart thema's: gezondheid, werkgelegenheid, leefbaarheid"
+      - "Vergrijzing, ontgroening, bevolkingskrimp, bereikbaarheid"
+      - "Bestaanszekerheid, kansenongelijkheid, woningmarkt"
+      - "Alleen herkenbare, benoemde thema's"
+
+  - name: "BeleidsPijler"
+    description: "Pijler of speerpunt binnen een specifiek programma of deal"
+    parent_type: "Concept"
+    graph_relevance: "active"
+    extraction_hints:
+      - "De pijlers/speerpunten van een regio deal of programma"
+      - "Alleen als expliciet als pijler of speerpunt benoemd"
+
+  - name: "Indicator"
+    description: "Meetbare indicator voor brede welvaart of beleid"
+    parent_type: "Concept"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Netto arbeidsparticipatie, levensverwachting, woningtekort"
+      - "Meetbare grootheden uit CBS Monitor Brede Welvaart"
+
+concepts:
+  - name: "BredeWelvaart"
+    description: "Overkoepelend concept voor kwaliteit van leven in brede zin"
+    related_concepts:
+      - "MaterieleWelvaart"
+      - "Gezondheid"
+      - "WonenLeefomgeving"
+      - "ArbeidVrijeTijd"
+      - "OnderwijsOntwikkeling"
+      - "SocialeVerbondenheid"
+      - "Veiligheid"
+
+  - name: "MaterieleWelvaart"
+    description: "Inkomen, vermogen, werk, koopkracht"
+    indicators: ["inkomen per hoofd", "werkloosheidspercentage", "armoede", "schulden"]
+
+  - name: "Gezondheid"
+    description: "Levensverwachting, ziekte, leefstijl, zorggebruik"
+    indicators: ["levensverwachting", "gezonde levensjaren", "overgewicht"]
+
+  - name: "WonenLeefomgeving"
+    description: "Woningkwaliteit, woonomgeving, groen, veiligheid"
+    indicators: ["woningtekort", "woontevredenheid", "afstand tot groen"]
+
+  - name: "Vergrijzing"
+    description: "Toename aandeel ouderen in de bevolking"
+    related_concepts: ["Ontgroening", "BevolkingsDaling"]
+
+  - name: "BevolkingsDaling"
+    description: "Structurele afname van bevolkingsomvang (krimp)"
+    related_concepts: ["Vergrijzing", "Leegstand"]
+
+  - name: "VoorzieningenNiveau"
+    description: "Beschikbaarheid en bereikbaarheid van voorzieningen"
+    indicators: ["afstand tot huisarts", "afstand tot basisschool", "OV-bereikbaarheid"]
+
+  - name: "Leefbaarheid"
+    description: "Kwaliteit van woon- en leefomgeving"
+
+  - name: "Vitaliteit"
+    description: "Veerkracht en toekomstbestendigheid van een gebied"
+
+relationship_types:
+  - name: "IS_PIJLER_VAN"
+    description: "Thema of pijler is onderdeel van een deal of programma"
+    source_types: ["BeleidsPijler", "BeleidsThema"]
+    target_types: ["*"]
+
+  - name: "LEIDT_TOT"
+    description: "Oorzaak-gevolg relatie"
+    extraction_hints: ["leidt tot, resulteert in, veroorzaakt"]
+
+  - name: "VERSTERKT"
+    description: "Versterkende relatie"
+    extraction_hints: ["versterkt, vergroot, vicieuze cirkel"]
+
+  - name: "VERMINDERT"
+    description: "Verminderende relatie"
+    extraction_hints: ["vermindert, voorkomt, remt af, doorbreekt"]

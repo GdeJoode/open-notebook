@@ -1,0 +1,209 @@
+# deals.yaml
+# Deals-hiërarchie: BaseDeal → RegioDeal, Woondeal, CityDeal
+#
+# Een "deal" is een samenwerkingsafspraak tussen Rijk en regio/steden
+# met cofinanciering, concrete doelen, en een bepaalde looptijd.
+# Dit is fundamenteel anders dan wetgeving (juridisch bindend) of
+# subsidies (eenzijdige financiering).
+
+metadata:
+  name: "deals"
+  version: "1.0.0"
+  description: "Deals-hiërarchie: samenwerkingsafspraken tussen Rijk en regio/steden"
+  extends: "instruments"
+
+entity_types:
+  # ---------------------------------------------------------------------------
+  # BaseDeal (abstract — niet direct instantieerbaar)
+  # ---------------------------------------------------------------------------
+  - name: "Deal"
+    description: "Samenwerkingsafspraak tussen Rijk en regio/steden met cofinanciering"
+    parent_type: "GovernmentService"
+    graph_relevance: "active"
+    abstract: true
+    extraction_hints:
+      - "Deal, samenwerkingsafspraak, convenant met cofinanciering"
+    properties:
+      - name: "naam"
+        data_type: "string"
+        required: true
+      - name: "looptijd"
+        data_type: "string"
+        description: "Start- en eindjaar"
+      - name: "rijksbijdrage"
+        data_type: "float"
+        description: "Bijdrage vanuit het Rijk in euro's"
+      - name: "regiobijdrage"
+        data_type: "float"
+        description: "Bijdrage vanuit de regio in euro's"
+      - name: "totaalbudget"
+        data_type: "float"
+      - name: "status"
+        data_type: "enum"
+        enum_values: ["in_voorbereiding", "lopend", "afgerond", "verlengd"]
+
+  # ---------------------------------------------------------------------------
+  # RegioDeal
+  # ---------------------------------------------------------------------------
+  - name: "RegioDeal"
+    description: "Regio Deal tussen Rijk en regio voor regionale ontwikkeling en brede welvaart"
+    parent_type: "Deal"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Regio Deal, Regiodeal, convenant regio deal"
+      - "Afspraak tussen Rijk en regio, cofinanciering"
+    properties:
+      - name: "regio"
+        data_type: "reference"
+        reference_type: "FunctioneleRegio"
+      - name: "tranche"
+        data_type: "string"
+        description: "Tranchenummer (1e t/m 5e)"
+      - name: "themas"
+        data_type: "array"
+        description: "Beleidsthema's waar de deal zich op richt"
+      - name: "pijlers"
+        data_type: "array"
+        description: "Pijlers/speerpunten van de deal"
+
+  # ---------------------------------------------------------------------------
+  # Woondeal
+  # ---------------------------------------------------------------------------
+  - name: "Woondeal"
+    description: "Woondeal voor woningbouwafspraken tussen Rijk en regio"
+    parent_type: "Deal"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Woondeal, woonakkoord, woningbouwafspraken"
+    properties:
+      - name: "woningbouwdoelstelling"
+        data_type: "integer"
+        description: "Aantal te bouwen woningen"
+      - name: "betaalbaar_percentage"
+        data_type: "float"
+        description: "Percentage betaalbare woningen"
+      - name: "woningtype"
+        data_type: "array"
+        description: "Type woningen (sociaal, middenhuur, koop)"
+
+  # ---------------------------------------------------------------------------
+  # CityDeal
+  # ---------------------------------------------------------------------------
+  - name: "CityDeal"
+    description: "City Deal: thematische samenwerking tussen steden en Rijk"
+    parent_type: "Deal"
+    graph_relevance: "active"
+    extraction_hints:
+      - "City Deal, Agenda Stad, stedelijke samenwerking"
+    properties:
+      - name: "thema"
+        data_type: "string"
+        description: "Centraal thema van de City Deal"
+      - name: "deelnemende_steden"
+        data_type: "array"
+        description: "Steden die deelnemen"
+
+  # ---------------------------------------------------------------------------
+  # Akkoord (geen deal maar verwant samenwerkingsinstrument)
+  # ---------------------------------------------------------------------------
+  - name: "Akkoord"
+    description: "Bestuurlijk of maatschappelijk akkoord"
+    parent_type: "GovernmentService"
+    graph_relevance: "active"
+    extraction_hints:
+      - "GALA, IZA, Preventieakkoord, Klimaatakkoord, Coalitieakkoord"
+      - "Bestuursakkoord, nationaal akkoord, sectorakkoord"
+    properties:
+      - name: "ondertekenaars"
+        data_type: "array"
+      - name: "looptijd"
+        data_type: "string"
+
+  # ---------------------------------------------------------------------------
+  # Projecten binnen deals
+  # ---------------------------------------------------------------------------
+  - name: "Project"
+    description: "Concreet project of initiatief binnen een deal of programma"
+    parent_type: "CreativeWork"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Specifiek benoemd project, pilot, initiatief"
+      - "Bijv: 'Gezonde Huiskamer', 'Dutch TechZone', 'Greenwise Campus'"
+      - "NIET: generieke activiteiten of beschrijvingen"
+
+  - name: "Voorziening"
+    description: "Fysieke voorziening of faciliteit gerealiseerd via een deal"
+    parent_type: "Place"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Campus, hub, centrum, ontmoetingsplek, buurthuis"
+
+  # ---------------------------------------------------------------------------
+  # BeleidsProgramma (overkoepelend, niet deal-specifiek)
+  # ---------------------------------------------------------------------------
+  - name: "BeleidsProgramma"
+    description: "Meerjarig beleidsprogramma van Rijk, provincie of gemeente"
+    parent_type: "GovernmentService"
+    graph_relevance: "active"
+    extraction_hints:
+      - "Nationaal Programma, NPVR, NPLV"
+      - "Actieplan, uitvoeringsprogramma"
+      - "NIET: generieke termen als 'programma' of 'beleid'"
+
+# ---------------------------------------------------------------------------
+# Relaties
+# ---------------------------------------------------------------------------
+
+relationship_types:
+  - name: "RICHT_ZICH_OP"
+    description: "Deal/programma richt zich op gebied of thema"
+    source_types: ["Deal", "RegioDeal", "Woondeal", "CityDeal", "BeleidsProgramma"]
+    target_types: ["FunctioneleRegio", "Gemeente", "BeleidsThema", "BeleidsPijler"]
+    extraction_hints:
+      - "richt zich op, beoogt, streeft naar, met als doel"
+
+  - name: "BOUWT_VOORT_OP"
+    description: "Voortzetting of opvolging van eerder instrument"
+    extraction_hints:
+      - "bouwt voort op, vervolg op, in lijn met, tranche II/III"
+
+  - name: "INVESTEERT_IN"
+    description: "Investering in thema, gebied of project"
+    extraction_hints:
+      - "investeert in, zet in op, besteedt aan"
+
+  - name: "BEVAT_PROJECT"
+    description: "Deal of programma bevat een project"
+    source_types: ["Deal", "RegioDeal", "BeleidsProgramma"]
+    target_types: ["Project", "Voorziening"]
+
+  - name: "ONDERTEKENT"
+    description: "Persoon of organisatie ondertekent een deal of akkoord"
+    source_types: ["Bewindspersoon", "Bestuurder", "Ministerie", "Gemeente", "Provincie"]
+    target_types: ["Deal", "RegioDeal", "Woondeal", "CityDeal", "Akkoord"]
+
+# ---------------------------------------------------------------------------
+# Extractie-patronen specifiek voor deals
+# ---------------------------------------------------------------------------
+
+extraction_patterns:
+  - name: "DealIdentificatie"
+    pattern: "(Regio\\s*Deal|Regiodeal|City\\s*Deal|Woondeal)\\s+([\\w\\s\\-]+?)\\s*(I{1,3}|[1-5]e?|eerste|tweede|derde|vierde|vijfde)?"
+    description: "Identificeer deal naam en eventueel tranche"
+
+  - name: "FinancieleBedragen"
+    pattern: "(€|EUR|euro)\\s*([\\d.,]+)\\s*(miljoen|miljard|mln|mrd)?"
+    description: "Extraheer financiële bedragen"
+
+  - name: "PartnerExtractie"
+    signals:
+      - "in samenwerking met"
+      - "samen met"
+      - "ondertekend door"
+      - "namens het Rijk"
+
+extraction_rules:
+  - "A RegioDeal always has a named region — extract both the deal AND the region"
+  - "Deal pillars (Leren, Werk, Gezondheid) → BeleidsPijler, not FunctioneleRegio"
+  - "Named projects within a deal (Gezonde Huiskamer, DOC33) → Project"
+  - "Generic activities (parkmanagement, procesregisseur) → do NOT extract"
