@@ -310,23 +310,26 @@ async def _extract_from_chunk(
     from model_routing import call_llm
 
     system_msg = (
-        "You are an entity extraction assistant. "
-        "Extract entities and relations from the text using the ontology. "
-        "Return ONLY valid JSON, no other text."
+        "You are a Dutch government document entity extraction system. "
+        "The input text is in Dutch. Entity names must be extracted exactly as written in the text. "
+        "Return ONLY valid JSON, no other text, no markdown."
     )
 
-    user_msg = f"""Extract entities and relations from this Dutch document text.
-Use ONLY these entity and relation types from the ontology:
+    user_msg = f"""Extract named entities and relations from this Dutch text.
+Use ONLY these types from the ontology:
 
 {ontology_prompt}
 
-Return valid JSON:
-{{"entities": [{{"name": "exact name from text", "type": "EntityType from list above", "description": "one sentence"}}],
- "relations": [{{"source": "entity name", "target": "entity name", "type": "RelationType from list above"}}]}}
+Return JSON:
+{{"entities": [{{"name": "exact name from text", "type": "EntityType"}}],
+ "relations": [{{"source": "entity name", "target": "entity name", "type": "RelationType"}}]}}
 
-IMPORTANT:
-- Use the exact names as they appear in the text
-- Do not invent or infer entities not mentioned in the text
+RULES:
+- The text is in Dutch (Nederlands). Preserve Dutch names exactly.
+- Extract ONLY named entities, not generic terms or descriptions.
+- Do not invent entities. Only extract what is explicitly mentioned.
+- No descriptions needed, only name and type.
+- Use Dutch entity names as they appear (e.g. "Ministerie van BZK" not "Ministry of Interior").
 
 TEXT:
 {chunk_text}"""

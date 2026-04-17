@@ -13,59 +13,58 @@
 # Override per request via model_override in the API payload.
 
 defaults:
-  # Default privacy when not specified
   default_privacy: "internal"
 
 providers:
   ollama:
     type: "ollama"
     base_url: "${OLLAMA_URL:-http://localhost:11434}"
-    # No API key needed
 
   nvidia:
     type: "openai_compatible"
     base_url: "${NVIDIA_API_URL:-https://integrate.api.nvidia.com/v1}"
     api_key: "${NVIDIA_API_KEY}"
-    # Free tier: Mistral Large 3 675B
+    # Default: Mistral Medium 3 (fast, good quality)
+    # For max quality, override with mistralai/mistral-large-3-675b-instruct-2512
 
 routing:
   # --- Extraction (entity/relation extraction from text) ---
   extraction:
     public:
       provider: "nvidia"
-      model: "mistralai/mistral-large-3-675b-instruct-2512"
-      temperature: 0.1
-      max_tokens: 4096
+      model: "mistralai/mistral-medium-3-instruct"
+      temperature: 0.15
+      max_tokens: 2048
     internal:
       provider: "ollama"
       model: "llama3.1:8b-instruct-q4_0"
-      temperature: 0.1
-      max_tokens: 4096
+      temperature: 0.15
+      max_tokens: 2048
       num_ctx: 8192
     confidential:
       provider: "ollama"
       model: "llama3.1:8b-instruct-q4_0"
-      temperature: 0.1
-      max_tokens: 4096
+      temperature: 0.15
+      max_tokens: 2048
       num_ctx: 8192
 
   # --- Summarization ---
   summarization:
     public:
       provider: "nvidia"
-      model: "mistralai/mistral-large-3-675b-instruct-2512"
-      temperature: 0.1
+      model: "mistralai/mistral-medium-3-instruct"
+      temperature: 0.15
       max_tokens: 4096
     internal:
       provider: "ollama"
       model: "llama3.1:8b-instruct-q4_0"
-      temperature: 0.1
+      temperature: 0.15
       max_tokens: 4096
       num_ctx: 32768
     confidential:
       provider: "ollama"
       model: "llama3.1:8b-instruct-q4_0"
-      temperature: 0.1
+      temperature: 0.15
       max_tokens: 4096
       num_ctx: 32768
 
