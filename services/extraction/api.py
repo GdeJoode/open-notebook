@@ -58,38 +58,125 @@ CHUNK_SIZE = int(os.getenv("EXTRACTION_CHUNK_SIZE", "4000"))
 # ---------------------------------------------------------------------------
 
 _ontology_cache: Dict[str, str] = {}
+_ontology_raw_cache: Dict[str, Dict] = {}
 
 
-def _load_ontology_prompt(name: str) -> str:
-    """Load an ontology YAML and format as extraction prompt context."""
-    if name in _ontology_cache:
-        return _ontology_cache[name]
+def _load_ontology_yaml(name: str, _visited: Optional[set] = None) -> Dict:
+    """Load an ontology YAML and resolve includes/extends recursively.
+
+    Merges entity_types, relationship_types, extraction_rules, and
+    extraction_patterns from all included ontologies. Prevents circular
+    includes.
+    """
+    if name in _ontology_raw_cache:
+        return _ontology_raw_cache[name]
+
+    if _visited is None:
+        _visited = set()
+    if name in _visited:
+        return {}
+    _visited.add(name)
 
     path = ONTOLOGY_DIR / f"{name}.yaml"
     if not path.exists():
         logger.warning(f"Ontology '{name}' not found at {path}")
-        return ""
+        return {}
 
     with open(path, encoding="utf-8") as f:
-        ont = yaml.safe_load(f)
+        ont = yaml.safe_load(f) or {}
+
+    # Collect all entity types, relations, rules from this file
+    merged_entity_types = list(ont.get("entity_types", []))
+    merged_relation_types = list(ont.get("relationship_types", []))
+    merged_extraction_rules = list(ont.get("extraction_rules", []))
+
+    # Resolve 'extends' (single parent)
+    extends = ont.get("metadata", {}).get("extends")
+    if extends and isinstance(extends, str):
+        parent = _load_ontology_yaml(extends, _visited)
+        merged_entity_types = list(parent.get("entity_types", [])) + merged_entity_types
+        merged_relation_types = list(parent.get("relationship_types", [])) + merged_relation_types
+        merged_extraction_rules = list(parent.get("extraction_rules", [])) + merged_extraction_rules
+
+    # Resolve 'includes' (multiple siblings)
+    includes = ont.get("metadata", {}).get("includes", [])
+    if isinstance(includes, list):
+        for inc_name in includes:
+            inc = _load_ontology_yaml(inc_name, _visited)
+            merged_entity_types.extend(inc.get("entity_types", []))
+            merged_relation_types.extend(inc.get("relationship_types", []))
+            merged_extraction_rules.extend(inc.get("extraction_rules", []))
+
+    # Deduplicate by name (last wins)
+    seen_entities = {}
+    for et in merged_entity_types:
+        seen_entities[et.get("name", "")] = et
+    seen_relations = {}
+    for rt in merged_relation_types:
+        seen_relations[rt.get("name", "")] = rt
+
+    result = {
+        "metadata": ont.get("metadata", {}),
+        "entity_types": list(seen_entities.values()),
+        "relationship_types": list(seen_relations.values()),
+        "extraction_rules": list(dict.fromkeys(merged_extraction_rules)),
+        "concepts": ont.get("concepts", []),
+        "claim_types": ont.get("claim_types", []),
+    }
+
+    _ontology_raw_cache[name] = result
+    return result
+
+
+def _load_ontology_prompt(name: str) -> str:
+    """Load an ontology and format as extraction prompt context.
+
+    Resolves includes/extends to produce a complete prompt with
+    all entity types, relation types, and extraction rules.
+    """
+    if name in _ontology_cache:
+        return _ontology_cache[name]
+
+    ont = _load_ontology_yaml(name)
+    if not ont:
+        return ""
 
     parts = ["ENTITY TYPES:"]
     for et in ont.get("entity_types", []):
         n = et.get("name", "")
         d = et.get("description", "")
+        gr = et.get("graph_relevance", "active")
         hints = et.get("extraction_hints", [])
+        if et.get("abstract"):
+            continue  # Skip abstract base classes
         line = f"- {n}: {d}"
+        if gr == "contextual":
+            line += " [contextual — extract but not for knowledge graph]"
         if hints:
             line += f" (look for: {'; '.join(hints[:2])})"
         parts.append(line)
 
     parts.append("\nRELATION TYPES:")
-    for rt in ont.get("relation_types", []):
+    for rt in ont.get("relationship_types", []):
         n = rt.get("name", "")
         d = rt.get("description", "")
         parts.append(f"- {n}: {d}")
 
+    rules = ont.get("extraction_rules", [])
+    if rules:
+        parts.append("\nEXTRACTION RULES:")
+        for rule in rules:
+            parts.append(f"- {rule}")
+
     prompt = "\n".join(parts)
+
+    logger.info(
+        f"Ontology '{name}' loaded: "
+        f"{len(ont.get('entity_types', []))} entity types, "
+        f"{len(ont.get('relationship_types', []))} relation types, "
+        f"{len(rules)} rules"
+    )
+
     _ontology_cache[name] = prompt
     return prompt
 
