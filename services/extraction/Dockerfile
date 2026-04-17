@@ -8,6 +8,10 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # Copy ontology YAML files
 COPY packages/ontology-manager/ontologies /app/ontologies
 
+# Copy shared modules (model routing)
+COPY services/shared/model_routing.py /app/model_routing.py
+COPY services/shared/model_routing.yaml /app/model_routing.yaml
+
 # Copy the service API and modules
 COPY services/extraction/api.py /app/api.py
 COPY services/extraction/vocabulary_manager.py /app/vocabulary_manager.py
@@ -37,6 +41,11 @@ ENV SURREALDB_PASS="root"
 # Ontology
 ENV ONTOLOGY_DIR="/app/ontologies"
 ENV DEFAULT_ONTOLOGY="regiodeal"
+
+# Model routing
+ENV DEFAULT_PRIVACY="internal"
+ENV NVIDIA_API_KEY=""
+ENV NVIDIA_API_URL="https://integrate.api.nvidia.com/v1"
 
 # Vocabularies
 ENV VOCAB_DIR="/app/vocabularies"

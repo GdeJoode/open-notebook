@@ -298,12 +298,24 @@ def _chunks_from_text(text: str, doc_name: str) -> List[Dict[str, Any]]:
 
 
 async def _extract_from_chunk(
-    client: httpx.AsyncClient,
     chunk_text: str,
     ontology_prompt: str,
+    privacy: str = "internal",
+    model_override: Optional[Dict] = None,
 ) -> Tuple[List[Dict], List[Dict]]:
-    """Extract entities and relations from a single chunk via LLM."""
-    prompt = f"""Extract entities and relations from this Dutch document text.
+    """Extract entities and relations from a single chunk via LLM.
+
+    Uses model_routing to select provider based on privacy level.
+    """
+    from model_routing import call_llm
+
+    system_msg = (
+        "You are an entity extraction assistant. "
+        "Extract entities and relations from the text using the ontology. "
+        "Return ONLY valid JSON, no other text."
+    )
+
+    user_msg = f"""Extract entities and relations from this Dutch document text.
 Use ONLY these entity and relation types from the ontology:
 
 {ontology_prompt}
@@ -313,35 +325,27 @@ Return valid JSON:
  "relations": [{{"source": "entity name", "target": "entity name", "type": "RelationType from list above"}}]}}
 
 IMPORTANT:
-- Extract geographical entities (gemeenten, provincies, regio's)
-- Extract organizations (ministeries, koepels, kennisinstellingen)
-- Extract policy instruments (regio deals, convenanten, programma's)
-- Extract thematic concepts (brede welvaart themes: werkgelegenheid, vergrijzing, leefbaarheid, bereikbaarheid, voorzieningen, gezondheid, onderwijs, etc.)
 - Use the exact names as they appear in the text
 - Do not invent or infer entities not mentioned in the text
 
 TEXT:
-{chunk_text}
-
-Return ONLY valid JSON, no other text."""
+{chunk_text}"""
 
     try:
-        resp = await client.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": 0.1, "num_ctx": OLLAMA_NUM_CTX},
-            },
+        response_text = await call_llm(
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            step="extraction",
+            privacy=privacy,
+            model_override=model_override,
         )
-        resp.raise_for_status()
-        text = resp.json().get("response", "")
 
-        start = text.find("{")
-        end = text.rfind("}") + 1
+        start = response_text.find("{")
+        end = response_text.rfind("}") + 1
         if start >= 0 and end > start:
-            data = json.loads(text[start:end])
+            data = json.loads(response_text[start:end])
             return data.get("entities", []), data.get("relations", [])
     except json.JSONDecodeError:
         pass
@@ -469,15 +473,24 @@ async def _write_to_surrealdb(
 # ---------------------------------------------------------------------------
 
 
+class ModelOverride(BaseModel):
+    """Override the default LLM provider/model for this request."""
+    provider: Optional[str] = Field(default=None, description="Provider: ollama, nvidia")
+    model: Optional[str] = Field(default=None, description="Model name")
+    api_key: Optional[str] = Field(default=None, description="API key (for cloud providers)")
+    base_url: Optional[str] = Field(default=None, description="Base URL override")
+
+
 class ExtractionOverride(BaseModel):
-    model: Optional[str] = None
     ontology: Optional[str] = None
     chunk_size: Optional[int] = None
 
 
 class ExtractRequest(BaseModel):
     file_path: str = Field(..., description="Path to input file (docling JSON, md, txt)")
+    privacy: str = Field(default="internal", description="Privacy level: public, internal, confidential")
     write_to_db: bool = Field(default=True, description="Write entities/relations to SurrealDB")
+    model_override: Optional[ModelOverride] = Field(default=None, description="Override default LLM")
     override: Optional[ExtractionOverride] = None
 
 
@@ -523,6 +536,13 @@ def get_ontologies():
     return {"ontologies": list_ontologies(), "default": DEFAULT_ONTOLOGY}
 
 
+@app.get("/routing")
+def get_routing():
+    """Show current model routing configuration."""
+    from model_routing import get_routing_summary
+    return get_routing_summary()
+
+
 @app.post("/extract", response_model=ExtractResponse)
 async def extract(req: ExtractRequest):
     """Extract entities and relations from a document."""
@@ -537,7 +557,8 @@ async def extract(req: ExtractRequest):
 
     # Resolve config
     ontology_name = (req.override.ontology if req.override and req.override.ontology else DEFAULT_ONTOLOGY)
-    model = (req.override.model if req.override and req.override.model else OLLAMA_MODEL)
+    privacy = req.privacy or "internal"
+    model_override_dict = req.model_override.model_dump(exclude_none=True) if req.model_override else None
 
     ontology_prompt = _load_ontology_prompt(ontology_name)
     if not ontology_prompt:
@@ -548,19 +569,41 @@ async def extract(req: ExtractRequest):
     if not chunks:
         raise HTTPException(status_code=400, detail="No content found in file")
 
-    logger.info(f"Extracting from {file_path.name}: {len(chunks)} chunks, ontology={ontology_name}, model={model}")
+    # Log routing info
+    from model_routing import get_model_config
+    route = get_model_config("extraction", privacy, model_override_dict)
+    logger.info(
+        f"Extracting from {file_path.name}: {len(chunks)} chunks, "
+        f"ontology={ontology_name}, privacy={privacy}, "
+        f"provider={route.get('provider')}, model={route.get('model')}"
+    )
 
-    # Extract from all chunks
+    # Extract from all chunks — parallel in batches
     all_entities: List[Dict] = []
     all_relations: List[Dict] = []
+    PARALLEL = 5  # concurrent LLM calls
+    if route.get("provider_type") == "openai_compatible":
+        PARALLEL = 3  # cloud free tiers have rate limits
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        for i, chunk in enumerate(chunks):
-            ents, rels = await _extract_from_chunk(client, chunk["text"], ontology_prompt)
-            all_entities.extend(ents)
-            all_relations.extend(rels)
-            if (i + 1) % 5 == 0:
-                logger.info(f"  {i+1}/{len(chunks)} chunks: {len(all_entities)} entities")
+    for batch_start in range(0, len(chunks), PARALLEL):
+        batch = chunks[batch_start:batch_start + PARALLEL]
+        tasks = [
+            _extract_from_chunk(
+                chunk["text"], ontology_prompt,
+                privacy=privacy,
+                model_override=model_override_dict,
+            )
+            for chunk in batch
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for r in results:
+            if isinstance(r, tuple):
+                ents, rels = r
+                all_entities.extend(ents)
+                all_relations.extend(rels)
+            elif isinstance(r, Exception):
+                logger.warning(f"Chunk extraction failed: {r}")
+        logger.info(f"  {min(batch_start + PARALLEL, len(chunks))}/{len(chunks)} chunks: {len(all_entities)} entities")
 
     # Deduplicate
     seen_ents: Dict[str, Dict] = {}

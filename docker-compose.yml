@@ -121,6 +121,9 @@ services:
       - SURREALDB_USER=root
       - SURREALDB_PASS=root
       - DEFAULT_ONTOLOGY=regiodeal
+      - DEFAULT_PRIVACY=internal
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - NVIDIA_API_URL=https://integrate.api.nvidia.com/v1
     restart: always
   open_notebook:
     build:
