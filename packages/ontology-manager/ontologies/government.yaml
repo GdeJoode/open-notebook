@@ -83,21 +83,7 @@ entity_types:
     extraction_hints:
       - "Ministerie van BZK, EZK, VWS, LNV, I&W, etc."
       - "NIET: personen (ministers, staatssecretarissen)"
-    aliases:
-      BZK: "Ministerie van Binnenlandse Zaken en Koninkrijksrelaties"
-      EZK: "Ministerie van Economische Zaken en Klimaat"
-      EZ: "Ministerie van Economische Zaken"
-      LNV: "Ministerie van Landbouw, Natuur en Voedselkwaliteit"
-      LVVN: "Ministerie van Landbouw, Visserij, Voedselzekerheid en Natuur"
-      VWS: "Ministerie van Volksgezondheid, Welzijn en Sport"
-      OCW: "Ministerie van Onderwijs, Cultuur en Wetenschap"
-      SZW: "Ministerie van Sociale Zaken en Werkgelegenheid"
-      IenW: "Ministerie van Infrastructuur en Waterstaat"
-      JenV: "Ministerie van Justitie en Veiligheid"
-      VRO: "Ministerie van Volkshuisvesting en Ruimtelijke Ordening"
-      KGG: "Ministerie van Klimaat en Groene Groei"
-      Fin: "Ministerie van Financiën"
-      Def: "Ministerie van Defensie"
+      - "Afkortingen: BZK=Binnenlandse Zaken, EZK=Economische Zaken en Klimaat, EZ=Economische Zaken, LNV=Landbouw Natuur Voedselkwaliteit, LVVN=Landbouw Visserij Voedselzekerheid Natuur, VWS=Volksgezondheid Welzijn Sport, OCW=Onderwijs Cultuur Wetenschap, SZW=Sociale Zaken Werkgelegenheid, IenW=Infrastructuur Waterstaat, JenV=Justitie Veiligheid, VRO=Volkshuisvesting Ruimtelijke Ordening, KGG=Klimaat Groene Groei, Fin=Financiën, Def=Defensie"
 
   - name: "Uitvoeringsorganisatie"
     description: "Rijksuitvoeringsorganisatie, agentschap of ZBO"

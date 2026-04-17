@@ -163,19 +163,31 @@ class OntologyRegistry:
         return None
 
     async def _resolve_inheritance(self, ontology: Ontology) -> Ontology:
-        """Resolve ontology inheritance by merging with parent."""
-        if not ontology.metadata.extends:
-            return ontology
+        """Resolve ontology inheritance by merging with parent and includes."""
+        # Resolve 'extends' (single parent)
+        if ontology.metadata.extends:
+            parent_name = ontology.metadata.extends
+            parent = await self.get(parent_name, resolve_inheritance=True)
+            if parent:
+                ontology = ontology.merge_with(parent)
+            else:
+                logger.warning(
+                    f"Parent ontology '{parent_name}' not found for '{ontology.metadata.name}'"
+                )
 
-        parent_name = ontology.metadata.extends
-        parent = await self.get(parent_name, resolve_inheritance=True)
-        if parent:
-            return ontology.merge_with(parent)
-        else:
-            logger.warning(
-                f"Parent ontology '{parent_name}' not found for '{ontology.metadata.name}'"
-            )
-            return ontology
+        # Resolve 'includes' (multiple siblings)
+        if ontology.metadata.includes:
+            for include_name in ontology.metadata.includes:
+                # Skip if already merged via extends chain
+                included = await self.get(include_name, resolve_inheritance=True)
+                if included:
+                    ontology = ontology.merge_with(included)
+                else:
+                    logger.warning(
+                        f"Included ontology '{include_name}' not found for '{ontology.metadata.name}'"
+                    )
+
+        return ontology
 
     async def register(
         self,

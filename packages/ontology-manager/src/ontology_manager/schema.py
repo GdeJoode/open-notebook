@@ -216,6 +216,7 @@ class OntologyMetadata(BaseModel):
     authors: Optional[List[str]] = None
     license: Optional[str] = None
     extends: Optional[str] = None  # Parent ontology name
+    includes: Optional[List[str]] = None  # Additional ontologies to merge
     created: Optional[str] = None
     updated: Optional[str] = None
 
