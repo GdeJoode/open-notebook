@@ -12,7 +12,12 @@ import {
   RunEntitiesOptions,
 } from '@/lib/types/api'
 
+export type PrivacyLevel = 'public' | 'internal' | 'confidential'
+
 export interface DoclingPipelineConfig {
+  // Privacy & model routing
+  privacy?: PrivacyLevel
+  // Docling settings
   docling_ocr_engine?: string
   docling_ocr_languages?: string[]
   docling_table_mode?: string
@@ -26,6 +31,7 @@ export interface DoclingPipelineConfig {
 }
 
 export const DEFAULT_PIPELINE_CONFIG: DoclingPipelineConfig = {
+  privacy: 'internal',
   docling_ocr_engine: 'easyocr',
   docling_ocr_languages: ['en', 'nl'],
   docling_table_mode: 'accurate',

@@ -24,7 +24,11 @@ import {
   ChevronRight,
   RotateCcw,
   Loader2,
+  Shield,
+  ShieldCheck,
+  ShieldAlert,
 } from 'lucide-react'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import type { DoclingPipelineConfig } from '@/lib/api/sources'
 import { DEFAULT_PIPELINE_CONFIG } from '@/lib/api/sources'
 
@@ -56,8 +60,53 @@ export function PipelineConfigPanel({
 
   const isVlm = config.docling_pipeline === 'vlm'
 
+  const privacyLevel = config.privacy ?? 'internal'
+
   const content = (
     <div className="space-y-4">
+      {/* Privacy & Model Routing */}
+      <div className="space-y-2">
+        <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+          <Shield className="h-3.5 w-3.5" />
+          Privacy & Model
+        </h4>
+        <RadioGroup
+          value={privacyLevel}
+          onValueChange={(v) => update('privacy', v as 'public' | 'internal' | 'confidential')}
+          className="space-y-1.5"
+        >
+          <div className="flex items-center gap-2">
+            <RadioGroupItem value="public" id="privacy-public" className="h-3.5 w-3.5" />
+            <Label htmlFor="privacy-public" className="text-xs flex items-center gap-1.5 cursor-pointer">
+              <ShieldCheck className="h-3.5 w-3.5 text-green-500" />
+              Public
+              <span className="text-muted-foreground">— Cloud API (sneller, beter)</span>
+            </Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <RadioGroupItem value="internal" id="privacy-internal" className="h-3.5 w-3.5" />
+            <Label htmlFor="privacy-internal" className="text-xs flex items-center gap-1.5 cursor-pointer">
+              <Shield className="h-3.5 w-3.5 text-blue-500" />
+              Internal
+              <span className="text-muted-foreground">— Lokaal (data blijft hier)</span>
+            </Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <RadioGroupItem value="confidential" id="privacy-confidential" className="h-3.5 w-3.5" />
+            <Label htmlFor="privacy-confidential" className="text-xs flex items-center gap-1.5 cursor-pointer">
+              <ShieldAlert className="h-3.5 w-3.5 text-orange-500" />
+              Confidentieel
+              <span className="text-muted-foreground">— Lokaal, minimale logging</span>
+            </Label>
+          </div>
+        </RadioGroup>
+        <div className="text-[10px] text-muted-foreground mt-1 pl-5">
+          {privacyLevel === 'public' && 'Extractie en samenvatting via NVIDIA Mistral Medium. Parsing altijd lokaal.'}
+          {privacyLevel === 'internal' && 'Alles lokaal via Ollama. Data verlaat de machine niet.'}
+          {privacyLevel === 'confidential' && 'Lokaal met minimale logging. Voor vertrouwelijke documenten.'}
+        </div>
+      </div>
+
       {/* OCR Section */}
       <div className="space-y-2">
         <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">OCR</h4>
