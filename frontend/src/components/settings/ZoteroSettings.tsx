@@ -147,11 +147,11 @@ export function ZoteroSettings() {
             <ul className="text-sm text-muted-foreground space-y-2">
               <li className="flex gap-2">
                 <span className="text-primary font-medium">Push:</span>
-                Use "Push to Zotero" on any source to create a Zotero item with the PDF uploaded to Zotero cloud storage.
+                Use &quot;Push to Zotero&quot; on any source to create a Zotero item with the PDF uploaded to Zotero cloud storage.
               </li>
               <li className="flex gap-2">
                 <span className="text-primary font-medium">Sync:</span>
-                "Sync Now" performs bidirectional sync — pushes new local sources and pulls changes from Zotero.
+                &quot;Sync Now&quot; performs bidirectional sync — pushes new local sources and pulls changes from Zotero.
               </li>
               <li className="flex gap-2">
                 <span className="text-primary font-medium">Duplicates:</span>
@@ -242,7 +242,7 @@ export function ZoteroSettings() {
             placeholder="e.g. Open Notebook Imports"
           />
           <p className="text-xs text-muted-foreground">
-            New items will be added to this collection. Created automatically if it doesn't exist.
+            New items will be added to this collection. Created automatically if it doesn&apos;t exist.
           </p>
         </div>
 

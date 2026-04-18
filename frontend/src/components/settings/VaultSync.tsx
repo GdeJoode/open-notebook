@@ -117,7 +117,7 @@ export function VaultSync() {
               <div className="flex justify-center py-8"><LoadingSpinner /></div>
             ) : pendingImports.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4">
-                No pending imports. Click "Sync Now" to scan your vault.
+                No pending imports. Click &quot;Sync Now&quot; to scan your vault.
               </p>
             ) : (
               <div className="space-y-3">

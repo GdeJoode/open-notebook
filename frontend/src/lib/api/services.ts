@@ -181,17 +181,17 @@ export interface VocabularyInfo {
 
 // Health & routing
 export const getServicesHealth = () =>
-  apiClient.get<ServiceHealth>('/api/services/health').then(r => r.data)
+  apiClient.get<ServiceHealth>('/services/health').then(r => r.data)
 
 export const getRouting = () =>
-  apiClient.get<RoutingSummary>('/api/services/routing').then(r => r.data)
+  apiClient.get<RoutingSummary>('/services/routing').then(r => r.data)
 
 // Extraction
 export const extractEntities = (req: ExtractRequest) =>
-  apiClient.post<ExtractResponse>('/api/services/extract', req).then(r => r.data)
+  apiClient.post<ExtractResponse>('/services/extract', req).then(r => r.data)
 
 export const getOntologies = () =>
-  apiClient.get<{ ontologies: string[]; default: string }>('/api/services/ontologies').then(r => r.data)
+  apiClient.get<{ ontologies: string[]; default: string }>('/services/ontologies').then(r => r.data)
 
 // Entity browsing
 export const getServiceEntities = (params?: {
@@ -200,13 +200,13 @@ export const getServiceEntities = (params?: {
   limit?: number
   offset?: number
 }) =>
-  apiClient.get('/api/services/entities', { params }).then(r => r.data)
+  apiClient.get('/services/entities', { params }).then(r => r.data)
 
 export const getServiceEntity = (entityId: string) =>
-  apiClient.get<ServiceEntityDetail>(`/api/services/entities/${entityId}`).then(r => r.data)
+  apiClient.get<ServiceEntityDetail>(`/services/entities/${entityId}`).then(r => r.data)
 
 export const getEntityGraph = (entityId: string, depth = 2) =>
-  apiClient.get<EntityGraph>(`/api/services/entities/${entityId}/graph`, { params: { depth } }).then(r => r.data)
+  apiClient.get<EntityGraph>(`/services/entities/${entityId}/graph`, { params: { depth } }).then(r => r.data)
 
 // Validation
 export const validateEntities = (params?: {
@@ -214,13 +214,13 @@ export const validateEntities = (params?: {
   use_api?: boolean
   apply_changes?: boolean
 }) =>
-  apiClient.post<ValidationReport>('/api/services/validate', null, { params }).then(r => r.data)
+  apiClient.post<ValidationReport>('/services/validate', null, { params }).then(r => r.data)
 
 export const getVocabularies = () =>
-  apiClient.get<VocabularyInfo>('/api/services/vocabularies').then(r => r.data)
+  apiClient.get<VocabularyInfo>('/services/vocabularies').then(r => r.data)
 
 export const refreshVocabularies = () =>
-  apiClient.post('/api/services/vocabularies/refresh').then(r => r.data)
+  apiClient.post('/services/vocabularies/refresh').then(r => r.data)
 
 // Deduplication
 export const findDuplicates = (params?: {
@@ -228,20 +228,20 @@ export const findDuplicates = (params?: {
   merge_threshold?: number
   review_threshold?: number
 }) =>
-  apiClient.post<DeduplicateResponse>('/api/services/deduplicate', null, { params }).then(r => r.data)
+  apiClient.post<DeduplicateResponse>('/services/deduplicate', null, { params }).then(r => r.data)
 
 export const getDuplicates = (params?: {
   entity_type?: string
   min_score?: number
 }) =>
-  apiClient.get('/api/services/duplicates', { params }).then(r => r.data)
+  apiClient.get('/services/duplicates', { params }).then(r => r.data)
 
 export const mergeEntities = (canonical_id: string, duplicate_id: string) =>
-  apiClient.post('/api/services/merge', { canonical_id, duplicate_id }).then(r => r.data)
+  apiClient.post('/services/merge', { canonical_id, duplicate_id }).then(r => r.data)
 
 // Summarization
 export const summarizeDocument = (req: SummarizeRequest) =>
-  apiClient.post('/api/services/summarize', req).then(r => r.data)
+  apiClient.post('/services/summarize', req).then(r => r.data)
 
 export const getPresets = () =>
-  apiClient.get<{ presets: PresetInfo[]; auto_detect: boolean }>('/api/services/presets').then(r => r.data)
+  apiClient.get<{ presets: PresetInfo[]; auto_detect: boolean }>('/services/presets').then(r => r.data)
