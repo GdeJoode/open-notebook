@@ -8,9 +8,9 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # Copy ontology YAML files
 COPY packages/ontology-manager/ontologies /app/ontologies
 
-# Copy shared modules (model routing)
-COPY services/shared/model_routing.py /app/model_routing.py
-COPY services/shared/model_routing.yaml /app/model_routing.yaml
+# Copy shared modules (model routing) — single canonical source
+COPY packages/shared/src/shared/model_routing.py /app/model_routing.py
+COPY packages/shared/src/shared/model_routing.yaml /app/model_routing.yaml
 
 # Copy the service API and modules
 COPY services/extraction/api.py /app/api.py

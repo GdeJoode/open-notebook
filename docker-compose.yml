@@ -1,6 +1,12 @@
+networks:
+  web:
+    name: docker-web
+    driver: bridge
+
 services:
   surrealdb:
     image: surrealdb/surrealdb:v2
+    networks: [web]
     ports:
       - "8000:8000"
     volumes:
@@ -15,6 +21,7 @@ services:
     build:
       context: .
       dockerfile: services/docling/Dockerfile
+    networks: [web]
     ports:
       - "8100:8100"
     volumes:
@@ -55,6 +62,7 @@ services:
     build:
       context: .
       dockerfile: services/summarization/Dockerfile
+    networks: [web]
     ports:
       - "8101:8101"
     volumes:
@@ -76,6 +84,7 @@ services:
     build:
       context: .
       dockerfile: services/whisperx/Dockerfile
+    networks: [web]
     ports:
       - "8102:8102"
     volumes:
@@ -103,6 +112,7 @@ services:
     build:
       context: .
       dockerfile: services/extraction/Dockerfile
+    networks: [web]
     ports:
       - "8103:8103"
     volumes:
@@ -115,7 +125,7 @@ services:
       - EXTRACTION_NUM_CTX=8192
       - EXTRACTION_CHUNK_SIZE=4000
       - EMBEDDING_MODEL=mxbai-embed-large
-      - SURREALDB_URL=ws://host.docker.internal:8000/rpc
+      - SURREALDB_URL=ws://surrealdb:8000/rpc
       - SURREALDB_NS=open_notebook
       - SURREALDB_DB=open_notebook
       - SURREALDB_USER=root
@@ -129,11 +139,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    networks: [web]
     ports:
       - "8502:8502"
       - "5055:5055"
     env_file:
       - ./docker.env
+    environment:
+      - SURREAL_URL=ws://surrealdb:8000
+      - OLLAMA_API_BASE=http://host.docker.internal:11434
+      - OLLAMA_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - surrealdb
     volumes:

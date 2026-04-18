@@ -23,15 +23,12 @@ ENV UV_LINK_MODE=copy
 # Set the working directory in the container to /app
 WORKDIR /app
 
-# Copy dependency files and minimal package structure first for better layer caching
-COPY pyproject.toml uv.lock ./
-COPY open_notebook/__init__.py ./open_notebook/__init__.py
-
-# Install dependencies with optimizations (this layer will be cached unless dependencies change)
-RUN uv sync --frozen --no-dev
-
-# Copy the rest of the application code
+# UV workspace: copy full source tree before sync (workspace members are
+# editable installs; hatchling also needs README.md for metadata validation).
 COPY . /app
+
+# Install dependencies
+RUN uv sync --frozen --no-dev --all-packages
 
 # Install frontend dependencies and build
 WORKDIR /app/frontend
