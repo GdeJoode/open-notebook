@@ -14,6 +14,12 @@ const TYPE_COLORS = [
   '#84cc16', '#e879f9', '#22d3ee', '#a3e635', '#fb923c',
 ]
 
+const COMMUNITY_COLORS = [
+  '#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
+  '#ec4899', '#14b8a6', '#f97316', '#06b6d4', '#84cc16',
+  '#6366f1', '#e879f9', '#22d3ee', '#a3e635', '#fb923c',
+]
+
 interface EntityGraphViewProps {
   entities: ExtractedEntity[]
   relations: ExtractedRelation[]
@@ -26,6 +32,8 @@ interface SelectedNode {
   confidence: number
   properties: Record<string, unknown>
   connections: number
+  pagerank?: number
+  communityId?: number
 }
 
 export function EntityGraphView({ entities, relations, mergeGroups }: EntityGraphViewProps) {
@@ -33,6 +41,18 @@ export function EntityGraphView({ entities, relations, mergeGroups }: EntityGrap
   const sigmaRef = useRef<Sigma | null>(null)
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null)
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set())
+  const [colorBy, setColorBy] = useState<'type' | 'community'>('type')
+  const [sizeBy, setSizeBy] = useState<'confidence' | 'pagerank'>('confidence')
+
+  // Check if pagerank/community data is available
+  const hasPagerank = useMemo(() => entities.some(e => e.pagerank != null && e.pagerank > 0), [entities])
+  const hasCommunity = useMemo(() => entities.some(e => e.community_id != null), [entities])
+
+  // Build community color map
+  const communityColorMap = useMemo(() => {
+    const ids = [...new Set(entities.map(e => e.community_id).filter((id): id is number => id != null))]
+    return new Map(ids.map((id, i) => [id, COMMUNITY_COLORS[i % COMMUNITY_COLORS.length]]))
+  }, [entities])
 
   // Build color map from unique entity labels
   const typeColorMap = useMemo(() => {
@@ -108,11 +128,17 @@ export function EntityGraphView({ entities, relations, mergeGroups }: EntityGrap
 
       const x = (Math.random() - 0.5) * scale
       const y = (Math.random() - 0.5) * scale
-      const color = typeColorMap.get(entity.label) ?? '#6366f1'
+      const typeColor = typeColorMap.get(entity.label) ?? '#6366f1'
+      const communityColor = entity.community_id != null
+        ? (communityColorMap.get(entity.community_id) ?? '#6366f1')
+        : typeColor
+      const color = colorBy === 'community' && hasCommunity ? communityColor : typeColor
       const isMerged = mergedLookup.has(entity.text)
 
-      // Size based on confidence
-      const size = Math.max(4, Math.min(14, entity.confidence * 12))
+      // Size based on confidence or pagerank
+      const size = sizeBy === 'pagerank' && hasPagerank && entity.pagerank != null
+        ? Math.max(4, Math.min(20, 4 + Math.log1p(entity.pagerank * 10000) * 3))
+        : Math.max(4, Math.min(14, entity.confidence * 12))
 
       graph.addNode(nodeId, {
         x,
@@ -124,6 +150,8 @@ export function EntityGraphView({ entities, relations, mergeGroups }: EntityGrap
         entityLabel: entity.label,
         entityConfidence: entity.confidence,
         entityProperties: entity.properties,
+        entityPagerank: entity.pagerank,
+        entityCommunityId: entity.community_id,
         isMerged,
         borderColor: isMerged ? '#fbbf24' : undefined,
       })
@@ -182,6 +210,8 @@ export function EntityGraphView({ entities, relations, mergeGroups }: EntityGrap
         confidence: attrs.entityConfidence || 0,
         properties: attrs.entityProperties || {},
         connections,
+        pagerank: attrs.entityPagerank,
+        communityId: attrs.entityCommunityId,
       })
     })
 
@@ -196,7 +226,7 @@ export function EntityGraphView({ entities, relations, mergeGroups }: EntityGrap
       sigmaRef.current = null
       document.body.style.cursor = 'default'
     }
-  }, [visibleEntities, visibleRelations, typeColorMap, mergedLookup])
+  }, [visibleEntities, visibleRelations, typeColorMap, mergedLookup, colorBy, sizeBy, hasPagerank, hasCommunity, communityColorMap])
 
   if (entities.length === 0) {
     return (
@@ -236,11 +266,39 @@ export function EntityGraphView({ entities, relations, mergeGroups }: EntityGrap
         ))}
       </div>
 
-      {/* Stats */}
-      <div className="absolute top-3 right-3 text-xs text-muted-foreground bg-background/90 backdrop-blur rounded-md px-2 py-1 border">
-        {visibleEntities.length} nodes, {visibleRelations.length} edges
-        {hiddenTypes.size > 0 && (
-          <span className="ml-1">({entities.length - visibleEntities.length} hidden)</span>
+      {/* Stats + controls */}
+      <div className="absolute top-3 right-3 text-xs text-muted-foreground bg-background/90 backdrop-blur rounded-md px-2.5 py-1.5 border space-y-1.5">
+        <div>
+          {visibleEntities.length} nodes, {visibleRelations.length} edges
+          {hiddenTypes.size > 0 && (
+            <span className="ml-1">({entities.length - visibleEntities.length} hidden)</span>
+          )}
+        </div>
+        {(hasPagerank || hasCommunity) && (
+          <div className="flex flex-col gap-1 pt-1 border-t">
+            {hasCommunity && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px]">Color:</span>
+                <button
+                  onClick={() => setColorBy(colorBy === 'type' ? 'community' : 'type')}
+                  className="text-[10px] underline hover:text-foreground"
+                >
+                  {colorBy === 'type' ? 'by type' : 'by community'}
+                </button>
+              </div>
+            )}
+            {hasPagerank && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px]">Size:</span>
+                <button
+                  onClick={() => setSizeBy(sizeBy === 'confidence' ? 'pagerank' : 'confidence')}
+                  className="text-[10px] underline hover:text-foreground"
+                >
+                  {sizeBy === 'confidence' ? 'by confidence' : 'by PageRank'}
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -259,6 +317,21 @@ export function EntityGraphView({ entities, relations, mergeGroups }: EntityGrap
           <div className="text-muted-foreground">
             {selectedNode.connections} connection{selectedNode.connections !== 1 ? 's' : ''}
           </div>
+          {selectedNode.pagerank != null && (
+            <div className="text-muted-foreground">
+              PR: {selectedNode.pagerank.toFixed(4)}
+            </div>
+          )}
+          {selectedNode.communityId != null && (
+            <div className="flex items-center gap-1 text-muted-foreground">
+              Community:
+              <div
+                className="w-2.5 h-2.5 rounded-full inline-block"
+                style={{ backgroundColor: communityColorMap.get(selectedNode.communityId) ?? '#6366f1' }}
+              />
+              <span>{selectedNode.communityId}</span>
+            </div>
+          )}
           {mergedLookup.has(selectedNode.text) && (
             <Badge variant="outline" className="text-xs border-yellow-500 text-yellow-500">
               Merged entity

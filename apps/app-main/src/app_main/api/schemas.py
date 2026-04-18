@@ -316,6 +316,7 @@ class SettingsResponse(BaseModel):
     docling_chunking_enabled: Optional[bool] = None
     docling_chunking_method: Optional[str] = None
     docling_chunking_max_tokens: Optional[int] = None
+    classification_max_chars: Optional[int] = None
     input_directory_path: Optional[str] = None
     markdown_directory_path: Optional[str] = None
     output_directory_path: Optional[str] = None
@@ -343,6 +344,7 @@ class SettingsUpdate(BaseModel):
     docling_chunking_enabled: Optional[bool] = None
     docling_chunking_method: Optional[str] = None
     docling_chunking_max_tokens: Optional[int] = None
+    classification_max_chars: Optional[int] = None
     input_directory_path: Optional[str] = None
     markdown_directory_path: Optional[str] = None
     output_directory_path: Optional[str] = None

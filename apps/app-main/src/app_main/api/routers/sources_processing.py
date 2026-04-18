@@ -354,7 +354,7 @@ async def reprocess_source(
             "UPDATE $source_id SET command = $command_id",
             {
                 "source_id": ensure_record_id(source_id),
-                "command_id": ensure_record_id(f"command:{command_id}"),
+                "command_id": ensure_record_id(command_id),
             },
         )
 

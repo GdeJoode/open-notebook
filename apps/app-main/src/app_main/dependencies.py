@@ -292,9 +292,17 @@ async def get_preprocessing_service_with_llm() -> PreprocessingService:
             detail=f"Model '{model_id}' is not a LanguageModel.",
         )
 
+    # Read classification_max_chars from settings
+    from app_main.services.preprocessing_service import DEFAULT_MAX_INPUT_CHARS
+
+    settings_repo = get_settings_repo()
+    settings = await settings_repo.get()
+    max_chars = getattr(settings, "classification_max_chars", None) or DEFAULT_MAX_INPUT_CHARS
+
     return PreprocessingService(
         chunk_repo=get_chunk_repo(),
         language_model=language_model,
+        max_input_chars=max_chars,
     )
 
 

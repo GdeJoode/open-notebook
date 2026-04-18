@@ -62,8 +62,8 @@ const STEP_LABELS = [
   { id: 2, label: 'Organize', phase: 'config' as const },
   { id: 3, label: 'Config', phase: 'config' as const },
   { id: 4, label: 'Extract', phase: 'pipeline' as const, description: 'Required — parses document into text chunks' },
-  { id: 5, label: 'Preprocess', phase: 'pipeline' as const, description: 'Optional — classify content and filter noise' },
-  { id: 6, label: 'Summaries', phase: 'pipeline' as const, description: 'Optional — generate AI summaries using various strategies' },
+  { id: 5, label: 'Postprocess', phase: 'pipeline' as const, description: 'Optional — review chunks, classify content and filter noise' },
+  { id: 6, label: 'Classification', phase: 'pipeline' as const, description: 'Required — classify document type and select ontologies' },
   { id: 7, label: 'Entities', phase: 'pipeline' as const, description: 'Optional — extract people, organizations, concepts for the knowledge graph' },
   { id: 8, label: 'Embed', phase: 'pipeline' as const, description: 'Optional — create vector embeddings for semantic search' },
   { id: 9, label: 'Done', phase: 'pipeline' as const },
@@ -101,6 +101,9 @@ export function CreateSourcePipeline() {
   )
   const [processingOverrides, setProcessingOverrides] = useState<Record<string, unknown>>({})
 
+  // Track classification readiness (ontology selected for all sources)
+  const [classificationReady, setClassificationReady] = useState(false)
+
   // Track whether we've configured embed/transformations
   const [embedEnabled, setEmbedEnabled] = useState(false)
   const [summariesEnabled, setSummariesEnabled] = useState(false)
@@ -111,8 +114,14 @@ export function CreateSourcePipeline() {
   const { data: settings } = useSettings()
 
   // Poll source data when in processing phase (single source mode)
+  const statusEnabled = phase === 'processing' && sourceIds.length <= 1
   const { data: sourceData } = useSource(sourceId || '')
-  const { data: statusData } = useSourceStatus(sourceId || '', phase === 'processing' && sourceIds.length <= 1)
+  const { data: statusData } = useSourceStatus(sourceId || '', statusEnabled)
+
+  // Debug: log polling state
+  useEffect(() => {
+    console.log('[Pipeline] polling debug:', { sourceId, phase, sourceIdsLength: sourceIds.length, statusEnabled, statusData: statusData?.status })
+  }, [sourceId, phase, sourceIds.length, statusEnabled, statusData])
 
   // Track previous auto-advance tab to avoid infinite loops
   const lastAutoAdvancedRef = useRef<number>(0)
@@ -564,6 +573,7 @@ export function CreateSourcePipeline() {
     setEmbedEnabled(false)
     setSummariesEnabled(false)
     setManualStatuses({ 5: 'pending', 6: 'pending', 7: 'pending', 8: 'pending' })
+    setClassificationReady(false)
     lastAutoAdvancedRef.current = 0
   }
 
@@ -608,6 +618,11 @@ export function CreateSourcePipeline() {
   const handleExtractionContinue = useCallback(() => {
     setActiveTab(5)
     lastAutoAdvancedRef.current = 5
+  }, [])
+
+  const handlePostprocessContinue = useCallback(() => {
+    setActiveTab(6)
+    lastAutoAdvancedRef.current = 6
   }, [])
 
   // Determine source type label for completion
@@ -715,6 +730,7 @@ export function CreateSourcePipeline() {
                         : 'pending',
                     }]
                 }
+                onContinue={handlePostprocessContinue}
               />
             )}
 
@@ -742,6 +758,7 @@ export function CreateSourcePipeline() {
                         : 'pending',
                     }]
                 }
+                onClassificationReady={setClassificationReady}
               />
             )}
 
@@ -770,6 +787,7 @@ export function CreateSourcePipeline() {
                     }]
                 }
                 onStart={handleStartEntities}
+                classificationReady={classificationReady}
               />
             )}
 

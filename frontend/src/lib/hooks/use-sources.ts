@@ -164,13 +164,13 @@ export function useSourceStatus(sourceId: string, enabled = true) {
     queryFn: () => sourcesApi.status(sourceId),
     enabled: !!sourceId && enabled,
     refetchInterval: (query) => {
-      // Auto-refresh every 2 seconds if processing
-      // The query.state.data contains the SourceStatusResponse
+      // Auto-refresh every 2 seconds while processing
       const data = query.state.data as SourceStatusResponse | undefined
-      if (data?.status === 'running' || data?.status === 'queued' || data?.status === 'new') {
+      // Keep polling if status is active OR if we haven't received data yet
+      if (!data || data.status === 'running' || data.status === 'queued' || data.status === 'new') {
         return 2000
       }
-      // No auto-refresh if completed, failed, or unknown
+      // Stop polling once completed, failed, or unknown
       return false
     },
     staleTime: 0, // Always consider status data stale for real-time updates

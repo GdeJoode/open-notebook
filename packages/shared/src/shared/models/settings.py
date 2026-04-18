@@ -119,6 +119,11 @@ class ContentSettings(RecordModel):
         False, description="Auto-scan vault for entity notes on app startup"
     )
 
+    # Classification Settings
+    classification_max_chars: Optional[int] = Field(
+        20000, description="Maximum characters of document text sent to LLM for classification (adjust based on model context window)"
+    )
+
     # File Operations
     file_operation: Optional[Literal["copy", "move", "none"]] = Field(
         "copy", description="File operation: copy, move, or none"

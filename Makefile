@@ -147,7 +147,9 @@ start-all:
 
 stop-all:
 	@echo "Stopping all Open Notebook services..."
-	@pkill -f "next dev" || true
+	@pkill -INT -f "next dev" || true
+	@pkill -INT -f "app_main.api.app" || true
+	@sleep 2
 	@pkill -f "app_main.api.app" || true
 	@docker compose down
 	@echo "All services stopped."

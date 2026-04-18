@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Network, Loader2, CheckCircle2, XCircle, Clock,
-  Play, Filter, ChevronDown,
+  Play, Filter, ChevronDown, ShieldCheck, Link2,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -25,6 +25,11 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { cn } from '@/lib/utils'
 import { sourcesApi } from '@/lib/api/sources'
 import { ontologiesApi, type OntologySummary } from '@/lib/api/ontologies'
+import {
+  validateEntities, findDuplicates, mergeEntities as mergeEntitiesApi,
+  type ValidationReport, type ValidationResult,
+  type DeduplicateResponse, type DuplicateCandidate,
+} from '@/lib/api/services'
 import type { ExtractionResultResponse, RunEntitiesOptions } from '@/lib/types/api'
 import type { StepStatus } from '../PipelineStepper'
 import type { FileEntry } from './ExtractionTab'
@@ -33,6 +38,7 @@ import { EntityGraphView } from './EntityGraphView'
 interface EntitiesTabProps {
   status: StepStatus
   extractionComplete?: boolean
+  classificationReady?: boolean
   sourceId?: string
   files?: FileEntry[]
   onStart?: () => void // kept for backward compat
@@ -41,6 +47,7 @@ interface EntitiesTabProps {
 export function EntitiesTab({
   status,
   extractionComplete,
+  classificationReady,
   sourceId,
   files = [],
   onStart,
@@ -64,7 +71,17 @@ export function EntitiesTab({
 
   // Right pane: results
   const [extractionResult, setExtractionResult] = useState<ExtractionResultResponse | null>(null)
-  const [activeResultTab, setActiveResultTab] = useState<'list' | 'visualization'>('list')
+  const [activeResultTab, setActiveResultTab] = useState<'list' | 'visualization' | 'duplicates'>('list')
+
+  // Validation
+  const [validationReport, setValidationReport] = useState<ValidationReport | null>(null)
+  const [validating, setValidating] = useState(false)
+  const [statusFilter, setStatusFilter] = useState<string>('all')
+
+  // Dedup review
+  const [dedupResponse, setDedupResponse] = useState<DeduplicateResponse | null>(null)
+  const [dedupLoading, setDedupLoading] = useState(false)
+  const [dismissedPairs, setDismissedPairs] = useState<Set<string>>(new Set())
 
   // Filtering options
   const [filteringOptions, setFilteringOptions] = useState({
@@ -192,6 +209,53 @@ export function EntitiesTab({
     }
   }
 
+  // Run validation on extracted entities
+  const handleValidate = async () => {
+    if (validating) return
+    setValidating(true)
+    try {
+      const report = await validateEntities({ apply_changes: true })
+      setValidationReport(report)
+      // Refresh extraction result to show updated entities
+      await refreshResult()
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : 'Validation failed')
+    } finally {
+      setValidating(false)
+    }
+  }
+
+  // Find duplicate candidates
+  const handleFindDuplicates = async () => {
+    if (dedupLoading) return
+    setDedupLoading(true)
+    try {
+      const resp = await findDuplicates({ review_threshold: 0.6 })
+      setDedupResponse(resp)
+      setDismissedPairs(new Set())
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : 'Dedup scan failed')
+    } finally {
+      setDedupLoading(false)
+    }
+  }
+
+  // Merge a duplicate pair
+  const handleMerge = async (canonical_id: string, duplicate_id: string, pairKey: string) => {
+    try {
+      await mergeEntitiesApi(canonical_id, duplicate_id)
+      setDismissedPairs(prev => new Set(prev).add(pairKey))
+      await refreshResult()
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : 'Merge failed')
+    }
+  }
+
+  // Dismiss (ignore) a duplicate pair
+  const handleDismiss = (pairKey: string) => {
+    setDismissedPairs(prev => new Set(prev).add(pairKey))
+  }
+
   // If extraction not complete, show locked state
   if (!extractionComplete) {
     return (
@@ -206,6 +270,26 @@ export function EntitiesTab({
         <CardContent className="flex items-center justify-center flex-1">
           <p className="text-sm text-muted-foreground">
             Entities available after text extraction completes.
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  // If classification not ready (no ontology selected), show gate
+  if (!classificationReady) {
+    return (
+      <Card className="flex-1 flex flex-col min-h-0">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 shrink-0">
+          <CardTitle className="text-base font-medium flex items-center gap-2">
+            <Network className="h-4 w-4" />
+            Entity Extraction
+          </CardTitle>
+          <Badge variant="outline" className="border-amber-500 text-amber-600">Needs Classification</Badge>
+        </CardHeader>
+        <CardContent className="flex items-center justify-center flex-1">
+          <p className="text-sm text-muted-foreground text-center max-w-sm">
+            At least one ontology must be selected and saved on the Analysis &amp; Classification step before entity extraction can proceed.
           </p>
         </CardContent>
       </Card>
@@ -257,6 +341,17 @@ export function EntitiesTab({
             running={running}
             activeTab={activeResultTab}
             onTabChange={setActiveResultTab}
+            validationReport={validationReport}
+            validating={validating}
+            onValidate={handleValidate}
+            statusFilter={statusFilter}
+            onStatusFilterChange={setStatusFilter}
+            dedupResponse={dedupResponse}
+            dedupLoading={dedupLoading}
+            dismissedPairs={dismissedPairs}
+            onFindDuplicates={handleFindDuplicates}
+            onMerge={handleMerge}
+            onDismiss={handleDismiss}
           />
         </div>
       </CardContent>
@@ -664,11 +759,33 @@ function ResultsPane({
   running,
   activeTab,
   onTabChange,
+  validationReport,
+  validating,
+  onValidate,
+  statusFilter,
+  onStatusFilterChange,
+  dedupResponse,
+  dedupLoading,
+  dismissedPairs,
+  onFindDuplicates,
+  onMerge,
+  onDismiss,
 }: {
   extractionResult: ExtractionResultResponse | null
   running: boolean
-  activeTab: 'list' | 'visualization'
-  onTabChange: (tab: 'list' | 'visualization') => void
+  activeTab: 'list' | 'visualization' | 'duplicates'
+  onTabChange: (tab: 'list' | 'visualization' | 'duplicates') => void
+  validationReport: ValidationReport | null
+  validating: boolean
+  onValidate: () => void
+  statusFilter: string
+  onStatusFilterChange: (v: string) => void
+  dedupResponse: DeduplicateResponse | null
+  dedupLoading: boolean
+  dismissedPairs: Set<string>
+  onFindDuplicates: () => void
+  onMerge: (canonicalId: string, duplicateId: string, pairKey: string) => void
+  onDismiss: (pairKey: string) => void
 }) {
   if (!extractionResult && !running) {
     return (
@@ -710,31 +827,98 @@ function ResultsPane({
       onValueChange={(v) => onTabChange(v as 'list' | 'visualization')}
       className="border rounded-md overflow-hidden flex flex-col min-h-0 gap-0"
     >
-      <div className="px-3 py-2 border-b bg-muted/50 shrink-0 flex items-center justify-between">
-        <TabsList className="h-7">
-          <TabsTrigger value="list" className="text-xs h-6 px-2.5">
-            Entities & Relations
-          </TabsTrigger>
-          <TabsTrigger value="visualization" className="text-xs h-6 px-2.5">
-            Visualization
-          </TabsTrigger>
-        </TabsList>
-        <div className="flex items-center gap-1.5">
-          <Badge variant="secondary" className="text-[10px]">
-            {extractionResult?.entity_count ?? 0} entities
-          </Badge>
-          <Badge variant="secondary" className="text-[10px]">
-            {extractionResult?.relation_count ?? 0} relations
-          </Badge>
+      <div className="px-3 py-2 border-b bg-muted/50 shrink-0 space-y-2">
+        <div className="flex items-center justify-between">
+          <TabsList className="h-7">
+            <TabsTrigger value="list" className="text-xs h-6 px-2.5">
+              Entities & Relations
+            </TabsTrigger>
+            <TabsTrigger value="visualization" className="text-xs h-6 px-2.5">
+              Visualization
+            </TabsTrigger>
+            <TabsTrigger value="duplicates" className="text-xs h-6 px-2.5">
+              Duplicates
+              {dedupResponse && dedupResponse.candidates.length - dismissedPairs.size > 0 && (
+                <Badge variant="secondary" className="text-[9px] ml-1 px-1">
+                  {dedupResponse.candidates.length - dismissedPairs.size}
+                </Badge>
+              )}
+            </TabsTrigger>
+          </TabsList>
+          <div className="flex items-center gap-1.5">
+            <Badge variant="secondary" className="text-[10px]">
+              {extractionResult?.entity_count ?? 0} entities
+            </Badge>
+            <Badge variant="secondary" className="text-[10px]">
+              {extractionResult?.relation_count ?? 0} relations
+            </Badge>
+          </div>
         </div>
+        {activeTab === 'list' && (
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-6 text-[10px] gap-1"
+              disabled={validating}
+              onClick={onValidate}
+            >
+              {validating ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <ShieldCheck className="h-3 w-3" />
+              )}
+              Validate
+            </Button>
+            <Select value={statusFilter} onValueChange={onStatusFilterChange}>
+              <SelectTrigger className="h-6 text-[10px] w-[130px]">
+                <SelectValue placeholder="Filter status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all" className="text-xs">All statuses</SelectItem>
+                <SelectItem value="validated" className="text-xs">Validated</SelectItem>
+                <SelectItem value="reclassified" className="text-xs">Reclassified</SelectItem>
+                <SelectItem value="enriched" className="text-xs">Enriched</SelectItem>
+                <SelectItem value="flagged_generic" className="text-xs">Generic</SelectItem>
+                <SelectItem value="unvalidated" className="text-xs">Unvalidated</SelectItem>
+              </SelectContent>
+            </Select>
+            {validationReport && (
+              <div className="flex items-center gap-1 ml-auto">
+                {Object.entries(validationReport.results_by_status).map(([status, count]) => (
+                  <Badge key={status} variant="outline" className="text-[9px]">
+                    {status}: {count}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <TabsContent value="list" className="flex-1 min-h-0 overflow-y-auto mt-0">
-        <EntityRelationList entities={entities} relations={relations} />
+        <EntityRelationList
+          entities={entities}
+          relations={relations}
+          validationReport={validationReport}
+          statusFilter={statusFilter}
+        />
       </TabsContent>
 
       <TabsContent value="visualization" className="flex-1 min-h-0 mt-0">
         <EntityGraphView entities={entities} relations={relations} />
+      </TabsContent>
+
+      <TabsContent value="duplicates" className="flex-1 min-h-0 overflow-y-auto mt-0">
+        <DuplicateReviewPane
+          dedupResponse={dedupResponse}
+          dedupLoading={dedupLoading}
+          dismissedPairs={dismissedPairs}
+          onFindDuplicates={onFindDuplicates}
+          onMerge={onMerge}
+          onDismiss={onDismiss}
+        />
       </TabsContent>
     </Tabs>
   )
@@ -744,49 +928,165 @@ function ResultsPane({
 /* Entity & Relation list tables                                       */
 /* ------------------------------------------------------------------ */
 
+function ValidationStatusBadge({ status, uri }: { status?: string; uri?: string }) {
+  switch (status) {
+    case 'validated':
+      return (
+        <span className="inline-flex items-center gap-0.5">
+          <Badge variant="outline" className="text-[9px] border-green-500 text-green-600 gap-0.5">
+            <CheckCircle2 className="h-2.5 w-2.5" />
+            validated
+          </Badge>
+          {uri && (
+            <a href={uri} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-600">
+              <Link2 className="h-3 w-3" />
+            </a>
+          )}
+        </span>
+      )
+    case 'reclassified':
+      return (
+        <Badge variant="outline" className="text-[9px] border-amber-500 text-amber-600">
+          reclassified
+        </Badge>
+      )
+    case 'enriched':
+      return (
+        <span className="inline-flex items-center gap-0.5">
+          <Badge variant="outline" className="text-[9px] border-blue-500 text-blue-600 gap-0.5">
+            <Link2 className="h-2.5 w-2.5" />
+            enriched
+          </Badge>
+          {uri && (
+            <a href={uri} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-600">
+              <Link2 className="h-3 w-3" />
+            </a>
+          )}
+        </span>
+      )
+    case 'flagged_generic':
+      return (
+        <Badge variant="outline" className="text-[9px] border-gray-400 text-gray-500">
+          generic
+        </Badge>
+      )
+    default:
+      return (
+        <Badge variant="outline" className="text-[9px]">
+          ?
+        </Badge>
+      )
+  }
+}
+
 function EntityRelationList({
   entities,
   relations,
+  validationReport,
+  statusFilter,
 }: {
   entities: ExtractionResultResponse['entities']
   relations: ExtractionResultResponse['relations']
+  validationReport: ValidationReport | null
+  statusFilter: string
 }) {
+  // Build a lookup from entity name to validation result
+  const validationLookup = useMemo(() => {
+    if (!validationReport) return new Map<string, ValidationResult>()
+    const lookup = new Map<string, ValidationResult>()
+    for (const r of [
+      ...validationReport.validated,
+      ...validationReport.reclassified,
+      ...validationReport.enriched,
+      ...validationReport.flagged_generic,
+      ...validationReport.unvalidated,
+    ]) {
+      lookup.set(r.entity_name, r)
+    }
+    return lookup
+  }, [validationReport])
+
+  // Filter entities by validation status
+  const filteredEntities = useMemo(() => {
+    if (statusFilter === 'all' || !validationReport) return entities
+    return entities.filter(e => {
+      const vr = validationLookup.get(e.text)
+      if (!vr) return statusFilter === 'unvalidated'
+      return vr.status === statusFilter
+    })
+  }, [entities, statusFilter, validationReport, validationLookup])
+
+  const hasGraphScores = useMemo(
+    () => entities.some(e => e.pagerank != null && e.pagerank > 0),
+    [entities]
+  )
+
   return (
     <div className="p-3 space-y-4">
       {/* Entities table */}
       <div>
         <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-          Entities ({entities.length})
+          Entities ({filteredEntities.length}{statusFilter !== 'all' ? ` of ${entities.length}` : ''})
         </p>
-        {entities.length > 0 ? (
+        {filteredEntities.length > 0 ? (
           <div className="border rounded overflow-hidden">
             <table className="w-full text-xs">
               <thead className="bg-muted/50">
                 <tr>
                   <th className="text-left px-2 py-1.5 font-medium">Text</th>
                   <th className="text-left px-2 py-1.5 font-medium">Label</th>
+                  {validationReport && (
+                    <th className="text-center px-2 py-1.5 font-medium">Status</th>
+                  )}
+                  {hasGraphScores && (
+                    <>
+                      <th className="text-right px-2 py-1.5 font-medium">PR</th>
+                      <th className="text-center px-2 py-1.5 font-medium">Com.</th>
+                    </>
+                  )}
                   <th className="text-right px-2 py-1.5 font-medium">Confidence</th>
                 </tr>
               </thead>
               <tbody>
-                {entities.slice(0, 100).map((entity, i) => (
-                  <tr key={i} className="border-t">
-                    <td className="px-2 py-1.5 truncate max-w-[200px]" title={entity.text}>
-                      {entity.text}
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <Badge variant="outline" className="text-[10px]">{entity.label}</Badge>
-                    </td>
-                    <td className="px-2 py-1.5 text-right text-muted-foreground">
-                      {(entity.confidence * 100).toFixed(0)}%
-                    </td>
-                  </tr>
-                ))}
+                {filteredEntities.slice(0, 100).map((entity, i) => {
+                  const vr = validationLookup.get(entity.text)
+                  return (
+                    <tr key={i} className="border-t">
+                      <td className="px-2 py-1.5 truncate max-w-[180px]" title={entity.text}>
+                        {entity.text}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <Badge variant="outline" className="text-[10px]">{entity.label}</Badge>
+                      </td>
+                      {validationReport && (
+                        <td className="px-2 py-1.5 text-center">
+                          <ValidationStatusBadge
+                            status={vr?.status}
+                            uri={vr?.external_uri}
+                          />
+                        </td>
+                      )}
+                      {hasGraphScores && (
+                        <>
+                          <td className="px-2 py-1.5 text-right text-muted-foreground tabular-nums">
+                            {entity.pagerank != null ? entity.pagerank.toFixed(4) : '-'}
+                          </td>
+                          <td className="px-2 py-1.5 text-center text-muted-foreground">
+                            {entity.community_id != null ? entity.community_id : '-'}
+                          </td>
+                        </>
+                      )}
+                      <td className="px-2 py-1.5 text-right text-muted-foreground">
+                        {(entity.confidence * 100).toFixed(0)}%
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
-            {entities.length > 100 && (
+            {filteredEntities.length > 100 && (
               <p className="text-[10px] text-muted-foreground text-center py-1.5 border-t">
-                Showing 100 of {entities.length} entities
+                Showing 100 of {filteredEntities.length} entities
               </p>
             )}
           </div>
@@ -840,6 +1140,130 @@ function EntityRelationList({
           <p className="text-xs text-muted-foreground italic">No relations found.</p>
         )}
       </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Duplicate review pane                                               */
+/* ------------------------------------------------------------------ */
+
+function DuplicateReviewPane({
+  dedupResponse,
+  dedupLoading,
+  dismissedPairs,
+  onFindDuplicates,
+  onMerge,
+  onDismiss,
+}: {
+  dedupResponse: DeduplicateResponse | null
+  dedupLoading: boolean
+  dismissedPairs: Set<string>
+  onFindDuplicates: () => void
+  onMerge: (canonicalId: string, duplicateId: string, pairKey: string) => void
+  onDismiss: (pairKey: string) => void
+}) {
+  if (!dedupResponse && !dedupLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center p-6 gap-3">
+        <p className="text-sm text-muted-foreground text-center">
+          Scan for duplicate entities across the knowledge base.
+        </p>
+        <Button size="sm" className="gap-1.5" onClick={onFindDuplicates}>
+          <Filter className="h-3.5 w-3.5" />
+          Find Duplicates
+        </Button>
+      </div>
+    )
+  }
+
+  if (dedupLoading) {
+    return (
+      <div className="flex items-center justify-center p-6">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Scanning for duplicates...
+        </div>
+      </div>
+    )
+  }
+
+  const candidates = dedupResponse!.candidates.filter(
+    c => !dismissedPairs.has(`${c.entity_a_id}:${c.entity_b_id}`)
+  )
+
+  return (
+    <div className="p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+          {candidates.length} candidates ({dedupResponse!.auto_merge_count} auto-merged)
+        </p>
+        <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1" onClick={onFindDuplicates}>
+          <Filter className="h-3 w-3" /> Rescan
+        </Button>
+      </div>
+
+      {candidates.length === 0 ? (
+        <p className="text-xs text-muted-foreground italic text-center py-4">
+          No duplicate candidates to review.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {candidates.slice(0, 50).map(c => {
+            const pairKey = `${c.entity_a_id}:${c.entity_b_id}`
+            return (
+              <div key={pairKey} className="border rounded-md p-2.5 space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-medium truncate">{c.entity_a_name}</span>
+                      <Badge variant="outline" className="text-[9px] shrink-0">{c.entity_a_type}</Badge>
+                    </div>
+                    <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                      <span>↔</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-medium truncate">{c.entity_b_name}</span>
+                      <Badge variant="outline" className="text-[9px] shrink-0">{c.entity_b_type}</Badge>
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0 space-y-0.5">
+                    <div className="text-[10px] text-muted-foreground">
+                      Score: {(c.combined_score * 100).toFixed(0)}%
+                    </div>
+                    {c.auto_merge && (
+                      <Badge variant="secondary" className="text-[9px]">auto</Badge>
+                    )}
+                  </div>
+                </div>
+                <div className="flex gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="h-6 text-[10px] flex-1 gap-1"
+                    onClick={() => onMerge(c.entity_a_id, c.entity_b_id, pairKey)}
+                  >
+                    Merge
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 text-[10px] flex-1"
+                    onClick={() => onDismiss(pairKey)}
+                  >
+                    Ignore
+                  </Button>
+                </div>
+              </div>
+            )
+          })}
+          {candidates.length > 50 && (
+            <p className="text-[10px] text-muted-foreground text-center">
+              Showing 50 of {candidates.length} candidates
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

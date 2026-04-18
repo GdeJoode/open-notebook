@@ -173,6 +173,8 @@ export interface ExtractedEntity {
   confidence: number
   source_chunk_id?: string
   source_grounding?: { start_pos: number; end_pos: number } | null
+  pagerank?: number
+  community_id?: number
 }
 
 export interface ExtractedRelation {

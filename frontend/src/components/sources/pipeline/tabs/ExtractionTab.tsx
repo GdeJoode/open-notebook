@@ -278,7 +278,7 @@ export function ExtractionTab({
             {allDone && onContinue && (
               <div className="flex justify-end mt-4 shrink-0">
                 <Button onClick={onContinue} className="gap-2">
-                  Continue to Summarization
+                  Continue to Postprocessing
                   <ArrowRight className="h-4 w-4" />
                 </Button>
               </div>

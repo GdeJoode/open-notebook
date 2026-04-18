@@ -656,7 +656,7 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
             <p className="text-xs text-muted-foreground">{pageChunks.length} elements · {chunks.length} total</p>
           </div>
           <Button
-            variant="ghost" size="sm" className="h-7 w-7 p-0"
+            type="button" variant="ghost" size="sm" className="h-7 w-7 p-0"
             onClick={() => { setShowAddForm(!showAddForm); if (!showAddForm) { setDrawingMode(true); setDrawnRect(null) } else { setDrawingMode(false) } }}
             title="Add chunk"
           >
@@ -687,10 +687,10 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
                   {drawnRect ? `Bbox: ${drawnRect.x.toFixed(0)},${drawnRect.y.toFixed(0)} ${drawnRect.w.toFixed(0)}x${drawnRect.h.toFixed(0)}` : 'Draw a bounding box on the PDF (optional)'}
                 </p>
                 <div className="flex gap-1.5">
-                  <Button size="sm" className="h-7 flex-1 gap-1 text-xs" onClick={handleCreateChunk} disabled={!newChunkText.trim() || createChunk.isPending}>
+                  <Button type="button" size="sm" className="h-7 flex-1 gap-1 text-xs" onClick={handleCreateChunk} disabled={!newChunkText.trim() || createChunk.isPending}>
                     {createChunk.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />} Save
                   </Button>
-                  <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setShowAddForm(false); setDrawingMode(false); setDrawnRect(null) }}>
+                  <Button type="button" size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setShowAddForm(false); setDrawingMode(false); setDrawnRect(null) }}>
                     <X className="h-3 w-3" />
                   </Button>
                 </div>
@@ -734,17 +734,17 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
                           </SelectContent>
                         </Select>
                         <div className="flex items-center gap-1.5">
-                          <Button size="sm" variant={drawingMode ? 'default' : 'outline'} className="h-7 gap-1 text-xs"
+                          <Button type="button" size="sm" variant={drawingMode ? 'default' : 'outline'} className="h-7 gap-1 text-xs"
                             onClick={() => { setDrawingMode(!drawingMode); if (!drawingMode) setDrawnRect(null) }}>
                             <Square className="h-3 w-3" /> {drawingMode ? 'Drawing...' : 'Edit bbox'}
                           </Button>
                           {drawnRect && <span className="text-[10px] text-muted-foreground">New bbox set</span>}
                         </div>
                         <div className="flex gap-1.5">
-                          <Button size="sm" className="h-7 flex-1 gap-1 text-xs" onClick={() => saveEdit(chunk)} disabled={updateChunk.isPending}>
+                          <Button type="button" size="sm" className="h-7 flex-1 gap-1 text-xs" onClick={() => saveEdit(chunk)} disabled={updateChunk.isPending}>
                             {updateChunk.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />} Save
                           </Button>
-                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={cancelEdit}>
+                          <Button type="button" size="sm" variant="ghost" className="h-7 text-xs" onClick={cancelEdit}>
                             <X className="h-3 w-3" />
                           </Button>
                         </div>
@@ -761,14 +761,14 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
                           {/* Action buttons — visible when selected */}
                           {isSelected && (
                             <div className="flex items-center gap-0.5 ml-auto">
-                              <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={(e) => { e.stopPropagation(); startEdit(chunk) }} title="Edit">
+                              <Button type="button" variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={(e) => { e.stopPropagation(); startEdit(chunk) }} title="Edit">
                                 <Pencil className="h-3 w-3" />
                               </Button>
-                              <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={(e) => { e.stopPropagation(); handleToggleContent(chunk) }}
+                              <Button type="button" variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={(e) => { e.stopPropagation(); handleToggleContent(chunk) }}
                                 title={isNoise ? 'Mark as content' : 'Mark as noise'}>
                                 {isNoise ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
                               </Button>
-                              <Button variant="ghost" size="sm" className="h-5 w-5 p-0 text-destructive" onClick={(e) => { e.stopPropagation(); handleDelete(chunk) }} title="Delete">
+                              <Button type="button" variant="ghost" size="sm" className="h-5 w-5 p-0 text-destructive" onClick={(e) => { e.stopPropagation(); handleDelete(chunk) }} title="Delete">
                                 <Trash2 className="h-3 w-3" />
                               </Button>
                             </div>
@@ -788,7 +788,7 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
       {/* Right Pane — PDF Page + Canvas Overlay */}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="p-2 border-b flex items-center gap-2 flex-shrink-0 bg-background">
-          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={currentPage <= 1} onClick={() => handlePageNav(-1)}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={currentPage <= 1} onClick={() => handlePageNav(-1)}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <div className="flex items-center gap-1 text-sm">
@@ -797,14 +797,14 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
               onKeyDown={(e) => e.key === 'Enter' && handlePageInputSubmit()} />
             <span className="text-muted-foreground text-xs">/ {pageCount}</span>
           </div>
-          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={currentPage >= pageCount} onClick={() => handlePageNav(1)}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={currentPage >= pageCount} onClick={() => handlePageNav(1)}>
             <ChevronRight className="h-4 w-4" />
           </Button>
           {drawingMode && (
             <Badge variant="default" className="bg-amber-600 text-xs ml-2">Drawing bbox — click and drag on PDF</Badge>
           )}
           <div className="ml-auto">
-            <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => setShowOverlay(!showOverlay)}>
+            <Button type="button" variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => setShowOverlay(!showOverlay)}>
               {showOverlay ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
               {showOverlay ? 'Hide' : 'Show'} boxes
             </Button>
