@@ -191,8 +191,11 @@ export const sourcesApi = {
     return response.data
   },
 
-  runPreprocessing: async (id: string) => {
-    const response = await apiClient.post<Record<string, unknown>>('/preprocessing/run', { source_id: id })
+  runPreprocessing: async (id: string, privacy?: 'public' | 'internal' | 'confidential') => {
+    const response = await apiClient.post<Record<string, unknown>>('/preprocessing/run', {
+      source_id: id,
+      ...(privacy ? { privacy } : {}),
+    })
     return response.data
   },
 

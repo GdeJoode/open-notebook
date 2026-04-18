@@ -106,75 +106,72 @@ class PreprocessingResult(BaseModel):
 # LLM prompt
 # ---------------------------------------------------------------------------
 
-_ANALYSIS_SYSTEM_PROMPT = """\
-You are a document analyst. Carefully read the provided document text, then return \
-a JSON object with exactly this structure:
+_ANALYSIS_SYSTEM_PROMPT = (
+    "You are a document analyst. You receive document text and return a JSON "
+    "analysis. Return ONLY valid JSON \u2014 no markdown fences, no explanation."
+)
 
-{
+_ANALYSIS_USER_TEMPLATE = """\
+Summarize and classify the document text below. Return a single JSON object.
+
+## Required JSON structure
+
+{{
   "summary": "<markdown-formatted summary>",
-  "classification": {
-    "document_type": "<one of the allowed types>",
+  "classification": {{
+    "document_type": "<type>",
     "language": "<ISO 639-1 code>",
-    "domain": "<one of the allowed domains>",
+    "domain": "<domain>",
     "key_topics": ["topic1", "topic2", "topic3"],
-    "formality_level": "<one of: formal, semi_formal, informal>",
-    "has_toc": <true or false>,
-    "has_hierarchical_structure": <true or false>,
+    "formality_level": "<level>",
+    "has_toc": true or false,
+    "has_hierarchical_structure": true or false,
     "suggested_ontologies": ["general"]
-  }
-}
+  }}
+}}
 
-## Summary instructions
+## Summary rules
 
-The summary MUST use markdown formatting inside the JSON string value. This is safe \
-and expected — markdown characters do not break JSON strings. Use newlines (\\n) for \
-line breaks within the string.
-
-Required markdown elements:
+Write 2-4 paragraphs capturing the document's purpose, main content, key arguments, \
+and conclusions. Use markdown inside the JSON string value (this is safe):
 - **Bold** for key terms, names, and important concepts
-- ## or ### headings to separate sections (e.g. "## Overview\\n\\n", "## Key Arguments\\n\\n")
-- Bullet points (- ) or numbered lists for enumerating findings, arguments, or conclusions
-- The summary should be 2-4 paragraphs and capture the document's purpose, main content, \
-key arguments, and conclusions.
+- ## or ### headings to separate sections
+- Bullet points or numbered lists for findings and conclusions
+- Use \\n for line breaks within the string
 
-Example of a correctly formatted summary value in JSON:
-"summary": "## Overview\\n\\n**John Smith** presents a comprehensive analysis of \\
-market dynamics...\\n\\n## Key Findings\\n\\n- **Finding 1**: The market shows...\\n\\
-- **Finding 2**: Regional differences...\\n\\n## Conclusions\\n\\nThe study concludes..."
+## Classification rules
 
-## Document type assessment
+**document_type** — choose one: academic_paper, policy_document, legal_document, \
+technical_report, transcript, news_article, book_chapter, correspondence, manual, \
+financial_report, presentation, other. Use "other" only if nothing else fits.
 
-Carefully assess the type of document. Consider its structure, language, purpose, \
-and intended audience:
+**domain** — choose one: science, technology, law, politics, healthcare, finance, \
+education, business, engineering, other.
 
-Allowed types: academic_paper, policy_document, legal_document, technical_report, \
-transcript, news_article, book_chapter, correspondence, manual, financial_report, \
-presentation, other.
+**key_topics** — 3-7 specific topics from the document, not generic categories.
 
-Be precise — use "other" only if nothing else fits. For example:
-- A peer-reviewed paper with abstract/methods/results → academic_paper
-- Government or institutional guidance/regulation → policy_document
-- A how-to guide or reference manual → manual
-- Spoken dialogue or interview → transcript
+**formality_level** — formal, semi_formal, or informal.
 
-## Structure assessment
+**has_toc** — true if the document contains a table of contents or explicit section outline.
 
-Assess the document's structural organization:
-- **has_toc**: Set to true if the document contains a table of contents, list of chapters, \
-or an explicit outline of sections at the beginning.
-- **has_hierarchical_structure**: Set to true if the document uses explicit section headers \
-(e.g. numbered sections like "1. Introduction", "2.1 Methods", or clearly titled sections) \
-that create a multi-level hierarchy. A flat document with no headers or only a title → false.
+**has_hierarchical_structure** — true if the document uses multi-level section headers \
+(e.g. "1. Introduction", "2.1 Methods"). Flat document with no headers → false.
 
-## Other rules
-
-- Return ONLY valid JSON. No markdown code fences, no explanation outside the JSON.
-- key_topics: 3-7 specific topics, not generic categories.
-- suggested_ontologies: always include "general"; add "scholarly" for academic papers, \
+**suggested_ontologies** — always include "general"; add "scholarly" for academic papers, \
 "policy" for policy documents.
-"""
 
-MAX_INPUT_CHARS = 50_000
+---
+
+DOCUMENT TEXT:
+
+{text}
+
+---
+
+Now return ONLY the JSON object with "summary" and "classification" keys. \
+No other text, no markdown fences, no explanation."""
+
+DEFAULT_MAX_INPUT_CHARS = 20_000
 
 
 # ---------------------------------------------------------------------------
@@ -189,16 +186,34 @@ class PreprocessingService:
         self,
         chunk_repo: ChunkRepository,
         language_model: Optional[LanguageModel] = None,
+        max_input_chars: int = DEFAULT_MAX_INPUT_CHARS,
+        privacy: Optional[str] = None,
     ):
         self.chunk_repo = chunk_repo
         self.language_model = language_model
+        self.max_input_chars = max_input_chars
+        self.privacy = privacy
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    async def run(self, source_id: str) -> PreprocessingResult:
-        """Run full preprocessing for a source document."""
+    async def run(
+        self, source_id: str, privacy: Optional[str] = None
+    ) -> PreprocessingResult:
+        """Run full preprocessing for a source document.
+
+        privacy overrides the instance default for this run only.
+        """
+        if privacy is not None:
+            self.privacy = privacy
+        # 1. Load all chunks
+        # 0. Clear any cached result so a fresh LLM call is always made
+        await execute_query(
+            "DELETE FROM preprocessing_result WHERE source_id = $source_id",
+            {"source_id": source_id},
+        )
+
         # 1. Load all chunks
         chunks = await self.chunk_repo.get_by_source(source_id)
         if not chunks:
@@ -216,11 +231,12 @@ class PreprocessingService:
         full_text = "\n\n".join(
             c.text for c in chunks_sorted if str(c.id) in set(filtered_ids)
         )
-        if len(full_text) > MAX_INPUT_CHARS:
-            full_text = full_text[:MAX_INPUT_CHARS]
+        if len(full_text) > self.max_input_chars:
+            full_text = full_text[:self.max_input_chars]
 
-        # 5. LLM analysis
-        if self.language_model:
+        # 5. LLM analysis — prefer model_routing (Mistral Medium on public,
+        # Ollama on internal/confidential), fall back to DB-configured LLM.
+        if self.privacy or self.language_model:
             summary, classification = await self._analyze_document(full_text)
         else:
             summary = full_text[:500] + "..."
@@ -408,14 +424,35 @@ class PreprocessingService:
         """Call LLM for summary + classification."""
         messages = [
             {"role": "system", "content": _ANALYSIS_SYSTEM_PROMPT},
-            {"role": "user", "content": text},
+            {"role": "user", "content": _ANALYSIS_USER_TEMPLATE.format(text=text)},
         ]
 
         try:
-            response = await self.language_model.achat_complete(
-                messages, stream=False
+            if self.privacy:
+                # Route via shared/model_routing — Mistral Medium 3 on public,
+                # llama3.1:8b on internal/confidential.
+                from shared.model_routing import call_llm
+
+                raw = await call_llm(
+                    messages=messages,
+                    step="classification",
+                    privacy=self.privacy,
+                )
+            else:
+                response = await self.language_model.achat_complete(
+                    messages, stream=False
+                )
+                raw = response.content
+            logger.debug(
+                f"LLM response length: {len(raw) if raw else 0}, "
+                f"first 200 chars: {repr(raw[:200]) if raw else '(empty)'}"
             )
-            raw = response.content
+
+            if not raw or not raw.strip():
+                logger.warning("LLM returned empty response for document analysis")
+                return "", DocumentClassification(
+                    document_type="other", domain="other"
+                )
 
             # Strip markdown code fences if present
             cleaned = raw.strip()
@@ -430,6 +467,12 @@ class PreprocessingService:
 
             summary = data.get("summary", "")
             cls_data = data.get("classification", {})
+            if not isinstance(cls_data, dict):
+                logger.warning(
+                    f"LLM returned classification as {type(cls_data).__name__}, "
+                    f"expected object; falling back to defaults"
+                )
+                cls_data = {}
             classification = DocumentClassification(
                 document_type=cls_data.get("document_type", "other"),
                 language=cls_data.get("language", "en"),
@@ -449,7 +492,7 @@ class PreprocessingService:
 
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse LLM JSON response: {e}")
-            return response.content[:2000], DocumentClassification(
+            return raw[:2000], DocumentClassification(
                 document_type="other", domain="other"
             )
         except RuntimeError as e:

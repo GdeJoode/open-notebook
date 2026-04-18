@@ -264,7 +264,7 @@ export function SourceDetailContent({
     if (!source) return
     try {
       setIsRunningPipeline('preprocessing')
-      await sourcesApi.runPreprocessing(sourceId)
+      await sourcesApi.runPreprocessing(sourceId, reprocessConfig.privacy)
       toast.success('Preprocessing completed')
       await fetchSource()
     } catch (err) {

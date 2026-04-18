@@ -25,9 +25,13 @@ export interface PreprocessingResult {
 }
 
 export const preprocessingApi = {
-  run: async (sourceId: string): Promise<PreprocessingResult> => {
+  run: async (
+    sourceId: string,
+    privacy?: 'public' | 'internal' | 'confidential',
+  ): Promise<PreprocessingResult> => {
     const { data } = await apiClient.post('/preprocessing/run', {
       source_id: sourceId,
+      ...(privacy ? { privacy } : {}),
     })
     return data
   },

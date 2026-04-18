@@ -48,6 +48,26 @@ routing:
       max_tokens: 2048
       num_ctx: 8192
 
+  # --- Classification (document type + summary during preprocessing) ---
+  classification:
+    public:
+      provider: "nvidia"
+      model: "mistralai/mistral-medium-3-instruct"
+      temperature: 0.1
+      max_tokens: 3000
+    internal:
+      provider: "ollama"
+      model: "llama3.1:8b-instruct-q4_0"
+      temperature: 0.1
+      max_tokens: 3000
+      num_ctx: 16384
+    confidential:
+      provider: "ollama"
+      model: "llama3.1:8b-instruct-q4_0"
+      temperature: 0.1
+      max_tokens: 3000
+      num_ctx: 16384
+
   # --- Summarization ---
   summarization:
     public:
