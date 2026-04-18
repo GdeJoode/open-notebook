@@ -134,3 +134,13 @@ specs/
 .claude
 
 .playwright-mcp/
+
+# Pipeline output directories (local runtime data)
+docling_input/
+docling_output/
+ingestion_output/
+summarization_data/
+whisperx_data/
+
+# Screenshots
+Schermafbeelding*.png
