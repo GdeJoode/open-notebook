@@ -466,6 +466,19 @@ class PreprocessingService:
             data = json.loads(cleaned.strip())
 
             summary = data.get("summary", "")
+            if isinstance(summary, dict):
+                # LLM sometimes wraps the summary as {"title": ..., "description": ...}
+                # Flatten to a markdown-ish string so it fits naive_summary: str.
+                parts = []
+                if summary.get("title"):
+                    parts.append(f"**{summary['title']}**")
+                for key in ("description", "abstract", "overview", "content"):
+                    if summary.get(key):
+                        parts.append(str(summary[key]))
+                        break
+                summary = "\n\n".join(parts) or json.dumps(summary, ensure_ascii=False)
+            elif not isinstance(summary, str):
+                summary = str(summary)
             cls_data = data.get("classification", {})
             if not isinstance(cls_data, dict):
                 logger.warning(
