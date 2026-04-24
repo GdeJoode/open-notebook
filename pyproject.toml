@@ -74,7 +74,10 @@ zotero-integration = { workspace = true }
 # ============================================================================
 
 [tool.hatch.build.targets.wheel]
-packages = ["open_notebook"]
+# Root is a workspace container — all code lives in apps/, packages/, pipelines/.
+# Build an empty wheel so hatchling validates but we don't ship legacy code.
+only-include = []
+bypass-selection = true
 
 [tool.isort]
 profile = "black"

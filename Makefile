@@ -45,10 +45,9 @@ docker-buildx-reset: docker-buildx-clean docker-buildx-prepare
 
 # === Docker Build Targets ===
 
-# Build and push version tags ONLY (no latest) for both regular and single images
+# Build and push version tags ONLY (no latest)
 docker-push: docker-buildx-prepare
 	@echo "📤 Building and pushing version $(VERSION) to both registries..."
-	@echo "🔨 Building regular image..."
 	docker buildx build --pull \
 		--platform $(PLATFORMS) \
 		--progress=plain \
@@ -56,27 +55,11 @@ docker-push: docker-buildx-prepare
 		-t $(GHCR_IMAGE):$(VERSION) \
 		--push \
 		.
-	@echo "🔨 Building single-container image..."
-	docker buildx build --pull \
-		--platform $(PLATFORMS) \
-		--progress=plain \
-		-f Dockerfile.single \
-		-t $(DOCKERHUB_IMAGE):$(VERSION)-single \
-		-t $(GHCR_IMAGE):$(VERSION)-single \
-		--push \
-		.
 	@echo "✅ Pushed version $(VERSION) to both registries (latest NOT updated)"
-	@echo "  📦 Docker Hub:"
-	@echo "    - $(DOCKERHUB_IMAGE):$(VERSION)"
-	@echo "    - $(DOCKERHUB_IMAGE):$(VERSION)-single"
-	@echo "  📦 GHCR:"
-	@echo "    - $(GHCR_IMAGE):$(VERSION)"
-	@echo "    - $(GHCR_IMAGE):$(VERSION)-single"
 
-# Update v1-latest tags to current version (both regular and single images)
+# Update v1-latest tags to current version
 docker-push-latest: docker-buildx-prepare
 	@echo "📤 Updating v1-latest tags to version $(VERSION)..."
-	@echo "🔨 Building regular image with latest tag..."
 	docker buildx build --pull \
 		--platform $(PLATFORMS) \
 		--progress=plain \
@@ -86,24 +69,7 @@ docker-push-latest: docker-buildx-prepare
 		-t $(GHCR_IMAGE):v1-latest \
 		--push \
 		.
-	@echo "🔨 Building single-container image with latest tag..."
-	docker buildx build --pull \
-		--platform $(PLATFORMS) \
-		--progress=plain \
-		-f Dockerfile.single \
-		-t $(DOCKERHUB_IMAGE):$(VERSION)-single \
-		-t $(DOCKERHUB_IMAGE):v1-latest-single \
-		-t $(GHCR_IMAGE):$(VERSION)-single \
-		-t $(GHCR_IMAGE):v1-latest-single \
-		--push \
-		.
 	@echo "✅ Updated v1-latest to version $(VERSION)"
-	@echo "  📦 Docker Hub:"
-	@echo "    - $(DOCKERHUB_IMAGE):$(VERSION) → v1-latest"
-	@echo "    - $(DOCKERHUB_IMAGE):$(VERSION)-single → v1-latest-single"
-	@echo "  📦 GHCR:"
-	@echo "    - $(GHCR_IMAGE):$(VERSION) → v1-latest"
-	@echo "    - $(GHCR_IMAGE):$(VERSION)-single → v1-latest-single"
 
 # Full release: push version AND update latest tags
 docker-release: docker-push-latest
@@ -114,13 +80,6 @@ tag:
 	echo "Creating tag v$$version"; \
 	git tag "v$$version"; \
 	git push origin "v$$version"
-
-
-dev:
-	docker compose -f docker-compose.dev.yml up --build 
-
-full:
-	docker compose -f docker-compose.full.yml up --build 
 
 
 api:
