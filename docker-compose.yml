@@ -45,8 +45,11 @@ services:
       - DOCLING_GENERATE_PAGE_IMAGES=false
       - DOCLING_GENERATE_PICTURE_IMAGES=true
       - DOCLING_IMAGES_SCALE=2.0
-      - DOCLING_DO_PICTURE_CLASSIFICATION=true
-      - DOCLING_DO_PICTURE_DESCRIPTION=true
+      # Picture classification/description via docling's internal VLM is
+      # memory-heavy on large scanned PDFs (GPU OOM on 20+ MB files).
+      # Disabled by default; opt in via env override when needed.
+      - DOCLING_DO_PICTURE_CLASSIFICATION=false
+      - DOCLING_DO_PICTURE_DESCRIPTION=false
       - DOCLING_VLM_MODEL=HuggingFaceTB/SmolVLM-256M-Instruct
       - DOCLING_DO_FORMULA_EXTRACTION=true
       - DOCLING_DO_CODE_ENRICHMENT=true
@@ -149,10 +152,18 @@ services:
       - SURREAL_URL=ws://surrealdb:8000
       - OLLAMA_API_BASE=http://host.docker.internal:11434
       - OLLAMA_URL=http://host.docker.internal:11434
+      - DOCLING_SERVICE_URL=http://docling:8100
+      - USE_DOCLING_SERVICE=true
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       - surrealdb
+      - docling
     volumes:
       - ./notebook_data:/app/data
+      # Shared with docling service — same paths in both containers so the
+      # service can read files the main app writes, and the main app can read
+      # the service's output.
+      - ./docling_input:/data/input
+      - ./docling_output:/data/output
     restart: always

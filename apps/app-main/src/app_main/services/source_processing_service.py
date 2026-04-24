@@ -9,9 +9,23 @@ Uses the ingestion pipeline (Docling + WhisperX) for file-based extraction.
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+_DOCLING_PARSEABLE_EXTENSIONS = {
+    ".pdf", ".docx", ".doc", ".xlsx", ".xls",
+    ".pptx", ".ppt", ".html", ".htm", ".txt", ".md",
+}
+
+
+def _use_docling_service() -> bool:
+    """True when USE_DOCLING_SERVICE env var is truthy."""
+    return os.environ.get("USE_DOCLING_SERVICE", "").lower() in {
+        "1", "true", "yes", "on"
+    }
 
 from loguru import logger
 
@@ -36,6 +50,26 @@ class ExtractionResult:
     url: Optional[str] = None
     chunks: Optional[List[Dict[str, Any]]] = None
     metadata: Optional[Dict[str, Any]] = None
+
+
+def _is_docling_parseable_extension(path: Path) -> bool:
+    return path.suffix.lower() in _DOCLING_PARSEABLE_EXTENSIONS
+
+
+def _strip_null_bytes(value: Any) -> Any:
+    """Remove NUL (\\x00) bytes that break SurrealDB's string serializer.
+
+    Docling/OCR output on scanned PDFs occasionally contains \\x00 which
+    SurrealDB writes without error but refuses to read back, surfacing as
+    'Serialization error: to be serialized string contained a null byte'.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "") if "\x00" in value else value
+    if isinstance(value, list):
+        return [_strip_null_bytes(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _strip_null_bytes(v) for k, v in value.items()}
+    return value
 
 
 class SourceProcessingService:
@@ -255,39 +289,61 @@ class SourceProcessingService:
         # IngestionWorkflow.process() is synchronous — run in thread pool.
         # Bridge loguru logs from the ingestion pipeline into LogStreamService
         # so the frontend can display verbose processing output.
-        workflow = IngestionWorkflow(config)
-        loop = asyncio.get_event_loop()
-
-        def _loguru_to_stream(message: object) -> None:
-            """Forward ingestion/docling loguru logs to LogStreamService."""
-            record = message.record  # type: ignore[union-attr]
-            name = record.get("name", "")
-            # Only forward logs from the ingestion pipeline and docling
-            if not (
-                name.startswith("ingestion")
-                or "docling" in name.lower()
-            ):
-                return
-            level = record["level"].name
-            msg = str(record["message"]).strip()
-            if not msg:
-                return
-            try:
-                loop.call_soon_threadsafe(log_stream.emit, emit_key, msg, level)
-            except RuntimeError:
-                pass  # Loop closed — ignore
-
-        sink_id = logger.add(
-            _loguru_to_stream,
-            level="INFO",
-            format="{message}",
+        use_service = _use_docling_service() and _is_docling_parseable_extension(
+            source_path
         )
-        try:
-            result = await loop.run_in_executor(
-                None, workflow.process, source_path
+
+        if use_service:
+            # Route to the GPU-accelerated docling service; skip in-process
+            # IngestionWorkflow entirely. The service writes the same output
+            # files (document.json, markdown, images) to /data/output.
+            from app_main.services.docling_http_client import DoclingHttpClient
+
+            logger.info(
+                f"Routing {source_path.name} to docling service (GPU)"
             )
-        finally:
-            logger.remove(sink_id)
+            log_stream.emit(
+                emit_key,
+                f"Routing to docling service: {source_path.name}",
+            )
+            client = DoclingHttpClient()
+            result = await client.process(source_path)
+        else:
+            workflow = IngestionWorkflow(config)
+            loop = asyncio.get_event_loop()
+
+            def _loguru_to_stream(message: object) -> None:
+                """Forward ingestion/docling loguru logs to LogStreamService."""
+                record = message.record  # type: ignore[union-attr]
+                name = record.get("name", "")
+                # Only forward logs from the ingestion pipeline and docling
+                if not (
+                    name.startswith("ingestion")
+                    or "docling" in name.lower()
+                ):
+                    return
+                level = record["level"].name
+                msg = str(record["message"]).strip()
+                if not msg:
+                    return
+                try:
+                    loop.call_soon_threadsafe(
+                        log_stream.emit, emit_key, msg, level
+                    )
+                except RuntimeError:
+                    pass  # Loop closed — ignore
+
+            sink_id = logger.add(
+                _loguru_to_stream,
+                level="INFO",
+                format="{message}",
+            )
+            try:
+                result = await loop.run_in_executor(
+                    None, workflow.process, source_path
+                )
+            finally:
+                logger.remove(sink_id)
 
         if not result.success:
             raise RuntimeError(
@@ -660,10 +716,10 @@ class SourceProcessingService:
                 url=extracted.url,
                 file_path=extracted.file_path,
             ).model_dump(),
-            "full_text": extracted.full_text,
+            "full_text": _strip_null_bytes(extracted.full_text),
         }
         if extracted.title:
-            update_data["title"] = extracted.title
+            update_data["title"] = _strip_null_bytes(extracted.title)
 
         # Persist output directory so we can serve images later
         output_dir = (extracted.metadata or {}).get("output_directory")
@@ -751,15 +807,15 @@ class SourceProcessingService:
             prepared.append(
                 {
                     "source": source_id,
-                    "text": chunk_data["text"],
+                    "text": _strip_null_bytes(chunk_data["text"]),
                     "order": chunk_data["order"],
                     "physical_page": chunk_data["physical_page"],
                     "printed_page": chunk_data.get("printed_page"),
-                    "chapter": chunk_data.get("chapter"),
+                    "chapter": _strip_null_bytes(chunk_data.get("chapter")),
                     "paragraph_number": chunk_data.get("paragraph_number"),
                     "element_type": chunk_data.get("element_type", "paragraph"),
                     "positions": chunk_data.get("positions", []),
-                    "metadata": chunk_data.get("metadata", {}),
+                    "metadata": _strip_null_bytes(chunk_data.get("metadata", {})),
                 }
             )
         return prepared
