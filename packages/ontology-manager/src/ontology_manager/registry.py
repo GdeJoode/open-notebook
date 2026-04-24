@@ -324,12 +324,15 @@ class OntologyRegistry:
         try:
             from surrealdb_service.connection import execute_query
 
+            # SurrealDB doesn't support `SELECT DISTINCT` — dedupe client-side.
             result = await execute_query(
-                "SELECT DISTINCT name FROM ontology_version", {}
+                "SELECT name FROM ontology_version", {}
             )
             if result:
                 for row in result:
-                    ontologies.add(row.get("name"))
+                    name = row.get("name")
+                    if name:
+                        ontologies.add(name)
         except Exception:
             pass
 
