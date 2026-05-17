@@ -43,12 +43,14 @@ class RaptorStrategy(BaseSummarizationStrategy):
         self,
         config: SummarizationConfig,
         embedding_fn: EmbeddingFn,
+        language_hint: Optional[str] = None,
         **kwargs,
     ) -> None:
         super().__init__(config, **kwargs)
         self._llm_config = config.llm
         self._raptor_config = config.raptor
         self._embedding_fn = embedding_fn
+        self._language_hint = language_hint
 
     # ------------------------------------------------------------------
     # LLM helpers
@@ -69,6 +71,23 @@ class RaptorStrategy(BaseSummarizationStrategy):
     async def _call_llm(self, prompt: str, max_tokens: int = 200) -> str:
         model = self._get_model(max_tokens)
         prompt = self.apply_output_instructions(prompt)
+        messages = [
+            {"role": "system", "content": self.get_system_prompt()},
+            {"role": "user", "content": prompt},
+        ]
+        response = await model.achat_complete(messages)
+        return self.normalize_response(response.content)
+
+    async def _call_llm_minimal(self, prompt: str, max_tokens: int = 200) -> str:
+        """LLM call without appending output_instructions.
+
+        Used for intermediate cluster-summary calls: those should produce short
+        prose, not the full meeting-note template that output_instructions
+        describes (which only belongs at the final/root level). System prompt
+        is still applied — it carries faithfulness constraints ("only report
+        what was said", language matching) that we want on every call.
+        """
+        model = self._get_model(max_tokens)
         messages = [
             {"role": "system", "content": self.get_system_prompt()},
             {"role": "user", "content": prompt},
@@ -290,13 +309,29 @@ class RaptorStrategy(BaseSummarizationStrategy):
                     continue
 
                 combined = "\n\n".join(member_texts)
+                lang_directive = (
+                    f"WRITE YOUR SUMMARY IN {self._language_hint.upper()}. "
+                    f"This is non-negotiable: every word, including technical "
+                    f"terms and proper nouns, must be in {self._language_hint}. "
+                    f"Do not switch to another language even if the source "
+                    f"contains foreign loanwords.\n\n"
+                    if self._language_hint
+                    else "Write your summary in the SAME language as the TEXTS below.\n\n"
+                )
                 prompt = (
-                    "Summarize the following related texts into a single "
-                    "coherent summary that captures the key themes and "
-                    "information.\n\n"
+                    f"{lang_directive}"
+                    "Summarize the following related text fragments into a "
+                    "concise, factual prose summary (3-6 short paragraphs). "
+                    "Do NOT use section headers, bullet lists, or any "
+                    "templated structure — only flowing paragraphs. Preserve "
+                    "speaker attributions (SPEAKER_N or names) and concrete "
+                    "content (names, numbers, decisions, quoted statements). "
+                    "Do not interpret or add context that is not present in "
+                    "the source.\n\n"
                     f"TEXTS:\n{combined}"
                 )
-                summary_text = await self._call_llm(
+                # Intermediate aggregate — bypass the meeting-note output_instructions.
+                summary_text = await self._call_llm_minimal(
                     prompt,
                     max_tokens=self._raptor_config.summarization_max_tokens,
                 )

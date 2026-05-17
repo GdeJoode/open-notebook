@@ -179,29 +179,91 @@ def _chunks_from_markdown(text: str) -> List[ChunkInput]:
 
     _flush()
 
-    # Fallback: if no headings found, split by double newlines
-    if not chunks:
-        chunks = _chunks_from_plain_text(text)
+    # Fallback: if no heading was ever encountered, route through plain-text
+    # chunker so its sliding-window splits transcripts / headingless docs.
+    # (Previously checked `if not chunks` — but headingless input still produced
+    # a single oversized chunk via _flush(), so plain_text was never reached.)
+    if not heading_stack:
+        return _chunks_from_plain_text(text)
 
     return chunks
 
 
-def _chunks_from_plain_text(text: str) -> List[ChunkInput]:
-    """Split plain text into chunks by double newlines (paragraphs)."""
-    paragraphs = re.split(r"\n{2,}", text.strip())
-    chunks = []
-    for i, para in enumerate(paragraphs):
-        para = para.strip()
-        if not para:
-            continue
-        chunks.append(
-            ChunkInput(
-                text=para,
-                chunk_id=str(uuid.uuid4()),
-                order=i,
-            )
-        )
-    return chunks
+def _chunks_from_plain_text(
+    text: str,
+    *,
+    target_chars: int = 4000,  # ~1000 tokens for NL/EN content (≈ 4 chars/token)
+    min_paragraphs_for_split: int = 3,
+    max_para_chars: int = 8000,
+) -> List[ChunkInput]:
+    """Split plain text into chunks.
+
+    Strategy:
+      1. Try splitting on double newlines (paragraph boundaries).
+      2. If we get >= min_paragraphs_for_split paragraphs and none is larger
+         than max_para_chars, use those — they likely reflect real document
+         structure.
+      3. Otherwise fall back to a character-based sliding window of
+         ~target_chars (~1000 tokens), breaking on whitespace so words aren't
+         cut. Each oversized paragraph in path 1 is itself window-split.
+
+    This guards against inputs without paragraph breaks (e.g. WhisperX
+    transcripts: one line per utterance, single newlines only) ending up as a
+    single huge chunk, which makes downstream strategies (RAPTOR, TreeKG, etc.)
+    degenerate to 1 node / 1 layer.
+    """
+    stripped = text.strip()
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", stripped) if p.strip()]
+
+    def _window_split(s: str, base_order: int) -> List[ChunkInput]:
+        out: List[ChunkInput] = []
+        i = 0
+        order = base_order
+        while i < len(s):
+            end = min(i + target_chars, len(s))
+            if end < len(s):
+                # back off to the nearest whitespace to avoid cutting words
+                break_pos = max(s.rfind(" ", i, end), s.rfind("\n", i, end))
+                if break_pos > i + target_chars // 2:
+                    end = break_pos
+            piece = s[i:end].strip()
+            if piece:
+                out.append(
+                    ChunkInput(
+                        text=piece,
+                        chunk_id=str(uuid.uuid4()),
+                        order=order,
+                    )
+                )
+                order += 1
+            i = end
+        return out
+
+    # Path 1: paragraphs look healthy — use them, window-splitting any oversized one.
+    if (
+        len(paragraphs) >= min_paragraphs_for_split
+        and max(len(p) for p in paragraphs) <= max_para_chars
+    ):
+        chunks: List[ChunkInput] = []
+        order = 0
+        for para in paragraphs:
+            if len(para) <= max_para_chars:
+                chunks.append(
+                    ChunkInput(
+                        text=para,
+                        chunk_id=str(uuid.uuid4()),
+                        order=order,
+                    )
+                )
+                order += 1
+            else:
+                sub = _window_split(para, order)
+                chunks.extend(sub)
+                order += len(sub)
+        return chunks
+
+    # Path 2: too few paragraphs or one is oversized → sliding window over the whole text.
+    return _window_split(stripped, 0)
 
 
 def _chunks_from_json(raw: str) -> List[ChunkInput]:
@@ -416,8 +478,11 @@ def _make_embedding_fn(override: Optional[EmbeddingOverride] = None):
         em = OllamaEmbeddingModel(model_name=model, base_url=base_url)
 
     async def embedding_fn(texts: List[str]) -> List[List[float]]:
-        result = await em.aembed(texts)
-        return [r.embedding for r in result]
+        # esperanto's aembed returns list[list[float]] directly — no .embedding
+        # wrapper. An earlier API revision returned EmbeddingResult objects;
+        # extracting .embedding silently broke RAPTOR (embedding step raised
+        # AttributeError, strategy fell back to a single naive concat).
+        return await em.aembed(texts)
 
     return embedding_fn
 
@@ -477,6 +542,31 @@ def _split_large_chunks(chunks: List[ChunkInput]) -> List[ChunkInput]:
     return result
 
 
+_NL_MARKERS = (" het ", " een ", " van ", " dat ", " ook ", " met ", " maar ",
+               " naar ", " zijn ", " worden ", " heeft ", " omdat ", " want ")
+_EN_MARKERS = (" the ", " and ", " of ", " is ", " in ", " to ", " for ",
+               " with ", " that ", " was ", " are ", " have ", " this ")
+
+
+def _detect_language(chunks: List[ChunkInput]) -> Optional[str]:
+    """Cheap heuristic language detect for cluster-prompt injection.
+
+    Cluster calls bypass output_instructions (which carry the user-supplied
+    language directive), so we lose the language signal there. Detecting it
+    from the source text and re-injecting in the cluster prompt keeps cluster
+    summaries language-consistent with the source, instead of qwen drifting
+    to English on technical content.
+    """
+    sample = " ".join(c.text[:1000] for c in chunks[:5]).lower()
+    nl = sum(1 for w in _NL_MARKERS if w in sample)
+    en = sum(1 for w in _EN_MARKERS if w in sample)
+    if nl > en and nl >= 3:
+        return "Dutch (Nederlands)"
+    if en > nl and en >= 3:
+        return "English"
+    return None
+
+
 async def _run_raptor(
     chunks: List[ChunkInput],
     llm_config: LLMConfig,
@@ -490,7 +580,10 @@ async def _run_raptor(
         system_prompt=system_prompt, output_instructions=output_instructions,
     )
     embedding_fn = _make_embedding_fn(embedding_override)
-    strategy = RaptorStrategy(config, embedding_fn=embedding_fn)
+    language_hint = _detect_language(chunks)
+    if language_hint:
+        logger.info(f"RAPTOR: detected source language = {language_hint}")
+    strategy = RaptorStrategy(config, embedding_fn=embedding_fn, language_hint=language_hint)
     raptor_chunks = _split_large_chunks(chunks)
     logger.info(f"RAPTOR: {len(chunks)} section chunks split into {len(raptor_chunks)} embedding chunks")
     return await strategy.summarize(raptor_chunks)
@@ -523,19 +616,43 @@ def _write_summary(result: SummarizationResult, output_path: Path) -> None:
     parts.append("")
 
     if result.document_summary:
-        parts.append("## Document Summary")
-        parts.append("")
-        parts.append(result.document_summary)
+        body = result.document_summary.lstrip()
+        # LLM output usually starts with its own H1/H2 (e.g. "## Narrative Summary").
+        # Adding another "## Document Summary" wrapper on top produces an empty
+        # header followed immediately by the LLM's header — visually broken.
+        # Skip the wrapper when the body already starts with a markdown heading.
+        if not body.startswith("#"):
+            parts.append("## Document Summary")
+            parts.append("")
+        parts.append(body)
         parts.append("")
 
-    if result.summary_nodes and result.has_hierarchy:
-        parts.append("## Summary Tree")
-        parts.append("")
+    # Per-layer rendering only adds value if there's more than one node — with a
+    # single node the tree is identical to Document Summary and just duplicates it.
+    # Render each node's full text as its own subsection (not a one-line bullet),
+    # grouped by layer ascending (leaves first, then aggregations). Skip the
+    # top layer if it has exactly one node — that's the root, which the strategy
+    # also returns as document_summary; rendering it again is pure duplicate.
+    if result.summary_nodes and result.has_hierarchy and len(result.summary_nodes) > 1:
+        by_layer: Dict[int, List] = {}
         for node in result.summary_nodes:
-            indent = "  " * node.layer
-            title = f" ({node.section_title})" if node.section_title else ""
-            parts.append(f"{indent}- **Layer {node.layer}{title}**: {node.text}")
-        parts.append("")
+            by_layer.setdefault(node.layer, []).append(node)
+
+        top_layer = max(by_layer.keys())
+        if len(by_layer[top_layer]) == 1:
+            del by_layer[top_layer]
+
+        for layer in sorted(by_layer.keys()):
+            nodes = by_layer[layer]
+            label = "Cluster" if layer > 0 else "Chunk"
+            parts.append(f"## Layer {layer} — {label}-samenvattingen")
+            parts.append("")
+            for i, node in enumerate(nodes, 1):
+                title = node.section_title or f"{label} {i}"
+                parts.append(f"### {title}")
+                parts.append("")
+                parts.append(node.text)
+                parts.append("")
 
     output_path.write_text("\n".join(parts), encoding="utf-8")
 

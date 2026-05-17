@@ -82,6 +82,9 @@ services:
       - EMBEDDING_MODEL=nomic-embed-text
       - EMBEDDING_BASE_URL=http://host.docker.internal:11434
       - LLM_API_KEY=
+      # esperanto LLM default timeout is 60s — too tight for qwen2.5:14b on this GPU.
+      # 600s = 10 min per LLM-call; enough headroom for slower, higher-quality models.
+      - ESPERANTO_LLM_TIMEOUT=600
     restart: always
   whisperx:
     build:

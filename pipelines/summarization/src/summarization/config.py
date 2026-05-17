@@ -37,9 +37,18 @@ class RaptorConfig:
     max_layers: int = 5
     min_chunks_for_clustering: int = 3
     reduction_dimension: int = 10
-    cluster_threshold: float = 0.1
-    max_tokens_per_cluster: int = 3500
-    summarization_max_tokens: int = 500
+    # Raised from 0.1 → 0.5: GMM soft-assignment only adds a chunk to clusters
+    # where prob ≥ threshold. At 0.1 nearly every chunk lands in 3-5 clusters,
+    # making them inhoud-identiek; at 0.5 only confident assignments count, so
+    # clusters become distinct topics instead of overlapping mush.
+    cluster_threshold: float = 0.5
+    # Raised from 1500 → 4000: 1500 chars (~375 tokens) truncated long clusters
+    # to their first 2-3 member chunks, dropping minority topics inside a cluster.
+    # 4000 (~1000 tokens) fits most clusters whole, fed into a model with
+    # summarization_max_tokens=2000 output budget — still well within num_ctx.
+    max_tokens_per_cluster: int = 4000
+    # Raised from 500 → 2000: a cluster summary of <400 words drops half the topics.
+    summarization_max_tokens: int = 2000
     use_pca_fallback: bool = False
 
 
