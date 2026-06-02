@@ -96,17 +96,14 @@ class SourceProcessingService:
         source_id: str,
         content_state: Dict[str, Any],
         *,
-        apply_transformations: bool = False,
-        embed: bool = False,
         notebook_ids: Optional[List[str]] = None,
-        transformation_ids: Optional[List[str]] = None,
         processing_overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Extract content from a source and persist chunks.
 
-        This method only handles extraction. Embedding, summarization,
-        and entity extraction are triggered separately by the user.
+        This method only handles extraction. Embedding (see ``embed_source``)
+        and summarization (see ``run_summaries``) are triggered separately.
 
         Args:
             source_id: ID of the source record to process.
@@ -114,10 +111,7 @@ class SourceProcessingService:
                 - ``{"file_path": "/path/to/file"}`` — process via IngestionWorkflow
                 - ``{"url": "https://..."}`` — extract web page content
                 - ``{"content": "raw text"}`` — wrap as single chunk
-            apply_transformations: Ignored (kept for backward compat).
-            embed: Ignored (kept for backward compat).
             notebook_ids: Optional notebook IDs (associations created by API layer).
-            transformation_ids: Ignored (kept for backward compat).
             processing_overrides: Per-submission overrides merged on top of
                 the global ContentSettings.
 

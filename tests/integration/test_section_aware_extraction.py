@@ -554,7 +554,7 @@ class TestResolutionLogService:
 
     async def test_list_candidates_with_filters(self):
         """List candidates respects status filter."""
-        from app_main.services.entity_persistence_service import ResolutionLogService
+        from app_main.services.resolution_log_service import ResolutionLogService
 
         svc = ResolutionLogService()
 
@@ -579,7 +579,7 @@ class TestResolutionLogService:
 
     async def test_update_status(self):
         """Update status sets reviewed_at timestamp."""
-        from app_main.services.entity_persistence_service import ResolutionLogService
+        from app_main.services.resolution_log_service import ResolutionLogService
 
         svc = ResolutionLogService()
 
@@ -597,7 +597,7 @@ class TestResolutionLogService:
 
     async def test_get_stats(self):
         """Stats returns aggregated counts."""
-        from app_main.services.entity_persistence_service import ResolutionLogService
+        from app_main.services.resolution_log_service import ResolutionLogService
 
         svc = ResolutionLogService()
 
@@ -622,7 +622,7 @@ class TestResolutionLogService:
 
     async def test_bulk_update_status(self):
         """Bulk update processes all IDs."""
-        from app_main.services.entity_persistence_service import ResolutionLogService
+        from app_main.services.resolution_log_service import ResolutionLogService
 
         svc = ResolutionLogService()
 

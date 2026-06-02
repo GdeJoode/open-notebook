@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app_main.services.entity_persistence_service import ResolutionLogService
+from app_main.services.resolution_log_service import ResolutionLogService
 
 router = APIRouter(prefix="/resolution-log", tags=["resolution-log"])
 
