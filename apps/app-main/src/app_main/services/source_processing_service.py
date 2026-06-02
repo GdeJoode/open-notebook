@@ -29,9 +29,12 @@ def _use_docling_service() -> bool:
 
 from loguru import logger
 
+from app_main.services.chunking import chunk_builder
+from app_main.services.ingestion.config_builder import build_ingestion_config
 from app_main.services.log_stream import get_log_stream
 from shared.models import Asset, Source
 from shared.models.settings import ContentSettings
+from shared.utils.text import strip_null_bytes
 from surrealdb_service.repositories import (
     ChunkRepository,
     ContentSettingsRepository,
@@ -54,22 +57,6 @@ class ExtractionResult:
 
 def _is_docling_parseable_extension(path: Path) -> bool:
     return path.suffix.lower() in _DOCLING_PARSEABLE_EXTENSIONS
-
-
-def _strip_null_bytes(value: Any) -> Any:
-    """Remove NUL (\\x00) bytes that break SurrealDB's string serializer.
-
-    Docling/OCR output on scanned PDFs occasionally contains \\x00 which
-    SurrealDB writes without error but refuses to read back, surfacing as
-    'Serialization error: to be serialized string contained a null byte'.
-    """
-    if isinstance(value, str):
-        return value.replace("\x00", "") if "\x00" in value else value
-    if isinstance(value, list):
-        return [_strip_null_bytes(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _strip_null_bytes(v) for k, v in value.items()}
-    return value
 
 
 class SourceProcessingService:
@@ -160,7 +147,7 @@ class SourceProcessingService:
         chunk_count = 0
         await self.chunk_repo.delete_by_source(source_id)
         if extracted.chunks:
-            prepared = self._prepare_chunks_for_db(extracted.chunks, source_id)
+            prepared = chunk_builder.prepare_for_db(extracted.chunks, source_id)
             log_stream.emit(source_id, f"Saving {len(prepared)} chunks...")
             await self.chunk_repo.bulk_create(prepared)
             chunk_count = len(prepared)
@@ -270,7 +257,7 @@ class SourceProcessingService:
             raise FileNotFoundError(f"Source file not found: {file_path}")
 
         # Build IngestionConfig from ContentSettings
-        config = self._build_ingestion_config(content_settings)
+        config = build_ingestion_config(content_settings)
 
         log_stream = get_log_stream()
         emit_key = source_id or str(source_path)
@@ -353,11 +340,11 @@ class SourceProcessingService:
         if result.document:
             title = result.document.title or source_path.stem
             full_text = result.document.full_text or result.document.to_markdown()
-            chunks = self._document_to_chunks(result.document)
+            chunks = chunk_builder.from_document(result.document)
         elif result.transcription:
             title = source_path.stem
             full_text = result.transcription.to_markdown()
-            chunks = self._transcription_to_chunks(result.transcription)
+            chunks = chunk_builder.from_transcription(result.transcription)
 
         # Optionally delete source file
         if delete_source and source_path.exists():
@@ -383,224 +370,6 @@ class SourceProcessingService:
                 "processing_time": result.processing_time_seconds,
             },
         )
-
-    @staticmethod
-    def _build_ingestion_config(
-        content_settings: ContentSettings,
-    ) -> "IngestionConfig":
-        """Bridge ContentSettings (DB) to IngestionConfig (pipeline)."""
-        from ingestion.config import (
-            AcceleratorDevice,
-            DoclingConfig,
-            IngestionConfig,
-            OcrEngine,
-            TableMode,
-        )
-
-        # Map GPU device
-        device_map = {
-            "auto": AcceleratorDevice.AUTO,
-            "cuda": AcceleratorDevice.CUDA,
-            "cpu": AcceleratorDevice.CPU,
-        }
-        device = device_map.get(
-            content_settings.docling_gpu_device or "auto",
-            AcceleratorDevice.AUTO,
-        )
-        gpu_enabled = content_settings.docling_gpu_enabled
-        if gpu_enabled is not None and not gpu_enabled:
-            device = AcceleratorDevice.CPU
-
-        # Map OCR engine
-        ocr_map = {
-            "auto": OcrEngine.EASYOCR,
-            "easyocr": OcrEngine.EASYOCR,
-            "rapidocr": OcrEngine.RAPIDOCR,
-            "tesseract": OcrEngine.TESSERACT,
-        }
-        ocr_engine = ocr_map.get(
-            content_settings.docling_ocr_engine or "easyocr",
-            OcrEngine.EASYOCR,
-        )
-
-        # Map table mode
-        table_mode_map = {
-            "accurate": TableMode.ACCURATE,
-            "fast": TableMode.FAST,
-        }
-        table_mode = table_mode_map.get(
-            content_settings.docling_table_mode or "accurate",
-            TableMode.ACCURATE,
-        )
-
-        # Map VLM model short names to HuggingFace repo IDs
-        vlm_model_map = {
-            "granite-docling-258m": "ibm-granite/granite-docling-258M",
-            "smoldocling-256m": "ds4sd/SmolDocling-256M-preview",
-        }
-        vlm_model = vlm_model_map.get(
-            content_settings.docling_vlm_model or "granite-docling-258m",
-            "ibm-granite/granite-docling-258M",
-        )
-
-        # Pipeline selection: "vlm" enables VLM features, "standard" disables them
-        pipeline = content_settings.docling_pipeline or "vlm"
-        use_vlm = pipeline == "vlm"
-
-        docling_cfg = DoclingConfig(
-            device=device,
-            do_ocr=True,
-            ocr_engine=ocr_engine,
-            ocr_lang=content_settings.docling_ocr_languages or ["en"],
-            table_mode=table_mode,
-            images_scale=content_settings.docling_image_scale or 2.0,
-            generate_picture_images=bool(
-                content_settings.docling_auto_export_images
-            ),
-            do_picture_description=use_vlm,
-            do_picture_classification=use_vlm,
-            vlm_model=vlm_model,
-        )
-
-        return IngestionConfig(docling=docling_cfg)
-
-    @staticmethod
-    def _document_to_chunks(
-        document: Any,
-    ) -> List[Dict[str, Any]]:
-        """Convert ExtractedDocument pages/elements into chunk dicts."""
-        chunks: List[Dict[str, Any]] = []
-        order = 0
-        # Global image counter matching the exporter's enumerate(all_images, 1)
-        image_idx = 0
-
-        for page in document.pages:
-            # Text elements
-            for elem in page.elements:
-                bbox = elem.bbox
-                positions = []
-                if bbox and (bbox.width > 0 or bbox.height > 0):
-                    positions = [
-                        [bbox.page, bbox.x, bbox.x2, bbox.y, bbox.y2]
-                    ]
-
-                chunks.append(
-                    {
-                        "text": elem.content,
-                        "order": order,
-                        "physical_page": page.page_number - 1,
-                        "printed_page": page.page_number,
-                        "chapter": (
-                            elem.section_path[-1] if elem.section_path else None
-                        ),
-                        "paragraph_number": None,
-                        "element_type": elem.element_type.value,
-                        "positions": positions,
-                        "metadata": {
-                            "has_spatial_data": len(positions) > 0,
-                            "section_path": elem.section_path,
-                            "section_level": elem.section_level,
-                        },
-                    }
-                )
-                order += 1
-
-            # Tables
-            for table in page.tables:
-                bbox = table.bbox
-                positions = []
-                if bbox and (bbox.width > 0 or bbox.height > 0):
-                    positions = [
-                        [bbox.page, bbox.x, bbox.x2, bbox.y, bbox.y2]
-                    ]
-
-                chunks.append(
-                    {
-                        "text": table.markdown or table.content,
-                        "order": order,
-                        "physical_page": page.page_number - 1,
-                        "printed_page": page.page_number,
-                        "chapter": None,
-                        "paragraph_number": None,
-                        "element_type": "table",
-                        "positions": positions,
-                        "metadata": {
-                            "has_spatial_data": len(positions) > 0,
-                            "num_rows": table.num_rows,
-                            "num_cols": table.num_cols,
-                        },
-                    }
-                )
-                order += 1
-
-            # Images — store filename reference, not base64 data
-            for image in page.images:
-                image_idx += 1
-                bbox = image.bbox
-                positions = []
-                if bbox and (bbox.width > 0 or bbox.height > 0):
-                    positions = [
-                        [bbox.page, bbox.x, bbox.x2, bbox.y, bbox.y2]
-                    ]
-
-                # Filename matches the exporter convention:
-                # image_{idx:03d}_page{page}.{format}
-                img_format = image.format or "png"
-                image_file = (
-                    f"image_{image_idx:03d}_page{image.page}.{img_format}"
-                )
-
-                chunks.append(
-                    {
-                        "text": image.description or image.content or f"[{image.classification}]",
-                        "order": order,
-                        "physical_page": page.page_number - 1,
-                        "printed_page": page.page_number,
-                        "chapter": None,
-                        "paragraph_number": None,
-                        "element_type": "image",
-                        "positions": positions,
-                        "metadata": {
-                            "has_spatial_data": len(positions) > 0,
-                            "classification": image.classification,
-                            "width": image.width,
-                            "height": image.height,
-                            "format": img_format,
-                            "image_file": image_file,
-                        },
-                    }
-                )
-                order += 1
-
-        return chunks
-
-    @staticmethod
-    def _transcription_to_chunks(
-        transcription: Any,
-    ) -> List[Dict[str, Any]]:
-        """Convert TranscriptionResult segments into chunk dicts."""
-        chunks: List[Dict[str, Any]] = []
-
-        for i, segment in enumerate(transcription.segments):
-            chunks.append(
-                {
-                    "text": segment.text,
-                    "order": i,
-                    "physical_page": 0,
-                    "printed_page": None,
-                    "chapter": None,
-                    "paragraph_number": None,
-                    "element_type": "transcription_segment",
-                    "positions": [],
-                    "metadata": {
-                        "start": segment.start,
-                        "end": segment.end,
-                        "speaker": getattr(segment, "speaker", None),
-                    },
-                }
-            )
-
-        return chunks
 
     # ------------------------------------------------------------------
     # URL processing
@@ -710,10 +479,10 @@ class SourceProcessingService:
                 url=extracted.url,
                 file_path=extracted.file_path,
             ).model_dump(),
-            "full_text": _strip_null_bytes(extracted.full_text),
+            "full_text": strip_null_bytes(extracted.full_text),
         }
         if extracted.title:
-            update_data["title"] = _strip_null_bytes(extracted.title)
+            update_data["title"] = strip_null_bytes(extracted.title)
 
         # Persist output directory so we can serve images later
         output_dir = (extracted.metadata or {}).get("output_directory")
@@ -785,35 +554,6 @@ class SourceProcessingService:
                 )
 
         return count
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _prepare_chunks_for_db(
-        chunks: List[Dict[str, Any]],
-        source_id: str,
-    ) -> List[Dict[str, Any]]:
-        """Map extracted chunk dicts to the shape expected by ChunkRepository."""
-        prepared = []
-        for chunk_data in chunks:
-            prepared.append(
-                {
-                    "source": source_id,
-                    "text": _strip_null_bytes(chunk_data["text"]),
-                    "order": chunk_data["order"],
-                    "physical_page": chunk_data["physical_page"],
-                    "printed_page": chunk_data.get("printed_page"),
-                    "chapter": _strip_null_bytes(chunk_data.get("chapter")),
-                    "paragraph_number": chunk_data.get("paragraph_number"),
-                    "element_type": chunk_data.get("element_type", "paragraph"),
-                    "positions": chunk_data.get("positions", []),
-                    "metadata": _strip_null_bytes(chunk_data.get("metadata", {})),
-                }
-            )
-        return prepared
-
 
 # ======================================================================
 # URL extraction helpers (module-level, used by _fetch_url_content)

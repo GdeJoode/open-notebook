@@ -5,7 +5,27 @@ Common text operations used across pipelines.
 """
 
 import re
-from typing import List, Optional
+from typing import Any, List, Optional
+
+
+def strip_null_bytes(value: Any) -> Any:
+    """Recursively remove NUL (``\\x00``) bytes from strings.
+
+    Docling/OCR output on scanned PDFs occasionally contains ``\\x00`` which
+    SurrealDB writes without error but refuses to read back, surfacing as
+    ``'Serialization error: to be serialized string contained a null byte'``.
+    Strip them before persistence.
+
+    Walks dicts and lists recursively; passes non-text values through
+    unchanged.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "") if "\x00" in value else value
+    if isinstance(value, list):
+        return [strip_null_bytes(v) for v in value]
+    if isinstance(value, dict):
+        return {k: strip_null_bytes(v) for k, v in value.items()}
+    return value
 
 
 def clean_text(text: str) -> str:
