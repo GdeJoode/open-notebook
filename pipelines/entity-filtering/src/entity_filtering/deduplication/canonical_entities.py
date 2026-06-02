@@ -140,7 +140,7 @@ async def _vector_blocking(
 
     For each entity with an embedding, find the top-k nearest neighbours.
     """
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     pairs: Set[Tuple[str, str]] = set()
 
@@ -151,7 +151,7 @@ async def _vector_blocking(
             continue
 
         # Use SurrealDB vector similarity to find nearest
-        results = await execute(
+        results = await execute_query(
             "SELECT id, vector::similarity::cosine(embedding, $emb) AS sim "
             "FROM entity WHERE id != $id AND status = 'active' AND embedding != NONE "
             "ORDER BY sim DESC LIMIT $k",
@@ -221,7 +221,7 @@ async def find_duplicates(
     Returns:
         List of DuplicateCandidate, sorted by combined_score descending.
     """
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     blocking_methods = blocking_methods or ["token", "sorted", "vector"]
 
@@ -229,7 +229,7 @@ async def find_duplicates(
     query = "SELECT * FROM entity WHERE status = 'active'"
     if entity_type:
         query += f" AND entity_type = '{entity_type}'"
-    entities = await execute(query)
+    entities = await execute_query(query)
 
     if len(entities) < 2:
         return []
@@ -324,11 +324,11 @@ async def merge_entities(
         duplicate_id: The entity to merge into canonical.
         merge_aliases: Whether to create an alias from the duplicate's name.
     """
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     # Get both entities
-    canonical = (await execute("SELECT * FROM $id", {"id": canonical_id}))
-    duplicate = (await execute("SELECT * FROM $id", {"id": duplicate_id}))
+    canonical = (await execute_query("SELECT * FROM $id", {"id": canonical_id}))
+    duplicate = (await execute_query("SELECT * FROM $id", {"id": duplicate_id}))
 
     if not canonical or not duplicate:
         logger.error(f"Cannot merge: one or both entities not found")
@@ -341,7 +341,7 @@ async def merge_entities(
     merged_docs = list(set(
         canonical.get("source_documents", []) + duplicate.get("source_documents", [])
     ))
-    await execute(
+    await execute_query(
         "UPDATE $id SET source_documents = $docs, updated_at = time::now()",
         {"id": canonical_id, "docs": merged_docs},
     )
@@ -350,33 +350,33 @@ async def merge_entities(
     if merge_aliases:
         dup_name = duplicate.get("canonical_name", "")
         if dup_name:
-            await execute(
+            await execute_query(
                 "CREATE entity_alias SET "
                 "alias_text = $name, canonical_entity = $eid, confidence = 1.0",
                 {"name": dup_name, "eid": canonical_id},
             )
 
     # Transfer existing aliases
-    await execute(
+    await execute_query(
         "UPDATE entity_alias SET canonical_entity = $canonical "
         "WHERE canonical_entity = $duplicate",
         {"canonical": canonical_id, "duplicate": duplicate_id},
     )
 
     # Redirect relations: incoming
-    await execute(
+    await execute_query(
         "UPDATE relation SET out = $canonical WHERE out = $duplicate",
         {"canonical": canonical_id, "duplicate": duplicate_id},
     )
 
     # Redirect relations: outgoing
-    await execute(
+    await execute_query(
         "UPDATE relation SET in = $canonical WHERE in = $duplicate",
         {"canonical": canonical_id, "duplicate": duplicate_id},
     )
 
     # Mark duplicate as merged
-    await execute(
+    await execute_query(
         "UPDATE $id SET status = 'merged', merged_into = $canonical, updated_at = time::now()",
         {"id": duplicate_id, "canonical": canonical_id},
     )
@@ -400,10 +400,10 @@ async def deduplicate_relations() -> int:
     Returns:
         Number of duplicate relations removed.
     """
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     # Find duplicates: group by (in, out, relation_type)
-    dupes = await execute(
+    dupes = await execute_query(
         "SELECT in, out, relation_type, count() AS cnt, "
         "array::group(id) AS ids "
         "FROM relation WHERE status = 'active' "
@@ -420,7 +420,7 @@ async def deduplicate_relations() -> int:
         # Fetch all, keep the one with highest confidence
         rels = []
         for rid in ids:
-            r = await execute("SELECT * FROM $id", {"id": rid})
+            r = await execute_query("SELECT * FROM $id", {"id": rid})
             if r:
                 rels.append(r[0])
 
@@ -428,7 +428,7 @@ async def deduplicate_relations() -> int:
 
         # Delete all except the first (highest confidence)
         for rel in rels[1:]:
-            await execute("DELETE $id", {"id": str(rel["id"])})
+            await execute_query("DELETE $id", {"id": str(rel["id"])})
             removed += 1
 
     logger.info(f"Triplet deduplication: removed {removed} duplicate relations")
@@ -454,10 +454,10 @@ async def detect_conflicts(
     Returns:
         List of ConflictReport objects.
     """
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     # Get entities with multiple source documents
-    entities = await execute(
+    entities = await execute_query(
         "SELECT * FROM entity WHERE status = 'active' "
         "AND array::len(source_documents) > 1"
     )
@@ -481,7 +481,7 @@ async def detect_conflicts(
                 continue
 
             # Look for aliases of this entity with different property values
-            aliases_result = await execute(
+            aliases_result = await execute_query(
                 "SELECT * FROM entity_alias WHERE canonical_entity = $eid",
                 {"eid": eid},
             )
@@ -515,9 +515,9 @@ async def detect_conflicts(
 
 async def _demo():
     """Demo: find duplicates and run deduplication."""
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
-    result = await execute("SELECT count() FROM entity GROUP ALL")
+    result = await execute_query("SELECT count() FROM entity GROUP ALL")
     count = result[0].get("count", 0) if result else 0
     logger.info(f"Entities: {count}")
 

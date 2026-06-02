@@ -105,7 +105,8 @@ async def write_entities_to_db(
     Returns:
         Tuple of (entities_created, relations_created).
     """
-    from semantic_intelligence.config import embed_text, execute
+    from semantic_intelligence.config import embed_text
+    from surrealdb_service.connection import execute_query
 
     entity_count = 0
     relation_count = 0
@@ -122,7 +123,7 @@ async def write_entities_to_db(
             continue
 
         # Check if entity already exists
-        existing = await execute(
+        existing = await execute_query(
             "SELECT id FROM entity WHERE canonical_name = $name AND entity_type = $type LIMIT 1",
             {"name": name, "type": etype},
         )
@@ -130,7 +131,7 @@ async def write_entities_to_db(
         if existing:
             eid = str(existing[0]["id"])
             # Update source_documents if not already there
-            await execute(
+            await execute_query(
                 "UPDATE $id SET source_documents += $src, updated_at = time::now()",
                 {"id": eid, "src": source_document},
             )
@@ -144,7 +145,7 @@ async def write_entities_to_db(
             embedding = []
 
         # Create entity
-        result = await execute(
+        result = await execute_query(
             "CREATE entity CONTENT $data RETURN id",
             {
                 "data": {
@@ -166,7 +167,7 @@ async def write_entities_to_db(
             entity_count += 1
 
             # Create alias
-            await execute(
+            await execute_query(
                 "CREATE entity_alias SET alias_text = $name, canonical_entity = $eid, confidence = 1.0",
                 {"name": name, "eid": eid},
             )
@@ -184,14 +185,14 @@ async def write_entities_to_db(
             continue
 
         # Check if relation already exists
-        existing = await execute(
+        existing = await execute_query(
             "SELECT id FROM relation WHERE in = $from AND out = $to AND relation_type = $type LIMIT 1",
             {"from": source_id, "to": target_id, "type": rel_type},
         )
         if existing:
             continue
 
-        await execute(
+        await execute_query(
             f"RELATE {source_id}->relation->{target_id} SET "
             f"relation_type = $type, "
             f"source_documents = $docs, "
@@ -259,7 +260,7 @@ async def process_document(doc_dir: Path) -> Dict[str, Any]:
 
 async def run_test_pipeline(doc_dirs: List[Path]):
     """Run the full test pipeline on multiple documents."""
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     logger.info("=" * 60)
     logger.info("SEMANTIC LAYER TEST PIPELINE")
@@ -274,9 +275,9 @@ async def run_test_pipeline(doc_dirs: List[Path]):
             results.append(result)
 
     # Show entity/relation counts
-    counts = await execute("SELECT count() FROM entity GROUP ALL")
+    counts = await execute_query("SELECT count() FROM entity GROUP ALL")
     ent_total = counts[0].get("count", 0) if counts else 0
-    counts = await execute("SELECT count() FROM relation GROUP ALL")
+    counts = await execute_query("SELECT count() FROM relation GROUP ALL")
     rel_total = counts[0].get("count", 0) if counts else 0
     logger.info(f"\nTotal in DB: {ent_total} entities, {rel_total} relations")
 

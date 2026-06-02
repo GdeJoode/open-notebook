@@ -75,7 +75,8 @@ async def record_decision(
     Returns:
         The SurrealDB record ID of the created decision.
     """
-    from semantic_intelligence.config import execute, embed_text
+    from semantic_intelligence.config import embed_text
+    from surrealdb_service.connection import execute_query
 
     # Build record
     params: Dict[str, Any] = {
@@ -99,7 +100,7 @@ async def record_decision(
         params["embedding"] = embedding
 
     # Create record
-    result = await execute(
+    result = await execute_query(
         "CREATE decision CONTENT $data RETURN id",
         {"data": params},
     )
@@ -133,7 +134,7 @@ async def link_decisions(
     Returns:
         The RELATE edge record ID.
     """
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     params: Dict[str, Any] = {
         "from": decision_a,
@@ -152,7 +153,7 @@ async def link_decisions(
     if description:
         query += ", description = $desc"
 
-    result = await execute(query, params)
+    result = await execute_query(query, params)
     edge_id = str(result[0].get("id", "")) if result else ""
     logger.info(f"Linked decisions: {decision_a} -[{relationship_type}]-> {decision_b}")
     return edge_id
@@ -178,7 +179,8 @@ async def find_precedents(
     Returns:
         List of decision records with similarity scores, sorted by relevance.
     """
-    from semantic_intelligence.config import execute, embed_text
+    from semantic_intelligence.config import embed_text
+    from surrealdb_service.connection import execute_query
 
     # Generate embedding for the query text
     query_embedding = await embed_text(reasoning_text)
@@ -194,7 +196,7 @@ async def find_precedents(
         f"ORDER BY similarity DESC LIMIT $limit"
     )
 
-    results = await execute(query, {"emb": query_embedding, "limit": limit})
+    results = await execute_query(query, {"emb": query_embedding, "limit": limit})
 
     # Clean up results
     precedents = []
@@ -226,7 +228,7 @@ async def trace_causal_chain(
     Returns:
         List of decisions in the causal chain, ordered by distance.
     """
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     if direction == "downstream":
         # Follow outgoing caused edges: what did this decision cause?
@@ -237,7 +239,7 @@ async def trace_causal_chain(
 
     # SurrealDB graph traversal with depth
     query = f"SELECT * FROM $start{arrow}decision..{depth}"
-    results = await execute(query, {"start": decision_id})
+    results = await execute_query(query, {"start": decision_id})
 
     # Flatten nested traversal results
     chain = []
@@ -281,10 +283,10 @@ async def analyse_impact(
     Returns:
         Dict with: downstream_decisions, affected_entities, total_reach.
     """
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     # Get the decision itself
-    decision_result = await execute("SELECT * FROM $id", {"id": decision_id})
+    decision_result = await execute_query("SELECT * FROM $id", {"id": decision_id})
     decision = decision_result[0] if decision_result else {}
 
     # Get downstream decisions
@@ -299,7 +301,7 @@ async def analyse_impact(
     affected_entities = []
     if all_entity_ids:
         for eid in all_entity_ids:
-            ent = await execute("SELECT canonical_name, entity_type FROM $id", {"id": eid})
+            ent = await execute_query("SELECT canonical_name, entity_type FROM $id", {"id": eid})
             if ent:
                 affected_entities.append(ent[0])
 
@@ -322,10 +324,10 @@ async def analyse_impact(
 
 async def _demo():
     """Demo: record decisions, link them, search precedents."""
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     # Check existing decisions
-    result = await execute("SELECT count() FROM decision GROUP ALL")
+    result = await execute_query("SELECT count() FROM decision GROUP ALL")
     count = result[0].get("count", 0) if result else 0
     logger.info(f"Existing decisions: {count}")
 
