@@ -1,3 +1,6 @@
+# Mirrors .gitignore (graphify uses .graphifyignore OR .gitignore — not both)
+# plus extra exclusions for graphify-specific noise.
+
 .env
 prompts/patterns/user/
 /notebooks/
@@ -145,6 +148,10 @@ whisperx_data/
 # Screenshots
 Schermafbeelding*.png
 
-# graphify output (generated knowledge graph artifacts)
+# === graphify-specific extras ===
+frontend/public/pdfjs-dist/
 graphify-out/
 graphify-out*/
+node_modules/
+.serena/
+.mcp.json
