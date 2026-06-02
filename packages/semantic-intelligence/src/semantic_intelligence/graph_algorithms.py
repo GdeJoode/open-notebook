@@ -54,7 +54,7 @@ async def build_graph(
     Returns:
         NetworkX directed graph.
     """
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     G = nx.DiGraph()
 
@@ -63,7 +63,7 @@ async def build_graph(
     if entity_filter:
         query += f" AND {entity_filter}"
 
-    entities = await execute(query)
+    entities = await execute_query(query)
     for ent in entities:
         eid = str(ent.get("id", ""))
         attrs = {
@@ -76,7 +76,7 @@ async def build_graph(
         G.add_node(eid, **attrs)
 
     # Load relations
-    relations = await execute("SELECT * FROM relation WHERE status = 'active'")
+    relations = await execute_query("SELECT * FROM relation WHERE status = 'active'")
     for rel in relations:
         from_id = str(rel.get("in", ""))
         to_id = str(rel.get("out", ""))
@@ -344,7 +344,7 @@ async def write_scores(
     Returns:
         Number of entities updated.
     """
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     # Collect all entity IDs that need updating
     all_ids = set()
@@ -373,7 +373,7 @@ async def write_scores(
         if fields:
             fields.append("updated_at = time::now()")
             query = f"UPDATE $id SET {', '.join(fields)}"
-            await execute(query, params)
+            await execute_query(query, params)
             updated += 1
 
     logger.info(f"Wrote graph scores to {updated} entities")

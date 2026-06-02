@@ -165,7 +165,7 @@ async def run_forward_chaining(
     Returns:
         Dict mapping rule name to number of facts produced.
     """
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     stats: Dict[str, int] = {r.name: 0 for r in rules}
     active_rules = [r for r in rules if r.enabled]
@@ -177,7 +177,7 @@ async def run_forward_chaining(
         for rule in active_rules:
             try:
                 # Evaluate condition
-                matches = await execute(rule.condition)
+                matches = await execute_query(rule.condition)
                 if not matches:
                     continue
 
@@ -221,7 +221,7 @@ async def _export_subgraph_to_rdflib(
     import rdflib
     from rdflib import URIRef, Literal, Namespace, RDF
 
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     ON = Namespace("urn:on:")
     ONT = Namespace("urn:on:type:")
@@ -240,7 +240,7 @@ async def _export_subgraph_to_rdflib(
         entity_query += f" AND {entity_filter}"
     entity_query += f" LIMIT {limit}"
 
-    entities = await execute(entity_query)
+    entities = await execute_query(entity_query)
     for ent in entities:
         eid = str(ent.get("id", "")).replace(":", "_")
         subj = URIRef(f"urn:on:entity:{eid}")
@@ -253,7 +253,7 @@ async def _export_subgraph_to_rdflib(
 
     # Export relations
     relation_query = f"SELECT * FROM relation WHERE status = 'active' LIMIT {limit}"
-    relations = await execute(relation_query)
+    relations = await execute_query(relation_query)
     for rel in relations:
         from_id = str(rel.get("in", "")).replace(":", "_")
         to_id = str(rel.get("out", "")).replace(":", "_")
@@ -309,7 +309,7 @@ async def sparql_construct(
     """
     from rdflib import URIRef
 
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     g = await _export_subgraph_to_rdflib(entity_filter)
     inferred = g.query(sparql)
@@ -327,13 +327,13 @@ async def sparql_construct(
                 rel_type = p.split("urn:on:rel:")[-1]
 
                 # Check if relation already exists
-                check = await execute(
+                check = await execute_query(
                     "SELECT * FROM relation WHERE in = $from AND out = $to "
                     "AND relation_type = $type LIMIT 1",
                     {"from": from_id, "to": to_id, "type": rel_type},
                 )
                 if not check:
-                    await execute(
+                    await execute_query(
                         "RELATE $from->relation->$to SET "
                         "relation_type = $type, "
                         "extraction_method = 'sparql', "
@@ -359,10 +359,10 @@ async def sparql_construct(
 
 async def _demo():
     """Demo: show provenance tracking and SPARQL query."""
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     # Check entity count
-    result = await execute("SELECT count() FROM entity GROUP ALL")
+    result = await execute_query("SELECT count() FROM entity GROUP ALL")
     count = result[0].get("count", 0) if result else 0
     logger.info(f"Entity count: {count}")
 

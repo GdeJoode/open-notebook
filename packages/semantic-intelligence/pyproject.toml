@@ -1,14 +1,17 @@
 [project]
 name = "semantic-intelligence"
 version = "0.1.0"
-description = "Semantic intelligence layer — graph algorithms, reasoning, decision tracking, shared SurrealDB/Ollama plumbing"
+description = "Semantic intelligence layer — graph algorithms, reasoning, decision tracking + Ollama helpers"
 requires-python = ">=3.10"
 dependencies = [
+    "surrealdb-service",
     "loguru>=0.7.2",
     "networkx>=3.0",
     "httpx>=0.25.0",
-    "surrealdb>=1.0.0",
 ]
+
+[tool.uv.sources]
+surrealdb-service = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

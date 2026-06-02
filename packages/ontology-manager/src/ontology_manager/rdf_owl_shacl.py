@@ -390,7 +390,7 @@ async def validate_entities(
     if not HAS_PYSHACL:
         return {"error": "pyshacl not installed"}
 
-    from semantic_intelligence.config import execute
+    from surrealdb_service.connection import execute_query
 
     # Export entities as RDF
     query = "SELECT * FROM entity WHERE status = 'active'"
@@ -398,7 +398,7 @@ async def validate_entities(
         query += f" AND entity_type = '{entity_type}'"
     query += f" LIMIT {limit}"
 
-    entities = await execute(query)
+    entities = await execute_query(query)
 
     data_graph = Graph()
     data_graph.bind("on", ON)
