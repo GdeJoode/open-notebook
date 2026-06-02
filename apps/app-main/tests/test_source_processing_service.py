@@ -692,3 +692,163 @@ class TestUpdateSource:
         call_args = source_repo.update.call_args
         data = call_args[0][1]
         assert "title" not in data
+
+
+# ===========================================================================
+# Characterization: embed_source (public API)
+# ===========================================================================
+
+class TestEmbedSource:
+    @pytest.mark.asyncio
+    async def test_calls_embedding_pipeline(self, service):
+        embed_service = MagicMock()
+        embed_service.embed_source = AsyncMock()
+        with patch(
+            "app_main.dependencies.get_embedding_service",
+            AsyncMock(return_value=embed_service),
+        ):
+            await service.embed_source("source:test1")
+
+        embed_service.embed_source.assert_awaited_once_with("source:test1")
+
+    @pytest.mark.asyncio
+    async def test_returns_source_id_and_chunk_count(self, service, source_repo):
+        source_repo.get_embedding_count = AsyncMock(return_value=7)
+        embed_service = MagicMock()
+        embed_service.embed_source = AsyncMock()
+        with patch(
+            "app_main.dependencies.get_embedding_service",
+            AsyncMock(return_value=embed_service),
+        ):
+            result = await service.embed_source("source:test1")
+
+        assert result == {"source_id": "source:test1", "embedded_chunks": 7}
+
+    @pytest.mark.asyncio
+    async def test_raises_on_missing_source(self, service, source_repo):
+        source_repo.get = AsyncMock(return_value=None)
+        with pytest.raises(ValueError, match="not found"):
+            await service.embed_source("source:missing")
+
+
+# ===========================================================================
+# Characterization: run_summaries (public API)
+# ===========================================================================
+
+class TestRunSummaries:
+    @pytest.mark.asyncio
+    async def test_raises_on_missing_source(self, service, source_repo):
+        source_repo.get = AsyncMock(return_value=None)
+        with pytest.raises(ValueError, match="not found"):
+            await service.run_summaries("source:missing")
+
+    @pytest.mark.asyncio
+    async def test_returns_zero_when_no_default_transformations(
+        self, service, transformation_repo
+    ):
+        import sys
+
+        transformation_repo.get_defaults = AsyncMock(return_value=[])
+
+        # _run_transformations imports app_main.graphs.transformation at the top
+        # of its body — patch sys.modules even though we expect an early return.
+        fake_module = MagicMock()
+        fake_module.graph = MagicMock()
+        with patch.dict(
+            sys.modules, {"app_main.graphs.transformation": fake_module}
+        ):
+            result = await service.run_summaries("source:test1")
+
+        assert result["transformations_run"] == 0
+        assert result["source_id"] == "source:test1"
+
+    @pytest.mark.asyncio
+    async def test_runs_specific_transformation_ids(
+        self, service, transformation_repo, source_repo
+    ):
+        import sys
+
+        from shared.models.transformation import Transformation
+
+        t = Transformation(
+            id="transformation:t1",
+            name="summarize",
+            title="Summary",
+            description="Summarize",
+            prompt="Summarize: {text}",
+            created=_NOW,
+            updated=_NOW,
+        )
+        transformation_repo.get = AsyncMock(return_value=t)
+        source_repo.get_insights = AsyncMock(return_value=[{"id": "i1"}, {"id": "i2"}])
+
+        mock_graph = MagicMock()
+        mock_graph.ainvoke = AsyncMock()
+        fake_module = MagicMock()
+        fake_module.graph = mock_graph
+
+        with patch.dict(
+            sys.modules, {"app_main.graphs.transformation": fake_module}
+        ):
+            result = await service.run_summaries(
+                "source:test1", transformation_ids=["transformation:t1"]
+            )
+
+        mock_graph.ainvoke.assert_awaited_once()
+        assert result["transformations_run"] == 1
+        assert result["insights_created"] == 2
+
+    @pytest.mark.asyncio
+    async def test_raises_on_unknown_transformation_id(
+        self, service, transformation_repo
+    ):
+        import sys
+
+        transformation_repo.get = AsyncMock(return_value=None)
+
+        fake_module = MagicMock()
+        fake_module.graph = MagicMock()
+        with patch.dict(
+            sys.modules, {"app_main.graphs.transformation": fake_module}
+        ):
+            with pytest.raises(
+                ValueError, match="Transformation 'transformation:bogus' not found"
+            ):
+                await service.run_summaries(
+                    "source:test1", transformation_ids=["transformation:bogus"]
+                )
+
+    @pytest.mark.asyncio
+    async def test_skips_when_source_has_no_content(
+        self, service, source_repo, transformation_repo
+    ):
+        import sys
+
+        from shared.models.transformation import Transformation
+
+        source_repo.get = AsyncMock(return_value=_make_source(full_text=None))
+        t = Transformation(
+            id="transformation:t1",
+            name="summarize",
+            title="Summary",
+            description="Summarize",
+            prompt="Summarize: {text}",
+            created=_NOW,
+            updated=_NOW,
+        )
+        transformation_repo.get = AsyncMock(return_value=t)
+
+        mock_graph = MagicMock()
+        mock_graph.ainvoke = AsyncMock()
+        fake_module = MagicMock()
+        fake_module.graph = mock_graph
+
+        with patch.dict(
+            sys.modules, {"app_main.graphs.transformation": fake_module}
+        ):
+            result = await service.run_summaries(
+                "source:test1", transformation_ids=["transformation:t1"]
+            )
+
+        mock_graph.ainvoke.assert_not_awaited()
+        assert result["transformations_run"] == 0
