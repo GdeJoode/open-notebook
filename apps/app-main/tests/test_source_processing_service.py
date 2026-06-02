@@ -16,6 +16,8 @@ import pytest
 from shared.models import Asset, Source
 from shared.models.settings import ContentSettings
 
+from app_main.services.chunking import chunk_builder
+from app_main.services.ingestion.config_builder import build_ingestion_config
 from app_main.services.source_processing_service import (
     ExtractionResult,
     SourceProcessingService,
@@ -404,7 +406,7 @@ class TestHtmlExtraction:
 class TestDocumentToChunks:
     def test_converts_elements(self):
         doc = FakeDocument()
-        chunks = SourceProcessingService._document_to_chunks(doc)
+        chunks = chunk_builder.from_document(doc)
 
         assert len(chunks) == 1
         assert chunks[0]["text"] == "Hello world"
@@ -418,7 +420,7 @@ class TestDocumentToChunks:
             tables=[FakeTable()],
         )
         doc = FakeDocument(pages=[page])
-        chunks = SourceProcessingService._document_to_chunks(doc)
+        chunks = chunk_builder.from_document(doc)
 
         assert len(chunks) == 1
         assert chunks[0]["element_type"] == "table"
@@ -433,7 +435,7 @@ class TestDocumentToChunks:
             tables=[FakeTable()],
         )
         doc = FakeDocument(pages=[page])
-        chunks = SourceProcessingService._document_to_chunks(doc)
+        chunks = chunk_builder.from_document(doc)
 
         assert len(chunks) == 3
         assert chunks[0]["order"] == 0
@@ -444,7 +446,7 @@ class TestDocumentToChunks:
         elem = FakeElement(bbox=None)
         page = FakePage(elements=[elem])
         doc = FakeDocument(pages=[page])
-        chunks = SourceProcessingService._document_to_chunks(doc)
+        chunks = chunk_builder.from_document(doc)
 
         assert chunks[0]["positions"] == []
         assert chunks[0]["metadata"]["has_spatial_data"] is False
@@ -462,7 +464,7 @@ class TestTranscriptionToChunks:
                 FakeSegment(text="World", start=2.5, end=5.0, speaker="B"),
             ]
         )
-        chunks = SourceProcessingService._transcription_to_chunks(transcription)
+        chunks = chunk_builder.from_transcription(transcription)
 
         assert len(chunks) == 2
         assert chunks[0]["text"] == "Hello"
@@ -484,7 +486,7 @@ class TestPrepareChunksForDb:
                 "element_type": "paragraph",
             }
         ]
-        prepared = SourceProcessingService._prepare_chunks_for_db(
+        prepared = chunk_builder.prepare_for_db(
             chunks, "source:abc"
         )
 
@@ -502,21 +504,21 @@ class TestPrepareChunksForDb:
 class TestBuildIngestionConfig:
     def test_default_settings(self):
         settings = _make_settings()
-        config = SourceProcessingService._build_ingestion_config(settings)
+        config = build_ingestion_config(settings)
 
         # Should not raise and should return a valid config
         assert config.docling is not None
 
     def test_gpu_disabled(self):
         settings = _make_settings(docling_gpu_enabled=False)
-        config = SourceProcessingService._build_ingestion_config(settings)
+        config = build_ingestion_config(settings)
 
         from ingestion.config import AcceleratorDevice
         assert config.docling.device == AcceleratorDevice.CPU
 
     def test_ocr_engine_mapping(self):
         settings = _make_settings(docling_ocr_engine="tesseract")
-        config = SourceProcessingService._build_ingestion_config(settings)
+        config = build_ingestion_config(settings)
 
         from ingestion.config import OcrEngine
         assert config.docling.ocr_engine == OcrEngine.TESSERACT
