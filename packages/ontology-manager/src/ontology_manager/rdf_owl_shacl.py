@@ -9,7 +9,7 @@ Converts the existing YAML ontologies into RDF/OWL/SHACL and provides:
 - Bidirectional sync between RDF and SurrealDB entity types
 
 Usage:
-    from semantic_layer.ontology_manager import (
+    from ontology_manager.rdf_owl_shacl import (
         load_yaml_ontology, export_ontology, validate_entities,
         generate_shacl_shapes, manage_skos_vocabulary,
     )
@@ -26,7 +26,7 @@ Usage:
     # Validate SurrealDB entities against shapes
     report = await validate_entities(shapes, entity_type="Gemeente")
 
-    python -m semantic_layer.ontology_manager
+    python -m ontology_manager.rdf_owl_shacl
 """
 
 from __future__ import annotations
@@ -390,7 +390,7 @@ async def validate_entities(
     if not HAS_PYSHACL:
         return {"error": "pyshacl not installed"}
 
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     # Export entities as RDF
     query = "SELECT * FROM entity WHERE status = 'active'"

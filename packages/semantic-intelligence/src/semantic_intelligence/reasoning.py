@@ -15,7 +15,7 @@ Three capabilities:
 
 Usage:
     # Provenance
-    from semantic_layer.reasoning import Provenance, attach_provenance
+    from semantic_intelligence.reasoning import Provenance, attach_provenance
 
     prov = Provenance(
         source_document="source:abc123",
@@ -24,7 +24,7 @@ Usage:
     )
 
     # Forward chaining
-    from semantic_layer.reasoning import Rule, run_forward_chaining
+    from semantic_intelligence.reasoning import Rule, run_forward_chaining
 
     rules = [
         Rule(
@@ -37,11 +37,11 @@ Usage:
     await run_forward_chaining(rules)
 
     # SPARQL
-    from semantic_layer.reasoning import sparql_query, sparql_construct
+    from semantic_intelligence.reasoning import sparql_query, sparql_construct
 
     results = await sparql_query("SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10")
 
-    python -m semantic_layer.reasoning
+    python -m semantic_intelligence.reasoning
 """
 
 from __future__ import annotations
@@ -165,7 +165,7 @@ async def run_forward_chaining(
     Returns:
         Dict mapping rule name to number of facts produced.
     """
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     stats: Dict[str, int] = {r.name: 0 for r in rules}
     active_rules = [r for r in rules if r.enabled]
@@ -221,7 +221,7 @@ async def _export_subgraph_to_rdflib(
     import rdflib
     from rdflib import URIRef, Literal, Namespace, RDF
 
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     ON = Namespace("urn:on:")
     ONT = Namespace("urn:on:type:")
@@ -309,7 +309,7 @@ async def sparql_construct(
     """
     from rdflib import URIRef
 
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     g = await _export_subgraph_to_rdflib(entity_filter)
     inferred = g.query(sparql)
@@ -359,7 +359,7 @@ async def sparql_construct(
 
 async def _demo():
     """Demo: show provenance tracking and SPARQL query."""
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     # Check entity count
     result = await execute("SELECT count() FROM entity GROUP ALL")

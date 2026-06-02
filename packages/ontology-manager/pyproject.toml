@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "shared",
     "surrealdb-service",
+    "semantic-intelligence",
     "pyyaml>=6.0",
     "pydantic>=2.9.2",
     "pydantic-settings>=2.0.0",
@@ -26,6 +27,7 @@ packages = ["src/ontology_manager"]
 [tool.uv.sources]
 shared = { workspace = true }
 surrealdb-service = { workspace = true }
+semantic-intelligence = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

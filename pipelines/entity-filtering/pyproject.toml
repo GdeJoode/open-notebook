@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "shared",
     "surrealdb-service",
+    "semantic-intelligence",
     "networkx>=3.0",
     "loguru>=0.7.2",
     "httpx>=0.27.0",
@@ -33,6 +34,7 @@ packages = ["src/entity_filtering"]
 shared = { workspace = true }
 surrealdb-service = { workspace = true }
 ontology-manager = { workspace = true }
+semantic-intelligence = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
