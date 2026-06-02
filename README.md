@@ -352,6 +352,10 @@ Thanks to the [Esperanto](https://github.com/lfnovo/esperanto) library, we suppo
 - **[🔐 Security](docs/deployment/security.md)** - Password protection and privacy
 - **[🚀 Deployment](docs/deployment/index.md)** - Complete deployment guides for all scenarios
 
+### For Contributors
+- **[🏗️ Architecture](ARCHITECTURE.md)** - Internal structure: apps / packages / pipelines / services
+- **[🛠️ Refactor Plan](docs/REFACTOR_PLAN.md)** - Recent refactor history and rationale
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## 🗺️ Roadmap
