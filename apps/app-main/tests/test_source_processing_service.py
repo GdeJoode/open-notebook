@@ -1,5 +1,6 @@
 """
-Tests for SourceProcessingService.
+Tests for the source-processing pipeline: SourceExtractor / SourceProcessor /
+SourceEmbeddingOrchestrator / SourceSummarizationOrchestrator.
 
 All external dependencies (repos, ingestion pipeline, embedding service,
 transformation graph) are mocked — no DB or GPU required.
@@ -18,10 +19,17 @@ from shared.models.settings import ContentSettings
 
 from app_main.services.chunking import chunk_builder
 from app_main.services.ingestion.config_builder import build_ingestion_config
-from app_main.services.source_processing_service import (
+from app_main.services.source_embedding_orchestrator import (
+    SourceEmbeddingOrchestrator,
+)
+from app_main.services.source_extractor import (
     ExtractionResult,
-    SourceProcessingService,
+    SourceExtractor,
     _extract_text_from_html,
+)
+from app_main.services.source_processor import SourceProcessor
+from app_main.services.source_summarization_orchestrator import (
+    SourceSummarizationOrchestrator,
 )
 
 
@@ -83,11 +91,29 @@ def transformation_repo():
 
 
 @pytest.fixture
-def service(source_repo, chunk_repo, settings_repo, transformation_repo):
-    return SourceProcessingService(
+def extractor():
+    return SourceExtractor()
+
+
+@pytest.fixture
+def processor(source_repo, chunk_repo, settings_repo, extractor):
+    return SourceProcessor(
         source_repo=source_repo,
         chunk_repo=chunk_repo,
         settings_repo=settings_repo,
+        extractor=extractor,
+    )
+
+
+@pytest.fixture
+def embedding_orchestrator(source_repo):
+    return SourceEmbeddingOrchestrator(source_repo=source_repo)
+
+
+@pytest.fixture
+def summarization_orchestrator(source_repo, transformation_repo):
+    return SourceSummarizationOrchestrator(
+        source_repo=source_repo,
         transformation_repo=transformation_repo,
     )
 
@@ -191,8 +217,8 @@ class FakeIngestionResult:
 # ===========================================================================
 
 class TestProcessText:
-    def test_wraps_content_as_single_chunk(self, service):
-        result = service._process_text("This is raw text.")
+    def test_wraps_content_as_single_chunk(self, extractor):
+        result = extractor._process_text("This is raw text.")
 
         assert isinstance(result, ExtractionResult)
         assert result.full_text == "This is raw text."
@@ -201,13 +227,13 @@ class TestProcessText:
         assert result.chunks[0]["text"] == "This is raw text."
         assert result.chunks[0]["element_type"] == "text"
 
-    def test_empty_content(self, service):
-        result = service._process_text("")
+    def test_empty_content(self, extractor):
+        result = extractor._process_text("")
         assert result.title == "Untitled"
         assert result.full_text == ""
 
-    def test_multiline_title_uses_first_line(self, service):
-        result = service._process_text("First line\nSecond line")
+    def test_multiline_title_uses_first_line(self, extractor):
+        result = extractor._process_text("First line\nSecond line")
         assert result.title == "First line"
 
 
@@ -217,7 +243,7 @@ class TestProcessText:
 
 class TestProcessFile:
     @pytest.mark.asyncio
-    async def test_processes_document(self, service, settings_repo, tmp_path):
+    async def test_processes_document(self, extractor, settings_repo, tmp_path):
         fake_result = FakeIngestionResult()
         test_file = tmp_path / "test.pdf"
         test_file.write_bytes(b"%PDF-1.4 fake")
@@ -228,7 +254,7 @@ class TestProcessFile:
             instance = MockWorkflow.return_value
             instance.process = MagicMock(return_value=fake_result)
 
-            result = await service._process_file(
+            result = await extractor._process_file(
                 file_path=str(test_file),
                 content_settings=_make_settings(),
             )
@@ -239,7 +265,7 @@ class TestProcessFile:
         assert len(result.chunks) > 0
 
     @pytest.mark.asyncio
-    async def test_processes_transcription(self, service, tmp_path):
+    async def test_processes_transcription(self, extractor, tmp_path):
         fake_result = FakeIngestionResult(
             document=None,
             transcription=FakeTranscription(),
@@ -254,7 +280,7 @@ class TestProcessFile:
             instance = MockWorkflow.return_value
             instance.process = MagicMock(return_value=fake_result)
 
-            result = await service._process_file(
+            result = await extractor._process_file(
                 file_path=str(test_file),
                 content_settings=_make_settings(),
             )
@@ -265,15 +291,15 @@ class TestProcessFile:
         assert result.chunks[0]["metadata"]["speaker"] == "Speaker 1"
 
     @pytest.mark.asyncio
-    async def test_raises_on_missing_file(self, service):
+    async def test_raises_on_missing_file(self, extractor):
         with pytest.raises(FileNotFoundError):
-            await service._process_file(
+            await extractor._process_file(
                 file_path="/nonexistent/file.pdf",
                 content_settings=_make_settings(),
             )
 
     @pytest.mark.asyncio
-    async def test_raises_on_ingestion_failure(self, service, tmp_path):
+    async def test_raises_on_ingestion_failure(self, extractor, tmp_path):
         fake_result = FakeIngestionResult(
             success=False,
             error_message="Parse error",
@@ -289,13 +315,13 @@ class TestProcessFile:
             instance.process = MagicMock(return_value=fake_result)
 
             with pytest.raises(RuntimeError, match="Ingestion failed"):
-                await service._process_file(
+                await extractor._process_file(
                     file_path=str(test_file),
                     content_settings=_make_settings(),
                 )
 
     @pytest.mark.asyncio
-    async def test_delete_source_flag(self, service, tmp_path):
+    async def test_delete_source_flag(self, extractor, tmp_path):
         test_file = tmp_path / "deleteme.txt"
         test_file.write_text("content")
         assert test_file.exists()
@@ -310,7 +336,7 @@ class TestProcessFile:
             instance = MockWorkflow.return_value
             instance.process = MagicMock(return_value=fake_result)
 
-            await service._process_file(
+            await extractor._process_file(
                 file_path=str(test_file),
                 content_settings=_make_settings(),
                 delete_source=True,
@@ -325,14 +351,14 @@ class TestProcessFile:
 
 class TestProcessUrl:
     @pytest.mark.asyncio
-    async def test_extracts_url_content(self, service):
+    async def test_extracts_url_content(self, extractor):
         with patch.object(
-            SourceProcessingService,
+            SourceExtractor,
             "_fetch_url_content",
             new_callable=AsyncMock,
             return_value=("Page Title", "Extracted text content."),
         ):
-            result = await service._process_url(
+            result = await extractor._process_url(
                 url="https://example.com",
                 content_settings=_make_settings(),
             )
@@ -344,15 +370,15 @@ class TestProcessUrl:
         assert result.chunks[0]["element_type"] == "web_content"
 
     @pytest.mark.asyncio
-    async def test_raises_on_empty_content(self, service):
+    async def test_raises_on_empty_content(self, extractor):
         with patch.object(
-            SourceProcessingService,
+            SourceExtractor,
             "_fetch_url_content",
             new_callable=AsyncMock,
             return_value=(None, ""),
         ):
             with pytest.raises(RuntimeError, match="No content extracted"):
-                await service._process_url(
+                await extractor._process_url(
                     url="https://empty.com",
                     content_settings=_make_settings(),
                 )
@@ -530,8 +556,8 @@ class TestBuildIngestionConfig:
 
 class TestProcessSource:
     @pytest.mark.asyncio
-    async def test_full_text_processing(self, service, source_repo, chunk_repo):
-        result = await service.process_source(
+    async def test_full_text_processing(self, processor, source_repo, chunk_repo):
+        result = await processor.process_source(
             source_id="source:test1",
             content_state={"content": "Hello world"},
         )
@@ -542,19 +568,19 @@ class TestProcessSource:
         source_repo.update.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_missing_source_raises(self, service, source_repo):
+    async def test_missing_source_raises(self, processor, source_repo):
         source_repo.get = AsyncMock(return_value=None)
 
         with pytest.raises(ValueError, match="not found"):
-            await service.process_source(
+            await processor.process_source(
                 source_id="source:missing",
                 content_state={"content": "test"},
             )
 
     @pytest.mark.asyncio
-    async def test_invalid_content_state_raises(self, service):
+    async def test_invalid_content_state_raises(self, processor):
         with pytest.raises(ValueError, match="must contain"):
-            await service.process_source(
+            await processor.process_source(
                 source_id="source:test1",
                 content_state={"invalid_key": "value"},
             )
@@ -566,7 +592,7 @@ class TestProcessSource:
 
 class TestUpdateSource:
     @pytest.mark.asyncio
-    async def test_updates_with_title(self, service, source_repo):
+    async def test_updates_with_title(self, processor, source_repo):
         extracted = ExtractionResult(
             title="New Title",
             full_text="New content",
@@ -574,7 +600,7 @@ class TestUpdateSource:
         )
         source = _make_source()
 
-        await service._update_source(source, extracted)
+        await processor._update_source(source, extracted)
 
         source_repo.update.assert_awaited_once()
         call_args = source_repo.update.call_args
@@ -584,14 +610,14 @@ class TestUpdateSource:
         assert data["asset"]["file_path"] == "/tmp/test.pdf"
 
     @pytest.mark.asyncio
-    async def test_skips_title_when_none(self, service, source_repo):
+    async def test_skips_title_when_none(self, processor, source_repo):
         extracted = ExtractionResult(
             title=None,
             full_text="Content",
         )
         source = _make_source()
 
-        await service._update_source(source, extracted)
+        await processor._update_source(source, extracted)
 
         call_args = source_repo.update.call_args
         data = call_args[0][1]
@@ -604,19 +630,19 @@ class TestUpdateSource:
 
 class TestEmbedSource:
     @pytest.mark.asyncio
-    async def test_calls_embedding_pipeline(self, service):
+    async def test_calls_embedding_pipeline(self, embedding_orchestrator):
         embed_service = MagicMock()
         embed_service.embed_source = AsyncMock()
         with patch(
             "app_main.dependencies.get_embedding_service",
             AsyncMock(return_value=embed_service),
         ):
-            await service.embed_source("source:test1")
+            await embedding_orchestrator.embed_source("source:test1")
 
         embed_service.embed_source.assert_awaited_once_with("source:test1")
 
     @pytest.mark.asyncio
-    async def test_returns_source_id_and_chunk_count(self, service, source_repo):
+    async def test_returns_source_id_and_chunk_count(self, embedding_orchestrator, source_repo):
         source_repo.get_embedding_count = AsyncMock(return_value=7)
         embed_service = MagicMock()
         embed_service.embed_source = AsyncMock()
@@ -624,15 +650,15 @@ class TestEmbedSource:
             "app_main.dependencies.get_embedding_service",
             AsyncMock(return_value=embed_service),
         ):
-            result = await service.embed_source("source:test1")
+            result = await embedding_orchestrator.embed_source("source:test1")
 
         assert result == {"source_id": "source:test1", "embedded_chunks": 7}
 
     @pytest.mark.asyncio
-    async def test_raises_on_missing_source(self, service, source_repo):
+    async def test_raises_on_missing_source(self, embedding_orchestrator, source_repo):
         source_repo.get = AsyncMock(return_value=None)
         with pytest.raises(ValueError, match="not found"):
-            await service.embed_source("source:missing")
+            await embedding_orchestrator.embed_source("source:missing")
 
 
 # ===========================================================================
@@ -641,14 +667,14 @@ class TestEmbedSource:
 
 class TestRunSummaries:
     @pytest.mark.asyncio
-    async def test_raises_on_missing_source(self, service, source_repo):
+    async def test_raises_on_missing_source(self, summarization_orchestrator, source_repo):
         source_repo.get = AsyncMock(return_value=None)
         with pytest.raises(ValueError, match="not found"):
-            await service.run_summaries("source:missing")
+            await summarization_orchestrator.run_summaries("source:missing")
 
     @pytest.mark.asyncio
     async def test_returns_zero_when_no_default_transformations(
-        self, service, transformation_repo
+        self, summarization_orchestrator, transformation_repo
     ):
         import sys
 
@@ -661,14 +687,14 @@ class TestRunSummaries:
         with patch.dict(
             sys.modules, {"app_main.graphs.transformation": fake_module}
         ):
-            result = await service.run_summaries("source:test1")
+            result = await summarization_orchestrator.run_summaries("source:test1")
 
         assert result["transformations_run"] == 0
         assert result["source_id"] == "source:test1"
 
     @pytest.mark.asyncio
     async def test_runs_specific_transformation_ids(
-        self, service, transformation_repo, source_repo
+        self, summarization_orchestrator, transformation_repo, source_repo
     ):
         import sys
 
@@ -694,7 +720,7 @@ class TestRunSummaries:
         with patch.dict(
             sys.modules, {"app_main.graphs.transformation": fake_module}
         ):
-            result = await service.run_summaries(
+            result = await summarization_orchestrator.run_summaries(
                 "source:test1", transformation_ids=["transformation:t1"]
             )
 
@@ -704,7 +730,7 @@ class TestRunSummaries:
 
     @pytest.mark.asyncio
     async def test_raises_on_unknown_transformation_id(
-        self, service, transformation_repo
+        self, summarization_orchestrator, transformation_repo
     ):
         import sys
 
@@ -718,13 +744,13 @@ class TestRunSummaries:
             with pytest.raises(
                 ValueError, match="Transformation 'transformation:bogus' not found"
             ):
-                await service.run_summaries(
+                await summarization_orchestrator.run_summaries(
                     "source:test1", transformation_ids=["transformation:bogus"]
                 )
 
     @pytest.mark.asyncio
     async def test_skips_when_source_has_no_content(
-        self, service, source_repo, transformation_repo
+        self, summarization_orchestrator, source_repo, transformation_repo
     ):
         import sys
 
@@ -750,7 +776,7 @@ class TestRunSummaries:
         with patch.dict(
             sys.modules, {"app_main.graphs.transformation": fake_module}
         ):
-            result = await service.run_summaries(
+            result = await summarization_orchestrator.run_summaries(
                 "source:test1", transformation_ids=["transformation:t1"]
             )
 
