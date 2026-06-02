@@ -74,11 +74,11 @@ async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
     start_time = time.time()
 
     try:
-        from app_main.dependencies import get_source_processing_service
+        from app_main.dependencies import get_source_processor
 
         logger.info(f"Starting source extraction for source: {validated.source_id}")
 
-        service = get_source_processing_service()
+        service = get_source_processor()
         result = await service.process_source(
             source_id=validated.source_id,
             content_state=validated.content_state,
@@ -138,10 +138,10 @@ async def handle_insight_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
     start_time = time.time()
 
     try:
-        from app_main.dependencies import get_source_processing_service
+        from app_main.dependencies import get_source_summarization_orchestrator
 
         logger.info(f"Starting summaries for source: {validated.source_id}")
-        service = get_source_processing_service()
+        service = get_source_summarization_orchestrator()
         result = await service.run_summaries(
             source_id=validated.source_id,
             transformation_ids=validated.transformation_ids,
@@ -242,10 +242,10 @@ async def _handle_embed_source(payload: Dict[str, Any]) -> Dict[str, Any]:
     start_time = time.time()
     source_id = payload["source_id"]
 
-    from app_main.dependencies import get_source_processing_service
+    from app_main.dependencies import get_source_embedding_orchestrator
 
     logger.info(f"Starting embedding for source: {source_id}")
-    service = get_source_processing_service()
+    service = get_source_embedding_orchestrator()
     result = await service.embed_source(source_id)
 
     processing_time = time.time() - start_time

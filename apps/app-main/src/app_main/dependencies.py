@@ -44,7 +44,12 @@ from app_main.services.insight_service import InsightService
 from app_main.services.knowledge_graph_service import KnowledgeGraphService
 from app_main.services.ontology_service import OntologyService
 from app_main.services.context_service import ContextService
-from app_main.services.source_processing_service import SourceProcessingService
+from app_main.services.source_embedding_orchestrator import SourceEmbeddingOrchestrator
+from app_main.services.source_extractor import SourceExtractor
+from app_main.services.source_processor import SourceProcessor
+from app_main.services.source_summarization_orchestrator import (
+    SourceSummarizationOrchestrator,
+)
 from app_main.services.preprocessing_service import PreprocessingService
 from app_main.services.summarization_service import SummarizationService
 from app_main.services.entity_extraction_service import EntityExtractionService
@@ -156,11 +161,26 @@ def get_context_service() -> ContextService:
     )
 
 
-def get_source_processing_service() -> SourceProcessingService:
-    return SourceProcessingService(
+def get_source_extractor() -> SourceExtractor:
+    return SourceExtractor()
+
+
+def get_source_processor() -> SourceProcessor:
+    return SourceProcessor(
         source_repo=get_source_repo(),
         chunk_repo=get_chunk_repo(),
         settings_repo=get_settings_repo(),
+        extractor=get_source_extractor(),
+    )
+
+
+def get_source_embedding_orchestrator() -> SourceEmbeddingOrchestrator:
+    return SourceEmbeddingOrchestrator(source_repo=get_source_repo())
+
+
+def get_source_summarization_orchestrator() -> SourceSummarizationOrchestrator:
+    return SourceSummarizationOrchestrator(
+        source_repo=get_source_repo(),
         transformation_repo=get_transformation_repo(),
     )
 
