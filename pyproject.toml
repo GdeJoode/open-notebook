@@ -63,6 +63,7 @@ entity-filtering = { workspace = true }
 summarization = { workspace = true }
 embeddings = { workspace = true }
 retrieval = { workspace = true }
+semantic-intelligence = { workspace = true }
 app-main = { workspace = true }
 zotero-integration = { workspace = true }
 

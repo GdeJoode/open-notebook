@@ -8,7 +8,7 @@ Records decisions as first-class objects in SurrealDB with:
 - Graph traversal for impact analysis
 
 Usage:
-    from semantic_layer.decision_tracker import (
+    from semantic_intelligence.decision_tracker import (
         record_decision, link_decisions, find_precedents,
         trace_causal_chain, analyse_impact,
     )
@@ -31,7 +31,7 @@ Usage:
     # Trace downstream impact
     chain = await trace_causal_chain(dec_id, depth=3)
 
-    python -m semantic_layer.decision_tracker
+    python -m semantic_intelligence.decision_tracker
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ async def record_decision(
     Returns:
         The SurrealDB record ID of the created decision.
     """
-    from semantic_layer.config import execute, embed_text
+    from semantic_intelligence.config import execute, embed_text
 
     # Build record
     params: Dict[str, Any] = {
@@ -133,7 +133,7 @@ async def link_decisions(
     Returns:
         The RELATE edge record ID.
     """
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     params: Dict[str, Any] = {
         "from": decision_a,
@@ -178,7 +178,7 @@ async def find_precedents(
     Returns:
         List of decision records with similarity scores, sorted by relevance.
     """
-    from semantic_layer.config import execute, embed_text
+    from semantic_intelligence.config import execute, embed_text
 
     # Generate embedding for the query text
     query_embedding = await embed_text(reasoning_text)
@@ -226,7 +226,7 @@ async def trace_causal_chain(
     Returns:
         List of decisions in the causal chain, ordered by distance.
     """
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     if direction == "downstream":
         # Follow outgoing caused edges: what did this decision cause?
@@ -281,7 +281,7 @@ async def analyse_impact(
     Returns:
         Dict with: downstream_decisions, affected_entities, total_reach.
     """
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     # Get the decision itself
     decision_result = await execute("SELECT * FROM $id", {"id": decision_id})
@@ -322,7 +322,7 @@ async def analyse_impact(
 
 async def _demo():
     """Demo: record decisions, link them, search precedents."""
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     # Check existing decisions
     result = await execute("SELECT count() FROM decision GROUP ALL")

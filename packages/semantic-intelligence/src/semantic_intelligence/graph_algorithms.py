@@ -12,7 +12,7 @@ Algorithms:
 - Shortest path: find the path between two entities through the graph
 
 Usage:
-    from semantic_layer.graph_algorithms import (
+    from semantic_intelligence.graph_algorithms import (
         build_graph, compute_pagerank, compute_communities, write_scores,
     )
 
@@ -21,7 +21,7 @@ Usage:
     communities = compute_communities(graph)
     await write_scores(scores, communities)
 
-    python -m semantic_layer.graph_algorithms
+    python -m semantic_intelligence.graph_algorithms
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ async def build_graph(
     Returns:
         NetworkX directed graph.
     """
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     G = nx.DiGraph()
 
@@ -344,7 +344,7 @@ async def write_scores(
     Returns:
         Number of entities updated.
     """
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     # Collect all entity IDs that need updating
     all_ids = set()

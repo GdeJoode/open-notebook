@@ -6,7 +6,7 @@ Reads from environment variables with sensible defaults that work
 both inside Docker (container names) and locally (localhost).
 
 Usage:
-    from semantic_layer.config import get_db, execute, OLLAMA_URL
+    from semantic_intelligence.config import get_db, execute, OLLAMA_URL
 
     # Async context manager for SurrealDB
     async with get_db() as db:

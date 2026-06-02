@@ -13,7 +13,7 @@ Strategies:
 5. **Conflict detection**: flag contradictions between sources.
 
 Usage:
-    from semantic_layer.deduplication import (
+    from entity_filtering.deduplication.canonical_entities import (
         find_duplicates, merge_entities, detect_conflicts,
     )
 
@@ -21,7 +21,7 @@ Usage:
     await merge_entities(canonical_id, duplicate_id)
     conflicts = await detect_conflicts()
 
-    python -m semantic_layer.deduplication
+    python -m semantic_intelligence.scripts.test_pipeline
 """
 
 from __future__ import annotations
@@ -140,7 +140,7 @@ async def _vector_blocking(
 
     For each entity with an embedding, find the top-k nearest neighbours.
     """
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     pairs: Set[Tuple[str, str]] = set()
 
@@ -221,7 +221,7 @@ async def find_duplicates(
     Returns:
         List of DuplicateCandidate, sorted by combined_score descending.
     """
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     blocking_methods = blocking_methods or ["token", "sorted", "vector"]
 
@@ -324,7 +324,7 @@ async def merge_entities(
         duplicate_id: The entity to merge into canonical.
         merge_aliases: Whether to create an alias from the duplicate's name.
     """
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     # Get both entities
     canonical = (await execute("SELECT * FROM $id", {"id": canonical_id}))
@@ -400,7 +400,7 @@ async def deduplicate_relations() -> int:
     Returns:
         Number of duplicate relations removed.
     """
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     # Find duplicates: group by (in, out, relation_type)
     dupes = await execute(
@@ -454,7 +454,7 @@ async def detect_conflicts(
     Returns:
         List of ConflictReport objects.
     """
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     # Get entities with multiple source documents
     entities = await execute(
@@ -515,7 +515,7 @@ async def detect_conflicts(
 
 async def _demo():
     """Demo: find duplicates and run deduplication."""
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     result = await execute("SELECT count() FROM entity GROUP ALL")
     count = result[0].get("count", 0) if result else 0

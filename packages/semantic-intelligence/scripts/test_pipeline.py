@@ -6,7 +6,7 @@ via Ollama LLM, writes them to SurrealDB entity/relation tables with
 provenance, then runs all semantic layer modules.
 
 Usage:
-    python -m semantic_layer.test_pipeline /data/output/Convenant_Oost-Groningen
+    python -m semantic_intelligence.test_pipeline /data/output/Convenant_Oost-Groningen
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ async def extract_entities_from_text(
     """
     import httpx
 
-    from semantic_layer.config import OLLAMA_LLM_MODEL, OLLAMA_URL
+    from semantic_intelligence.config import OLLAMA_LLM_MODEL, OLLAMA_URL
 
     prompt = f"""Extract entities and relations from this Dutch government document text.
 
@@ -105,7 +105,7 @@ async def write_entities_to_db(
     Returns:
         Tuple of (entities_created, relations_created).
     """
-    from semantic_layer.config import embed_text, execute
+    from semantic_intelligence.config import embed_text, execute
 
     entity_count = 0
     relation_count = 0
@@ -259,7 +259,7 @@ async def process_document(doc_dir: Path) -> Dict[str, Any]:
 
 async def run_test_pipeline(doc_dirs: List[Path]):
     """Run the full test pipeline on multiple documents."""
-    from semantic_layer.config import execute
+    from semantic_intelligence.config import execute
 
     logger.info("=" * 60)
     logger.info("SEMANTIC LAYER TEST PIPELINE")
@@ -286,7 +286,7 @@ async def run_test_pipeline(doc_dirs: List[Path]):
 
     # Step 2: Graph algorithms
     logger.info("\n--- Step 2: Graph algorithms ---")
-    from semantic_layer.graph_algorithms import run_all
+    from semantic_intelligence.graph_algorithms import run_all
     graph_result = await run_all()
     logger.info(f"Graph: {graph_result.get('nodes')} nodes, {graph_result.get('edges')} edges, "
                 f"{graph_result.get('communities')} communities")
@@ -296,7 +296,7 @@ async def run_test_pipeline(doc_dirs: List[Path]):
 
     # Step 3: Decision tracker
     logger.info("\n--- Step 3: Decision intelligence ---")
-    from semantic_layer.decision_tracker import (
+    from semantic_intelligence.decision_tracker import (
         find_precedents,
         link_decisions,
         record_decision,
@@ -329,7 +329,7 @@ async def run_test_pipeline(doc_dirs: List[Path]):
 
     # Step 4: Deduplication
     logger.info("\n--- Step 4: Deduplication ---")
-    from semantic_layer.deduplication import detect_conflicts, find_duplicates
+    from semantic_intelligence.deduplication import detect_conflicts, find_duplicates
     candidates = await find_duplicates(review_threshold=0.4)
     logger.info(f"Duplicate candidates: {len(candidates)}")
     for c in candidates[:5]:
@@ -340,7 +340,7 @@ async def run_test_pipeline(doc_dirs: List[Path]):
 
     # Step 5: Provenance + SPARQL
     logger.info("\n--- Step 5: SPARQL reasoning ---")
-    from semantic_layer.reasoning import sparql_query
+    from semantic_intelligence.reasoning import sparql_query
     results = await sparql_query(
         "PREFIX on: <urn:on:prop:> "
         "PREFIX ont: <urn:on:type:> "
@@ -355,7 +355,7 @@ async def run_test_pipeline(doc_dirs: List[Path]):
 
     # Step 6: Ontology management
     logger.info("\n--- Step 6: Ontology management ---")
-    from semantic_layer.ontology_manager import (
+    from semantic_intelligence.ontology_manager import (
         create_brede_welvaart_skos,
         export_ontology,
         generate_shacl_shapes,
