@@ -12,7 +12,6 @@ dependencies = [
     "ingestion",
     "ontology-extraction",
     "summarization",
-    "enrichment",
     "embeddings",
     "entity-filtering",
     "retrieval",
@@ -55,7 +54,6 @@ llm-manager = { workspace = true }
 ingestion = { workspace = true }
 ontology-extraction = { workspace = true }
 summarization = { workspace = true }
-enrichment = { workspace = true }
 embeddings = { workspace = true }
 entity-filtering = { workspace = true }
 retrieval = { workspace = true }

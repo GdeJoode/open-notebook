@@ -532,8 +532,6 @@ class TestProcessSource:
         result = await service.process_source(
             source_id="source:test1",
             content_state={"content": "Hello world"},
-            apply_transformations=False,
-            embed=False,
         )
 
         assert result["source_id"] is not None
@@ -552,108 +550,12 @@ class TestProcessSource:
             )
 
     @pytest.mark.asyncio
-    async def test_embed_flag_is_ignored(
-        self, service, source_repo, chunk_repo
-    ):
-        """embed= param is kept for backward compat but ignored by process_source."""
-        with patch(
-            "app_main.dependencies.get_embedding_service",
-        ) as mock_get_embed:
-            await service.process_source(
-                source_id="source:test1",
-                content_state={"content": "Hello"},
-                embed=True,
-                apply_transformations=False,
-            )
-
-            # Embedding is now triggered separately, not inline
-            mock_get_embed.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_embed_skipped_when_false(self, service):
-        with patch(
-            "app_main.dependencies.get_embedding_service",
-        ) as mock_get_embed:
-            await service.process_source(
-                source_id="source:test1",
-                content_state={"content": "Hello"},
-                embed=False,
-                apply_transformations=False,
-            )
-
-            mock_get_embed.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_invalid_content_state_raises(self, service):
         with pytest.raises(ValueError, match="must contain"):
             await service.process_source(
                 source_id="source:test1",
                 content_state={"invalid_key": "value"},
             )
-
-    @pytest.mark.asyncio
-    async def test_transformation_flags_are_ignored(
-        self, service, transformation_repo
-    ):
-        """apply_transformations and transformation_ids are kept for backward
-        compat but ignored by process_source (transformations triggered separately)."""
-        await service.process_source(
-            source_id="source:test1",
-            content_state={"content": "Long text to summarize"},
-            apply_transformations=True,
-            embed=False,
-            transformation_ids=["transformation:t1"],
-        )
-
-        # Transformation repo should not be consulted during extraction
-        transformation_repo.get.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_no_transformations_when_no_content(
-        self, service, source_repo, transformation_repo
-    ):
-        import sys
-
-        from shared.models.transformation import Transformation
-
-        source_repo.get = AsyncMock(
-            return_value=_make_source(full_text=None)
-        )
-        # update returns source without full_text too
-        source_repo.update = AsyncMock(
-            return_value=_make_source(full_text=None)
-        )
-
-        # Provide a valid transformation so the lookup succeeds
-        t = Transformation(
-            id="transformation:t1",
-            name="summarize",
-            title="Summary",
-            description="Summarize",
-            prompt="Summarize: {text}",
-            created=_NOW,
-            updated=_NOW,
-        )
-        transformation_repo.get = AsyncMock(return_value=t)
-
-        mock_graph = MagicMock()
-        mock_graph.ainvoke = AsyncMock()
-
-        fake_module = MagicMock()
-        fake_module.graph = mock_graph
-        with patch.dict(
-            sys.modules, {"app_main.graphs.transformation": fake_module}
-        ):
-            await service.process_source(
-                source_id="source:test1",
-                content_state={"content": ""},
-                apply_transformations=True,
-                embed=False,
-                transformation_ids=["transformation:t1"],
-            )
-
-            # Transformation should not be invoked on empty content
-            mock_graph.ainvoke.assert_not_awaited()
 
 
 # ===========================================================================

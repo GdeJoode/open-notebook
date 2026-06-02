@@ -61,12 +61,9 @@ ingestion = { workspace = true }
 ontology-extraction = { workspace = true }
 entity-filtering = { workspace = true }
 summarization = { workspace = true }
-enrichment = { workspace = true }
 embeddings = { workspace = true }
 retrieval = { workspace = true }
 app-main = { workspace = true }
-chat = { workspace = true }
-canvas = { workspace = true }
 zotero-integration = { workspace = true }
 
 # ============================================================================
