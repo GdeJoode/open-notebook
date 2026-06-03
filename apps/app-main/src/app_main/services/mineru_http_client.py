@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import shutil
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -39,10 +40,26 @@ DEFAULT_SERVICE_URL = "http://mineru:8104"
 SHARED_INPUT_DIR = Path("/data/input")
 SHARED_OUTPUT_DIR = Path("/data/mineru_output")
 PROCESS_TIMEOUT_SECONDS = 1800  # 30 min — large PDFs with VLM can be slow
+HEALTH_CHECK_TIMEOUT_SECONDS = 2.0
 
 
 class MineruServiceError(RuntimeError):
     """Raised when the MinerU service returns an error response."""
+
+
+@dataclass(frozen=True)
+class MineruHealthResult:
+    """Result of a MinerU service health probe.
+
+    ``healthy`` is the only field guaranteed to be set. ``version`` is
+    populated from the service's own ``/health`` response payload when
+    available; ``error`` carries the failure reason on a non-healthy
+    probe so the UI can surface it in a tooltip.
+    """
+
+    healthy: bool
+    version: Optional[str] = None
+    error: Optional[str] = None
 
 
 class MineruHttpClient:
@@ -181,6 +198,44 @@ class MineruHttpClient:
         return file_result
 
     # ------------------------------------------------------------------
+    # Health probing
+    # ------------------------------------------------------------------
+
+    async def health_check(
+        self, *, timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS
+    ) -> MineruHealthResult:
+        """Probe the MinerU service's ``/health`` endpoint.
+
+        Used by the ``GET /api/health/mineru`` router to back the UI
+        chip. The 2-second default timeout keeps the page-load impact
+        small even when the container is unreachable.
+
+        Never raises. Connection errors, HTTP errors, malformed JSON —
+        all are surfaced as ``MineruHealthResult(healthy=False,
+        error=...)``. The caller only needs to inspect ``healthy``.
+        """
+        url = f"{self.service_url}/health"
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(url)
+            if resp.status_code != 200:
+                return MineruHealthResult(
+                    healthy=False,
+                    error=f"HTTP {resp.status_code}: {resp.text[:200]}",
+                )
+            try:
+                data = resp.json()
+            except ValueError:
+                # 200 with non-JSON body — treat as healthy without version
+                return MineruHealthResult(healthy=True)
+            version = data.get("version") if isinstance(data, dict) else None
+            return MineruHealthResult(healthy=True, version=version)
+        except httpx.HTTPError as exc:
+            return MineruHealthResult(healthy=False, error=str(exc))
+        except Exception as exc:  # noqa: BLE001 — endpoint must never raise
+            return MineruHealthResult(healthy=False, error=str(exc))
+
+    # ------------------------------------------------------------------
     # Convenience accessors (used by tests and the auto-fallback logic in A.1c)
     # ------------------------------------------------------------------
 
@@ -217,6 +272,8 @@ _MINERU_SUPPORTED_EXTENSIONS = {
 
 __all__ = [
     "DEFAULT_SERVICE_URL",
+    "HEALTH_CHECK_TIMEOUT_SECONDS",
+    "MineruHealthResult",
     "MineruHttpClient",
     "MineruServiceError",
     "PROCESS_TIMEOUT_SECONDS",
