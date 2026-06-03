@@ -1,0 +1,16 @@
+-- Migration 43: Source.metadata FLEXIBLE field for extraction provenance (Phase A.1c, Q-A-3)
+--
+-- The `source` table is SCHEMAFULL (migration 1), so writes to undeclared
+-- fields are rejected. Phase A.1c persists per-source extraction
+-- provenance under Source.metadata (the four keys: parser_engine_used,
+-- extraction_confidence, extraction_confidence_signals,
+-- extraction_fallback_triggered). Mirror the pattern used for
+-- source_folder.metadata and pipeline_cache.metadata in migration 26:
+-- declare a FLEXIBLE option<object> field so additive keys do not
+-- require a schema bump.
+--
+-- Legacy rows without the field deserialise via the Pydantic default
+-- (`Field(default_factory=dict)`) on Source. Idempotent: IF NOT EXISTS
+-- makes this safe to re-run.
+
+DEFINE FIELD IF NOT EXISTS metadata ON TABLE source FLEXIBLE TYPE option<object>;

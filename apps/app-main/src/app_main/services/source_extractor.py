@@ -356,9 +356,13 @@ class SourceExtractor:
             f"Auto-mode: trying Docling first for {source_path.name}",
         )
 
+        # Explicit None check — not truthy — because 0.0 is a legal value
+        # meaning "always use docling, never fall back" (the API schema
+        # permits ge=0.0). `value or DEFAULT_THRESHOLD` would silently
+        # demote 0.0 to 0.95, the opposite of what the caller asked for.
+        raw_threshold = getattr(content_settings, "docling_min_confidence", None)
         threshold = float(
-            getattr(content_settings, "docling_min_confidence", None)
-            or DEFAULT_THRESHOLD
+            raw_threshold if raw_threshold is not None else DEFAULT_THRESHOLD
         )
 
         # Adapter so the orchestrator can call ``client.process(path)``

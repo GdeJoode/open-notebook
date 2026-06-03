@@ -595,6 +595,74 @@ class TestProcessFile:
         assert result.metadata["extraction_fallback_triggered"] is True
 
     @pytest.mark.asyncio
+    async def test_auto_respects_threshold_zero_never_falls_back(
+        self, extractor, tmp_path
+    ):
+        """Regression for A.1c attempt-1 Blocker #2: ``docling_min_confidence=0.0``
+        means "always accept docling, never fall back". The previous code
+        used ``getattr(...) or DEFAULT_THRESHOLD`` which silently demoted
+        0.0 to 0.95 because Python treats 0.0 as falsy. With the fix this
+        test verifies the threshold actually reaches the auto-fallback
+        orchestrator and MinerU is *not* called even on a low-quality doc
+        that would normally trigger fallback at the 0.95 default.
+        """
+        # Build the same low-quality fixture that
+        # test_auto_low_confidence_falls_back_to_mineru uses — confirming
+        # the *only* thing changing behaviour is the threshold override.
+        low_doc = FakeDocument(
+            title="Scan",
+            full_text="x" * 50,
+            pages=[FakePage(
+                page_number=1,
+                elements=[FakeElement(
+                    content="ocr",
+                    element_type=MagicMock(value="text"),
+                    page=1,
+                    bbox=None,
+                    section_level=0,
+                )],
+            )],
+        )
+        low_doc.page_count = 1
+        low_doc.all_tables = []
+        low_doc.all_images = []
+        low_doc.pages[0].elements[0].source = "ocr"
+        low_doc.pages[0].elements[0].confidence = 0.4
+
+        docling_result = FakeIngestionResult(document=low_doc)
+        test_file = tmp_path / "scan.pdf"
+        test_file.write_bytes(b"%PDF-1.4 fake")
+
+        mineru_mock_client = MagicMock()
+        mineru_mock_client.process = AsyncMock(return_value=FakeIngestionResult())
+        mineru_module = MagicMock()
+        mineru_module.MineruHttpClient = MagicMock(return_value=mineru_mock_client)
+
+        with patch.dict(
+            "sys.modules",
+            {"app_main.services.mineru_http_client": mineru_module},
+        ):
+            with patch("ingestion.workflow.IngestionWorkflow") as MockWorkflow:
+                MockWorkflow.return_value.process = MagicMock(return_value=docling_result)
+
+                result = await extractor._process_file(
+                    file_path=str(test_file),
+                    content_settings=_make_settings(
+                        parser_engine="auto",
+                        docling_min_confidence=0.0,
+                    ),
+                )
+
+        # The bug-of-record assertion: a low-conf doc + threshold=0.0 must
+        # stay with docling. MinerU must not have been called.
+        mineru_mock_client.process.assert_not_called()
+        assert result.metadata["parser_engine_used"] == "docling"
+        assert result.metadata["extraction_fallback_triggered"] is False
+        # The score was computed and threshold was honoured.
+        assert "extraction_confidence" in result.metadata
+        assert "extraction_confidence_signals" in result.metadata
+
+    @pytest.mark.asyncio
     async def test_simple_setting_records_docling_engine_used(
         self, extractor, tmp_path
     ):

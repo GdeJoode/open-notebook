@@ -678,14 +678,26 @@ warning) is addressed as caveat #6 above.
   accept→fallback, both-engines-fail keeps degraded docling, both
   engines raising raises RuntimeError, default threshold used when
   omitted).
+- `migrations/43.surrealql` + `migrations/43_down.surrealql` (attempt 2)
+  — declare `DEFINE FIELD IF NOT EXISTS metadata ON TABLE source
+  FLEXIBLE TYPE option<object>;`. Required because the `source` table
+  is SCHEMAFULL (migration 1) and the attempt-1 status doc wrongly
+  claimed the table was schemaless. Without this migration every
+  Source.metadata write would be silently dropped or rejected.
+  Mirrors the pattern used for `source_folder.metadata` and
+  `pipeline_cache.metadata` (migration 26).
 
 **Modified**:
 
 - `packages/shared/src/shared/models/source.py` (Q-A-3) — `Source`
   gains `metadata: Dict[str, Any] = Field(default_factory=dict)` with
   a defensive `field_validator` that coerces NULL/non-dict legacy
-  column values to `{}`. Additive + non-breaking; existing rows
-  default to `{}` without a SurrealDB migration (schemaless tables).
+  column values to `{}`. Backed by the new migration #43 below — the
+  `source` table is SCHEMAFULL, so the field is explicitly declared
+  as `FLEXIBLE TYPE option<object>` (same pattern as
+  `source_folder.metadata` and `pipeline_cache.metadata` from
+  migration 26). Additive + non-breaking; legacy rows read back as
+  NONE and deserialise via the Pydantic default.
 - `packages/shared/src/shared/models/settings.py` — `ContentSettings`
   gains `docling_min_confidence: Optional[float] = Field(0.95, ge=0.0,
   le=1.0)`. Bounds enforced at the model level; the API schema also
@@ -833,12 +845,19 @@ Acceptable; it's a closure-style adapter, not a long-lived service.
    matters, it can be lazy-cached on `SourceExtractor`. Not worth
    doing pre-optimisation.
 
-4. **No SurrealDB schema migration for `Source.metadata`**. The
-   table is schemaless in this codebase, so legacy rows without the
-   `metadata` column deserialise via the Pydantic default
-   (`Field(default_factory=dict)`). The new `field_validator` also
-   coerces `None`/non-dict values to `{}` defensively, in case
-   anything legacy ever lands in the column with a stray type.
+4. **SurrealDB migration #43 for `Source.metadata`** (corrected in
+   attempt 2). The original attempt-1 status doc and model docstring
+   claimed the `source` table was schemaless and that no migration
+   was needed. **That was wrong** — `migrations/1.surrealql:2`
+   declares `DEFINE TABLE IF NOT EXISTS source SCHEMAFULL;`, so
+   writes to undeclared fields are rejected or silently dropped.
+   Attempt 2 adds `migrations/43.surrealql` (and matching down) that
+   declares the field as `FLEXIBLE TYPE option<object>`, mirroring
+   the pattern from migration 26 for `source_folder.metadata` and
+   `pipeline_cache.metadata`. Legacy rows without the column
+   continue to deserialise via the Pydantic default
+   (`Field(default_factory=dict)`) plus the `ensure_metadata_dict`
+   validator that coerces stray `None`/non-dict values to `{}`.
 
 5. **Adapter pattern in `_run_auto_fallback`**. The `_DoclingAdapter`
    inner class is a deliberate closure-style adapter so the
@@ -857,4 +876,101 @@ Acceptable; it's a closure-style adapter, not a long-lived service.
 
 7. **PR creation**: branch pushed but no PR is opened — that's the
    orchestrator's responsibility after review.
+
+---
+
+## Phase A.1c — REVISIONS (attempt 2, 2026-06-03)
+
+**Branch**: `track/a-mineru-fallback` (same branch, new commits)
+
+Triggered by `docs/tracks/A-mineru/reviews/phase-A.1c-attempt-1.md`
+which flagged two blockers: a missing schema migration for the
+`SCHEMAFULL` `source` table (Blocker #1) and a falsy-zero bug in
+the threshold resolver (Blocker #2).
+
+### Fixes
+
+1. **Migration #43 added** for `Source.metadata`. The attempt-1
+   docstring + status text claimed the table was schemaless. It is
+   not — `migrations/1.surrealql:2` declares
+   `DEFINE TABLE IF NOT EXISTS source SCHEMAFULL;`. Without a field
+   declaration, every `update(... metadata=...)` would be rejected
+   or silently dropped by SurrealDB. Added
+   `migrations/43.surrealql` (`DEFINE FIELD IF NOT EXISTS metadata
+   ON TABLE source FLEXIBLE TYPE option<object>;`) and
+   `migrations/43_down.surrealql` (`REMOVE FIELD IF EXISTS metadata
+   ON TABLE source;`), mirroring the pattern used for
+   `source_folder.metadata` / `pipeline_cache.metadata` in
+   migration 26.
+
+2. **Falsy-zero threshold bug fixed** in
+   `apps/app-main/src/app_main/services/source_extractor.py:359-366`.
+   The previous code used
+   `float(getattr(...) or DEFAULT_THRESHOLD)`, which silently
+   demoted `docling_min_confidence=0.0` (a legal value meaning
+   "always use docling, never fall back") to the 0.95 default
+   because Python treats `0.0` as falsy. Replaced with explicit
+   `value if value is not None else DEFAULT_THRESHOLD`. Regression
+   test added: `test_auto_respects_threshold_zero_never_falls_back`
+   in `apps/app-main/tests/test_source_processing_service.py` and
+   `test_threshold_zero_keeps_docling_no_fallback` in
+   `apps/app-main/tests/test_auto_fallback.py`.
+
+3. **Docs corrected**:
+   - `packages/shared/src/shared/models/source.py` — model
+     docstring + `ensure_metadata_dict` docstring updated to
+     reference migration #43 instead of "schemaless tables".
+   - `docs/tracks/A-mineru/status.md` — "Modified" line for
+     `source.py` and caveat #4 corrected; new "Created" entry
+     for migration #43.
+
+4. **Integration test added**: `apps/app-main/tests/test_metadata_persistence_integration.py`
+   exercises the actual `SourceRepository.update()` path against a
+   real `SourceRepository` (not a mocked-out `repo.update`) with
+   `execute_query` patched at the lowest level. Verifies that
+   `Source.metadata` containing the four provenance keys round-trips
+   to the SurrealQL UPDATE call payload — i.e., the repository layer
+   does not strip the field. **Plus** a static-validation test that
+   parses `migrations/43.surrealql` and asserts it declares
+   `metadata` on the `source` table as a flexible object — so a
+   future accidental removal trips immediately. See "Testing gap"
+   note below for what this does NOT cover.
+
+5. **Testing gap** (acknowledged, not silently swallowed): the
+   project has no live-SurrealDB integration test infrastructure
+   (no testcontainer / docker-compose plumbing inside the test
+   suite). A true round-trip test — `INSERT → DEFINE FIELD
+   accepts → SELECT round-trips` — would require either
+   `pytest-docker` (not in workspace deps) or the unreleased
+   in-memory SurrealDB driver (not available in our pinned
+   `surrealdb-python` version, which only accepts `ws://`/`http://`
+   URLs). The static-validation test catches the most likely
+   regression (someone deleting the migration); the repository-layer
+   test catches "did the metadata dict actually reach the UPDATE
+   payload"; **the live `SCHEMAFULL` round-trip is owed to Phase
+   A.3 Playwright**, which will drive a real PDF through the API
+   against a real SurrealDB and inspect the persisted row.
+
+### Tests run (attempt 2)
+
+- `uv run --project apps/app-main pytest apps/app-main/tests/` →
+  **349 passed** (attempt 1: 341 — delta +8: one threshold-zero
+  regression in `test_auto_fallback.py`, one threshold-zero
+  regression in `test_source_processing_service.py`, and six new
+  integration tests in `test_metadata_persistence_integration.py`).
+- `uv run --project packages/shared pytest packages/shared/tests/` →
+  **105 passed** (unchanged — no shared-package code changes
+  beyond docstrings).
+- `uv run --project packages/surrealdb-service pytest
+  packages/surrealdb-service/tests/` → **45 passed** (unchanged —
+  the new migration is discovered correctly).
+- `cd frontend && npx tsc --noEmit` → **clean** (unchanged from
+  attempt 1; no frontend changes).
+
+### Acceptance criteria status (attempt 2 delta)
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 7 | Threshold override respected — including 0.0 (revised) | **Done** — added `test_auto_respects_threshold_zero_never_falls_back` (extractor) + `test_threshold_zero_keeps_docling_no_fallback` (orchestrator). |
+| 8 | `Source.metadata` after auto-extraction contains the four provenance keys | **Done at repo-layer + static-migration layers** — `test_metadata_persistence_integration.py` exercises the real `SourceRepository.update()` code path; live SurrealDB round-trip deferred to A.3 Playwright (see "Testing gap" above). |
 

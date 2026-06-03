@@ -339,3 +339,37 @@ async def test_default_threshold_used_when_not_provided(tmp_path):
         fake_pdf, docling_client=docling, mineru_client=mineru
     )
     assert score.threshold == DEFAULT_THRESHOLD
+
+
+@pytest.mark.asyncio
+async def test_threshold_zero_keeps_docling_no_fallback(tmp_path):
+    """Regression for attempt-1 Blocker #2: threshold=0.0 is a legal
+    "always-accept docling, never fall back" signal. Even a scanned
+    low-quality docling result (which would normally trigger fallback
+    at the 0.95 default) must stay with docling when the caller
+    explicitly sets the threshold to 0.0.
+    """
+    docling_result = FakeIngestionResult(document=_low_quality_document(3))
+    mineru_result = FakeIngestionResult(document=_high_quality_document(3))
+    docling = _client_returning(docling_result)
+    mineru = _client_returning(mineru_result)
+
+    fake_pdf = tmp_path / "scan.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.4 fake")
+
+    chosen, engine, score = await extract_with_auto_fallback(
+        fake_pdf,
+        docling_client=docling,
+        mineru_client=mineru,
+        threshold=0.0,
+    )
+
+    assert engine == "docling", (
+        f"Expected docling at threshold 0.0, got {engine} "
+        f"(overall {score.overall:.3f})"
+    )
+    assert chosen is docling_result
+    assert score.threshold == 0.0
+    assert score.decision == "accept"
+    # MinerU must not have been called — the whole point of threshold=0.0.
+    mineru.process.assert_not_called()

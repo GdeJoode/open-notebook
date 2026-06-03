@@ -126,9 +126,13 @@ class Source(ObjectModel):
     #   extraction_confidence           float in [0, 1] — docling score
     #   extraction_confidence_signals   per-signal breakdown for the UI tooltip
     #   extraction_fallback_triggered   bool — true when auto-mode re-routed
-    # Additive + non-breaking: legacy sources without this field deserialise
-    # with the default empty dict (no schema migration needed thanks to
-    # SurrealDB's permissive schemaless tables).
+    # The `source` table is SCHEMAFULL (migration 1), so this field is
+    # declared in `migrations/43.surrealql` as
+    # `FLEXIBLE TYPE option<object>` to accept arbitrary additive keys
+    # without further schema bumps. Legacy rows written before #43 read
+    # back as NONE/missing and deserialise via the Pydantic default
+    # (`Field(default_factory=dict)`) plus the `ensure_metadata_dict`
+    # validator below.
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="Per-source metadata bag (extraction confidence, parser engine used, etc.)",
@@ -149,10 +153,11 @@ class Source(ObjectModel):
     def ensure_metadata_dict(cls, v: Any) -> Dict[str, Any]:
         """Defensively coerce legacy/null metadata into an empty dict.
 
-        Surreal records written before Phase A.1c don't have this field;
-        they deserialise with the default. But if the column ever lands
-        in the DB with an explicit ``NULL`` or non-dict value, Pydantic
-        would refuse to parse. Coerce to ``{}`` for resilience.
+        Surreal records written before migration #43 (the migration
+        that declared this field) read back as NONE; they deserialise
+        with the default. Should the column ever land in the DB with
+        an explicit ``NULL`` or non-dict value, Pydantic would refuse
+        to parse. Coerce to ``{}`` for resilience.
         """
         if v is None:
             return {}
