@@ -10,15 +10,36 @@ off the next phase.
 
 **Branch**: `track/a-playwright` (pushed to origin; PR creation is up to the orchestrator)
 
-**Commits** (3, oldest → newest):
+**Commits** (oldest → newest):
 
 | Hash | Message |
 |------|---------|
 | `670cfa1` | `chore(frontend): add Playwright config + scripts + devDep (A.0)` |
 | `444e86e` | `test(frontend): smoke E2E spec + shared helper skeleton (A.0)` |
-| `da3b9e3` | `ci: add Playwright E2E workflow for PRs touching frontend/apps/services (A.0)` |
+| `47b60ee` | `docs(track-a): pointer to E2E README + status.md for Phase A.0 (A.0)` |
+| _(next)_ | `ci: stage Playwright E2E workflow as pending artifact (A.0)` (this commit, see "Pending workflow file" below) |
 
-(Plus a docs-only commit once this status file + README pointer land.)
+### IMPORTANT — Pending workflow file (CI gate)
+
+The CI workflow content lives at **`docs/tracks/A-mineru/e2e-workflow.yml.pending`**
+rather than its canonical destination `.github/workflows/e2e.yml`. Reason: the
+implementer's PAT lacks the `workflow` OAuth scope required by GitHub to create
+or update files under `.github/workflows/` via git push or the contents REST API.
+
+**Action required by orchestrator (one-time, with a workflow-scoped token)**:
+
+```bash
+git checkout track/a-playwright
+git pull
+git mv docs/tracks/A-mineru/e2e-workflow.yml.pending .github/workflows/e2e.yml
+git commit -m "ci: install Playwright E2E workflow at canonical path (A.0)"
+git push
+```
+
+The file is byte-identical to what the implementer authored — no review delta
+between staging path and final path. The acceptance criterion #4 ("CI workflow
+runs Playwright on a PR touching `frontend/`") only fires once the file lives
+under `.github/workflows/`.
 
 ### What was done
 
@@ -37,13 +58,15 @@ off the next phase.
   and asserts the appropriate UI is visible. Doubles as install-validation.
 - `frontend/e2e/README.md` — local setup, running, debugging, reports,
   authoring new specs, CI pointer.
-- `.github/workflows/e2e.yml` — runs on PRs touching `frontend/`,
+- `docs/tracks/A-mineru/e2e-workflow.yml.pending` — **staged** GitHub Actions
+  workflow; must be moved to `.github/workflows/e2e.yml` by the orchestrator
+  (see "Pending workflow file" above). Runs on PRs touching `frontend/`,
   `apps/app-main/`, `services/`, `packages/`, the workflow itself, or
-  `Dockerfile` / `docker-compose.yml`. Concurrency-cancels in-flight
-  runs on the same ref. Caches npm + Playwright browsers. Brings up
-  GPU-free services (`surrealdb` + `open_notebook`), polls
-  `http://localhost:8502` for readiness, then runs `npm run e2e`.
-  Uploads the HTML report (always) and traces + compose logs (on failure).
+  `Dockerfile` / `docker-compose.yml`. Concurrency-cancels in-flight runs
+  on the same ref. Caches npm + Playwright browsers. Brings up GPU-free
+  services (`surrealdb` + `open_notebook`), polls `http://localhost:8502`
+  for readiness, then runs `npm run e2e`. Uploads the HTML report (always)
+  and traces + compose logs (on failure).
 
 **Modified**:
 
@@ -62,7 +85,7 @@ off the next phase.
 | 1 | `cd frontend && npm install && npm run e2e:install` succeeds | **Partial** | `npm install` validated locally (`@playwright/test 1.60.0` resolved). `npm run e2e:install` not executed in this sandbox (would download Chromium + sudo for system deps). CI exercises the equivalent step on every PR. |
 | 2 | `npm run e2e` runs the smoke spec and passes against `http://localhost:8502` | **Not validated locally** | Docker-compose stack is not guaranteed to be up in this sandbox. The CI workflow validates this on PR. Local validation: `npx playwright test --list` succeeds and discovers exactly the smoke spec, proving config + spec are well-formed. |
 | 3 | Failed test produces an HTML report under `playwright-report/` | **Configured** | `reporter: ['html', { open: 'never' }]` in `playwright.config.ts`. Cannot be exercised without a live failure, but the config is the canonical Playwright pattern. |
-| 4 | CI workflow runs Playwright on a PR touching `frontend/` | **Implemented** | `.github/workflows/e2e.yml`. Will be exercised by the PR that lands this branch (which itself touches `frontend/`). |
+| 4 | CI workflow runs Playwright on a PR touching `frontend/` | **Implemented, install pending** | Workflow content authored at `docs/tracks/A-mineru/e2e-workflow.yml.pending`. Orchestrator must `git mv` it to `.github/workflows/e2e.yml` and push with a workflow-scoped token (see "Pending workflow file" section). Will then be exercised by the next PR touching `frontend/`. |
 | 5 | README documents how to run locally | **Done** | `frontend/e2e/README.md` (canonical) + top-level `README.md` pointer. |
 
 ### What was NOT validated
