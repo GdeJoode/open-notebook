@@ -355,6 +355,7 @@ Thanks to the [Esperanto](https://github.com/lfnovo/esperanto) library, we suppo
 ### For Contributors
 - **[🏗️ Architecture](ARCHITECTURE.md)** - Internal structure: apps / packages / pipelines / services
 - **[🛠️ Refactor Plan](docs/REFACTOR_PLAN.md)** - Recent refactor history and rationale
+- **[🧪 Running E2E tests](frontend/e2e/README.md)** - Playwright-driven browser tests against a live docker-compose stack
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
