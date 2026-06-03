@@ -396,3 +396,124 @@ with docling, no PdfChunkViewer UX regression.
 8. **PR creation**: branch pushed but no PR is opened — that's the
    orchestrator's responsibility after review.
 
+
+---
+
+## Phase A.1b — IMPLEMENTED (2026-06-03)
+
+**Branch**: `track/a-mineru-dispatcher` (pushed to origin; PR creation is up to the orchestrator)
+
+**Commits** (oldest → newest):
+
+| Hash | Message |
+|------|---------|
+| `7ebd8bf` | `feat(settings): rename default_content_processing_engine_doc to parser_engine (A.1b)` |
+| `13efe76` | `feat(parsing): add parser engine dispatcher (A.1b)` |
+| `180d415` | `feat(extractor): dispatch _process_file on parser_engine + record engine used (A.1b)` |
+| `d37c322` | `feat(api,frontend): parser_engine override + frontend rename (A.1b)` |
+
+### Acceptance criteria status
+
+1. **`PUT /api/settings` round-trip with `parser_engine`** ✅
+   Backend `SettingsResponse` / `SettingsUpdate` carry `parser_engine` and
+   `mineru_supported_extensions`; `test_settings_router.py` asserts the new
+   field on GET. The ContentSettings model accepts `parser_engine` directly.
+2. **`parser_engine="docling"` default keeps existing behaviour** ✅
+   Mock-based test `test_records_parser_engine_used_in_metadata` confirms the
+   default path still calls `IngestionWorkflow` and records
+   `metadata["parser_engine_used"] = "docling"`. (Bit-identical regression
+   sample snapshot is deferred to integration time — pending Docker compose
+   stack; we have no recorded fixture today.)
+3. **`parser_engine="mineru"` calls MineruHttpClient.process once + persists metadata** ✅
+   `test_routes_to_mineru_when_parser_engine_mineru` asserts `process` is
+   awaited exactly once and `metadata["parser_engine_used"] == "mineru"`.
+4. **`parser_engine="mineru"` + unsupported extension falls back to docling** ✅
+   `test_falls_back_to_docling_for_unsupported_mineru_ext` confirms the
+   MinerU client is never instantiated for `.html`, the docling path runs,
+   and the dispatcher logs at INFO ("MinerU does not support .html…").
+5. **Per-source `ReprocessRequest.parser_engine` override** ✅
+   Field added (default `None`). Flows through existing
+   `processing_overrides` plumbing in `SourceProcessor.process_source`
+   which already merges per-call overrides onto `ContentSettings`. The
+   override is end-to-end-exercisable through `POST /api/sources/{id}/reprocess`.
+6. **`select_parser_engine` ≥90% coverage** ✅
+   97% line coverage (32 test cases in `test_engine_dispatcher.py`).
+
+### Migration
+
+Added `migrations/42.surrealql` + `migrations/42_down.surrealql`:
+
+- **42 (up)**: Idempotent rewrite of `open_notebook:content_settings` —
+  copies the old `default_content_processing_engine_doc` value to
+  `parser_engine` (with old `"auto"` → new `"docling"` because the
+  semantics changed); fills `mineru_supported_extensions` default;
+  UNSETs the obsolete field.
+- **42 (down)**: Restores `default_content_processing_engine_doc` from
+  `parser_engine` (new `"mineru"` maps back to `"docling"` so the
+  downgraded app boots cleanly); UNSETs the new fields.
+
+Each step is gated on field state so re-running the migration is a no-op.
+
+### Files created
+
+- `apps/app-main/src/app_main/services/parsing/engine_dispatcher.py` (97% covered)
+- `apps/app-main/tests/test_engine_dispatcher.py` (32 cases)
+- `migrations/42.surrealql` + `migrations/42_down.surrealql`
+
+### Files modified
+
+- `packages/shared/src/shared/models/settings.py` — rename + new
+  `mineru_supported_extensions` field
+- `packages/shared/tests/test_models.py`, `tests/test_domain.py` — field rename
+- `apps/app-main/src/app_main/api/schemas.py` — `SettingsResponse` +
+  `SettingsUpdate`
+- `apps/app-main/src/app_main/api/routers/sources_processing.py` —
+  `ReprocessRequest.parser_engine` override
+- `apps/app-main/src/app_main/services/source_extractor.py` — dispatcher
+  wired into `_process_file`; `metadata["parser_engine_used"]` recorded
+- `apps/app-main/src/app_main/services/parsing/__init__.py` — re-exports
+- `apps/app-main/tests/test_settings_router.py` — field rename
+- `apps/app-main/tests/test_source_processing_service.py` — +4 routing tests
+- `frontend/src/lib/types/api.ts` — `parser_engine` + `mineru_supported_extensions`
+- `frontend/src/app/(dashboard)/settings/components/SettingsForm.tsx` — field rename
+  (UI revamp deferred to A.2; current options remain Docling + Simple)
+- `frontend/src/components/sources/steps/ProcessingConfigStep.tsx` — field rename
+- `docs/development/api-reference.md` — API docs reflect new field
+
+### Tests run
+
+- `uv run --project apps/app-main pytest apps/app-main/tests/` → **299 passed**
+  (up from 263 in A.1a; +32 dispatcher + 4 routing tests + minor renames)
+- `uv run --project packages/shared pytest packages/shared/tests/` → **101 passed**
+- `cd frontend && npx tsc --noEmit` → **0 errors**
+
+### Notes / caveats
+
+1. **"simple" engine** is preserved as a value but currently routes
+   through Docling because there is no separate simple-extraction
+   implementation. Behaviour is unchanged from before A.1b. A real
+   simple-only path can land in a future refactor without touching the
+   dispatcher contract.
+
+2. **"auto" engine** is in the enum + selectable on the form
+   schema, but the dispatcher resolves it to Docling in A.1b. The
+   confidence-driven fallback ships in A.1c by swapping the `"auto"`
+   branch inside `select_parser_engine` (or one layer up in
+   `SourceExtractor`). The pinned test
+   `test_auto_setting_resolves_to_docling_in_a1b` will turn into the
+   "regression guard" for the A.1c upgrade.
+
+3. **Settings form UI is intentionally minimal in A.1b**. The
+   options dropdown still shows Docling + Simple only. MinerU and Auto
+   plus the confidence slider land in A.2 along with the badge and
+   the MinerU service health chip. The renamed field is wired through
+   so save/load round-trips work today.
+
+4. **Migration is idempotent but not yet executed in CI**. The
+   SurrealQL is shape-checked but not stack-tested. First-boot of the
+   compose stack with this branch will exercise it; orchestrator may
+   want to run an integration smoke before merging if there is real
+   data in any running database.
+
+5. **No PR created** — branch pushed for orchestrator review.
+
