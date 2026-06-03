@@ -64,8 +64,13 @@ export interface SourceStatusResponse {
 }
 
 export interface SettingsResponse {
-  // Document Engine (simplified - GPU/VLM controlled via advanced settings)
-  default_content_processing_engine_doc?: 'auto' | 'docling' | 'simple'
+  // Document Parser Engine (renamed from default_content_processing_engine_doc in A.1b, Q-A-6)
+  // Values: 'simple' | 'docling' | 'mineru' | 'auto'.
+  // 'auto' currently routes to docling; confidence-driven fallback ships in A.1c.
+  parser_engine?: 'simple' | 'docling' | 'mineru' | 'auto'
+  // Extensions that route to MinerU when parser_engine selects it.
+  // Other extensions fall back to Docling (with INFO log on the backend).
+  mineru_supported_extensions?: string[]
   default_content_processing_engine_url?: 'auto' | 'firecrawl' | 'jina' | 'simple'
   default_embedding_option?: 'ask' | 'always' | 'never'
   auto_delete_files?: 'yes' | 'no'
