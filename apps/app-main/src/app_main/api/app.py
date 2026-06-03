@@ -140,6 +140,7 @@ def create_app() -> FastAPI:
         embedding,
         embedding_rebuild,
         episode_profiles,
+        health,
         insights,
         knowledge_graph,
         models,
@@ -204,6 +205,7 @@ def create_app() -> FastAPI:
     application.include_router(
         services_proxy.router, prefix="/api", tags=["services"]
     )
+    application.include_router(health.router, prefix="/api", tags=["health"])
 
     # --- Exception Handlers ---
     @application.exception_handler(NotFoundError)
