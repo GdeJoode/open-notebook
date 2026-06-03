@@ -132,7 +132,15 @@ class SourceProcessor:
         source: Source,
         extracted: ExtractionResult,
     ) -> Source:
-        """Persist extracted content back to the source record."""
+        """Persist extracted content back to the source record.
+
+        Lifts a curated subset of ``ExtractionResult.metadata`` onto the
+        Source-level ``metadata`` dict (Phase A.1c, Q-A-3) so the UI can
+        render a "parsed by MinerU (auto-fallback)" badge and tooltip.
+        Only the parser-engine-provenance keys are persisted at the
+        Source level — large per-element bags stay on the
+        ExtractionResult so the DB row doesn't bloat.
+        """
         update_data: Dict[str, Any] = {
             "asset": Asset(
                 url=extracted.url,
@@ -143,8 +151,28 @@ class SourceProcessor:
         if extracted.title:
             update_data["title"] = strip_null_bytes(extracted.title)
 
-        output_dir = (extracted.metadata or {}).get("output_directory")
+        extraction_metadata = extracted.metadata or {}
+        output_dir = extraction_metadata.get("output_directory")
         if output_dir:
             update_data["output_directory"] = output_dir
+
+        # Merge parser-engine provenance onto Source.metadata. Keep keys
+        # consistent with the UI badge contract in Phase A.2:
+        #   parser_engine_used, extraction_confidence,
+        #   extraction_confidence_signals, extraction_fallback_triggered.
+        # Anything else (output_directory, markdown_path, processing_time)
+        # is already lifted onto top-level Source fields elsewhere.
+        existing_metadata: Dict[str, Any] = dict(source.metadata or {})
+        provenance_keys = (
+            "parser_engine_used",
+            "extraction_confidence",
+            "extraction_confidence_signals",
+            "extraction_fallback_triggered",
+        )
+        for key in provenance_keys:
+            if key in extraction_metadata:
+                existing_metadata[key] = extraction_metadata[key]
+        if existing_metadata != (source.metadata or {}):
+            update_data["metadata"] = existing_metadata
 
         return await self.source_repo.update(source.id, update_data)

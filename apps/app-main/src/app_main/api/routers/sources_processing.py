@@ -31,6 +31,16 @@ class ReprocessRequest(BaseModel):
         description="Override the global parser engine for this run (simple | docling | mineru | auto)",
     )
 
+    # Docling confidence threshold override (Phase A.1c)
+    # Only used when parser_engine resolves to "auto". None means "use
+    # ContentSettings.docling_min_confidence" (default 0.95).
+    docling_min_confidence: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Override the auto-mode confidence threshold for this run",
+    )
+
     # OCR
     docling_ocr_engine: Optional[str] = Field("easyocr", description="OCR engine: easyocr, rapidocr, tesseract")
     docling_ocr_languages: Optional[list[str]] = Field(["en", "nl"], description="OCR languages")

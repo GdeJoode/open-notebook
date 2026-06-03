@@ -120,6 +120,20 @@ class Source(ObjectModel):
         None, description="Link to processing job/command"
     )
 
+    # Per-source extraction provenance bag (Phase A.1c, Q-A-3).
+    # Keys currently written by the auto-fallback path:
+    #   parser_engine_used              "docling" | "mineru" | "whisperx"
+    #   extraction_confidence           float in [0, 1] — docling score
+    #   extraction_confidence_signals   per-signal breakdown for the UI tooltip
+    #   extraction_fallback_triggered   bool — true when auto-mode re-routed
+    # Additive + non-breaking: legacy sources without this field deserialise
+    # with the default empty dict (no schema migration needed thanks to
+    # SurrealDB's permissive schemaless tables).
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Per-source metadata bag (extraction confidence, parser engine used, etc.)",
+    )
+
     @field_validator("topics", mode="before")
     @classmethod
     def ensure_topics_list(cls, v: Any) -> List[str]:
@@ -129,3 +143,19 @@ class Source(ObjectModel):
         if isinstance(v, str):
             return [v]
         return list(v)
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def ensure_metadata_dict(cls, v: Any) -> Dict[str, Any]:
+        """Defensively coerce legacy/null metadata into an empty dict.
+
+        Surreal records written before Phase A.1c don't have this field;
+        they deserialise with the default. But if the column ever lands
+        in the DB with an explicit ``NULL`` or non-dict value, Pydantic
+        would refuse to parse. Coerce to ``{}`` for resilience.
+        """
+        if v is None:
+            return {}
+        if isinstance(v, dict):
+            return v
+        return {}

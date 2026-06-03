@@ -41,6 +41,17 @@ class ContentSettings(RecordModel):
         description="Extensions routed to MinerU when parser_engine selects it",
     )
 
+    # Confidence threshold for the parser_engine="auto" fallback (Phase A.1c).
+    # When the docling extraction's confidence score drops below this value,
+    # the auto-fallback orchestrator re-runs the document through MinerU.
+    # 0.95 is the roadmap default; Phase A.3 tuning may revise it.
+    docling_min_confidence: Optional[float] = Field(
+        0.95,
+        ge=0.0,
+        le=1.0,
+        description="Confidence threshold below which auto-mode falls back to MinerU",
+    )
+
     default_content_processing_engine_url: Optional[
         Literal["auto", "firecrawl", "jina", "simple"]
     ] = Field("auto", description="Default Content Processing Engine for URLs")

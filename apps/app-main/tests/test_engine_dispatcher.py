@@ -107,7 +107,14 @@ class TestMineruSetting:
 
 
 class TestAutoSetting:
-    """In A.1b ``auto`` is identical to docling. A.1c upgrades this branch."""
+    """``auto`` resolves to docling here; the real fallback lives in
+    ``app_main.services.parsing.auto_fallback`` (A.1c) and is invoked
+    by SourceExtractor before consulting this dispatcher.
+
+    Keeping the dispatcher pure means callers that don't care about
+    auto-fallback (per-file routing, simple dispatcher tests) still
+    get a single concrete engine back.
+    """
 
     def test_auto_resolves_to_docling(self):
         assert select_parser_engine("auto", Path("doc.pdf")) == "docling"

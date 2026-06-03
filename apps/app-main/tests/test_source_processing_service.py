@@ -396,27 +396,203 @@ class TestProcessFile:
         assert result.metadata["parser_engine_used"] == "docling"
 
     @pytest.mark.asyncio
-    async def test_auto_setting_resolves_to_docling_in_a1b(
+    async def test_auto_high_confidence_keeps_docling(
         self, extractor, tmp_path
     ):
-        """Phase A.1b: parser_engine='auto' behaves like 'docling'.
-
-        A.1c will replace this with the confidence-based fallback; this
-        test pins the A.1b behaviour so the change is intentional.
+        """Phase A.1c: parser_engine='auto' + high-confidence docling
+        result ⇒ MinerU is not called and metadata says docling.
         """
-        fake_result = FakeIngestionResult()
-        test_file = tmp_path / "doc.pdf"
+        # High-quality fake document: many pages, dense text, headings.
+        pages: list[FakePage] = []
+        for idx in range(1, 6):
+            elements = [
+                FakeElement(
+                    content="Heading",
+                    element_type=MagicMock(value="heading"),
+                    page=idx,
+                ),
+                FakeElement(
+                    content="Title",
+                    element_type=MagicMock(value="title"),
+                    page=idx,
+                ),
+            ]
+            for _ in range(5):
+                elements.append(
+                    FakeElement(
+                        content="paragraph",
+                        element_type=MagicMock(value="paragraph"),
+                        page=idx,
+                    )
+                )
+            pages.append(FakePage(page_number=idx, elements=elements))
+
+        good_doc = FakeDocument(
+            title="Good doc",
+            full_text="x" * (2500 * 5),
+            pages=pages,
+        )
+        # Attach attributes the confidence scorer reads.
+        good_doc.page_count = 5
+        good_doc.all_tables = []
+        good_doc.all_images = []
+
+        fake_result = FakeIngestionResult(document=good_doc)
+        test_file = tmp_path / "paper.pdf"
         test_file.write_bytes(b"%PDF-1.4 fake")
 
-        with patch("ingestion.workflow.IngestionWorkflow") as MockWorkflow:
-            MockWorkflow.return_value.process = MagicMock(return_value=fake_result)
+        mineru_mock_client = MagicMock()
+        mineru_mock_client.process = AsyncMock(return_value=fake_result)
+        mineru_module = MagicMock()
+        mineru_module.MineruHttpClient = MagicMock(return_value=mineru_mock_client)
 
-            result = await extractor._process_file(
-                file_path=str(test_file),
-                content_settings=_make_settings(parser_engine="auto"),
-            )
+        with patch.dict(
+            "sys.modules",
+            {"app_main.services.mineru_http_client": mineru_module},
+        ):
+            with patch("ingestion.workflow.IngestionWorkflow") as MockWorkflow:
+                MockWorkflow.return_value.process = MagicMock(return_value=fake_result)
 
+                result = await extractor._process_file(
+                    file_path=str(test_file),
+                    content_settings=_make_settings(parser_engine="auto"),
+                )
+
+        # MinerU must not have been called for a high-confidence doc.
+        mineru_mock_client.process.assert_not_called()
         assert result.metadata["parser_engine_used"] == "docling"
+        assert result.metadata["extraction_fallback_triggered"] is False
+        assert 0.0 <= result.metadata["extraction_confidence"] <= 1.0
+        assert "extraction_confidence_signals" in result.metadata
+
+    @pytest.mark.asyncio
+    async def test_auto_low_confidence_falls_back_to_mineru(
+        self, extractor, tmp_path
+    ):
+        """Phase A.1c: parser_engine='auto' + low-confidence docling ⇒
+        MinerU is called and metadata reports the fallback.
+        """
+        # Low-quality document: minimal text, no structure.
+        low_doc = FakeDocument(
+            title="Scan",
+            full_text="x" * 50,
+            pages=[FakePage(
+                page_number=1,
+                elements=[FakeElement(
+                    content="ocr",
+                    element_type=MagicMock(value="text"),
+                    page=1,
+                    bbox=None,
+                    section_level=0,
+                )],
+            )],
+        )
+        low_doc.page_count = 1
+        low_doc.all_tables = []
+        low_doc.all_images = []
+        # Mark the element as OCR-sourced with low confidence so the
+        # OCR signal pulls the overall score under the threshold.
+        low_doc.pages[0].elements[0].source = "ocr"
+        low_doc.pages[0].elements[0].confidence = 0.4
+
+        docling_result = FakeIngestionResult(document=low_doc)
+        mineru_result = FakeIngestionResult()  # default fake doc
+        test_file = tmp_path / "scan.pdf"
+        test_file.write_bytes(b"%PDF-1.4 fake")
+
+        mineru_mock_client = MagicMock()
+        mineru_mock_client.process = AsyncMock(return_value=mineru_result)
+        mineru_module = MagicMock()
+        mineru_module.MineruHttpClient = MagicMock(return_value=mineru_mock_client)
+
+        with patch.dict(
+            "sys.modules",
+            {"app_main.services.mineru_http_client": mineru_module},
+        ):
+            with patch("ingestion.workflow.IngestionWorkflow") as MockWorkflow:
+                MockWorkflow.return_value.process = MagicMock(return_value=docling_result)
+
+                result = await extractor._process_file(
+                    file_path=str(test_file),
+                    content_settings=_make_settings(parser_engine="auto"),
+                )
+
+        mineru_mock_client.process.assert_awaited_once()
+        assert result.metadata["parser_engine_used"] == "mineru"
+        assert result.metadata["extraction_fallback_triggered"] is True
+
+    @pytest.mark.asyncio
+    async def test_auto_respects_docling_min_confidence_override(
+        self, extractor, tmp_path
+    ):
+        """Phase A.1c acceptance criterion #7: a higher
+        ``docling_min_confidence`` override on reprocess raises the bar
+        for that one extraction.
+        """
+        # Build a "good but not perfect" doc — let image-text ratio dent
+        # the score so a 0.99 bar can flip it to fallback.
+        pages: list[FakePage] = []
+        for idx in range(1, 4):
+            elements = [
+                FakeElement(
+                    content="Heading",
+                    element_type=MagicMock(value="heading"),
+                    page=idx,
+                ),
+            ]
+            for _ in range(2):
+                elements.append(FakeElement(
+                    content="para",
+                    element_type=MagicMock(value="paragraph"),
+                    page=idx,
+                ))
+            pages.append(FakePage(
+                page_number=idx,
+                elements=elements,
+                images=[FakeElement(
+                    content="img",
+                    element_type=MagicMock(value="image"),
+                    page=idx,
+                ) for _ in range(3)],
+            ))
+        mid_doc = FakeDocument(
+            title="Mid",
+            full_text="x" * (2500 * 3),
+            pages=pages,
+        )
+        mid_doc.page_count = 3
+        mid_doc.all_tables = []
+        mid_doc.all_images = [FakeElement() for _ in range(3 * 3)]
+
+        docling_result = FakeIngestionResult(document=mid_doc)
+        mineru_result = FakeIngestionResult()
+        test_file = tmp_path / "paper.pdf"
+        test_file.write_bytes(b"%PDF-1.4 fake")
+
+        mineru_mock_client = MagicMock()
+        mineru_mock_client.process = AsyncMock(return_value=mineru_result)
+        mineru_module = MagicMock()
+        mineru_module.MineruHttpClient = MagicMock(return_value=mineru_mock_client)
+
+        with patch.dict(
+            "sys.modules",
+            {"app_main.services.mineru_http_client": mineru_module},
+        ):
+            with patch("ingestion.workflow.IngestionWorkflow") as MockWorkflow:
+                MockWorkflow.return_value.process = MagicMock(return_value=docling_result)
+
+                result = await extractor._process_file(
+                    file_path=str(test_file),
+                    content_settings=_make_settings(
+                        parser_engine="auto",
+                        docling_min_confidence=0.99,
+                    ),
+                )
+
+        # At 0.99 bar the mid-quality doc should fall back.
+        mineru_mock_client.process.assert_awaited_once()
+        assert result.metadata["parser_engine_used"] == "mineru"
+        assert result.metadata["extraction_fallback_triggered"] is True
 
     @pytest.mark.asyncio
     async def test_simple_setting_records_docling_engine_used(
@@ -770,6 +946,68 @@ class TestUpdateSource:
         call_args = source_repo.update.call_args
         data = call_args[0][1]
         assert "title" not in data
+
+    @pytest.mark.asyncio
+    async def test_lifts_extraction_metadata_to_source_metadata(
+        self, processor, source_repo
+    ):
+        """Phase A.1c: provenance keys must flow to Source.metadata so
+        the UI badge can render them (Q-A-3).
+        """
+        extracted = ExtractionResult(
+            title="Doc",
+            full_text="content",
+            file_path="/tmp/doc.pdf",
+            metadata={
+                "source_type": "document",
+                "parser_engine_used": "mineru",
+                "extraction_confidence": 0.62,
+                "extraction_confidence_signals": {
+                    "ocr_confidence": 0.4,
+                    "text_density": 0.5,
+                },
+                "extraction_fallback_triggered": True,
+                # Non-provenance noise that must NOT be lifted.
+                "processing_time": 12.3,
+                "markdown_path": "/tmp/doc.md",
+            },
+        )
+        source = _make_source()
+
+        await processor._update_source(source, extracted)
+
+        data = source_repo.update.call_args[0][1]
+        assert "metadata" in data
+        assert data["metadata"]["parser_engine_used"] == "mineru"
+        assert data["metadata"]["extraction_confidence"] == 0.62
+        assert data["metadata"]["extraction_confidence_signals"] == {
+            "ocr_confidence": 0.4,
+            "text_density": 0.5,
+        }
+        assert data["metadata"]["extraction_fallback_triggered"] is True
+        # processing_time / markdown_path are not part of the Source.metadata
+        # provenance contract — they stay on the ExtractionResult only.
+        assert "processing_time" not in data["metadata"]
+        assert "markdown_path" not in data["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_omits_metadata_when_no_provenance_keys(
+        self, processor, source_repo
+    ):
+        """If the ExtractionResult has no provenance keys, don't touch
+        Source.metadata — keeps the DB row minimal for legacy paths.
+        """
+        extracted = ExtractionResult(
+            title="Doc",
+            full_text="content",
+            metadata={"source_type": "document", "processing_time": 5.0},
+        )
+        source = _make_source()
+
+        await processor._update_source(source, extracted)
+
+        data = source_repo.update.call_args[0][1]
+        assert "metadata" not in data
 
 
 # ===========================================================================

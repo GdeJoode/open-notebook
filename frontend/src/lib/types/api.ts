@@ -71,6 +71,10 @@ export interface SettingsResponse {
   // Extensions that route to MinerU when parser_engine selects it.
   // Other extensions fall back to Docling (with INFO log on the backend).
   mineru_supported_extensions?: string[]
+  // Auto-mode confidence threshold (Phase A.1c).
+  // When parser_engine="auto" and the docling confidence drops below this,
+  // the orchestrator re-runs the document through MinerU. Default 0.95.
+  docling_min_confidence?: number
   default_content_processing_engine_url?: 'auto' | 'firecrawl' | 'jina' | 'simple'
   default_embedding_option?: 'ask' | 'always' | 'never'
   auto_delete_files?: 'yes' | 'no'
