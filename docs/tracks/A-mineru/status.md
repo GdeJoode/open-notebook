@@ -17,7 +17,8 @@ off the next phase.
 | `670cfa1` | `chore(frontend): add Playwright config + scripts + devDep (A.0)` |
 | `444e86e` | `test(frontend): smoke E2E spec + shared helper skeleton (A.0)` |
 | `47b60ee` | `docs(track-a): pointer to E2E README + status.md for Phase A.0 (A.0)` |
-| _(next)_ | `ci: stage Playwright E2E workflow as pending artifact (A.0)` (this commit, see "Pending workflow file" below) |
+| `264b9a3` | `ci: stage Playwright E2E workflow as pending artifact (A.0)` (see "Pending workflow file" below) |
+| `1bd5f27` | `docs(track-a): escalation note re missing workflow PAT scope (A.0)` |
 
 ### IMPORTANT — Pending workflow file (CI gate)
 
