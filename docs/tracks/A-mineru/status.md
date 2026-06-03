@@ -312,31 +312,39 @@ with docling, no PdfChunkViewer UX regression.
 
 | # | Criterion | Status | Notes |
 |---|-----------|--------|-------|
-| 1 | `docker compose build mineru` completes; `docker compose up mineru` starts; `GET /health` returns 200 within 60s after first model download | **Build in flight** | The Dockerfile is correct (validated with `docker compose config --services` listing `mineru`); the layered build is mid-way through downloading `mineru[all]` (PyTorch + CUDA libs, network-bound). Reviewer should re-run `docker compose build mineru` locally; expect ~20–40 min cold and a quick rebuild thereafter. **No build error observed.** |
-| 2 | `curl POST /process` with a sample PDF returns valid response with `markdown_path` | **Deferred to live smoke** | `services/mineru/README.md` provides the exact recipe (`docling_input/yardstickbias.pdf` → `mineru_output/yardstickbias/auto/`). The API handler itself is exercised at the unit level by the HTTP-client tests (they verify the response payload contract). |
+| 1 | `docker compose build mineru` completes; `docker compose up mineru` starts; `GET /health` returns 200 within 60s after first model download | **Done** | Build completed locally in ~48 min cold (network-bound; `mineru[all]` is ~5 GB of wheels including PyTorch 2.11, vllm 0.21, transformers 4.57, CUDA-13 libs). Resulting image is 12 GB. `docker compose up -d mineru` brings the container to `Up` state. `curl -sf http://localhost:8104/health` returns `{"status":"ok","service":"mineru"}` in <5 s after startup (no model download required for the health endpoint — that's a CLI invocation concern). |
+| 2 | `curl POST /process` with a sample PDF returns valid response with `markdown_path` | **Deferred to live smoke** | `services/mineru/README.md` provides the exact recipe (`docling_input/yardstickbias.pdf` → `mineru_output/yardstickbias/auto/`). The API handler itself is exercised at the unit level by the HTTP-client tests (they verify the response payload contract). The first `/process` call triggers the MinerU model download (~5–8 GB), which is environment-dependent and not validated in this sandbox; the `mineru_models` named volume persists the download across container restarts. |
 | 3 | `MineruHttpClient().process(Path).success == True` with populated content | **Validated (mocked)** | `test_process_success_returns_ingestion_result_with_document` writes a synthetic MinerU output tree and asserts `result.success=True`, document title + full_text populated, image_paths populated. Live PDF run is the same code path. |
 | 4 | `pytest test_mineru_http_client.py` green; coverage ≥ 70% on `mineru_http_client.py` | **Done** | 12/12 tests pass. Coverage: 98% on `mineru_http_client.py`, 93% on `mineru_layout_parser.py` — combined 94%. |
-| 5 | `open_notebook` service does NOT hard-depend on mineru | **Done** | `depends_on:` lists only `surrealdb` and `docling`; reviewer can validate via `docker compose up -d open_notebook` while `mineru` container is stopped. |
+| 5 | `open_notebook` service does NOT hard-depend on mineru | **Done** | `depends_on:` lists only `surrealdb` and `docling` (validated programmatically via `python3 -c "import yaml; ..."`). `docker compose stop mineru` then keeping `open_notebook` running works in this sandbox. |
 | 6 | `ExtractedElement` instances have populated bboxes (per Q-A-5) | **Done** | Validated by `test_text_levels_map_to_title_heading_and_paragraph` (exact bbox values), `test_table_record_yields_extracted_table_with_rows_and_markdown`, `test_image_and_chart_records_yield_extracted_image_with_resolved_path`, and the pipeline-vs-VLM normalisation tests. Page-furniture types preserved with appropriate `ElementType` (HEADER/FOOTER/FOOTNOTE/CAPTION). |
 
 ### What was validated locally
 
 - `uv run --project apps/app-main pytest apps/app-main/tests/test_mineru_http_client.py apps/app-main/tests/test_mineru_layout_parser.py` → **28/28 passing**, combined coverage 94%.
-- `uv run --project apps/app-main pytest apps/app-main/tests/test_source_processing_service.py` → **35/35 passing** (no regression in the upstream processing pipeline; A.1b is the integration point and lives in the next PR).
+- `uv run --project apps/app-main pytest apps/app-main/tests/` → **263/263 passing** (full app-main suite; no regression in upstream processing pipeline; A.1b is the integration point and lives in the next PR).
 - `docker compose config --services` lists `mineru` alongside the
   other services; YAML is valid.
-- `docker compose build mineru` initiated; image layer at PyTorch +
-  CUDA stack download (network-bound). Reviewer to confirm
-  completion locally; the Dockerfile mirrors the docling pattern
-  exactly so the layer cache will be reusable.
+- `docker compose build mineru` completed in ~48 min wall-clock
+  cold (network-bound `mineru[all]` install). Resulting image
+  `open-notebook-mineru:latest` is 12 GB.
+- `docker compose up -d mineru` brings the container to `Up`
+  state; `curl -sf http://localhost:8104/health` returns 200 with
+  `{"status":"ok","service":"mineru"}` in <5 s.
+- `docker compose stop mineru` while `open_notebook` is configured
+  (no `depends_on` reference to `mineru`) — the main app boot is
+  decoupled from MinerU availability per criterion 5.
 
 ### What was NOT validated (deferred)
 
-- **Live MinerU run against a real PDF** (acceptance criteria 1 + 2).
-  Blocked on completing the `mineru[all]` install (~20–40 min cold
-  network-bound) plus the first model download (~5–8 GB). The
-  schema and code paths are exercised by the unit tests using
-  synthetic fixtures matching the documented schema. Smoke recipe
+- **Live MinerU /process call against a real PDF** (acceptance
+  criterion 2). The first `/process` call triggers the MinerU model
+  download (~5–8 GB from HuggingFace or modelscope, configurable
+  via `MINERU_MODEL_SOURCE`), which is environment-dependent (rate
+  limits, mirror availability, GPU presence). The HTTP contract is
+  exercised by `test_process_success_returns_ingestion_result_with_document`
+  via on-disk fixtures matching the documented schema; the same
+  code path executes against real MinerU output. Smoke recipe
   documented in `services/mineru/README.md`.
 
 ### Caveats & follow-ups
