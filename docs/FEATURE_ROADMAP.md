@@ -1,0 +1,1010 @@
+# Open Notebook — Feature Roadmap (v2)
+
+> **Scope**: doorontwikkeling van open-notebook door cherry-picking uit drie referentie-projecten — `myKG` (knowledge graph extractor), `wiki_llm` (Writer-Evaluator-Editor wiki pipeline), en `llm-wiki` (multi-agent research prompt-kit). Plus uitbreiding tot **headless agent-platform** voor externe integraties (hermes, claude-code, etc.). Open-notebook blijft de **substrate** (Web-UI + SurrealDB + multi-notebook + workspace-monorepo); de drie repos leveren bouwstenen; Track G maakt het aanroepbaar door agents.
+>
+> **Datum**: 2026-06-03 — basis is de post-Phase-7 staat van open-notebook (zie `docs/REFACTOR_PLAN.md`).
+>
+> **Referentie-analyses**: `docs/MYKG_COMPARISON.md` (myKG diepte), `docs/LLM_WIKI_COMPARISON.md` (llm-wiki + wiki_llm).
+>
+> **Status**: V2 — alle Q1-Q9 beslispunten zijn opgelost, Track G (Agent Integration) toegevoegd.
+
+## 0. Architecturale constraints
+
+Elke nieuwe feature respecteert:
+
+1. **Workspace structuur**: nieuwe code in `apps/`, `packages/`, `pipelines/`, of `services/` — niet aan de root.
+2. **Service-naming-conventions** uit `ARCHITECTURE.md`: `*Service` / `*Orchestrator` / `*Processor` / `*Extractor` / `*Repository`.
+3. **DI-container patroon**: alle services via factories in `apps/app-main/src/app_main/dependencies.py`.
+4. **SurrealDB als persistence-laag** (geen filesystem-only state behalve voor zware artifacts zoals media output).
+5. **Job-queue voor langlopende werk** (zie `packages/job-queue`).
+6. **GPU-heavy code in een eigen HTTP service** (zoals docling/whisperx), geen direct linken in app-main.
+7. **MIT-licensed code uit referentie-repos** mag direct geport worden mits attribution in de file-header.
+8. **Agent-first API surface** — elk meaningful capability is via REST aanroepbaar (Track G); UI is één front, niet de enige.
+
+Wat we **niet** overnemen:
+- myKG's pure-CLI / session-dir-state model (in tegenspraak met SurrealDB-persistente notebooks)
+- wiki_llm's `content_new/ → content_processed/` filesystem-routing (we hebben job-queue)
+- llm-wiki's hub/registry concept buiten de UI (in open-notebook is een notebook al de hub)
+
+## 1. Q1-Q9 + G — opgeloste beslispunten
+
+| # | Decision | Samenvatting finaal |
+|---|---|---|
+| Q1 | Obsidian export-stijl | myKG-puur: platte vault `vault/<entity>.md`, filter-defaults `min_conn=5, min_conf=0.9`, handmatige overrides. Notebook-overview + cross-notebook merge zijn aparte features. |
+| Q2 | Repair / cleanup | Full myKG `orphan_connector` port (~1060 LOC) + prune-lifecycle voor blijvende orphans (recoverable archive). LangGraph + lint komen mee met hun parent-features. |
+| Q3 | Quality-gates | Drie lagen: confidence-scoring (always-on, gratis) → Writer-Evaluator-Editor (per-summary opt-in) → Audit (8 concrete checks, 6 LLM-vrij). |
+| Q4 | markdown-hero | Adopt + wrapper-module in `packages/shared/utils/markdown.py`. 6 use-cases ontgrendeld. |
+| Q5 | BM25 fallback | Skip — bestaande hybrid-search heeft al BM25 via SurrealDB. Wel UI-toggle voor text/vector/hybrid modes. |
+| Q6 | Multi-agent research | E1 single-agent + E3 thesis-mode samen; Tavily-first, DuckDuckGo fallback. Plus review-found-sources stap. E2 multi-agent later als optimalisatie. |
+| Q7 | Typed collectors | Geen aparte collector-feature. Wel lichte **binary routing layer**: research papers → Zotero (per-notebook collection), andere binaries → managed disk + link. Strict heuristic met flag-for-review bij twijfel. |
+| Q8 | Schema review UX | Schema-als-artifact (niet-blocking) + soft nudge na Pass 1. **View + edit in V1**. Pass 1 doet schema-validatie + delta-detection bovenop bestaande detector. **Multi-schema sequentieel top-3** met merge-step. |
+| Q9 | Vocabulary stack | TOOI volledig + maandelijks refresh + user-overlay (global + per-notebook) + **Crossref direct** voor research papers. Architecturaal prepared voor ORCID/arXiv/Wikidata. Plus myKG name_normalizer + NL-uitbreiding. |
+| G-Q1 | Agent API auth | Simple API-keys (header-based), per-agent. |
+| G-Q2 | File-watcher | Always-on op conventional path (configurable). |
+| G-Q3 | Conflict resolution | Non-blocking — warning-badge in UI, werk gaat door. |
+| G-Q4 | Summary templates v1 | `literature_note` + `meeting_notes` als eerste, anderen op aanvraag. |
+
+---
+
+## 2. Zeven parallelle tracks
+
+### Track legend
+
+- 🅐 = porting uit **myKG**
+- 🅑 = porting uit **wiki_llm**
+- 🅒 = porting uit **llm-wiki**
+- 📦 = nieuwe workspace member
+
+---
+
+## Track A — Ingestion robustness (MinerU naast docling)
+
+**Vision**: twee parser-routes in de UI (docling/MinerU) + automatische fallback wanneer docling-confidence te laag is.
+
+### A1 — MinerU als parallelle service 📦
+
+**Implementatie**:
+
+1. Nieuwe service: `services/mineru/`
+   - `Dockerfile` op CUDA-base
+   - `api.py` met FastAPI endpoint `POST /parse`
+   - Volume-mount `/data/input` + `/data/output`
+   - Installs `mineru[all]` in een **ephemeral uv-venv** (overnemen van 🅐 myKG's `src/mykg/uv_venv.py::ephemeral_mineru_venv`)
+2. Compose service `mineru:` in `docker-compose.yml` met CUDA reservations
+3. HTTP client: `apps/app-main/src/app_main/services/mineru_http_client.py`
+4. Pipeline integratie: nieuwe content-setting `parser_engine: "docling" | "mineru" | "auto"`
+5. UI: dropdown in Settings + per-source override via `processing_overrides`
+
+**Effort**: 2-3 dagen. **Risico**: 🟡 medium (eerste keer tweede GPU-service).
+
+### A2 — Sequentiële MinerU fallback bij lage docling-confidence
+
+**Confidence-metric** voor docling, geconstrueerd uit 6 signalen:
+
+| Signaal | Gewicht |
+|---|---|
+| OCR-confidence avg | 30% |
+| Text density (chars/page) | 20% |
+| Heading detection rate | 15% |
+| Table parsing success | 15% |
+| Image-to-text ratio | 10% |
+| Element_type onbekend % | 10% |
+
+Threshold default `0.95`, user-configurable. Module: `apps/app-main/src/app_main/services/parsing/confidence.py`.
+
+Implementatie in `SourceExtractor._process_file` (Phase 3 refactor):
+```python
+if parser_engine == "auto":
+    docling_result = await self._extract_with_docling(...)
+    conf = score_docling_extraction(docling_result)
+    if conf < settings.docling_min_confidence:
+        mineru_result = await self._extract_with_mineru(...)
+        return select_best(docling_result, mineru_result)
+    return docling_result
+```
+
+Persisteren confidence in `Source.metadata.extraction_confidence`; UI toont badge bij fallback.
+
+**Effort**: 3-4 dagen + 1-2 weken threshold-tuning op realistische input.
+
+### A3 — Bestaande docling-improvements (nice-to-have)
+
+- Markitdown als 3e parser-optie (lichtgewicht, geen ML). Bron: 🅑 wiki_llm.
+- Ephemeral-venv pattern hergebruiken voor andere optionele heavy deps.
+
+---
+
+## Track B — KG quality (multi-schema + formele discipline)
+
+**Vision**: KG wordt grounded in echte ontology met validatie. Schema is editable in UI. Multi-schema sequentieel voor cross-domain documenten.
+
+### B1 — Two-pass extractie met multi-schema + extension-detection
+
+**Bron**: 🅐 myKG `src/mykg/pass1.py` + `pass2.py`, aangepast aan open-notebook's multi-schema realiteit.
+
+**Architectuur** (zie Sectie 3.1 voor uitgebreide design):
+
+```
+Document ─► Detector (bestaand) ─► Pass 1 (LLM, lichtgewicht)
+                                          │
+                                          ├─ Confirm/refine schema-keuze
+                                          ├─ Coverage-check (% gedekt)
+                                          ├─ Propose extensions
+                                          ▼
+                                  Soft-nudge UI (Q8)
+                                          │
+                                          ▼
+                                   Pass 2 (entity extraction)
+```
+
+**Multi-schema mode** (top-3 schemas applicabel):
+- Sequential 3× Pass 1
+- Soft-nudge cumulatief
+- Sequential 3× Pass 2 met respective accepted extensions
+- Merge-step: cross-pass entity-dedup (via Q9 name-normalizer) + multi-type tagging
+
+**Implementatie**:
+- Module: `pipelines/ontology-extraction/src/ontology_extraction/pass1_schema_validation.py`
+- Module: `pipelines/ontology-extraction/src/ontology_extraction/pass2_typed_extraction.py`
+- Module: `pipelines/ontology-extraction/src/ontology_extraction/multi_schema_orchestrator.py`
+- Storage: nieuwe SurrealDB table `notebook_schema` (per notebook)
+- Storage: `pass1_results` table (coverage, extensions, used)
+
+**Effort**: 1.5-2 weken (vereenvoudigd door multi-schema setup t.o.v. myKG pure-induction).
+
+### B2 — TTL/RDFS export met Protégé-compatibiliteit
+
+**Bron**: 🅐 myKG `src/mykg/ttl_validator.py`.
+
+1. Vervang/aanvul bestaande `packages/ontology-manager/src/ontology_manager/rdf_owl_shacl.py` (en fix bestaande rdflib-import bug uit REFACTOR_PLAN follow-up).
+2. Port `ttl_validator.py` (rdflib syntax + semantische checks).
+3. API endpoint: `GET /api/notebooks/{id}/schema.ttl`.
+4. UI: download-knop + "Edit in Protégé" instructie.
+
+**Effort**: 3-4 dagen.
+
+### B3 — Schema review UX (Q8 finalized)
+
+**Implementation aspects**:
+
+1. **Schema-tab** in notebook-UI (altijd zichtbaar):
+   - Classes + properties browsen
+   - Per-source coverage-stats kolom
+   - Pending extensions sectie
+   - Edit operations: rename, merge, split, delete (V1)
+   - TTL export-knop (via B2)
+
+2. **Soft nudge** na eerste Pass 1:
+   - Dismissible notification: "Schema gegenereerd: N classes, M properties. [Review] [Use as-is]"
+   - `[Use as-is]` is silent default
+   - Per-notebook "don't show again" optie
+
+3. **Optional pause-toggle** (default off):
+   - Per-notebook setting `schema_review_required: bool`
+   - Als true: workflow stopt na Pass 1, wacht op `[Approve]`
+
+4. **Schema-change → re-extract prompt**:
+   - Na schema-edit: "Schema gewijzigd. Bestaande sources re-extracten? [N affected sources]"
+
+**Effort**:
+- Schema-tab view-only: 3-4 dagen
+- Edit operations (rename/merge/delete/split): 1 week
+- Soft-nudge + pause-toggle: 2-3 dagen
+- Schema-change → re-extract flow: 2-3 dagen
+- TTL roundtrip (export → Protégé edit → import): 3-4 dagen
+- **Totaal**: 2.5-3 weken
+
+### B4 — Confidence scoring overal
+
+**Bron**: 🅐 myKG — verspreid over modules.
+
+1. Schema-extensie: `Entity` model krijgt `confidence: float` veld (`packages/shared/.../models/entity.py`).
+2. Idem `Relation`, `Attribute`.
+3. Pass 2 prompts returnen confidence als structured output veld.
+4. UI: progress-bar per entity/relation; filter "Verberg < N".
+5. Synergie: Pass 1's `coverage_pct` is een confidence-score → same data-flow.
+6. Synergie: A2 MinerU-fallback gebruikt zelfde confidence-paradigma.
+
+**Effort**: 1 week (model + prompts + UI tonen + filter).
+
+### B5 — Orphan-connector + prune-lifecycle (Q2 finalized)
+
+**Bron**: 🅐 myKG `src/mykg/orphan_connector.py` (1060 LOC).
+
+**Implementation**:
+
+1. Nieuwe module: `pipelines/entity-filtering/src/entity_filtering/resolution/orphan_connector.py`.
+2. Run na entity-extraction, voor finale dedup.
+3. Heuristic: co-occurrence in zelfde chunk.
+4. LLM-confirm proposed edges.
+5. **Prune-lifecycle**:
+   - 1e run: probeer connect → success of fail
+   - Bij fail: entity status `pending_reconnect`
+   - Bij elke nieuwe source-import in notebook: re-try voor pending entities
+   - Na N pogingen (default 3) of M tijd (default 90 dagen) → status `archived`
+   - Archive is recoverable, niet hard-delete
+6. UI: per-notebook toggle "Auto-reconnect orphans" + dashboard met pending/archived counts.
+7. Audit-laag (F1) surfaces long-pending orphans als action items.
+
+**Effort**: 1.5 weken (port + prune-lifecycle + tests).
+
+### B6 — Cross-notebook graph merge
+
+**Bron**: 🅐 myKG `src/mykg/merger.py` + `merge_orchestrator.py`.
+
+1. API: `POST /api/notebooks/merge` met `{ source_ids, target_id }`.
+2. Backend port van myKG's merger.
+3. UI: "Merge into..." dropdown in notebook-menu.
+
+**Effort**: 1-2 weken.
+
+---
+
+## Track C — Content quality (Writer-Evaluator-Editor + markdown lint)
+
+### C1 — Writer-Evaluator-Editor chain voor summaries
+
+**Bron**: 🅑 wiki_llm `src/pipeline.py` generate-stage.
+
+1. Nieuwe enhancer: `pipelines/summarization/src/summarization/enhancers/writer_evaluator_editor.py`.
+2. Configureerbaar via SummarizationConfig: `enhancer: "writer_evaluator_editor"`.
+3. Wrapt elke strategy (naive/raptor/treekg/refine): final summary door 3-pass review.
+4. **Opt-in** per-call (default off). UI-toggle: "High-quality mode" voor publicatie-rijp content.
+5. Vult de bestaande `chain_of_density.py` / `self_correction.py` stubs.
+
+**Effort**: 1 week (wiki_llm's ~150 LOC port + prompt-tuning).
+
+### C2 — markdown-hero (Q4 finalized)
+
+**Bron**: 🅑 wiki_llm dep.
+
+1. Add `markdown-hero` als dep in `packages/shared/pyproject.toml`.
+2. Wrapper-module: `packages/shared/src/shared/utils/markdown.py` (façade pattern).
+3. 6 integratiepunten over de tijd:
+   - Frontmatter parsing in `pipelines/ingestion` (direct)
+   - `strip()` voor content-hash IDs (C4)
+   - `extract_chunks(purpose="rag")` voor re-imported notes
+   - `markdown_merge` voor summary consolidation
+   - `lint` voor audit-laag (F1)
+   - `word_format` voor .docx export (C3)
+
+**Effort**: 1-1.5 dag wrapper + first integration; andere integraties komen mee met parent-features.
+
+### C3 — Word (.docx) export
+
+Via `markdown_hero.word_format()`.
+
+1. Endpoint: `POST /api/notebooks/{id}/export.docx` (en per-source/summary).
+2. UI: "Export as Word" knop op notebook + source detail-pages.
+
+**Effort**: 2-3 dagen.
+
+### C4 — Deterministic UUID van content-hash
+
+Source-IDs en chunk-IDs uit `sha256(stripped_content)[:16]` i.p.v. path-based.
+
+1. Migration: bestaande IDs behouden via lookup-table; nieuwe extractions content-hash.
+2. Voorkomt ID-changes bij file-rename.
+
+**Effort**: 1-2 dagen + migration script.
+
+---
+
+## Track D — Output rijkdom (Obsidian / TTL / JSONL / NetworkX)
+
+### D1 — Obsidian vault export (Q1 finalized)
+
+**myKG-puur, platte vault.**
+
+1. Endpoint: `POST /api/notebooks/{id}/export-obsidian` → zip-download of direct-write naar configured vault-path.
+2. Per entity: `<vault>/<entity_name>.md`:
+   - **Frontmatter**: `id`, `type`, `confidence`, `external_ids` (TOOI/Crossref URIs), `aliases`, `sources` (citations)
+   - **Body**: attributes als bullet list
+   - **Wikilinks** naar gerelateerde entities (op basis van relations)
+3. Index-bestand `<vault>/README.md` met graph-overzicht.
+4. **Filter-defaults voor auto-pipeline**: `min_connections=5`, `min_confidence=0.9`.
+5. **Handmatige UI** met sliders voor custom thresholds.
+
+**Effort**: 1 week (port + zip-streaming + UI download-knop + filter-vorm).
+
+### D2 — JSONL export (Neo4j/RAG ready)
+
+Streaming JSONL voor Neo4j / RAG-pipelines.
+
+**Effort**: 2-3 dagen.
+
+### D3 — NetworkX export (7 formaten)
+
+GraphML, GEXF, GML, JSON-tree, edge-list, adjacency-list, pickle.
+
+**Effort**: 1-2 dagen — myKG's exporter direct hergebruikbaar.
+
+---
+
+## Track E — Research workflows (E1 + E3 first, E2 later)
+
+### E1 — Single-agent research
+
+**Bron**: 🅒 llm-wiki `research.md` command (vertaald naar Python orchestrator).
+
+**Architectuur**:
+```
+User: "research X" of "thesis: Y"
+        │
+        ▼
+job-queue: JobType.RESEARCH
+        │
+        ▼
+handle_research handler:
+   1. Parse intent (LLM)
+   2. Generate search queries (LLM)
+   3. Tavily search → URL list
+   4. **Review-stap** (Q7-confirmed):
+      User sieve found URLs → keep/discard subset
+   5. Per kept URL: `source_processor.process_source(url=...)`
+      met **binary routing** (Q7):
+        - PDF + paper-heuristic → Zotero collection
+        - other → docling/mineru
+   6. Synthesis-LLM-call → resulterende `Source` type `research_synthesis`
+```
+
+**Web-search**: Tavily-first, DuckDuckGo fallback. Geabstraheerd via `WebSearchClient` interface in `apps/app-main/src/app_main/services/web_search/`.
+
+**UI**: research-modal op notebook-page met query input, source-count slider, depth (quick/standard/deep), mode-select (query/thesis).
+
+### E3 — Thesis-mode
+
+Bovenop E1: query split in for-evidence + against-evidence, parallel searches, verdict-synthesis.
+
+Source-tagging in SurrealDB: `evidence_polarity: "for" | "against" | "neutral"`.
+
+Synthesis-rapport sectie "Voor" / "Tegen" / "Verdict + confidence".
+
+### E2 — Multi-agent (future optimization)
+
+Planning-stap die query opbreekt in 3-7 subqueries → parallelle subagents per subquery → master synthesis.
+
+**Effort gehele Track E**:
+- E1 incl. WebSearchClient + review-step + binary routing: 2.5-3 weken
+- E3 thesis-mode bovenop: 1 week
+- E2 multi-agent (future): 1-2 weken
+- **Direct te leveren**: E1+E3 = 3.5-4 weken
+
+---
+
+## Track F — Operations & quality (audit, librarian, resumable)
+
+### F1 — Audit met 8 concrete checks (Q3 finalized)
+
+**Always-on dashboard widget** (6 LLM-vrije checks):
+1. Citation completeness — entities zonder source-link (error)
+2. Stale source detection — sources > threshold leeftijd (info)
+3. Low-confidence survivors — entities net boven filter (warn)
+4. Long-pending orphans — Q2 prune-candidates (warn)
+5. Community quality — clusters met lage cohesion (info)
+6. Schema drift — veel fallback-type entities (info)
+
+**On-demand "Deep audit"** (LLM-calls):
+7. Conflicting facts — attribute Y=A in S1 vs Y=B in S2 (warn)
+8. Provenance gaps — relations zonder duidelijke source-evidence (warn)
+
+**Optional periodiek background-job** (opt-in per notebook).
+
+**Effort**:
+- Phase 3a (6 LLM-vrije checks + widget): 4-5 dagen
+- Phase 3b (deep audit + checks 7-8): 1 week
+- Phase 3c (background-job): 3-4 dagen
+- **Totaal**: ~2 weken
+
+### F2 — Librarian background-task
+
+🅒 llm-wiki librarian-pattern: cron-style periodic checks per notebook. Bovenop F1.
+
+**Effort**: 1 week.
+
+### F3 — Resumable pipeline / step-level recovery
+
+Source.status fine-grained: `extracted`, `chunked`, `embedded`, `entities_extracted`, `summarized`. Resume vanaf laatste-succesvolle stap.
+
+**Effort**: 1 week.
+
+---
+
+## Track G — Agent Integration & Headless Mode (NEW)
+
+**Vision**: open-notebook als headless backend dat externe agents (hermes, claude-code, cursor, custom) via API kunnen aanroepen voor document-processing, summary-generation, en KG-extractie. Bidirectionele sync met Obsidian-vaults voor cross-front edit-flow.
+
+Zie Sectie 3.3 voor architectuur-deep-dive.
+
+### G1 — Public Agent API
+
+**Endpoints** (versioned `/api/v1/agents/`):
+
+| Endpoint | Doel |
+|---|---|
+| `POST /agents/process-document` | PDF/DOCX/etc. via path of upload → Source met chunks/entities/summary |
+| `POST /agents/process-audio` | Audio via path → transcript + summary |
+| `POST /agents/process-url` | URL → ingest + summary |
+| `POST /agents/generate-summary` | Raw text + template-name → summary |
+| `POST /agents/extract-entities` | Raw text + schema → typed entities |
+| `GET /agents/jobs/{job_id}` | Job status + result |
+| `POST /agents/webhooks` | Register callback URL per agent + event types |
+| `GET /agents/audit-log` | Per-agent audit trail |
+
+**Authentication**: API-keys via `X-API-Key` header. Per-key:
+- `agent_id`
+- Permissions (read-only / write / admin)
+- Rate-limits
+- Audit-log entries
+
+Storage: nieuwe SurrealDB tabel `agent_keys`.
+
+UI: "API Keys" tab in settings — generate, revoke, view audit-log per key.
+
+**OpenAPI spec / Swagger** auto-generated; endpoint `GET /api/v1/agents/openapi.json`.
+
+**Effort**: 1-1.5 week.
+
+### G2 — File-watcher service (always-on)
+
+**Conventional paths** (defaults, configurable):
+- `~/open-notebook/inbox/` — globaal watched
+- `<notebook_data>/<notebook_id>/inbox/` — per-notebook watched
+
+**Mechanisme**:
+- `watchdog` library voor cross-platform file-events
+- Debounced (2-5s) om burst-writes te clusteren
+- Recursive scan-on-startup voor backlog
+- File-type detection → route naar juiste handler:
+  - `.pdf .docx` → handle_process_document
+  - `.mp3 .m4a .wav` → handle_process_audio
+  - `.url .webloc` → handle_process_url
+- Moved-to-processed pattern: na succes, `mv` naar `<inbox>/_processed/`; bij failure naar `<inbox>/_errors/`
+
+**Effort**: 3-4 dagen.
+
+### G3 — ObsidianSyncService — write side
+
+**Templates** (V1 Q7-confirmed: `literature_note`, `meeting_notes`):
+
+```
+vault/
+├── literature_notes/
+│   ├── <slug>.md                    # generated per Source
+│   └── ...
+├── meeting_notes/
+│   ├── <slug>.md
+│   └── ...
+└── entities/                         # Q1 atlas export
+    └── ...
+```
+
+**Template-driven rendering** via `markdown-hero` (Q4):
+
+```python
+class TemplateRenderer:
+    def render_literature_note(self, source: Source) -> str:
+        # YAML frontmatter + structured body
+        # Sections: Abstract, Key concepts, Entities (with TOOI/Crossref links),
+        #           Methodology, Findings, Citations
+        ...
+```
+
+**Atomic writes**: write to `.tmp`, fsync, rename — voorkomt half-written files.
+
+**Effort**: 1 week.
+
+### G4 — ObsidianSyncService — read side (sync)
+
+**De moeilijkste component.**
+
+Architectuur:
+```
+File-watcher op vault
+       │
+       ▼
+Change detected (debounced)
+       │
+       ├─ Parse markdown (markdown-hero)
+       ├─ Diff tegen stored versie (content-hash)
+       │
+       ├─ Body changed?
+       │   ├─ Re-extract entities op nieuwe content (Pass 2)
+       │   ├─ Diff entity-set vs stored
+       │   ├─ Add new, mark removed als pending-prune
+       │   └─ Trigger quality-check (F1 audit) op nieuwe state
+       │
+       ├─ Frontmatter changed?
+       │   └─ Update Source-metadata in DB
+       │
+       └─ Conflict (UI heeft ook gewijzigd sinds last sync)?
+           ├─ Status: "needs_merge"
+           ├─ UI badge "Conflict pending" (Q7 G-Q3 = non-blocking)
+           └─ Surface in conflict-resolution panel
+```
+
+**Conflict resolution UI** (non-blocking):
+- Lijst van pending conflicts in notebook-sidebar
+- Per conflict: diff-view (UI versie vs vault versie)
+- User picks: "keep UI", "keep vault", "manual merge"
+- Werk gaat door op andere notes terwijl conflicts pending zijn
+
+**State tracking**: nieuwe tabel `sync_state` met `{source_id, last_synced_hash, last_synced_at, last_origin, conflict_status}`.
+
+**Effort**: **2 weken** — moeilijkste deel van Track G.
+
+### G5 — Webhook outbound + audit log
+
+**Event types** waar agents zich op kunnen subscriben:
+- `job.complete`
+- `job.failed`
+- `sync.conflict`
+- `quality.warning` (audit-laag)
+- `entity.extension_proposed` (Q8 schema-extension)
+
+**Per-agent config**: webhook URL + secret (HMAC sign).
+
+**Retry-policy**: exponential backoff, max 5 retries, dead-letter queue.
+
+**Audit log**: every API-call + every webhook-fire persistent in SurrealDB.
+
+**Effort**: 1 week.
+
+### G6 — Specific summary templates
+
+**V1 (Q-G4 confirmed)**:
+
+1. **`literature_note`** — voor research-papers:
+   - Frontmatter: title, authors, year, DOI (uit Crossref), abstract, tags
+   - Sections: Key concepts, Methodology, Findings, Critique, Citations
+   - Wikilinks naar entities (researchers, organizations, concepts)
+   - Implementation: `pipelines/summarization/.../templates/literature_note.py`
+
+2. **`meeting_notes`** — voor audio-transcripts:
+   - Frontmatter: date, deelnemers (TOOI-resolved), duration, location
+   - Sections: Besluiten, Action items (met assignee), Quotes (met timestamps), Open vragen
+   - Wikilinks naar deelnemers + onderwerpen
+   - Implementation: `pipelines/summarization/.../templates/meeting_notes.py`
+
+**Future templates** (on-demand): `research_synthesis` (uit E1), `policy_brief`, `executive_summary`, etc.
+
+**Template config**: YAML-driven prompts in `pipelines/summarization/src/summarization/templates/<name>.yaml`.
+
+**Effort**: 1-1.5 week voor 2 templates met Writer-Evaluator-Editor enhancer (Q3 Laag 2).
+
+---
+
+## 3. Architecturale deep-dives
+
+### 3.1 Multi-schema two-pass design
+
+**Probleem**: Ollama-context-budget + multi-domain documents.
+
+**Oplossing**: Pass 1 = **schema-validatie + delta-detection** bovenop bestaande detector, NIET full schema-induction.
+
+```
+Document
+   │
+   ▼
+Document detector (bestaand, regel-based)
+   → applicable_schemas: [(schema_id, confidence)]
+   → top-3 with confidence ≥ 0.3
+   │
+   ▼
+For each applicable schema (sequential bij top-3):
+   Pass 1 (LLM, lightweight)
+      Input:
+        - Compact schema-representation (~500 tokens)
+        - Sample chunks van doc (~1500 tokens)
+      Output (structured JSON):
+        {
+          "detected_schema": "fiscal_policy_doc",
+          "confidence_in_choice": 0.92,
+          "alternative_schemas": [...],
+          "coverage_pct": 87,
+          "uncovered_concepts": [
+            {"surface_form": "...", "suggested_type": "..."},
+            ...
+          ],
+          "proposed_extensions": [...]
+        }
+   │
+   ▼
+Soft-nudge decision (cumulatief over schemas):
+   coverage > 95%  → silent, proceed
+   coverage 80-95% → notification "extend schema?"
+   coverage < 80%  → prompt "switch schema?"
+   │
+   ▼
+For each schema (sequential):
+   Pass 2 (LLM, focused)
+      Input: schema + accepted extensions + chunk
+      Output: typed entities + relations per chunk
+   │
+   ▼
+Merge step (in-process, no LLM):
+   - Match entities cross-passes (via Q9 vocab-stack + name-normalizer)
+   - Multi-type assignment: primary van hoogste-confidence pass
+   - Relations dedup op (source, target, rel_type)
+   - Cross-schema relations toegestaan
+```
+
+**Per-pass token-budget**: 2000-3000 tokens — past in llama3.1:8b context.
+
+**Storage**:
+- `notebook_schema` table — per-notebook ontology evolution
+- `pass1_results` table — per-source coverage + extension-history
+- `entity` table extended met `type_tags: list[str]`, `primary_type: str`
+
+### 3.2 Vocabulary stack — gelaagde entity-resolution
+
+**Probleem**: entities uit verschillende sources hebben verschillende surface-forms. Need authoritative canonicalization.
+
+**Oplossing**: gelaagde stack van vocabularies, geprobeerd in priority-volgorde.
+
+```
+For each extracted entity (surface_form, entity_type):
+   │
+   ▼
+Layer 1: TOOI (NL government authoritative)
+   - SKOS lookup via SurrealDB cached vocabulary
+   - Match: prefLabel + altLabel (case-insensitive + light fuzzy)
+   - Hit → use TOOI canonical + URI; STOP
+   │
+   ▼ (no hit)
+Layer 2: User overlay
+   - Per-notebook overlay first, dan globaal
+   - User-defined canonicals (SKOS-format)
+   - Hit → use user-defined canonical; STOP
+   │
+   ▼ (no hit)
+Layer 3: Crossref (papers + authors + DOIs) [Q9 finalized: now]
+   - REST API call met cache (avoid repeat-calls)
+   - Hit → use Crossref-record (DOI, author-IDs); STOP
+   │
+   ▼ (no hit)
+Layer 4-6: ORCID, arXiv, Wikidata (architecturally prepared)
+   - Same pattern; activable via vocabularies-tab
+   │
+   ▼ (no hit)
+Layer 7: name_normalizer (myKG port + NL extensions)
+   - Strip honorifics, suffixes, domain tokens
+   - Casing-normalize
+   - Cluster surface variants
+   │
+   ▼
+Layer 8: Fuzzy dedup (jellyfish)
+Layer 9: Embedding dedup (FAISS)
+   │
+   ▼
+Existing notebook entity match?
+   yes → link
+   no → create new
+```
+
+**Module layout**:
+```
+packages/ontology-manager/src/ontology_manager/vocabularies/
+├── __init__.py
+├── base.py                  # Abstract VocabularyResolver protocol
+├── stack.py                 # Stack orchestrator
+├── tooi/                    # Layer 1 — NL gov (always-on)
+├── user_overlay/            # Layer 2 — both global + per-notebook
+├── crossref/                # Layer 3 — papers + DOIs
+├── orcid/                   # Layer 4 — placeholder, architecturally prepared
+├── arxiv/                   # Layer 5 — placeholder
+└── wikidata/                # Layer 6 — placeholder
+```
+
+**Interface** (Protocol):
+```python
+class VocabularyResolver(Protocol):
+    name: str
+    priority: int                # lower = higher authority
+    domain_types: set[str]       # which entity-types this resolver handles
+    
+    async def resolve(
+        self, surface_form: str, entity_type: str
+    ) -> Optional[VocabularyMatch]: ...
+```
+
+**Storage**: SurrealDB tables `vocabulary_tooi`, `vocabulary_user_overlay`, `vocabulary_crossref`, etc. Refresh via cron-job (TOOI monthly, Crossref on-demand cache).
+
+**UI**: "Vocabularies" tab — browse + manage user-overlays + enable/disable vocabularies + view refresh status.
+
+### 3.3 Agent platform & bidirectionele sync
+
+```
+                ┌───────────────────────────────────┐
+                │     SurrealDB + workspace pkgs    │
+                │     (single source of truth)      │
+                └─────────────────┬─────────────────┘
+                                  │
+       ┌──────────────────────────┼──────────────────────────┐
+       │                          │                          │
+       ▼                          ▼                          ▼
+┌─────────────┐         ┌──────────────────┐       ┌────────────────┐
+│   Web UI    │         │ Agent API (G1)   │       │ Obsidian Sync  │
+│  (humans)   │         │ + Webhooks (G5)  │       │ (G3 + G4)      │
+│             │         │                  │       │                │
+│ Next.js     │         │ hermes /         │       │ Vault watcher  │
+│ frontend    │         │ claude-code /    │       │ + writer       │
+│             │         │ custom agents    │       │                │
+└─────────────┘         └──────────────────┘       └────────────────┘
+       │                          │                          │
+       └──────────┬───────────────┴──────────┬───────────────┘
+                  │                          │
+                  ▼                          ▼
+            ┌──────────────┐         ┌────────────────────┐
+            │ DI container │         │ Job queue + audit  │
+            │ (services)   │         │ + webhook dispatch │
+            └──────────────┘         └────────────────────┘
+```
+
+**Drie fronts, één business-logic**:
+- Web UI = humans
+- Agent API = machines (hermes, etc.)
+- Obsidian Sync = filesystem-driven (human edits via Obsidian, agents drop files)
+
+**Conflict-detectie state machine** voor sync:
+
+```
+Source state per (source_id, last_synced_hash, last_origin):
+  - origin: "ui" | "vault" | "agent"
+  - hash: sha256 of body content
+  - timestamp
+
+On vault file change:
+  new_hash = sha256(parsed_body)
+  if new_hash == last_synced_hash:
+      no-op (we wrote this ourselves)
+  elif last_origin == "vault":
+      vault is canonical, simple update
+  elif last_origin == "ui" or "agent":
+      both sides changed → mark "needs_merge"
+      surface in conflict-resolution panel
+      keep work going (non-blocking per G-Q3)
+```
+
+---
+
+## 4. Execution roadmap (9-12 maanden)
+
+### 4.1 Maandschema
+
+| Maand | Track | Focus | Voorwaarde |
+|---|---|---|---|
+| **M1** | A — MinerU | A1 service + A2 confidence-fallback | direct startbaar |
+| **M2** | B — KG quality | B1 two-pass + B2 TTL + B4 confidence | direct startbaar |
+| **M3** | B + C | B5 orphan-connector + B3 schema-tab + C1 Writer-Eval-Editor | na B1 |
+| **M4** | G — Agent platform | G1 API + G2 file-watcher + G3 Obsidian write + Q9 vocabulary stack | na B1, parallel met B3 |
+| **M5** | E — Research | E1+E3 incl. review-step + binary routing (Q7) | na G1+G2 |
+| **M5** | G + D | G6 templates (literature_note + meeting_notes) + D1 Obsidian export | na G3, na C1 |
+| **M6** | G — Sync | G4 bidirectional sync + G5 webhooks | na G3 |
+| **M7** | F — Operations | F1 audit (8 checks) + F3 resumable pipeline | na B4 + B5 |
+| **M8** | C + D | C2 markdown-hero + C3 docx + D2/D3 JSONL/NetworkX | parallel |
+| **M9** | B + F | B6 cross-notebook merge + F2 librarian | parallel |
+| **M10-12** | E + polish | E2 multi-agent + tuning + remaining templates | optional / on-demand |
+
+### 4.2 Track-onafhankelijke quick wins (tussendoor)
+
+- A3 markitdown (½ dag)
+- C4 deterministic UUID (1-2 dagen)
+- Vocabulary architecture prep (ORCID/arXiv/Wikidata stubs): geen werk, alleen interface-skeletons
+
+### 4.3 Effort vs Impact matrix
+
+```
+                        IMPACT
+                          ▲
+                          │
+              🟥 hoog     │   🟦 hoog
+              • E2 multi  │   • B1 two-pass + multi-schema
+              • G4 sync   │   • A2 mineru-fallback
+                          │   • C1 Writer-Eval-Editor
+                          │   • G1 Agent API
+                          │   • Q9 vocab stack (TOOI+Crossref)
+                          │
+              🟨 medium   │   🟩 medium
+              • F2 libra  │   • A1 mineru-alt
+              • E4 colle. │   • B2 TTL export
+              • B6 merge  │   • B4 confidence
+                          │   • D1 obsidian-export
+                          │   • G3 Obsidian write
+                          │   • G6 templates
+                          │
+   ◄──────────────────────┼──────────────────────►
+   hoog effort            │             laag effort
+                          │              
+```
+
+**Sweet spot** (rechtsboven):
+1. A2 MinerU confidence-fallback
+2. B1 two-pass multi-schema
+3. Q9 vocabulary stack (TOOI + Crossref)
+4. C1 Writer-Evaluator-Editor
+5. G1 Agent API
+
+Begin daarmee — hoogste user-facing-impact per ingezet uur.
+
+---
+
+## 5. Appendix
+
+### 5.1 Feature → source mapping (uitgebreid)
+
+| Feature | myKG | wiki_llm | llm-wiki | Most kansrijk |
+|---|---|---|---|---|
+| Two-pass extraction | ✅ first-class | – | – | **myKG** (adapted naar multi-schema) |
+| TTL/RDFS export | ✅ + validator | – | – | **myKG** |
+| Schema editing UX | CLI + Protégé | – | – | **myKG-pattern, eigen UI** |
+| Multi-schema sequentieel | – | – | – | **eigen design** (open-notebook specific) |
+| Confidence scoring | ✅ everywhere | – | – | **myKG** |
+| Orphan-connector + prune | ✅ 1060 LOC | LangGraph alt | `/lint --fix` | **myKG** + eigen prune-lifecycle |
+| Name normalization | ✅ 202 LOC | markdown-hero dedup | – | **myKG** + NL-extensies |
+| Vocabulary stack (TOOI/Crossref/User) | – (SKOS basis) | – | – | **eigen design**, geïnspireerd door myKG SKOS |
+| Cross-notebook merge | ✅ 852 LOC | – | hub-merge | **myKG** |
+| Writer-Evaluator-Editor | – | ✅ first-class | – | **wiki_llm** |
+| markdown-hero | – | ✅ library | – | **wiki_llm** |
+| .docx export | – | ✅ via mh | – | **wiki_llm** |
+| Deterministic content-hash IDs | – | ✅ | – | **wiki_llm** |
+| LangGraph repair | – | ✅ | – | **wiki_llm** (future, na D1) |
+| markitdown | – | ✅ | – | **wiki_llm** |
+| Multi-agent research | – | – | ✅ first-class | **llm-wiki** (E2 future) |
+| Thesis-driven mode | – | – | ✅ | **llm-wiki** (E3) |
+| Single-agent research | – | – | ✅ (foundation) | **llm-wiki-pattern, eigen impl** |
+| Audit command | – | – | ✅ | **llm-wiki-pattern, 8 concrete checks** |
+| Librarian background | – | – | ✅ | **llm-wiki** |
+| Obsidian export (atlas) | ✅ entity-centric | – | ✅ topic-centric | **myKG-stijl finalized** |
+| Agent API / headless mode | – | – | – | **eigen design**, geen ref-repo |
+| Bidirectional vault sync | – | – | – | **eigen design** |
+
+### 5.2 File-path catalog (waar elke feature komt te wonen)
+
+```
+apps/app-main/src/app_main/
+├── api/
+│   ├── routers/
+│   │   ├── agents.py                  # G1 Agent API endpoints
+│   │   ├── notebooks.py               # extended: schema, export, merge
+│   │   └── vocabularies.py            # NEW: user-overlay management
+│   └── auth/
+│       └── api_keys.py                # G1 API-key auth
+├── services/
+│   ├── source_extractor.py            # Phase 3, parser-engine routing toegevoegd
+│   ├── source_processor.py            # Phase 3, geen wijziging
+│   ├── source_summarization_orchestrator.py  # Phase 3 + templates
+│   ├── source_embedding_orchestrator.py
+│   ├── parsing/
+│   │   ├── confidence.py              # A2 docling-confidence-metric
+│   │   └── mineru_http_client.py      # A1
+│   ├── web_search/
+│   │   ├── tavily_client.py           # E1
+│   │   ├── duckduckgo_client.py       # E1 fallback
+│   │   └── base.py                    # interface
+│   ├── obsidian_sync/
+│   │   ├── writer.py                  # G3 write-side
+│   │   ├── watcher.py                 # G4 read-side
+│   │   ├── differ.py                  # G4 diff + conflict detection
+│   │   └── conflict_resolver.py       # G4 conflict UI service
+│   ├── audit_service.py               # F1 audit checks
+│   ├── librarian_service.py           # F2
+│   ├── file_watcher_service.py        # G2 always-on watcher
+│   └── webhook_dispatcher.py          # G5 outbound webhooks
+
+services/
+├── docling/                           # bestaand
+├── mineru/                            # NEW (A1)
+├── summarization/                     # bestaand
+├── whisperx/                          # bestaand
+└── extraction/                        # bestaand
+
+packages/
+├── shared/
+│   └── src/shared/utils/
+│       └── markdown.py                # NEW Q4 markdown-hero wrapper
+├── ontology-manager/
+│   └── src/ontology_manager/
+│       ├── rdf_owl_shacl.py           # bestaand, B2 fix + uitbreiding
+│       └── vocabularies/              # NEW Q9
+│           ├── base.py
+│           ├── stack.py
+│           ├── tooi/                  # active
+│           ├── user_overlay/          # active
+│           ├── crossref/              # active
+│           ├── orcid/                 # prepared (interface only)
+│           ├── arxiv/                 # prepared
+│           └── wikidata/              # prepared
+└── ... (rest unchanged from Phase 7)
+
+pipelines/
+├── entity-filtering/
+│   └── src/entity_filtering/
+│       ├── deduplication/
+│       │   ├── canonical_entities.py  # bestaand Phase 4
+│       │   └── name_normalizer.py     # NEW Q9 myKG-port + NL
+│       └── resolution/
+│           └── orphan_connector.py    # NEW B5 myKG-port + prune
+├── ontology-extraction/
+│   └── src/ontology_extraction/
+│       ├── pass1_schema_validation.py    # NEW B1
+│       ├── pass2_typed_extraction.py     # NEW B1
+│       └── multi_schema_orchestrator.py  # NEW B1 multi-schema
+├── summarization/
+│   └── src/summarization/
+│       ├── enhancers/
+│       │   └── writer_evaluator_editor.py  # NEW C1
+│       └── templates/                       # NEW G6
+│           ├── literature_note.py
+│           ├── meeting_notes.py
+│           └── ...                          # future templates
+└── retrieval/                          # bestaand
+```
+
+### 5.3 Storage additions (SurrealDB tables)
+
+| Table | Purpose | Track |
+|---|---|---|
+| `notebook_schema` | Per-notebook ontology evolution | B1 |
+| `pass1_results` | Coverage + extensions per source | B1 |
+| `agent_keys` | API key registry per agent | G1 |
+| `agent_audit_log` | All agent actions | G5 |
+| `webhook_subscriptions` | Per-agent webhook config | G5 |
+| `sync_state` | Last-synced state per Source/file | G4 |
+| `vocabulary_tooi` | TOOI cached entries | Q9 |
+| `vocabulary_user_overlay` | User-defined canonicals (global+notebook) | Q9 |
+| `vocabulary_crossref` | Crossref cache | Q9 |
+| `pending_extensions` | Schema extensions awaiting user review | B3 |
+| `pending_reconnects` | Orphans awaiting reconnection retry | B5 |
+| `archived_entities` | Pruned orphans (recoverable) | B5 |
+| `audit_findings` | Last audit-run per notebook | F1 |
+| `conflict_pending` | Sync conflicts awaiting resolution | G4 |
+
+### 5.4 Nieuwe externe dependencies
+
+| Dep | Purpose | Track |
+|---|---|---|
+| `markdown-hero` | Markdown structural ops | Q4 (C2) |
+| `tavily-python` (of REST direct) | Web search | E1 |
+| `duckduckgo-search` | Web search fallback | E1 |
+| `crossref-commons` (of REST direct) | Paper metadata | Q9 |
+| `watchdog` | Cross-platform file events | G2 + G4 |
+| `mineru[all]` | PDF parsing (alt) | A1 |
+| `python-docx` (al via markdown-hero) | Word export | C3 |
+| `rank-bm25` | ❌ NIET nodig (Q5 finalized: skip) | - |
+| `pyshacl` | SHACL validation (optional) | B2 (already in rdf_owl_shacl) |
+
+---
+
+## 6. Track G beslispunten recap
+
+| # | Decision |
+|---|---|
+| G-Q1 | API-key authentication (header-based, per-agent) |
+| G-Q2 | File-watcher always-on op conventional path (`~/open-notebook/inbox/` + per-notebook) |
+| G-Q3 | Conflict-resolution non-blocking (warning-badge, werk gaat door) |
+| G-Q4 | Summary templates V1: `literature_note` + `meeting_notes` |
+
+---
+
+## 7. Volgende stap
+
+Met alle Q1-Q9 + G-Q1 t/m G-Q4 finaal, is de roadmap nu actionable. Aanbevolen volgende stap:
+
+**Sprint-plan voor Track A** (eerste track, laagste-risico, hoogste-impact):
+- Concrete file-paden + Dockerfile-sketch voor MinerU service
+- Per-file effort + PR-grenzen
+- Test strategy
+- Zelfde detail-niveau als `REFACTOR_PLAN.md`
+
+Of: **alternatief beginnen met Q9 vocabulary-stack** als foundation voor B + G (vocabulary is dependency van entity-resolution overal).
+
+---
+
+## Bijlagen
+
+- `docs/REFACTOR_PLAN.md` — voltooide refactor (Phase 0-7)
+- `docs/MYKG_COMPARISON.md` — myKG diepte-analyse
+- `docs/LLM_WIKI_COMPARISON.md` — llm-wiki + wiki_llm comparison
+- `docs/SUMMARIZATION_APPROACHES.md` — bestaande summarization strategies
+- `ARCHITECTURE.md` — post-refactor structuur
