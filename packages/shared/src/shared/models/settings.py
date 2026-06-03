@@ -20,9 +20,27 @@ class ContentSettings(RecordModel):
     record_id: ClassVar[str] = "open_notebook:content_settings"
 
     # Document Processing Engine
-    default_content_processing_engine_doc: Optional[
-        Literal["auto", "docling", "simple"]
-    ] = Field("docling", description="Default Content Processing Engine for Documents")
+    # Renamed from default_content_processing_engine_doc in Phase A.1b (Q-A-6).
+    # Values:
+    #   - "simple"  — skip document parser; basic text extraction
+    #   - "docling" — Docling pipeline (default; current behaviour)
+    #   - "mineru"  — route to MinerU HTTP service (alt parser for scientific PDFs)
+    #   - "auto"    — Docling first, fall back to MinerU when confidence < threshold
+    #                  (auto-fallback ships in Phase A.1c; in A.1b "auto" behaves like
+    #                   "docling" to keep this migration purely structural)
+    parser_engine: Optional[
+        Literal["simple", "docling", "mineru", "auto"]
+    ] = Field("docling", description="Document parser engine (simple | docling | mineru | auto)")
+
+    # File extensions that MinerU accepts. When parser_engine selects MinerU but the
+    # uploaded file's extension is not in this list, the dispatcher falls back to
+    # Docling (and logs at INFO). Kept here (not on MineruHttpClient) so operators
+    # can shrink the set without redeploying the app.
+    mineru_supported_extensions: Optional[List[str]] = Field(
+        default_factory=lambda: [".pdf", ".docx", ".doc", ".pptx", ".png", ".jpg", ".jpeg"],
+        description="Extensions routed to MinerU when parser_engine selects it",
+    )
+
     default_content_processing_engine_url: Optional[
         Literal["auto", "firecrawl", "jina", "simple"]
     ] = Field("auto", description="Default Content Processing Engine for URLs")

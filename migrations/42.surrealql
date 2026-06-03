@@ -1,0 +1,26 @@
+-- Migration 42: ContentSettings.default_content_processing_engine_doc -> parser_engine (Q-A-6)
+--
+-- Renames the field that gates document parsing and introduces mineru_supported_extensions.
+-- Old "auto" (= "decide by file type") is remapped to the new "docling"; the new "auto"
+-- (= confidence-driven fallback) is opt-in only.
+--
+-- Idempotent: each UPDATE either no-ops (record absent) or is safe to re-run.
+-- Order: copy old value, default any missing fields, then drop the obsolete field.
+
+UPDATE open_notebook:content_settings
+  SET parser_engine = "docling"
+  WHERE parser_engine = NONE
+    AND (default_content_processing_engine_doc = "auto"
+      OR default_content_processing_engine_doc = "docling"
+      OR default_content_processing_engine_doc = NONE);
+
+UPDATE open_notebook:content_settings
+  SET parser_engine = "simple"
+  WHERE parser_engine = NONE
+    AND default_content_processing_engine_doc = "simple";
+
+UPDATE open_notebook:content_settings
+  SET mineru_supported_extensions = [".pdf", ".docx", ".doc", ".pptx", ".png", ".jpg", ".jpeg"]
+  WHERE mineru_supported_extensions = NONE;
+
+UPDATE open_notebook:content_settings UNSET default_content_processing_engine_doc;

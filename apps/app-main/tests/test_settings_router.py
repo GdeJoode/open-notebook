@@ -29,8 +29,8 @@ class TestGetSettings:
 
         assert resp.status_code == 200
         data = resp.json()
-        # Default values from ContentSettings
-        assert data["default_content_processing_engine_doc"] == "docling"
+        # Default values from ContentSettings (renamed in A.1b)
+        assert data["parser_engine"] == "docling"
 
 
 class TestUpdateSettings:
