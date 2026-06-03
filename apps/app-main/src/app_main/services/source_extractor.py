@@ -24,6 +24,7 @@ from loguru import logger
 from app_main.services.chunking import chunk_builder
 from app_main.services.ingestion.config_builder import build_ingestion_config
 from app_main.services.log_stream import get_log_stream
+from app_main.services.parsing import select_parser_engine
 from shared.models.settings import ContentSettings
 
 
@@ -107,9 +108,28 @@ class SourceExtractor:
     ) -> ExtractionResult:
         """Process a local file through the ingestion pipeline.
 
-        Uses Docling for documents and WhisperX for audio/video. When
-        ``USE_DOCLING_SERVICE=1`` parseable files route to the GPU
-        docling HTTP service instead of in-process Docling.
+        Routing (Phase A.1b):
+        * ``content_settings.parser_engine == "mineru"`` → MinerU HTTP
+          service when the extension is in
+          ``content_settings.mineru_supported_extensions``; otherwise
+          fall back to Docling and log at INFO.
+        * ``"docling"`` / ``"simple"`` / ``"auto"`` → existing Docling
+          path. ``"auto"`` will gain confidence-based fallback in A.1c.
+        * ``"simple"`` is treated as Docling for now because there is no
+          separate simple-extraction implementation in the codebase; the
+          enum is preserved so user-facing copy is unchanged.
+
+        Audio / video continues to go through ``IngestionWorkflow``
+        (WhisperX) regardless of ``parser_engine`` because the dispatcher
+        only fires on document-style files.
+
+        Persists ``parser_engine_used`` on ``ExtractionResult.metadata``
+        so downstream callers (UI badge in A.2, auto-fallback in A.1c)
+        can read which engine actually ran. The value reflects the
+        engine that *executed*, not the user setting — so audio routed
+        through WhisperX records ``"whisperx"`` and ``parser_engine="simple"``
+        falling through to Docling records ``"docling"``. A.1c's
+        confidence-fallback depends on this semantic.
         """
         from ingestion.workflow import IngestionWorkflow
 
@@ -127,11 +147,50 @@ class SourceExtractor:
         )
         log_stream.emit(emit_key, f"Processing file: {source_path.name}")
 
-        use_service = _use_docling_service() and _is_docling_parseable_extension(
-            source_path
+        # Decide which parser engine to actually run. Settings default to
+        # "docling"; only routable extensions get the chance to pick MinerU.
+        parser_engine_setting = getattr(content_settings, "parser_engine", "docling") or "docling"
+        if _is_docling_parseable_extension(source_path):
+            resolved_engine = select_parser_engine(
+                parser_engine_setting,
+                source_path,
+                mineru_supported_extensions=getattr(
+                    content_settings, "mineru_supported_extensions", None
+                ),
+            )
+        else:
+            # Audio/video and other non-document extensions skip the
+            # docling/mineru dispatch entirely — IngestionWorkflow picks
+            # the right pipeline (WhisperX etc.). We don't know which
+            # pipeline yet; the post-execution branch below will infer
+            # the engine that actually ran from the result shape.
+            resolved_engine = "docling"
+
+        use_mineru = resolved_engine == "mineru"
+        use_docling_service = (
+            not use_mineru
+            and _use_docling_service()
+            and _is_docling_parseable_extension(source_path)
         )
 
-        if use_service:
+        # parser_engine_used reflects the engine-that-ran, not the user
+        # setting. Each dispatch branch is responsible for setting it; the
+        # post-execution branch below promotes WhisperX when IngestionWorkflow
+        # produced a transcription rather than a document.
+        engine_used: str
+
+        if use_mineru:
+            from app_main.services.mineru_http_client import MineruHttpClient
+
+            logger.info(f"Routing {source_path.name} to MinerU service")
+            log_stream.emit(
+                emit_key,
+                f"Routing to MinerU service: {source_path.name}",
+            )
+            client = MineruHttpClient()
+            result = await client.process(source_path)
+            engine_used = "mineru"
+        elif use_docling_service:
             # Route to the GPU-accelerated docling service; skip in-process
             # IngestionWorkflow entirely. The service writes the same output
             # files (document.json, markdown, images) to /data/output.
@@ -146,6 +205,7 @@ class SourceExtractor:
             )
             client = DoclingHttpClient()
             result = await client.process(source_path)
+            engine_used = "docling"
         else:
             workflow = IngestionWorkflow(config)
             loop = asyncio.get_event_loop()
@@ -181,6 +241,14 @@ class SourceExtractor:
                 )
             finally:
                 logger.remove(sink_id)
+            # IngestionWorkflow dispatches internally to either Docling
+            # (documents) or WhisperX (audio/video). We infer which one
+            # actually ran from the result shape rather than the user's
+            # setting, so downstream A.1c logic can trust the field.
+            if result.transcription is not None and result.document is None:
+                engine_used = "whisperx"
+            else:
+                engine_used = "docling"
 
         if not result.success:
             raise RuntimeError(
@@ -222,6 +290,7 @@ class SourceExtractor:
                     str(result.markdown_path) if result.markdown_path else None
                 ),
                 "processing_time": result.processing_time_seconds,
+                "parser_engine_used": engine_used,
             },
         )
 

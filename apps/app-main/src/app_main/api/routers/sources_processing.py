@@ -1,6 +1,6 @@
 """Sources processing sub-router — pipeline triggering endpoints."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -24,6 +24,13 @@ class ReprocessRequest(BaseModel):
     All fields default to maximum quality settings. Any field set to None
     uses the global default from ContentSettings.
     """
+    # Parser engine override (Phase A.1b, Q-A-6)
+    # None means "use global ContentSettings.parser_engine".
+    parser_engine: Optional[Literal["simple", "docling", "mineru", "auto"]] = Field(
+        None,
+        description="Override the global parser engine for this run (simple | docling | mineru | auto)",
+    )
+
     # OCR
     docling_ocr_engine: Optional[str] = Field("easyocr", description="OCR engine: easyocr, rapidocr, tesseract")
     docling_ocr_languages: Optional[list[str]] = Field(["en", "nl"], description="OCR languages")

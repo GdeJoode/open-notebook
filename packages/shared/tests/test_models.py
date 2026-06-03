@@ -288,7 +288,8 @@ class TestContentSettings:
     def test_content_settings_defaults(self):
         """Test ContentSettings with default values."""
         settings = ContentSettings()
-        assert settings.default_content_processing_engine_doc == "docling"
+        assert settings.parser_engine == "docling"
+        assert ".pdf" in (settings.mineru_supported_extensions or [])
         assert settings.docling_gpu_enabled is True
         assert settings.docling_ocr_engine == "easyocr"
 

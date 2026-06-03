@@ -18,7 +18,9 @@ import { ChevronDownIcon, SettingsIcon } from 'lucide-react'
 
 const settingsSchema = z.object({
   // Basic Settings
-  default_content_processing_engine_doc: z.enum(['auto', 'docling', 'simple']).optional(),
+  // parser_engine renamed from default_content_processing_engine_doc in A.1b (Q-A-6).
+  // 'mineru' and updated 'auto' (confidence-driven) become user-selectable in A.2.
+  parser_engine: z.enum(['simple', 'docling', 'mineru', 'auto']).optional(),
   default_content_processing_engine_url: z.enum(['auto', 'firecrawl', 'jina', 'simple']).optional(),
   default_embedding_option: z.enum(['ask', 'always', 'never']).optional(),
   auto_delete_files: z.enum(['yes', 'no']).optional(),
@@ -80,7 +82,7 @@ export function SettingsForm() {
   } = useForm<SettingsFormData>({
     resolver: zodResolver(settingsSchema),
     defaultValues: {
-      default_content_processing_engine_doc: undefined,
+      parser_engine: undefined,
       default_content_processing_engine_url: undefined,
       default_embedding_option: undefined,
       auto_delete_files: undefined,
@@ -97,10 +99,10 @@ export function SettingsForm() {
   }
 
   useEffect(() => {
-    if (settings && settings.default_content_processing_engine_doc && !hasResetForm) {
+    if (settings && settings.parser_engine && !hasResetForm) {
       const formData = {
         // Basic Settings
-        default_content_processing_engine_doc: settings.default_content_processing_engine_doc as 'auto' | 'docling' | 'simple',
+        parser_engine: settings.parser_engine as 'simple' | 'docling' | 'mineru' | 'auto',
         default_content_processing_engine_url: settings.default_content_processing_engine_url as 'auto' | 'firecrawl' | 'jina' | 'simple',
         default_embedding_option: settings.default_embedding_option as 'ask' | 'always' | 'never',
         auto_delete_files: settings.auto_delete_files as 'yes' | 'no',
@@ -183,7 +185,7 @@ export function SettingsForm() {
           <div className="space-y-3">
             <Label htmlFor="doc_engine">Document Processing Engine</Label>
             <Controller
-              name="default_content_processing_engine_doc"
+              name="parser_engine"
               control={control}
               render={({ field }) => (
                 <Select
@@ -193,11 +195,10 @@ export function SettingsForm() {
                   disabled={field.disabled || isLoading}
                 >
                     <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select document processing engine" />
+                      <SelectValue placeholder="Select document parser engine" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="auto">Auto (Recommended)</SelectItem>
-                      <SelectItem value="docling">Docling</SelectItem>
+                      <SelectItem value="docling">Docling (default)</SelectItem>
                       <SelectItem value="simple">Simple</SelectItem>
                     </SelectContent>
                   </Select>
@@ -211,7 +212,7 @@ export function SettingsForm() {
               <CollapsibleContent className="mt-2 text-sm text-muted-foreground space-y-2">
                 <p>• <strong>Docling</strong> provides accurate document processing with support for tables and images. Configure GPU acceleration and processing pipelines in Advanced Settings below.</p>
                 <p>• <strong>Simple</strong> will extract content without formatting. OK for simple documents, but loses quality in complex ones.</p>
-                <p>• <strong>Auto (recommended)</strong> will try docling and fallback to simple if needed.</p>
+                <p className="text-xs italic">MinerU and Auto engines arrive in a follow-up release.</p>
               </CollapsibleContent>
             </Collapsible>
           </div>

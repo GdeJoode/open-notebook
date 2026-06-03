@@ -396,3 +396,225 @@ with docling, no PdfChunkViewer UX regression.
 8. **PR creation**: branch pushed but no PR is opened — that's the
    orchestrator's responsibility after review.
 
+
+---
+
+## Phase A.1b — IMPLEMENTED (2026-06-03)
+
+**Branch**: `track/a-mineru-dispatcher` (pushed to origin; PR creation is up to the orchestrator)
+
+**Commits** (oldest → newest):
+
+| Hash | Message |
+|------|---------|
+| `7ebd8bf` | `feat(settings): rename default_content_processing_engine_doc to parser_engine (A.1b)` |
+| `13efe76` | `feat(parsing): add parser engine dispatcher (A.1b)` |
+| `180d415` | `feat(extractor): dispatch _process_file on parser_engine + record engine used (A.1b)` |
+| `d37c322` | `feat(api,frontend): parser_engine override + frontend rename (A.1b)` |
+
+### Acceptance criteria status
+
+1. **`PUT /api/settings` round-trip with `parser_engine`** ✅
+   Backend `SettingsResponse` / `SettingsUpdate` carry `parser_engine` and
+   `mineru_supported_extensions`; `test_settings_router.py` asserts the new
+   field on GET. The ContentSettings model accepts `parser_engine` directly.
+2. **`parser_engine="docling"` default keeps existing behaviour** ✅
+   Mock-based test `test_records_parser_engine_used_in_metadata` confirms the
+   default path still calls `IngestionWorkflow` and records
+   `metadata["parser_engine_used"] = "docling"`. (Bit-identical regression
+   sample snapshot is deferred to integration time — pending Docker compose
+   stack; we have no recorded fixture today.)
+3. **`parser_engine="mineru"` calls MineruHttpClient.process once + persists metadata** ✅
+   `test_routes_to_mineru_when_parser_engine_mineru` asserts `process` is
+   awaited exactly once and `metadata["parser_engine_used"] == "mineru"`.
+4. **`parser_engine="mineru"` + unsupported extension falls back to docling** ✅
+   `test_falls_back_to_docling_for_unsupported_mineru_ext` confirms the
+   MinerU client is never instantiated for `.html`, the docling path runs,
+   and the dispatcher logs at INFO ("MinerU does not support .html…").
+5. **Per-source `ReprocessRequest.parser_engine` override** ✅
+   Field added (default `None`). Flows through existing
+   `processing_overrides` plumbing in `SourceProcessor.process_source`
+   which already merges per-call overrides onto `ContentSettings`. The
+   override is end-to-end-exercisable through `POST /api/sources/{id}/reprocess`.
+6. **`select_parser_engine` ≥90% coverage** ✅
+   97% line coverage (32 test cases in `test_engine_dispatcher.py`).
+
+### Migration
+
+Added `migrations/42.surrealql` + `migrations/42_down.surrealql`:
+
+- **42 (up)**: Idempotent rewrite of `open_notebook:content_settings` —
+  copies the old `default_content_processing_engine_doc` value to
+  `parser_engine` (with old `"auto"` → new `"docling"` because the
+  semantics changed); fills `mineru_supported_extensions` default;
+  UNSETs the obsolete field.
+- **42 (down)**: Restores `default_content_processing_engine_doc` from
+  `parser_engine` (new `"mineru"` maps back to `"docling"` so the
+  downgraded app boots cleanly); UNSETs the new fields.
+
+Each step is gated on field state so re-running the migration is a no-op.
+
+### Files created
+
+- `apps/app-main/src/app_main/services/parsing/engine_dispatcher.py` (97% covered)
+- `apps/app-main/tests/test_engine_dispatcher.py` (32 cases)
+- `migrations/42.surrealql` + `migrations/42_down.surrealql`
+
+### Files modified
+
+- `packages/shared/src/shared/models/settings.py` — rename + new
+  `mineru_supported_extensions` field
+- `packages/shared/tests/test_models.py`, `tests/test_domain.py` — field rename
+- `apps/app-main/src/app_main/api/schemas.py` — `SettingsResponse` +
+  `SettingsUpdate`
+- `apps/app-main/src/app_main/api/routers/sources_processing.py` —
+  `ReprocessRequest.parser_engine` override
+- `apps/app-main/src/app_main/services/source_extractor.py` — dispatcher
+  wired into `_process_file`; `metadata["parser_engine_used"]` recorded
+- `apps/app-main/src/app_main/services/parsing/__init__.py` — re-exports
+- `apps/app-main/tests/test_settings_router.py` — field rename
+- `apps/app-main/tests/test_source_processing_service.py` — +4 routing tests
+- `frontend/src/lib/types/api.ts` — `parser_engine` + `mineru_supported_extensions`
+- `frontend/src/app/(dashboard)/settings/components/SettingsForm.tsx` — field rename
+  (UI revamp deferred to A.2; current options remain Docling + Simple)
+- `frontend/src/components/sources/steps/ProcessingConfigStep.tsx` — field rename
+- `docs/development/api-reference.md` — API docs reflect new field
+
+### Tests run
+
+- `uv run --project apps/app-main pytest apps/app-main/tests/` → **299 passed**
+  (up from 263 in A.1a; +32 dispatcher + 4 routing tests + minor renames)
+- `uv run --project packages/shared pytest packages/shared/tests/` → **101 passed**
+- `cd frontend && npx tsc --noEmit` → **0 errors**
+
+### Notes / caveats
+
+1. **"simple" engine** is preserved as a value but currently routes
+   through Docling because there is no separate simple-extraction
+   implementation. Behaviour is unchanged from before A.1b. A real
+   simple-only path can land in a future refactor without touching the
+   dispatcher contract.
+
+2. **"auto" engine** is in the enum + selectable on the form
+   schema, but the dispatcher resolves it to Docling in A.1b. The
+   confidence-driven fallback ships in A.1c by swapping the `"auto"`
+   branch inside `select_parser_engine` (or one layer up in
+   `SourceExtractor`). The pinned test
+   `test_auto_setting_resolves_to_docling_in_a1b` will turn into the
+   "regression guard" for the A.1c upgrade.
+
+3. **Settings form UI is intentionally minimal in A.1b**. The
+   options dropdown still shows Docling + Simple only. MinerU and Auto
+   plus the confidence slider land in A.2 along with the badge and
+   the MinerU service health chip. The renamed field is wired through
+   so save/load round-trips work today.
+
+4. **Migration is idempotent but not yet executed in CI**. The
+   SurrealQL is shape-checked but not stack-tested. First-boot of the
+   compose stack with this branch will exercise it; orchestrator may
+   want to run an integration smoke before merging if there is real
+   data in any running database.
+
+5. **No PR created** — branch pushed for orchestrator review.
+
+6. **Operator warning — setting MinerU globally via PUT /api/settings in
+   A.1b**: the field is wired through the API and persisted, so a `PUT
+   /api/settings {"parser_engine": "mineru"}` will succeed and is honoured
+   by `SourceExtractor` for all subsequent ingestions. However the
+   Settings UI dropdown in A.1b still only renders **Docling** and
+   **Simple**, so the next time an operator opens the form and saves
+   (even without intending to change anything), the underlying Radix
+   `<Select>` value mismatch will silently submit the form's local state
+   and overwrite `parser_engine=mineru` back to one of the visible
+   options. **Avoid setting MinerU globally via API until A.2 lands the
+   four-option dropdown.** Per-source override via
+   `POST /api/sources/{id}/reprocess` body
+   `{"parser_engine": "mineru"}` is safe and intended for A.1b — it does
+   not touch the singleton settings row.
+
+---
+
+## Phase A.1b — attempt 2 fixes (2026-06-03)
+
+Adversarial review (`docs/tracks/A-mineru/reviews/phase-A.1b-attempt-1.md`)
+returned **REVISIONS_NEEDED** with one blocker and one major. Both are
+addressed on the same `track/a-mineru-dispatcher` branch (revision pushed
+on top of the attempt-1 commits).
+
+### Issues addressed
+
+| Severity | Issue | Resolved? |
+|----------|-------|-----------|
+| 🔴 Blocker | `SettingsResponse.parser_engine` / `SettingsUpdate.parser_engine` typed as `Optional[str]` — accepted arbitrary strings at the API boundary; invalid values MERGE-upserted into SurrealDB before validation fired on response construction. | **Yes** — both fields now typed `Optional[Literal["simple","docling","mineru","auto"]]`; FastAPI/Pydantic returns 422 on invalid input before the service layer is even called. |
+| 🟡 Major | `metadata["parser_engine_used"]` recorded the *user setting* rather than the *engine that actually ran* — `simple` claimed "simple" despite Docling running; audio files claimed "docling" despite WhisperX running. A.1c's confidence-fallback would consume garbage. | **Yes** — `parser_engine_used` is now set per dispatch branch (`"mineru"` only when MinerU runs, `"docling"` for the docling service / IngestionWorkflow document path, `"whisperx"` when IngestionWorkflow emits a transcription). |
+| 🔵 Minor | Operator-warning footnote about setting MinerU globally via API in A.1b. | **Done** — added as caveat #6 above. |
+
+### What changed
+
+**Modified**:
+
+- `apps/app-main/src/app_main/api/schemas.py` — `SettingsResponse.parser_engine`
+  and `SettingsUpdate.parser_engine` retyped from `Optional[str]` to
+  `Optional[Literal["simple","docling","mineru","auto"]]`. The `Literal` import
+  was already present (used by `RebuildRequest.mode` and `IssueAlert.type`).
+- `apps/app-main/src/app_main/services/source_extractor.py:_process_file`
+  — introduced an `engine_used: str` local that each dispatch branch
+  sets explicitly: `"mineru"` inside `if use_mineru:`, `"docling"` inside
+  the `elif use_docling_service:` block, and the IngestionWorkflow
+  `else` branch post-execution decides between `"docling"` and
+  `"whisperx"` based on `result.transcription is not None and
+  result.document is None`. The final `ExtractionResult.metadata`
+  uses `engine_used` instead of the user-setting `resolved_engine`.
+  Docstring updated to spell out the engine-that-ran semantic so A.1c
+  has an unambiguous contract to consume.
+
+**Added (tests)**:
+
+- `apps/app-main/tests/test_settings_router.py::TestParserEngineValidation`
+  — `test_put_rejects_invalid_parser_engine` asserts 422 on
+  `{"parser_engine": "evil_value"}` and that the service mock was
+  never awaited. `test_put_accepts_each_valid_parser_engine` is a
+  parametrized 200-check over the full literal set
+  (`simple`, `docling`, `mineru`, `auto`).
+- `apps/app-main/tests/test_source_processing_service.py::TestProcessFile`
+  — `test_simple_setting_records_docling_engine_used` pins the new
+  contract for `parser_engine="simple"` + `.pdf` →
+  `parser_engine_used="docling"` (engine that ran).
+  `test_audio_records_whisperx_engine_used` pins the audio path —
+  `parser_engine="mineru"` + `.mp3` →
+  `parser_engine_used="whisperx"` (WhisperX bypasses the dispatcher
+  entirely; the metadata reflects the actual pipeline).
+
+### Engine-used semantic (canonical reference)
+
+| Dispatch branch | Trigger condition | `parser_engine_used` value |
+|-----------------|-------------------|----------------------------|
+| MinerU HTTP client | `select_parser_engine(...) == "mineru"` and ext supported | `"mineru"` |
+| Docling HTTP service | `USE_DOCLING_SERVICE=true` and ext is docling-parseable | `"docling"` |
+| IngestionWorkflow → Docling | else branch; `result.document is not None` | `"docling"` |
+| IngestionWorkflow → WhisperX | else branch; `result.transcription is not None and result.document is None` | `"whisperx"` |
+
+Note that `select_parser_engine` is only consulted for docling-parseable
+extensions (`.pdf`, `.docx`, `.xlsx`, `.pptx`, `.html`, `.txt`, `.md`,
+etc.). Audio/video files (`.mp3`, `.mp4`, `.wav`, ...) skip the
+dispatcher and the post-execution branch above is what classifies them.
+This means `parser_engine="mineru"` + `.mp3` ⇒ `parser_engine_used="whisperx"`,
+not `"mineru"`.
+
+### Tests run
+
+- `uv run --project apps/app-main pytest apps/app-main/tests/test_settings_router.py` → **8 passed** (was 3; +5 new validation cases)
+- `uv run --project apps/app-main pytest apps/app-main/tests/test_source_processing_service.py` → **41 passed** (was 39; +2 engine-used semantic tests)
+- `uv run --project apps/app-main pytest apps/app-main/tests/` → **306 passed** (was 299; +7 total)
+- `uv run --project packages/shared pytest packages/shared/tests/` → **101 passed** (unchanged)
+- `cd frontend && npx tsc --noEmit` → not re-run (no frontend changes in attempt 2)
+
+### Not addressed (per brief)
+
+The other minors from the review (brittle mineru-mock patching, Zod
+schema vs. UI dropdown mismatch, missing `mineru_supported_extensions`
+in form schema, lossy mineru→docling down migration, inert test_domain.py
+assertion, live-migration testing) remain deferred per the brief —
+either A.2 territory or acknowledged caveats. Minor #2 (the operator
+warning) is addressed as caveat #6 above.
+

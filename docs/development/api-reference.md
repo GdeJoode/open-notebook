@@ -773,7 +773,8 @@ Get current application settings.
 **Response**:
 ```json
 {
-  "default_content_processing_engine_doc": "docling",
+  "parser_engine": "docling",
+  "mineru_supported_extensions": [".pdf", ".docx", ".doc", ".pptx", ".png", ".jpg", ".jpeg"],
   "default_content_processing_engine_url": "firecrawl",
   "default_embedding_option": "auto",
   "auto_delete_files": "false",
@@ -788,7 +789,8 @@ Update application settings.
 **Request Body** (all fields optional):
 ```json
 {
-  "default_content_processing_engine_doc": "docling",
+  "parser_engine": "docling",
+  "mineru_supported_extensions": [".pdf", ".docx", ".doc", ".pptx", ".png", ".jpg", ".jpeg"],
   "default_content_processing_engine_url": "firecrawl",
   "default_embedding_option": "auto",
   "auto_delete_files": "true",

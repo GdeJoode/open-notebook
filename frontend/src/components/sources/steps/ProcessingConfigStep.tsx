@@ -51,16 +51,15 @@ export function ProcessingConfigStep({
       >
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label className="text-sm">Processing Engine</Label>
+            <Label className="text-sm">Parser Engine</Label>
             <Select
-              value={getValue<string>("default_content_processing_engine_doc") || "auto"}
-              onValueChange={(v) => setValue("default_content_processing_engine_doc", v)}
+              value={getValue<string>("parser_engine") || "docling"}
+              onValueChange={(v) => setValue("parser_engine", v)}
             >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="auto">Auto</SelectItem>
                 <SelectItem value="docling">Docling</SelectItem>
                 <SelectItem value="simple">Simple</SelectItem>
               </SelectContent>

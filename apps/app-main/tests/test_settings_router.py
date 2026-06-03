@@ -2,6 +2,7 @@
 
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -29,8 +30,8 @@ class TestGetSettings:
 
         assert resp.status_code == 200
         data = resp.json()
-        # Default values from ContentSettings
-        assert data["default_content_processing_engine_doc"] == "docling"
+        # Default values from ContentSettings (renamed in A.1b)
+        assert data["parser_engine"] == "docling"
 
 
 class TestUpdateSettings:
@@ -56,3 +57,47 @@ class TestUpdateSettings:
         resp = client.put("/api/settings", json={})
 
         assert resp.status_code == 200
+
+
+class TestParserEngineValidation:
+    """Phase A.1b attempt-2: parser_engine must be one of the literal set.
+
+    Prior to the fix, `SettingsResponse.parser_engine` and
+    `SettingsUpdate.parser_engine` accepted arbitrary strings. A garbage
+    value could be MERGE-upserted into SurrealDB before validation fired on
+    response construction, leaving the singleton in a broken state. These
+    tests pin the boundary check at the schema layer.
+    """
+
+    def test_put_rejects_invalid_parser_engine(self):
+        svc = AsyncMock(spec=SettingsService)
+        # If validation slips through, this fake update would echo back
+        # the invalid value. The 422 from FastAPI must happen first.
+        svc.update.return_value = make_settings()
+        client = _make_app(svc)
+
+        resp = client.put(
+            "/api/settings",
+            json={"parser_engine": "evil_value"},
+        )
+
+        assert resp.status_code == 422
+        # The service must never see the invalid payload.
+        svc.update.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "engine",
+        ["simple", "docling", "mineru", "auto"],
+    )
+    def test_put_accepts_each_valid_parser_engine(self, engine):
+        svc = AsyncMock(spec=SettingsService)
+        svc.update.return_value = make_settings(parser_engine=engine)
+        client = _make_app(svc)
+
+        resp = client.put(
+            "/api/settings",
+            json={"parser_engine": engine},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["parser_engine"] == engine

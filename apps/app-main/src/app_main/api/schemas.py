@@ -297,7 +297,11 @@ class RebuildStatusResponse(BaseModel):
 
 # Settings API schemas
 class SettingsResponse(BaseModel):
-    default_content_processing_engine_doc: Optional[str] = None
+    # Constrained to the same literal set as ContentSettings.parser_engine so
+    # invalid values are rejected at the API boundary instead of being
+    # MERGE-upserted into SurrealDB and only failing on response hydration.
+    parser_engine: Optional[Literal["simple", "docling", "mineru", "auto"]] = None
+    mineru_supported_extensions: Optional[List[str]] = None
     default_content_processing_engine_url: Optional[str] = None
     default_embedding_option: Optional[str] = None
     auto_delete_files: Optional[str] = None
@@ -325,7 +329,11 @@ class SettingsResponse(BaseModel):
 
 
 class SettingsUpdate(BaseModel):
-    default_content_processing_engine_doc: Optional[str] = None
+    # Constrained to the same literal set as ContentSettings.parser_engine so
+    # invalid values are rejected at the API boundary instead of being
+    # MERGE-upserted into SurrealDB and only failing on response hydration.
+    parser_engine: Optional[Literal["simple", "docling", "mineru", "auto"]] = None
+    mineru_supported_extensions: Optional[List[str]] = None
     default_content_processing_engine_url: Optional[str] = None
     default_embedding_option: Optional[str] = None
     auto_delete_files: Optional[str] = None

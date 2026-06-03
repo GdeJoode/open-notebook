@@ -1,0 +1,20 @@
+-- Migration 42 down: revert parser_engine rename.
+--
+-- Maps parser_engine back to default_content_processing_engine_doc. The new value
+-- "mineru" has no historical counterpart; we map it to "docling" so the downgraded
+-- app boots cleanly. "auto" round-trips (it is also a legal old value).
+
+UPDATE open_notebook:content_settings
+  SET default_content_processing_engine_doc = "docling"
+  WHERE parser_engine = "mineru" OR parser_engine = "docling";
+
+UPDATE open_notebook:content_settings
+  SET default_content_processing_engine_doc = "auto"
+  WHERE parser_engine = "auto";
+
+UPDATE open_notebook:content_settings
+  SET default_content_processing_engine_doc = "simple"
+  WHERE parser_engine = "simple";
+
+UPDATE open_notebook:content_settings UNSET parser_engine;
+UPDATE open_notebook:content_settings UNSET mineru_supported_extensions;

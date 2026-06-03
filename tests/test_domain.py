@@ -248,7 +248,7 @@ class TestContentSettings:
         settings = ContentSettings()
 
         assert settings.record_id == "open_notebook:content_settings"
-        assert settings.default_content_processing_engine_doc == "auto"
+        assert settings.parser_engine == "docling"
         assert settings.default_embedding_option == "ask"
         assert settings.auto_delete_files == "yes"
         assert len(settings.youtube_preferred_languages) > 0
