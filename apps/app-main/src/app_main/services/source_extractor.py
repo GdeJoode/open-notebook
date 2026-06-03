@@ -125,7 +125,11 @@ class SourceExtractor:
 
         Persists ``parser_engine_used`` on ``ExtractionResult.metadata``
         so downstream callers (UI badge in A.2, auto-fallback in A.1c)
-        can read which engine actually ran.
+        can read which engine actually ran. The value reflects the
+        engine that *executed*, not the user setting — so audio routed
+        through WhisperX records ``"whisperx"`` and ``parser_engine="simple"``
+        falling through to Docling records ``"docling"``. A.1c's
+        confidence-fallback depends on this semantic.
         """
         from ingestion.workflow import IngestionWorkflow
 
@@ -157,7 +161,9 @@ class SourceExtractor:
         else:
             # Audio/video and other non-document extensions skip the
             # docling/mineru dispatch entirely — IngestionWorkflow picks
-            # the right pipeline (WhisperX etc.).
+            # the right pipeline (WhisperX etc.). We don't know which
+            # pipeline yet; the post-execution branch below will infer
+            # the engine that actually ran from the result shape.
             resolved_engine = "docling"
 
         use_mineru = resolved_engine == "mineru"
@@ -166,6 +172,12 @@ class SourceExtractor:
             and _use_docling_service()
             and _is_docling_parseable_extension(source_path)
         )
+
+        # parser_engine_used reflects the engine-that-ran, not the user
+        # setting. Each dispatch branch is responsible for setting it; the
+        # post-execution branch below promotes WhisperX when IngestionWorkflow
+        # produced a transcription rather than a document.
+        engine_used: str
 
         if use_mineru:
             from app_main.services.mineru_http_client import MineruHttpClient
@@ -177,6 +189,7 @@ class SourceExtractor:
             )
             client = MineruHttpClient()
             result = await client.process(source_path)
+            engine_used = "mineru"
         elif use_docling_service:
             # Route to the GPU-accelerated docling service; skip in-process
             # IngestionWorkflow entirely. The service writes the same output
@@ -192,6 +205,7 @@ class SourceExtractor:
             )
             client = DoclingHttpClient()
             result = await client.process(source_path)
+            engine_used = "docling"
         else:
             workflow = IngestionWorkflow(config)
             loop = asyncio.get_event_loop()
@@ -227,6 +241,14 @@ class SourceExtractor:
                 )
             finally:
                 logger.remove(sink_id)
+            # IngestionWorkflow dispatches internally to either Docling
+            # (documents) or WhisperX (audio/video). We infer which one
+            # actually ran from the result shape rather than the user's
+            # setting, so downstream A.1c logic can trust the field.
+            if result.transcription is not None and result.document is None:
+                engine_used = "whisperx"
+            else:
+                engine_used = "docling"
 
         if not result.success:
             raise RuntimeError(
@@ -268,7 +290,7 @@ class SourceExtractor:
                     str(result.markdown_path) if result.markdown_path else None
                 ),
                 "processing_time": result.processing_time_seconds,
-                "parser_engine_used": resolved_engine,
+                "parser_engine_used": engine_used,
             },
         )
 

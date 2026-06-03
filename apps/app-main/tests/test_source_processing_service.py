@@ -419,6 +419,56 @@ class TestProcessFile:
         assert result.metadata["parser_engine_used"] == "docling"
 
     @pytest.mark.asyncio
+    async def test_simple_setting_records_docling_engine_used(
+        self, extractor, tmp_path
+    ):
+        """parser_engine='simple' falls through to Docling, so the engine
+        that *actually ran* is "docling" — not "simple". This is the A.1b
+        attempt-2 fix: the field reflects the executed engine, not the
+        user setting, so A.1c's confidence-fallback can trust it.
+        """
+        fake_result = FakeIngestionResult()
+        test_file = tmp_path / "doc.pdf"
+        test_file.write_bytes(b"%PDF-1.4 fake")
+
+        with patch("ingestion.workflow.IngestionWorkflow") as MockWorkflow:
+            MockWorkflow.return_value.process = MagicMock(return_value=fake_result)
+
+            result = await extractor._process_file(
+                file_path=str(test_file),
+                content_settings=_make_settings(parser_engine="simple"),
+            )
+
+        assert result.metadata["parser_engine_used"] == "docling"
+
+    @pytest.mark.asyncio
+    async def test_audio_records_whisperx_engine_used(self, extractor, tmp_path):
+        """Audio files route through IngestionWorkflow → WhisperX regardless
+        of the parser_engine setting. The metadata must say "whisperx"
+        (engine that ran), not the user setting. A.1b attempt-2 fix.
+        """
+        fake_result = FakeIngestionResult(
+            document=None,
+            transcription=FakeTranscription(),
+            source_type=FakeSourceType(value="audio"),
+        )
+        test_file = tmp_path / "talk.mp3"
+        test_file.write_bytes(b"fake audio")
+
+        with patch("ingestion.workflow.IngestionWorkflow") as MockWorkflow:
+            MockWorkflow.return_value.process = MagicMock(return_value=fake_result)
+
+            result = await extractor._process_file(
+                file_path=str(test_file),
+                # Even with parser_engine="mineru", the audio extension
+                # bypasses the dispatcher and IngestionWorkflow picks
+                # WhisperX. The metadata must reflect what ran.
+                content_settings=_make_settings(parser_engine="mineru"),
+            )
+
+        assert result.metadata["parser_engine_used"] == "whisperx"
+
+    @pytest.mark.asyncio
     async def test_delete_source_flag(self, extractor, tmp_path):
         test_file = tmp_path / "deleteme.txt"
         test_file.write_text("content")
