@@ -1,0 +1,125 @@
+name: E2E (Playwright)
+
+# Runs the Playwright suite against a real docker-compose stack on every PR that
+# touches the frontend, the FastAPI app, or any backing service.
+#
+# We intentionally only bring up the GPU-free services (surrealdb + open_notebook)
+# — GPU services (docling, mineru, whisperx, extraction, summarization) cannot run
+# on standard GitHub-hosted runners. Specs that exercise GPU-dependent flows must
+# mock the relevant clients at the API boundary or be marked with a CI-skip annotation.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - 'apps/app-main/**'
+      - 'services/**'
+      - 'packages/**'
+      - '.github/workflows/e2e.yml'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+  workflow_dispatch: {}
+
+# Cancel in-flight runs on the same PR — saves runner minutes when a contributor
+# pushes a fixup commit before the previous run finishes.
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Playwright smoke + suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # Used inside docker-compose.yml; HF token is optional and absent on CI.
+      HF_TOKEN: ''
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      # Materialize the docker.env file expected by docker-compose. Real
+      # secrets are not needed for the smoke spec — the open_notebook service
+      # must boot and serve the dashboard route.
+      - name: Create empty docker.env
+        run: touch docker.env
+
+      - name: Build open_notebook image
+        run: docker compose build open_notebook
+
+      - name: Start GPU-free services
+        run: |
+          docker compose up -d surrealdb open_notebook
+          echo "Waiting for open_notebook to respond on :8502 …"
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://localhost:8502/ ; then
+              echo "open_notebook is up after ${i}s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::open_notebook did not become ready within 120s"
+          docker compose logs --tail 200 open_notebook
+          exit 1
+
+      - name: Run Playwright tests
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:8502
+        run: npm run e2e
+
+      - name: Upload Playwright HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: frontend/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Dump compose logs on failure
+        if: failure()
+        run: docker compose logs --tail 500
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
