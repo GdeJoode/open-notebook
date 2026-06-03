@@ -302,6 +302,8 @@ class SettingsResponse(BaseModel):
     # MERGE-upserted into SurrealDB and only failing on response hydration.
     parser_engine: Optional[Literal["simple", "docling", "mineru", "auto"]] = None
     mineru_supported_extensions: Optional[List[str]] = None
+    # Phase A.1c: auto-mode confidence threshold ([0, 1]).
+    docling_min_confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
     default_content_processing_engine_url: Optional[str] = None
     default_embedding_option: Optional[str] = None
     auto_delete_files: Optional[str] = None
@@ -334,6 +336,8 @@ class SettingsUpdate(BaseModel):
     # MERGE-upserted into SurrealDB and only failing on response hydration.
     parser_engine: Optional[Literal["simple", "docling", "mineru", "auto"]] = None
     mineru_supported_extensions: Optional[List[str]] = None
+    # Phase A.1c: auto-mode confidence threshold ([0, 1]).
+    docling_min_confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
     default_content_processing_engine_url: Optional[str] = None
     default_embedding_option: Optional[str] = None
     auto_delete_files: Optional[str] = None

@@ -172,6 +172,32 @@ class TestSource:
         source = Source(title="Test", topics="single topic")
         assert source.topics == ["single topic"]
 
+    def test_source_metadata_defaults_to_empty_dict(self):
+        """Phase A.1c (Q-A-3): Source.metadata is additive + defaults to {}."""
+        source = Source(title="Test")
+        assert source.metadata == {}
+
+    def test_source_metadata_accepts_extraction_provenance(self):
+        """Auto-fallback writes the four provenance keys after extraction."""
+        provenance = {
+            "parser_engine_used": "mineru",
+            "extraction_confidence": 0.62,
+            "extraction_confidence_signals": {"ocr_confidence": 0.4},
+            "extraction_fallback_triggered": True,
+        }
+        source = Source(title="Test", metadata=provenance)
+        assert source.metadata == provenance
+
+    def test_source_metadata_coerces_null_to_empty_dict(self):
+        """Legacy records persisted with NULL metadata must still parse."""
+        source = Source(title="Test", metadata=None)  # type: ignore[arg-type]
+        assert source.metadata == {}
+
+    def test_source_metadata_coerces_non_dict_to_empty_dict(self):
+        """Defensive: a stray string in the metadata column won't crash."""
+        source = Source(title="Test", metadata="not a dict")  # type: ignore[arg-type]
+        assert source.metadata == {}
+
 
 class TestChunk:
     """Tests for the Chunk model."""
