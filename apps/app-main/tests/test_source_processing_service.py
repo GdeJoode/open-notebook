@@ -321,6 +321,104 @@ class TestProcessFile:
                 )
 
     @pytest.mark.asyncio
+    async def test_records_parser_engine_used_in_metadata(self, extractor, tmp_path):
+        """Default settings (parser_engine='docling') -> metadata records docling."""
+        fake_result = FakeIngestionResult()
+        test_file = tmp_path / "doc.pdf"
+        test_file.write_bytes(b"%PDF-1.4 fake")
+
+        with patch("ingestion.workflow.IngestionWorkflow") as MockWorkflow:
+            MockWorkflow.return_value.process = MagicMock(return_value=fake_result)
+
+            result = await extractor._process_file(
+                file_path=str(test_file),
+                content_settings=_make_settings(),
+            )
+
+        assert result.metadata is not None
+        assert result.metadata["parser_engine_used"] == "docling"
+
+    @pytest.mark.asyncio
+    async def test_routes_to_mineru_when_parser_engine_mineru(
+        self, extractor, tmp_path
+    ):
+        """parser_engine='mineru' + supported ext -> MineruHttpClient.process called once."""
+        fake_result = FakeIngestionResult()
+        test_file = tmp_path / "paper.pdf"
+        test_file.write_bytes(b"%PDF-1.4 fake")
+
+        # Mock the lazily-imported MineruHttpClient inside source_extractor.
+        mineru_mock_client = MagicMock()
+        mineru_mock_client.process = AsyncMock(return_value=fake_result)
+        mineru_module = MagicMock()
+        mineru_module.MineruHttpClient = MagicMock(return_value=mineru_mock_client)
+
+        with patch.dict(
+            "sys.modules",
+            {"app_main.services.mineru_http_client": mineru_module},
+        ):
+            result = await extractor._process_file(
+                file_path=str(test_file),
+                content_settings=_make_settings(parser_engine="mineru"),
+            )
+
+        mineru_mock_client.process.assert_awaited_once()
+        assert result.metadata["parser_engine_used"] == "mineru"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_docling_for_unsupported_mineru_ext(
+        self, extractor, tmp_path, caplog
+    ):
+        """parser_engine='mineru' + unsupported ext -> docling, INFO log emitted."""
+        import logging
+
+        fake_result = FakeIngestionResult()
+        test_file = tmp_path / "page.html"
+        test_file.write_text("<html><body>x</body></html>")
+
+        mineru_module = MagicMock()
+        mineru_module.MineruHttpClient = MagicMock()
+
+        with patch.dict(
+            "sys.modules",
+            {"app_main.services.mineru_http_client": mineru_module},
+        ):
+            with patch("ingestion.workflow.IngestionWorkflow") as MockWorkflow:
+                MockWorkflow.return_value.process = MagicMock(return_value=fake_result)
+                with caplog.at_level(logging.INFO):
+                    result = await extractor._process_file(
+                        file_path=str(test_file),
+                        content_settings=_make_settings(parser_engine="mineru"),
+                    )
+
+        # MinerU client must not have been instantiated.
+        mineru_module.MineruHttpClient.assert_not_called()
+        assert result.metadata["parser_engine_used"] == "docling"
+
+    @pytest.mark.asyncio
+    async def test_auto_setting_resolves_to_docling_in_a1b(
+        self, extractor, tmp_path
+    ):
+        """Phase A.1b: parser_engine='auto' behaves like 'docling'.
+
+        A.1c will replace this with the confidence-based fallback; this
+        test pins the A.1b behaviour so the change is intentional.
+        """
+        fake_result = FakeIngestionResult()
+        test_file = tmp_path / "doc.pdf"
+        test_file.write_bytes(b"%PDF-1.4 fake")
+
+        with patch("ingestion.workflow.IngestionWorkflow") as MockWorkflow:
+            MockWorkflow.return_value.process = MagicMock(return_value=fake_result)
+
+            result = await extractor._process_file(
+                file_path=str(test_file),
+                content_settings=_make_settings(parser_engine="auto"),
+            )
+
+        assert result.metadata["parser_engine_used"] == "docling"
+
+    @pytest.mark.asyncio
     async def test_delete_source_flag(self, extractor, tmp_path):
         test_file = tmp_path / "deleteme.txt"
         test_file.write_text("content")
