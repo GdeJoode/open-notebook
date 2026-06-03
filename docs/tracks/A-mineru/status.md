@@ -128,3 +128,99 @@ under `.github/workflows/`.
 
 5. **PR creation**: This branch is pushed but no PR is opened — that's
    the orchestrator's responsibility after review.
+
+---
+
+## Phase A.0 — attempt 2 fixes (2026-06-03)
+
+Adversarial review (`docs/tracks/A-mineru/reviews/phase-A.0-attempt-1.md`)
+returned **REVISIONS_NEEDED** with one blocker and two majors. This entry
+records the implementer's fixes for the two issues in their lane;
+Major #2 (workflow file `git mv` to `.github/workflows/e2e.yml`) remains
+the orchestrator's task and is unchanged.
+
+**Branch**: `track/a-playwright` (same branch as attempt 1; revision pushed
+on top of `7092b41`).
+
+### Issues addressed
+
+| Severity | Issue | Resolved? |
+|----------|-------|-----------|
+| 🔴 Blocker | Smoke spec URL regex missed the `/models?setup_required=true` redirect produced by the empty-`docker.env` CI stack. Spec would fail deterministically in CI. | **Yes** — see "Strategy" below. |
+| 🟡 Major #1 | `expect(page.locator('body')).toBeVisible()` was a vapid assertion: true on any rendered HTML, including a Next.js runtime-error overlay. Smoke test could not detect a broken dashboard route. | **Yes** — replaced with a check on the "Noesis" text marker. |
+| 🟡 Major #2 | Workflow file lives at `docs/tracks/A-mineru/e2e-workflow.yml.pending` instead of `.github/workflows/e2e.yml`. | **Out of scope** — orchestrator task (PAT scope limitation; recipe still documented above). |
+
+### Strategy
+
+Combined strategy (a) + (b) from the review's recommendation list:
+
+- **(a) Extend the URL regex** to accept `/models` as a valid terminal
+  redirect target. The empty-config CI stack legitimately lands on
+  `/models?setup_required=true` (dashboard layout's `useModelStatus()` →
+  `valid=false` redirect, `frontend/src/app/(dashboard)/layout.tsx:43-50`).
+  Acceptable URLs are now `/notebooks`, `/login`, OR `/models(?...)`.
+- **(b) Replace the body-visibility assertion with a meaningful marker**:
+  the string "Noesis" (the app name) is present on every legitimate
+  landed state:
+  - `/login` → `LoginForm` card title (`frontend/src/components/auth/LoginForm.tsx:142`)
+  - `/notebooks`, `/models`, `/sources`, etc. → `AppSidebar` header
+    (`frontend/src/components/layout/AppSidebar.tsx:142-144`),
+    rendered via `AppShell` on all dashboard routes.
+  - A Next.js error overlay or 500 page would render neither sidebar
+    nor login card → assertion fails. This is the smoke contract the
+    reviewer asked for.
+
+Why **not** (c) "seed default models in CI": intrusive — needs a database
+migration or admin-API call from the workflow, and couples the smoke test
+to backend state. The pure-spec fix above is cheaper and more durable.
+
+### What changed
+
+**Modified**:
+
+- `frontend/e2e/_smoke.spec.ts` — rewrote the spec:
+  - URL regex extended from `/\/(notebooks|login)(\?|$)/` to
+    `/\/(notebooks|login|models)(\?|$)/` (factored as a `const validLanded`
+    so `waitForURL` and the post-redirect `toHaveURL` share the pattern).
+  - Removed `expect(page.locator('body')).toBeVisible()`.
+  - Added `expect(page.getByText('Noesis').first()).toBeVisible()` —
+    the primary smoke assertion, applies to all three landed states.
+  - Kept the auth-branch secondary check but switched it from the now-
+    universal "Noesis" title to the unique login description ("Enter
+    your password to access the application") for failure-mode clarity.
+  - Updated the test name to "app root mounts on a legitimate landed
+    state" (was "dashboard root loads (auth-on or auth-off)") to reflect
+    the broader set of valid terminal states.
+  - Updated the file-level docstring to explain the three-state contract
+    and the choice of "Noesis" as the marker.
+
+**Not modified**:
+
+- `frontend/e2e/_helpers.ts` — left untouched. Minor #5 (drop unused
+  return type on `gotoAndWait`) is a quality nit; the brief restricted
+  this revision to the blocker + major #1 to keep the diff tight.
+  Filed implicitly as a follow-up.
+- `frontend/playwright.config.ts` — unchanged.
+- `docs/tracks/A-mineru/e2e-workflow.yml.pending` — unchanged
+  (orchestrator owns).
+
+### Validation
+
+```
+$ cd frontend && npx tsc --noEmit
+(no output — clean)
+
+$ cd frontend && npx playwright test --list
+Listing tests:
+  [chromium] › _smoke.spec.ts:34:7 › smoke › app root mounts on a legitimate landed state
+Total: 1 test in 1 file
+
+$ cd frontend && npx next lint  # filtered to e2e/
+(no warnings introduced by e2e/_smoke.spec.ts or e2e/_helpers.ts)
+```
+
+Live spec execution against a running stack still not performed in this
+sandbox (same constraint as attempt 1). The fix is, however, defensible
+on inspection: it now matches every documented redirect terminal in the
+dashboard layout, and the "Noesis" assertion is grounded in concrete
+source-code references (cited above).
