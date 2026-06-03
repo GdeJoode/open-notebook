@@ -45,4 +45,5 @@ export const QUERY_KEYS = {
   resolutionLog: (filters?: Record<string, unknown>) => ['resolution-log', filters] as const,
   resolutionLogStats: ['resolution-log', 'stats'] as const,
   resolutionLogMethods: ['resolution-log', 'methods'] as const,
+  mineruHealth: ['health', 'mineru'] as const,
 }
