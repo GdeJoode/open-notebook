@@ -141,6 +141,43 @@ services:
       - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
       - NVIDIA_API_URL=https://integrate.api.nvidia.com/v1
     restart: always
+  mineru:
+    build:
+      context: .
+      dockerfile: services/mineru/Dockerfile
+    networks: [web]
+    ports:
+      - "8104:8104"
+    volumes:
+      # Shared input dir with docling — both parsers read from the same
+      # staged-upload location. Each parser writes to its own output dir
+      # (./mineru_output here, ./docling_output for docling) so the
+      # confidence-fallback flow in Phase A.1c can compare results
+      # without cross-contamination.
+      - ./docling_input:/data/input
+      - ./mineru_output:/data/mineru_output
+      # Persistent model cache — first-run downloads are ~5–8 GB.
+      - mineru_models:/data/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - MINERU_DEVICE=cuda
+      - MINERU_BACKEND=pipeline
+      - MINERU_METHOD=auto
+      - MINERU_LANG=en
+      - MINERU_FORMULA_ENABLE=true
+      - MINERU_TABLE_ENABLE=true
+      - MINERU_TIMEOUT_SECONDS=1800
+      # Switch to modelscope mirror if HuggingFace is unreachable:
+      # - MINERU_MODEL_SOURCE=modelscope
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
   open_notebook:
     build:
       context: .
@@ -157,16 +194,25 @@ services:
       - OLLAMA_URL=http://host.docker.internal:11434
       - DOCLING_SERVICE_URL=http://docling:8100
       - USE_DOCLING_SERVICE=true
+      - MINERU_SERVICE_URL=http://mineru:8104
+      - USE_MINERU_SERVICE=true
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # No hard depends_on for mineru — the app must boot when the MinerU
+    # service is down or being rebuilt; parser_engine routing falls back
+    # to docling in that case.
     depends_on:
       - surrealdb
       - docling
     volumes:
       - ./notebook_data:/app/data
-      # Shared with docling service — same paths in both containers so the
-      # service can read files the main app writes, and the main app can read
-      # the service's output.
+      # Shared with docling + mineru services — same paths in all containers
+      # so the services can read files the main app writes, and the main app
+      # can read the services' output.
       - ./docling_input:/data/input
       - ./docling_output:/data/output
+      - ./mineru_output:/data/mineru_output
     restart: always
+
+volumes:
+  mineru_models:
