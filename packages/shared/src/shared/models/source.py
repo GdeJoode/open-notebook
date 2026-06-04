@@ -120,6 +120,24 @@ class Source(ObjectModel):
         None, description="Link to processing job/command"
     )
 
+    # Per-source extraction provenance bag (Phase A.1c, Q-A-3).
+    # Keys currently written by the auto-fallback path:
+    #   parser_engine_used              "docling" | "mineru" | "whisperx"
+    #   extraction_confidence           float in [0, 1] — docling score
+    #   extraction_confidence_signals   per-signal breakdown for the UI tooltip
+    #   extraction_fallback_triggered   bool — true when auto-mode re-routed
+    # The `source` table is SCHEMAFULL (migration 1), so this field is
+    # declared in `migrations/43.surrealql` as
+    # `FLEXIBLE TYPE option<object>` to accept arbitrary additive keys
+    # without further schema bumps. Legacy rows written before #43 read
+    # back as NONE/missing and deserialise via the Pydantic default
+    # (`Field(default_factory=dict)`) plus the `ensure_metadata_dict`
+    # validator below.
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Per-source metadata bag (extraction confidence, parser engine used, etc.)",
+    )
+
     @field_validator("topics", mode="before")
     @classmethod
     def ensure_topics_list(cls, v: Any) -> List[str]:
@@ -129,3 +147,20 @@ class Source(ObjectModel):
         if isinstance(v, str):
             return [v]
         return list(v)
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def ensure_metadata_dict(cls, v: Any) -> Dict[str, Any]:
+        """Defensively coerce legacy/null metadata into an empty dict.
+
+        Surreal records written before migration #43 (the migration
+        that declared this field) read back as NONE; they deserialise
+        with the default. Should the column ever land in the DB with
+        an explicit ``NULL`` or non-dict value, Pydantic would refuse
+        to parse. Coerce to ``{}`` for resilience.
+        """
+        if v is None:
+            return {}
+        if isinstance(v, dict):
+            return v
+        return {}

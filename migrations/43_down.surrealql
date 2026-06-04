@@ -1,0 +1,7 @@
+-- Migration 43 down: drop the metadata field from the source table.
+--
+-- After downgrading, any rows that have metadata populated lose that
+-- column (a destructive but expected downgrade — the data is purely
+-- provenance, not authoritative source content).
+
+REMOVE FIELD IF EXISTS metadata ON TABLE source;

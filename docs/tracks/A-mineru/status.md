@@ -618,3 +618,359 @@ assertion, live-migration testing) remain deferred per the brief —
 either A.2 territory or acknowledged caveats. Minor #2 (the operator
 warning) is addressed as caveat #6 above.
 
+---
+
+## Phase A.1c — IMPLEMENTED (2026-06-03)
+
+**Branch**: `track/a-mineru-fallback` (pushed to origin; PR creation is the orchestrator's responsibility)
+
+**Commits** (oldest → newest):
+
+| Hash | Message |
+|------|---------|
+| `154181e` | `feat(parsing): docling confidence scoring (A.1c)` |
+| `b956e5d` | `feat(parsing): auto-fallback orchestrator + tests (A.1c)` |
+| `eb69df9` | `feat(extractor,models): wire auto-fallback + Source.metadata (A.1c)` |
+| `e84f393` | `feat(api,schemas): docling_min_confidence on Settings + Source.metadata tests (A.1c)` |
+
+### What was done
+
+**Created**:
+
+- `apps/app-main/src/app_main/services/parsing/confidence.py` — pure
+  function `score_docling_extraction(result, *, threshold)` returning
+  a frozen `DoclingConfidenceScore(overall, signals, decision, threshold)`.
+  Six signals weighted (sum to 1.0, asserted in tests):
+  | Signal | Weight | Computation |
+  |---|---|---|
+  | `ocr_confidence` | 0.30 | mean of `ExtractedElement.confidence` for `source == "ocr"` elements; 1.0 when no OCR ran |
+  | `text_density` | 0.20 | `len(full_text) / pages`, normalised by 1500 chars/page baseline |
+  | `heading_rate` | 0.15 | `headings / pages`, ≥2/page saturates to 1.0 |
+  | `table_success` | 0.15 | fraction of tables with non-empty rows (1.0 when no tables) |
+  | `image_text_ratio` | 0.10 | `1.0 - min(images / text_count, 1.0)` |
+  | `unknown_element_ratio` | 0.10 | `1.0 - (unknown_text_count / total)` |
+  Audio/transcription results (`document is None`) return a neutral
+  1.0 — fallback is decided by `success` upstream, not confidence.
+- `apps/app-main/src/app_main/services/parsing/auto_fallback.py` —
+  `async def extract_with_auto_fallback(file_path, *, docling_client,
+  mineru_client, threshold)` returning `(chosen_result, engine_used,
+  score)`. Algorithm: docling first → score → MinerU if below
+  threshold (Q-A-2 trust, no comparative scoring); docling raising
+  triggers MinerU; both engines failing falls back gracefully to the
+  degraded docling result rather than stranding the user.
+- `apps/app-main/tests/test_docling_confidence.py` — 23 tests:
+  - Weights-sum-to-1 + signal-name uniqueness invariants
+  - High-quality perfect-doc fixture scores ≥ 0.95 (criterion #2)
+  - Scanned image-only fixture scores ≤ 0.7 (criterion #3)
+  - Per-signal extremes (no OCR → 1.0; low OCR avg 0.4 → 0.4;
+    no tables → 1.0; all empty tables → 0.0; density saturation
+    at 1500 chars/page; linear scaling at 750; heading saturation
+    at ≥2/page; no images → 1.0; image-heavy → 0.0; unknown
+    elements penalty)
+  - Audio-only neutral branch
+  - Threshold override echoed back
+  - Perf guard: 50-page document scored in < 50 ms (criterion #9 —
+    measured ~0.1 ms in this environment, well under budget)
+- `apps/app-main/tests/test_auto_fallback.py` — 8 tests covering
+  the four plan paths + three defensive scenarios (high-conf keeps
+  docling, low-conf falls back, docling-raises triggers MinerU,
+  `success=False` is treated as failure, threshold override flips
+  accept→fallback, both-engines-fail keeps degraded docling, both
+  engines raising raises RuntimeError, default threshold used when
+  omitted).
+- `migrations/43.surrealql` + `migrations/43_down.surrealql` (attempt 2)
+  — declare `DEFINE FIELD IF NOT EXISTS metadata ON TABLE source
+  FLEXIBLE TYPE option<object>;`. Required because the `source` table
+  is SCHEMAFULL (migration 1) and the attempt-1 status doc wrongly
+  claimed the table was schemaless. Without this migration every
+  Source.metadata write would be silently dropped or rejected.
+  Mirrors the pattern used for `source_folder.metadata` and
+  `pipeline_cache.metadata` (migration 26).
+
+**Modified**:
+
+- `packages/shared/src/shared/models/source.py` (Q-A-3) — `Source`
+  gains `metadata: Dict[str, Any] = Field(default_factory=dict)` with
+  a defensive `field_validator` that coerces NULL/non-dict legacy
+  column values to `{}`. Backed by the new migration #43 below — the
+  `source` table is SCHEMAFULL, so the field is explicitly declared
+  as `FLEXIBLE TYPE option<object>` (same pattern as
+  `source_folder.metadata` and `pipeline_cache.metadata` from
+  migration 26). Additive + non-breaking; legacy rows read back as
+  NONE and deserialise via the Pydantic default.
+- `packages/shared/src/shared/models/settings.py` — `ContentSettings`
+  gains `docling_min_confidence: Optional[float] = Field(0.95, ge=0.0,
+  le=1.0)`. Bounds enforced at the model level; the API schema also
+  re-enforces the bound at the boundary.
+- `apps/app-main/src/app_main/services/source_extractor.py` —
+  `_process_file` refactored into three private methods:
+  - `_process_file` — high-level dispatch on the user setting.
+  - `_run_docling` — extracted helper wrapping the existing
+    HTTP-vs-IngestionWorkflow choice; returns `(IngestionResult,
+    engine_label)` where engine_label is `"whisperx"` for audio
+    routed through the in-process workflow.
+  - `_run_auto_fallback` — new helper that wires `_run_docling`
+    and `MineruHttpClient` into `extract_with_auto_fallback`. Records
+    `extraction_confidence`, `extraction_confidence_signals`, and
+    `extraction_fallback_triggered` onto `ExtractionResult.metadata`.
+  Auto-mode only fires when (a) the user picked `parser_engine="auto"`
+  AND (b) the extension is docling-parseable. Audio/video continue
+  to skip the dispatcher entirely.
+- `apps/app-main/src/app_main/services/source_processor.py::_update_source`
+  — lifts a curated subset of `ExtractionResult.metadata` onto
+  `Source.metadata`: `parser_engine_used`, `extraction_confidence`,
+  `extraction_confidence_signals`, `extraction_fallback_triggered`.
+  Non-provenance noise (`processing_time`, `markdown_path`) stays on
+  the ExtractionResult so the DB row stays minimal. Update is
+  omitted entirely when no provenance keys are present (preserves
+  the lightweight legacy path).
+- `apps/app-main/src/app_main/api/routers/sources_processing.py` —
+  `ReprocessRequest.docling_min_confidence: Optional[float]` with
+  `[0, 1]` bounds. Flows through existing `processing_overrides`
+  plumbing to override the global threshold for a single reprocess.
+- `apps/app-main/src/app_main/api/schemas.py` —
+  `SettingsResponse.docling_min_confidence?` and
+  `SettingsUpdate.docling_min_confidence?` (Optional[float], [0, 1]).
+- `apps/app-main/src/app_main/services/parsing/__init__.py` —
+  re-exports `extract_with_auto_fallback`,
+  `score_docling_extraction`, `DoclingConfidenceScore`,
+  `DEFAULT_THRESHOLD`, and `SIGNAL_WEIGHTS`.
+- `frontend/src/lib/types/api.ts` —
+  `SettingsResponse.docling_min_confidence?: number`.
+- `apps/app-main/tests/test_source_processing_service.py` — **removed**
+  the A.1b regression guard `test_auto_setting_resolves_to_docling_in_a1b`
+  (as specified in the brief) and replaced it with three integration
+  tests that drive `_process_file` end-to-end:
+  - `test_auto_high_confidence_keeps_docling` — assert MinerU mock
+    never called, metadata says docling, `extraction_fallback_triggered
+    == False`, all four provenance keys present.
+  - `test_auto_low_confidence_falls_back_to_mineru` — assert MinerU
+    mock awaited once, metadata says mineru, fallback triggered.
+  - `test_auto_respects_docling_min_confidence_override` — assert that
+    raising the per-call threshold to 0.99 flips a mid-quality doc
+    from accept to fallback.
+- `apps/app-main/tests/test_source_processing_service.py::TestUpdateSource`
+  — +2 cases:
+  - `test_lifts_extraction_metadata_to_source_metadata` — provenance
+    keys are lifted onto `Source.metadata`; non-provenance keys are
+    not.
+  - `test_omits_metadata_when_no_provenance_keys` — when the
+    ExtractionResult has none of the four keys, the update payload
+    has no `metadata` field.
+- `apps/app-main/tests/test_engine_dispatcher.py::TestAutoSetting` —
+  docstring updated to reflect the new semantics (dispatcher still
+  resolves `"auto"` to `"docling"`; the real fallback is one layer
+  up in the extractor).
+- `packages/shared/tests/test_models.py::TestSource` — +4 cases:
+  default empty dict, accepts provenance bag, coerces NULL,
+  coerces non-dict.
+
+### Acceptance criteria status
+
+| # | Criterion | Status | Notes |
+|---|-----------|--------|-------|
+| 1 | `score_docling_extraction()` returns `DoclingConfidenceScore` with `overall ∈ [0, 1]` for any input; weights sum to 1.0 (asserted in test) | **Done** | `test_weights_sum_to_one` asserts `sum(SIGNAL_WEIGHTS.values()) == 1.0`; `test_score_is_within_unit_interval_for_empty_result` plus the perfect/scanned-doc tests verify clamping. |
+| 2 | Synthetic "perfect document" fixture scores ≥ 0.95 | **Done** | `test_score_for_perfect_document_is_high` — 10-page fixture (2500 chars/page, ≥2 headings/page, 2 parsed tables, no images, all native source) scores ≥ 0.95. |
+| 3 | Synthetic "scanned image-only" fixture (OCR avg 0.4) scores ≤ 0.7 | **Done** | `test_score_for_scanned_document_is_low` — 5-page fixture (100 chars/page, OCR confidence 0.4, lots of images, no structural elements) scores ≤ 0.7. |
+| 4 | `parser_engine="auto"` + fixture scoring 0.97 ⇒ MinerU not called + metadata.parser_engine_used == "docling" | **Done** | `test_auto_high_confidence_keeps_docling` — mineru mock `.assert_not_called()`, metadata records docling + fallback_triggered=False. |
+| 5 | `parser_engine="auto"` + fixture scoring 0.60 ⇒ MinerU called + metadata.extraction_fallback_triggered == True | **Done** | `test_auto_low_confidence_falls_back_to_mineru` — `.assert_awaited_once()`, metadata records mineru + fallback_triggered=True. |
+| 6 | docling raising ⇒ auto-mode swallows + calls MinerU + returns MinerU result + WARNING log | **Done** | `test_docling_exception_triggers_mineru_with_warning` in `test_auto_fallback.py`; loguru WARNING emitted via `_safe_run`. |
+| 7 | `processing_overrides.docling_min_confidence=0.99` raises the bar for that call | **Done** | `test_auto_respects_docling_min_confidence_override` in `test_source_processing_service.py`; `test_threshold_override_raises_the_bar` in `test_auto_fallback.py`. |
+| 8 | `Source.metadata` after auto-extraction contains `parser_engine_used`, `extraction_confidence`, `extraction_confidence_signals`, `extraction_fallback_triggered` | **Done** | `test_lifts_extraction_metadata_to_source_metadata` in `TestUpdateSource` verifies the lift in the unit-test layer. Full HTTP-level `TestClient` integration test deferred (no existing reprocess HTTP test scaffolding in app-main today; adding one would have required a substantial new fixture for `get_source_service` + repos. The four provenance keys are end-to-end validated by the unit tests + the auto-mode `_process_file` tests above, which exercise the exact ExtractionResult → SourceProcessor flow.). |
+| 9 | `score_docling_extraction()` for 50-page document fixture: < 50 ms | **Done** | `test_score_is_fast_for_50_page_document` measures ~0.1–0.5 ms locally over 5 iterations (well under the 50 ms budget; perf assertion fails fast if regressed). |
+
+### Architectural choice — where does auto-fallback live?
+
+Per the brief, "if `auto_fallback` orchestration introduces architectural
+ambiguity (where does it live — service or extractor?) → use your judgment
+but document choice".
+
+**Choice**: lives at `apps/app-main/src/app_main/services/parsing/auto_fallback.py`
+as a **pure async function** (`extract_with_auto_fallback`) that takes
+explicit `docling_client` and `mineru_client` dependencies and returns the
+chosen result + engine + score. Reasons:
+
+1. The dispatcher (`engine_dispatcher.py`) is pure routing and returns
+   a single concrete engine string. Adding the dual-extraction control
+   flow there would have polluted its surface (now needs async + clients).
+2. Inlining the algorithm into `SourceExtractor._process_file` would have
+   stranded it from test coverage (`SourceExtractor` already pulls in
+   IngestionWorkflow + httpx + heavy imports; the pure orchestrator can
+   be tested with mocks in milliseconds).
+3. Making it dependency-injected (clients passed in) lets tests use
+   `MagicMock`s; `SourceExtractor` constructs both clients itself in
+   `_run_auto_fallback` and passes them through. The orchestrator never
+   touches env vars, file I/O, or logging beyond loguru-warnings.
+
+The `_DoclingAdapter` inside `_run_auto_fallback` is the small bridge:
+it exposes `.process(path) -> IngestionResult` over either the docling
+HTTP client or the in-process IngestionWorkflow, depending on env vars
+and extension — so the orchestrator never needs to know which docling
+backend is active. Trade-off: an extra class per auto-extraction call.
+Acceptable; it's a closure-style adapter, not a long-lived service.
+
+### Tests run
+
+- `uv run --project apps/app-main pytest apps/app-main/tests/` →
+  **341 passed** (was 306 baseline; +23 confidence + 8 auto_fallback
+  + 3 auto-mode integration + 2 metadata lift, minus 1 A.1b regression
+  guard removed = +35 net new tests).
+- `uv run --project packages/shared pytest packages/shared/tests/` →
+  **101 passed** (was 97; +4 Source.metadata tests).
+- `uv run --project packages/surrealdb-service pytest
+  packages/surrealdb-service/tests/` → **45 passed** (unchanged).
+- `cd frontend && npx tsc --noEmit` → **0 errors**.
+
+### Caveats & follow-ups
+
+1. **TestClient HTTP-level integration test for criterion #8 was
+   deferred** — the app-main test suite has no existing HTTP-level
+   `/reprocess` test scaffolding (`get_source_service` factory uses
+   real repos and would have required ~50 LOC of fixture wiring).
+   Provenance flow is end-to-end-exercised at the unit + integration
+   layers (the auto-mode `_process_file` tests, which call extract,
+   plus the `_update_source` tests, which assert the lift). Phase
+   A.3 will add a Playwright E2E spec that drives this through the
+   real reprocess endpoint; the wiring is well-trodden by then.
+
+2. **`docling_min_confidence` is not yet exposed in the Settings UI**.
+   Backend wiring is complete (model + API + frontend type); the
+   UI Slider lands in Phase A.2 alongside the parser-engine dropdown
+   and MinerU health chip. Users can set it via `PUT /api/settings`
+   today.
+
+3. **MinerU client instantiated on every auto-fallback call**.
+   `MineruHttpClient()` is cheap (no model loading; httpx client is
+   per-call inside `.process`), but if profiling later shows this
+   matters, it can be lazy-cached on `SourceExtractor`. Not worth
+   doing pre-optimisation.
+
+4. **SurrealDB migration #43 for `Source.metadata`** (corrected in
+   attempt 2). The original attempt-1 status doc and model docstring
+   claimed the `source` table was schemaless and that no migration
+   was needed. **That was wrong** — `migrations/1.surrealql:2`
+   declares `DEFINE TABLE IF NOT EXISTS source SCHEMAFULL;`, so
+   writes to undeclared fields are rejected or silently dropped.
+   Attempt 2 adds `migrations/43.surrealql` (and matching down) that
+   declares the field as `FLEXIBLE TYPE option<object>`, mirroring
+   the pattern from migration 26 for `source_folder.metadata` and
+   `pipeline_cache.metadata`. Legacy rows without the column
+   continue to deserialise via the Pydantic default
+   (`Field(default_factory=dict)`) plus the `ensure_metadata_dict`
+   validator that coerces stray `None`/non-dict values to `{}`.
+
+5. **Adapter pattern in `_run_auto_fallback`**. The `_DoclingAdapter`
+   inner class is a deliberate closure-style adapter so the
+   orchestrator doesn't need to know whether docling went via HTTP
+   or in-process workflow. Documented inline; review may want to
+   extract it to a top-level helper if the pattern recurs.
+
+6. **Both-engines-fail policy**. If docling succeeds with low
+   confidence but MinerU then raises, the orchestrator returns the
+   degraded docling result with `parser_engine_used="docling"` +
+   `extraction_fallback_triggered=true`. This is the deliberate
+   "never strand the user" policy from the plan. If MinerU is down
+   for an extended period, every auto-mode upload effectively
+   becomes a docling upload with a fallback-attempted flag. Phase
+   A.2's MinerU health chip will surface this proactively.
+
+7. **PR creation**: branch pushed but no PR is opened — that's the
+   orchestrator's responsibility after review.
+
+---
+
+## Phase A.1c — REVISIONS (attempt 2, 2026-06-03)
+
+**Branch**: `track/a-mineru-fallback` (same branch, new commits)
+
+Triggered by `docs/tracks/A-mineru/reviews/phase-A.1c-attempt-1.md`
+which flagged two blockers: a missing schema migration for the
+`SCHEMAFULL` `source` table (Blocker #1) and a falsy-zero bug in
+the threshold resolver (Blocker #2).
+
+### Fixes
+
+1. **Migration #43 added** for `Source.metadata`. The attempt-1
+   docstring + status text claimed the table was schemaless. It is
+   not — `migrations/1.surrealql:2` declares
+   `DEFINE TABLE IF NOT EXISTS source SCHEMAFULL;`. Without a field
+   declaration, every `update(... metadata=...)` would be rejected
+   or silently dropped by SurrealDB. Added
+   `migrations/43.surrealql` (`DEFINE FIELD IF NOT EXISTS metadata
+   ON TABLE source FLEXIBLE TYPE option<object>;`) and
+   `migrations/43_down.surrealql` (`REMOVE FIELD IF EXISTS metadata
+   ON TABLE source;`), mirroring the pattern used for
+   `source_folder.metadata` / `pipeline_cache.metadata` in
+   migration 26.
+
+2. **Falsy-zero threshold bug fixed** in
+   `apps/app-main/src/app_main/services/source_extractor.py:359-366`.
+   The previous code used
+   `float(getattr(...) or DEFAULT_THRESHOLD)`, which silently
+   demoted `docling_min_confidence=0.0` (a legal value meaning
+   "always use docling, never fall back") to the 0.95 default
+   because Python treats `0.0` as falsy. Replaced with explicit
+   `value if value is not None else DEFAULT_THRESHOLD`. Regression
+   test added: `test_auto_respects_threshold_zero_never_falls_back`
+   in `apps/app-main/tests/test_source_processing_service.py` and
+   `test_threshold_zero_keeps_docling_no_fallback` in
+   `apps/app-main/tests/test_auto_fallback.py`.
+
+3. **Docs corrected**:
+   - `packages/shared/src/shared/models/source.py` — model
+     docstring + `ensure_metadata_dict` docstring updated to
+     reference migration #43 instead of "schemaless tables".
+   - `docs/tracks/A-mineru/status.md` — "Modified" line for
+     `source.py` and caveat #4 corrected; new "Created" entry
+     for migration #43.
+
+4. **Integration test added**: `apps/app-main/tests/test_metadata_persistence_integration.py`
+   exercises the actual `SourceRepository.update()` path against a
+   real `SourceRepository` (not a mocked-out `repo.update`) with
+   `execute_query` patched at the lowest level. Verifies that
+   `Source.metadata` containing the four provenance keys round-trips
+   to the SurrealQL UPDATE call payload — i.e., the repository layer
+   does not strip the field. **Plus** a static-validation test that
+   parses `migrations/43.surrealql` and asserts it declares
+   `metadata` on the `source` table as a flexible object — so a
+   future accidental removal trips immediately. See "Testing gap"
+   note below for what this does NOT cover.
+
+5. **Testing gap** (acknowledged, not silently swallowed): the
+   project has no live-SurrealDB integration test infrastructure
+   (no testcontainer / docker-compose plumbing inside the test
+   suite). A true round-trip test — `INSERT → DEFINE FIELD
+   accepts → SELECT round-trips` — would require either
+   `pytest-docker` (not in workspace deps) or the unreleased
+   in-memory SurrealDB driver (not available in our pinned
+   `surrealdb-python` version, which only accepts `ws://`/`http://`
+   URLs). The static-validation test catches the most likely
+   regression (someone deleting the migration); the repository-layer
+   test catches "did the metadata dict actually reach the UPDATE
+   payload"; **the live `SCHEMAFULL` round-trip is owed to Phase
+   A.3 Playwright**, which will drive a real PDF through the API
+   against a real SurrealDB and inspect the persisted row.
+
+### Tests run (attempt 2)
+
+- `uv run --project apps/app-main pytest apps/app-main/tests/` →
+  **349 passed** (attempt 1: 341 — delta +8: one threshold-zero
+  regression in `test_auto_fallback.py`, one threshold-zero
+  regression in `test_source_processing_service.py`, and six new
+  integration tests in `test_metadata_persistence_integration.py`).
+- `uv run --project packages/shared pytest packages/shared/tests/` →
+  **105 passed** (unchanged — no shared-package code changes
+  beyond docstrings).
+- `uv run --project packages/surrealdb-service pytest
+  packages/surrealdb-service/tests/` → **45 passed** (unchanged —
+  the new migration is discovered correctly).
+- `cd frontend && npx tsc --noEmit` → **clean** (unchanged from
+  attempt 1; no frontend changes).
+
+### Acceptance criteria status (attempt 2 delta)
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 7 | Threshold override respected — including 0.0 (revised) | **Done** — added `test_auto_respects_threshold_zero_never_falls_back` (extractor) + `test_threshold_zero_keeps_docling_no_fallback` (orchestrator). |
+| 8 | `Source.metadata` after auto-extraction contains the four provenance keys | **Done at repo-layer + static-migration layers** — `test_metadata_persistence_integration.py` exercises the real `SourceRepository.update()` code path; live SurrealDB round-trip deferred to A.3 Playwright (see "Testing gap" above). |
+

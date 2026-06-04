@@ -24,7 +24,11 @@ from loguru import logger
 from app_main.services.chunking import chunk_builder
 from app_main.services.ingestion.config_builder import build_ingestion_config
 from app_main.services.log_stream import get_log_stream
-from app_main.services.parsing import select_parser_engine
+from app_main.services.parsing import (
+    DEFAULT_THRESHOLD,
+    extract_with_auto_fallback,
+    select_parser_engine,
+)
 from shared.models.settings import ContentSettings
 
 
@@ -108,36 +112,35 @@ class SourceExtractor:
     ) -> ExtractionResult:
         """Process a local file through the ingestion pipeline.
 
-        Routing (Phase A.1b):
+        Routing (Phase A.1c):
         * ``content_settings.parser_engine == "mineru"`` → MinerU HTTP
           service when the extension is in
           ``content_settings.mineru_supported_extensions``; otherwise
           fall back to Docling and log at INFO.
-        * ``"docling"`` / ``"simple"`` / ``"auto"`` → existing Docling
-          path. ``"auto"`` will gain confidence-based fallback in A.1c.
-        * ``"simple"`` is treated as Docling for now because there is no
+        * ``"docling"`` / ``"simple"`` → Docling path (current behaviour).
+          ``"simple"`` is treated as Docling for now because there is no
           separate simple-extraction implementation in the codebase; the
           enum is preserved so user-facing copy is unchanged.
+        * ``"auto"`` (A.1c, document extensions only) → confidence-driven
+          fallback: Docling first, score the result, then re-run via
+          MinerU when ``confidence < content_settings.docling_min_confidence``.
+          Auto persists ``extraction_confidence``,
+          ``extraction_confidence_signals``, and
+          ``extraction_fallback_triggered`` on metadata so the UI badge
+          can surface provenance to the user (Q-A-3).
 
         Audio / video continues to go through ``IngestionWorkflow``
         (WhisperX) regardless of ``parser_engine`` because the dispatcher
         only fires on document-style files.
 
-        Persists ``parser_engine_used`` on ``ExtractionResult.metadata``
-        so downstream callers (UI badge in A.2, auto-fallback in A.1c)
-        can read which engine actually ran. The value reflects the
-        engine that *executed*, not the user setting — so audio routed
-        through WhisperX records ``"whisperx"`` and ``parser_engine="simple"``
-        falling through to Docling records ``"docling"``. A.1c's
-        confidence-fallback depends on this semantic.
+        ``parser_engine_used`` reflects the engine that *executed*, not
+        the user setting — audio routed through WhisperX records
+        ``"whisperx"`` and ``parser_engine="simple"`` falling through to
+        Docling records ``"docling"``.
         """
-        from ingestion.workflow import IngestionWorkflow
-
         source_path = Path(file_path)
         if not source_path.exists():
             raise FileNotFoundError(f"Source file not found: {file_path}")
-
-        config = build_ingestion_config(content_settings)
 
         log_stream = get_log_stream()
         emit_key = source_id or str(source_path)
@@ -150,7 +153,8 @@ class SourceExtractor:
         # Decide which parser engine to actually run. Settings default to
         # "docling"; only routable extensions get the chance to pick MinerU.
         parser_engine_setting = getattr(content_settings, "parser_engine", "docling") or "docling"
-        if _is_docling_parseable_extension(source_path):
+        is_docling_ext = _is_docling_parseable_extension(source_path)
+        if is_docling_ext:
             resolved_engine = select_parser_engine(
                 parser_engine_setting,
                 source_path,
@@ -161,25 +165,33 @@ class SourceExtractor:
         else:
             # Audio/video and other non-document extensions skip the
             # docling/mineru dispatch entirely — IngestionWorkflow picks
-            # the right pipeline (WhisperX etc.). We don't know which
-            # pipeline yet; the post-execution branch below will infer
-            # the engine that actually ran from the result shape.
+            # the right pipeline (WhisperX etc.).
             resolved_engine = "docling"
 
-        use_mineru = resolved_engine == "mineru"
-        use_docling_service = (
-            not use_mineru
-            and _use_docling_service()
-            and _is_docling_parseable_extension(source_path)
+        # Auto-mode (A.1c) wraps Docling+MinerU in extract_with_auto_fallback.
+        # The dispatcher's select_parser_engine() still resolves "auto" to
+        # "docling" for forward-compat; we branch on the raw user setting
+        # here so auto-fallback only fires when (a) the user explicitly
+        # picked auto and (b) the extension is docling-parseable.
+        use_auto_fallback = (
+            parser_engine_setting == "auto"
+            and is_docling_ext
+            and resolved_engine != "mineru"
         )
+        use_mineru = resolved_engine == "mineru"
 
-        # parser_engine_used reflects the engine-that-ran, not the user
-        # setting. Each dispatch branch is responsible for setting it; the
-        # post-execution branch below promotes WhisperX when IngestionWorkflow
-        # produced a transcription rather than a document.
         engine_used: str
+        result: Any
+        confidence_metadata: Dict[str, Any] = {}
 
-        if use_mineru:
+        if use_auto_fallback:
+            engine_used, result, confidence_metadata = await self._run_auto_fallback(
+                source_path=source_path,
+                content_settings=content_settings,
+                emit_key=emit_key,
+                log_stream=log_stream,
+            )
+        elif use_mineru:
             from app_main.services.mineru_http_client import MineruHttpClient
 
             logger.info(f"Routing {source_path.name} to MinerU service")
@@ -190,65 +202,13 @@ class SourceExtractor:
             client = MineruHttpClient()
             result = await client.process(source_path)
             engine_used = "mineru"
-        elif use_docling_service:
-            # Route to the GPU-accelerated docling service; skip in-process
-            # IngestionWorkflow entirely. The service writes the same output
-            # files (document.json, markdown, images) to /data/output.
-            from app_main.services.docling_http_client import DoclingHttpClient
-
-            logger.info(
-                f"Routing {source_path.name} to docling service (GPU)"
-            )
-            log_stream.emit(
-                emit_key,
-                f"Routing to docling service: {source_path.name}",
-            )
-            client = DoclingHttpClient()
-            result = await client.process(source_path)
-            engine_used = "docling"
         else:
-            workflow = IngestionWorkflow(config)
-            loop = asyncio.get_event_loop()
-
-            def _loguru_to_stream(message: object) -> None:
-                """Forward ingestion/docling loguru logs to LogStreamService."""
-                record = message.record  # type: ignore[union-attr]
-                name = record.get("name", "")
-                if not (
-                    name.startswith("ingestion")
-                    or "docling" in name.lower()
-                ):
-                    return
-                level = record["level"].name
-                msg = str(record["message"]).strip()
-                if not msg:
-                    return
-                try:
-                    loop.call_soon_threadsafe(
-                        log_stream.emit, emit_key, msg, level
-                    )
-                except RuntimeError:
-                    pass  # Loop closed — ignore
-
-            sink_id = logger.add(
-                _loguru_to_stream,
-                level="INFO",
-                format="{message}",
+            result, engine_used = await self._run_docling(
+                source_path=source_path,
+                content_settings=content_settings,
+                emit_key=emit_key,
+                log_stream=log_stream,
             )
-            try:
-                result = await loop.run_in_executor(
-                    None, workflow.process, source_path
-                )
-            finally:
-                logger.remove(sink_id)
-            # IngestionWorkflow dispatches internally to either Docling
-            # (documents) or WhisperX (audio/video). We infer which one
-            # actually ran from the result shape rather than the user's
-            # setting, so downstream A.1c logic can trust the field.
-            if result.transcription is not None and result.document is None:
-                engine_used = "whisperx"
-            else:
-                engine_used = "docling"
 
         if not result.success:
             raise RuntimeError(
@@ -276,23 +236,187 @@ class SourceExtractor:
             except OSError as e:
                 logger.warning(f"Failed to delete source file: {e}")
 
+        metadata: Dict[str, Any] = {
+            "source_type": result.source_type.value,
+            "output_directory": (
+                str(result.output_directory) if result.output_directory else None
+            ),
+            "markdown_path": (
+                str(result.markdown_path) if result.markdown_path else None
+            ),
+            "processing_time": result.processing_time_seconds,
+            "parser_engine_used": engine_used,
+        }
+        metadata.update(confidence_metadata)
+
         return ExtractionResult(
             title=title,
             full_text=full_text,
             file_path=file_path,
             chunks=chunks,
-            metadata={
-                "source_type": result.source_type.value,
-                "output_directory": (
-                    str(result.output_directory) if result.output_directory else None
-                ),
-                "markdown_path": (
-                    str(result.markdown_path) if result.markdown_path else None
-                ),
-                "processing_time": result.processing_time_seconds,
-                "parser_engine_used": engine_used,
-            },
+            metadata=metadata,
         )
+
+    # ------------------------------------------------------------------
+    # Engine dispatch helpers
+    # ------------------------------------------------------------------
+
+    async def _run_docling(
+        self,
+        *,
+        source_path: Path,
+        content_settings: ContentSettings,
+        emit_key: str,
+        log_stream: Any,
+    ) -> tuple[Any, str]:
+        """Run the docling extraction (HTTP service or in-process workflow).
+
+        Returns ``(IngestionResult, engine_used)`` — engine_used is
+        ``"docling"`` for documents or ``"whisperx"`` when the in-process
+        workflow routed audio/video through transcription instead.
+        """
+        from ingestion.workflow import IngestionWorkflow
+
+        is_doc_ext = _is_docling_parseable_extension(source_path)
+        if _use_docling_service() and is_doc_ext:
+            from app_main.services.docling_http_client import DoclingHttpClient
+
+            logger.info(
+                f"Routing {source_path.name} to docling service (GPU)"
+            )
+            log_stream.emit(
+                emit_key,
+                f"Routing to docling service: {source_path.name}",
+            )
+            client = DoclingHttpClient()
+            result = await client.process(source_path)
+            return result, "docling"
+
+        config = build_ingestion_config(content_settings)
+        workflow = IngestionWorkflow(config)
+        loop = asyncio.get_event_loop()
+
+        def _loguru_to_stream(message: object) -> None:
+            """Forward ingestion/docling loguru logs to LogStreamService."""
+            record = message.record  # type: ignore[union-attr]
+            name = record.get("name", "")
+            if not (
+                name.startswith("ingestion")
+                or "docling" in name.lower()
+            ):
+                return
+            level = record["level"].name
+            msg = str(record["message"]).strip()
+            if not msg:
+                return
+            try:
+                loop.call_soon_threadsafe(
+                    log_stream.emit, emit_key, msg, level
+                )
+            except RuntimeError:
+                pass  # Loop closed — ignore
+
+        sink_id = logger.add(
+            _loguru_to_stream,
+            level="INFO",
+            format="{message}",
+        )
+        try:
+            result = await loop.run_in_executor(
+                None, workflow.process, source_path
+            )
+        finally:
+            logger.remove(sink_id)
+
+        # IngestionWorkflow dispatches internally to either Docling
+        # (documents) or WhisperX (audio/video).
+        if result.transcription is not None and result.document is None:
+            return result, "whisperx"
+        return result, "docling"
+
+    async def _run_auto_fallback(
+        self,
+        *,
+        source_path: Path,
+        content_settings: ContentSettings,
+        emit_key: str,
+        log_stream: Any,
+    ) -> tuple[str, Any, Dict[str, Any]]:
+        """Run docling+MinerU through the auto-fallback orchestrator.
+
+        Returns ``(engine_used, IngestionResult, confidence_metadata)``.
+        ``confidence_metadata`` contains ``extraction_confidence``,
+        ``extraction_confidence_signals`` and
+        ``extraction_fallback_triggered`` for the UI badge.
+        """
+        from app_main.services.mineru_http_client import MineruHttpClient
+
+        log_stream.emit(
+            emit_key,
+            f"Auto-mode: trying Docling first for {source_path.name}",
+        )
+
+        # Explicit None check — not truthy — because 0.0 is a legal value
+        # meaning "always use docling, never fall back" (the API schema
+        # permits ge=0.0). `value or DEFAULT_THRESHOLD` would silently
+        # demote 0.0 to 0.95, the opposite of what the caller asked for.
+        raw_threshold = getattr(content_settings, "docling_min_confidence", None)
+        threshold = float(
+            raw_threshold if raw_threshold is not None else DEFAULT_THRESHOLD
+        )
+
+        # Adapter so the orchestrator can call ``client.process(path)``
+        # without caring whether docling went via the HTTP service or the
+        # in-process workflow.
+        class _DoclingAdapter:
+            def __init__(self, extractor: SourceExtractor) -> None:
+                self._extractor = extractor
+                # Cache the engine label inferred from _run_docling so
+                # auto-fallback's "engine_used" reflects whisperx for
+                # audio-via-workflow. In practice auto-fallback only
+                # runs on docling-parseable extensions, but we preserve
+                # the field for forward-compat.
+                self.last_engine_label: str = "docling"
+
+            async def process(self, path: Path):
+                result, engine = await self._extractor._run_docling(
+                    source_path=path,
+                    content_settings=content_settings,
+                    emit_key=emit_key,
+                    log_stream=log_stream,
+                )
+                self.last_engine_label = engine
+                return result
+
+        docling_adapter = _DoclingAdapter(self)
+        mineru_client = MineruHttpClient()
+
+        chosen_result, engine_used, score = await extract_with_auto_fallback(
+            source_path,
+            docling_client=docling_adapter,
+            mineru_client=mineru_client,
+            threshold=threshold,
+        )
+
+        # When docling actually ran (engine_used="docling") and the
+        # adapter saw whisperx (audio file slipped through), prefer the
+        # adapter's label so the metadata reflects what executed.
+        if engine_used == "docling" and docling_adapter.last_engine_label != "docling":
+            engine_used = docling_adapter.last_engine_label
+
+        log_stream.emit(
+            emit_key,
+            f"Auto-mode picked {engine_used} (confidence {score.overall:.3f}, "
+            f"threshold {score.threshold:.3f})",
+        )
+
+        confidence_metadata: Dict[str, Any] = {
+            "extraction_confidence": score.overall,
+            "extraction_confidence_signals": dict(score.signals),
+            "extraction_fallback_triggered": score.decision == "fallback",
+        }
+
+        return engine_used, chosen_result, confidence_metadata
 
     # ------------------------------------------------------------------
     # URL processing
