@@ -1047,3 +1047,126 @@ Branch pushed to origin. Self-review at
 PR review. A.3 picks up integration testing + threshold tuning.
 
 
+---
+
+## Phase A.3 — IMPLEMENTED (2026-06-04)
+
+**Branch**: `track/a-mineru-integration` (stacked on `main`, A.0-A.2 merged).
+
+**Commits (oldest → newest)**:
+
+| Hash | Message |
+|------|---------|
+| `cb98c34` | `docs(track-a): catch-up of review reports + A.2 plan` (catch-up commit) |
+| `f229ea7` | `chore(fixtures): add tiny synthetic PDFs + generator for parser-engine tests` |
+| `98af375` | `feat(app-main/scripts): score_pdf_corpus CLI for threshold tuning` |
+| `5f8f6d7` | `docs(track-a): threshold tuning report + decision` |
+| `ab2b8d3` | `test(e2e/track-a): integration spec covering full auto-fallback + reprocess override` |
+| `07f16ab` | `docs: README parser engines + ARCHITECTURE source-extraction subsection` |
+| `badd747` | `docs(troubleshooting): parser engines page + index link` |
+| (this entry) | `docs(track-a): RETRO + status.md final entry + FEATURE_ROADMAP done marker` |
+
+(Commit 4 from the plan — the "bump default" code change — was
+conditional on the tuning concluding "lower the threshold". Tuning
+kept the 0.95 default, so commit 4 is intentionally skipped. See
+`threshold-tuning.md` for the decision rationale.)
+
+### What was done
+
+**Threshold tuning**:
+
+- Scored five real PDFs (Dutch policy convenants, an academic
+  fiscal-equalisation paper, a long-form welfare report, an
+  OCR-needed academic test PDF) via
+  `apps/app-main/scripts/score_pdf_corpus.py` against the running
+  docling service.
+- All five scored 0.725-0.850, all triggered fallback at 0.95.
+- Dominant low signal across the corpus was uniformly
+  `table_success = 0.00` — docling detected tables but parsed zero
+  rows for them.
+- **Decision: keep default at 0.95.** The fallback behaviour is
+  acting as designed; operators with pure-prose corpora can lower
+  the threshold via the existing Settings slider without a code
+  change. Full reasoning in
+  `docs/tracks/A-mineru/threshold-tuning.md`.
+
+**New code**:
+
+- `apps/app-main/scripts/score_pdf_corpus.py` — CLI that scores a
+  PDF or directory of PDFs through Docling and prints a Markdown
+  table row per file. Supports both HTTP and in-process docling.
+- `apps/app-main/tests/test_score_pdf_corpus.py` — 8 smoke tests
+  pinning the table format + the dominant-signal calculation.
+- `apps/app-main/tests/fixtures/{generate.py, *.pdf, README.md}` —
+  three tiny synthetic PDFs (clean text, table-heavy, image-only)
+  + a stdlib+Pillow generator. No new workspace dependency.
+- `frontend/e2e/track-a/parser-engine-integration.spec.ts` — single
+  spec with two test blocks: (a) auto-fallback happy path covering
+  settings → badge → reprocess override; (b) graceful degradation
+  when MinerU is offline. Both fully route-mocked.
+
+**Docs**:
+
+- `README.md` — new "Parser engines" subsection under Advanced Features.
+- `docs/development/architecture.md` — new "Source extraction
+  pipeline" subsection after §4 AI Processing Layer.
+- `docs/troubleshooting/parser-engines.md` — 4 troubleshooting
+  scenarios (container won't start, fallback fires too often,
+  rolling back, bad confidence score).
+- `docs/troubleshooting/index.md` — pointer to the new page.
+- `docs/tracks/A-mineru/threshold-tuning.md` — full tuning report.
+- `docs/tracks/A-mineru/RETRO.md` — track retrospective.
+- `docs/FEATURE_ROADMAP.md` — Track A marked complete with pointers
+  to RETRO + threshold-tuning report.
+
+### Quality gates
+
+- `uv run --project apps/app-main pytest apps/app-main/tests/` → all
+  green; +8 new tests for `score_pdf_corpus` smoke. Full count:
+  357 passed (was 349 at end of A.1c; A.2 didn't add app-main tests).
+- `uv run --project packages/shared pytest packages/shared/tests/` →
+  105 passed (unchanged).
+- `cd frontend && npx tsc --noEmit` → clean.
+- `cd frontend && npm run lint` → clean (no new warnings; only
+  pre-existing warnings from unrelated files).
+- `cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:8503 npx
+  playwright test e2e/track-a/` → **10/10 passed** in ~1.0 min
+  (8 prior A.2 sub-tests + 2 new A.3 integration sub-tests).
+
+### Pre-resolved decisions honoured
+
+- ARCHITECTURE.md insertion → after §4 AI Processing Layer ✓
+- README subsection → Advanced Features ✓
+- Threshold-tuning report → curated Markdown table only (no raw stdout) ✓
+- Graceful-degradation → second `test()` block in same spec file ✓
+
+### Caveats & follow-ups
+
+1. The Phase A.0 CI workflow at
+   `docs/tracks/A-mineru/e2e-workflow.yml.pending` still has not been
+   moved to `.github/workflows/e2e.yml` — orchestrator task per the
+   PAT scope limitation from A.0. Track A's CI smoke contract will
+   not fire until that move happens.
+
+2. The `table_success` confidence signal is too binary (any one
+   bad table → 0.0). Documented in
+   `threshold-tuning.md` "Follow-ups" and `RETRO.md` "What hurt".
+
+3. Live SurrealDB round-trip test for `Source.metadata` is still
+   deferred (acknowledged gap from A.1c attempt-2). The integration
+   spec drives `parser_engine_used` through the API boundary but
+   the persisted-row read-back is fixture-mocked. Resolution
+   belongs to a testcontainers harness PR in Track B.
+
+4. The host-bridge in `score_pdf_corpus.py` is a deliberate
+   workaround for the docker bind-mount path mismatch — see
+   RETRO.md "Tooling that didn't carry its weight" for the fold-back
+   recommendation.
+
+5. PR creation: branch pushed to origin; orchestrator owns merge.
+
+---
+
+**Track A — COMPLETE on 2026-06-04.** Six phases (A.0/A.1a/A.1b/A.1c/A.2/A.3) shipped across `track/a-playwright`, `track/a-mineru-service`, `track/a-mineru-dispatcher`, `track/a-mineru-fallback`, `track/a-mineru-ui`, and `track/a-mineru-integration`. Auto-mode parser engine selection with confidence-driven MinerU fallback is live.
+
+
