@@ -18,6 +18,7 @@ import pytest
 
 from app_main.services import mineru_http_client as mineru_client_module
 from app_main.services.mineru_http_client import (
+    MineruHealthResult,
     MineruHttpClient,
     MineruServiceError,
 )
@@ -394,3 +395,96 @@ def test_is_supported_extension_classmethod() -> None:
 
 def test_mineru_service_error_is_runtime_error() -> None:
     assert issubclass(MineruServiceError, RuntimeError)
+
+
+# ---------------------------------------------------------------------------
+# health_check() — A.2 addition for the UI health chip
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_health_check_returns_healthy_with_version(tmp_path: Path) -> None:
+    """200 + JSON body with a ``version`` is the standard happy path."""
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/health"
+        return httpx.Response(200, json={"status": "ok", "version": "2.0.0"})
+
+    with _PatchedAsyncClient(_mock_transport(responder)):
+        client = _make_client(tmp_path)
+        result = await client.health_check()
+
+    assert result == MineruHealthResult(healthy=True, version="2.0.0")
+
+
+@pytest.mark.asyncio
+async def test_health_check_200_without_version_still_healthy(tmp_path: Path) -> None:
+    """Older mineru builds may not include a version key — accept that."""
+
+    def responder(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok"})
+
+    with _PatchedAsyncClient(_mock_transport(responder)):
+        client = _make_client(tmp_path)
+        result = await client.health_check()
+
+    assert result.healthy is True
+    assert result.version is None
+    assert result.error is None
+
+
+@pytest.mark.asyncio
+async def test_health_check_connection_error_returns_unhealthy(tmp_path: Path) -> None:
+    """A transport-level failure must surface as ``healthy=False`` (never raise)."""
+
+    def responder(_request: httpx.Request) -> httpx.Response:
+        # MockTransport doesn't simulate ConnectError natively; raising
+        # inside the handler propagates the same exception class.
+        raise httpx.ConnectError("connection refused")
+
+    with _PatchedAsyncClient(_mock_transport(responder)):
+        client = _make_client(tmp_path)
+        result = await client.health_check()
+
+    assert result.healthy is False
+    assert result.error is not None
+    assert "connection refused" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_health_check_5xx_returns_unhealthy_with_error(tmp_path: Path) -> None:
+    """A non-2xx response must mark the service unhealthy."""
+
+    def responder(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="internal error")
+
+    with _PatchedAsyncClient(_mock_transport(responder)):
+        client = _make_client(tmp_path)
+        result = await client.health_check()
+
+    assert result.healthy is False
+    assert result.error is not None
+    assert "500" in result.error
+
+
+@pytest.mark.asyncio
+async def test_health_check_non_json_body_still_healthy_on_200(tmp_path: Path) -> None:
+    """If mineru ever ships ``/health`` as plain text, treat 200 as healthy."""
+
+    def responder(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="OK")
+
+    with _PatchedAsyncClient(_mock_transport(responder)):
+        client = _make_client(tmp_path)
+        result = await client.health_check()
+
+    assert result.healthy is True
+    assert result.version is None
+
+
+def test_mineru_health_result_is_frozen_dataclass() -> None:
+    """Public contract: result objects are immutable."""
+    result = MineruHealthResult(healthy=True, version="x")
+    with pytest.raises((AttributeError, Exception)):
+        result.healthy = False  # type: ignore[misc]

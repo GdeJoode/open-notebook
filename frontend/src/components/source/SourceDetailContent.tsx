@@ -69,6 +69,7 @@ import {
 import { SourceInsightDialog } from '@/components/source/SourceInsightDialog'
 import { NotebookAssociations } from '@/components/source/NotebookAssociations'
 import { PdfChunkViewer } from '@/components/source/PdfChunkViewer'
+import { ParserEngineBadge } from '@/components/source/ParserEngineBadge'
 import { PipelineConfigPanel } from '@/components/sources/pipeline/PipelineConfigPanel'
 import { DEFAULT_PIPELINE_CONFIG, type DoclingPipelineConfig } from '@/lib/api/sources'
 import { useSourceChunks } from '@/lib/hooks/use-sources'
@@ -550,6 +551,10 @@ export function SourceDetailContent({
       {/* Processing Status Bar */}
       <div className="px-2 pb-3">
         <div className="flex flex-wrap gap-2 text-xs">
+          <ParserEngineBadge
+            metadata={source.metadata}
+            sourceStatus={source.status}
+          />
           <Badge variant={chunksData?.total_chunks ? "default" : "secondary"} className="gap-1">
             {chunksData?.total_chunks ? (
               <><CheckCircle className="h-3 w-3" /> {chunksData.total_chunks} chunks</>

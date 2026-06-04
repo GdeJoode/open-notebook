@@ -974,3 +974,76 @@ the threshold resolver (Blocker #2).
 | 7 | Threshold override respected — including 0.0 (revised) | **Done** — added `test_auto_respects_threshold_zero_never_falls_back` (extractor) + `test_threshold_zero_keeps_docling_no_fallback` (orchestrator). |
 | 8 | `Source.metadata` after auto-extraction contains the four provenance keys | **Done at repo-layer + static-migration layers** — `test_metadata_persistence_integration.py` exercises the real `SourceRepository.update()` code path; live SurrealDB round-trip deferred to A.3 Playwright (see "Testing gap" above). |
 
+---
+
+## Phase A.2 — IMPLEMENTED (2026-06-04)
+
+**Branch**: `track/a-mineru-ui` (stacked on `track/a-mineru-fallback`).
+
+**Commits (oldest → newest)**:
+
+| Hash | Message |
+|------|---------|
+| `fdfb52e` | `feat(app-main): add MineruHttpClient.health_check() + tests` |
+| `47be625` | `feat(api): add GET /api/health/mineru endpoint` |
+| `bd406fe` | `feat(frontend/api): typed health client + Source.metadata types` |
+| `1d1e153` | `feat(frontend/settings): parser_engine dropdown + confidence slider + health chip` |
+| `53cad43` | `feat(frontend/source): ParserEngineBadge + insertion in detail` |
+| `764b4d4` | `feat(frontend/reparse): per-source parser-engine override` |
+| `ef77765` | `test(e2e/track-a): 4 Playwright specs covering A.2 acceptance criteria` |
+
+### What was done
+
+**Backend** (`apps/app-main`):
+
+- `MineruHttpClient.health_check()` (async, 2s default timeout,
+  never raises) + frozen dataclass `MineruHealthResult`.
+- New `routers/health.py` with `GET /api/health/mineru` — wrapped
+  in try/except so the route handler always returns 200, even when
+  the upstream service is unreachable.
+
+**Frontend** (`frontend/src/…`):
+
+- Typed `healthApi.mineru()` client + `useMineruHealth()` React
+  Query hook (`refetchInterval: 30_000`, `retry: false`).
+- `SourceMetadata` and `MineruHealthResponse` interfaces in
+  `lib/types/api.ts`.
+- `SettingsForm.tsx` — four `parser_engine` options
+  (simple/docling/mineru/auto), conditional `docling_min_confidence`
+  slider in auto mode, `<MineruServiceHealthChip />` next to the
+  label.
+- `ParserEngineBadge.tsx` — four visual states (silent / blue /
+  amber / red), inserted as first badge in `SourceDetailContent`.
+- `PipelineConfigPanel.tsx` — per-source "Parser engine for this
+  run" Select defaulting to `""` (= use global) + matching
+  confidence slider.
+
+**E2E** (`frontend/e2e/track-a/`):
+
+- 4 spec files + 1 helper module = 8 sub-tests, all route-mocked
+  so they run on CI without the mineru container.
+
+### Quality gates
+
+- `apps/app-main` pytest (`test_mineru_http_client.py` +
+  `test_health_router.py`) → **22 passed** in 83s.
+- `frontend` `npx tsc --noEmit` → **clean**.
+- `frontend` `npm run lint` → **clean** (no new errors; only
+  pre-existing warnings from unrelated files).
+- `frontend` Playwright `e2e/track-a/` against `next dev` →
+  **8/8 passed** in 35.5s.
+
+### Pre-resolved decisions
+
+- Badge unit test shipped as Playwright spec — no vitest added.
+- MinerU `mineru` option stays enabled even when chip is red
+  (passive indicator only).
+- New `health.py` router (not extending `services_proxy.py`).
+
+### Hand-off
+
+Branch pushed to origin. Self-review at
+`docs/tracks/A-mineru/reviews/phase-A.2-self-review.md`. Ready for
+PR review. A.3 picks up integration testing + threshold tuning.
+
+

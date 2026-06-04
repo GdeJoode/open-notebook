@@ -49,9 +49,39 @@ export interface ProcessingInfo {
   [key: string]: unknown
 }
 
+/**
+ * Provenance metadata persisted by the SourceExtractor in A.1c.
+ *
+ * Surfaced on the source-detail badge bar via <ParserEngineBadge>.
+ * All fields optional: legacy sources processed before A.1c don't
+ * have a metadata block, and the badge renders nothing in that case.
+ */
+export interface SourceMetadata {
+  /** Which engine actually produced the extracted text. */
+  parser_engine_used?: 'docling' | 'mineru'
+  /** Aggregate confidence from the docling-confidence scorer (0..1). */
+  extraction_confidence?: number
+  /** Per-signal breakdown (e.g. {ocr: 0.94, layout: 0.88, ...}). */
+  extraction_confidence_signals?: Record<string, number>
+  /**
+   * True when parser_engine='auto' picked docling first, the confidence
+   * dropped below the configured threshold, and the orchestrator
+   * re-ran the document through MinerU.
+   */
+  extraction_fallback_triggered?: boolean
+}
+
 export interface SourceDetailResponse extends SourceListResponse {
   full_text: string | null  // Can be null for async processing sources
   notebooks?: string[]  // List of notebook IDs this source is linked to
+  metadata?: SourceMetadata
+}
+
+/** Response shape for GET /api/health/mineru. */
+export interface MineruHealthResponse {
+  healthy: boolean
+  version?: string
+  error?: string
 }
 
 export type SourceResponse = SourceDetailResponse

@@ -17,6 +17,13 @@ export type PrivacyLevel = 'public' | 'internal' | 'confidential'
 export interface DoclingPipelineConfig {
   // Privacy & model routing
   privacy?: PrivacyLevel
+  // Parser engine override for this reparse run (A.2). When undefined,
+  // the backend uses the global parser_engine setting. Empty string in
+  // the form maps to undefined here (see PipelineConfigPanel).
+  parser_engine?: 'simple' | 'docling' | 'mineru' | 'auto'
+  // Auto-mode confidence threshold override (A.2). Only meaningful
+  // when parser_engine === 'auto'.
+  docling_min_confidence?: number
   // Docling settings
   docling_ocr_engine?: string
   docling_ocr_languages?: string[]

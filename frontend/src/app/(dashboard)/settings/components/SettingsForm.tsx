@@ -15,12 +15,15 @@ import { Slider } from '@/components/ui/slider'
 import { useSettings, useUpdateSettings } from '@/lib/hooks/use-settings'
 import { useEffect, useState } from 'react'
 import { ChevronDownIcon, SettingsIcon } from 'lucide-react'
+import { MineruServiceHealthChip } from '@/components/settings/MineruServiceHealthChip'
 
 const settingsSchema = z.object({
   // Basic Settings
   // parser_engine renamed from default_content_processing_engine_doc in A.1b (Q-A-6).
   // 'mineru' and updated 'auto' (confidence-driven) become user-selectable in A.2.
   parser_engine: z.enum(['simple', 'docling', 'mineru', 'auto']).optional(),
+  // Auto-mode confidence threshold (A.1c). Only meaningful when parser_engine='auto'.
+  docling_min_confidence: z.number().min(0).max(1).optional(),
   default_content_processing_engine_url: z.enum(['auto', 'firecrawl', 'jina', 'simple']).optional(),
   default_embedding_option: z.enum(['ask', 'always', 'never']).optional(),
   auto_delete_files: z.enum(['yes', 'no']).optional(),
@@ -92,6 +95,9 @@ export function SettingsForm() {
   // Watch values for displaying in sliders
   const imageScale = watch('docling_image_scale') ?? 2.0
   const chunkingMaxTokens = watch('docling_chunking_max_tokens') ?? 512
+  // Drives the conditional confidence slider — A.2.
+  const watchedEngine = watch('parser_engine')
+  const minConfidence = watch('docling_min_confidence') ?? 0.95
 
 
   const toggleSection = (section: string) => {
@@ -103,6 +109,7 @@ export function SettingsForm() {
       const formData = {
         // Basic Settings
         parser_engine: settings.parser_engine as 'simple' | 'docling' | 'mineru' | 'auto',
+        docling_min_confidence: settings.docling_min_confidence,
         default_content_processing_engine_url: settings.default_content_processing_engine_url as 'auto' | 'firecrawl' | 'jina' | 'simple',
         default_embedding_option: settings.default_embedding_option as 'ask' | 'always' | 'never',
         auto_delete_files: settings.auto_delete_files as 'yes' | 'no',
@@ -183,7 +190,10 @@ export function SettingsForm() {
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-3">
-            <Label htmlFor="doc_engine">Document Processing Engine</Label>
+            <div className="flex justify-between items-center">
+              <Label htmlFor="doc_engine">Document Processing Engine</Label>
+              <MineruServiceHealthChip />
+            </div>
             <Controller
               name="parser_engine"
               control={control}
@@ -194,25 +204,56 @@ export function SettingsForm() {
                   onValueChange={field.onChange}
                   disabled={field.disabled || isLoading}
                 >
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger className="w-full" aria-label="Document processing engine">
                       <SelectValue placeholder="Select document parser engine" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="docling">Docling (default)</SelectItem>
                       <SelectItem value="simple">Simple</SelectItem>
+                      <SelectItem value="docling">Docling (default)</SelectItem>
+                      <SelectItem value="mineru">MinerU</SelectItem>
+                      <SelectItem value="auto">Auto (docling with MinerU fallback)</SelectItem>
                     </SelectContent>
                   </Select>
               )}
             />
+            {watchedEngine === 'auto' && (
+              <div className="space-y-2 p-3 border rounded-md bg-muted/30">
+                <Label htmlFor="docling_min_confidence">
+                  Confidence threshold: {minConfidence.toFixed(2)}
+                </Label>
+                <Controller
+                  name="docling_min_confidence"
+                  control={control}
+                  render={({ field }) => (
+                    <Slider
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={[field.value ?? 0.95]}
+                      onValueChange={(value) => field.onChange(value[0])}
+                      disabled={isLoading}
+                      className="w-full"
+                      aria-label="Docling confidence threshold"
+                    />
+                  )}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Below this score, docling output is rejected and MinerU
+                  re-parses the document.
+                </p>
+              </div>
+            )}
             <Collapsible open={expandedSections.doc} onOpenChange={() => toggleSection('doc')}>
               <CollapsibleTrigger className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
                 <ChevronDownIcon className={`h-4 w-4 transition-transform ${expandedSections.doc ? 'rotate-180' : ''}`} />
                 Help me choose
               </CollapsibleTrigger>
               <CollapsibleContent className="mt-2 text-sm text-muted-foreground space-y-2">
-                <p>• <strong>Docling</strong> provides accurate document processing with support for tables and images. Configure GPU acceleration and processing pipelines in Advanced Settings below.</p>
-                <p>• <strong>Simple</strong> will extract content without formatting. OK for simple documents, but loses quality in complex ones.</p>
-                <p className="text-xs italic">MinerU and Auto engines arrive in a follow-up release.</p>
+                <p>• <strong>Simple</strong> extracts content without formatting. OK for simple documents, but loses quality in complex ones.</p>
+                <p>• <strong>Docling</strong> (default) provides accurate document processing with support for tables and images. Configure GPU acceleration and processing pipelines in Advanced Settings below.</p>
+                <p>• <strong>MinerU</strong> uses a GPU-accelerated layout-aware parser optimised for scientific papers and complex PDFs. Requires the MinerU service container to be running (see chip above).</p>
+                <p>• <strong>Auto</strong> runs docling first and re-parses with MinerU when the confidence drops below the threshold. Best balance of speed and quality.</p>
+                <p className="text-xs italic">If the MinerU chip shows offline, MinerU and Auto can still be selected; documents that need MinerU will fail or fall back to docling until the service comes back online.</p>
               </CollapsibleContent>
             </Collapsible>
           </div>

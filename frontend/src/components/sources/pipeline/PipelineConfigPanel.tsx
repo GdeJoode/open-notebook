@@ -18,6 +18,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import { Slider } from '@/components/ui/slider'
 import {
   Settings2,
   ChevronDown,
@@ -27,6 +28,7 @@ import {
   Shield,
   ShieldCheck,
   ShieldAlert,
+  WandSparkles,
 } from 'lucide-react'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import type { DoclingPipelineConfig } from '@/lib/api/sources'
@@ -62,8 +64,58 @@ export function PipelineConfigPanel({
 
   const privacyLevel = config.privacy ?? 'internal'
 
+  // Empty string in the Select maps back to `undefined` on the config
+  // so the backend uses the global parser_engine setting. This keeps
+  // "Use default" as a first-class option rather than overloading an
+  // engine value.
+  const parserEngineValue = config.parser_engine ?? ''
+  const minConfidence = config.docling_min_confidence ?? 0.95
+
   const content = (
     <div className="space-y-4">
+      {/* Parser engine override (A.2) */}
+      <div className="space-y-2">
+        <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+          <WandSparkles className="h-3.5 w-3.5" />
+          Parser engine for this run
+        </h4>
+        <Select
+          value={parserEngineValue || 'default'}
+          onValueChange={(v) =>
+            update('parser_engine', v === 'default' ? undefined : (v as 'simple' | 'docling' | 'mineru' | 'auto'))
+          }
+        >
+          <SelectTrigger className="h-8 text-xs" aria-label="Parser engine for this run">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="default" className="text-xs">
+              Use default (current global setting)
+            </SelectItem>
+            <SelectItem value="simple" className="text-xs">Simple</SelectItem>
+            <SelectItem value="docling" className="text-xs">Docling</SelectItem>
+            <SelectItem value="mineru" className="text-xs">MinerU</SelectItem>
+            <SelectItem value="auto" className="text-xs">Auto (docling with MinerU fallback)</SelectItem>
+          </SelectContent>
+        </Select>
+        {config.parser_engine === 'auto' && (
+          <div className="space-y-1 pt-1">
+            <Label className="text-xs">
+              Confidence threshold: {minConfidence.toFixed(2)}
+            </Label>
+            <Slider
+              min={0}
+              max={1}
+              step={0.01}
+              value={[minConfidence]}
+              onValueChange={(value) => update('docling_min_confidence', value[0])}
+              className="w-full"
+              aria-label="Docling confidence threshold"
+            />
+          </div>
+        )}
+      </div>
+
       {/* Privacy & Model Routing */}
       <div className="space-y-2">
         <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
