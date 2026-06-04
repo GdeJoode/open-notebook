@@ -321,6 +321,17 @@ Thanks to the [Esperanto](https://github.com/lfnovo/esperanto) library, we suppo
 - **📊 Fine-Grained Context Control**: Choose exactly what to share with AI models
 - **📎 Citations**: Get answers with proper source citations
 
+### Parser engines
+
+Open Notebook ships with four document-parser engines, switchable per-document or globally in Settings → Content Processing:
+
+- **Docling** (default) — battle-tested general parser. Works well for most native PDFs, Word docs, web pages, and Markdown. GPU-accelerated when available.
+- **MinerU** — alternative GPU parser optimised for scientific PDFs, multi-column layouts, and formula-heavy content. First run downloads ~5-8 GB of model weights into a persistent volume.
+- **Auto** (recommended) — runs Docling first, scores the result against a configurable confidence threshold (default 0.95), and silently re-parses with MinerU when Docling underperforms. The chosen engine and confidence breakdown are persisted on `Source.metadata` and surfaced in the source detail view as a coloured badge.
+- **Simple** — bypasses both parsers and uses lightweight text extraction. Fastest; loses table structure, headings, and bboxes.
+
+MinerU is provided by an optional `services/mineru` container. When the container is unreachable the Settings page shows a red "MinerU offline" chip; auto-mode automatically degrades to docling-only with no user-visible failure. See [docs/troubleshooting/parser-engines.md](docs/troubleshooting/parser-engines.md) for service-down and threshold-tuning recipes.
+
 ### Three-Column Interface
 1. **Sources**: Manage all your research materials
 2. **Notes**: Create manual or AI-generated notes

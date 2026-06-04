@@ -136,6 +136,17 @@ async def ask_graph(state: AskState):
     # 4. Final response generation
 ```
 
+### Source extraction pipeline
+
+Document ingestion is dispatched through `apps/app-main/src/app_main/services/parsing/engine_dispatcher.py`, which maps the user's `parser_engine` setting (`simple` / `docling` / `mineru` / `auto`) and the file extension to a concrete extraction client. The two GPU-backed parser engines (`services/docling/`, `services/mineru/`) are independent FastAPI containers that share an input volume and expose a symmetric `/process` endpoint. Audio/video files bypass the dispatcher entirely and route to WhisperX via the in-process `IngestionWorkflow`.
+
+When `parser_engine = "auto"`, the orchestrator `auto_fallback.py` runs Docling first, scores the result via `confidence.py::score_docling_extraction` (six weighted signals: OCR confidence, text density, heading rate, table success, image ratio, unknown-element ratio), and re-parses with MinerU only when the overall score is below `docling_min_confidence` (default 0.95). The chosen engine, confidence, signal breakdown, and a `fallback_triggered` flag are persisted on the per-source `Source.metadata` bag (SurrealDB `FLEXIBLE TYPE option<object>`, migration #43) and rendered in the UI by `ParserEngineBadge`.
+
+- **Routing**: `apps/app-main/src/app_main/services/parsing/engine_dispatcher.py`
+- **Auto-fallback**: `apps/app-main/src/app_main/services/parsing/auto_fallback.py`
+- **Confidence**: `apps/app-main/src/app_main/services/parsing/confidence.py`
+- **Provenance**: `Source.metadata` (declared in `migrations/43.surrealql`)
+
 ### 5. Background Processing (`commands/`)
 
 **Purpose**: Asynchronous job processing
