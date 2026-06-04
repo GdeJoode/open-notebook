@@ -79,7 +79,11 @@ jobs:
 
       - name: Start GPU-free services
         run: |
-          docker compose up -d surrealdb open_notebook
+          # --no-deps: surrealdb is listed explicitly so it starts; open_notebook
+          # depends_on docling in compose, but docling reserves an nvidia GPU which
+          # is unavailable on GitHub-hosted runners. --no-deps prevents compose from
+          # trying to start GPU-bound services we don't need for the smoke suite.
+          docker compose up -d --no-deps surrealdb open_notebook
           echo "Waiting for open_notebook to respond on :8502 …"
           for i in $(seq 1 60); do
             if curl -fsS -o /dev/null http://localhost:8502/ ; then
