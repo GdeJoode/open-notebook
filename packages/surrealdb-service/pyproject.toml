@@ -14,7 +14,14 @@ dependencies = [
 
 [project.optional-dependencies]
 ui = ["streamlit>=1.30.0"]
-dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "pytest-cov>=4.0.0"]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    # Testcontainers boots a real SurrealDB instance for migration round-trip
+    # tests (Track B.0 harness). Gated behind the `requires_docker` marker.
+    "testcontainers>=4.0.0",
+]
 
 [project.scripts]
 surrealdb-service = "surrealdb_service.api.app:main"
@@ -35,3 +42,11 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
+markers = [
+    "requires_docker: Tests that need a Docker daemon (testcontainers-backed). Skipped automatically when Docker is unreachable.",
+]
+
+[dependency-groups]
+dev = [
+    "testcontainers>=4.0.0",
+]
