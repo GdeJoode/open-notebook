@@ -1,5 +1,41 @@
 # Track B — KG quality: rolling status
 
+## Phase B.1c — Pass-1 schema validation module — attempt 2 (2026-06-05)
+
+**Branch**: `track/b-pass1-module`
+**Commits added in attempt 2**: `9a2e3fc` → `bf01589` → `339907d` → `8076722`
+**State**: attempt 1 rejected (REVISIONS_NEEDED). All 3 majors + 6 minors addressed; ready for re-review.
+
+### Attempt 2 changes (vs attempt 1)
+
+- **Major 1 (`bf01589`)**: malformed-JSON paths now degrade gracefully per plan AC #3 — return empty `Pass1Output` (detected_schema="", coverage=0.0, confidence=0.0, empty lists) + WARNING log. `Pass1ParseError` reclassified to transport-only.
+- **Major 2 (`bf01589`)**: `Pass1Output.alternative_schemas` is now `List[Dict[str, Any]]` matching `Pass1Result` — no more ValidationError at B.1f persistence time. LLM contract carries `{"name", "confidence"}` per entry.
+- **Major 3 (`9a2e3fc`)**: schema-summary auto-compression at > 30 types + output-format trim. 100-type ontology + 1500-token sample now fits at ~2192 tokens (cap 2400). Stress tests pin the contract.
+- **Minor 1 (`8076722`)**: coverage 100% on both `pass1_schema_validation.py` AND `prompts/pass1.py` (was 89%, target ≥ 90%).
+- **Minor 2 (`9a2e3fc`)**: candidate-schema list extended with `base`, `policy_themes`, `social_profiles` — full 11-ontology surface.
+- **Minor 3 (`bf01589`)**: brace-extraction salvage for prose-wrapped JSON.
+- **Minor 4 (`bf01589`)**: dead `ModelManager()` instantiation removed; replaced with import-only check.
+- **Minor 5 (`9a2e3fc`)**: system prompt moved to `prompts/pass1.PASS1_SYSTEM_PROMPT`.
+- **Minor 6 (self-review edit)**: scholarly.yaml type count corrected (8, not "~30").
+- **Bonus (`339907d`)**: LLMExtractor `LLMManager` → `ModelManager` rename — Option B (TODO marker) chosen because the proper fix requires DI plumbing that belongs in B.1f.
+
+### Quality gates (attempt 2)
+
+```
+pipelines/ontology-extraction : 98 → 124, all green
+  Coverage pass1_schema_validation.py: 100%
+  Coverage prompts/pass1.py:           100%
+packages/shared              : 145 (unchanged)
+apps/app-main                : 368 (no regression)
+
+Token budgets (attempt 2):
+  scholarly.yaml + 1500-tok sample:  ~1947 / 2400 tokens (18.9% headroom)
+  synth 100 types + 1500-tok sample: ~2192 / 2400 tokens (8.7% headroom)
+  synth 150 types + 1500-tok sample: ~2367 / 2400 tokens (1.4% headroom)
+```
+
+---
+
 ## Phase B.1c — Pass-1 schema validation module (2026-06-05)
 
 **Branch**: `track/b-pass1-module`
