@@ -158,6 +158,18 @@ class EntityRepository:
 
         Raises:
             RuntimeError: If the query fails.
+
+        Note:
+            The SELECT-then-UPDATE flow is not atomic — two concurrent
+            ``upsert_entity`` calls for the same
+            ``(canonical_name, entity_type)`` can both observe "no
+            existing row" and then race on CREATE; the migration-39
+            ``idx_entity_name_type`` UNIQUE index will reject one of
+            them. This is acceptable today because all writers go
+            through the single-process ``EntityPersistenceService``.
+            **B.1e must wrap this in a per-canonical-name lock or move
+            the merge into a SurrealDB transaction** before introducing
+            parallel writers.
         """
         try:
             existing_rows = await execute_query(
@@ -283,6 +295,37 @@ class EntityRepository:
                 f"'{entity.canonical_name}' ({entity.entity_type})"
             )
         return str(result[0]["id"])
+
+    async def get_entity(self, record_id: str) -> Optional[Entity]:
+        """Fetch a single entity by record ID, returning a typed ``Entity``.
+
+        Selects all migration-39/44 fields and parses the result into the
+        Pydantic model. Used by B.1e's merge step to pick canonical winners
+        by recency (and elsewhere wherever a typed handle is preferred over
+        a raw dict).
+
+        Args:
+            record_id: Entity record ID (e.g. ``"entity:abc123"``).
+
+        Returns:
+            An ``Entity`` instance, or ``None`` if no row exists.
+        """
+        if not record_id:
+            return None
+        try:
+            rid = ensure_record_id(record_id)
+            rows = await execute_query(
+                "SELECT * FROM entity WHERE id = $id LIMIT 1",
+                {"id": rid},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"Failed to get entity '{record_id}': {e}")
+            return None
+        if not rows:
+            return None
+        # ``execute_query`` already converts RecordIDs to strings.
+        return Entity(**rows[0])
 
     async def register_alias(
         self,

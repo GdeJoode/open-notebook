@@ -8,6 +8,7 @@ must hold (``array::union``, ``math::max``).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
@@ -145,3 +146,59 @@ async def test_upsert_handles_empty_embedding(
     )
     assert len(rows) == 1
     assert rows[0]["embedding"] == []
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_upsert_roundtrips_created_at_and_updated_at(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """created_at + updated_at must survive the round-trip through the Pydantic model.
+
+    Mirrors the major from the attempt-1 review: ``Entity(**row)`` previously
+    dropped the timestamps silently (the inherited ``ObjectModel.created`` /
+    ``updated`` field names didn't match the schema's ``created_at`` /
+    ``updated_at``). This guards against the regression.
+
+    Flow:
+      1. Upsert → assert ``get_entity`` reads back ``created_at`` populated.
+      2. Sleep a tick, upsert again with higher confidence → assert
+         ``updated_at`` ≥ ``created_at`` (the UPDATE branch refreshes it
+         via ``time::now()``).
+    """
+    repo = EntityRepository(config=live_surrealdb)
+    name = _unique("timestamp-roundtrip")
+
+    first = Entity(
+        canonical_name=name,
+        entity_type="Person",
+        confidence=0.5,
+        embedding=[],
+    )
+    record_id = await repo.upsert_entity(first)
+    assert record_id
+
+    after_create = await repo.get_entity(record_id)
+    assert after_create is not None, "get_entity returned None after CREATE"
+    assert after_create.created_at is not None, "created_at should be populated by DB default"
+    assert after_create.updated_at is not None, "updated_at should be populated by DB default"
+    created_at_initial = after_create.created_at
+
+    # Bump confidence so the merge UPDATE branch fires.
+    await asyncio.sleep(0.05)
+    second = Entity(
+        canonical_name=name,
+        entity_type="Person",
+        confidence=0.9,
+        embedding=[],
+    )
+    await repo.upsert_entity(second)
+
+    after_update = await repo.get_entity(record_id)
+    assert after_update is not None
+    assert after_update.created_at == created_at_initial, "created_at must not change on UPDATE"
+    assert after_update.updated_at is not None
+    assert after_update.updated_at >= created_at_initial, (
+        "updated_at should be refreshed on the UPDATE branch"
+    )
+    assert after_update.confidence == pytest.approx(0.9)
