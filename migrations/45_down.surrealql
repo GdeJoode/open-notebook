@@ -1,0 +1,9 @@
+-- Migration 45 down: drop the notebook_schema and pass1_results tables.
+--
+-- Both tables are write-only until B.1c lands, so a downgrade before B.1c
+-- is non-destructive in practice. After B.1c, dropping these tables loses
+-- per-notebook ontology state and pass-1 history — recoverable only by
+-- re-running pass-1 on every source in the notebook. Treat as one-way.
+
+REMOVE TABLE IF EXISTS notebook_schema;
+REMOVE TABLE IF EXISTS pass1_results;
