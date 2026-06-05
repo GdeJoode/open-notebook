@@ -21,6 +21,10 @@ from surrealdb_service.repositories.notebook import (
     NoteRepository,
     NotebookRepository,
 )
+from surrealdb_service.repositories.notebook_schema import (
+    NotebookSchemaRepository,
+    Pass1ResultRepository,
+)
 from surrealdb_service.repositories.podcast import (
     EpisodeProfileRepository,
     PodcastEpisodeRepository,
@@ -60,6 +64,9 @@ __all__ = [
     "NoteRepository",
     "ChatSessionRepository",
     "ChatMessageRepository",
+    # Notebook schema (Phase B.1b)
+    "NotebookSchemaRepository",
+    "Pass1ResultRepository",
     # Podcast
     "SpeakerProfileRepository",
     "EpisodeProfileRepository",
