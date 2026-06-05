@@ -32,8 +32,20 @@ class LLMExtractor(ExtractorBase):
         user_prompt = f"Extract knowledge from the following text:\n\n{text}"
 
         try:
-            # Call LLM via llm-manager (import lazily)
-            from llm_manager.manager import LLMManager
+            # TODO(B.1f): LLMManager → ModelManager rename. The current
+            # ``from llm_manager.manager import LLMManager`` raised
+            # ImportError (no such class — see manager.py: it's
+            # ``ModelManager``) and the surface differs too: there is
+            # no ``manager.generate(...)`` method. The correct path is
+            # ``ModelManager().get_model_from_config(model).complete(...)``
+            # but that requires fetching a ``shared.models.Model``
+            # record first — a DI wiring change owned by B.1f. Until
+            # then this branch silently returns an empty result, which
+            # is the same behaviour as before the rename, so callers
+            # in production are unaffected by this attempt-2 marker.
+            # See ``docs/tracks/B-kg-quality/reviews/phase-B.1c-attempt-1.md``
+            # bonus section for the full diagnosis.
+            from llm_manager.manager import LLMManager  # type: ignore[attr-defined]
 
             manager = LLMManager()
             response = await manager.generate(
