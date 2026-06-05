@@ -11,9 +11,9 @@ Scope
 =====
 **Single schema only** in this phase. The multi-schema orchestrator
 that runs Pass-1 against several candidates and picks the best lands
-in B.1e. The ``alternative_schemas`` field here just records the
-top-3 fallback NAMES the LLM noticed — actually re-running against
-them is B.1e's job.
+in B.1e. The ``alternative_schemas`` field here records the top-3
+fallback {name, confidence} dicts the LLM noticed — actually
+re-running against them is B.1e's job.
 
 Token budget
 ============
@@ -22,7 +22,9 @@ margin (target ≤ 2400 tokens). Per Q-B-2, we use the coarse
 ``len(text) // 4`` heuristic — no ``tiktoken`` dependency. The
 ``TokenBudgetExceeded`` exception fires *before* the LLM call, so a
 caller that produced an oversized sample gets a loud failure rather
-than a quietly-truncated extraction.
+than a quietly-truncated extraction. For very large ontologies the
+schema summary auto-compresses (see ``COMPACT_SUMMARY_THRESHOLD``)
+so a 100-type ontology + 1500-token sample still fits.
 
 Integration
 ===========
@@ -32,22 +34,41 @@ returning raw response text. This keeps the module testable without
 ``llm-manager`` running (tests pass a canned callable) and matches
 the lazy-import pattern in ``LLMExtractor``. The production wiring
 into ``EntityExtractionService`` is B.1f — see the TODO marker there.
+
+Malformed-LLM-output policy
+===========================
+The plan (AC #3) requires graceful degradation when the LLM returns
+malformed JSON: ``_parse_response`` returns an empty ``Pass1Output``
+(``detected_schema=""``, ``coverage_pct=0.0``, ``confidence_in_choice=0.0``,
+empty lists) and emits a structured WARNING log. The orchestrator
+(B.1e) decides whether to retry, skip, or surface in the UI. The
+distinct ``Pass1ParseError`` is reserved for *transport* failures
+(network, auth, timeout) signalled by the LLM caller itself.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from ontology_extraction.prompts.pass1 import build_pass1_prompt
+from ontology_extraction.prompts.pass1 import (
+    PASS1_SYSTEM_PROMPT,
+    build_pass1_prompt,
+)
 
 # Coarse token estimator: ``len(text) // 4`` matches Q-B-2's
 # heuristic. With a 20% safety margin against the 3000-token plan
 # cap, we enforce ≤ 2400 estimated tokens for the assembled prompt.
 TOKEN_BUDGET_TARGET = 2400
+
+# How many characters of a malformed LLM response to include in the
+# WARNING log. Long enough to diagnose, short enough not to swamp the
+# log line. Truncation is centralised so the format stays consistent.
+_MALFORMED_LOG_EXCERPT_CHARS = 240
 
 # Sync callable: ``(system_prompt, user_prompt, model) -> str``
 SyncLLMCaller = Callable[[str, str, str], str]
@@ -109,7 +130,12 @@ class Pass1Output(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     detected_schema: str = Field(
-        description="Schema name the LLM judged best-fit for the text."
+        default="",
+        description=(
+            "Schema name the LLM judged best-fit for the text. Empty "
+            "string is the sentinel for 'unknown' — emitted by the "
+            "graceful malformed-JSON path so callers can branch on it."
+        ),
     )
     confidence_in_choice: float = Field(
         default=0.0,
@@ -137,11 +163,15 @@ class Pass1Output(BaseModel):
         default_factory=list,
         description="Extension proposals derived from ``uncovered_concepts``.",
     )
-    alternative_schemas: List[str] = Field(
+    alternative_schemas: List[Dict[str, Any]] = Field(
         default_factory=list,
         description=(
-            "Top-3 fallback schema NAMES the LLM noticed. B.1e re-runs "
-            "Pass-1 against these to pick the best fit."
+            "Top-3 fallback schemas the LLM noticed, each a dict "
+            "shaped roughly ``{'name': str, 'confidence': float}``. "
+            "Shape matches ``Pass1Result.alternative_schemas`` so the "
+            "model_dump feeds the repo directly without lifting "
+            "strings into dicts. B.1e re-runs Pass-1 against the "
+            "named schemas."
         ),
     )
 
@@ -191,13 +221,44 @@ class Pass1Output(BaseModel):
 
     @field_validator("alternative_schemas", mode="before")
     @classmethod
-    def ensure_list_of_strings(cls, v: Any) -> List[str]:
-        """Coerce None / non-list to an empty list, drop non-strings."""
+    def normalise_alternative_schemas(cls, v: Any) -> List[Dict[str, Any]]:
+        """Accept list-of-dicts; coerce list-of-strings for back-compat.
+
+        The canonical LLM contract emits
+        ``[{"name": "general", "confidence": 0.4}, ...]`` so the dump
+        feeds ``Pass1Result.alternative_schemas`` (also a
+        ``List[Dict[str, Any]]``) without re-shaping.
+
+        We still accept a bare ``List[str]`` defensively because an
+        LLM may regress to the simpler format. Bare strings are
+        lifted to ``{"name": s}`` so downstream readers find ``name``
+        in the expected place.
+        """
         if v is None:
             return []
         if not isinstance(v, list):
             return []
-        return [str(item) for item in v if item is not None][:3]
+        normalised: List[Dict[str, Any]] = []
+        for item in v:
+            if isinstance(item, dict):
+                # Drop entries missing ``name`` — they would have no
+                # meaningful interpretation for B.1e.
+                name = item.get("name")
+                if name is None:
+                    continue
+                normalised.append({**item, "name": str(name)})
+            elif isinstance(item, str):
+                normalised.append({"name": item})
+            # Silently drop other types (None, ints, etc.) — defensive
+            # against malformed LLM output.
+        return normalised[:3]
+
+
+# Regex for the "salvage a JSON object from arbitrary prose" minor.
+# Greedy match so we capture nested objects rather than stopping at
+# the first inner ``}``. Anchored to braces because that's the only
+# structural shape Pass-1 accepts (arrays are rejected upstream).
+_BRACED_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def _strip_code_fence(text: str) -> str:
@@ -214,12 +275,61 @@ def _strip_code_fence(text: str) -> str:
     return s
 
 
-class Pass1ParseError(RuntimeError):
-    """Raised when the LLM response cannot be parsed into ``Pass1Output``.
+def _salvage_json_object(text: str) -> str:
+    """Extract the first ``{...}`` block from arbitrary prose.
 
-    Distinct from ``TokenBudgetExceeded`` so callers can branch on
-    transient (retry) vs structural (fail-loud) failures.
+    LLMs sometimes wrap JSON in commentary ("Here is the result: {...}
+    Hope that helps."). After ``_strip_code_fence`` removes markdown
+    fences, this regex pulls out the brace-delimited JSON object so
+    ``json.loads`` has a fighting chance. Returns the original text
+    unchanged if no object is found — the caller will fail and the
+    graceful malformed-JSON path takes over.
     """
+    match = _BRACED_OBJECT_RE.search(text)
+    return match.group(0) if match else text
+
+
+class Pass1ParseError(RuntimeError):
+    """Raised when the LLM caller itself fails (network, auth, timeout).
+
+    Distinct from ``TokenBudgetExceeded``. Content-parsing failures
+    (malformed JSON, missing fields) **do NOT** raise this — they
+    return an empty ``Pass1Output`` with a WARNING log so the
+    orchestrator (B.1e) can decide between retry / skip / surface.
+    """
+
+
+def _empty_pass1_output() -> "Pass1Output":
+    """Build the sentinel ``Pass1Output`` for malformed-LLM-output paths.
+
+    Centralised so the graceful-degradation contract is documented in
+    one place and every degraded return looks identical from the
+    caller's perspective.
+    """
+    return Pass1Output(
+        detected_schema="",
+        confidence_in_choice=0.0,
+        coverage_pct=0.0,
+        uncovered_concepts=[],
+        proposed_extensions=[],
+        alternative_schemas=[],
+    )
+
+
+def _log_malformed(reason: str, response: str) -> None:
+    """Emit a structured WARNING log for a malformed-LLM-output case.
+
+    The orchestrator looks for these log lines to count parse
+    failures. Body is truncated to keep log lines bounded.
+    """
+    excerpt = response[:_MALFORMED_LOG_EXCERPT_CHARS]
+    suffix = "..." if len(response) > _MALFORMED_LOG_EXCERPT_CHARS else ""
+    logger.warning(
+        "Pass-1 returned empty Pass1Output: {reason} | excerpt={excerpt!r}{suffix}",
+        reason=reason,
+        excerpt=excerpt,
+        suffix=suffix,
+    )
 
 
 class Pass1SchemaValidator:
@@ -228,6 +338,17 @@ class Pass1SchemaValidator:
     Stateless wrapper around the prompt builder + LLM call + parser.
     A new instance per run is fine — the only ``__init__`` argument
     is the LLM caller, which is cheap to capture.
+
+    Token-budget note
+    -----------------
+    The prompt-assembly pipeline auto-compresses the schema summary
+    for ontologies with more than ``COMPACT_SUMMARY_THRESHOLD`` (30)
+    types. With that compression in place, a synthetic 100-type
+    ontology + 1500-token sample fits comfortably under the
+    2400-token cap (see ``TestStressTokenBudget`` in the test
+    module). The orchestrator (B.1e) is still responsible for
+    selecting a sample size that fits — this module fails loudly
+    via ``TokenBudgetExceeded`` rather than silently truncating.
     """
 
     def __init__(
@@ -267,11 +388,14 @@ class Pass1SchemaValidator:
             model: Override the default model id.
 
         Returns:
-            A populated ``Pass1Output``.
+            A populated ``Pass1Output``. On malformed LLM output the
+            return is the empty sentinel (``detected_schema=""``,
+            ``coverage_pct=0.0``, ``confidence_in_choice=0.0``) plus a
+            WARNING log — no exception.
 
         Raises:
             TokenBudgetExceeded: Prompt exceeds the 2400-token cap.
-            Pass1ParseError: LLM response could not be parsed.
+            Pass1ParseError: LLM caller itself failed (transport).
         """
         prompt = build_pass1_prompt(ontology, text_sample)
         estimated = _estimate_tokens(prompt)
@@ -283,11 +407,6 @@ class Pass1SchemaValidator:
             )
             raise TokenBudgetExceeded(estimated, TOKEN_BUDGET_TARGET)
 
-        system_prompt = (
-            "You are a meticulous ontology curator. Judge schema fit "
-            "honestly — under-confidence is better than over-confidence."
-        )
-
         # Resolve LLM caller. Lazy-import the real client if none was
         # injected; tests always inject so this branch is dev-only.
         caller = self._llm_caller
@@ -296,16 +415,17 @@ class Pass1SchemaValidator:
 
         chosen_model = model or self._default_model
         try:
-            raw_response = caller(system_prompt, prompt, chosen_model)
+            raw_response = caller(PASS1_SYSTEM_PROMPT, prompt, chosen_model)
             # Both sync and async callers are supported. ``inspect``
             # isn't needed — coroutines are awaitable, strings are not.
             if hasattr(raw_response, "__await__"):
                 raw_response = await raw_response  # type: ignore[misc]
         except Exception as e:
-            # Don't swallow — Pass-1 failure should bubble so the
-            # caller can decide between retry / fallback / abort.
+            # Transport-level failure (network, timeout, auth). Wrap
+            # in Pass1ParseError so the orchestrator can branch on it
+            # the same way it branches on TokenBudgetExceeded.
             logger.exception(f"Pass-1 LLM call failed: {e}")
-            raise
+            raise Pass1ParseError(f"LLM caller failed: {e}") from e
 
         return self._parse_response(str(raw_response))
 
@@ -313,30 +433,50 @@ class Pass1SchemaValidator:
     def _parse_response(response: str) -> Pass1Output:
         """Parse and validate an LLM response into a ``Pass1Output``.
 
-        Tolerates markdown code fences and accepts percentage-style
-        scalars (the field validators handle scaling). Raises
-        ``Pass1ParseError`` on anything that can't be coerced.
+        Per plan AC #3, content-parsing failures degrade gracefully:
+        return the empty sentinel ``Pass1Output`` and emit a WARNING
+        log. The orchestrator decides whether to retry / skip /
+        surface — we don't raise.
+
+        Tolerates markdown code fences and brace-delimited JSON
+        embedded in arbitrary prose (minor #3). Accepts percentage-
+        style scalars (the field validators handle scaling).
         """
         if not response or not response.strip():
-            raise Pass1ParseError("Empty LLM response")
+            _log_malformed("empty LLM response", response or "")
+            return _empty_pass1_output()
 
+        # Unwrap markdown fence, then salvage a brace-delimited block
+        # from any surrounding prose (covers "Here is the JSON: {...}"
+        # patterns). Salvage is a no-op if the input is already pure
+        # JSON.
         text = _strip_code_fence(response)
+        text = _salvage_json_object(text)
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:
-            logger.warning(f"Pass-1 response is not valid JSON: {e}")
-            raise Pass1ParseError(f"Invalid JSON: {e}") from e
+            _log_malformed(f"invalid JSON ({e})", response)
+            return _empty_pass1_output()
 
         if not isinstance(data, dict):
-            raise Pass1ParseError(
-                f"Pass-1 response must be a JSON object, got {type(data).__name__}"
+            _log_malformed(
+                f"top-level JSON is {type(data).__name__}, expected object",
+                response,
             )
+            return _empty_pass1_output()
 
         try:
             return Pass1Output(**data)
+        except ValidationError as e:
+            _log_malformed(f"output failed Pass1Output validation ({e})", response)
+            return _empty_pass1_output()
         except Exception as e:
-            logger.warning(f"Pass-1 response failed validation: {e}")
-            raise Pass1ParseError(f"Output validation failed: {e}") from e
+            # Belt-and-braces: a Pydantic upgrade could surface a new
+            # exception class. Treat any constructor failure as a
+            # graceful-degradation case rather than crashing the
+            # pipeline.
+            _log_malformed(f"unexpected Pass1Output construction error ({e})", response)
+            return _empty_pass1_output()
 
     @staticmethod
     def _default_llm_caller() -> LLMCaller:
@@ -349,19 +489,21 @@ class Pass1SchemaValidator:
         # NOTE B.1f will wire ``EntityExtractionService`` into
         # ``Pass1SchemaValidator`` and supply an LLM caller via DI.
         # This default is a safety net for ad-hoc CLI use only.
-        from llm_manager.manager import ModelManager  # type: ignore[import-not-found]
-
-        manager = ModelManager()
+        # The import is kept so the dependency surfaces if missing —
+        # but the manager itself is not instantiated, since B.1f
+        # owns the wiring (the previous attempt-1 code allocated a
+        # ModelManager and threw it away, which was the minor-#4
+        # dead-instantiation finding).
+        import llm_manager.manager  # noqa: F401  type: ignore[import-not-found]
 
         async def _call(system_prompt: str, user_prompt: str, model: str) -> str:
-            # ModelManager exposes ``get_model_from_config(...).complete``
-            # but the surface differs by provider; this stub is a
-            # placeholder that B.1f will replace with the real
-            # wiring. Returning empty JSON keeps the parser failure
-            # path testable in production until then.
+            # This stub returns empty JSON and logs WARNING. B.1f
+            # replaces it with the real ModelManager round-trip. The
+            # WARNING is the canary — production must not exercise
+            # this path.
             logger.warning(
                 "Pass1SchemaValidator using lazy default LLM caller — "
-                "B.1f integration not yet wired."
+                "B.1f integration not yet wired; returning empty JSON."
             )
             return "{}"
 
