@@ -1,5 +1,98 @@
 # Track B — KG quality: rolling status
 
+## Phase B.1c — Pass-1 schema validation module (2026-06-05)
+
+**Branch**: `track/b-pass1-module`
+**Commits**: `1b82c48` (name_normalizer stub) → `aa7d02f` (Pass-1 module)
+**State**: code complete, all quality gates green, ready for review.
+
+### Delivered
+
+- `packages/shared/src/shared/utils/name_normalizer.py` — V1 stub
+  (`lowercase + collapse-whitespace + strip-trailing-punctuation`)
+  behind a single import point `shared.utils.name_normalizer.
+  normalize_entity_name`. Q9 (Track M4) replaces this with TOOI +
+  Crossref lookups; until then, the single import point keeps the
+  upgrade invisible to downstream callers.
+- `pipelines/ontology-extraction/src/ontology_extraction/
+  pass1_schema_validation.py` — `Pass1SchemaValidator` with async
+  `run(text_sample, ontology)` returning a fully-validated
+  `Pass1Output`. Coarse `len(text)//4` token-budget guard fires
+  pre-LLM-call at the 2400-token cap (3000 plan budget minus 20 %
+  safety margin per Q-B-2); raises `TokenBudgetExceeded`.
+- `pipelines/ontology-extraction/src/ontology_extraction/prompts/
+  pass1.py` — three-section prompt template (schema summary / text
+  sample / output JSON schema). Real-world headroom for
+  `scholarly.yaml` (~30 entity types) + 1500-token sample is
+  ~2132 / 2400 tokens (11.2 %).
+- `Pass1Output.model_dump()` keys are field-compatible with
+  `shared.models.notebook_schema.Pass1Result` — a guard test
+  (`TestPass1OutputCompatibility::test_model_dump_keys_match_…`)
+  fails if the two models drift, blocking B.1f-style persistence
+  bugs at PR time.
+- Defensive output parser: tolerates markdown code fences,
+  percentage-style scalars (`87` → `0.87`), `null` arrays, extra
+  fields; raises `Pass1ParseError` on structurally bad responses.
+- LLM caller is **injected** (not lazy-imported by default) — see
+  the self-review for the trade-off. Tests pass canned callables;
+  B.1f wires the real one. `EntityExtractionService.run_extraction`
+  gained a TODO marker only — no behaviour change.
+
+### Tests added
+
+- `packages/shared/tests/test_name_normalizer.py` — 17 tests
+  (transformations, idempotence, Unicode passthrough, public API).
+- `pipelines/ontology-extraction/tests/
+  test_pass1_schema_validation.py` — 37 tests (token budget at
+  boundary, prompt template renderings, malformed JSON parsing,
+  field-validator edge cases, end-to-end with mocked sync + async
+  LLM callers, real-world scholarly-ontology budget headroom,
+  `Pass1Output` ↔ `Pass1Result` field compatibility).
+
+### Quality gates
+
+```
+packages/shared           : 128 → 145 (+17), all green
+pipelines/ontology-extraction : 61 → 98 (+37), all green
+apps/app-main             : 368 → 368, no regressions
+```
+
+### Decisions worth flagging (full detail in self-review)
+
+- **Injected LLM caller > lazy import default**: the existing
+  `LLMExtractor` imports `LLMManager` (which does not exist in
+  `llm-manager`), always hits the ImportError fallback, and returns
+  empty results. Pass-1 chose injection so unit tests do not
+  inherit that broken-default behaviour. B.1f wires the production
+  caller.
+- **Pass1Output.alternative_schemas is `List[str]`** (the LLM-facing
+  contract), while `Pass1Result.alternative_schemas` stays
+  `List[Dict[str, Any]]` (the DB-side FLEXIBLE shape). The B.1f
+  persistence wrapper lifts strings into `{"name": s}` dicts.
+- **Percentage rescaling on coverage_pct / confidence_in_choice**:
+  values > 1.5 are divided by 100. Defensive against LLM
+  inconsistency; tested + easy to revert if a reviewer prefers
+  strict rejection.
+
+### Outstanding follow-ups for downstream phases
+
+- **B.1d (Pass 2)**: import `Pass1SchemaValidator`, `Pass1Output`
+  from `ontology_extraction` — re-exports are already in place.
+- **B.1e (multi-schema)**: this phase shipped only the
+  single-schema validator. B.1e adds the orchestrator that runs
+  Pass-1 against several candidate schemas and picks the best fit.
+- **B.1f (service integration)**: replace the TODO marker in
+  `EntityExtractionService.run_extraction` with the actual
+  sample-→-validate-→-persist path. The default lazy LLM caller
+  in `Pass1SchemaValidator._default_llm_caller` is the swap point.
+- **B.4 (telemetry)**: when the metrics table lands, the validator
+  should emit `pass1_runs`, `pass1_token_estimate`,
+  `pass1_token_budget_exceeded` counters. Currently we have only
+  `loguru` WARNING-level observability.
+- **Track M4 Q9**: replace `normalize_entity_name` body with the
+  full TOOI + Crossref pipeline. The import point stays at
+  `shared.utils.name_normalizer` — no caller rewiring needed.
+
 ## Phase B.1b — notebook_schema + pass1_results tables + repos (2026-06-05)
 
 **Branch**: `track/b-models-notebook-schema`
