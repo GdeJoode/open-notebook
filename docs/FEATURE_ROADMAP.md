@@ -583,6 +583,59 @@ Change detected (debounced)
 
 ---
 
+## Track H — Vision-model parser tier (DEFERRED — start na Track G)
+
+**Status**: ⏸ Geplanned, **niet beginnen voor Track G compleet is**. Toegevoegd 2026-06-05 op user-request tijdens Track B.1c.
+
+**Probleem**: Track A's auto-fallback is binair — docling óf MinerU. Drie scenario's vallen tussen wal en schip:
+
+1. **Tabellen** waar zowel docling als MinerU de structuur fout interpreteren (samengevoegde cellen, multi-line headers, nested tables).
+2. **Figuren** met embedded text, diagrammen, of charts — beide parsers vlakken die af tot ruwe pixels of niets.
+3. **Fallback-van-fallback**: zowel docling als MinerU produceren lage-confidence output (beide onder threshold). Nu wint MinerU per default (Q-A-2 V1-trust). Een derde optie kan helpen.
+
+### H1 — Vision-model parser als parallelle service
+
+**Aanpak** (vergelijkbaar met A1 MinerU-service):
+
+- Nieuwe Docker service (bv. `vision-parser` in `services/vision-parser/`) wraps een multimodaal model. Kandidaten:
+  - **Local**: `Qwen2-VL-7B`, `MiniCPM-V`, of `Llama-3.2-Vision` via vLLM
+  - **Hosted**: GPT-4o, Claude Sonnet, Gemini 1.5 Pro vision-mode
+  - User-configurable via Settings, zoals andere model-keuzes
+- HTTP API: `POST /extract` met file + region-of-interest hints (pagina-range, bbox)
+- Output: structured table HTML, figure-description, of extracted text
+
+### H2 — Hybride routing (per-element)
+
+- Auto-fallback wordt drie-fase i.p.v. twee:
+  1. Docling primary
+  2. MinerU als docling.confidence < threshold
+  3. **Vision parser** voor specifieke elementen waar MinerU's confidence per-element ook laag is
+- Vereist **per-chunk/per-element confidence** uit de note `docs/tracks/A-mineru/CONFIDENCE_GRANULARITY_NOTE.md` (Optie A) — Track H is dus afhankelijk van die feature.
+- Result-merge: docling tekst + MinerU layout + vision tables/figuren
+
+### H3 — UI granulariteit
+
+- Parser-engine dropdown krijgt 5e optie: "Vision (tables/figures only)" en "Vision (full fallback)".
+- Badge wordt rijker: "docling+mineru+vision (3 fragments)".
+- Per-source override in reparse modal: kies welke parser voor welk segment.
+
+**Vereisten voor start van Track H**:
+
+1. Track G volledig gemerged (geen scope-conflict met Agent platform).
+2. Per-chunk confidence ingebouwd (Optie A uit CONFIDENCE_GRANULARITY_NOTE).
+3. Live-test feedback van Track A bevestigt dat tabellen/figuren een echt probleem zijn (anders YAGNI).
+4. Vision-model keuze gemaakt (lokaal vs. hosted; budget-impact).
+
+**Effort schatting**: 2-3 weken (1 nieuwe service, hybride routing, UI rijker, threshold tuning).
+
+**Risico's**:
+
+- Vision-models zijn 5-10× duurder in inference dan docling/MinerU. Threshold en routing moeten conservatief zijn.
+- Lokale modellen (Qwen2-VL etc) vereisen GPU met ≥16GB VRAM; user's H100-class is overkill maar niet alle deployments hebben dat.
+- Hosted vision modellen brengen data-soevereiniteit issues mee voor users die on-prem draaien.
+
+---
+
 ## 3. Architecturale deep-dives
 
 ### 3.1 Multi-schema two-pass design

@@ -113,3 +113,7 @@ Per-chunk is conceptueel mooier maar voegt veel complexiteit toe. Beter eerst te
 - **V1 limitations**: gedocumenteerd hier.
 - **Beslissing nodig**: na live-test → Optie A/B/C kiezen.
 - **Tracking**: deze note + `docs/tracks/A-mineru/RETRO.md` "What hurt" sectie krijgt een verwijzing.
+
+## Relatie met Track H — Vision-model parser tier
+
+Track H (zie `docs/FEATURE_ROADMAP.md`) is een **mogelijk vervolg**, geplanned na Track G. H2 (hybride routing per-element) heeft **expliciet Optie A uit deze note nodig** — per-chunk confidence is een prerequisite om een vision-model alleen op specifieke elementen los te laten i.p.v. het complete document. Als de live-test rechtvaardigt dat we Track H willen, valt de keuze tussen A/B/C hier vanzelf op Optie A.
