@@ -1,0 +1,72 @@
+-- Migration 45: notebook_schema + pass1_results tables (Phase B.1b)
+--
+-- Track B (KG quality) introduces per-notebook ontology evolution and
+-- per-source pass-1 history. This migration declares the two SCHEMAFULL
+-- tables that B.1c will write into.
+--
+--   notebook_schema  → one row per notebook holding the chosen base
+--                      ontology, accepted/pending schema extensions, the
+--                      rolling coverage average and per-notebook review
+--                      toggles (soft-nudge, manual-review).
+--
+--   pass1_results    → append-only history of every pass-1 attempt per
+--                      source. Records the detected schema, confidence,
+--                      coverage and uncovered concepts so reviewers can
+--                      inspect why an extension was proposed.
+--
+-- Pattern: SCHEMAFULL with one ``FLEXIBLE option<object>`` extension-bag
+-- per table (mirrors migration 43's ``source.metadata`` design — keeps
+-- additive keys future-safe without further migrations). Array fields
+-- that hold extension dicts (``accepted_extensions``,
+-- ``pending_extensions``, ``uncovered_concepts``, ``proposed_extensions``,
+-- ``alternative_schemas``) are FLEXIBLE so individual dict shapes can
+-- evolve in code without schema churn.
+--
+-- Idempotent: every DEFINE uses ``IF NOT EXISTS`` so re-running the
+-- migration on a DB that already has the tables is a no-op.
+
+-- =============================================================================
+-- notebook_schema: per-notebook ontology + review state
+-- =============================================================================
+
+DEFINE TABLE IF NOT EXISTS notebook_schema SCHEMAFULL;
+
+DEFINE FIELD IF NOT EXISTS notebook ON TABLE notebook_schema TYPE record<notebook>;
+DEFINE FIELD IF NOT EXISTS base_ontology ON TABLE notebook_schema TYPE string;
+DEFINE FIELD IF NOT EXISTS accepted_extensions ON TABLE notebook_schema FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD IF NOT EXISTS pending_extensions ON TABLE notebook_schema FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD IF NOT EXISTS coverage_pct ON TABLE notebook_schema TYPE float DEFAULT 0.0;
+DEFINE FIELD IF NOT EXISTS review_required ON TABLE notebook_schema TYPE bool DEFAULT false;
+DEFINE FIELD IF NOT EXISTS soft_nudge_dismissed ON TABLE notebook_schema TYPE bool DEFAULT false;
+DEFINE FIELD IF NOT EXISTS last_modified_at ON TABLE notebook_schema TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS last_modified_by ON TABLE notebook_schema TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS metadata ON TABLE notebook_schema FLEXIBLE TYPE option<object>;
+
+-- One notebook_schema row per notebook. Treated as the source of truth
+-- for the "double-upsert" semantic — repository upsert MUST rewrite the
+-- existing row rather than creating a duplicate.
+DEFINE INDEX IF NOT EXISTS idx_notebook_schema_notebook ON notebook_schema FIELDS notebook UNIQUE;
+
+-- =============================================================================
+-- pass1_results: append-only per-source pass-1 history
+-- =============================================================================
+
+DEFINE TABLE IF NOT EXISTS pass1_results SCHEMAFULL;
+
+DEFINE FIELD IF NOT EXISTS source ON TABLE pass1_results TYPE record<source>;
+DEFINE FIELD IF NOT EXISTS notebook ON TABLE pass1_results TYPE record<notebook>;
+DEFINE FIELD IF NOT EXISTS schema_attempted ON TABLE pass1_results TYPE string;
+DEFINE FIELD IF NOT EXISTS detected_schema ON TABLE pass1_results TYPE string;
+DEFINE FIELD IF NOT EXISTS confidence_in_choice ON TABLE pass1_results TYPE float DEFAULT 0.0;
+DEFINE FIELD IF NOT EXISTS coverage_pct ON TABLE pass1_results TYPE float DEFAULT 0.0;
+DEFINE FIELD IF NOT EXISTS uncovered_concepts ON TABLE pass1_results FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD IF NOT EXISTS proposed_extensions ON TABLE pass1_results FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD IF NOT EXISTS alternative_schemas ON TABLE pass1_results FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD IF NOT EXISTS created_at ON TABLE pass1_results TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS pass1_metadata ON TABLE pass1_results FLEXIBLE TYPE option<object>;
+
+-- Source-scoped reads dominate (list_by_source); notebook-scoped reads
+-- are secondary so we cover the hot path here. A second index on
+-- ``notebook`` can be added later if listing-by-notebook latency becomes
+-- a problem.
+DEFINE INDEX IF NOT EXISTS idx_pass1_source ON pass1_results FIELDS source;
