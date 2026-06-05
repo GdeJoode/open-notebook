@@ -2,6 +2,7 @@
 Shared utilities.
 """
 
+from shared.utils.name_normalizer import normalize_entity_name
 from shared.utils.version import (
     compare_versions,
     get_installed_version,
@@ -28,6 +29,7 @@ __all__ = [
     "clean_thinking_content",
     "count_tokens_estimate",
     "extract_title",
+    "normalize_entity_name",
     "normalize_whitespace",
     "parse_thinking_content",
     "split_into_sentences",
