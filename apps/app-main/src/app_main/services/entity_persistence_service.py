@@ -4,16 +4,37 @@ Service for persisting filtered extraction results to the knowledge graph.
 Takes a FilteredResult from the entity-filtering pipeline and upserts
 entities into the ``entity`` table and relations into the ``relation``
 table in SurrealDB, making them visible on the Knowledge Graph page.
+
+Phase B.1a (2026-06): entity upsert was historically a raw-SQL block that
+wrote to ``name`` / ``weight`` / ``source_ids`` — drift from the SCHEMAFULL
+schema declared in migration 39 (``canonical_name`` / no weight /
+``source_documents``). The drift was caught by Phase B.0's roundtrip
+canaries; this service now routes entity writes through
+``EntityRepository.upsert_entity`` so the canonical schema and the
+write-path stay aligned.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from shared.models.entity import Entity
 from surrealdb_service.connection import execute_query
+from surrealdb_service.repositories.entity import EntityRepository
 
 
 class EntityPersistenceService:
     """Persists filtered entities and relations to the KG tables."""
+
+    def __init__(
+        self, entity_repository: Optional[EntityRepository] = None
+    ) -> None:
+        """Initialize with an optional pre-built repository.
+
+        Args:
+            entity_repository: Inject for tests; defaults to a fresh
+                ``EntityRepository`` using the global SurrealDB config.
+        """
+        self._entity_repo = entity_repository or EntityRepository()
 
     async def persist_match_candidates(
         self,
@@ -128,40 +149,19 @@ class EntityPersistenceService:
                 stored_props["merged_from"] = merge_lookup[text]
 
             try:
-                # Upsert: find by name+type, update or create
-                result = await execute_query(
-                    """
-                    LET $existing = (SELECT * FROM entity
-                        WHERE name = $name AND entity_type = $entity_type
-                        LIMIT 1);
-                    IF array::len($existing) > 0 THEN {
-                        UPDATE $existing[0].id SET
-                            weight = weight + 1,
-                            confidence = math::max(confidence, $confidence),
-                            source_ids = array::union(source_ids, [$source_id]),
-                            properties = object::extend(properties, $properties),
-                            updated = time::now();
-                        RETURN $existing[0].id;
-                    } ELSE {
-                        CREATE entity SET
-                            name = $name,
-                            entity_type = $entity_type,
-                            weight = 1,
-                            confidence = $confidence,
-                            source_ids = [$source_id],
-                            properties = $properties,
-                            created = time::now(),
-                            updated = time::now();
-                    } END
-                    """,
-                    {
-                        "name": text,
-                        "entity_type": label,
-                        "confidence": confidence,
-                        "source_id": source_id,
-                        "properties": stored_props,
-                    },
+                # Route through EntityRepository.upsert_entity so the write
+                # uses the canonical schema field names (canonical_name,
+                # source_documents, embedding=[]) declared in migration 39+44.
+                # See Phase B.1a notes at top of this module for context.
+                entity_model = Entity(
+                    canonical_name=text,
+                    entity_type=label,
+                    confidence=confidence,
+                    source_documents=[source_id],
+                    properties=stored_props,
+                    embedding=[],
                 )
+                await self._entity_repo.upsert_entity(entity_model)
                 entities_upserted += 1
             except Exception as e:
                 logger.warning(f"Failed to upsert entity '{text}': {e}")
@@ -178,17 +178,21 @@ class EntityPersistenceService:
                 continue
 
             try:
+                # Field-name alignment to migration 39's SCHEMAFULL `relation`
+                # table: lookups use `canonical_name`, and the edge carries
+                # `source_documents` (array), not the legacy `source_id` scalar.
                 await execute_query(
                     """
-                    LET $src = (SELECT id FROM entity WHERE name = $src_name LIMIT 1);
-                    LET $tgt = (SELECT id FROM entity WHERE name = $tgt_name LIMIT 1);
+                    LET $src = (SELECT id FROM entity
+                        WHERE canonical_name = $src_name LIMIT 1);
+                    LET $tgt = (SELECT id FROM entity
+                        WHERE canonical_name = $tgt_name LIMIT 1);
                     IF array::len($src) > 0 AND array::len($tgt) > 0 THEN {
                         RELATE $src[0].id->relation->$tgt[0].id SET
                             relation_type = $rel_type,
                             confidence = $confidence,
-                            source_id = $source_id,
-                            properties = $properties,
-                            created = time::now();
+                            source_documents = [$source_id],
+                            properties = $properties;
                     } END
                     """,
                     {
