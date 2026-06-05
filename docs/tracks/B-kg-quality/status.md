@@ -222,3 +222,74 @@ uv run pytest apps/app-main/tests -q
 - `445c072` — `feat(shared): Entity/Relation models with type_tags + primary_type (B.1a)`
 - `c0127f7` — `feat(surrealdb-service): EntityRepository.upsert_entity canonical write-path (B.1a)`
 - `c459fe8` — `fix(app-main): align entity_persistence_service to migration-39 schema (B.1a)`
+
+## Phase B.1a — attempt 2 (2026-06-05)
+
+**State**: revisions addressed, docker-gated suite re-verified
+end-to-end, ready for re-review.
+
+### Fixes vs attempt 1
+
+Reviewer rejected attempt 1 with `REVISIONS_NEEDED` (1 major + 6
+minors). Per-issue fix table with commit SHAs lives at
+`docs/tracks/B-kg-quality/reviews/phase-B.1a-self-review.md` →
+"Attempt 2 fixes".
+
+Highlights:
+
+- **Major** (timestamp drop): `Entity` now carries explicit
+  `created_at` + `updated_at` (option A from the review). `Relation`
+  carries `created_at` only (schema declares no `updated_at` on the
+  `relation` table). Net-new models, no caller-side breakage.
+- **Minor 1** (in/out aliases): `Relation.in_entity`/`out_entity` now
+  have `Field(alias="in"/"out")` + `populate_by_name=True`. Unit test
+  added.
+- **Minor 2** (race window): documented inline in `upsert_entity` —
+  B.1e must lock or transact.
+- **Minor 3** (embedding docstring): softened wording.
+- **Minor 4** (inaccurate test-failure claim): removed from
+  self-review.
+- **Add-on**: `EntityRepository.get_entity(record_id) -> Optional[Entity]`
+  added (typed read-path; B.1e merge will use it).
+- **Add-on**: docker-gated `test_upsert_roundtrips_created_at_and_updated_at`
+  added — regression guard for the major.
+
+### Verification (attempt 2)
+
+```
+cd packages/shared && uv run pytest -q
+  116 passed in 1.14s
+
+cd packages/surrealdb-service && uv run pytest -m "not requires_docker" -q
+  52 passed, 10 deselected in 2.04s
+
+cd packages/surrealdb-service && uv run pytest -m requires_docker -v
+  10 passed, 52 deselected in 6.31s
+  (incl. test_upsert_roundtrips_created_at_and_updated_at — new)
+```
+
+### Commit hashes (attempt 2)
+
+- `4486aee` — `fix(shared): Entity/Relation surface schema-side timestamps + in/out aliases (B.1a r2)`
+- `6621e76` — `feat(surrealdb-service): get_entity + timestamp roundtrip test + race note (B.1a r2)`
+
+### Known follow-ups
+
+These are pre-existing issues that B.1a flagged but does not fix
+(reviewer minors 5 + 6). All are read-side or counter-side and not on
+the canonical write-path B.1a hardened.
+
+- **Read-side entity drift in `EntityRepository`**: `find_by_type`,
+  `list_entities`, `search_entities`, and
+  `get_all_entities_and_relations` still `SELECT id, name,
+  entity_type, weight` — but migration 39 doesn't carry `name` or
+  `weight` columns. These read paths silently return empty rows for
+  the missing fields. Symmetric counterpart to the write-side drift
+  B.1a fixed. **Fix in B.1e or earlier** (the merge step touches these
+  paths anyway).
+- **`relations_created` over-counts in `entity_persistence_service.py`
+  lines 184-207**: the counter increments per RELATE call without
+  deduping when the same entity-pair fires multiple relation_types
+  back-to-back. Pre-existing, low-impact (purely a telemetry skew),
+  not on the write-path. Fix when the relation block gets its
+  upsert-equivalent (B.1c).
