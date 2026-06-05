@@ -65,6 +65,15 @@ as the project's general-purpose lessons-learned doc.
   table across the corpus, not that the signal is over-sensitive.
   Worth re-evaluating with a broader corpus and possibly weighting by
   row-yield rather than the binary non-empty check.
+- **Confidence scoring is per-document, not per-chunk.** Discovered
+  during Track B that the user's original intent for confidence was
+  per-chunk granularity (so docling could keep the clean pages and
+  MinerU could re-parse only the problematic ones). What shipped is
+  per-document: one score → all-or-nothing fallback. Documented in
+  `docs/tracks/A-mineru/CONFIDENCE_GRANULARITY_NOTE.md` with three
+  resolution options (per-chunk redesign, page-level fallback,
+  accept-as-V1). Decision deferred until live-test telemetry shows
+  whether the per-document model is hurting in practice.
 - **Frontend prod-bundle vs dev drift.** Track A.2/A.3 validated
   against `next dev`, but the bundled `open_notebook` Docker image
   served from port 8502 is from June 2 (pre-A.2). Anyone running
