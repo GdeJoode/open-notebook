@@ -9,8 +9,29 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from shared.models.entity import Entity
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
+
+
+def _union_preserve_order(
+    existing: List[Any], incoming: List[Any]
+) -> List[Any]:
+    """Return ``existing + (incoming \\ existing)``, preserving order.
+
+    Mirrors what ``array::union`` does in SurrealDB (dedup with stable order
+    of first appearance). We implement it in Python because ``upsert_entity``
+    pre-fetches the row and performs the merge client-side — see that
+    docstring for rationale.
+
+    Nested dicts/lists inside provenance_chain are JSON-comparable but not
+    hashable, so we fall back to an O(n*m) scan rather than a set.
+    """
+    out = list(existing)
+    for item in incoming:
+        if item not in out:
+            out.append(item)
+    return out
 
 
 class EntityRepository:
@@ -99,6 +120,212 @@ class EntityRepository:
                 f"Failed to find entities by type '{entity_type}': {e}"
             )
             return []
+
+    async def upsert_entity(self, entity: Entity) -> str:
+        """Upsert a canonical entity, returning its record ID.
+
+        Lookup is by ``(canonical_name, entity_type)`` — the unique-index pair
+        declared in migration 39 (``idx_entity_name_type``). When a row with
+        the same name+type already exists, the upsert merges (Python-side
+        merge of provenance/scoring fields, then a single UPDATE):
+
+        - confidence: ``max`` of existing vs new (monotonic, never drops)
+        - source_documents: union (dedup-preserving)
+        - properties: dict overlay — new keys win, existing keys retained
+        - type_tags: union (multi-type accumulation from B1 merge)
+        - primary_type: replaced with the new value when supplied
+        - provenance_chain: union
+
+        All other fields (``status``, ``embedding``, ``description``, ...) keep
+        the existing row's value on update. New rows take all fields from
+        ``entity`` directly, including the required ``embedding`` (which has
+        no DB-side default — see migration 39 line 30).
+
+        Why we merge in Python rather than in SurrealQL: ``object::extend`` /
+        ``object::merge`` are not available on SurrealDB v2.x at the time of
+        writing — calls produce
+        ``Parse error: Invalid function/constant path``. Pre-fetching the
+        existing row (one short SELECT) and applying the merge in Python keeps
+        the contract identical while sidestepping the SurrealQL gap.
+
+        Args:
+            entity: An ``Entity`` model populated with the canonical-schema
+                field names. ``embedding`` MUST be a list (use ``[]`` when
+                no vector is available).
+
+        Returns:
+            The record ID of the upserted entity, e.g. ``"entity:abc123"``.
+
+        Raises:
+            RuntimeError: If the query fails.
+
+        Note:
+            The SELECT-then-UPDATE flow is not atomic — two concurrent
+            ``upsert_entity`` calls for the same
+            ``(canonical_name, entity_type)`` can both observe "no
+            existing row" and then race on CREATE; the migration-39
+            ``idx_entity_name_type`` UNIQUE index will reject one of
+            them. This is acceptable today because all writers go
+            through the single-process ``EntityPersistenceService``.
+            **B.1e must wrap this in a per-canonical-name lock or move
+            the merge into a SurrealDB transaction** before introducing
+            parallel writers.
+        """
+        try:
+            existing_rows = await execute_query(
+                "SELECT * FROM entity "
+                "WHERE canonical_name = $canonical_name "
+                "AND entity_type = $entity_type LIMIT 1",
+                {
+                    "canonical_name": entity.canonical_name,
+                    "entity_type": entity.entity_type,
+                },
+                self.config,
+            )
+        except Exception as e:
+            logger.exception(
+                f"upsert_entity lookup failed for "
+                f"'{entity.canonical_name}' ({entity.entity_type}): {e}"
+            )
+            raise
+
+        if existing_rows:
+            existing = existing_rows[0]
+            merged_confidence = max(
+                float(existing.get("confidence", 0.0) or 0.0),
+                entity.confidence,
+            )
+            merged_sources = _union_preserve_order(
+                existing.get("source_documents") or [],
+                list(entity.source_documents),
+            )
+            merged_type_tags = _union_preserve_order(
+                existing.get("type_tags") or [],
+                list(entity.type_tags),
+            )
+            merged_provenance = _union_preserve_order(
+                existing.get("provenance_chain") or [],
+                list(entity.provenance_chain),
+            )
+            merged_properties: Dict[str, Any] = dict(
+                existing.get("properties") or {}
+            )
+            merged_properties.update(entity.properties)
+
+            update_payload = {
+                "id": existing["id"],
+                "confidence": merged_confidence,
+                "source_documents": merged_sources,
+                "properties": merged_properties,
+                "type_tags": merged_type_tags,
+                "primary_type": entity.primary_type
+                if entity.primary_type is not None
+                else existing.get("primary_type"),
+                "provenance_chain": merged_provenance,
+            }
+            try:
+                await execute_query(
+                    """
+                    UPDATE type::thing($id) SET
+                        confidence = $confidence,
+                        source_documents = $source_documents,
+                        properties = $properties,
+                        type_tags = $type_tags,
+                        primary_type = $primary_type,
+                        provenance_chain = $provenance_chain,
+                        updated_at = time::now();
+                    """,
+                    update_payload,
+                    self.config,
+                )
+            except Exception as e:
+                logger.exception(
+                    f"upsert_entity update failed for "
+                    f"'{entity.canonical_name}' ({entity.entity_type}): {e}"
+                )
+                raise
+            return str(existing["id"])
+
+        # No existing row — fresh CREATE.
+        create_payload: Dict[str, Any] = {
+            "canonical_name": entity.canonical_name,
+            "entity_type": entity.entity_type,
+            "description": entity.description,
+            "source_documents": list(entity.source_documents),
+            "extraction_method": entity.extraction_method,
+            "confidence": entity.confidence,
+            "provenance_chain": list(entity.provenance_chain),
+            "properties": dict(entity.properties),
+            "embedding": list(entity.embedding),
+            "status": entity.status,
+            "type_tags": list(entity.type_tags),
+            "primary_type": entity.primary_type,
+        }
+
+        try:
+            result = await execute_query(
+                """
+                CREATE entity SET
+                    canonical_name = $canonical_name,
+                    entity_type = $entity_type,
+                    description = $description,
+                    source_documents = $source_documents,
+                    extraction_method = $extraction_method,
+                    confidence = $confidence,
+                    provenance_chain = $provenance_chain,
+                    properties = $properties,
+                    embedding = $embedding,
+                    status = $status,
+                    type_tags = $type_tags,
+                    primary_type = $primary_type;
+                """,
+                create_payload,
+                self.config,
+            )
+        except Exception as e:
+            logger.exception(
+                f"upsert_entity create failed for "
+                f"'{entity.canonical_name}' ({entity.entity_type}): {e}"
+            )
+            raise
+
+        if not result:
+            raise RuntimeError(
+                f"CREATE entity returned no rows for "
+                f"'{entity.canonical_name}' ({entity.entity_type})"
+            )
+        return str(result[0]["id"])
+
+    async def get_entity(self, record_id: str) -> Optional[Entity]:
+        """Fetch a single entity by record ID, returning a typed ``Entity``.
+
+        Selects all migration-39/44 fields and parses the result into the
+        Pydantic model. Used by B.1e's merge step to pick canonical winners
+        by recency (and elsewhere wherever a typed handle is preferred over
+        a raw dict).
+
+        Args:
+            record_id: Entity record ID (e.g. ``"entity:abc123"``).
+
+        Returns:
+            An ``Entity`` instance, or ``None`` if no row exists.
+        """
+        if not record_id:
+            return None
+        try:
+            rid = ensure_record_id(record_id)
+            rows = await execute_query(
+                "SELECT * FROM entity WHERE id = $id LIMIT 1",
+                {"id": rid},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"Failed to get entity '{record_id}': {e}")
+            return None
+        if not rows:
+            return None
+        # ``execute_query`` already converts RecordIDs to strings.
+        return Entity(**rows[0])
 
     async def register_alias(
         self,

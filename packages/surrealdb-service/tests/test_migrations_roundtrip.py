@@ -248,59 +248,80 @@ async def test_source_roundtrip(live_surrealdb: SurrealDBConfig) -> None:
 
 
 # --------------------------------------------------------------------------
-# XFAIL: entity-persistence drift — to be fixed in Phase B.1a
+# Persistence-service field alignment (Phase B.1a — flipped from xfail).
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Pre-existing drift between SCHEMAFULL `entity` table (migration 39) "
-        "and apps/app-main/src/app_main/services/entity_persistence_service.py "
-        "lines 132-156, which writes `name`, `weight`, `source_ids` (legacy "
-        "SCHEMALESS shape) instead of the canonical `canonical_name`, "
-        "`source_documents`, and *no* weight field. Track B.1a will fix this "
-        "by routing writes through EntityRepository.upsert_entity(). When that "
-        "phase lands, flip this xfail to a passing assertion (or delete the "
-        "test) and update docs/tracks/B-kg-quality/status.md."
-    ),
-)
-async def test_entity_persistence_drift_xfail(
+async def test_entity_persistence_field_alignment(
     live_surrealdb: SurrealDBConfig,
 ) -> None:
-    """Mirror the legacy persistence-service write shape.
+    """Guard against the legacy ``name`` / ``weight`` / ``source_ids`` drift.
 
-    Expected to fail until B.1a aligns field names. Once B.1a lands, this test
-    should be deleted (or rewritten to assert the canonical shape via the
-    repository).
+    Phase B.1a routed entity writes through ``EntityRepository.upsert_entity``
+    using the migration-39 canonical fields (``canonical_name`` /
+    ``source_documents`` / explicit ``embedding=[]``). This test asserts two
+    things at the DB boundary:
 
-    Pointer for the fixer: ``entity_persistence_service.persist_filtered_result``
-    in ``apps/app-main/src/app_main/services/entity_persistence_service.py``,
-    lines 132-156.
+    1. The canonical write-path succeeds against SCHEMAFULL (no rejection).
+    2. The legacy field shape — ``name`` / ``weight`` / ``source_ids`` — IS
+       still rejected. If it ever stops being rejected, the schema has
+       silently gone SCHEMALESS and we've lost the canary.
+
+    This file lives in ``surrealdb-service`` (no ``app_main`` dependency), so
+    we exercise ``EntityRepository.upsert_entity`` directly with the same
+    Entity the persistence service now builds. The service-level wiring is
+    covered by the unit suite in ``apps/app-main/tests``.
+
+    Previously this lived as ``test_entity_persistence_drift_xfail`` — the
+    xfail marker has been removed because B.1a is the phase that fixes it.
     """
-    legacy_name = _unique("drift")
-    # SCHEMAFULL `entity` declares `canonical_name`, NOT `name`. SurrealDB will
-    # reject the CREATE with a schema error → xfail.
-    await execute_query(
-        """
-        CREATE entity SET
-            name = $name,
-            entity_type = "Person",
-            weight = 1,
-            confidence = 0.9,
-            source_ids = ["source:abc"],
-            properties = {};
-        """,
-        {"name": legacy_name},
-        config=live_surrealdb,
+    from shared.models import Entity
+    from surrealdb_service.repositories.entity import EntityRepository
+
+    repo = EntityRepository(config=live_surrealdb)
+
+    # --- 1. canonical write succeeds -----------------------------------
+    canonical = _unique("b1a-flip")
+    ent = Entity(
+        canonical_name=canonical,
+        entity_type="Person",
+        confidence=0.9,
+        source_documents=["source:b1a-test"],
+        properties={"affiliation": "ACME"},
+        embedding=[],
     )
-    # If we ever get here without an error, B.1a fixed the bug — promote
-    # to a real assertion at that point.
+    record_id = await repo.upsert_entity(ent)
+    assert record_id, "Canonical upsert returned no record id"
+
     rows = await execute_query(
-        "SELECT * FROM entity WHERE name = $name;",
-        {"name": legacy_name},
+        "SELECT * FROM entity WHERE canonical_name = $name;",
+        {"name": canonical},
         config=live_surrealdb,
     )
-    assert rows  # would fail today even if the CREATE silently no-ops
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["canonical_name"] == canonical
+    assert row["entity_type"] == "Person"
+    assert row["confidence"] == pytest.approx(0.9)
+    assert row["source_documents"] == ["source:b1a-test"]
+    assert row["properties"]["affiliation"] == "ACME"
+    assert row["status"] == "active"
+
+    # --- 2. legacy shape still rejected --------------------------------
+    legacy_name = _unique("legacy-drift")
+    with pytest.raises(Exception):  # noqa: B017 — SurrealDB schema error
+        await execute_query(
+            """
+            CREATE entity SET
+                name = $name,
+                entity_type = "Person",
+                weight = 1,
+                confidence = 0.9,
+                source_ids = ["source:abc"],
+                properties = {};
+            """,
+            {"name": legacy_name},
+            config=live_surrealdb,
+        )

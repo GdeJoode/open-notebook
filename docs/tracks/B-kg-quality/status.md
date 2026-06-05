@@ -199,3 +199,161 @@ must include `embedding` — keep this in mind when routing
 - `d2342bb` — `fix(surrealdb-service): robust migrations-dir lookup + pool reset`
 - `5de7ed8` — `test(surrealdb-service): non-docker safety net for fixture path drift`
 - `37bd30f` — `test(surrealdb-service): roundtrip canaries pass end-to-end against real DB`
+
+## Phase B.1a — Entity/Relation models + persistence drift fix (2026-06-05)
+
+**Branch**: `track/b-models-entity`
+**State**: code complete, all gates green, ready for review.
+
+### Delivered
+
+- `packages/shared/src/shared/models/entity.py` — new `Entity(ObjectModel)`
+  mirroring migration-39 fields plus the multi-type-tagging additions
+  (`type_tags`, `primary_type`) introduced by migration 44. New
+  `Relation(ObjectModel)` mirroring the `relation` RELATE table; DB-side
+  `in`/`out` surface as `in_entity`/`out_entity` to dodge the Python
+  keyword. Both exported from `shared.models`.
+- `migrations/44.surrealql` + `_down.surrealql` — additive
+  `DEFINE FIELD IF NOT EXISTS type_tags ... FLEXIBLE TYPE array DEFAULT []`
+  and `primary_type ... TYPE option<string>`. Idempotent. **Note**:
+  `FLEXIBLE` is required — without it SCHEMAFULL silently drops list
+  values on this SurrealDB version (confirmed via repro script).
+- `packages/surrealdb-service/src/surrealdb_service/repositories/entity.py`
+  — new `upsert_entity(entity: Entity) -> str`. Lookup by
+  `(canonical_name, entity_type)` (the migration-39 unique index);
+  Python-side merge of confidence (max) / source_documents / type_tags /
+  provenance_chain (union) / properties (dict overlay). Merge moved
+  client-side because `object::extend` is unavailable in this SurrealDB
+  version (Parse error).
+- `apps/app-main/src/app_main/services/entity_persistence_service.py`
+  — entity-upsert routed through `EntityRepository.upsert_entity`. Field
+  names align to migration 39 (`canonical_name`, `source_documents`,
+  explicit `embedding=[]`). Relation block also fixed: lookup uses
+  `canonical_name` (was `name`), edge carries `source_documents` (was
+  legacy `source_id` scalar). DI: optional `entity_repository=` argument
+  for test injection.
+- `packages/shared/tests/test_entity_model.py` — 11 Pydantic roundtrip
+  tests covering construction, defaults, None coercion (legacy rows),
+  confidence bounds, multi-type roundtrip.
+- `packages/surrealdb-service/tests/test_entity_repository_roundtrip.py`
+  — 3 docker-gated tests: create with type_tags, merge-on-second-call
+  (asserts union/max semantics), empty-embedding contract.
+- `packages/surrealdb-service/tests/test_migrations_roundtrip.py` — the
+  former `test_entity_persistence_drift_xfail` was renamed to
+  `test_entity_persistence_field_alignment` and **flipped to PASSING**.
+  It exercises `EntityRepository.upsert_entity` directly (no
+  app_main dependency) and also asserts the legacy field shape IS still
+  rejected — drift regression guard.
+- `apps/app-main/tests/test_entity_persistence_service.py` — refactored
+  to patch the injected repository for the entity path, while keeping
+  `execute_query` mocks for the relation path. Added a guard test
+  asserting the `Entity` passed to the repo uses the migration-39
+  canonical field names.
+
+### Verification
+
+```
+cd packages/shared && uv run pytest -q
+116 passed in 2.30s
+
+cd packages/surrealdb-service && uv run pytest -m "not requires_docker" -q
+52 passed, 9 deselected in 2.80s
+
+cd packages/surrealdb-service && uv run pytest -m requires_docker -v
+9 passed, 52 deselected in 6.35s
+  (incl. test_entity_persistence_field_alignment — formerly xfail)
+
+uv run pytest apps/app-main/tests -q
+368 passed in 57.29s   (baseline 367 + 1 new alignment guard)
+```
+
+### Notes for the next phase (B.1b/B.1e merge step)
+
+- `EntityRepository.upsert_entity` is now the canonical write-path. Pass
+  `embedding=[]` if the vector isn't computed yet (the SCHEMAFULL column
+  has no DB default).
+- For multi-type merges, `type_tags` accumulates via union and
+  `primary_type` is overwritten with the new value when supplied
+  (otherwise the existing one is preserved). The B1.e merge step gets
+  union semantics for free.
+- Schema-level rule: any new SCHEMAFULL array field that may need to
+  hold non-typed elements MUST use `FLEXIBLE TYPE array`. Plain
+  `TYPE array` silently coerces to `[]` on write — verified in this
+  phase, worth recording for migrations 45+.
+
+### Commit hashes
+
+- `445c072` — `feat(shared): Entity/Relation models with type_tags + primary_type (B.1a)`
+- `c0127f7` — `feat(surrealdb-service): EntityRepository.upsert_entity canonical write-path (B.1a)`
+- `c459fe8` — `fix(app-main): align entity_persistence_service to migration-39 schema (B.1a)`
+
+## Phase B.1a — attempt 2 (2026-06-05)
+
+**State**: revisions addressed, docker-gated suite re-verified
+end-to-end, ready for re-review.
+
+### Fixes vs attempt 1
+
+Reviewer rejected attempt 1 with `REVISIONS_NEEDED` (1 major + 6
+minors). Per-issue fix table with commit SHAs lives at
+`docs/tracks/B-kg-quality/reviews/phase-B.1a-self-review.md` →
+"Attempt 2 fixes".
+
+Highlights:
+
+- **Major** (timestamp drop): `Entity` now carries explicit
+  `created_at` + `updated_at` (option A from the review). `Relation`
+  carries `created_at` only (schema declares no `updated_at` on the
+  `relation` table). Net-new models, no caller-side breakage.
+- **Minor 1** (in/out aliases): `Relation.in_entity`/`out_entity` now
+  have `Field(alias="in"/"out")` + `populate_by_name=True`. Unit test
+  added.
+- **Minor 2** (race window): documented inline in `upsert_entity` —
+  B.1e must lock or transact.
+- **Minor 3** (embedding docstring): softened wording.
+- **Minor 4** (inaccurate test-failure claim): removed from
+  self-review.
+- **Add-on**: `EntityRepository.get_entity(record_id) -> Optional[Entity]`
+  added (typed read-path; B.1e merge will use it).
+- **Add-on**: docker-gated `test_upsert_roundtrips_created_at_and_updated_at`
+  added — regression guard for the major.
+
+### Verification (attempt 2)
+
+```
+cd packages/shared && uv run pytest -q
+  116 passed in 1.14s
+
+cd packages/surrealdb-service && uv run pytest -m "not requires_docker" -q
+  52 passed, 10 deselected in 2.04s
+
+cd packages/surrealdb-service && uv run pytest -m requires_docker -v
+  10 passed, 52 deselected in 6.31s
+  (incl. test_upsert_roundtrips_created_at_and_updated_at — new)
+```
+
+### Commit hashes (attempt 2)
+
+- `4486aee` — `fix(shared): Entity/Relation surface schema-side timestamps + in/out aliases (B.1a r2)`
+- `6621e76` — `feat(surrealdb-service): get_entity + timestamp roundtrip test + race note (B.1a r2)`
+
+### Known follow-ups
+
+These are pre-existing issues that B.1a flagged but does not fix
+(reviewer minors 5 + 6). All are read-side or counter-side and not on
+the canonical write-path B.1a hardened.
+
+- **Read-side entity drift in `EntityRepository`**: `find_by_type`,
+  `list_entities`, `search_entities`, and
+  `get_all_entities_and_relations` still `SELECT id, name,
+  entity_type, weight` — but migration 39 doesn't carry `name` or
+  `weight` columns. These read paths silently return empty rows for
+  the missing fields. Symmetric counterpart to the write-side drift
+  B.1a fixed. **Fix in B.1e or earlier** (the merge step touches these
+  paths anyway).
+- **`relations_created` over-counts in `entity_persistence_service.py`
+  lines 184-207**: the counter increments per RELATE call without
+  deduping when the same entity-pair fires multiple relation_types
+  back-to-back. Pre-existing, low-impact (purely a telemetry skew),
+  not on the write-path. Fix when the relation block gets its
+  upsert-equivalent (B.1c).
