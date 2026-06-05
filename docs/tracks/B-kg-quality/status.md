@@ -1,5 +1,69 @@
 # Track B — KG quality: rolling status
 
+## Phase B.1b — notebook_schema + pass1_results tables + repos (2026-06-05)
+
+**Branch**: `track/b-models-notebook-schema`
+**Commits**: `5fc4859` → `e7f0310` → `997ad8f`
+**State**: code complete, all quality gates green, ready for review.
+
+### Delivered
+
+- `migrations/45.surrealql` + `migrations/45_down.surrealql` — two new
+  SCHEMAFULL tables (`notebook_schema`, `pass1_results`) following the
+  migration-43 FLEXIBLE-extension-bag pattern. `UNIQUE` index on
+  `notebook_schema.notebook` enforces one row per notebook;
+  `idx_pass1_source` covers the hot read path. All `DEFINE` statements
+  use `IF NOT EXISTS` so the migration is idempotent.
+- `packages/shared/src/shared/models/notebook_schema.py` —
+  `NotebookSchema` and `Pass1Result` Pydantic models. Both carry
+  bounded confidence/coverage fields, a defensive
+  `ensure_metadata_dict` validator on the FLEXIBLE bag, and
+  `List[Dict[str, Any]]` for extension-shaped arrays so the dict
+  shape can evolve without further migrations.
+- `packages/surrealdb-service/src/surrealdb_service/repositories/notebook_schema.py`
+  — `NotebookSchemaRepository` (singleton-per-notebook with
+  rewrite-on-conflict upsert; plus
+  `add_pending_extension` / `accept_pending_extension` /
+  `reject_pending_extension`) and `Pass1ResultRepository` (append-only
+  + source-scoped / notebook-scoped reads).
+- `packages/shared/tests/test_notebook_schema_model.py` — 11 unit
+  tests covering construction, full roundtrip, bounds, metadata
+  coercion.
+- `packages/surrealdb-service/tests/test_notebook_schema_repo_roundtrip.py`
+  — 10 `requires_docker` tests covering migration record-keeping +
+  idempotence, full roundtrip, UNIQUE-rewrite semantic, direct-CREATE
+  blocking, extension lifecycle, and empty-list handling.
+- `packages/shared/src/shared/models/__init__.py` + repository
+  `__init__.py` — additive exports only. **Coordination note**: B.1a
+  (`track/b-models-entity`) touches the same two files to add
+  `Entity` / `Relation` and their repos. Both branches are additive
+  in distinct sections of `__all__`; merge is expected to be clean
+  three-way without semantic conflicts.
+
+### Decisions taken (all per autopilot defaults Q-B-8, Q-B-9)
+
+- **Q-B-9**: migration 45 is reserved for B.1b. (B.1a takes 44.)
+- **Q-B-8**: shared `notebook_event` table is NOT introduced here —
+  deferred to B.3b as planned.
+- **UNIQUE-index handling**: rewrite-on-conflict semantic in the
+  repository's `upsert`. Detailed rationale in
+  `reviews/phase-B.1b-self-review.md` and inline near `upsert()`.
+
+### Test results
+
+| Suite | Before | After | Note |
+|---|---|---|---|
+| `packages/shared` | 105 | 116 (+11) | new model tests |
+| `packages/surrealdb-service` (not requires_docker) | 52 | 52 | no new non-docker tests; no regressions |
+| `packages/surrealdb-service` (requires_docker) | 5 pass, 1 xfail | 15 pass, 1 xfail (+10) | new repo roundtrips |
+| `apps/app-main` | 367 | 367 | no regressions |
+
+Final `requires_docker` run summary: `15 passed, 52 deselected, 1 xfailed in 17.63s`.
+
+### Ready for review
+
+PR title: `feat(shared,surrealdb): notebook_schema + pass1_results tables + repos (B.1b)`
+
 ## Phase B.0 — Testcontainers SurrealDB harness (2026-06-05)
 
 **Branch**: `track/b-kg-foundation`
