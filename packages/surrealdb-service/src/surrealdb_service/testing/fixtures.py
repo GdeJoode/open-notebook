@@ -5,16 +5,18 @@ There is no first-party ``testcontainers-surrealdb`` adapter on PyPI as of
 wait strategy. The fixture:
 
 1. Pulls ``surrealdb/surrealdb:v2`` (matching ``docker-compose.yml``).
-2. Boots it with the same ``rocksdb`` storage + root/root credentials we use
-   in production, but on an ephemeral in-container path so each container
-   starts fresh.
+2. Boots it with the ``memory`` storage engine and root/root credentials.
+   Production uses ``rocksdb`` but no migration we exercise depends on
+   rocksdb-specific behaviour; ``memory`` gives a faster boot and a
+   guaranteed clean slate per session.
 3. Waits for ``GET /health`` to return 200.
 4. Builds a ``SurrealDBConfig`` pointing at the exposed port and applies every
-   discovered migration via the canonical :class:`AsyncMigrationManager`.
-5. Resets the global connection pool so tests get a fresh pool per session.
+   discovered migration (43+ files) via the canonical :class:`AsyncMigrationManager`.
+5. Resets the global connection pool so tests get a fresh pool per session,
+   bound to the test event loop rather than the migration loop.
 
 Session-scoped: one container per pytest session. Migrations are slow enough
-(a few seconds for ~17 files) that re-applying per-function would be painful;
+(a few seconds for 43+ files) that re-applying per-function would be painful;
 tests that need a clean DB should clear specific tables themselves.
 """
 
@@ -23,11 +25,10 @@ from __future__ import annotations
 import socket
 import time
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Iterator
 
 import httpx
 import pytest
-import pytest_asyncio
 from loguru import logger
 
 from surrealdb_service import connection as connection_module
@@ -42,11 +43,27 @@ SURREALDB_IMAGE = "surrealdb/surrealdb:v2"
 # random host port we discover via .get_exposed_port().
 SURREALDB_INTERNAL_PORT = 8000
 
-# Repo root is three levels up from this file:
-#   packages/surrealdb-service/src/surrealdb_service/testing/fixtures.py
-# → ../../../../..
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-_MIGRATIONS_DIR = _REPO_ROOT / "migrations"
+
+def _find_migrations_dir() -> Path:
+    """Walk upward from this file until we find a sibling ``migrations/`` dir.
+
+    Magic-number ``parents[N]`` indexing is fragile when files move (the
+    attempt-1 bug used ``parents[4]`` and landed in ``packages/``). Walking up
+    until we find ``migrations/`` next to a workspace marker (``pyproject.toml``
+    declaring ``[tool.uv.workspace]``) is robust to future reshuffles.
+    """
+    here = Path(__file__).resolve()
+    for ancestor in here.parents:
+        candidate = ancestor / "migrations"
+        if candidate.is_dir() and (ancestor / "pyproject.toml").is_file():
+            return candidate
+    raise RuntimeError(
+        f"Could not locate the workspace ``migrations/`` directory by walking "
+        f"up from {here}. Has the repo layout changed?"
+    )
+
+
+_MIGRATIONS_DIR = _find_migrations_dir()
 
 
 def _docker_reachable() -> bool:
@@ -66,11 +83,12 @@ def _docker_reachable() -> bool:
         return False
 
 
-DOCKER_AVAILABLE = _docker_reachable()
-
-
 def docker_available() -> bool:
-    """Re-evaluate Docker availability at call-time (handy in CI debug)."""
+    """Re-evaluate Docker availability at call-time.
+
+    Lazy by design — importing this module should not block on a Docker SDK
+    ping for ``pytest -m "not requires_docker"`` runs.
+    """
     return _docker_reachable()
 
 
@@ -103,7 +121,7 @@ def _port_open(host: str, port: int, timeout_s: float = 2.0) -> bool:
 
 
 @pytest.fixture(scope="session")
-def live_surrealdb() -> SurrealDBConfig:
+def live_surrealdb() -> Iterator[SurrealDBConfig]:
     """Boot a SurrealDB container, apply all migrations, yield a config.
 
     Returns a :class:`SurrealDBConfig` whose ``url`` points at the container.
@@ -117,7 +135,7 @@ def live_surrealdb() -> SurrealDBConfig:
             rows = await execute_query("INFO FOR DB;", config=live_surrealdb)
             ...
     """
-    if not DOCKER_AVAILABLE:
+    if not docker_available():
         pytest.skip("Docker daemon not reachable — skipping requires_docker tests")
 
     # Import lazily so collection in non-docker environments doesn't choke on
@@ -161,8 +179,9 @@ def live_surrealdb() -> SurrealDBConfig:
             database="open_notebook_test",
         )
 
-        # Reset the global pool so this config is honoured. The pool caches
-        # the first config it sees, which would otherwise point at the dev DB.
+        # Reset the global pool BEFORE migrations so AsyncMigrationManager
+        # builds connections via the test config (not whatever the dev env
+        # cached at import time).
         connection_module._pool = None
 
         logger.info(
@@ -184,13 +203,23 @@ def live_surrealdb() -> SurrealDBConfig:
                 f"Failed to apply migrations against testcontainer SurrealDB: {exc}"
             ) from exc
 
+        # CRITICAL: ``asyncio.run`` closes the loop it created. Any
+        # AsyncSurreal connections that the migration runner cached inside the
+        # global pool are now bound to a dead loop. Reset the pool so the
+        # first test using ``execute_query`` rebuilds connections on its own
+        # (pytest-asyncio-owned) loop.
+        connection_module._pool = None
+
         # Yield the config to tests
         yield config
     finally:
         # Tear down the pool first so no dangling connections leak when the
-        # container goes away.
+        # container goes away. Pool may be None if tests never touched it.
         try:
-            asyncio.run(connection_module.close_pool())
+            import asyncio
+
+            if connection_module._pool is not None:
+                asyncio.run(connection_module.close_pool())
         except Exception:
             pass
         connection_module._pool = None
@@ -222,11 +251,3 @@ async def _apply_with_diagnostics(manager: AsyncMigrationManager) -> None:
             f"Migration runner failed after version {current}; "
             f"offending file is likely {candidate}. Underlying error: {exc}"
         ) from exc
-
-
-# Async wrapper for callers that want an awaitable handle.
-# (Some tests prefer pytest-asyncio's async fixtures.)
-@pytest_asyncio.fixture(scope="session")
-async def live_surrealdb_async(live_surrealdb: SurrealDBConfig) -> AsyncIterator[SurrealDBConfig]:
-    """Async-flavoured alias of ``live_surrealdb`` for tests that want one."""
-    yield live_surrealdb

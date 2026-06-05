@@ -13,14 +13,12 @@ for the whole pytest session. Mark tests that depend on it with
 """
 
 from surrealdb_service.testing.fixtures import (
-    DOCKER_AVAILABLE,
     SURREALDB_IMAGE,
     docker_available,
     live_surrealdb,
 )
 
 __all__ = [
-    "DOCKER_AVAILABLE",
     "SURREALDB_IMAGE",
     "docker_available",
     "live_surrealdb",
