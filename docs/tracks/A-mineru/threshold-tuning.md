@@ -112,6 +112,13 @@ re-parse for `auto`-mode users. Operators with predominantly pure-prose
 corpora (no tables at all) can lower the threshold to ~0.80 via
 Settings without code changes.
 
+> **Corpus-size disclaimer.** Five PDFs is too small to claim 0.95 is
+> optimal — the data only justifies that 0.95 is **defensible** given
+> the observed mix and the per-user override path. Phase A's exit
+> contract is that the default is configurable; revisiting the default
+> after operators report telemetry from a broader corpus is a Track
+> H/follow-up item, not an A.3 regression.
+
 ### Branch B — Lower to 0.80-0.85 (REJECTED)
 
 A lower threshold would have kept three of five fixtures on docling
@@ -159,12 +166,13 @@ For the maintainer's convenience the synthetic fixtures live in
 These are not blockers for closing Track A; they're items worth
 revisiting after live MinerU usage produces real data.
 
-1. **`table_success` signal calibration.** The signal currently returns
-   0.0 the moment docling detects any `<table>` element with zero
-   parsed rows — there is no graceful "partial success" curve. A
-   future refinement could weight by table count (one bad table
-   shouldn't completely zero the signal) or by row-yield (4-of-5
-   tables OK ⇒ 0.8). Tracked as an A4 polish item; not blocking.
+1. **`table_success` signal calibration.** The signal is
+   `non_empty_tables / len(tables)` (so 1 bad table out of 5 ⇒ 0.8,
+   not 0.0). The 0.00 we saw in this corpus means **every** detected
+   table parsed empty, not just one. A future refinement could weight
+   by row-yield rather than the binary non-empty check, so partial
+   table extraction earns partial credit. Tracked as an A4 polish
+   item; not blocking.
 2. **Live telemetry.** Track A ships without instrumentation; we can't
    tell whether real users see fallback rates of 100% (matching our
    corpus) or 10%. A B4-era telemetry layer (planned per

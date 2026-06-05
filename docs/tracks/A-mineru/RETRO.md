@@ -41,12 +41,15 @@ as the project's general-purpose lessons-learned doc.
 
 ## What hurt
 
-- **CI workflow PAT scope blocker (A.0).** The `e2e.yml` file is
-  still pending move to `.github/workflows/` because the implementer
-  lacked the `workflow` OAuth scope. Five other PRs landed and the
-  workflow is still staged at `e2e-workflow.yml.pending`. This is a
-  procedural debt that should be resolved before track B starts —
-  otherwise the CI smoke contract Track A introduced doesn't fire.
+- **CI workflow PAT scope blocker (A.0).** The initial implementer push
+  for `.github/workflows/e2e.yml` failed mid-A.0 because the OAuth
+  token lacked the `workflow` scope. The orchestrator refreshed the
+  token (`gh auth refresh -s workflow`) and the file was moved into
+  place mid-A.0 (commit `732a1cf`) and further patched in PR #7
+  (`cf1ad8b`) when we discovered compose was pulling in the GPU
+  service chain. Both fixes are now on main. Lesson for future
+  tracks: have the orchestrator pre-validate the PAT scopes for
+  every directory the implementer will write to.
 - **No live-SurrealDB round-trip test.** A.1c attempt-1 wrongly
   declared `source` schemaless. The fix (migration #43) is right but
   the testing gap remains — the SurrealDB harness assertion only
@@ -55,11 +58,13 @@ as the project's general-purpose lessons-learned doc.
   early; the work is non-trivial (~1 day) but unlocks confidence for
   every track that touches schema.
 - **Confidence-score signal calibration is incomplete.** The Phase
-  A.3 tuning corpus revealed that `table_success` zeros the moment
-  any table has zero parsed rows — even a clean text doc with a
-  single mis-parsed table tank its score by 0.15. No track A blocker
-  (the bias is towards more fallback, which is the safe default), but
-  worth a polish PR.
+  A.3 tuning corpus all hit `table_success=0.00` because docling
+  parsed **zero** of the detected tables in every fixture. The signal
+  formula is `non_empty/len(tables)` (so 1 bad out of 5 = 0.8, not
+  0.0); the 0.00 finding means the docling table parser dropped every
+  table across the corpus, not that the signal is over-sensitive.
+  Worth re-evaluating with a broader corpus and possibly weighting by
+  row-yield rather than the binary non-empty check.
 - **Frontend prod-bundle vs dev drift.** Track A.2/A.3 validated
   against `next dev`, but the bundled `open_notebook` Docker image
   served from port 8502 is from June 2 (pre-A.2). Anyone running
@@ -143,15 +148,23 @@ the strongest predictor of a first-try APPROVED.
 
 ## CI infrastructure discovery (Phase 7 → all phases)
 
-A.0 surfaced that the implementer's GitHub PAT lacks the `workflow`
-OAuth scope required to create or update files under
-`.github/workflows/` via git push. The CI workflow was authored
-correctly at `docs/tracks/A-mineru/e2e-workflow.yml.pending` and is
-byte-identical to its canonical destination — but the move requires a
-workflow-scoped token. This was the right call (commit the artifact
-to the branch so it isn't lost) but it means Track A's CI smoke
-contract isn't actually firing yet. **This must be resolved before
-Track B opens its first PR**, otherwise B will inherit the same gap.
+A.0 surfaced two CI gaps that were both resolved during Track A:
+
+1. **PAT scope.** The implementer's first push of
+   `.github/workflows/e2e.yml` was rejected because the OAuth token
+   lacked the `workflow` scope. The orchestrator refreshed the token
+   (`gh auth refresh -s workflow`), moved the file via `git mv` (commit
+   `732a1cf`), and the workflow began firing on subsequent PRs.
+2. **GPU dependency chain.** PRs #5 and #6 hit a CI failure during
+   `docker compose up -d surrealdb open_notebook` because compose
+   followed `open_notebook.depends_on → docling`, and docling reserves
+   an nvidia GPU. The hosted runner has none, so the stack never came
+   up and the readiness probe timed out. Fixed in PR #7
+   (`cf1ad8b`) by adding `--no-deps` to the up command; both stalled
+   PRs were rebased on the new main and merged cleanly. Lesson: when
+   shipping a CI workflow, run it against a real PR end-to-end before
+   declaring it "done" — the A.0 acceptance criteria only checked
+   that the file was on disk, not that the workflow could complete.
 
 ## Tooling that paid off
 

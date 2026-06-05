@@ -42,7 +42,7 @@ sequence:
 ```
 $ uv run --project apps/app-main pytest apps/app-main/tests/ -q
 …
-357 passed
+367 passed
 ```
 
 ```
@@ -82,13 +82,15 @@ dropdown. The integration spec was updated accordingly.
    deferred. The integration spec covers the API → UI side; the
    DB → API read-back is fixture-mocked. Belongs to a testcontainers
    PR in Track B.
-3. The `table_success` confidence signal zeros on any one bad
-   table — documented in `threshold-tuning.md` Follow-ups and
+3. The `table_success` confidence signal is `non_empty/len(tables)`
+   — 1 bad table out of 5 = 0.8, not 0.0. The corpus all hit 0.0
+   because docling parsed zero of the detected tables in every
+   fixture. Documented in `threshold-tuning.md` Follow-ups and
    `RETRO.md` "What hurt".
-4. Phase A.0's CI workflow (`docs/tracks/A-mineru/e2e-workflow.yml.pending`)
-   is still pending the `git mv` to `.github/workflows/e2e.yml`.
-   Orchestrator task; Track A's CI smoke contract does not fire
-   until resolved.
+4. **(resolved)** Phase A.0's CI workflow was moved to
+   `.github/workflows/e2e.yml` mid-A.0 (commit `732a1cf`) and
+   patched in PR #7 (`cf1ad8b`) with `--no-deps`. Track A's CI
+   smoke contract is firing.
 
 ## Hand-off
 

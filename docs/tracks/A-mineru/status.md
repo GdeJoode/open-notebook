@@ -1122,8 +1122,9 @@ kept the 0.95 default, so commit 4 is intentionally skipped. See
 ### Quality gates
 
 - `uv run --project apps/app-main pytest apps/app-main/tests/` → all
-  green; +8 new tests for `score_pdf_corpus` smoke. Full count:
-  357 passed (was 349 at end of A.1c; A.2 didn't add app-main tests).
+  green; +8 new tests for `score_pdf_corpus` smoke + 10 new for the
+  `/api/health/mineru` router that landed in A.2. Full count:
+  **367 passed** (was 349 at end of A.1c).
 - `uv run --project packages/shared pytest packages/shared/tests/` →
   105 passed (unchanged).
 - `cd frontend && npx tsc --noEmit` → clean.
@@ -1142,14 +1143,17 @@ kept the 0.95 default, so commit 4 is intentionally skipped. See
 
 ### Caveats & follow-ups
 
-1. The Phase A.0 CI workflow at
-   `docs/tracks/A-mineru/e2e-workflow.yml.pending` still has not been
-   moved to `.github/workflows/e2e.yml` — orchestrator task per the
-   PAT scope limitation from A.0. Track A's CI smoke contract will
-   not fire until that move happens.
+1. **(resolved)** The Phase A.0 CI workflow was moved to
+   `.github/workflows/e2e.yml` mid-A.0 (commit `732a1cf`) and patched
+   in PR #7 (`cf1ad8b`) to use `--no-deps` when bringing up the stack
+   (GPU services would otherwise block the readiness probe). Track
+   A's CI smoke contract is now firing.
 
-2. The `table_success` confidence signal is too binary (any one
-   bad table → 0.0). Documented in
+2. The `table_success` confidence signal returns
+   `non_empty_tables / len(tables)` — 1 bad out of 5 yields 0.8, not
+   0.0. The A.3 corpus all hit 0.0 because docling parsed zero of the
+   detected tables in every fixture. Worth re-evaluating signal weights
+   once a broader corpus surfaces. Documented in
    `threshold-tuning.md` "Follow-ups" and `RETRO.md` "What hurt".
 
 3. Live SurrealDB round-trip test for `Source.metadata` is still
