@@ -8,6 +8,12 @@ This pipeline takes text chunks and an ontology schema, sends them to an LLM
 from ontology_extraction.config import ExtractionConfig
 from ontology_extraction.extractors.base import ExtractorBase
 from ontology_extraction.extractors.llm_extractor import LLMExtractor
+from ontology_extraction.pass1_schema_validation import (
+    Pass1Output,
+    Pass1ParseError,
+    Pass1SchemaValidator,
+    TokenBudgetExceeded,
+)
 from ontology_extraction.workflow import ExtractionWorkflow
 
 __all__ = [
@@ -15,4 +21,8 @@ __all__ = [
     "ExtractionWorkflow",
     "ExtractorBase",
     "LLMExtractor",
+    "Pass1Output",
+    "Pass1ParseError",
+    "Pass1SchemaValidator",
+    "TokenBudgetExceeded",
 ]
