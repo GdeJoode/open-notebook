@@ -39,18 +39,40 @@ def _unique(prefix: str) -> str:
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
 async def test_migrations_applied(live_surrealdb: SurrealDBConfig) -> None:
-    """All migrations applied → ``_sbl_migrations`` has rows up to 43."""
+    """Every ``.surrealql`` file in ``migrations/`` is recorded as applied.
+
+    Stronger than ``max() >= 43``: builds the expected set from disk by
+    scanning the migrations directory, so this test catches "silently skipped
+    middle migration" — the failure mode the self-review flagged for the
+    runner's ``already exists`` short-circuit. The historical sequence has
+    gaps (1..10 + 26..43), so a contiguous-range check would be wrong;
+    deriving from the filesystem is the only correct source of truth.
+    """
+    from surrealdb_service.testing import fixtures as fx
+
+    expected_versions: set[int] = set()
+    for p in fx._MIGRATIONS_DIR.iterdir():
+        if not (p.is_file() and p.suffix == ".surrealql"):
+            continue
+        stem = p.stem
+        if stem.endswith("_down"):
+            continue
+        try:
+            expected_versions.add(int(stem))
+        except ValueError:
+            continue
+
     rows = await execute_query(
         "SELECT * FROM _sbl_migrations ORDER BY version;",
         config=live_surrealdb,
     )
     assert rows, "Expected at least one applied migration"
-    versions = [r["version"] for r in rows]
-    # We don't pin the exact set (migrations get added over time), but the
-    # baseline 1-43 must all be present.
-    assert max(versions) >= 43, (
-        f"Highest applied migration is {max(versions)}; expected >= 43. "
-        f"Has a new migration broken the runner?"
+    applied = {r["version"] for r in rows}
+    missing = expected_versions - applied
+    assert not missing, (
+        f"Migrations on disk but not recorded as applied: {sorted(missing)}. "
+        f"The runner may have silently skipped them, or _sbl_migrations is "
+        f"out of date."
     )
 
 
@@ -68,13 +90,17 @@ async def test_entity_roundtrip(live_surrealdb: SurrealDBConfig) -> None:
     ``test_entity_persistence_drift_xfail`` below.
     """
     canonical = _unique("entity-roundtrip")
+    # ``embedding`` is FLEXIBLE TYPE array with no DEFAULT on the SCHEMAFULL
+    # ``entity`` table (migration 39), so callers MUST provide a value — even
+    # an empty list. This mirrors what production callers do.
     inserted = await execute_query(
         """
         CREATE entity SET
             canonical_name = $name,
             entity_type = $etype,
             description = $desc,
-            confidence = $confidence;
+            confidence = $confidence,
+            embedding = [];
         """,
         {
             "name": canonical,
@@ -111,7 +137,8 @@ async def test_entity_alias_roundtrip(live_surrealdb: SurrealDBConfig) -> None:
         """
         CREATE entity SET
             canonical_name = $name,
-            entity_type = "Org";
+            entity_type = "Org",
+            embedding = [];
         """,
         {"name": canonical},
         config=live_surrealdb,
@@ -119,13 +146,15 @@ async def test_entity_alias_roundtrip(live_surrealdb: SurrealDBConfig) -> None:
     parent_id = parent[0]["id"]
 
     alias_text = _unique("alias-text")
+    # Use ``type::thing()`` to parameterize the record-ID rather than f-string
+    # interpolating an unsanitized identifier into the query body.
     await execute_query(
-        f"""
+        """
         CREATE entity_alias SET
             alias_text = $alias,
-            canonical_entity = {parent_id};
+            canonical_entity = type::thing($parent_id);
         """,
-        {"alias": alias_text},
+        {"alias": alias_text, "parent_id": parent_id},
         config=live_surrealdb,
     )
 
@@ -147,18 +176,26 @@ async def test_relation_roundtrip(live_surrealdb: SurrealDBConfig) -> None:
     b_name = _unique("rel-dst")
 
     a = await execute_query(
-        "CREATE entity SET canonical_name = $n, entity_type = 'Person';",
+        "CREATE entity SET canonical_name = $n, entity_type = 'Person', embedding = [];",
         {"n": a_name},
         config=live_surrealdb,
     )
     b = await execute_query(
-        "CREATE entity SET canonical_name = $n, entity_type = 'Org';",
+        "CREATE entity SET canonical_name = $n, entity_type = 'Org', embedding = [];",
         {"n": b_name},
         config=live_surrealdb,
     )
     a_id = a[0]["id"]
     b_id = b[0]["id"]
 
+    # SurrealQL's RELATE arrow syntax does not accept function-call
+    # expressions like ``type::thing($a)`` in the source/target positions —
+    # the parser requires bare record-ID literals (see SurrealDB issue #4232).
+    # f-string interpolation is safe here because ``a_id`` / ``b_id`` come
+    # directly from ``parse_record_ids`` (no user input) and the format
+    # ``entity:<rand>`` is colon-and-alnum only. The SELECT below uses
+    # parameterized ``type::thing()`` which IS supported in projection
+    # position.
     await execute_query(
         f"""
         RELATE {a_id}->relation->{b_id} SET
@@ -169,11 +206,12 @@ async def test_relation_roundtrip(live_surrealdb: SurrealDBConfig) -> None:
     )
 
     rows = await execute_query(
-        f"""
+        """
         SELECT id, relation_type, confidence, status
         FROM relation
-        WHERE in = {a_id} AND out = {b_id};
+        WHERE in = type::thing($a) AND out = type::thing($b);
         """,
+        {"a": a_id, "b": b_id},
         config=live_surrealdb,
     )
     assert len(rows) == 1, f"Expected 1 RELATE row, got {len(rows)}"
