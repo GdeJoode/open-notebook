@@ -59,6 +59,15 @@ Wat we **niet** overnemen:
 
 ## Track A — Ingestion robustness (MinerU naast docling)
 
+> **Status**: ✅ **COMPLETE (2026-06-04)** — A1 (MinerU service +
+> dispatcher) + A2 (confidence-fallback + UI badge + slider + health
+> chip + per-source override) shipped across six PRs. See
+> [`docs/tracks/A-mineru/RETRO.md`](./tracks/A-mineru/RETRO.md) for
+> the retrospective and
+> [`docs/tracks/A-mineru/threshold-tuning.md`](./tracks/A-mineru/threshold-tuning.md)
+> for the default-0.95 calibration decision. A3 (markitdown / ephemeral
+> venv reuse) remains as "nice-to-have" follow-up; not blocking.
+
 **Vision**: twee parser-routes in de UI (docling/MinerU) + automatische fallback wanneer docling-confidence te laag is.
 
 ### A1 — MinerU als parallelle service 📦

@@ -22,6 +22,9 @@ Welcome to the Open Notebook troubleshooting guide. This section provides compre
 - [Performance Profiling](./debugging.md#performance-profiling)
 - [Support Information](./debugging.md#support-information)
 
+### 🔌 Parser Engines (MinerU + Docling)
+- [Parser engine troubleshooting](./parser-engines.md) — service startup, auto-fallback tuning, rolling back to docling-only, confidence-score diagnostics
+
 ## 🚨 Emergency Quick Fixes
 
 ### Service Not Starting
