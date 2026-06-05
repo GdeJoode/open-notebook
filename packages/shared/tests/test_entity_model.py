@@ -122,3 +122,27 @@ class TestRelationModel:
         assert reparsed.in_entity == "entity:abc"
         assert reparsed.out_entity == "entity:def"
         assert reparsed.properties == {"role": "co-author"}
+
+    def test_constructs_from_db_row_with_in_out_keys(self):
+        """A raw SurrealDB RELATE row uses ``in`` / ``out`` (Python keywords).
+
+        The ``Field(alias="in")`` / ``Field(alias="out")`` wiring lets us
+        construct directly from such a dict — important so the repository
+        can pass ``Relation(**row)`` without manually re-keying.
+        """
+        db_row = {
+            "id": "relation:xyz",
+            "in": "entity:abc",
+            "out": "entity:def",
+            "relation_type": "PART_OF",
+            "confidence": 0.9,
+            "source_documents": ["source:doc1"],
+            "properties": {"since": "2024"},
+        }
+        rel = Relation(**db_row)
+        assert rel.in_entity == "entity:abc"
+        assert rel.out_entity == "entity:def"
+        assert rel.relation_type == "PART_OF"
+        assert rel.confidence == pytest.approx(0.9)
+        assert rel.source_documents == ["source:doc1"]
+        assert rel.properties == {"since": "2024"}

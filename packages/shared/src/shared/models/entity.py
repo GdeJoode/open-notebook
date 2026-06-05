@@ -16,7 +16,7 @@ the canonical write-path to the migration-39+44 schema.
 from datetime import datetime
 from typing import Any, ClassVar, Dict, List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from shared.models.base import ObjectModel
 
@@ -29,15 +29,32 @@ class Entity(ObjectModel):
     status) plus migration 44 (``type_tags``, ``primary_type``) for
     multi-type tagging from Phase B1's merge step.
 
-    Why ``embedding`` is required (no default): the schema declares
-    ``embedding FLEXIBLE TYPE array`` with NO ``DEFAULT`` clause, so every
-    ``CREATE entity`` must supply an explicit value — even an empty list.
-    Callers that don't have a vector yet must pass ``embedding=[]``
-    explicitly. This mirrors the production canary in
-    ``test_entity_roundtrip``.
+    Timestamps: migration 39 declares ``created_at`` / ``updated_at`` on
+    the ``entity`` table (not the bare ``created`` / ``updated`` carried
+    by ``ObjectModel`` for other domain models). They are surfaced as
+    explicit fields here so DB roundtrips preserve them — B.1e's merge
+    step picks canonical winners by recency and B.3 UIs display them.
+    The inherited ``created`` / ``updated`` from ``ObjectModel`` stay
+    unused for this model.
+
+    ``embedding`` defaults to an empty list for Pydantic ergonomics;
+    callers with a vector should always supply it. The SCHEMAFULL column
+    has no DB-side default, so the repository always sends an explicit
+    value on CREATE.
     """
 
     table_name: ClassVar[str] = "entity"
+
+    # Schema-side timestamps (migration 39 — entity table uses the _at
+    # suffix, not the bare created/updated inherited from ObjectModel).
+    created_at: Optional[datetime] = Field(
+        default=None,
+        description="Row creation timestamp (DB default = time::now())",
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        description="Row last-update timestamp (DB default = time::now(), refreshed on upsert)",
+    )
 
     # Identity
     canonical_name: str = Field(description="Canonical/preferred name of the entity")
@@ -70,10 +87,11 @@ class Entity(ObjectModel):
         description="Flexible domain-specific attributes",
     )
 
-    # Embedding (FLEXIBLE TYPE array, NO default in schema → caller MUST supply)
+    # Embedding (FLEXIBLE TYPE array, NO DB-side default; the model defaults
+    # to [] so callers without a vector yet don't need to construct one).
     embedding: List[float] = Field(
         default_factory=list,
-        description="Vector embedding for semantic search (empty list when not yet computed)",
+        description="Vector embedding for semantic search; defaults to []. Callers with a real vector should supply it.",
     )
 
     # Graph algorithm scores (Phase 1)
@@ -117,23 +135,58 @@ class Entity(ObjectModel):
             return v
         return {}
 
+    @field_validator("created_at", "updated_at", "extracted_at", mode="before")
+    @classmethod
+    def parse_db_datetime(cls, value: Any) -> Optional[datetime]:
+        """Parse datetime from SurrealDB string form, preserving ``None``."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return value
+
 
 class Relation(ObjectModel):
     """Typed directed edge between two entities (RELATE table in migration 39).
 
     Note: SurrealDB RELATE tables carry ``in`` / ``out`` system fields holding
     the source/target record IDs. We surface those here as ``in_entity`` and
-    ``out_entity`` to avoid shadowing the Python ``in`` keyword. The
-    repository write-path translates these to the DB-side ``in`` / ``out``.
+    ``out_entity`` to avoid shadowing the Python ``in`` keyword. Field aliases
+    let callers construct from a raw DB row (with ``in`` / ``out`` keys) or
+    from a Pythonic kwargs payload (with ``in_entity`` / ``out_entity``) —
+    ``populate_by_name=True`` enables the latter form.
+
+    Timestamps: migration 39 declares only ``created_at`` on the ``relation``
+    table (no ``updated_at`` — relations are immutable in the current schema).
+    The inherited ``created`` / ``updated`` from ``ObjectModel`` stay unused.
     """
+
+    # Allow both `in_entity=` (Python kwarg) and `in=` (DB-row key) on
+    # construction; serialization keeps both forms working as expected.
+    model_config = ConfigDict(
+        from_attributes=True,
+        arbitrary_types_allowed=True,
+        populate_by_name=True,
+    )
 
     table_name: ClassVar[str] = "relation"
 
+    # Schema-side timestamp (migration 39 — relation has created_at only,
+    # no updated_at).
+    created_at: Optional[datetime] = Field(
+        default=None,
+        description="Row creation timestamp (DB default = time::now())",
+    )
+
     in_entity: Optional[str] = Field(
-        default=None, description="Source entity record ID (DB-side 'in')"
+        default=None,
+        alias="in",
+        description="Source entity record ID (DB-side 'in')",
     )
     out_entity: Optional[str] = Field(
-        default=None, description="Target entity record ID (DB-side 'out')"
+        default=None,
+        alias="out",
+        description="Target entity record ID (DB-side 'out')",
     )
 
     relation_type: str = Field(description="Edge label, e.g. WORKS_AT, PART_OF")
@@ -168,3 +221,13 @@ class Relation(ObjectModel):
         if isinstance(v, dict):
             return v
         return {}
+
+    @field_validator("created_at", "extracted_at", mode="before")
+    @classmethod
+    def parse_db_datetime(cls, value: Any) -> Optional[datetime]:
+        """Parse datetime from SurrealDB string form, preserving ``None``."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return value
