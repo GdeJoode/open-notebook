@@ -118,4 +118,5 @@ python_functions = ["test_*"]
 addopts = "--import-mode=importlib"
 markers = [
     "integration: Cross-package integration tests (no DB, no LLM, no heavy models)",
+    "requires_docker: Tests that need a Docker daemon (testcontainers-backed). Skipped automatically when Docker is unreachable.",
 ]
