@@ -65,3 +65,73 @@
   gate**.
 - B.1a inherits the xfail test in `test_migrations_roundtrip.py` — its
   acceptance criterion #4 should explicitly delete or invert it.
+
+## Phase B.0 — attempt 2 (2026-06-05)
+
+**State**: revisions addressed, verified end-to-end against a real
+SurrealDB container, ready for re-review.
+
+### Fixes vs attempt 1
+
+Reviewer rejected attempt 1 with REVISIONS_NEEDED (review at
+`docs/tracks/B-kg-quality/reviews/phase-B.0-attempt-1.md`). Attempt 2
+addresses every blocker and major plus several minors. Full per-blocker
+table with commit SHAs lives at
+`docs/tracks/B-kg-quality/reviews/phase-B.0-self-review.md` → "Attempt 2
+fixes".
+
+Highlights:
+
+- **Blocker #1** (migrations-dir off-by-one) → `fixtures.py` now walks
+  up from `__file__` looking for a `migrations/` dir sibling to a
+  workspace-marker `pyproject.toml`. Robust to file moves.
+- **Blocker #2** (no non-Docker safety net) → new
+  `tests/test_testing_fixtures.py` (7 tests, no marker) catches
+  path-drift, missing migrations files, and dead-code regressions on
+  every `pytest -q` run.
+- **Major #3** (pool-lifecycle across `asyncio.run`) → pool is now
+  reset *after* the migration block, before `yield config`.
+- **Major #4** (stale docstring) → rewritten; engine is `memory`, file
+  count is "43+".
+- **Major #5** (`live_surrealdb_async` dead code) → deleted.
+- **Minors #6, #7, #9, #10** → all addressed (see self-review for
+  details).
+
+### Verification (attempt 2)
+
+End-to-end run with Docker:
+
+```
+cd packages/surrealdb-service && uv run pytest -m requires_docker -v
+5 passed, 52 deselected, 1 xfailed in 12.58s
+(real 24s including container boot — well under 90s budget)
+```
+
+Gating without Docker:
+
+```
+cd packages/surrealdb-service && uv run pytest -q -m "not requires_docker"
+52 passed, 6 deselected in 0.91s
+```
+
+App-main regression check:
+
+```
+cd apps/app-main && uv run pytest -q
+367 passed in 51.38s
+```
+
+### New issue surfaced while running end-to-end
+
+`SCHEMAFULL entity` requires `embedding` to be supplied at CREATE time
+(migration 39 declares it as `FLEXIBLE TYPE array` with no DEFAULT).
+Tests now pass `embedding = []` to mirror production-correct callers.
+**Implication for B.1a**: every `EntityRepository.upsert_entity` write
+must include `embedding` — keep this in mind when routing
+`entity_persistence_service` through the repository.
+
+### Commit hashes (attempt 2)
+
+- `d2342bb` — `fix(surrealdb-service): robust migrations-dir lookup + pool reset`
+- `5de7ed8` — `test(surrealdb-service): non-docker safety net for fixture path drift`
+- `37bd30f` — `test(surrealdb-service): roundtrip canaries pass end-to-end against real DB`
