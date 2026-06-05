@@ -5,11 +5,17 @@ strings. Mirrors the ``ontology_manager.prompts`` pattern.
 """
 
 from ontology_extraction.prompts.pass1 import (
+    CANDIDATE_SCHEMA_NAMES,
+    COMPACT_SUMMARY_THRESHOLD,
+    PASS1_SYSTEM_PROMPT,
     build_pass1_prompt,
     build_schema_summary,
 )
 
 __all__ = [
+    "CANDIDATE_SCHEMA_NAMES",
+    "COMPACT_SUMMARY_THRESHOLD",
+    "PASS1_SYSTEM_PROMPT",
     "build_pass1_prompt",
     "build_schema_summary",
 ]
