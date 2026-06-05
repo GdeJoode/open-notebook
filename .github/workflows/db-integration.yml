@@ -1,0 +1,85 @@
+name: DB integration (testcontainers SurrealDB)
+
+# Runs the testcontainers-backed migration roundtrip suite on every PR that
+# touches the SurrealDB schema, the surrealdb-service package, or the shared
+# models (the three places where SCHEMAFULL drift can happen).
+#
+# Docker is available on ubuntu-latest GitHub-hosted runners by default; no
+# extra setup is needed. The tests are gated behind @pytest.mark.requires_docker
+# so they skip cleanly on runners that lack Docker — but here we *want* them
+# to run, so we verify Docker first and fail the job if it's missing.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'migrations/**'
+      - 'packages/surrealdb-service/**'
+      - 'packages/shared/src/shared/models/**'
+      - '.github/workflows/db-integration.yml'
+  workflow_dispatch: {}
+
+# Cancel in-flight runs on the same PR — saves runner minutes on fixup pushes.
+concurrency:
+  group: db-integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testcontainers:
+    name: Migration roundtrip (testcontainers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Verify Docker is reachable before running anything that depends on it.
+      # Track A's GPU surprise is the cautionary tale: assume nothing about the
+      # runner image. If this step fails, the workflow should fail loudly with
+      # a clear error rather than silently skipping all the gated tests.
+      - name: Verify Docker daemon
+        run: |
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "::error::docker CLI not found on runner"
+            exit 1
+          fi
+          if ! docker ps >/dev/null 2>&1; then
+            echo "::error::docker daemon not reachable"
+            exit 1
+          fi
+          docker version
+          docker info
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: 'latest'
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install workspace deps
+        working-directory: packages/surrealdb-service
+        run: uv sync --extra dev
+
+      # Pre-pull the SurrealDB image so the fixture's first start doesn't
+      # eat into the test timeout. The tag matches docker-compose.yml.
+      - name: Pre-pull SurrealDB image
+        run: docker pull surrealdb/surrealdb:v2
+
+      - name: Run migration roundtrip suite
+        working-directory: packages/surrealdb-service
+        run: |
+          uv run pytest \
+            -m requires_docker \
+            tests/test_migrations_roundtrip.py \
+            -v --tb=short
+
+      - name: Dump SurrealDB container logs on failure
+        if: failure()
+        run: |
+          for cid in $(docker ps -aq --filter ancestor=surrealdb/surrealdb:v2); do
+            echo "=== logs for $cid ==="
+            docker logs "$cid" 2>&1 | tail -200 || true
+          done
