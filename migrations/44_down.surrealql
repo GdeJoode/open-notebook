@@ -1,0 +1,8 @@
+-- Migration 44 down: drop the multi-type tagging fields from entity.
+--
+-- Destructive but expected for a downgrade — any rows that have type_tags
+-- or primary_type populated lose those columns. The original `entity_type`
+-- single-value column is unaffected.
+
+REMOVE FIELD IF EXISTS type_tags ON TABLE entity;
+REMOVE FIELD IF EXISTS primary_type ON TABLE entity;

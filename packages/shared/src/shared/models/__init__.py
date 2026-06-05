@@ -5,6 +5,7 @@ Pure Pydantic models without database operations.
 """
 
 from shared.models.base import ObjectModel, RecordModel
+from shared.models.entity import Entity, Relation
 from shared.models.file_tracking import (
     KnowledgeBase,
     PipelineCacheEntry,
@@ -82,4 +83,7 @@ __all__ = [
     "ExtractedRelation",
     "ExtractionResult",
     "FilteredResult",
+    # Knowledge-graph entity/relation models (Phase B.1a)
+    "Entity",
+    "Relation",
 ]

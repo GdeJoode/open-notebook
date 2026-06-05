@@ -1,0 +1,16 @@
+-- Migration 44: Multi-type tagging on entity (Phase B.1a)
+--
+-- Phase B1's merge step needs to record ALL types that apply to an entity
+-- (e.g. ["Person", "Researcher"]) plus a single "best" / highest-confidence
+-- type for default rendering. The existing `entity_type` field (declared in
+-- migration 39) stays as the single primary string for back-compat with
+-- code paths that haven't migrated to multi-type semantics yet.
+--
+-- Additive only — both fields have safe defaults (`[]` and `NONE`). Rows
+-- written before this migration read back via the Pydantic defaults
+-- (`default_factory=list` / `None`). Mirrors the pattern from migration 43.
+--
+-- Idempotent: IF NOT EXISTS makes re-run a no-op.
+
+DEFINE FIELD IF NOT EXISTS type_tags ON TABLE entity FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD IF NOT EXISTS primary_type ON TABLE entity TYPE option<string>;
