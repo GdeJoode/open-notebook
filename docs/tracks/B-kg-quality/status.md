@@ -622,3 +622,68 @@ demo path).
   Logged for future cleanup; may mask data-quality regressions.
 - `_demo` hardcodes a Windows-style path as `PROJECT_ROOT` default.
   Cosmetic.
+
+---
+
+## Phase B.2b — `GET /api/notebooks/{id}/schema.ttl` endpoint (2026-06-06)
+
+**Branch**: `track/b-ttl-endpoint` (off main)
+**Commits**: `16f7cb0` (router + tests)
+
+### What shipped
+
+- `apps/app-main/src/app_main/api/routers/schemas.py` — new router with
+  `GET /api/notebooks/{notebook_id}/schema.ttl`. Loads the base ontology
+  YAML referenced by `notebook_schema.base_ontology`, merges
+  `accepted_extensions` as `owl:Class` declarations, serialises to
+  Turtle, returns with `Content-Type: text/turtle` and
+  `Content-Disposition: attachment; filename="<notebook>.ttl"`.
+- Registered in `apps/app-main/src/app_main/api/app.py` under `/api`.
+- `apps/app-main/tests/test_schemas_router.py` — 6 tests covering the
+  happy path with 2 accepted extensions, 404 for unknown notebooks,
+  empty-extensions fallback to base ontology, content-type and
+  content-disposition headers, and rdflib-roundtrip well-formedness.
+- `docs/tracks/B-kg-quality/PROTEGE_TEST.md` — manual import script
+  for Protégé 5.6+, including pass criteria and failure diagnostics.
+- `docs/tracks/B-kg-quality/reviews/phase-B.2b-self-review.md` — full
+  acceptance-criteria walkthrough.
+
+### Quality gates
+
+- `cd apps/app-main && uv run pytest tests/test_schemas_router.py -v` →
+  **6 passed in 63s**.
+- `cd apps/app-main && uv run pytest -q` → **374 passed in 72s** (368
+  baseline + 6 new, zero regressions).
+- `cd packages/ontology-manager && uv run pytest -q` → **191 passed,
+  1 skipped**, no regressions.
+- Smoke test: TestClient curl-equivalent against the live router
+  returns HTTP 200, `Content-Type: text/turtle; charset=utf-8`,
+  `Content-Disposition: attachment; filename="notebook_abc123.ttl"`,
+  and the body begins with `@prefix on: …` followed by the rest of
+  the standard prefix block, then the merged `owl:Class` declarations.
+
+### Design notes / things to watch
+
+- **Missing notebook_schema row returns the bare base ontology with
+  200**, not 404. B.1c hasn't populated the row yet for fresh
+  notebooks; the effective schema is still defined.
+- **DI provider `get_notebook_schema_repo` lives in the router**, not
+  in `app_main.dependencies`. Lift to the central module when B.3a
+  adds the JSON schema-browse endpoint.
+- **Path-resolution gotcha**: `Path(__file__).resolve().parents[N]`
+  for the repo root needs N=6 (not 5). Documented in a comment so the
+  next refactor doesn't re-break it.
+- Authentication inherits from the global `PasswordAuthMiddleware`
+  — `/api/notebooks/.../schema.ttl` is NOT in the excluded-paths
+  allow-list, so the password gate applies as it does to every other
+  `/api/notebooks/...` route.
+
+### Outstanding
+
+- Live Protégé screenshot deferred to first dev-environment run.
+- The `_DEFAULT_BASE_ONTOLOGY = "scholarly"` literal duplicates the
+  default in `OntologyManagerConfig`. Wire the config through in
+  B.3a if/when the default changes.
+- TTL is the only export format today. JSON-LD/RDF-XML support is
+  out of scope for B.2b but trivial to add via
+  `graph.serialize(format=...)` behind a `?format=` query parameter.
