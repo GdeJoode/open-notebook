@@ -681,9 +681,53 @@ demo path).
 ### Outstanding
 
 - Live Protégé screenshot deferred to first dev-environment run.
-- The `_DEFAULT_BASE_ONTOLOGY = "scholarly"` literal duplicates the
-  default in `OntologyManagerConfig`. Wire the config through in
-  B.3a if/when the default changes.
+- The `_DEFAULT_BASE_ONTOLOGY = "scholarly"` literal **deliberately
+  diverges** from `OntologyManagerConfig.default_ontology` (which is
+  `"general"`). Scholarly carries the entity types the B-track corpus
+  exercises, and `general.yaml` uses a dict-of-dicts `entity_types`
+  shape that `load_yaml_ontology` does not currently parse. Comment
+  on `schemas.py:78-90` documents the rationale. Revisit in B.3a if
+  `general.yaml` is normalised or `OntologyManager.get_ontology` is
+  wired through.
 - TTL is the only export format today. JSON-LD/RDF-XML support is
   out of scope for B.2b but trivial to add via
   `graph.serialize(format=...)` behind a `?format=` query parameter.
+- `_ontologies_dir` reads `OntologyRegistry()._ontology_dir` (private
+  attribute, `# noqa: SLF001`). When the registry exposes a public
+  accessor, swap to it — single-line change.
+
+### Attempt 2 (post-review, 2026-06-06)
+
+Reviewer flagged 1 major + 5 minors in
+`docs/tracks/B-kg-quality/reviews/phase-B.2b-attempt-1.md`. All
+addressed in a single follow-up commit:
+
+- **Major (URI safety)**: extensions whose `type_name` contains
+  whitespace or punctuation no longer crash rdflib's Turtle serialiser.
+  `_to_camel_case_uri_fragment()` converts to a valid URI fragment;
+  the original string is preserved as `rdfs:label`. Applied to
+  `type_name`, `parent_type`, and per-property names. 4 new tests.
+- **Minor 1 (doc accuracy)**: kept `"scholarly"` literal; comment
+  rewritten to spell out the divergence from
+  `OntologyManagerConfig.default_ontology = "general"` (above).
+- **Minor 2 (`_safe_filename`)**: regex now strips CR/LF, tabs, null
+  bytes, single + double quotes, backslashes (header-safety scope);
+  docstring no longer claims "filesystem-safe".
+- **Minor 3 (`_ontologies_dir`)**: delegates to
+  `OntologyRegistry()._ontology_dir`; the `parents[6]` computation is
+  gone.
+- **Minor 4 (streaming note)**: module docstring §"Serialisation
+  footprint" added — in-memory buffer is fine at current scale, revisit
+  at >100KB output.
+- **Minor 5 (auth test)**: `TestAuthExclusionAllowList` stands up a
+  minimal app with `PasswordAuthMiddleware` (mirroring
+  `app.py`'s excluded-paths verbatim) and asserts 401 on the schema
+  endpoint when password is set and no `Authorization` header is sent.
+
+Test counts after attempt 2:
+
+| Suite | Pass / fail |
+|---|---|
+| `apps/app-main/tests/test_schemas_router.py` | 12 passed |
+| `apps/app-main/tests/` (full) | 380 passed (374 + 6 new) |
+| `packages/ontology-manager/tests/` | 191 passed, 1 skipped (unchanged) |
