@@ -1,4 +1,16 @@
-"""LLM-based extractor using ontology-guided prompts."""
+"""LLM-based extractor using ontology-guided prompts.
+
+Back-compat shim. New code should call
+``ontology_extraction.run_pass2`` (B.1d) directly — it adds
+accepted-extension injection and enforces the B4 confidence-
+everywhere invariant. This module stays in place so existing
+wiring (``workflow.py`` + tests) keeps working unchanged; B.1f
+will decide whether to migrate ``ExtractionWorkflow`` over.
+
+The ``LLMManager → ModelManager`` TODO inside ``extract`` is
+tracked separately and is B.1f scope. B.1d deliberately does not
+touch it.
+"""
 
 import json
 
