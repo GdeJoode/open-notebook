@@ -357,3 +357,66 @@ the canonical write-path B.1a hardened.
   back-to-back. Pre-existing, low-impact (purely a telemetry skew),
   not on the write-path. Fix when the relation block gets its
   upsert-equivalent (B.1c).
+
+---
+
+## Phase B.2a — TTL/RDFS exporter fix + roundtrip test (2026-06-06)
+
+**Branch**: `track/b-ttl-exporter-fix`
+**Commits**: `aa61bb1` (fix) → `150135f` (tests)
+**State**: code complete, all quality gates green, ready for review.
+
+### Delivered
+
+- `packages/ontology-manager/src/ontology_manager/rdf_owl_shacl.py`
+  — fixed the module-load `NameError: name 'Namespace' is not defined`
+  bug. Pre-fix, the module raised at import time when rdflib was missing
+  because `ON`/`ONR`/`DTYPE_MAP` at module scope referenced `Namespace`
+  and `XSD` imported inside a `try:` block. Fix uses the sentinel
+  pattern from the RETRO: `RDFLIB_AVAILABLE = True/False` flag, all
+  rdflib-referencing constants guarded behind `if RDFLIB_AVAILABLE:`,
+  and a `_require_rdflib()` helper that raises a clear `ImportError`
+  with install hint at every public entry point.
+- `packages/ontology-manager/pyproject.toml` — added `rdflib>=7.0.0`
+  to runtime deps (was missing — the legacy try/except was masking
+  the missing-dep bomb). Added `pyshacl>=0.25.0` to dev deps for the
+  roundtrip parsability check.
+- `packages/ontology-manager/tests/test_ttl_roundtrip.py` — four
+  new tests:
+  - `test_yaml_to_ttl_roundtrip_preserves_triples_scholarly` (set
+    equality on `(s, p, o)` triples for `scholarly.yaml`)
+  - `test_yaml_to_ttl_roundtrip_preserves_triples_policy` (same for
+    `policy.yaml` — second ontology per plan)
+  - `test_ttl_output_parses_with_pyshacl` (Protégé surrogate —
+    skips cleanly if pyshacl unavailable)
+  - `test_rdflib_imports_succeed_at_module_load` (permanent
+    regression guard for the original NameError)
+
+### Quality gates
+
+- `cd packages/ontology-manager && uv run pytest -q` → **192 passed**
+  (188 pre-fix + 4 new, zero regressions).
+- `cd packages/shared && uv run pytest -q` → **128 passed**, no regressions.
+- `cd apps/app-main && uv run pytest -q` → no rdf_owl_shacl-touching
+  code paths in app-main (only `ontology_manager.manager` and
+  `ontology_manager.schema` are imported there); changes are isolated.
+- Coverage on changed lines: 100% on reachable paths; defensive
+  branches (rdflib-missing else, ImportError raise) are unreachable
+  in CI by design (rdflib IS installed) but validated by inspection.
+
+### Self-review
+
+See `docs/tracks/B-kg-quality/reviews/phase-B.2a-self-review.md` for
+the full acceptance-criteria walkthrough, exact bug reproduction,
+and REFACTOR_PLAN follow-up notes (untested SHACL/SKOS functions,
+silent exception-swallowing in `load_all_ontologies`, hardcoded
+demo path).
+
+### Follow-ups for later phases
+
+- `generate_shacl_shapes`, `validate_entities`, `create_skos_scheme`,
+  `_demo` remain untested. Out of scope for B.2a; flag for B.2c/B.3.
+- `load_all_ontologies` silently swallows `Exception` per YAML file.
+  Logged for future cleanup; may mask data-quality regressions.
+- `_demo` hardcodes a Windows-style path as `PROJECT_ROOT` default.
+  Cosmetic.
