@@ -38,8 +38,18 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 from loguru import logger
 
+# ---------------------------------------------------------------------------
+# Optional-dependency sentinels
+# ---------------------------------------------------------------------------
+# rdflib is a required dependency for TTL/RDFS/OWL operations. The legacy
+# code wrapped the imports in a try/except so the module could still load
+# without rdflib, but module-level constants below (ON, ONR, DTYPE_MAP)
+# reference Namespace / XSD which raised NameError at import time when
+# rdflib was missing. We now: (a) require rdflib in pyproject.toml,
+# (b) keep the sentinel pattern for defensive graceful-failure, and
+# (c) guard all module-level constants behind the RDFLIB_AVAILABLE flag.
 try:
-    import rdflib
+    import rdflib  # noqa: F401
     from rdflib import (
         BNode,
         Graph,
@@ -49,10 +59,16 @@ try:
     )
     from rdflib.namespace import DCTERMS, OWL, RDF, RDFS, SKOS, XSD
 
-    HAS_RDFLIB = True
-except ImportError:
-    HAS_RDFLIB = False
-    logger.warning("rdflib not installed — ontology features disabled")
+    RDFLIB_AVAILABLE = True
+except ImportError:  # pragma: no cover - rdflib is a hard dep now
+    RDFLIB_AVAILABLE = False
+    logger.warning(
+        "rdflib not installed — TTL/RDFS/OWL features disabled. "
+        "Install with: uv pip install rdflib"
+    )
+
+# Backwards-compat alias for code that imported HAS_RDFLIB.
+HAS_RDFLIB = RDFLIB_AVAILABLE
 
 try:
     from pyshacl import validate as shacl_validate
@@ -62,26 +78,47 @@ except ImportError:
     HAS_PYSHACL = False
 
 
-# Namespace for our ontology
-ON = Namespace("https://open-notebook.dev/ontology/")
-ONR = Namespace("https://open-notebook.dev/resource/")
+_RDFLIB_REQUIRED_MSG = (
+    "rdflib required for TTL operations; install with: uv pip install rdflib"
+)
 
-# Data type mapping from YAML to XSD
-DTYPE_MAP = {
-    "string": XSD.string,
-    "text": XSD.string,
-    "int": XSD.integer,
-    "integer": XSD.integer,
-    "float": XSD.float,
-    "bool": XSD.boolean,
-    "boolean": XSD.boolean,
-    "datetime": XSD.dateTime,
-    "date": XSD.date,
-    "url": XSD.anyURI,
-    "reference": None,  # Handled as object property
-    "array": None,
-    "json": None,
-}
+
+def _require_rdflib() -> None:
+    """Raise a clear ImportError if rdflib is not installed."""
+    if not RDFLIB_AVAILABLE:
+        raise ImportError(_RDFLIB_REQUIRED_MSG)
+
+
+# ---------------------------------------------------------------------------
+# Module-level constants (only defined when rdflib is available)
+# ---------------------------------------------------------------------------
+if RDFLIB_AVAILABLE:
+    # Namespace for our ontology
+    ON = Namespace("https://open-notebook.dev/ontology/")
+    ONR = Namespace("https://open-notebook.dev/resource/")
+
+    # Data type mapping from YAML to XSD
+    DTYPE_MAP = {
+        "string": XSD.string,
+        "text": XSD.string,
+        "int": XSD.integer,
+        "integer": XSD.integer,
+        "float": XSD.float,
+        "bool": XSD.boolean,
+        "boolean": XSD.boolean,
+        "datetime": XSD.dateTime,
+        "date": XSD.date,
+        "url": XSD.anyURI,
+        "reference": None,  # Handled as object property
+        "array": None,
+        "json": None,
+    }
+else:
+    # Sentinels so the module can be imported (and tests can introspect
+    # RDFLIB_AVAILABLE) even without rdflib installed.
+    ON = None  # type: ignore[assignment]
+    ONR = None  # type: ignore[assignment]
+    DTYPE_MAP = {}  # type: ignore[assignment]
 
 
 # ============================================================================
@@ -105,8 +142,7 @@ def load_yaml_ontology(yaml_path: str | Path) -> Graph:
     Returns:
         rdflib Graph containing the OWL ontology.
     """
-    if not HAS_RDFLIB:
-        raise ImportError("rdflib is required for ontology management")
+    _require_rdflib()
 
     path = Path(yaml_path)
     with open(path, encoding="utf-8") as f:
@@ -238,6 +274,7 @@ def load_all_ontologies(
     Returns:
         Merged rdflib Graph with all ontologies.
     """
+    _require_rdflib()
     merged = Graph()
     merged.bind("on", ON)
     merged.bind("onr", ONR)
@@ -280,6 +317,7 @@ def export_ontology(
     Returns:
         The serialized ontology as string.
     """
+    _require_rdflib()
     format_map = {
         "turtle": "turtle",
         "ttl": "turtle",
@@ -322,8 +360,7 @@ def generate_shacl_shapes(ontology_graph: Graph) -> Graph:
     Returns:
         rdflib Graph containing SHACL shapes.
     """
-    if not HAS_RDFLIB:
-        raise ImportError("rdflib is required")
+    _require_rdflib()
 
     SH = Namespace("http://www.w3.org/ns/shacl#")
 
@@ -475,6 +512,7 @@ def create_skos_scheme(
     Returns:
         rdflib Graph with the SKOS concept scheme.
     """
+    _require_rdflib()
     g = Graph()
     g.bind("skos", SKOS)
     g.bind("on", ON)
