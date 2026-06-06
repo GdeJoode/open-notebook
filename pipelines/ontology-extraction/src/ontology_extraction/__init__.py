@@ -19,6 +19,14 @@ from ontology_extraction.pass2_typed_extraction import (
     Pass2TokenBudgetExceeded,
     run_pass2,
 )
+from ontology_extraction.multi_schema_orchestrator import (
+    MIN_APPLICABLE_CONFIDENCE,
+    SOFT_NUDGE_COVERAGE_HIGH,
+    SOFT_NUDGE_COVERAGE_LOW,
+    SoftNudgeDecision,
+    detect_applicable_schemas,
+    run_multi_schema,
+)
 from ontology_extraction.workflow import ExtractionWorkflow
 
 __all__ = [
@@ -26,11 +34,17 @@ __all__ = [
     "ExtractionWorkflow",
     "ExtractorBase",
     "LLMExtractor",
+    "MIN_APPLICABLE_CONFIDENCE",
     "Pass1Output",
     "Pass1ParseError",
     "Pass1SchemaValidator",
     "Pass2ParseError",
     "Pass2TokenBudgetExceeded",
+    "SOFT_NUDGE_COVERAGE_HIGH",
+    "SOFT_NUDGE_COVERAGE_LOW",
+    "SoftNudgeDecision",
     "TokenBudgetExceeded",
+    "detect_applicable_schemas",
+    "run_multi_schema",
     "run_pass2",
 ]

@@ -45,7 +45,29 @@ class ExtractionContext(BaseModel):
 
 
 class ExtractedEntity(BaseModel):
-    """An entity extracted from text."""
+    """An entity extracted from text.
+
+    Multi-schema tagging (Phase B.1e)
+    ================================
+    When the multi-schema orchestrator merges results from several
+    Pass-2 runs (one per applicable schema), the same entity may
+    legitimately receive different ``label`` values from each pass.
+    Rather than discarding that information:
+
+    - ``label`` retains the highest-confidence pass's label for
+      back-compat with single-schema callers.
+    - ``type_tags`` accumulates *every* label this entity was assigned
+      across passes — order matches the orchestrator's schema-iteration
+      order (highest applicability first).
+    - ``primary_type`` mirrors ``label`` and is set explicitly by the
+      merger; downstream code that wants the canonical type for a
+      multi-tagged entity should prefer ``primary_type`` over ``label``
+      because ``label`` was historically free-form.
+
+    Single-schema (non-merged) entities keep ``type_tags`` empty and
+    ``primary_type=None`` for back-compat — the absence of these fields
+    is the signal that no merge happened.
+    """
 
     text: str = Field(description="The entity surface form as found in text")
     label: str = Field(description="Entity type label (e.g. PERSON, ORG)")
@@ -63,6 +85,21 @@ class ExtractedEntity(BaseModel):
     extraction_context: Optional[ExtractionContext] = Field(
         default=None,
         description="Document structure context from the source chunk",
+    )
+    type_tags: List[str] = Field(
+        default_factory=list,
+        description=(
+            "All entity-type labels assigned to this surface form across "
+            "multi-schema passes. Empty list for single-schema results."
+        ),
+    )
+    primary_type: Optional[str] = Field(
+        default=None,
+        description=(
+            "Canonical entity-type label chosen by the multi-schema "
+            "merger — the label from the pass with highest confidence. "
+            "None for single-schema results (use ``label`` instead)."
+        ),
     )
 
 

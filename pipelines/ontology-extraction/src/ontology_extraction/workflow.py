@@ -1,10 +1,18 @@
-"""Orchestrator that processes batches of text chunks for extraction."""
+"""Orchestrator that processes batches of text chunks for extraction.
+
+Phase B.1e adds a ``mode`` parameter to :meth:`ExtractionWorkflow.extract`
+controlling whether the orchestrator runs the legacy single-extractor
+path or hands off to :func:`run_multi_schema`. The default is
+``"single"`` to preserve every existing caller's behaviour; B.1f flips
+the default to ``"multi"`` once ``EntityExtractionService`` is wired.
+"""
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from loguru import logger
 from ontology_manager import get_ontology_manager
+from ontology_manager.schema import Ontology
 from shared.models.extraction import (
     ExtractionContext,
     ExtractedEntity,
@@ -15,6 +23,10 @@ from shared.models.extraction import (
 from .config import ExtractionConfig
 from .extractors.base import ExtractorBase
 from .extractors.llm_extractor import LLMExtractor
+from .multi_schema_orchestrator import (
+    SoftNudgeDecision,
+    run_multi_schema,
+)
 
 
 class ExtractionWorkflow:
@@ -64,17 +76,77 @@ class ExtractionWorkflow:
                 )
         return self._extractor
 
-    async def extract(self, chunks: List[Dict[str, Any]]) -> ExtractionResult:
+    async def extract(
+        self,
+        chunks: List[Dict[str, Any]],
+        mode: Literal["single", "multi"] = "single",
+        applicable_schemas: Optional[List[Tuple[Ontology, float]]] = None,
+        source_id: Optional[str] = None,
+        notebook_id: Optional[str] = None,
+        pass1_repo: Optional[Any] = None,
+        accepted_extensions_by_schema: Optional[
+            Dict[str, List[Dict[str, Any]]]
+        ] = None,
+    ) -> ExtractionResult:
         """
         Extract entities and relations from a list of text chunks.
 
         Args:
             chunks: List of dicts with at least a "text" key.
                    Optional "id" key for chunk tracking.
+            mode: ``"single"`` (default, B.1d-and-earlier behaviour:
+                run the configured extractor against a single ontology)
+                or ``"multi"`` (B.1e: hand off to
+                :func:`run_multi_schema` with the supplied applicable
+                schemas). The default preserves zero behaviour change
+                for existing callers; B.1f flips ``EntityExtractionService``
+                to ``"multi"`` when a ``notebook_id`` is available.
+            applicable_schemas: For ``mode="multi"``: the
+                ``(ontology, confidence)`` tuples from
+                :func:`detect_applicable_schemas`. Required when
+                ``mode="multi"``; ignored otherwise.
+            source_id: For ``mode="multi"``: source record id forwarded
+                to ``Pass1Result.source``.
+            notebook_id: For ``mode="multi"``: notebook record id
+                forwarded to ``Pass1Result.notebook``.
+            pass1_repo: For ``mode="multi"``: ``Pass1ResultRepository``
+                instance (or test fake exposing ``async record``).
+            accepted_extensions_by_schema: For ``mode="multi"``: per-
+                schema accepted extension lists. Missing keys default
+                to ``[]``.
 
         Returns:
-            Combined ExtractionResult from all chunks.
+            Combined ExtractionResult from all chunks. In ``mode="multi"``
+            the returned result carries ``type_tags`` / ``primary_type``
+            on entities and ``metadata["soft_nudge"]`` carries the
+            :class:`SoftNudgeDecision` value (the decision itself is
+            also accessible via the orchestrator's tuple return — call
+            :func:`run_multi_schema` directly if you need it).
         """
+        if mode == "multi":
+            if not applicable_schemas:
+                logger.warning(
+                    "ExtractionWorkflow.extract(mode='multi') called with "
+                    "empty applicable_schemas — returning empty result. "
+                    "Caller should compute schemas via "
+                    "detect_applicable_schemas first."
+                )
+                return ExtractionResult(
+                    metadata={
+                        "soft_nudge": SoftNudgeDecision.NONE.value,
+                        "schemas_attempted": [],
+                    }
+                )
+            merged, _decision = await run_multi_schema(
+                source_id=source_id or "",
+                notebook_id=notebook_id or "",
+                chunks=chunks,
+                applicable_schemas=applicable_schemas,
+                pass1_repo=pass1_repo,
+                accepted_extensions_by_schema=accepted_extensions_by_schema,
+            )
+            return merged
+
         manager = get_ontology_manager()
         ontology = await manager.get_ontology(self._config.ontology_name)
         if not ontology:
