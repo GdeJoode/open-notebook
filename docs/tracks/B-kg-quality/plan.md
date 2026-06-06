@@ -554,6 +554,14 @@ The 17 sub-phases below map to the 6 roadmap sub-tracks (B1-B6) plus a foundatio
 
 **Effort estimate**: **2 days** (2 components + migration + service + retrofit + Playwright).
 
+**B.4 follow-up: relation-endpoint re-linking** (carry-over from B.1e attempt-1 review):
+
+- **File**: `pipelines/ontology-extraction/src/ontology_extraction/multi_schema_orchestrator.py:682-696`
+- **Problem**: when entity-merge and relation-merge pick different pass-winners (e.g. `Alice@0.9` wins entity-conf, `alice@0.6` wins relation-conf), the surviving relation keeps un-normalized source/target text. Downstream `entity_by_text[rel.source_entity]` lookup misses → orphan relation or duplicated node.
+- **Why deferred**: spec-literal (plan §272-275 did not mandate endpoint rewriting). Implementation followed plan. Not a regression — but B.1f activates multi-schema against real data and KG quality will degrade if uncorrected.
+- **Fix**: final pass in `_merge_results` that rewrites each surviving relation's `source_entity`/`target_entity` to the merged entity's `best_text`. Add test pinning the canonical-form preservation.
+- **Priority**: must land before B.1f flips multi-schema on by default.
+
 ---
 
 ### Phase B.5a — Orphan-connector module (co-occurrence + LLM-confirm)
