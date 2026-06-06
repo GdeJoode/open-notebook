@@ -90,3 +90,24 @@ on:Cohort a owl:Class ;
 ## Verdict
 
 Ready for review.
+
+## Attempt 2 fixes (post-review)
+
+Commit `9b12e4b` addresses all 1 major + 5 minors from `phase-B.2b-attempt-1.md`:
+
+| # | Issue | Fix |
+|---|---|---|
+| Major | Whitespace/punctuation in `type_name` → 500 | New `_to_camel_case_uri_fragment()` helper; CamelCase URI + `rdfs:label` preserves original |
+| Minor 1 | `_DEFAULT_BASE_ONTOLOGY` accuracy claim wrong | Comment rewritten — explains scholarly chosen because general.yaml has a different parser shape |
+| Minor 2 | `_safe_filename` over-promises | `_FILENAME_UNSAFE_RE` regex strips CR/LF/tabs/null/quotes/path-separators; docstring scoped to "header-safe" |
+| Minor 3 | `_ontologies_dir` duplicates registry helper | Delegates to `OntologyRegistry()._ontology_dir` — no more `parents[6]` |
+| Minor 4 | Buffered serialisation doc | Module docstring updated with streaming-relevance threshold (>100KB) |
+| Minor 5 | No auth test | `TestAuthExclusionAllowList::test_endpoint_returns_401_when_password_set_and_no_auth_header` |
+
+**New tests** (6 total):
+- `TestTypeNameSanitisation` — spaces, punctuation, leading-digit, parent_type-sanitisation (4 tests)
+- `TestFilenameSanitisation` — quotes, CRLF, tabs (1 test)
+- `TestAuthExclusionAllowList` — 401 when password protected (1 test)
+
+**Local pytest hung** on `uv sync` torch-wheel install during attempt 2 (same WSL flake as B.1e). Tests not executed locally; the implementer's polling-loop was killed and changes committed manually after reviewing the diff. CI will execute the suite on the PR.
+
