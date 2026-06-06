@@ -397,9 +397,11 @@ the canonical write-path B.1a hardened.
 - `cd packages/ontology-manager && uv run pytest -q` → **192 passed**
   (188 pre-fix + 4 new, zero regressions).
 - `cd packages/shared && uv run pytest -q` → **128 passed**, no regressions.
-- `cd apps/app-main && uv run pytest -q` → no rdf_owl_shacl-touching
-  code paths in app-main (only `ontology_manager.manager` and
-  `ontology_manager.schema` are imported there); changes are isolated.
+- `cd apps/app-main && uv run pytest tests/ -q` → **368 passed**
+  (311 core + 57 parser tests); `tests/test_ontology_service.py`
+  passes 7/7 explicitly. app-main only imports
+  `ontology_manager.manager` / `ontology_manager.schema`, so the
+  `rdf_owl_shacl.py` changes are isolated.
 - Coverage on changed lines: 100% on reachable paths; defensive
   branches (rdflib-missing else, ImportError raise) are unreachable
   in CI by design (rdflib IS installed) but validated by inspection.

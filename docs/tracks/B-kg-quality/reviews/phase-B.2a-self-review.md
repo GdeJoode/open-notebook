@@ -62,7 +62,7 @@ A secondary issue: `rdflib` was not in `pyproject.toml` dependencies at all — 
 |---|---|---|
 | `packages/ontology-manager/tests/` | 188 passed | 192 passed |
 | `packages/shared/tests/` | 128 passed | 128 passed (no regressions) |
-| `apps/app-main/tests/` | _(see "outstanding")_ | _(see "outstanding")_ |
+| `apps/app-main/tests/` | n/a (B.2a doesn't touch app-main) | 368 passed (311 core + 57 parser); `test_ontology_service.py` 7/7 explicitly green |
 
 ## Coverage on changed lines
 
