@@ -81,6 +81,11 @@ class EntityExtractionService:
         6. Persist filtered entities to KG tables (entity, relation).
         7. Return summary dict.
         """
+        # TODO(B.1f): Insert Pass-1 schema validation here. The
+        # ``Pass1SchemaValidator`` module (B.1c) is implemented and
+        # importable; B.1f will sample chunks, run it, and persist
+        # the result via ``Pass1ResultRepository.record(...)`` before
+        # the typed-extraction call below.
         logger.info(f"Starting entity extraction for source: {source_id}")
 
         # 1. Fetch chunks
