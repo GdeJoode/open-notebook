@@ -3,7 +3,7 @@
 ## Phase B.1d — Pass-2 typed extraction module (2026-06-06)
 
 **Branch**: `track/b-pass2-module`
-**Commits**: TBD (pre-push)
+**Commits**: `a3fd1e5` (Pass-2 prompt) → `293ef1b` (run_pass2 module) → `0ce55b4` (tests) → `8292cb3` (LLMExtractor docstring) → `e65316a` (docs)
 **State**: code complete, all quality gates green, ready for review.
 
 ### Delivered
