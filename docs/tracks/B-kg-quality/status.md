@@ -1,5 +1,76 @@
 # Track B — KG quality: rolling status
 
+## Phase B.1d — Pass-2 typed extraction module (2026-06-06)
+
+**Branch**: `track/b-pass2-module`
+**Commits**: TBD (pre-push)
+**State**: code complete, all quality gates green, ready for review.
+
+### Delivered
+
+- `pipelines/ontology-extraction/src/ontology_extraction/
+  pass2_typed_extraction.py` — `async run_pass2(chunks, ontology,
+  accepted_extensions, llm_caller)` producing an `ExtractionResult`
+  with confidence populated on EVERY entity AND EVERY relation. This
+  is where the B4 confidence-everywhere invariant first appears in
+  the pipeline. Same DI seam as Pass-1: injected LLM caller, lazy
+  default for CLI-only fallback.
+- `pipelines/ontology-extraction/src/ontology_extraction/prompts/
+  pass2.py` — focused per-chunk prompt builder. Schema header + entity
+  types + relationship types + accepted-extensions section (omitted
+  when extensions list is empty) + chunk text + output-format rules.
+  Mirrors Pass-1's compression policy at > 30 types so a 100-type
+  ontology + 1500-token chunk + 3 extensions still fits the 2400-token
+  budget (~1929 tokens / 19.6 % headroom).
+- `Pass2TokenBudgetExceeded` raised pre-LLM-call (Q-B-2 `len(text)//4`
+  heuristic, target 2400 tokens, plan cap 3000).
+- `Pass2ParseError` raised on transport-level LLM caller failures
+  (network / auth / timeout) — distinct contract from content-parse
+  failures, which degrade gracefully to per-chunk empty results with
+  WARNING logs.
+- Telemetry always-on (Q-B-6): `pass2_chunk_start`,
+  `pass2_chunk_complete`, `pass2_run_complete` structured INFO logs;
+  WARNING on budget breach and parse failure. B.4 wires these into
+  the metrics table when it lands.
+- Back-compat for legacy LLMExtractor JSON shape: `_parse_chunk_response`
+  accepts both `{source, target, type}` (canonical) and
+  `{subject, predicate, object}` (legacy) so a transitional LLM
+  trained on the older prompt still parses.
+- `_clamp_confidence` defaults to 0.0 on missing/unparseable values so
+  the B4 invariant holds even on partial LLM output. Out-of-range
+  values are clamped; percentages auto-divided by 100 (defensive
+  against LLM emitting `87` instead of `0.87`).
+
+### Quality gates
+
+```
+pipelines/ontology-extraction : 124 → 187 tests, all green
+  Coverage pass2_typed_extraction.py:  96% (5 missed = lazy default LLM caller, B.1f scope)
+  Coverage prompts/pass2.py:           100%
+  Combined coverage:                   98%
+packages/shared              : 145 (unchanged)
+apps/app-main                : 368 (no regression)
+
+Token budgets (B.1d):
+  scholarly ontology (8 types) + 1500-tok chunk + 0 extensions: ~comfortably under
+  synth 100 types + 1500-tok chunk + 3 extensions:              ~1929 / 2400 tokens (19.6% headroom)
+```
+
+### Outstanding follow-ups for downstream phases
+
+- **B.1e (multi-schema orchestrator)**: import `run_pass2` from
+  `ontology_extraction`. Single-schema path is stable; orchestrator
+  owns dedup, name-normalization, top-3 schema selection.
+- **B.1f (service integration)**: wire `EntityExtractionService` to
+  call `run_pass2` with the production LLM caller via DI. Decide
+  whether to migrate `ExtractionWorkflow` over from `LLMExtractor`
+  or leave it on the legacy path.
+- **B.4 (telemetry)**: replace the three `loguru.info` lines with
+  counter increments + a `pass2_token_budget_exceeded` counter when
+  the metrics table is available.
+
+---
+
 ## Phase B.1c — Pass-1 schema validation module — attempt 2 (2026-06-05)
 
 **Branch**: `track/b-pass1-module`
