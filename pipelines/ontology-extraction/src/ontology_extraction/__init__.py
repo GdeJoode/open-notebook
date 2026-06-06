@@ -14,6 +14,11 @@ from ontology_extraction.pass1_schema_validation import (
     Pass1SchemaValidator,
     TokenBudgetExceeded,
 )
+from ontology_extraction.pass2_typed_extraction import (
+    Pass2ParseError,
+    Pass2TokenBudgetExceeded,
+    run_pass2,
+)
 from ontology_extraction.workflow import ExtractionWorkflow
 
 __all__ = [
@@ -24,5 +29,8 @@ __all__ = [
     "Pass1Output",
     "Pass1ParseError",
     "Pass1SchemaValidator",
+    "Pass2ParseError",
+    "Pass2TokenBudgetExceeded",
     "TokenBudgetExceeded",
+    "run_pass2",
 ]
