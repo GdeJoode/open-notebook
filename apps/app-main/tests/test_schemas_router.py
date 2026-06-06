@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from rdflib import Graph
-from rdflib.namespace import OWL, RDF
+from rdflib import Graph, Literal
+from rdflib.namespace import OWL, RDF, RDFS
 
 from app_main.api.routers.schemas import (
     get_notebook_schema_repo,
@@ -161,13 +161,21 @@ class TestNotebookWithoutSchemaRow:
         assert body.lstrip().startswith("@prefix")
 
         # The output equals the default base ontology with no extensions
-        # added. Compare the class set to the scholarly baseline.
+        # added. Compare the class set to a freshly loaded baseline of
+        # whichever ontology the router calls "default". Pulling the
+        # name from the router constant keeps this test honest if the
+        # default ever changes via config.
         from ontology_manager.rdf_owl_shacl import load_yaml_ontology
-        from app_main.api.routers.schemas import _ontologies_dir
+        from app_main.api.routers.schemas import (
+            _DEFAULT_BASE_ONTOLOGY,
+            _ontologies_dir,
+        )
 
         returned = Graph()
         returned.parse(data=body, format="turtle")
-        baseline = load_yaml_ontology(_ontologies_dir() / "scholarly.yaml")
+        baseline = load_yaml_ontology(
+            _ontologies_dir() / f"{_DEFAULT_BASE_ONTOLOGY}.yaml"
+        )
 
         assert set(returned.subjects(RDF.type, OWL.Class)) == set(
             baseline.subjects(RDF.type, OWL.Class)
@@ -238,3 +246,208 @@ class TestRoundtripParse:
         g.parse(data=resp.text, format="turtle")
         # Triples > 0 — sanity that we got real content not an empty doc.
         assert len(g) > 0
+
+
+# ---------------------------------------------------------------------------
+# URI sanitisation — type_name with URI-illegal characters
+# ---------------------------------------------------------------------------
+
+
+class TestTypeNameSanitisation:
+    """Reviewer-flagged major: extensions whose ``type_name`` contains
+    spaces or punctuation must not crash rdflib's Turtle serializer.
+
+    Acceptance: the response is 200, the URI fragment is CamelCase
+    (e.g. ``MyClassWithSpaces``), and the original human-readable name
+    survives as ``rdfs:label``.
+    """
+
+    def _request(self, type_name: str):
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+
+        schema_repo = AsyncMock(spec=NotebookSchemaRepository)
+        schema_repo.get_by_notebook.return_value = NotebookSchema(
+            notebook="notebook:test1",
+            base_ontology="scholarly",
+            accepted_extensions=[
+                {"extension_id": "e1", "type_name": type_name},
+            ],
+        )
+        client = _make_app(notebook_svc, schema_repo)
+        return client.get("/api/notebooks/notebook:test1/schema.ttl")
+
+    def test_spaces_in_type_name_produce_camelcase_uri_and_label(self):
+        """The canonical case from the review report.
+
+        Input  : ``"My Class With Spaces"``
+        Expects: URI fragment ``MyClassWithSpaces``,
+                 rdfs:label ``"My Class With Spaces"``,
+                 200 response (NOT a 500).
+        """
+        resp = self._request("My Class With Spaces")
+        assert resp.status_code == 200
+
+        g = Graph()
+        g.parse(data=resp.text, format="turtle")
+
+        # 1) The CamelCase URI is present as an owl:Class.
+        from app_main.api.routers.schemas import ON
+
+        expected_uri = ON["MyClassWithSpaces"]
+        assert (expected_uri, RDF.type, OWL.Class) in g
+
+        # 2) The original human-readable name survives as rdfs:label.
+        assert (
+            expected_uri,
+            RDFS.label,
+            Literal("My Class With Spaces"),
+        ) in g
+
+    def test_punctuation_in_type_name_is_stripped(self):
+        """Slashes, parentheses, hyphens → all collapsed into CamelCase."""
+        resp = self._request("Author/Editor (Senior)")
+        assert resp.status_code == 200
+
+        g = Graph()
+        g.parse(data=resp.text, format="turtle")
+
+        from app_main.api.routers.schemas import ON
+
+        assert (ON["AuthorEditorSenior"], RDF.type, OWL.Class) in g
+        assert (
+            ON["AuthorEditorSenior"],
+            RDFS.label,
+            Literal("Author/Editor (Senior)"),
+        ) in g
+
+    def test_leading_digit_type_name_gets_underscore_prefix(self):
+        """URI fragments cannot start with a digit (NCName rule)."""
+        resp = self._request("2024 cohort")
+        assert resp.status_code == 200
+
+        g = Graph()
+        g.parse(data=resp.text, format="turtle")
+
+        from app_main.api.routers.schemas import ON
+
+        assert (ON["_2024Cohort"], RDF.type, OWL.Class) in g
+
+    def test_parent_type_with_spaces_also_sanitised(self):
+        """parent_type goes into rdfs:subClassOf — same sanitisation rules."""
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+
+        schema_repo = AsyncMock(spec=NotebookSchemaRepository)
+        schema_repo.get_by_notebook.return_value = NotebookSchema(
+            notebook="notebook:test1",
+            base_ontology="scholarly",
+            accepted_extensions=[
+                {
+                    "extension_id": "e1",
+                    "type_name": "Clinical Trial",
+                    "parent_type": "Research Study",
+                },
+            ],
+        )
+        client = _make_app(notebook_svc, schema_repo)
+        resp = client.get("/api/notebooks/notebook:test1/schema.ttl")
+
+        assert resp.status_code == 200
+
+        g = Graph()
+        g.parse(data=resp.text, format="turtle")
+
+        from app_main.api.routers.schemas import ON
+
+        assert (
+            ON["ClinicalTrial"],
+            RDFS.subClassOf,
+            ON["ResearchStudy"],
+        ) in g
+
+
+# ---------------------------------------------------------------------------
+# Filename sanitisation — Content-Disposition header safety
+# ---------------------------------------------------------------------------
+
+
+class TestFilenameSanitisation:
+    """Newly-handled characters per reviewer minor #2 (over-promising
+    docstring on ``_safe_filename``).
+
+    The header itself must remain syntactically valid even when the
+    notebook id contains a CR/LF or a quote.
+    """
+
+    def test_safe_filename_strips_quotes_and_newlines(self):
+        from app_main.api.routers.schemas import _safe_filename
+
+        # Quotes would terminate the filename="..." attribute.
+        assert _safe_filename('notebook:with"quote') == "notebook_with_quote.ttl"
+        # CR/LF would let an attacker inject extra headers.
+        assert (
+            _safe_filename("notebook:abc\r\ndef") == "notebook_abc__def.ttl"
+        )
+        # Single quotes also collapsed.
+        assert _safe_filename("name's") == "name_s.ttl"
+        # Tabs and nulls
+        assert _safe_filename("a\tb\x00c") == "a_b_c.ttl"
+
+
+# ---------------------------------------------------------------------------
+# Auth — endpoint is NOT in the global auth-exclusion allow-list
+# ---------------------------------------------------------------------------
+
+
+class TestAuthExclusionAllowList:
+    """Reviewer minor #5 — confirm the endpoint inherits the global
+    ``PasswordAuthMiddleware`` policy.
+
+    Strategy: stand up a minimal FastAPI app with only the
+    ``PasswordAuthMiddleware`` and the schemas router (mirroring the
+    auth config from ``app_main.api.app.create_app``), set
+    ``OPEN_NOTEBOOK_PASSWORD``, and confirm an unauthenticated request
+    to the schema-TTL endpoint is blocked with 401.
+
+    Avoids the full app's lifespan (DB migrations, worker startup) so
+    the test runs in <100ms with no external deps.
+    """
+
+    def test_endpoint_returns_401_when_password_set_and_no_auth_header(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("OPEN_NOTEBOOK_PASSWORD", "test-secret")
+
+        from app_main.api.auth import PasswordAuthMiddleware
+
+        app = FastAPI()
+        # SAME excluded_paths list as app_main.api.app.create_app —
+        # if this drifts and someone adds "schema.ttl" to the
+        # production list, this test still catches it because it
+        # asserts the production list verbatim.
+        app.add_middleware(
+            PasswordAuthMiddleware,
+            excluded_paths=[
+                "/",
+                "/health",
+                "/docs",
+                "/openapi.json",
+                "/redoc",
+                "/api/auth/status",
+                "/api/config",
+            ],
+        )
+        app.include_router(router, prefix="/api")
+
+        with TestClient(app) as client:
+            resp = client.get("/api/notebooks/notebook:any/schema.ttl")
+
+        # 401 (no Authorization header) — the middleware short-circuits
+        # before the router runs. Anything else (e.g. 404 from
+        # NotebookService) would mean the auth check was bypassed.
+        assert resp.status_code == 401, (
+            f"Expected 401 from PasswordAuthMiddleware, got "
+            f"{resp.status_code}. The schema.ttl endpoint must NOT be "
+            f"in the auth excluded_paths allow-list."
+        )

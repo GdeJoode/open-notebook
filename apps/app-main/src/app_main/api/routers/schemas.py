@@ -26,12 +26,27 @@ Design notes
   the dict shape is intentionally schemaless on the DB side (see
   ``shared.models.notebook_schema`` for rationale).
 
+* **type_name sanitisation for URIs.** LLM-generated extensions
+  (B.1c/B.1d) may produce ``type_name`` values containing spaces or
+  punctuation. rdflib's Turtle serializer rejects those because
+  ``https://open-notebook.dev/ontology/My Class`` is not a valid URI.
+  We CamelCase the URI fragment and preserve the original
+  human-readable string in ``rdfs:label`` — the standard RDF/OWL
+  convention.
+
+* **Serialisation footprint.** Current output is buffered in memory.
+  At present scale (single-notebook ontology with ~10-50 classes) this
+  is ~10-30 KB and the in-memory Turtle is fine. Streaming becomes
+  relevant if a notebook accumulates >100 KB of TTL (rough heuristic:
+  >500 classes); revisit at that scale.
+
 * **rdflib is a runtime dep** of ``ontology-manager`` (merged in B.2a),
   so the import is unconditional at module load time.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -44,6 +59,7 @@ from ontology_manager.rdf_owl_shacl import (
     ON,
     load_yaml_ontology,
 )
+from ontology_manager.registry import OntologyRegistry
 from rdflib import Graph, Literal, URIRef
 from rdflib.namespace import OWL, RDF, RDFS
 from surrealdb_service.repositories.notebook_schema import (
@@ -59,39 +75,36 @@ router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["schemas"])
 # ---------------------------------------------------------------------------
 
 # When a notebook has no ``notebook_schema`` row yet (B.1c hasn't run), we
-# still need to pick a base ontology to export. ``scholarly`` matches the
-# default in ``ontology_manager.config.OntologyManagerConfig``.
+# still need to pick a base ontology to export.
+#
+# **Divergence from ``OntologyManagerConfig.default_ontology``** (which is
+# ``"general"``): scholarly is the canonical default for notebook schemas
+# in the B-track corpus — it carries the classes (Article, Author,
+# Cohort, PreprintServer, ...) that B.1c/B.1d's LLM pass-1 actually
+# emits against. ``general.yaml`` uses a dict-of-dicts ``entity_types``
+# shape that ``load_yaml_ontology`` does not currently parse, so
+# switching to it would 500 every fresh-notebook download.
+#
+# When B.3a wires the manager config end-to-end (or when ``general.yaml``
+# is normalised to the list-of-dicts shape), revisit this literal.
 _DEFAULT_BASE_ONTOLOGY = "scholarly"
 
 
 def _ontologies_dir() -> Path:
     """Resolve the bundled YAML ontology directory.
 
-    Mirrors the search performed by ``OntologyRegistry._find_ontology_dir``
-    but constrained to a single resolution since we always want the
-    in-repo files for the TTL exporter (DB-stored ontologies aren't yet
-    a thing the TTL exporter knows about).
+    Delegates to ``OntologyRegistry._find_ontology_dir`` (via the
+    singleton's cached ``_ontology_dir`` attribute) so the resolution
+    rules (package-relative → cwd → ``ONTOLOGY_DIR`` env → fallback)
+    stay in one place. This avoids the ``parents[N]`` fragility of
+    computing the repo root from this file's location.
 
-    The file lives at:
-        packages/ontology-manager/ontologies/<name>.yaml
-
-    Resolution priority:
-        1. ``ONTOLOGY_DIR`` env override (production / docker).
-        2. Repo-relative fallback computed from this file's path.
+    The ``_ontology_dir`` attribute is private by convention but stable
+    across the codebase (set in ``__init__`` and never mutated). When
+    ``_find_ontology_dir`` is exposed as part of a public registry
+    contract in a future phase, replace this with the public helper.
     """
-    import os
-
-    env_dir = os.environ.get("ONTOLOGY_DIR")
-    if env_dir:
-        p = Path(env_dir)
-        if p.exists():
-            return p
-
-    # This file: apps/app-main/src/app_main/api/routers/schemas.py
-    # parents[0..5]: routers, api, app_main, src, app-main, apps
-    # parents[6]   : repo root
-    repo_root = Path(__file__).resolve().parents[6]
-    return repo_root / "packages" / "ontology-manager" / "ontologies"
+    return OntologyRegistry()._ontology_dir  # noqa: SLF001 — see docstring
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +128,49 @@ def get_notebook_schema_repo() -> NotebookSchemaRepository:
 # ---------------------------------------------------------------------------
 
 
+_CAMEL_SPLIT_RE = re.compile(r"[^A-Za-z0-9]+")
+
+
+def _to_camel_case_uri_fragment(name: str) -> str:
+    """Convert a human-readable type name into a CamelCase URI fragment.
+
+    rdflib's Turtle serializer rejects URIs containing spaces or other
+    URI-illegal characters. Since LLM-generated extension names
+    inevitably contain such characters ("Clinical Trial Phase",
+    "Author/Editor"), we transform them into CamelCase before building
+    the URI. The original string is preserved separately in
+    ``rdfs:label`` so human readability survives the trip.
+
+    Examples::
+
+        "My Class With Spaces"   → "MyClassWithSpaces"
+        "preprint server"        → "PreprintServer"
+        "Author/Editor"          → "AuthorEditor"
+        "ARXiv paper"            → "ARXivPaper"
+        "PreprintServer"         → "PreprintServer"   (no-op when valid)
+        "2024 cohort"            → "_2024Cohort"      (leading-digit guard)
+    """
+    parts = [p for p in _CAMEL_SPLIT_RE.split(name) if p]
+    if not parts:
+        return ""
+
+    # Preserve already-internally-capitalised words ("ARXiv",
+    # "PreprintServer") by only upper-casing the first character if
+    # it's lower-case. Avoids destroying intentional capitalisation.
+    def _cap_first(s: str) -> str:
+        return s[0].upper() + s[1:] if s else s
+
+    fragment = "".join(_cap_first(p) for p in parts)
+
+    # URI fragments cannot start with a digit if we want a valid QName
+    # (Turtle's prefixed-name form uses NCName rules). Prefix with an
+    # underscore in that case — still serialisable, still unique.
+    if fragment and fragment[0].isdigit():
+        fragment = "_" + fragment
+
+    return fragment
+
+
 def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
     """Add accepted-extension classes (and their properties) to ``graph``.
 
@@ -134,6 +190,11 @@ def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
     when ``parent_type`` is set. Properties become ``owl:DatatypeProperty``
     declarations (object-property nuance is left to B.3b's full editor).
 
+    ``type_name`` is sanitised to a CamelCase URI fragment via
+    ``_to_camel_case_uri_fragment``; the original human-readable string
+    is written to ``rdfs:label``. The same transform is applied to
+    ``parent_type`` so the ``rdfs:subClassOf`` URI also stays valid.
+
     Returns the number of new ``owl:Class`` declarations actually added.
     Defensive of missing keys: an extension dict without ``type_name`` is
     skipped with a warning rather than raising — that matches the
@@ -148,14 +209,26 @@ def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
             )
             continue
 
-        cls_uri: URIRef = ON[type_name]
+        uri_fragment = _to_camel_case_uri_fragment(type_name)
+        if not uri_fragment:
+            logger.warning(
+                "Skipping extension with un-sanitisable type_name: {!r}",
+                type_name,
+            )
+            continue
+
+        cls_uri: URIRef = ON[uri_fragment]
         graph.add((cls_uri, RDF.type, OWL.Class))
+        # Preserve the original human-readable name — this is the value
+        # users see in Protégé / a KG browser regardless of URI mangling.
         graph.add((cls_uri, RDFS.label, Literal(type_name)))
         classes_added += 1
 
         parent = ext.get("parent_type")
         if isinstance(parent, str) and parent:
-            graph.add((cls_uri, RDFS.subClassOf, ON[parent]))
+            parent_fragment = _to_camel_case_uri_fragment(parent)
+            if parent_fragment:
+                graph.add((cls_uri, RDFS.subClassOf, ON[parent_fragment]))
 
         description = ext.get("description")
         if isinstance(description, str) and description:
@@ -167,7 +240,13 @@ def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
             pname = prop.get("name")
             if not pname or not isinstance(pname, str):
                 continue
-            prop_uri = ON[pname]
+            pfragment = _to_camel_case_uri_fragment(pname)
+            if not pfragment:
+                continue
+            # Property URIs use lower-camel by convention; lower-case the
+            # very first character.
+            pfragment = pfragment[0].lower() + pfragment[1:]
+            prop_uri = ON[pfragment]
             graph.add((prop_uri, RDF.type, OWL.DatatypeProperty))
             graph.add((prop_uri, RDFS.domain, cls_uri))
             graph.add((prop_uri, RDFS.label, Literal(pname)))
@@ -175,15 +254,26 @@ def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
     return classes_added
 
 
-def _safe_filename(notebook_id: str) -> str:
-    """Build a filesystem-safe filename from a SurrealDB record id.
+# Characters that either break the Content-Disposition header itself
+# (CR/LF, embedded quotes) or trip OS save dialogs (path separators,
+# colon on older Windows clients).
+_FILENAME_UNSAFE_RE = re.compile(r'[:/\\\r\n\t\x00"\']')
 
-    ``notebook:abc-123`` → ``notebook_abc-123.ttl``. Browsers tolerate
-    most punctuation in ``Content-Disposition`` filenames, but the colon
-    can trip older versions of Windows Save dialogs, so we replace it
-    with an underscore.
+
+def _safe_filename(notebook_id: str) -> str:
+    """Build a filename safe for ``Content-Disposition`` headers.
+
+    Replaces characters that break the HTTP header (CR/LF, single and
+    double quotes) or trip OS save dialogs (path separators, colon)
+    with underscores, then appends ``.ttl``.
+
+    Example: ``notebook:abc-123`` → ``notebook_abc-123.ttl``.
+
+    Not a general-purpose filesystem sanitiser — the strip-list is
+    scoped to the characters that matter for HTTP attachment downloads
+    and common consumer OSes (Windows / macOS / Linux file pickers).
     """
-    return notebook_id.replace(":", "_").replace("/", "_") + ".ttl"
+    return _FILENAME_UNSAFE_RE.sub("_", notebook_id) + ".ttl"
 
 
 # ---------------------------------------------------------------------------
