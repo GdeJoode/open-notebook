@@ -1,5 +1,51 @@
 # Track B — KG quality: rolling status
 
+## Phase B.1e — Multi-schema orchestrator (2026-06-06)
+
+**Branch**: `track/b-multi-schema-orchestrator`
+**Commits**: `2e23dfe` (skeleton) → `5e4fa93` (test suite)
+**State**: code complete, all quality gates green, ready for review.
+
+### Delivered
+
+- `pipelines/ontology-extraction/src/ontology_extraction/multi_schema_orchestrator.py` —
+  - `detect_applicable_schemas(document_type, document_text, ontologies, top_k=3)` ranks ontologies via `document_mapper` (high precision) + entity-type keyword overlap (broad recall), combined via `max(...)`, filtered by `MIN_APPLICABLE_CONFIDENCE = 0.3`.
+  - `run_multi_schema(source_id, notebook_id, chunks, applicable_schemas, llm_caller, pass1_repo, accepted_extensions_by_schema)` runs Pass-1 sequentially per schema, persists `pass1_results` rows, accumulates deduped extensions, decides a `SoftNudgeDecision`, runs Pass-2 once per schema, then merges in-process.
+  - `SoftNudgeDecision` enum: `NONE` (cov > 0.95) / `EXTENSION_SUGGESTED` (0.80–0.95) / `SCHEMA_MISMATCH` (< 0.80).
+  - Merge step: entity dedup keyed by `normalize_entity_name(text)` with `type_tags` aggregation; `primary_type` from the highest-confidence pass; relation dedup on `(norm(src), norm(tgt), type)` with max-confidence wins. Single-schema input is a pass-through (no merge metadata added) per AC #4.
+- `packages/shared/src/shared/config.py` — NEW single-source-of-truth for `SOFT_NUDGE_COVERAGE_HIGH`, `SOFT_NUDGE_COVERAGE_LOW`, `MIN_APPLICABLE_CONFIDENCE` (RETRO lesson #2; B.3c UI reads same values).
+- `packages/shared/src/shared/models/extraction.py` — `ExtractedEntity` gains `type_tags: List[str]` and `primary_type: Optional[str]`; defaults preserve single-schema back-compat.
+- `pipelines/ontology-extraction/src/ontology_extraction/workflow.py` — `ExtractionWorkflow.extract(chunks, mode="single"|"multi", ...)`; default `"single"` preserves existing behaviour. `mode="multi"` dispatches to `run_multi_schema`.
+- Package public API extended: `run_multi_schema`, `detect_applicable_schemas`, `SoftNudgeDecision`, and the three shared thresholds are re-exported from `ontology_extraction`.
+
+### Quality gates
+
+```
+pipelines/ontology-extraction : 234 tests, all green (+47 new)
+  Coverage on multi_schema_orchestrator.py:  99 % (2 defensive branches uncovered)
+packages/shared              : 145 tests, all green (no regression)
+packages/surrealdb-service   : 52 tests passing (non-docker subset)
+
+Token budgets:
+  Each Pass-2 prompt for the scholarly fixture: <= 335 estimated tokens (well under 3000 cap)
+  Pass-1 internal cap unchanged at 2400 tokens (B.1c TOKEN_BUDGET_TARGET)
+```
+
+### Pre-resolved decisions honoured
+
+- **Q-B-2**: Heuristic char-budget sampling (`PASS2_SAMPLE_CHAR_BUDGET = 6000`); Pass-1 / Pass-2 internal guards keep `len(text) // 4`. No new deps.
+- **Q-B-4**: Re-uses B.1c's `shared.utils.name_normalizer.normalize_entity_name` — single import point, no new normalizer.
+- **Q-B-6**: Always-on telemetry: `pass1_attempt`, `multi_schema_pass1_complete`, `multi_schema_run skipped`, plus warnings for per-schema failures.
+- **Q-B-7**: Stub normalizer reused; Q9 deferred.
+
+### Outstanding follow-ups
+
+- B.1f wires `EntityExtractionService.run_extraction()` to call `run_multi_schema(...)` when `notebook_id` is supplied; flips workflow default to `"multi"`.
+- B.3c presents `SoftNudgeDecision` + `metadata["proposed_extensions"]` to the curator.
+- B.4 layers `confidence` / `primary_type` / `type_tags` onto the KG page.
+
+---
+
 ## Phase B.1d — Pass-2 typed extraction module (2026-06-06)
 
 **Branch**: `track/b-pass2-module`
