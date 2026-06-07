@@ -49,6 +49,11 @@ class EntityExtractPayload(BaseModel):
     langextract_temperature: Optional[float] = None
     langextract_use_schema_constraints: Optional[bool] = None
     langextract_fence_output: Optional[bool] = None
+    # B.1f back-compat kill-switch. Ops can submit a job with
+    # ``multi_schema_enabled=False`` to force the legacy single-schema
+    # path if the orchestrator misbehaves in production. Defaults
+    # ``True`` so the multi-schema path is the new normal.
+    multi_schema_enabled: bool = True
 
 
 class EmbeddingPayload(BaseModel):
@@ -169,12 +174,29 @@ async def handle_insight_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @registry.register(JobType.ENTITY_EXTRACT)
 async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Run ontology-guided entity extraction on a source."""
+    """Run ontology-guided entity extraction on a source.
+
+    Phase B.1f: resolves the source's owning notebook before invoking
+    extraction so the multi-schema orchestrator can run when the source
+    belongs to a notebook with a configured schema. Sources unlinked
+    from any notebook (CLI uploads, orphans) fall through to the legacy
+    single-schema path because ``notebook_id`` stays ``None``.
+
+    Raising :class:`SchemaReviewPendingError` is the contract for "user
+    must review pending extensions before this source can be extracted".
+    The exception bubbles to the worker which translates it into the
+    ``PAUSED_FOR_REVIEW`` job state (see ``packages/job-queue/worker.py``);
+    callers checking job status see this state and surface a 409 in the
+    UI.
+    """
     validated = EntityExtractPayload(**payload)
     start_time = time.time()
 
     try:
-        from app_main.dependencies import get_entity_extraction_service
+        from app_main.dependencies import get_entity_extraction_service, get_source_repo
+        from app_main.services.entity_extraction_service import (
+            SchemaReviewPendingError,
+        )
 
         logger.info(f"Starting entity extraction for source: {validated.source_id}")
         service = get_entity_extraction_service()
@@ -191,11 +213,29 @@ async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
             if value is not None:
                 config_overrides[key] = value
 
+        # Resolve the owning notebook so the multi-schema orchestrator
+        # can load NotebookSchema. ``None`` is fine (legacy path).
+        notebook_id: Optional[str] = None
+        try:
+            notebook_id = await get_source_repo().get_notebook_id(
+                validated.source_id
+            )
+        except Exception as e:
+            # Edge resolution is best-effort. If it fails, log and fall
+            # through to single-schema rather than aborting the whole
+            # extraction.
+            logger.warning(
+                f"Could not resolve notebook for source "
+                f"{validated.source_id}: {e}; defaulting to single-schema"
+            )
+
         result = await service.run_extraction(
             source_id=validated.source_id,
             ontology_name=validated.ontology_name,
             extractor_type=validated.extractor_type,
             config_overrides=config_overrides if config_overrides else None,
+            notebook_id=notebook_id,
+            multi_schema_enabled=validated.multi_schema_enabled,
         )
 
         processing_time = time.time() - start_time
@@ -208,6 +248,16 @@ async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
             **result,
             "processing_time": processing_time,
         }
+
+    except SchemaReviewPendingError as e:
+        # Reraise so the worker / queue machinery parks the job in
+        # PAUSED_FOR_REVIEW (see worker.py B.1f branch). The exception
+        # carries the notebook_id / pending_count for downstream UI use.
+        logger.warning(
+            f"Entity extraction paused for review: notebook={e.notebook_id} "
+            f"source={e.source_id} pending={e.pending_count}"
+        )
+        raise
 
     except Exception as e:
         logger.error(f"Entity extraction failed for source {validated.source_id}: {e}")

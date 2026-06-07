@@ -71,6 +71,9 @@ class RunEntitiesRequest(BaseModel):
     langextract_temperature: Optional[float] = None
     langextract_use_schema_constraints: Optional[bool] = None
     langextract_fence_output: Optional[bool] = None
+    # B.1f back-compat kill-switch — defaults true so multi-schema is the
+    # new normal; ops sends ``false`` to roll back to the legacy path.
+    multi_schema_enabled: bool = True
 
 
 class RunFilteringRequest(BaseModel):
@@ -123,18 +126,67 @@ async def run_entities(
     body: RunEntitiesRequest = RunEntitiesRequest(),
     source_svc: SourceService = Depends(get_source_service),
 ):
-    """Trigger ontology-guided entity extraction for a source."""
+    """Trigger ontology-guided entity extraction for a source.
+
+    Phase B.1f: pre-checks the owning notebook's schema-review state.
+    When ``review_required=True`` and no accepted extensions exist yet,
+    returns 409 Conflict (rather than queueing a job that will pause
+    immediately). The handler still catches the same condition as a
+    defence-in-depth in case the notebook state changes between the
+    pre-check and the worker pulling the job.
+    """
     try:
         source = await source_svc.get(source_id)
         if not source:
             raise HTTPException(status_code=404, detail="Source not found")
 
+        from app_main.dependencies import get_source_repo
         from app_main.services.command_service import CommandService
+        from surrealdb_service.repositories import NotebookSchemaRepository
+
+        # Pre-check: synchronous 409 when the owning notebook has the
+        # review-pending toggle set. The handler also enforces this on
+        # the worker side; doing it here saves a roundtrip when the UI
+        # would just have to wait for the same answer.
+        if body.extractor_type == "llm" and body.multi_schema_enabled:
+            try:
+                notebook_id = await get_source_repo().get_notebook_id(
+                    str(source.id)
+                )
+            except Exception as e:
+                logger.warning(
+                    f"run-entities: could not resolve notebook for "
+                    f"{source.id}: {e}"
+                )
+                notebook_id = None
+
+            if notebook_id is not None:
+                nb_schema_repo = NotebookSchemaRepository()
+                nb_schema = await nb_schema_repo.get_by_notebook(notebook_id)
+                if (
+                    nb_schema is not None
+                    and nb_schema.review_required
+                    and not nb_schema.accepted_extensions
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "schema_review_pending",
+                            "message": (
+                                "Notebook has pending schema-extension "
+                                "review. Resolve pending extensions before "
+                                "running entity extraction."
+                            ),
+                            "notebook_id": notebook_id,
+                            "pending_count": len(nb_schema.pending_extensions),
+                        },
+                    )
 
         command_payload = {
             "source_id": str(source.id),
             "ontology_name": body.ontology_name,
             "extractor_type": body.extractor_type,
+            "multi_schema_enabled": body.multi_schema_enabled,
         }
         # Forward langextract options if provided
         for field_name in (

@@ -3,15 +3,32 @@ Service bridging the app layer to the ontology-extraction and entity-filtering p
 
 Fetches source chunks, runs ExtractionWorkflow, optionally runs
 FilteringWorkflow for deduplication, and persists results to SurrealDB.
+
+Phase B.1f wires the multi-schema orchestrator (B.1e) into
+``run_extraction``. The default behaviour now is "multi-schema when a
+notebook_id is supplied"; legacy CLI callers omit ``notebook_id`` and
+fall through to the single-schema path so no existing test relies on
+B.1e being green.
+
+A back-compat kill-switch (``multi_schema_enabled=False``) forces the
+single-schema path regardless of ``notebook_id``. Ops runbook: pass
+``False`` via the handler payload to roll back if the orchestrator
+misbehaves in production.
 """
 
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from surrealdb_service.connection import execute_query
-from surrealdb_service.repositories import SourceRepository
+from surrealdb_service.repositories import (
+    NotebookSchemaRepository,
+    Pass1ResultRepository,
+    SourceRepository,
+)
 
+from job_queue import JobPausedForReviewError
 from ontology_extraction.config import ExtractionConfig
+from ontology_extraction.multi_schema_orchestrator import detect_applicable_schemas
 from ontology_extraction.workflow import ExtractionWorkflow
 
 from entity_filtering.config import FilteringConfig
@@ -20,11 +37,149 @@ from entity_filtering.workflow import FilteringWorkflow
 from app_main.services.entity_persistence_service import EntityPersistenceService
 
 
+async def make_default_llm_caller(model_id: Optional[str] = None):
+    """Build an async ``LLMCaller`` backed by :class:`ModelManager`.
+
+    Phase B.1f fixes the long-standing LLMExtractor "silent empty"
+    bug. The old code wrote ``from llm_manager.manager import LLMManager``
+    and ``manager.generate(...)`` — both symbols had been renamed
+    (``LLMManager`` → :class:`ModelManager`) and replaced
+    (``.generate`` → ``ModelInstance.achat_complete``). The
+    consequence in production: ``ImportError`` caught silently,
+    extractor returned empty results, no extraction ever happened.
+
+    This factory closes the loop. It:
+
+    1. Looks up the configured default chat model via
+       :class:`shared.models.DefaultModels`.
+    2. Resolves the :class:`Model` row from the repository.
+    3. Instantiates the esperanto ``LanguageModel`` via
+       ``ModelManager.get_model_from_config``.
+    4. Returns an async ``(system, user, model) -> str`` callable
+       that dispatches via ``LanguageModel.achat_complete``.
+
+    Args:
+        model_id: Override the default chat model id. ``None`` means
+            "use the configured default".
+
+    Returns:
+        An async callable matching the
+        :type:`ontology_extraction.pass2_typed_extraction.LLMCaller`
+        protocol (``async (system_prompt, user_prompt, model) -> str``).
+    """
+    # Local imports to keep module-import cheap (these chains are
+    # heavy: esperanto loads provider SDKs lazily).
+    from esperanto import LanguageModel
+    from llm_manager import get_model_manager
+
+    from app_main.dependencies import (
+        get_default_models_repo,
+        get_model_repo,
+    )
+
+    mm = get_model_manager()
+
+    defaults = mm.get_defaults()
+    if not defaults or not defaults.default_chat_model:
+        defaults_repo = get_default_models_repo()
+        defaults = await defaults_repo.get()
+        mm.set_defaults(defaults)
+
+    resolved_id = model_id or defaults.default_chat_model
+    if not resolved_id:
+        raise RuntimeError(
+            "No chat model configured — set DefaultModels.default_chat_model "
+            "or pass model_id explicitly."
+        )
+
+    model_record = await get_model_repo().get(resolved_id)
+    if not model_record:
+        raise RuntimeError(
+            f"Model '{resolved_id}' not found in database."
+        )
+
+    instance = mm.get_model_from_config(model_record)
+    if not isinstance(instance, LanguageModel):
+        raise TypeError(
+            f"Model '{resolved_id}' is not a LanguageModel "
+            f"(got {type(instance).__name__})."
+        )
+
+    async def _caller(system_prompt: str, user_prompt: str, _model: str) -> str:
+        # The injected ``model`` arg is for telemetry/parity with
+        # Pass-1/Pass-2 callers; the LanguageModel itself is already
+        # bound. We honour it by logging when the caller asks for a
+        # model id that differs from the bound instance — a sign the
+        # caller wants per-call model overrides that we don't yet
+        # support.
+        if _model and _model not in ("default", model_record.id):
+            logger.warning(
+                f"LLMExtractor caller requested model={_model!r} but "
+                f"this caller is bound to {model_record.id!r}"
+            )
+        response = await instance.achat_complete(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+        )
+        # esperanto ``ChatCompletion`` shape: ``response.choices[0].message.content``
+        # Defensive extraction — return empty string if the shape changes
+        # rather than raising, because the extractor's JSON parser
+        # tolerates empty/invalid output.
+        try:
+            return response.choices[0].message.content or ""
+        except (AttributeError, IndexError) as e:
+            logger.error(
+                f"Unexpected esperanto ChatCompletion shape: {e}; "
+                f"response={response!r}"
+            )
+            return ""
+
+    return _caller
+
+
+class SchemaReviewPendingError(JobPausedForReviewError):
+    """Raised when extraction blocks on user review of pending schema extensions.
+
+    Phase B.1f introduces a per-notebook ``review_required`` toggle. When
+    set, the multi-schema orchestrator should not run until the user has
+    explicitly approved (or rejected) the pending extension proposals.
+    The handler catches this exception and parks the background job in
+    ``PAUSED_FOR_REVIEW``; the API translates it into 409 Conflict.
+
+    Subclassing :class:`JobPausedForReviewError` lets the generic
+    :class:`job_queue.worker.JobWorker` route this to
+    ``PAUSED_FOR_REVIEW`` without knowing about extraction internals.
+    """
+
+    def __init__(self, notebook_id: str, source_id: str, pending_count: int = 0):
+        self.notebook_id = notebook_id
+        self.source_id = source_id
+        self.pending_count = pending_count
+        super().__init__(
+            f"Notebook {notebook_id} requires review of pending schema "
+            f"extensions before source {source_id} can be extracted "
+            f"({pending_count} pending)."
+        )
+
+
 class EntityExtractionService:
     """Runs ontology-guided entity extraction on a source's chunks."""
 
-    def __init__(self, source_repo: SourceRepository):
+    def __init__(
+        self,
+        source_repo: SourceRepository,
+        notebook_schema_repo: Optional[NotebookSchemaRepository] = None,
+        pass1_repo: Optional[Pass1ResultRepository] = None,
+    ):
         self._source_repo = source_repo
+        # B.1f wiring: the multi-schema orchestrator needs both repos.
+        # The legacy single-schema path doesn't, so they default to
+        # ``None`` and are lazily constructed when needed. Tests can
+        # inject fakes to assert on the multi-schema branch.
+        self._notebook_schema_repo = notebook_schema_repo
+        self._pass1_repo = pass1_repo
         self._persistence = EntityPersistenceService()
 
     async def _embed_entities(
@@ -61,6 +216,144 @@ class EntityExtractionService:
                 f"Entity embedding failed (dedup will use string-only): {e}"
             )
 
+    async def _run_multi_schema(
+        self,
+        workflow: "ExtractionWorkflow",
+        source_id: str,
+        notebook_id: str,
+        chunks: List[Dict[str, Any]],
+    ) -> "ExtractionResult":
+        """Detect applicable schemas and invoke the B.1e orchestrator.
+
+        Sequence:
+
+        1. Load the :class:`NotebookSchema` row (if any). Enforce the
+           ``review_required`` gate before doing any LLM work.
+        2. Discover the candidate ontologies via the registry and score
+           them with :func:`detect_applicable_schemas`. When no schema
+           clears the applicability floor we fall back to a single-pass
+           run against the configured ``ontology_name`` — the
+           orchestrator with an empty applicable list would return zero
+           entities, and the legacy path is the right safety net.
+        3. Hand off to ``ExtractionWorkflow.extract(mode="multi", ...)``.
+
+        The notebook-schema repo is lazily constructed when the caller
+        didn't inject one, so production wiring stays a single ``__init__``
+        argument away.
+        """
+        # Lazy-construct the repos so DI is optional. Production wires
+        # them via ``get_entity_extraction_service``; tests inject fakes.
+        from ontology_manager import get_ontology_manager
+
+        notebook_schema_repo = self._notebook_schema_repo or NotebookSchemaRepository()
+        pass1_repo = self._pass1_repo or Pass1ResultRepository()
+
+        notebook_schema = await notebook_schema_repo.get_by_notebook(notebook_id)
+
+        # Review gate — if the user has paused processing for this
+        # notebook, do not run extraction. The caller (handler) treats
+        # this exception as "park the job in PAUSED_FOR_REVIEW".
+        if (
+            notebook_schema is not None
+            and notebook_schema.review_required
+            and not notebook_schema.accepted_extensions
+        ):
+            raise SchemaReviewPendingError(
+                notebook_id=notebook_id,
+                source_id=source_id,
+                pending_count=len(notebook_schema.pending_extensions),
+            )
+
+        # Document-type hint comes from the source's metadata bag —
+        # ``parser_engine_used``, ``document_type``, etc. live there.
+        source = await self._source_repo.get(source_id)
+        document_type: Optional[str] = None
+        if source is not None and getattr(source, "metadata", None):
+            document_type = source.metadata.get("document_type")
+
+        # Sample text for the applicability scorer — first chunk's
+        # content is a cheap signal. The orchestrator's Pass-1 step
+        # builds a richer sample independently.
+        sample_text: Optional[str] = None
+        for chunk in chunks:
+            text = chunk.get("text", "")
+            if text:
+                sample_text = text[:2000]
+                break
+
+        # Discover candidate ontologies. ``list_ontologies`` returns
+        # names; we resolve them through the registry. Missing ontology
+        # entries (e.g. ``general`` declared but file not registered)
+        # are silently skipped.
+        manager = get_ontology_manager()
+        ontology_names = await manager.list_ontologies()
+        candidate_ontologies = []
+        for name in ontology_names:
+            ontology = await manager.get_ontology(name)
+            if ontology is not None:
+                candidate_ontologies.append(ontology)
+
+        applicable_schemas = await detect_applicable_schemas(
+            document_type=document_type,
+            document_text=sample_text,
+            ontologies=candidate_ontologies,
+            top_k=3,
+        )
+
+        if not applicable_schemas:
+            # No schema cleared the floor — fall back to the configured
+            # default ontology via the legacy single-schema path. This
+            # mirrors the orchestrator's own "no schemas applicable"
+            # behaviour but gives the caller *some* entities instead of
+            # an empty result.
+            logger.info(
+                "multi_schema: no applicable schemas for source={src} "
+                "notebook={nb}, falling back to single-schema path",
+                src=source_id,
+                nb=notebook_id,
+            )
+            return await workflow.extract(chunks)
+
+        # Build the per-schema accepted-extensions map from the
+        # notebook's accepted extensions. Each extension dict carries
+        # an optional ``schema_name`` field; ones without it are
+        # broadcast to every schema (conservative default).
+        accepted_by_schema: Dict[str, List[Dict[str, Any]]] = {}
+        if notebook_schema is not None:
+            for ext in notebook_schema.accepted_extensions:
+                schema_name = ext.get("schema_name")
+                if schema_name:
+                    accepted_by_schema.setdefault(schema_name, []).append(ext)
+                else:
+                    for ontology, _conf in applicable_schemas:
+                        name = ontology.metadata.name if ontology.metadata else ""
+                        if name:
+                            accepted_by_schema.setdefault(name, []).append(ext)
+
+        # Build the production LLM caller once per run so Pass-1 and
+        # Pass-2 share a single bound ``LanguageModel``. Failures here
+        # are logged but non-fatal — Pass-1/Pass-2 fall through to
+        # their lazy-default empty-result paths if no caller arrives.
+        llm_caller = None
+        try:
+            llm_caller = await make_default_llm_caller()
+        except Exception as e:
+            logger.warning(
+                f"multi_schema: failed to wire LLM caller ({e}); "
+                "Pass-1/Pass-2 will run with their lazy defaults."
+            )
+
+        return await workflow.extract(
+            chunks=chunks,
+            mode="multi",
+            applicable_schemas=applicable_schemas,
+            source_id=source_id,
+            notebook_id=notebook_id,
+            pass1_repo=pass1_repo,
+            accepted_extensions_by_schema=accepted_by_schema or None,
+            llm_caller=llm_caller,
+        )
+
     async def run_extraction(
         self,
         source_id: str,
@@ -69,6 +362,8 @@ class EntityExtractionService:
         config_overrides: Dict[str, Any] | None = None,
         run_filtering: bool = True,
         filtering_config: Optional[FilteringConfig] = None,
+        notebook_id: Optional[str] = None,
+        multi_schema_enabled: bool = True,
     ) -> Dict[str, Any]:
         """
         Run entity extraction and optional filtering for a source.
@@ -80,12 +375,26 @@ class EntityExtractionService:
         5. Persist raw results to ``extraction_result`` table.
         6. Persist filtered entities to KG tables (entity, relation).
         7. Return summary dict.
+
+        Args:
+            notebook_id: When provided AND ``multi_schema_enabled`` is
+                ``True``, routes through the B.1e multi-schema
+                orchestrator (Pass-1 schema validation + Pass-2 typed
+                extraction + merge). Required for the notebook-schema
+                review-gating logic. When ``None``, the legacy
+                single-schema path runs unchanged.
+            multi_schema_enabled: Ops kill-switch. ``False`` forces the
+                legacy single-schema path even when ``notebook_id`` is
+                set — used as the emergency rollback if the orchestrator
+                misbehaves in production.
+
+        Raises:
+            SchemaReviewPendingError: Multi-schema path only; raised
+                when the notebook's ``review_required`` flag is true
+                and no accepted extensions exist yet. The handler maps
+                this to ``PAUSED_FOR_REVIEW`` job status; the API
+                returns 409 Conflict.
         """
-        # TODO(B.1f): Insert Pass-1 schema validation here. The
-        # ``Pass1SchemaValidator`` module (B.1c) is implemented and
-        # importable; B.1f will sample chunks, run it, and persist
-        # the result via ``Pass1ResultRepository.record(...)`` before
-        # the typed-extraction call below.
         logger.info(f"Starting entity extraction for source: {source_id}")
 
         # 1. Fetch chunks
@@ -123,10 +432,56 @@ class EntityExtractionService:
         if config_overrides:
             config_kwargs.update(config_overrides)
         config = ExtractionConfig(**config_kwargs)
-        workflow = ExtractionWorkflow(config)
 
-        # 4. Run extraction
-        result = await workflow.extract(chunk_dicts)
+        # 4. Run extraction — branch on multi-schema vs single-schema.
+        use_multi_schema = (
+            multi_schema_enabled
+            and notebook_id is not None
+            and extractor_type == "llm"
+        )
+        if use_multi_schema:
+            # Multi-schema path: workflow has no extractor bound — the
+            # orchestrator routes via Pass-1/Pass-2 with the injected
+            # caller from ``_run_multi_schema``.
+            workflow = ExtractionWorkflow(config)
+            result = await self._run_multi_schema(
+                workflow=workflow,
+                source_id=source_id,
+                notebook_id=notebook_id,
+                chunks=chunk_dicts,
+            )
+        else:
+            # Legacy single-schema path — unchanged from B.1e and earlier
+            # in terms of API, but B.1f wires the LLMExtractor through
+            # ``ModelManager`` so production callers actually hit the
+            # LLM (the pre-B.1f code silently returned empty results).
+            # Hit when ``notebook_id`` is omitted (CLI / tests), when
+            # ops disables multi-schema via the flag, or when the caller
+            # selects ``extractor_type="langextract"``.
+            extractor = None
+            if extractor_type == "llm":
+                try:
+                    llm_caller = await make_default_llm_caller(
+                        model_id=config.llm_model
+                        if config.llm_model != "default"
+                        else None,
+                    )
+                    from ontology_extraction.extractors.llm_extractor import (
+                        LLMExtractor,
+                    )
+
+                    extractor = LLMExtractor(
+                        llm_model=config.llm_model,
+                        confidence_threshold=config.confidence_threshold,
+                        llm_caller=llm_caller,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"single-schema: failed to wire LLM caller ({e}); "
+                        "extractor will fall back to lazy-default empty path."
+                    )
+            workflow = ExtractionWorkflow(config, extractor=extractor)
+            result = await workflow.extract(chunk_dicts)
 
         # Store extractor_type in metadata
         if not hasattr(result, "metadata") or result.metadata is None:
