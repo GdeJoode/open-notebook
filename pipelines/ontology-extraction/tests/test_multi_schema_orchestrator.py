@@ -658,6 +658,47 @@ class TestMergeResults:
         assert merged.relations[0].source_entity == "Alice"
         assert merged.relations[0].target_entity == "MIT"
 
+    def test_relation_with_orphan_endpoint_passes_through_unchanged(self):
+        """B.4 re-link contract: when a relation references an entity
+        that no schema yielded, the relation's endpoint stays as the
+        LLM-raw text (NOT rewritten, NOT dropped).
+
+        Rationale: downstream KG persistence
+        (``entity_persistence_service``) drops relations whose endpoints
+        don't match any entity text, so an orphan relation will be
+        silently filtered. We deliberately *do not* synthesise a
+        placeholder entity here — the orchestrator stays pure.
+
+        Pins minor #1 from the B.1f attempt-1 review.
+        """
+        # Pass A: knows Alice.
+        result_a = ExtractionResult(
+            entities=[
+                ExtractedEntity(text="Alice", label="Researcher", confidence=0.9),
+            ],
+            relations=[
+                ExtractedRelation(
+                    source_entity="Alice",
+                    target_entity="MIT",  # MIT is not in any entity list!
+                    relation_type="AFFILIATED_WITH",
+                    confidence=0.8,
+                ),
+            ],
+        )
+        # Pass B is empty (forces the merge path to actually run; the
+        # single-schema short-circuit would bypass the re-link).
+        result_b = ExtractionResult(entities=[])
+
+        merged = _merge_results([("a", result_a), ("b", result_b)])
+
+        assert len(merged.relations) == 1
+        rel = merged.relations[0]
+        # Source endpoint IS in the entity list → re-linked to canon.
+        assert rel.source_entity == "Alice"
+        # Target endpoint is an orphan → left as the LLM-raw text so
+        # downstream filtering decides what to do.
+        assert rel.target_entity == "MIT"
+
 
 class TestMergedEntityHelper:
     """Direct tests for the MergedEntity bookkeeper.
