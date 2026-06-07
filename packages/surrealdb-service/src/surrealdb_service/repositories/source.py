@@ -36,6 +36,43 @@ class SourceRepository(BaseRepository[Source]):
             logger.error(f"Failed to add source to notebook: {e}")
             return False
 
+    async def get_notebook_id(self, source_id: str) -> Optional[str]:
+        """Return the first notebook that links to ``source_id`` (or ``None``).
+
+        Phase B.1f wires the multi-schema orchestrator into
+        ``EntityExtractionService``. The orchestrator wants the owning
+        notebook's id so it can load a :class:`NotebookSchema` row. The
+        source ↔ notebook link lives on the ``reference`` graph edge
+        (``add_to_notebook`` above creates it), so we walk that edge.
+
+        A source may belong to multiple notebooks; we return the first
+        one because notebook-schemas are 1:1 with notebooks and the
+        downstream call site simply needs *a* notebook to anchor schema
+        lookup. The chosen notebook is deterministic because SurrealDB
+        returns ``reference`` edges in insertion order (no explicit
+        ORDER BY is required for this single-record fetch).
+
+        Returns ``None`` when the source is unlinked (CLI extractions
+        or orphaned sources). The caller treats ``None`` as "no
+        notebook-schema available → run single-schema legacy path".
+        """
+        try:
+            rows = await execute_query(
+                "SELECT VALUE out FROM reference "
+                "WHERE in = $source LIMIT 1;",
+                {"source": ensure_record_id(source_id)},
+                self.config,
+            )
+            if not rows:
+                return None
+            # ``execute_query`` parses RecordIDs to strings already.
+            return str(rows[0]) if rows[0] is not None else None
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch notebook for source {source_id}: {e}"
+            )
+            return None
+
     async def get_insights(self, source_id: str) -> List[SourceInsight]:
         """
         Get all insights for a source.

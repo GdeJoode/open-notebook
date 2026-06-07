@@ -30,11 +30,26 @@ from .multi_schema_orchestrator import (
 
 
 class ExtractionWorkflow:
-    """Orchestrates ontology-guided extraction across text chunks."""
+    """Orchestrates ontology-guided extraction across text chunks.
 
-    def __init__(self, config: Optional[ExtractionConfig] = None):
+    Args:
+        config: Extraction configuration. Defaults to a fresh
+            :class:`ExtractionConfig`.
+        extractor: Optional pre-built :class:`ExtractorBase` instance.
+            When provided, ``_get_extractor`` returns it directly
+            rather than constructing from ``config``. Phase B.1f wires
+            an :class:`LLMExtractor` with an injected LLM caller this
+            way so the single-schema legacy path can hit the real LLM
+            instead of the silent-empty default.
+    """
+
+    def __init__(
+        self,
+        config: Optional[ExtractionConfig] = None,
+        extractor: Optional[ExtractorBase] = None,
+    ):
         self._config = config or ExtractionConfig()
-        self._extractor: Optional[ExtractorBase] = None
+        self._extractor: Optional[ExtractorBase] = extractor
 
     def _get_extractor(self) -> ExtractorBase:
         if self._extractor is None:
@@ -87,6 +102,7 @@ class ExtractionWorkflow:
         accepted_extensions_by_schema: Optional[
             Dict[str, List[Dict[str, Any]]]
         ] = None,
+        llm_caller: Optional[Any] = None,
     ) -> ExtractionResult:
         """
         Extract entities and relations from a list of text chunks.
@@ -144,6 +160,10 @@ class ExtractionWorkflow:
                 applicable_schemas=applicable_schemas,
                 pass1_repo=pass1_repo,
                 accepted_extensions_by_schema=accepted_extensions_by_schema,
+                # B.1f: thread the production LLM caller (or test fake)
+                # through to Pass-1 + Pass-2. ``None`` retains the
+                # orchestrator's lazy-default behaviour (logs a canary).
+                llm_caller=llm_caller,
             )
             return merged
 
