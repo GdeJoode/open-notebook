@@ -12,6 +12,7 @@ from loguru import logger
 
 from shared.types.enums import JobStatus
 
+from job_queue.exceptions import JobPausedForReviewError
 from job_queue.queue import JobQueue
 from job_queue.registry import HandlerRegistry
 from job_queue.repository import JobRepository
@@ -149,6 +150,21 @@ class JobWorker:
                 result=result,
             )
             logger.info(f"Job {job_id} completed successfully")
+
+        except JobPausedForReviewError as e:
+            # Handler signalled "park, don't fail". No retry, no
+            # dead-letter — the UI surfaces the paused state and the
+            # user can resume the job after acting (B.3c). The message
+            # carries enough context for the UI to render a prompt.
+            logger.warning(
+                f"Job {job_id} paused for review: {e}"
+            )
+            await self._repository.update_status(
+                job_id,
+                JobStatus.PAUSED_FOR_REVIEW,
+                error_message=str(e),
+            )
+            return
 
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}")
