@@ -1,5 +1,44 @@
 # Track B — KG quality: rolling status
 
+## Phase B.1f — Extraction-service wiring + LLMExtractor fix + B.4 relation re-link (2026-06-07)
+
+**Branch**: `track/b-extraction-service-wiring`
+**Commits**: `821cc39` (queue plumbing) → `684af89` (LLMExtractor DI) → `be23140` (B.4 fix) → `ae7990e` (service + handler + tests)
+**State**: code complete, all quality gates green, ready for adversarial review.
+
+### Delivered
+
+- `EntityExtractionService.run_extraction` now branches on `(multi_schema_enabled, notebook_id)` → routes through the B.1e orchestrator when multi-schema mode applies, falls back to single-schema otherwise.
+- `SchemaReviewPendingError` (subclass of `JobPausedForReviewError`) raised when the notebook has `review_required=True` and no accepted extensions; queue worker translates it to the new `JobStatus.PAUSED_FOR_REVIEW`; API pre-check returns 409.
+- LLMExtractor migrated from the broken `LLMManager`/`manager.generate` path to a DI'd async `LLMCaller`; `make_default_llm_caller()` wires the production `ModelManager.get_model_from_config(...).achat_complete(...)`.
+- B.4 follow-up landed: `_merge_results` now rewrites each surviving relation's endpoint text to the canonical merged-entity surface form, fixing the spec-literal-but-real bug from the B.1e review.
+
+### Quality gates
+
+```
+packages/shared              : 145 passed (no regressions)
+packages/job-queue           : 36 passed (no regressions; new exception type)
+packages/surrealdb-service   : 52 passed, 20 docker-skipped
+pipelines/ontology-extraction: 240 passed (234 baseline + 6 new)
+apps/app-main                : 388 passed (380 baseline + 8 new)
+```
+
+### Pre-resolved decisions honoured
+
+- Multi-schema enabled by default when `notebook_id` is available.
+- Kill-switch via `multi_schema_enabled` flag (API → handler → service).
+- Re-uses Pass-2's `LLMCaller` protocol — single contract across Pass-1/Pass-2/LLMExtractor.
+- B.4 fix in-merge (not a separate pass) — single normalize key shared with entity merge.
+- `JobPausedForReviewError` lives in `job-queue`, not `app-main` (worker decoupled from handler internals).
+
+### Known follow-ups
+
+- B.3c UI: "approve extension and resume" — queue side is ready.
+- Per-call model override in `make_default_llm_caller` (deferred).
+- Stricter per-schema routing of accepted extensions once the data model adds a required `schema_name` field.
+
+---
+
 ## Phase B.1e — Multi-schema orchestrator (2026-06-06)
 
 **Branch**: `track/b-multi-schema-orchestrator`
