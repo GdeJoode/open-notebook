@@ -668,3 +668,112 @@ demo path).
   Logged for future cleanup; may mask data-quality regressions.
 - `_demo` hardcodes a Windows-style path as `PROJECT_ROOT` default.
   Cosmetic.
+
+---
+
+## Phase B.2b — `GET /api/notebooks/{id}/schema.ttl` endpoint (2026-06-06)
+
+**Branch**: `track/b-ttl-endpoint` (off main)
+**Commits**: `16f7cb0` (router + tests)
+
+### What shipped
+
+- `apps/app-main/src/app_main/api/routers/schemas.py` — new router with
+  `GET /api/notebooks/{notebook_id}/schema.ttl`. Loads the base ontology
+  YAML referenced by `notebook_schema.base_ontology`, merges
+  `accepted_extensions` as `owl:Class` declarations, serialises to
+  Turtle, returns with `Content-Type: text/turtle` and
+  `Content-Disposition: attachment; filename="<notebook>.ttl"`.
+- Registered in `apps/app-main/src/app_main/api/app.py` under `/api`.
+- `apps/app-main/tests/test_schemas_router.py` — 6 tests covering the
+  happy path with 2 accepted extensions, 404 for unknown notebooks,
+  empty-extensions fallback to base ontology, content-type and
+  content-disposition headers, and rdflib-roundtrip well-formedness.
+- `docs/tracks/B-kg-quality/PROTEGE_TEST.md` — manual import script
+  for Protégé 5.6+, including pass criteria and failure diagnostics.
+- `docs/tracks/B-kg-quality/reviews/phase-B.2b-self-review.md` — full
+  acceptance-criteria walkthrough.
+
+### Quality gates
+
+- `cd apps/app-main && uv run pytest tests/test_schemas_router.py -v` →
+  **6 passed in 63s**.
+- `cd apps/app-main && uv run pytest -q` → **374 passed in 72s** (368
+  baseline + 6 new, zero regressions).
+- `cd packages/ontology-manager && uv run pytest -q` → **191 passed,
+  1 skipped**, no regressions.
+- Smoke test: TestClient curl-equivalent against the live router
+  returns HTTP 200, `Content-Type: text/turtle; charset=utf-8`,
+  `Content-Disposition: attachment; filename="notebook_abc123.ttl"`,
+  and the body begins with `@prefix on: …` followed by the rest of
+  the standard prefix block, then the merged `owl:Class` declarations.
+
+### Design notes / things to watch
+
+- **Missing notebook_schema row returns the bare base ontology with
+  200**, not 404. B.1c hasn't populated the row yet for fresh
+  notebooks; the effective schema is still defined.
+- **DI provider `get_notebook_schema_repo` lives in the router**, not
+  in `app_main.dependencies`. Lift to the central module when B.3a
+  adds the JSON schema-browse endpoint.
+- **Path-resolution gotcha**: `Path(__file__).resolve().parents[N]`
+  for the repo root needs N=6 (not 5). Documented in a comment so the
+  next refactor doesn't re-break it.
+- Authentication inherits from the global `PasswordAuthMiddleware`
+  — `/api/notebooks/.../schema.ttl` is NOT in the excluded-paths
+  allow-list, so the password gate applies as it does to every other
+  `/api/notebooks/...` route.
+
+### Outstanding
+
+- Live Protégé screenshot deferred to first dev-environment run.
+- The `_DEFAULT_BASE_ONTOLOGY = "scholarly"` literal **deliberately
+  diverges** from `OntologyManagerConfig.default_ontology` (which is
+  `"general"`). Scholarly carries the entity types the B-track corpus
+  exercises, and `general.yaml` uses a dict-of-dicts `entity_types`
+  shape that `load_yaml_ontology` does not currently parse. Comment
+  on `schemas.py:78-90` documents the rationale. Revisit in B.3a if
+  `general.yaml` is normalised or `OntologyManager.get_ontology` is
+  wired through.
+- TTL is the only export format today. JSON-LD/RDF-XML support is
+  out of scope for B.2b but trivial to add via
+  `graph.serialize(format=...)` behind a `?format=` query parameter.
+- `_ontologies_dir` reads `OntologyRegistry()._ontology_dir` (private
+  attribute, `# noqa: SLF001`). When the registry exposes a public
+  accessor, swap to it — single-line change.
+
+### Attempt 2 (post-review, 2026-06-06)
+
+Reviewer flagged 1 major + 5 minors in
+`docs/tracks/B-kg-quality/reviews/phase-B.2b-attempt-1.md`. All
+addressed in a single follow-up commit:
+
+- **Major (URI safety)**: extensions whose `type_name` contains
+  whitespace or punctuation no longer crash rdflib's Turtle serialiser.
+  `_to_camel_case_uri_fragment()` converts to a valid URI fragment;
+  the original string is preserved as `rdfs:label`. Applied to
+  `type_name`, `parent_type`, and per-property names. 4 new tests.
+- **Minor 1 (doc accuracy)**: kept `"scholarly"` literal; comment
+  rewritten to spell out the divergence from
+  `OntologyManagerConfig.default_ontology = "general"` (above).
+- **Minor 2 (`_safe_filename`)**: regex now strips CR/LF, tabs, null
+  bytes, single + double quotes, backslashes (header-safety scope);
+  docstring no longer claims "filesystem-safe".
+- **Minor 3 (`_ontologies_dir`)**: delegates to
+  `OntologyRegistry()._ontology_dir`; the `parents[6]` computation is
+  gone.
+- **Minor 4 (streaming note)**: module docstring §"Serialisation
+  footprint" added — in-memory buffer is fine at current scale, revisit
+  at >100KB output.
+- **Minor 5 (auth test)**: `TestAuthExclusionAllowList` stands up a
+  minimal app with `PasswordAuthMiddleware` (mirroring
+  `app.py`'s excluded-paths verbatim) and asserts 401 on the schema
+  endpoint when password is set and no `Authorization` header is sent.
+
+Test counts after attempt 2:
+
+| Suite | Pass / fail |
+|---|---|
+| `apps/app-main/tests/test_schemas_router.py` | 12 passed |
+| `apps/app-main/tests/` (full) | 380 passed (374 + 6 new) |
+| `packages/ontology-manager/tests/` | 191 passed, 1 skipped (unchanged) |

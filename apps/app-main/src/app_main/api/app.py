@@ -150,6 +150,7 @@ def create_app() -> FastAPI:
         podcasts,
         preprocessing,
         resolution_log,
+        schemas,
         search,
         services_proxy,
         settings,
@@ -165,6 +166,7 @@ def create_app() -> FastAPI:
     application.include_router(auth.router, prefix="/api", tags=["auth"])
     application.include_router(config.router, prefix="/api", tags=["config"])
     application.include_router(notebooks.router, prefix="/api", tags=["notebooks"])
+    application.include_router(schemas.router, prefix="/api", tags=["schemas"])
     application.include_router(search.router, prefix="/api", tags=["search"])
     application.include_router(models.router, prefix="/api", tags=["models"])
     application.include_router(
