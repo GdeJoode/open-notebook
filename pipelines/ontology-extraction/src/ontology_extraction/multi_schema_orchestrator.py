@@ -699,14 +699,63 @@ def _merge_results(
         relation_best[k] for k in relation_insertion_order
     ]
 
+    # ------------------------------------------------------------------
+    # B.4 fix (B.1f scope): rewrite each surviving relation's endpoint
+    # text to the canonical merged-entity surface form. Without this
+    # step the relation merger and entity merger can pick different
+    # pass-winners (max-confidence picks the surface form from
+    # different passes), leaving relations whose ``source_entity`` /
+    # ``target_entity`` no longer matches any entity's ``text`` field.
+    # Downstream KG persistence (``entity_persistence_service``) keys
+    # entities by text and would drop these relations.
+    #
+    # Rule: for each relation endpoint, look up the merged entity by
+    # the same ``normalize_entity_name`` key the entity merge used; if
+    # found, copy the merged entity's ``text`` over the relation's
+    # endpoint. If not found, leave it as-is (it'll be filtered out
+    # downstream — better than synthesising an entity).
+    # ------------------------------------------------------------------
+    canonical_text_by_key: Dict[str, str] = {
+        key: merged_entities[key].best_text for key in entity_insertion_order
+    }
+    relinked_relations: List[ExtractedRelation] = []
+    for relation in final_relations:
+        src_key = normalize_entity_name(relation.source_entity)
+        tgt_key = normalize_entity_name(relation.target_entity)
+        canon_src = canonical_text_by_key.get(src_key)
+        canon_tgt = canonical_text_by_key.get(tgt_key)
+        # Re-emit through model_copy so the original input dicts in
+        # ``per_schema_results`` stay untouched (pure function
+        # contract). Skip the copy if neither endpoint actually
+        # changed — saves an allocation in the common case where the
+        # relation's pass also won the entity tie.
+        if (
+            (canon_src is not None and canon_src != relation.source_entity)
+            or (canon_tgt is not None and canon_tgt != relation.target_entity)
+        ):
+            relinked_relations.append(
+                relation.model_copy(
+                    update={
+                        "source_entity": canon_src
+                        if canon_src is not None
+                        else relation.source_entity,
+                        "target_entity": canon_tgt
+                        if canon_tgt is not None
+                        else relation.target_entity,
+                    }
+                )
+            )
+        else:
+            relinked_relations.append(relation)
+
     schema_names = [name for name, _result in per_schema_results]
     return ExtractionResult(
         entities=final_entities,
-        relations=final_relations,
+        relations=relinked_relations,
         metadata={
             "merged_from_schemas": schema_names,
             "schema_count": len(per_schema_results),
             "total_entities": len(final_entities),
-            "total_relations": len(final_relations),
+            "total_relations": len(relinked_relations),
         },
     )
