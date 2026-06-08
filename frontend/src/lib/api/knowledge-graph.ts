@@ -5,6 +5,12 @@ export interface Entity {
   name: string
   entity_type: string
   weight: number
+  /**
+   * Per-entity extraction confidence in the [0, 1] range. Optional because
+   * older rows persisted before B.1 may not carry the field; callers should
+   * treat `undefined` as "unknown" and skip the confidence bar.
+   */
+  confidence?: number
 }
 
 export interface EntityDetail extends Entity {
@@ -18,6 +24,11 @@ export interface EntityRelation {
   source: string
   target: string
   relation_type: string
+  /**
+   * Per-relation extraction confidence in the [0, 1] range. Optional for
+   * the same reason as {@link Entity.confidence}.
+   */
+  confidence?: number
 }
 
 export interface EntityTypeSummary {

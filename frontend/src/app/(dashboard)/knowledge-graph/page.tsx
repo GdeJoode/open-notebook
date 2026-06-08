@@ -22,6 +22,8 @@ import {
 import { Share2, Search, X, ChevronLeft, ChevronRight, GitMerge } from 'lucide-react'
 import type { Entity, EntityDetail } from '@/lib/api/knowledge-graph'
 import { ResolutionLogTab } from './components/ResolutionLogTab'
+import { ConfidenceBar } from '@/components/knowledge-graph/ConfidenceBar'
+import { ConfidenceFilter } from '@/components/knowledge-graph/ConfidenceFilter'
 
 const SigmaGraphView = dynamic(
   () => import('./components/SigmaGraphView'),
@@ -34,6 +36,10 @@ export default function KnowledgeGraphPage() {
   const [page, setPage] = useState(0)
   const [selectedEntity, setSelectedEntity] = useState<EntityDetail | null>(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
+  // Confidence filter threshold. Driven by `<ConfidenceFilter>` which
+  // persists the value to localStorage and pushes the restored value
+  // back here on mount.
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0)
   const pageSize = 50
 
   const { data: entityTypes } = useEntityTypes()
@@ -56,7 +62,16 @@ export default function KnowledgeGraphPage() {
     }
   }, [])
 
-  const displayEntities = searchQuery ? searchResults : paginatedEntities?.items
+  const rawEntities = searchQuery ? searchResults : paginatedEntities?.items
+  // Client-side confidence filter. Entities without a confidence field
+  // (legacy rows) are kept when the threshold is 0; once the user raises
+  // the slider they are filtered out, matching the "hide low / unknown"
+  // expectation reviewers have voiced in retros.
+  const displayEntities = rawEntities?.filter((e) => {
+    if (confidenceThreshold <= 0) return true
+    if (typeof e.confidence !== 'number') return false
+    return e.confidence >= confidenceThreshold
+  })
   const totalEntities = paginatedEntities?.total ?? 0
   const totalPages = Math.ceil(totalEntities / pageSize)
 
@@ -107,6 +122,8 @@ export default function KnowledgeGraphPage() {
                   ))}
                 </SelectContent>
               </Select>
+
+              <ConfidenceFilter onChange={setConfidenceThreshold} />
             </div>
           </div>
 
@@ -141,12 +158,15 @@ export default function KnowledgeGraphPage() {
                             <th className="text-left p-3 font-medium">Name</th>
                             <th className="text-left p-3 font-medium">Type</th>
                             <th className="text-left p-3 font-medium">Weight</th>
+                            <th className="text-left p-3 font-medium">Confidence</th>
                           </tr>
                         </thead>
                         <tbody>
                           {displayEntities.map((entity: Entity) => (
                             <tr
                               key={entity.id}
+                              data-testid={`entity-row-${entity.id}`}
+                              data-entity-name={entity.name}
                               className="border-b cursor-pointer hover:bg-muted/50 transition-colors"
                               onClick={() => handleEntityClick(entity.id)}
                             >
@@ -156,6 +176,13 @@ export default function KnowledgeGraphPage() {
                               </td>
                               <td className="p-3 text-muted-foreground">
                                 {entity.weight}
+                              </td>
+                              <td className="p-3">
+                                {typeof entity.confidence === 'number' ? (
+                                  <ConfidenceBar value={entity.confidence} />
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">—</span>
+                                )}
                               </td>
                             </tr>
                           ))}
@@ -280,7 +307,11 @@ export default function KnowledgeGraphPage() {
                   </h3>
                   <div className="space-y-2">
                     {selectedEntity.relations.map((rel) => (
-                      <Card key={rel.id} className="p-3">
+                      <Card
+                        key={rel.id}
+                        data-testid={`relation-row-${rel.id}`}
+                        className="p-3"
+                      >
                         <div className="text-xs text-muted-foreground mb-1">
                           {rel.relation_type}
                         </div>
@@ -301,6 +332,11 @@ export default function KnowledgeGraphPage() {
                             </span>
                           )}
                         </div>
+                        {typeof rel.confidence === 'number' && (
+                          <div className="mt-2">
+                            <ConfidenceBar value={rel.confidence} />
+                          </div>
+                        )}
                       </Card>
                     ))}
                   </div>
