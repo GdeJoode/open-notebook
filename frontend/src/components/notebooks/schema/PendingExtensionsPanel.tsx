@@ -118,8 +118,13 @@ function DisabledActionButton({
       <TooltipTrigger asChild>
         {/* The wrapping span gives Radix a focusable target for the
             tooltip, since a disabled <button> doesn't receive focus
-            or hover events. */}
-        <span tabIndex={0} className="inline-block">
+            or hover events. The `focus-visible:ring-*` styles keep
+            keyboard users oriented — without them, Tab-onto a disabled
+            button looks like focus disappeared. */}
+        <span
+          tabIndex={0}
+          className="inline-block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        >
           <Button
             type="button"
             size="sm"

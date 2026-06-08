@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -25,19 +25,48 @@ interface SchemaBrowserProps {
  * Effective-schema browser.
  *
  * Renders a two-column layout:
- *  - left: a flat (single-level for now) collapsible list of entity
- *    types in the effective schema = base ontology + accepted
- *    extensions. Hierarchy is shown via the `parent_type` badge on
- *    each row rather than nested tree depth, because (a) the base
- *    YAML rarely defines deep hierarchies and (b) a flat list scans
- *    much faster keyboard-only than a true tree.
+ *  - left: a flat single-select `role="listbox"` of entity types in
+ *    the effective schema = base ontology + accepted extensions. Each
+ *    row shows the type name and (when present) its `parent_type` in
+ *    the side panel — the list itself is flat.
  *  - right: a side panel for the selected type, showing its
  *    description + properties.
  *
- * Keyboard accessibility:
- *  - Items are `<button>` rows; native Tab order works out of the box.
- *  - Enter / Space selects an item (default button activation).
- *  - The selected item gets `aria-current="true"` for screen readers.
+ * # Listbox vs tree — design decision (B.3a attempt-2)
+ *
+ * The original plan (`docs/tracks/B-kg-quality/plan.md` §Phase B.3a
+ * AC #2) asked for a "collapsible tree". We pivoted to a flat listbox
+ * after the attempt-1 review. The reasoning:
+ *
+ *  1. **Shallow hierarchy in practice.** The in-scope base ontologies
+ *     (scholarly, general) use a single-level `parent_type` at most —
+ *     no nested type-of-type-of-type chains. A flat list with a
+ *     "extends X" annotation on the side panel conveys the same info
+ *     without forcing the user to expand nodes to see leaf classes.
+ *  2. **Listbox is the correct ARIA semantic for single-select.**
+ *     `role="tree"` carries `aria-expanded` semantics + arrow-key
+ *     traversal that imply child nodes; using it for a flat list
+ *     mis-signals expandability to screen readers.
+ *  3. **No B.3b dependency.** The rename/merge/split edit ops shipped
+ *     in B.3b operate on individual types, not on tree edges — they
+ *     read the same flat `items[]` list. Pivoting later would be cheap
+ *     if a deeply-nested ontology lands in scope.
+ *  4. **Keyboard scan speed.** A flat list is faster to skim with Tab
+ *     + Enter than a tree where each parent has to be expanded first.
+ *
+ * Plan AC #2 + AC #6 were softened to match in the same review cycle.
+ *
+ * # Keyboard accessibility
+ *
+ *  - Items are `<button>` rows inside `<li>` inside `<ul role="listbox">`.
+ *    Native Tab order steps through them; Space / Enter activate
+ *    selection via default button semantics.
+ *  - The listbox carries `aria-activedescendant` pointing to the
+ *    currently-selected option's id, which lets screen readers
+ *    announce selection changes consistently across browsers (some
+ *    don't read `aria-selected` reliably on a `<button role="option">`).
+ *  - Each option additionally has `aria-current="true"` so navigation
+ *    patterns that prefer the WAI-ARIA "current" hint also work.
  *
  * Tooltips: each row's name has a tooltip with the description when
  * present — keeps the row label short while preserving discoverability.
@@ -75,6 +104,14 @@ export function SchemaBrowser({ schema }: SchemaBrowserProps) {
   )
   const selected = items.find((it) => it.key === selectedKey) ?? null
 
+  // Stable id prefix for option ids. Required so `aria-activedescendant`
+  // on the listbox can point at the option DOM node. `useId` keeps the
+  // prefix unique across multiple SchemaBrowser instances on a page.
+  const optionIdPrefix = useId()
+  const optionId = (key: string) =>
+    `${optionIdPrefix}-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}`
+  const activeOptionId = selectedKey ? optionId(selectedKey) : undefined
+
   if (items.length === 0) {
     return (
       <div
@@ -96,6 +133,7 @@ export function SchemaBrowser({ schema }: SchemaBrowserProps) {
         <ul
           role="listbox"
           aria-label="Entity types"
+          aria-activedescendant={activeOptionId}
           className="flex max-h-[60vh] flex-col gap-1 overflow-y-auto rounded-md border p-2"
         >
           {items.map((item) => {
@@ -107,6 +145,7 @@ export function SchemaBrowser({ schema }: SchemaBrowserProps) {
                     <button
                       type="button"
                       role="option"
+                      id={optionId(item.key)}
                       aria-selected={isSelected}
                       aria-current={isSelected ? 'true' : undefined}
                       data-testid={`schema-tree-item-${item.name}`}
