@@ -32,12 +32,13 @@ from fastapi.testclient import TestClient
 from rdflib import Graph, Literal
 from rdflib.namespace import OWL, RDF, RDFS
 
-from app_main.api.routers.schemas import (
+from app_main.api.routers.schemas import router
+from app_main.dependencies import (
     get_notebook_schema_repo,
+    get_notebook_service,
     get_pass1_result_repo,
-    router,
+    get_source_repo,
 )
-from app_main.dependencies import get_notebook_service, get_source_repo
 from app_main.services.notebook_service import NotebookService
 from shared.models import Notebook, Source
 from shared.models.notebook_schema import NotebookSchema, Pass1Result

@@ -54,7 +54,12 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from app_main.dependencies import get_notebook_service, get_source_repo
+from app_main.dependencies import (
+    get_notebook_schema_repo,
+    get_notebook_service,
+    get_pass1_result_repo,
+    get_source_repo,
+)
 from app_main.services.notebook_service import NotebookService
 from ontology_manager.rdf_owl_shacl import (
     ON,
@@ -113,28 +118,12 @@ def _ontologies_dir() -> Path:
 # ---------------------------------------------------------------------------
 # DI providers
 # ---------------------------------------------------------------------------
-
-
-def get_notebook_schema_repo() -> NotebookSchemaRepository:
-    """FastAPI provider for the notebook_schema repository.
-
-    Defined here rather than in ``app_main.dependencies`` because this is
-    the only router in app-main that uses it today; will lift to the
-    central dependencies module when B.3a/B.3b add the JSON browse + edit
-    endpoints.
-    """
-    return NotebookSchemaRepository()
-
-
-def get_pass1_result_repo() -> Pass1ResultRepository:
-    """FastAPI provider for the pass1_results repository.
-
-    Same locality argument as ``get_notebook_schema_repo`` — only the
-    schemas router consumes pass-1 results today (B.3a's CoverageStats
-    table). Lift to ``app_main.dependencies`` once a second caller
-    appears.
-    """
-    return Pass1ResultRepository()
+#
+# ``get_notebook_schema_repo`` and ``get_pass1_result_repo`` live in
+# ``app_main.dependencies`` — they were originally defined locally
+# (single-consumer rule) but B.3b/B.3c will also import them, so the
+# central location is now the right home. See those provider docstrings
+# for the lift rationale.
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +492,13 @@ def _normalise_extension(ext: Dict[str, Any]) -> _ExtensionView:
         name = p.get("name")
         if not isinstance(name, str) or not name:
             continue
+        # ``data_type`` falls back to ``"string"`` when the LLM-emitted
+        # extension dict omits it (older Pass1 payloads predating the
+        # B.1d schema, or hand-crafted fixtures). String is the safest
+        # default because it round-trips losslessly to TTL
+        # (``xsd:string``) and the frontend treats unknown data-types
+        # as opaque labels. B.3b's editor surfaces the value so users
+        # can correct it if the inference is wrong.
         props.append(
             _PropertyDef(
                 name=name,

@@ -29,6 +29,10 @@ from surrealdb_service.repositories import (
     SummaryRepository,
     TransformationRepository,
 )
+from surrealdb_service.repositories.notebook_schema import (
+    NotebookSchemaRepository,
+    Pass1ResultRepository,
+)
 from surrealdb_service.connection import execute_query
 
 from app_main.services.notebook_service import NotebookService
@@ -131,6 +135,29 @@ def get_entity_repo() -> EntityRepository:
 
 def get_summary_repo() -> SummaryRepository:
     return SummaryRepository()
+
+
+def get_notebook_schema_repo() -> NotebookSchemaRepository:
+    """FastAPI provider for the per-notebook schema row.
+
+    Lifted from ``api/routers/schemas.py`` (B.3a attempt-2) once a second
+    consumer appeared: B.3b's edit-ops endpoints + B.3c's soft-nudge
+    toggle both need the same repo, so centralising the factory here
+    avoids drift between routers.
+    """
+    return NotebookSchemaRepository()
+
+
+def get_pass1_result_repo() -> Pass1ResultRepository:
+    """FastAPI provider for the pass-1 results table.
+
+    Lifted from ``api/routers/schemas.py`` for the same reason as
+    ``get_notebook_schema_repo`` — the orchestrator side
+    (``entity_extraction_service``) already instantiates the repo
+    directly, and the B.3a router was the second non-orchestrator
+    consumer.
+    """
+    return Pass1ResultRepository()
 
 
 # --- Service providers ---
