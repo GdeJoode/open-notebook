@@ -1,40 +1,58 @@
 # Track B — KG quality: rolling status
 
-## Phase B.4 — Confidence display + filter + always-on telemetry (2026-06-08, frontend completion)
+## Phase B.3a — Schema-tab view-only, attempt 2 (2026-06-08)
 
-**Branch**: `track/b-confidence-telemetry`
-**Backend commits**: `861595a` (migration 47 + `shared.services.metrics` + `record_metric`) → `1bd8e47` (`extraction.complete` + `extraction.auto_fallback` call sites + tests)
-**Frontend commit**: see new HEAD (`feat(kg): confidence bar + filter + relation bars + SELECT projection`)
-**State**: code complete, all quality gates green, ready for review.
+**Branch**: `track/b-schema-tab-view`
+**Base commits (attempt 1)**: `6cdb661` → `85077f2` → `3485e2f`
+**Attempt-2 commits**: `6d36531` → `16bfee7` → `bb7795f` → `ed9aaf5` → `bb9e793`
+**State**: blocker + major + 4 minors resolved; full quality gates green. APPROVED.
 
-### Delivered (frontend portion)
+### Reviewer items resolved
 
-- `frontend/src/components/knowledge-graph/ConfidenceBar.tsx` — inline Tailwind-coloured progress bar with Radix tooltip. Reused on entity rows and per-relation cards.
-- `frontend/src/components/knowledge-graph/ConfidenceFilter.tsx` — Radix slider [0, 1] step 0.05, persists to `localStorage.kg_confidence_threshold`, SSR-safe hydration.
-- `frontend/src/app/(dashboard)/knowledge-graph/page.tsx` — new "Confidence" table column, filter wired into the existing filter bar, per-relation bar in the detail panel.
-- `frontend/src/lib/api/knowledge-graph.ts` — `confidence?: number` on `Entity` and `EntityRelation`.
-- `packages/surrealdb-service/src/surrealdb_service/repositories/entity.py` — additive: project `confidence` in `list_entities` / `search_entities` and in the relation SELECT inside `get_entity_detail`.
-- `frontend/e2e/track-b/confidence-display.spec.ts` — 4 specs covering all four ACs (bar visibility, filter behaviour, localStorage persistence, relation bars).
+| Severity | Issue | Resolution |
+|---|---|---|
+| Blocker | Playwright spec 4/4 failing — notebook-detail mock URL did not match the un-encoded request URL emitted by `notebooksApi.get`. | Switched route patterns to RegExp matchers that accept both raw and percent-encoded notebook ids (`notebook:b3a-fix` ↔ `notebook%3Ab3a-fix`). |
+| Major | Plan AC #2/#6 said "collapsible tree expandable via Enter"; implementation is a flat listbox. | Pivoted to option B: kept the flat `role="listbox"` (with `aria-activedescendant`), updated plan.md AC #2/#6 wording, documented the design decision in the SchemaBrowser docstring. |
+| Minor 1 | Dead `notebookSchemaApi.getTtlUrl` (unused; auth-less risk). | Deleted; left a `NOTE:` block explaining why future re-introduction needs a paired auth review. |
+| Minor 2 | Repo factories `get_notebook_schema_repo` + `get_pass1_result_repo` were locally defined in the schemas router. | Lifted into `apps/app-main/src/app_main/dependencies.py` (B.3b/B.3c will also import). Test imports updated. |
+| Minor 3 | `_normalise_extension` had an undocumented `"string"` default for missing `data_type`. | Added an inline comment explaining why string is the safe TTL-compatible fallback. |
+| Minor 5 | The `<span tabIndex={0}>` wrapper for the disabled accept/reject buttons had no visible focus ring. | Added `focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2` so keyboard users can see when they tab onto the wrapper. |
+| Minor 4 | Extension/base type-name collision. | Deferred to B.3b per reviewer guidance. |
 
 ### Quality gates
 
 ```
-frontend: tsc --noEmit       : clean
-frontend: next lint          : 0 errors, 0 NEW warnings
-frontend: confidence-display : 4/4 Playwright passed (mocked, no DB)
-apps/app-main (KG router/service tests) : 17/17 passed
-packages/surrealdb-service tests        : 77/77 passed
+frontend playwright (schema-tab spec)  : 4/4 passed (6.1s)
+frontend tsc --noEmit                  : clean
+frontend npm run lint                  : clean for changed files (pre-existing warnings unchanged)
+apps/app-main schemas router suite     : 21/21 passed
+apps/app-main full suite               : 410/410 passed (no regressions)
 ```
 
-### Pre-resolved decisions honoured
+### Out-of-scope
 
-- Q-B-6: telemetry always-on — backend already implemented this in the prior two commits.
-- No new dependencies; `@radix-ui/react-slider` and `@radix-ui/react-tooltip` were already in `package.json`.
+- B.3a backend `_normalise_extension` collision detection — held for B.3b's edit-ops review.
+- Real ARIA tree implementation — explicitly rejected via option B; revisit only if a deeper ontology lands in scope.
 
-### Known follow-ups
+---
 
-- Sigma graph view doesn't tint by confidence (out of scope; can be added in a later UX polish phase).
-- Adding a sortable "Confidence" column header (alphabetical sort by name is preserved).
+## Phase B.4 — Confidence display + filter + always-on telemetry (2026-06-08, MERGED PR #18)
+
+**Branch**: `track/b-confidence-telemetry`
+**Backend commits**: `861595a` (migration 47 + `shared.services.metrics` + `record_metric`) → `1bd8e47` (`extraction.complete` + `extraction.auto_fallback` call sites + tests)
+**Frontend commits**: `dc8da79` → `dd23533` → `3e061b7` → `9e35198`
+**State**: merged to main, RETRO #5 (Track A telemetry blind-spot) closed.
+
+### Delivered
+
+- `migrations/47.surrealql` — `metrics` table SCHEMAFULL with FLEXIBLE payload, composite `(event_type, created_at)` index
+- `packages/shared/src/shared/services/metrics.py` — `record_metric()` with env-flag skip + exception swallow
+- `apps/app-main/src/app_main/services/entity_extraction_service.py` — `extraction.complete` exactly-once per run
+- `apps/app-main/src/app_main/services/parsing/auto_fallback.py` — `extraction.auto_fallback` per source (RETRO #5)
+- `frontend/src/components/knowledge-graph/ConfidenceBar.tsx` + `ConfidenceFilter.tsx` — tri-color bar + persisted slider
+- `frontend/src/app/(dashboard)/knowledge-graph/page.tsx` — new Confidence column + filter
+- `packages/surrealdb-service/src/surrealdb_service/repositories/entity.py` — confidence projection in SELECTs
+- `frontend/e2e/track-b/confidence-display.spec.ts` — 4/4 Playwright specs
 
 ---
 
