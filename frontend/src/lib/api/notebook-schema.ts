@@ -36,25 +36,16 @@ export const notebookSchemaApi = {
     )
     return response.data
   },
-
-  /**
-   * Resolve the absolute TTL download URL for a notebook's schema.
-   *
-   * Returned as a string rather than a Blob fetch so the
-   * `<TtlDownloadButton>` can drive the download with a plain
-   * `<a download>` — which lets the browser handle the file save
-   * dialog natively (including filename hint from the
-   * `Content-Disposition` header). Going via axios + Blob would
-   * round-trip the file through JS memory for no benefit.
-   *
-   * Note: callers still need a valid auth header for the download to
-   * succeed when `OPEN_NOTEBOOK_PASSWORD` is set. The `<a>` route
-   * relies on the user's browser session having the bearer token; in
-   * the auth-disabled local-dev case this is a non-issue.
-   */
-  getTtlUrl: async (notebookId: string): Promise<string> => {
-    const { getApiUrl } = await import('@/lib/config')
-    const apiUrl = await getApiUrl()
-    return `${apiUrl}/api/notebooks/${encodeURIComponent(notebookId)}/schema.ttl`
-  },
 }
+
+// NOTE: A `getTtlUrl` helper used to live here, returning an absolute
+// URL so a plain `<a download>` could trigger the export. We removed it
+// for two reasons:
+//   1. `TtlDownloadButton` already drives the download through the
+//      shared `apiClient` (Blob path), so the bearer-token interceptor
+//      fires automatically when `OPEN_NOTEBOOK_PASSWORD` is set.
+//   2. Returning a raw URL would side-step that interceptor — a
+//      footgun for future callers who may not realise the URL is
+//      unauthenticated unless cookies happen to be in play.
+// Re-introduce only if both the auth model and an alternative download
+// path are re-evaluated together.
