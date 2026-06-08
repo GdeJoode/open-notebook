@@ -548,6 +548,157 @@ class TestMergeResults:
         assert len(merged.entities) == 1
         assert merged.entities[0].text == "Real"
 
+    def test_relation_endpoints_relinked_to_canonical_entity_text(self):
+        """B.4 fix: when entity merge picks one pass-winner's surface form
+        and relation merge picks another's, the relation's endpoint must
+        be rewritten to the canonical entity ``text``.
+
+        Scenario (mirrors the B.1e review's concrete bug report):
+
+        - Pass-A: ``Alice@0.9`` + ``Alice→MIT@0.6``
+        - Pass-B: ``alice@0.6`` + ``alice→MIT@0.9``
+
+        Entity merge: Alice@0.9 wins → ``text="Alice"``.
+        Relation merge: alice→MIT@0.9 wins (Pass-B has higher conf).
+
+        Without the B.4 fix the relation's ``source_entity`` stays
+        ``"alice"`` (Pass-B's raw form), leaving the relation pointing
+        at a name no entity owns. The fix rewrites it to ``"Alice"``.
+        """
+        result_a = ExtractionResult(
+            entities=[
+                ExtractedEntity(text="Alice", label="Researcher", confidence=0.9),
+                ExtractedEntity(text="MIT", label="Institution", confidence=0.9),
+            ],
+            relations=[
+                ExtractedRelation(
+                    source_entity="Alice",
+                    target_entity="MIT",
+                    relation_type="AFFILIATED_WITH",
+                    confidence=0.6,
+                ),
+            ],
+        )
+        result_b = ExtractionResult(
+            entities=[
+                ExtractedEntity(text="alice", label="Person", confidence=0.6),
+                ExtractedEntity(text="mit", label="Org", confidence=0.6),
+            ],
+            relations=[
+                ExtractedRelation(
+                    source_entity="alice",
+                    target_entity="mit",
+                    relation_type="AFFILIATED_WITH",
+                    confidence=0.9,
+                ),
+            ],
+        )
+
+        merged = _merge_results(
+            [("scholarly", result_a), ("general", result_b)]
+        )
+
+        # Entity merge: canonical text is the highest-confidence form.
+        alice_entity = [
+            e for e in merged.entities
+            if e.text.lower().strip() == "alice"
+        ][0]
+        mit_entity = [
+            e for e in merged.entities
+            if e.text.lower().strip() == "mit"
+        ][0]
+        assert alice_entity.text == "Alice", (
+            f"Entity merge should keep 'Alice' (conf 0.9 won over 0.6); "
+            f"got {alice_entity.text!r}"
+        )
+        assert mit_entity.text == "MIT"
+
+        # Relation merge picked Pass-B (conf 0.9), but the B.4 fix
+        # rewrites endpoints to the canonical entity surface form.
+        assert len(merged.relations) == 1
+        rel = merged.relations[0]
+        assert rel.confidence == 0.9, "Higher-confidence relation must win"
+        assert rel.source_entity == "Alice", (
+            f"B.4 re-link: source_entity should match canonical entity "
+            f"text 'Alice'; got {rel.source_entity!r}"
+        )
+        assert rel.target_entity == "MIT", (
+            f"B.4 re-link: target_entity should match canonical entity "
+            f"text 'MIT'; got {rel.target_entity!r}"
+        )
+
+    def test_relation_endpoint_unchanged_when_already_canonical(self):
+        """B.4 fix: the rewrite is a no-op when the surviving relation
+        already references the canonical entity surface form.
+
+        Pins that the new pass doesn't break the common case where the
+        entity merge and the relation merge both pick the same pass.
+        """
+        result_a = ExtractionResult(
+            entities=[
+                ExtractedEntity(text="Alice", label="Researcher", confidence=0.9),
+                ExtractedEntity(text="MIT", label="Institution", confidence=0.9),
+            ],
+            relations=[
+                ExtractedRelation(
+                    source_entity="Alice",
+                    target_entity="MIT",
+                    relation_type="AFFILIATED_WITH",
+                    confidence=0.95,
+                ),
+            ],
+        )
+        result_b = ExtractionResult(
+            entities=[
+                ExtractedEntity(text="alice", label="Person", confidence=0.5),
+            ],
+        )
+        merged = _merge_results([("a", result_a), ("b", result_b)])
+        assert len(merged.relations) == 1
+        assert merged.relations[0].source_entity == "Alice"
+        assert merged.relations[0].target_entity == "MIT"
+
+    def test_relation_with_orphan_endpoint_passes_through_unchanged(self):
+        """B.4 re-link contract: when a relation references an entity
+        that no schema yielded, the relation's endpoint stays as the
+        LLM-raw text (NOT rewritten, NOT dropped).
+
+        Rationale: downstream KG persistence
+        (``entity_persistence_service``) drops relations whose endpoints
+        don't match any entity text, so an orphan relation will be
+        silently filtered. We deliberately *do not* synthesise a
+        placeholder entity here — the orchestrator stays pure.
+
+        Pins minor #1 from the B.1f attempt-1 review.
+        """
+        # Pass A: knows Alice.
+        result_a = ExtractionResult(
+            entities=[
+                ExtractedEntity(text="Alice", label="Researcher", confidence=0.9),
+            ],
+            relations=[
+                ExtractedRelation(
+                    source_entity="Alice",
+                    target_entity="MIT",  # MIT is not in any entity list!
+                    relation_type="AFFILIATED_WITH",
+                    confidence=0.8,
+                ),
+            ],
+        )
+        # Pass B is empty (forces the merge path to actually run; the
+        # single-schema short-circuit would bypass the re-link).
+        result_b = ExtractionResult(entities=[])
+
+        merged = _merge_results([("a", result_a), ("b", result_b)])
+
+        assert len(merged.relations) == 1
+        rel = merged.relations[0]
+        # Source endpoint IS in the entity list → re-linked to canon.
+        assert rel.source_entity == "Alice"
+        # Target endpoint is an orphan → left as the LLM-raw text so
+        # downstream filtering decides what to do.
+        assert rel.target_entity == "MIT"
+
 
 class TestMergedEntityHelper:
     """Direct tests for the MergedEntity bookkeeper.

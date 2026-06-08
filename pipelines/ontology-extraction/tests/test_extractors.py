@@ -262,9 +262,150 @@ class TestLLMExtractorInit:
         extractor = LLMExtractor()
         assert extractor._llm_model == "default"
         assert extractor._confidence_threshold == 0.5
+        # B.1f: caller defaults to None (legacy "silent empty" path,
+        # but now with an explicit WARNING canary).
+        assert extractor._llm_caller is None
 
     def test_custom_model_and_threshold(self):
         """Custom values are stored correctly."""
         extractor = LLMExtractor(llm_model="gpt-4o", confidence_threshold=0.9)
         assert extractor._llm_model == "gpt-4o"
         assert extractor._confidence_threshold == 0.9
+
+
+class TestLLMExtractorCallerWiring:
+    """B.1f: LLMExtractor accepts an injected LLM caller and dispatches
+    through it. Pins that the pre-B.1f broken import path (``LLMManager``
+    + ``manager.generate``) is gone and that the extractor wires to a
+    real caller without ImportError."""
+
+    def test_constructs_with_async_caller_no_import_error(self):
+        """The constructor binds an async caller without touching
+        ``llm_manager.manager`` (the pre-B.1f import path). Pin via
+        attribute identity — if a future refactor accidentally
+        re-introduces a module-level import the test stays green only
+        if the binding survives."""
+
+        async def caller(system: str, user: str, model: str) -> str:
+            return "{}"
+
+        extractor = LLMExtractor(llm_caller=caller)
+        # Caller bound, not None, ready to dispatch.
+        assert extractor._llm_caller is caller
+
+    def test_extract_dispatches_to_injected_caller(self):
+        """End-to-end: injected caller's output flows through
+        _parse_response. Verifies the wire is genuinely connected, not
+        just stored."""
+
+        import asyncio
+
+        from ontology_manager.schema import (
+            EntityTypeDefinition,
+            Ontology,
+            OntologyMetadata,
+        )
+
+        async def caller(system: str, user: str, model: str) -> str:
+            # Verify the caller is invoked with both prompts and the
+            # model id — pins the LLMCaller contract.
+            assert "Extract knowledge" in user
+            assert model == "default"
+            return json.dumps(
+                {
+                    "entities": [
+                        {
+                            "name": "Pinned Entity",
+                            "entity_type": "Thing",
+                            "confidence": 0.95,
+                        }
+                    ],
+                    "relationships": [],
+                }
+            )
+
+        extractor = LLMExtractor(llm_caller=caller, confidence_threshold=0.5)
+        ontology = Ontology(
+            metadata=OntologyMetadata(name="t", version="1.0"),
+            entity_types={
+                "Thing": EntityTypeDefinition(
+                    name="Thing", description="anything"
+                )
+            },
+        )
+
+        result = asyncio.run(extractor.extract("Some text", ontology))
+
+        # The injected caller's JSON travelled through _parse_response
+        # — pin via entity content rather than just count, so any
+        # short-circuit return path is detected.
+        assert len(result.entities) == 1
+        assert result.entities[0].text == "Pinned Entity"
+        assert result.entities[0].confidence == 0.95
+
+    def test_extract_no_caller_returns_empty_without_import_error(self):
+        """Backwards-compat: no caller wired → empty result + WARNING.
+        Critically, no ``ImportError`` for ``llm_manager.manager`` —
+        the pre-B.1f code path is gone."""
+        import asyncio
+
+        from ontology_manager.schema import (
+            EntityTypeDefinition,
+            Ontology,
+            OntologyMetadata,
+        )
+
+        extractor = LLMExtractor()  # no llm_caller
+        ontology = Ontology(
+            metadata=OntologyMetadata(name="t", version="1.0"),
+            entity_types={
+                "Thing": EntityTypeDefinition(name="Thing", description="x")
+            },
+        )
+
+        # The whole extract() call must complete without raising.
+        result = asyncio.run(extractor.extract("Text", ontology))
+        assert result.entities == []
+        assert result.relations == []
+
+    def test_pre_b1f_import_path_no_longer_referenced(self):
+        """Regression guard: the broken
+        ``from llm_manager.manager import LLMManager`` import is gone.
+
+        Compile the module AST and inspect import statements +
+        function calls — checking source text would match the
+        docstring's historical mention of the bad path.
+        """
+        import ast
+        import inspect
+
+        from ontology_extraction.extractors import llm_extractor as mod
+
+        tree = ast.parse(inspect.getsource(mod))
+
+        # Walk imports — no module attempts to bring ``LLMManager`` in.
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    assert alias.name != "LLMManager", (
+                        f"Pre-B.1f broken import path resurfaced: "
+                        f"from {node.module} import {alias.name}"
+                    )
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert "LLMManager" not in alias.name
+
+        # Walk calls — no ``X.generate(...)`` where X is named ``manager``
+        # (the non-existent method on the old class).
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "generate"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "manager"
+            ):
+                raise AssertionError(
+                    "Pre-B.1f broken method call ``manager.generate(...)`` "
+                    "resurfaced — the ModelManager API is achat_complete."
+                )

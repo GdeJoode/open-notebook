@@ -78,7 +78,16 @@ class JobRepository(BaseRepository[Job]):
 
         if status == JobStatus.PROCESSING:
             data["started_at"] = datetime.now(timezone.utc)
-        elif status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+        elif status in (
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.CANCELLED,
+            # B.1f: PAUSED_FOR_REVIEW also terminates the *current*
+            # processing attempt — the job is dormant until a user
+            # resumes it. ``completed_at`` doubles as "last activity"
+            # so the UI can show "paused 2h ago".
+            JobStatus.PAUSED_FOR_REVIEW,
+        ):
             data["completed_at"] = datetime.now(timezone.utc)
 
         for key, value in fields.items():

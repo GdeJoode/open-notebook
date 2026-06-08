@@ -8,6 +8,7 @@ import pytest
 from shared.models.jobs import Job
 from shared.types.enums import JobPriority, JobStatus, JobType
 
+from job_queue.exceptions import JobPausedForReviewError
 from job_queue.queue import JobQueue
 from job_queue.registry import HandlerRegistry
 from job_queue.repository import JobRepository
@@ -46,6 +47,8 @@ class TestJobWorker:
         repo = MagicMock(spec=JobRepository)
         repo.get = AsyncMock()
         repo.update_status = AsyncMock()
+        repo.add_to_dead_letter = AsyncMock()
+        repo.list_jobs = AsyncMock(return_value=[])
         return repo
 
     @pytest.fixture
@@ -186,3 +189,110 @@ class TestJobWorker:
         await worker.stop()
 
         repository.update_status.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # B.1f: JobPausedForReviewError → PAUSED_FOR_REVIEW translation.
+    #
+    # The exception is raised by handlers (e.g. extraction-service
+    # ``SchemaReviewPendingError``) to signal "park this job, do not
+    # retry, do not dead-letter". The worker's ``except`` clause for
+    # ``JobPausedForReviewError`` MUST sit above the generic
+    # ``except Exception`` because the latter would otherwise swallow
+    # the pause signal and treat it as a transient failure.
+    #
+    # These tests pin both the happy path AND the clause-ordering
+    # invariant: if a future refactor flips the except order so the
+    # generic clause traps the pause first, ``test_paused_for_review_*``
+    # will start asserting ``RETRYING`` / ``FAILED`` instead of
+    # ``PAUSED_FOR_REVIEW`` and fail loudly.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_paused_for_review_no_retry_no_dead_letter(
+        self, queue, repository, registry
+    ):
+        """Handler raises ``JobPausedForReviewError`` → job goes to
+        ``PAUSED_FOR_REVIEW``, NOT ``FAILED`` / ``RETRYING``.
+
+        Ordering guard: the worker has a dedicated ``except`` clause
+        for this exception above the generic catch-all (see
+        ``worker.py:154-167``). Reversing the clause order would cause
+        every paused review job to be retried and eventually dead-
+        lettered. This test fails loudly if that regression happens
+        because the assertions check the FAILED / RETRYING / dead-
+        letter paths were NOT taken.
+        """
+        job = _make_job(retry_count=0, max_retries=2)
+        repository.get.return_value = job
+        repository.update_status.return_value = job
+
+        @registry.register(JobType.DOCUMENT_PARSE)
+        async def handler(payload):
+            raise JobPausedForReviewError(
+                "Notebook nb:abc requires review of 3 pending extensions."
+            )
+
+        worker = JobWorker(queue, repository, registry)
+
+        await queue.enqueue("job:test1")
+        await worker.start()
+        await asyncio.sleep(0.1)
+        await worker.stop()
+
+        # Status calls: PROCESSING then PAUSED_FOR_REVIEW (no RETRYING,
+        # no FAILED).
+        calls = repository.update_status.call_args_list
+        assert len(calls) == 2
+        assert calls[0].args == ("job:test1", JobStatus.PROCESSING)
+        assert calls[1].args == ("job:test1", JobStatus.PAUSED_FOR_REVIEW)
+
+        # Error message carries the handler's context for the UI.
+        err_msg = calls[1].kwargs.get("error_message", "")
+        assert "Notebook nb:abc" in err_msg
+        assert "3 pending extensions" in err_msg
+
+        # No retry, no dead-letter.
+        for call in calls:
+            assert call.args[1] != JobStatus.RETRYING
+            assert call.args[1] != JobStatus.FAILED
+        repository.add_to_dead_letter.assert_not_called()
+        # No re-enqueue: queue must be empty after the paused job.
+        assert queue.size() == 0
+
+    @pytest.mark.asyncio
+    async def test_paused_for_review_subclass_routes_correctly(
+        self, queue, repository, registry
+    ):
+        """A user-defined subclass of ``JobPausedForReviewError`` (the
+        real production case via ``SchemaReviewPendingError``) is also
+        caught by the ordered ``except`` clause.
+
+        This is the *integration* of M1 with the extraction-service
+        ``SchemaReviewPendingError`` — the worker must not know about
+        subclasses, only about the base type.
+        """
+
+        class FancyPausedError(JobPausedForReviewError):
+            def __init__(self):
+                super().__init__("subclass-pause-context")
+
+        job = _make_job(retry_count=0, max_retries=2)
+        repository.get.return_value = job
+        repository.update_status.return_value = job
+
+        @registry.register(JobType.DOCUMENT_PARSE)
+        async def handler(payload):
+            raise FancyPausedError()
+
+        worker = JobWorker(queue, repository, registry)
+
+        await queue.enqueue("job:test1")
+        await worker.start()
+        await asyncio.sleep(0.1)
+        await worker.stop()
+
+        # The subclass is still routed to PAUSED_FOR_REVIEW because
+        # the worker's ``except`` clause uses the base class.
+        calls = repository.update_status.call_args_list
+        assert calls[-1].args == ("job:test1", JobStatus.PAUSED_FOR_REVIEW)
+        repository.add_to_dead_letter.assert_not_called()

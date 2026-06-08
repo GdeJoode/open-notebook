@@ -160,6 +160,10 @@ class JobStatus(str, Enum):
     FAILED = "failed"  # Error during processing
     CANCELLED = "cancelled"  # Manually cancelled
     RETRYING = "retrying"  # Failed, attempting retry
+    # B.1f: extraction blocked pending notebook-schema review (multi-schema
+    # path). The UI surfaces a "review queue" entry; once the user accepts
+    # or rejects the proposed extensions the job can be re-queued.
+    PAUSED_FOR_REVIEW = "paused_for_review"
 
 
 class JobPriority(str, Enum):
