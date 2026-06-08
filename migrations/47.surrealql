@@ -1,0 +1,44 @@
+-- Migration 47: metrics table (Phase B.4)
+--
+-- Track B (KG quality) introduces an always-on telemetry sink that captures
+-- extraction-confidence-bearing events from across the pipeline so we can
+-- correlate UI quality, auto-fallback decisions, and multi-schema extraction
+-- without the manual logfile spelunking that RETRO #5 flagged.
+--
+--   metrics  → append-only event log. One row per emit. ``event_type`` is the
+--              canonical discriminator (e.g. ``extraction.complete``,
+--              ``extraction.auto_fallback``); ``payload`` is a FLEXIBLE
+--              object so callers can attach domain-specific counters
+--              (entity_count, avg_confidence, decision, …) without further
+--              schema churn. ``source``/``notebook`` are optional so events
+--              that don't belong to either context can still land cleanly.
+--
+-- Pattern: SCHEMAFULL with a single ``FLEXIBLE TYPE object DEFAULT {}``
+-- payload bag (mirrors migration 45's extension-array shape — additive keys
+-- stay future-safe without further migrations). Optional foreign keys are
+-- ``option<string>`` rather than ``record<…>`` to keep this table loosely
+-- coupled to source/notebook lifecycle (a deleted source must not orphan
+-- historical metrics).
+--
+-- Idempotent: every DEFINE uses ``IF NOT EXISTS`` so re-running on a DB
+-- that already has the table is a no-op. The B.0 testcontainers harness
+-- validates this by replaying the migration.
+
+-- =============================================================================
+-- metrics: append-only telemetry sink
+-- =============================================================================
+
+DEFINE TABLE IF NOT EXISTS metrics SCHEMAFULL;
+
+DEFINE FIELD IF NOT EXISTS event_type ON TABLE metrics TYPE string;
+DEFINE FIELD IF NOT EXISTS payload ON TABLE metrics FLEXIBLE TYPE object DEFAULT {};
+DEFINE FIELD IF NOT EXISTS source ON TABLE metrics TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS notebook ON TABLE metrics TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS created_at ON TABLE metrics TYPE datetime DEFAULT time::now();
+
+-- Time-bucketed event-type lookups dominate the read path
+-- (e.g. "how many extraction.complete in the last 24h?"). A composite
+-- index on (event_type, created_at) covers that hot path with no
+-- additional scan cost. Single-field source/notebook indexes can be
+-- added later if per-context filtering shows up in dashboards.
+DEFINE INDEX IF NOT EXISTS idx_metrics_event_created ON metrics FIELDS event_type, created_at;
