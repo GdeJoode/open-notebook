@@ -100,12 +100,23 @@ test.describe('B.3a: schema tab view-only', () => {
   test.setTimeout(60_000)
   test.use({ navigationTimeout: 45_000 })
 
+  // The frontend has two API clients that build URLs *differently*:
+  //   * `notebooksApi.get` interpolates the raw id, so the request URL
+  //     carries a literal colon ("/api/notebooks/notebook:b3a-fix").
+  //   * `notebookSchemaApi.get` and friends call `encodeURIComponent`
+  //     first, so their URLs contain "%3A" instead.
+  // Playwright glob route patterns are literal — `:` does not match
+  // `%3A` — so we use a regex matcher on the notebook-id segment to
+  // accept both spellings. This keeps the mock robust against either
+  // client deciding to flip its encoding strategy in the future.
+  const NB_ID_ENCODED_RE = '(?:notebook:b3a-fix|notebook%3Ab3a-fix)'
+
   test.beforeEach(async ({ page }) => {
     await mockDashboardChrome(page)
 
     // Notebook detail GET (used by useNotebook hook on the schema page).
     await page.route(
-      `**/api/notebooks/${encodeURIComponent(NOTEBOOK_ID)}`,
+      new RegExp(`/api/notebooks/${NB_ID_ENCODED_RE}(?:\\?.*)?$`),
       (route) =>
         route.fulfill({
           status: 200,
@@ -116,7 +127,7 @@ test.describe('B.3a: schema tab view-only', () => {
 
     // Schema JSON.
     await page.route(
-      `**/api/notebooks/${encodeURIComponent(NOTEBOOK_ID)}/schema`,
+      new RegExp(`/api/notebooks/${NB_ID_ENCODED_RE}/schema(?:\\?.*)?$`),
       (route) =>
         route.fulfill({
           status: 200,
@@ -127,7 +138,9 @@ test.describe('B.3a: schema tab view-only', () => {
 
     // Pass1 results.
     await page.route(
-      `**/api/notebooks/${encodeURIComponent(NOTEBOOK_ID)}/pass1_results`,
+      new RegExp(
+        `/api/notebooks/${NB_ID_ENCODED_RE}/pass1_results(?:\\?.*)?$`,
+      ),
       (route) =>
         route.fulfill({
           status: 200,
@@ -141,7 +154,7 @@ test.describe('B.3a: schema tab view-only', () => {
     // component creates, so we just need to satisfy the actual
     // GET /schema.ttl with a small Turtle body.
     await page.route(
-      `**/api/notebooks/${encodeURIComponent(NOTEBOOK_ID)}/schema.ttl`,
+      new RegExp(`/api/notebooks/${NB_ID_ENCODED_RE}/schema\\.ttl(?:\\?.*)?$`),
       (route) =>
         route.fulfill({
           status: 200,
