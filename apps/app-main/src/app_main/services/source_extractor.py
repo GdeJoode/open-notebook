@@ -190,6 +190,7 @@ class SourceExtractor:
                 content_settings=content_settings,
                 emit_key=emit_key,
                 log_stream=log_stream,
+                source_id=source_id,
             )
         elif use_mineru:
             from app_main.services.mineru_http_client import MineruHttpClient
@@ -341,6 +342,7 @@ class SourceExtractor:
         content_settings: ContentSettings,
         emit_key: str,
         log_stream: Any,
+        source_id: str | None = None,
     ) -> tuple[str, Any, Dict[str, Any]]:
         """Run docling+MinerU through the auto-fallback orchestrator.
 
@@ -396,6 +398,7 @@ class SourceExtractor:
             docling_client=docling_adapter,
             mineru_client=mineru_client,
             threshold=threshold,
+            source_id=source_id,
         )
 
         # When docling actually ran (engine_used="docling") and the

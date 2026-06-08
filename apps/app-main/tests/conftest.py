@@ -4,6 +4,7 @@ Shared test fixtures for app-main.
 All repositories are AsyncMock — no database required.
 """
 
+import os
 from datetime import datetime
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock
@@ -26,6 +27,23 @@ from shared.models import (
 )
 from shared.models.podcast import EpisodeProfile, PodcastEpisode, SpeakerProfile
 from shared.models.transformation import DefaultPrompts
+
+
+_DISABLE_METRICS_KEY = "OPEN_NOTEBOOK_DISABLE_METRICS"
+
+
+@pytest.fixture(autouse=True)
+def _disable_metrics_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Suppress ``record_metric`` writes in unit tests.
+
+    The shared ``shared.services.metrics.record_metric`` helper is
+    failure-tolerant but it still tries to reach SurrealDB unless the
+    env flag is set. In unit tests we never want that — both for speed
+    and because most tests are AsyncMock-only and shouldn't take a
+    DB dependency. Tests that explicitly want to assert on the metric
+    write monkeypatch ``shared.services.metrics.record_metric`` directly.
+    """
+    monkeypatch.setenv(_DISABLE_METRICS_KEY, "1")
 
 
 # ---------------------------------------------------------------------------
