@@ -16,9 +16,10 @@ single-schema path regardless of ``notebook_id``. Ops runbook: pass
 misbehaves in production.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from loguru import logger
+from shared.services.metrics import record_metric
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories import (
     NotebookSchemaRepository,
@@ -35,6 +36,27 @@ from entity_filtering.config import FilteringConfig
 from entity_filtering.workflow import FilteringWorkflow
 
 from app_main.services.entity_persistence_service import EntityPersistenceService
+
+
+def _avg_entity_confidence(entities: Iterable[Any]) -> float:
+    """Mean ``confidence`` across ``entities`` — 0.0 for an empty iterable.
+
+    Defined at module scope so unit tests can exercise it without
+    booting the service. Skips entities whose ``confidence`` attribute
+    is missing or non-numeric — the metric column is a single float and
+    we'd rather report a slightly-low average than crash the telemetry
+    write.
+    """
+    scores: List[float] = []
+    for entity in entities:
+        raw = getattr(entity, "confidence", None)
+        try:
+            scores.append(float(raw))
+        except (TypeError, ValueError):
+            continue
+    if not scores:
+        return 0.0
+    return sum(scores) / len(scores)
 
 
 async def make_default_llm_caller(model_id: Optional[str] = None):
@@ -401,6 +423,22 @@ class EntityExtractionService:
         chunks = await self._source_repo.get_chunks(source_id)
         if not chunks:
             logger.warning(f"No chunks found for source {source_id}")
+            # AC#3: every run_extraction call writes exactly ONE
+            # extraction.complete metric, including the zero-chunk
+            # early-return. Without this we'd lose the "we tried but
+            # got nothing" signal that's useful for dashboards.
+            await record_metric(
+                "extraction.complete",
+                {
+                    "entity_count": 0,
+                    "relation_count": 0,
+                    "avg_confidence": 0.0,
+                    "multi_schema": False,
+                    "no_chunks": True,
+                },
+                source=source_id,
+                notebook=notebook_id,
+            )
             return {
                 "source_id": source_id,
                 "entity_count": 0,
@@ -573,6 +611,25 @@ class EntityExtractionService:
             f"Entity extraction completed for source {source_id}: "
             f"{result.entity_count} entities, {result.relation_count} relations"
         )
+
+        # 8. Emit one telemetry row per run_extraction (B.4 / RETRO #5).
+        # ``record_metric`` is failure-tolerant — extraction never fails
+        # on a telemetry hiccup. Computed here (rather than inside each
+        # branch) so the multi-schema and single-schema paths share one
+        # canonical event shape.
+        avg_confidence = _avg_entity_confidence(result.entities)
+        await record_metric(
+            "extraction.complete",
+            {
+                "entity_count": result.entity_count,
+                "relation_count": result.relation_count,
+                "avg_confidence": avg_confidence,
+                "multi_schema": use_multi_schema,
+            },
+            source=source_id,
+            notebook=notebook_id,
+        )
+
         return summary
 
     async def run_filtering_only(

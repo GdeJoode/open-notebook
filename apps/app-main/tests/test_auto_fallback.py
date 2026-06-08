@@ -373,3 +373,109 @@ async def test_threshold_zero_keeps_docling_no_fallback(tmp_path):
     assert score.decision == "accept"
     # MinerU must not have been called — the whole point of threshold=0.0.
     mineru.process.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# B.4: telemetry hook (RETRO #5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_auto_fallback_emits_metric_on_accept_path(tmp_path):
+    """Accept path → one metric with decision='accept', engine_used='docling'."""
+    from unittest.mock import patch
+
+    docling_result = FakeIngestionResult(document=_high_quality_document(10))
+    docling = _client_returning(docling_result)
+    mineru = _client_returning(FakeIngestionResult(document=_high_quality_document(10)))
+
+    fake_pdf = tmp_path / "paper.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.4 fake")
+
+    with patch(
+        "app_main.services.parsing.auto_fallback.record_metric",
+        new_callable=AsyncMock,
+    ) as spy:
+        chosen, engine, score = await extract_with_auto_fallback(
+            fake_pdf,
+            docling_client=docling,
+            mineru_client=mineru,
+            source_id="source:abc",
+            notebook_id="notebook:xyz",
+        )
+
+    assert engine == "docling"
+    spy.assert_awaited_once()
+    call = spy.await_args
+    assert call.args[0] == "extraction.auto_fallback"
+    payload = call.args[1]
+    assert payload["decision"] == "accept"
+    assert payload["engine_used"] == "docling"
+    assert payload["confidence"] == score.overall
+    assert payload["threshold"] == score.threshold
+    assert call.kwargs["source"] == "source:abc"
+    assert call.kwargs["notebook"] == "notebook:xyz"
+
+
+@pytest.mark.asyncio
+async def test_auto_fallback_emits_metric_on_fallback_path(tmp_path):
+    """Confidence-driven fallback → one metric with decision='fallback', engine_used='mineru'."""
+    from unittest.mock import patch
+
+    docling_result = FakeIngestionResult(document=_low_quality_document(3))
+    mineru_result = FakeIngestionResult(document=_high_quality_document(3))
+    docling = _client_returning(docling_result)
+    mineru = _client_returning(mineru_result)
+
+    fake_pdf = tmp_path / "scan.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.4 fake")
+
+    with patch(
+        "app_main.services.parsing.auto_fallback.record_metric",
+        new_callable=AsyncMock,
+    ) as spy:
+        chosen, engine, score = await extract_with_auto_fallback(
+            fake_pdf,
+            docling_client=docling,
+            mineru_client=mineru,
+            source_id="source:abc",
+        )
+
+    assert engine == "mineru"
+    spy.assert_awaited_once()
+    payload = spy.await_args.args[1]
+    assert payload["decision"] == "fallback"
+    assert payload["engine_used"] == "mineru"
+    # notebook_id omitted by caller → None in the kwargs.
+    assert spy.await_args.kwargs["notebook"] is None
+
+
+@pytest.mark.asyncio
+async def test_auto_fallback_does_not_emit_when_both_engines_fail(tmp_path):
+    """Both-failed raises → no metric (we never reached a decision).
+
+    The caller (source_extractor / handler) takes responsibility for the
+    error path; emitting half-baked telemetry would muddy dashboards.
+    """
+    from unittest.mock import patch
+
+    docling = MagicMock()
+    docling.process = AsyncMock(side_effect=RuntimeError("docling boom"))
+    mineru = MagicMock()
+    mineru.process = AsyncMock(side_effect=RuntimeError("mineru boom"))
+
+    fake_pdf = tmp_path / "broken.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.4 fake")
+
+    with patch(
+        "app_main.services.parsing.auto_fallback.record_metric",
+        new_callable=AsyncMock,
+    ) as spy:
+        with pytest.raises(RuntimeError):
+            await extract_with_auto_fallback(
+                fake_pdf,
+                docling_client=docling,
+                mineru_client=mineru,
+            )
+
+    spy.assert_not_awaited()

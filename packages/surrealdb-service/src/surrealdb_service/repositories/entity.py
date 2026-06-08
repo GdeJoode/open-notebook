@@ -417,14 +417,14 @@ class EntityRepository:
         try:
             if entity_type:
                 return await execute_query(
-                    "SELECT id, name, entity_type, weight "
+                    "SELECT id, name, entity_type, weight, confidence "
                     "FROM entity WHERE entity_type = $entity_type "
                     "ORDER BY name LIMIT $limit START $offset",
                     {"entity_type": entity_type, "limit": limit, "offset": offset},
                     self.config,
                 )
             return await execute_query(
-                "SELECT id, name, entity_type, weight "
+                "SELECT id, name, entity_type, weight, confidence "
                 "FROM entity ORDER BY name LIMIT $limit START $offset",
                 {"limit": limit, "offset": offset},
                 self.config,
@@ -490,9 +490,11 @@ class EntityRepository:
 
             entity = result[0]
 
-            # Get relations where this entity is source or target
+            # Get relations where this entity is source or target. Confidence is
+            # surfaced so the KG UI can render a per-relation confidence bar
+            # (B.4 frontend).
             relations = await execute_query(
-                "SELECT id, in AS source, out AS target, relation_type "
+                "SELECT id, in AS source, out AS target, relation_type, confidence "
                 "FROM relation WHERE in = $id OR out = $id",
                 {"id": eid},
                 self.config,
@@ -534,7 +536,7 @@ class EntityRepository:
         """
         try:
             return await execute_query(
-                "SELECT id, name, entity_type, weight "
+                "SELECT id, name, entity_type, weight, confidence "
                 "FROM entity WHERE string::contains(string::lowercase(name), "
                 "string::lowercase($query)) LIMIT $limit",
                 {"query": query, "limit": limit},

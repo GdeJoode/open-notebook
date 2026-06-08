@@ -1,0 +1,8 @@
+-- Migration 47 down: drop the metrics table.
+--
+-- ``metrics`` is append-only telemetry. Dropping it loses every recorded
+-- event but does not break downstream consumers — record_metric() swallows
+-- write errors by design and emits via Loguru as a fallback. Treat as one-way
+-- for production data; safe to roll back in dev/test.
+
+REMOVE TABLE IF EXISTS metrics;

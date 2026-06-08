@@ -1,5 +1,43 @@
 # Track B — KG quality: rolling status
 
+## Phase B.4 — Confidence display + filter + always-on telemetry (2026-06-08, frontend completion)
+
+**Branch**: `track/b-confidence-telemetry`
+**Backend commits**: `861595a` (migration 47 + `shared.services.metrics` + `record_metric`) → `1bd8e47` (`extraction.complete` + `extraction.auto_fallback` call sites + tests)
+**Frontend commit**: see new HEAD (`feat(kg): confidence bar + filter + relation bars + SELECT projection`)
+**State**: code complete, all quality gates green, ready for review.
+
+### Delivered (frontend portion)
+
+- `frontend/src/components/knowledge-graph/ConfidenceBar.tsx` — inline Tailwind-coloured progress bar with Radix tooltip. Reused on entity rows and per-relation cards.
+- `frontend/src/components/knowledge-graph/ConfidenceFilter.tsx` — Radix slider [0, 1] step 0.05, persists to `localStorage.kg_confidence_threshold`, SSR-safe hydration.
+- `frontend/src/app/(dashboard)/knowledge-graph/page.tsx` — new "Confidence" table column, filter wired into the existing filter bar, per-relation bar in the detail panel.
+- `frontend/src/lib/api/knowledge-graph.ts` — `confidence?: number` on `Entity` and `EntityRelation`.
+- `packages/surrealdb-service/src/surrealdb_service/repositories/entity.py` — additive: project `confidence` in `list_entities` / `search_entities` and in the relation SELECT inside `get_entity_detail`.
+- `frontend/e2e/track-b/confidence-display.spec.ts` — 4 specs covering all four ACs (bar visibility, filter behaviour, localStorage persistence, relation bars).
+
+### Quality gates
+
+```
+frontend: tsc --noEmit       : clean
+frontend: next lint          : 0 errors, 0 NEW warnings
+frontend: confidence-display : 4/4 Playwright passed (mocked, no DB)
+apps/app-main (KG router/service tests) : 17/17 passed
+packages/surrealdb-service tests        : 77/77 passed
+```
+
+### Pre-resolved decisions honoured
+
+- Q-B-6: telemetry always-on — backend already implemented this in the prior two commits.
+- No new dependencies; `@radix-ui/react-slider` and `@radix-ui/react-tooltip` were already in `package.json`.
+
+### Known follow-ups
+
+- Sigma graph view doesn't tint by confidence (out of scope; can be added in a later UX polish phase).
+- Adding a sortable "Confidence" column header (alphabetical sort by name is preserved).
+
+---
+
 ## Phase B.1f — Extraction-service wiring + LLMExtractor fix + B.4 relation re-link (2026-06-07)
 
 **Branch**: `track/b-extraction-service-wiring`

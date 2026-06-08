@@ -860,3 +860,157 @@ class TestRunMultiSchemaBody:
         assert "scholarly" in forwarded and "general" in forwarded
         assert forwarded["scholarly"][0]["type_name"] == "GlobalExt"
         assert forwarded["general"][0]["type_name"] == "GlobalExt"
+
+
+# ---------------------------------------------------------------------------
+# B.4: telemetry hook
+# ---------------------------------------------------------------------------
+
+
+class TestExtractionTelemetryHook:
+    """run_extraction emits exactly one ``extraction.complete`` metric per call.
+
+    Closes the AC#3 acceptance gate for Phase B.4. The autouse
+    ``_disable_metrics_by_default`` conftest fixture means the real
+    ``record_metric`` would short-circuit (env flag) — these tests patch
+    the symbol at import-site so we can spy on calls without needing
+    the env to be unset.
+    """
+
+    @pytest.fixture
+    def patched_record_metric(self):
+        """Patch ``record_metric`` at its callsite in entity_extraction_service.
+
+        Patching the imported reference (not the source module) ensures
+        the spy intercepts the call even though it's bound at module
+        load time. Returns the AsyncMock so tests can assert on it.
+        """
+        with patch(
+            "app_main.services.entity_extraction_service.record_metric",
+            new_callable=AsyncMock,
+        ) as mock:
+            yield mock
+
+    @pytest.mark.asyncio
+    async def test_happy_path_emits_one_extraction_complete(
+        self, base_source_repo, patched_record_metric
+    ):
+        """Standard single-schema run → exactly one metric, with the right payload."""
+        svc = EntityExtractionService(source_repo=base_source_repo)
+
+        with patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as mock_workflow_cls, patch.object(
+            svc, "_save_result", AsyncMock()
+        ):
+            mock_workflow = MagicMock()
+            mock_workflow.extract = AsyncMock(
+                return_value=ExtractionResult(metadata={})
+            )
+            mock_workflow_cls.return_value = mock_workflow
+
+            await svc.run_extraction(
+                source_id="source:test",
+                ontology_name="general",
+                run_filtering=False,
+            )
+
+        patched_record_metric.assert_awaited_once()
+        call = patched_record_metric.await_args
+        assert call.args[0] == "extraction.complete"
+        payload = call.args[1]
+        assert payload["entity_count"] == 0
+        assert payload["relation_count"] == 0
+        assert payload["multi_schema"] is False
+        assert payload["avg_confidence"] == 0.0
+        # Context flows through unchanged.
+        assert call.kwargs["source"] == "source:test"
+        assert call.kwargs["notebook"] is None
+
+    @pytest.mark.asyncio
+    async def test_no_chunks_still_emits_one_metric(
+        self, base_source_repo, patched_record_metric
+    ):
+        """Zero-chunk early-return must still write a metric (AC#3)."""
+        base_source_repo.get_chunks = AsyncMock(return_value=[])
+        svc = EntityExtractionService(source_repo=base_source_repo)
+
+        with patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ):
+            await svc.run_extraction(source_id="source:test")
+
+        patched_record_metric.assert_awaited_once()
+        call = patched_record_metric.await_args
+        assert call.args[0] == "extraction.complete"
+        payload = call.args[1]
+        assert payload["no_chunks"] is True
+        assert payload["entity_count"] == 0
+        assert call.kwargs["source"] == "source:test"
+
+    @pytest.mark.asyncio
+    async def test_multi_schema_path_marks_payload(
+        self,
+        base_source_repo,
+        notebook_schema_repo_fixture,
+        pass1_repo_fixture,
+        patched_record_metric,
+    ):
+        """multi_schema=True in the payload when the orchestrator was used."""
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        with patch.object(
+            svc, "_run_multi_schema", AsyncMock(return_value=ExtractionResult())
+        ), patch.object(svc, "_save_result", AsyncMock()):
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+        patched_record_metric.assert_awaited_once()
+        call = patched_record_metric.await_args
+        assert call.args[1]["multi_schema"] is True
+        assert call.kwargs["notebook"] == "notebook:abc"
+
+    @pytest.mark.asyncio
+    async def test_review_paused_does_not_emit_metric(
+        self,
+        base_source_repo,
+        notebook_schema_repo_fixture,
+        pass1_repo_fixture,
+        patched_record_metric,
+    ):
+        """SchemaReviewPendingError must not be followed by a metric write.
+
+        The job is parked, not completed. Emitting here would inflate
+        the extraction.complete count and pollute dashboards.
+        """
+        nb_schema = NotebookSchema(
+            notebook="notebook:abc",
+            base_ontology="scholarly",
+            review_required=True,
+            pending_extensions=[{"extension_id": "ext-1"}],
+            accepted_extensions=[],
+        )
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=nb_schema
+        )
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        with pytest.raises(SchemaReviewPendingError):
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+        patched_record_metric.assert_not_awaited()
