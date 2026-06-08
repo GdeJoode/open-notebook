@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { NotebookResponse } from '@/lib/types/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -9,12 +10,22 @@ import { useUpdateNotebook, useDeleteNotebook } from '@/lib/hooks/use-notebooks'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { formatDistanceToNow } from 'date-fns'
 import { InlineEdit } from '@/components/common/InlineEdit'
+import { cn } from '@/lib/utils'
 
 interface NotebookHeaderProps {
   notebook: NotebookResponse
+  /**
+   * Highlights the active tab in the secondary navigation. Defaults
+   * to `"workspace"` — the 3-column page at `/notebooks/[id]`.
+   * Pass `"schema"` when rendering on the Schema sub-route.
+   */
+  activeTab?: 'workspace' | 'schema'
 }
 
-export function NotebookHeader({ notebook }: NotebookHeaderProps) {
+export function NotebookHeader({
+  notebook,
+  activeTab = 'workspace',
+}: NotebookHeaderProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   
   const updateNotebook = useUpdateNotebook()
@@ -108,9 +119,32 @@ export function NotebookHeader({ notebook }: NotebookHeaderProps) {
           />
           
           <div className="text-sm text-muted-foreground">
-            Created {formatDistanceToNow(new Date(notebook.created), { addSuffix: true })} • 
+            Created {formatDistanceToNow(new Date(notebook.created), { addSuffix: true })} •
             Updated {formatDistanceToNow(new Date(notebook.updated), { addSuffix: true })}
           </div>
+
+          {/*
+            Secondary nav between the 3-column workspace view and the
+            B.3a Schema sub-route. Implemented as <Link>s rather than
+            tabs so the underlying routes own their data fetching and
+            page state — no shared state to coordinate between views.
+          */}
+          <nav
+            aria-label="Notebook sections"
+            className="flex gap-1 pt-2"
+            data-testid="notebook-section-nav"
+          >
+            <NotebookTabLink
+              href={`/notebooks/${notebook.id}`}
+              label="Workspace"
+              active={activeTab === 'workspace'}
+            />
+            <NotebookTabLink
+              href={`/notebooks/${notebook.id}/schema`}
+              label="Schema"
+              active={activeTab === 'schema'}
+            />
+          </nav>
         </div>
       </div>
 
@@ -124,5 +158,32 @@ export function NotebookHeader({ notebook }: NotebookHeaderProps) {
         onConfirm={handleDelete}
       />
     </>
+  )
+}
+
+function NotebookTabLink({
+  href,
+  label,
+  active,
+}: {
+  href: string
+  label: string
+  active: boolean
+}) {
+  return (
+    <Link
+      href={href}
+      aria-current={active ? 'page' : undefined}
+      data-testid={`notebook-tab-${label.toLowerCase()}`}
+      className={cn(
+        'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        active
+          ? 'bg-accent text-accent-foreground'
+          : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+      )}
+    >
+      {label}
+    </Link>
   )
 }
