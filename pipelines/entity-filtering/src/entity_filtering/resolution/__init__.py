@@ -7,6 +7,14 @@ from entity_filtering.resolution.entity_linker import (
     EntityLinker,
 )
 from entity_filtering.resolution.kg_resolver import KGResolver
+from entity_filtering.resolution.orphan_connector import (
+    OrphanEntityRepoProtocol,
+    OrphanProposal,
+    OrphanTokenBudgetExceeded,
+    confirm_connections,
+    find_orphans,
+    propose_connections,
+)
 
 __all__ = [
     "ContextualClusterer",
@@ -14,4 +22,10 @@ __all__ = [
     "EntityLinker",
     "DBpediaSpotlightLinker",
     "KGResolver",
+    "OrphanEntityRepoProtocol",
+    "OrphanProposal",
+    "OrphanTokenBudgetExceeded",
+    "find_orphans",
+    "propose_connections",
+    "confirm_connections",
 ]
