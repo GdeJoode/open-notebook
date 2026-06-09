@@ -39,6 +39,15 @@ export interface ExtensionView {
   description?: string | null
   rationale?: string | null
   properties: PropertyDef[]
+  /**
+   * B.3c resume-sentinel marker. Older rows / non-sentinel entries
+   * lack this field entirely. The SchemaBrowser filters items where
+   * `is_resume_sentinel === true` so users never see the marker as a
+   * tree node — it carries no schema content. The backend already
+   * filters sentinels at the JSON-schema endpoint (defence-in-depth
+   * here in case a future endpoint forgets).
+   */
+  is_resume_sentinel?: boolean
 }
 
 export interface NotebookSchemaResponse {

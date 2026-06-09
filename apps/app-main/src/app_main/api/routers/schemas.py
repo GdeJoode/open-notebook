@@ -871,9 +871,25 @@ async def _ensure_notebook_exists(
 #     }
 #
 # Future B.3b/B.3d edit-ops should treat ``is_resume_sentinel=True``
-# entries as "do not show in the SchemaBrowser tree" (the frontend
-# already filters them by checking ``type_name.startswith('_')`` — see
-# ``SchemaBrowser`` notes).
+# entries as "do not show in the SchemaBrowser tree". As of B.3c
+# attempt-2 there are now FOUR sentinel filter sites (defence-in-depth):
+#
+#  1. ``get_notebook_schema_json`` here (this file ~L633) — strips
+#     sentinels from the JSON contract so they never reach the frontend.
+#  2. ``_apply_extensions`` here (this file ~L214) — strips sentinels
+#     from the TTL exporter so they never enter downloaded ontologies.
+#  3. ``EntityExtractionService._run_multi_schema`` — strips sentinels
+#     before forwarding ``accepted_extensions_by_schema`` to the
+#     workflow, so Pass-2 never sees them.
+#  4. ``ontology_extraction.prompts.pass2._format_accepted_extensions``
+#     — strips sentinels at the prompt-render seam as a final guard
+#     against any consumer that forgets the upstream filter.
+#  5. ``SchemaBrowser.tsx`` — frontend belt-and-braces filter using
+#     ``is_resume_sentinel === true`` OR ``type_name.startsWith('_')``.
+#
+# If you add a new ``accepted_extensions`` consumer, add the sentinel
+# filter to that consumer too — the marker is infrastructure, not
+# ontology content.
 
 _RESUME_SENTINEL_TYPE_NAME = "_resumed_without_extensions"
 
@@ -1292,11 +1308,18 @@ async def resume_extraction(
     sentinel_added = False
     if schema.review_required and not schema.accepted_extensions:
         # Predicate would still raise — append a sentinel.
+        # ``isoformat()`` on a tz-aware datetime renders ``+00:00`` for
+        # UTC; we normalise to ``Z`` for consistency with the rest of
+        # the codebase (event ``created`` timestamps + frontend parsers
+        # both expect ``Z``).
+        created_at = (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
         schema.accepted_extensions.append(
             {
                 "type_name": _RESUME_SENTINEL_TYPE_NAME,
                 "is_resume_sentinel": True,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": created_at,
             }
         )
         await schema_repo.upsert(schema)

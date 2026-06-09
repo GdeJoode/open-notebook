@@ -92,6 +92,13 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
   // extensions are flagged so the UI can render an "Extension" badge.
   // Types in `excluded_types` (B.3b soft-delete) are filtered out so
   // the browser reflects the effective schema, not the raw lists.
+  //
+  // B.3c defence-in-depth: drop resume-sentinel entries and any
+  // underscore-prefixed `type_name` before rendering. The backend
+  // already filters at the JSON schema endpoint (`schemas.py` ~L633),
+  // but matching the pattern here means a future endpoint regression
+  // can't leak the `_resumed_without_extensions` marker into the
+  // SchemaBrowser tree.
   const items: TreeItem[] = useMemo(() => {
     const excluded = new Set(schema.excluded_types ?? [])
     const base: TreeItem[] = schema.base_ontology_types
@@ -104,16 +111,20 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
         parent_type: et.parent_type ?? null,
         properties: et.properties,
       }))
-    const accepted: TreeItem[] = schema.accepted_extensions
-      .filter((ext) => !excluded.has(ext.type_name))
-      .map((ext) => ({
-        kind: 'extension',
-        key: `ext:${ext.extension_id ?? ext.type_name}`,
-        name: ext.type_name,
-        description: ext.description ?? null,
-        parent_type: ext.parent_type ?? null,
-        properties: ext.properties,
-      }))
+    const visibleExtensions = schema.accepted_extensions.filter(
+      (ext) =>
+        !excluded.has(ext.type_name) &&
+        ext.is_resume_sentinel !== true &&
+        !(ext.type_name ?? '').startsWith('_'),
+    )
+    const accepted: TreeItem[] = visibleExtensions.map((ext) => ({
+      kind: 'extension',
+      key: `ext:${ext.extension_id ?? ext.type_name}`,
+      name: ext.type_name,
+      description: ext.description ?? null,
+      parent_type: ext.parent_type ?? null,
+      properties: ext.properties,
+    }))
     // Stable order: base types first (preserves YAML order), then
     // accepted extensions in their stored order. Both groups are
     // alphabetised within their group for predictability.
