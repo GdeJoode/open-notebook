@@ -47,6 +47,7 @@ Design notes
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -75,6 +76,8 @@ from ontology_manager.rdf_owl_shacl import (
 from ontology_manager.registry import OntologyRegistry
 from rdflib import Graph, Literal, URIRef
 from rdflib.namespace import OWL, RDF, RDFS
+from shared.models.notebook_schema import NotebookSchema
+from shared.types.enums import JobStatus, JobType
 from surrealdb_service.repositories.notebook_schema import (
     NotebookSchemaRepository,
     Pass1ResultRepository,
@@ -212,6 +215,11 @@ def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
     """
     classes_added = 0
     for ext in extensions:
+        # B.3c: skip resume sentinels — they only exist to satisfy the
+        # review-gate predicate (see ``_RESUME_SENTINEL_TYPE_NAME``) and
+        # carry no schema content.
+        if ext.get("is_resume_sentinel") is True:
+            continue
         type_name = ext.get("type_name")
         if not type_name or not isinstance(type_name, str):
             logger.warning(
@@ -632,11 +640,16 @@ async def get_notebook_schema_json(
         review_required = bool(notebook_schema.review_required)
         soft_nudge_dismissed = bool(notebook_schema.soft_nudge_dismissed)
 
+    # B.3c: hide resume sentinels from the SchemaBrowser — they are
+    # an implementation detail of the pause/resume flow.
+    visible_accepted = [
+        e for e in accepted_raw if e.get("is_resume_sentinel") is not True
+    ]
     return NotebookSchemaResponse(
         notebook_id=notebook_id,
         base_ontology=base_ontology,
         base_ontology_types=_load_base_ontology_types(base_ontology),
-        accepted_extensions=[_normalise_extension(e) for e in accepted_raw],
+        accepted_extensions=[_normalise_extension(e) for e in visible_accepted],
         pending_extensions=[_normalise_extension(e) for e in pending_raw],
         excluded_types=excluded_types,
         coverage_pct=coverage_pct,
@@ -814,9 +827,162 @@ async def _ensure_notebook_exists(
     notebook_id: str, notebook_service: NotebookService
 ) -> None:
     """Common 404 guard — every edit-ops handler runs this first."""
+
+
+# Phase B.3c — soft-nudge UI + per-notebook pause toggle
+# ---------------------------------------------------------------------------
+#
+# The B.1e Pass-1 orchestrator emits ``notebook_event`` rows of type
+# ``extension_suggested`` (coverage 80-95%) and ``schema_mismatch``
+# (coverage <80%) — both are surface-able as a dismissible banner on
+# the notebook workspace.
+#
+# B.1f introduces a per-notebook ``review_required`` toggle. When set,
+# the entity-extraction service raises :class:`SchemaReviewPendingError`
+# (which subclasses :class:`JobPausedForReviewError`) and the worker
+# parks the job in :class:`JobStatus.PAUSED_FOR_REVIEW`. The resume
+# flow needs to lift that gate.
+#
+# The review-gate predicate in
+# ``EntityExtractionService._run_multi_schema`` is::
+#
+#     review_required is True AND accepted_extensions is empty
+#
+# So "resume with current schema" can satisfy the gate by appending a
+# sentinel entry to ``accepted_extensions``. We picked option (a) from
+# the B.3c plan (sentinel) over per-source approval tracking because:
+#
+#  1. It re-uses the existing field — no new migration, no new repo.
+#  2. The sentinel is filtered out by the TTL export defensively
+#     (``type_name`` validation is already there) — see
+#     ``_apply_extensions``: a sentinel with ``type_name`` starting with
+#     ``_`` parses to an empty fragment after the leading-digit guard;
+#     the TTL exporter additionally skips it explicitly below.
+#  3. ``last_modified_by`` (``last_modified_at`` via ``upsert``) records
+#     the resume action for the audit log.
+#
+# Documented sentinel shape::
+#
+#     {
+#       "type_name": "_resumed_without_extensions",
+#       "is_resume_sentinel": True,
+#       "created_at": "<isoformat utc>",
+#       "source_id": "<source record id triggering the resume, optional>",
+#     }
+#
+# Future B.3b/B.3d edit-ops should treat ``is_resume_sentinel=True``
+# entries as "do not show in the SchemaBrowser tree" (the frontend
+# already filters them by checking ``type_name.startswith('_')`` — see
+# ``SchemaBrowser`` notes).
+
+_RESUME_SENTINEL_TYPE_NAME = "_resumed_without_extensions"
+
+
+class ReviewRequiredRequest(BaseModel):
+    """Body for ``POST /api/notebooks/{id}/schema/review_required``."""
+
+    enabled: bool
+
+
+class ReviewRequiredResponse(BaseModel):
+    """Echo response confirming the new toggle state."""
+
+    notebook_id: str
+    review_required: bool
+
+
+class DismissNudgeResponse(BaseModel):
+    """Echo response confirming the soft-nudge has been dismissed."""
+
+    notebook_id: str
+    soft_nudge_dismissed: bool
+
+
+class ResumeExtractionResponse(BaseModel):
+    """Result of resuming extraction for a paused notebook.
+
+    ``resumed_count`` is the number of paused jobs that were transitioned
+    back to ``QUEUED``. ``sentinel_added`` is ``True`` when the resume
+    flow appended a sentinel entry to ``accepted_extensions`` to satisfy
+    the review-gate predicate (only happens when the gate was active).
+    """
+
+    notebook_id: str
+    resumed_count: int
+    sentinel_added: bool
+
+
+class PausedExtractionStatus(BaseModel):
+    """Whether any extraction job is paused for this notebook.
+
+    Drives the ``ExtractionPausedBanner`` — the UI polls this with a
+    cheap GET and only renders the banner when ``paused_count > 0``.
+    """
+
+    notebook_id: str
+    paused_count: int
+    paused_source_ids: List[str] = Field(default_factory=list)
+
+
+async def _ensure_schema_row(
+    schema_repo: NotebookSchemaRepository,
+    notebook_id: str,
+) -> NotebookSchema:
+    """Fetch the notebook_schema row, creating a default one if absent.
+
+    B.1c populates the row on first pass-1 run, but the soft-nudge
+    toggle endpoints can fire before that — e.g. the user opens a
+    fresh notebook, enables ``review_required`` proactively, and only
+    then drops a source onto the upload area. We materialise the row
+    eagerly so the toggle persists across restarts.
+    """
+    existing = await schema_repo.get_by_notebook(notebook_id)
+    if existing is not None:
+        return existing
+    # Build a sensible default. ``base_ontology`` is whatever the TTL
+    # endpoint also defaults to so the two stay in lock-step.
+    return NotebookSchema(
+        notebook=notebook_id,
+        base_ontology=_DEFAULT_BASE_ONTOLOGY,
+    )
+
+
+@router.post(
+    "/schema/review_required",
+    response_model=ReviewRequiredResponse,
+    responses={404: {"description": "Notebook not found."}},
+)
+async def set_review_required(
+    notebook_id: str,
+    body: ReviewRequiredRequest,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    schema_repo: NotebookSchemaRepository = Depends(get_notebook_schema_repo),
+) -> ReviewRequiredResponse:
+    """Toggle the per-notebook ``review_required`` flag (B.3c).
+
+    When set to ``True``, the next entity-extraction run for any source
+    in this notebook will raise :class:`SchemaReviewPendingError` at the
+    Pass-1 boundary if no extensions have been accepted yet — the worker
+    parks the job in ``PAUSED_FOR_REVIEW`` and the UI surfaces the
+    :class:`ExtractionPausedBanner`.
+
+    Idempotent: setting the same value twice is a no-op (but still
+    bumps ``last_modified_at`` via ``upsert``).
+    """
     notebook = await notebook_service.get(notebook_id)
     if not notebook:
         raise HTTPException(status_code=404, detail="Notebook not found")
+
+    schema = await _ensure_schema_row(schema_repo, notebook_id)
+    schema.review_required = bool(body.enabled)
+    await schema_repo.upsert(schema)
+    logger.info(
+        "Set review_required={} for notebook {}", schema.review_required, notebook_id
+    )
+    return ReviewRequiredResponse(
+        notebook_id=notebook_id,
+        review_required=schema.review_required,
+    )
 
 
 @router.post(
@@ -993,3 +1159,181 @@ async def delete_type(
     except NotebookSchemaNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return _schema_to_response(notebook_id, updated)
+
+
+@router.post(
+    "/schema/dismiss_nudge",
+    response_model=DismissNudgeResponse,
+    responses={404: {"description": "Notebook not found."}},
+)
+async def dismiss_soft_nudge(
+    notebook_id: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    schema_repo: NotebookSchemaRepository = Depends(get_notebook_schema_repo),
+) -> DismissNudgeResponse:
+    """Dismiss the low-coverage soft-nudge banner for this notebook (B.3c).
+
+    Sets ``soft_nudge_dismissed=true``. The B.1e orchestrator re-arms
+    the flag when coverage drops below threshold again — that logic
+    lives outside this endpoint (downstream pipeline concern).
+
+    Idempotent: dismissing twice is a no-op.
+    """
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    schema = await _ensure_schema_row(schema_repo, notebook_id)
+    schema.soft_nudge_dismissed = True
+    await schema_repo.upsert(schema)
+    logger.info("Dismissed soft-nudge for notebook {}", notebook_id)
+    return DismissNudgeResponse(
+        notebook_id=notebook_id,
+        soft_nudge_dismissed=True,
+    )
+
+
+async def _list_paused_jobs_for_notebook(
+    notebook_id: str,
+    source_repo: SourceRepository,
+) -> List[Any]:
+    """Find all ``PAUSED_FOR_REVIEW`` jobs whose source belongs to this notebook.
+
+    Done in two steps because the job table only stores ``source_id``,
+    not ``notebook_id``. We walk the ``reference`` edge from the notebook
+    to its sources and then query the job table for paused entries.
+
+    Local import of :class:`JobRepository` to keep the module-level
+    import graph tight (the schemas router otherwise has no job-queue
+    dependency).
+    """
+    from job_queue.repository import JobRepository
+
+    job_repo = JobRepository()
+
+    rows = await source_repo.list_with_metadata(notebook_id=notebook_id, limit=500)
+    source_ids = {str(row["id"]) for row in rows if row.get("id")}
+    if not source_ids:
+        return []
+
+    paused_entity_jobs = await job_repo.list_jobs(
+        status=JobStatus.PAUSED_FOR_REVIEW,
+        job_type=JobType.ENTITY_EXTRACT,
+        limit=200,
+    )
+    return [j for j in paused_entity_jobs if j.source_id in source_ids]
+
+
+@router.get(
+    "/extraction/paused",
+    response_model=PausedExtractionStatus,
+    responses={404: {"description": "Notebook not found."}},
+)
+async def list_paused_extraction(
+    notebook_id: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    source_repo: SourceRepository = Depends(get_source_repo),
+) -> PausedExtractionStatus:
+    """Report ``PAUSED_FOR_REVIEW`` extraction jobs for this notebook (B.3c).
+
+    The frontend ``ExtractionPausedBanner`` polls this; render the
+    banner only when ``paused_count > 0``. Returns an empty list rather
+    than 404 when the notebook has no sources or no paused jobs.
+    """
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    paused_jobs = await _list_paused_jobs_for_notebook(notebook_id, source_repo)
+    paused_source_ids = sorted(
+        {j.source_id for j in paused_jobs if j.source_id}
+    )
+    return PausedExtractionStatus(
+        notebook_id=notebook_id,
+        paused_count=len(paused_jobs),
+        paused_source_ids=paused_source_ids,
+    )
+
+
+@router.post(
+    "/extraction/resume",
+    response_model=ResumeExtractionResponse,
+    responses={404: {"description": "Notebook not found."}},
+)
+async def resume_extraction(
+    notebook_id: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    schema_repo: NotebookSchemaRepository = Depends(get_notebook_schema_repo),
+    source_repo: SourceRepository = Depends(get_source_repo),
+) -> ResumeExtractionResponse:
+    """Resume extraction for sources paused under ``review_required`` (B.3c).
+
+    Two effects:
+
+    1. **Sentinel marker** — if the review-gate predicate would still
+       fire (``review_required=True`` AND ``accepted_extensions`` is
+       empty), append a sentinel entry so the next pass-1 attempt
+       advances past the gate. See the module-level comment on
+       :data:`_RESUME_SENTINEL_TYPE_NAME` for the rationale and shape.
+    2. **Job re-queue** — every ``ENTITY_EXTRACT`` job in
+       ``PAUSED_FOR_REVIEW`` whose source belongs to this notebook is
+       moved back to ``QUEUED``. The worker will pick them up on the
+       next tick.
+
+    Returns counts so the UI can render "Resumed 3 sources" instead of
+    a bare 200.
+    """
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    schema = await _ensure_schema_row(schema_repo, notebook_id)
+
+    sentinel_added = False
+    if schema.review_required and not schema.accepted_extensions:
+        # Predicate would still raise — append a sentinel.
+        schema.accepted_extensions.append(
+            {
+                "type_name": _RESUME_SENTINEL_TYPE_NAME,
+                "is_resume_sentinel": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await schema_repo.upsert(schema)
+        sentinel_added = True
+        logger.info(
+            "Added resume sentinel to notebook {} (review_required=True, "
+            "accepted_extensions was empty)",
+            notebook_id,
+        )
+
+    # Move any paused jobs back to QUEUED so the worker re-picks them.
+    paused_jobs = await _list_paused_jobs_for_notebook(notebook_id, source_repo)
+    if paused_jobs:
+        from job_queue.repository import JobRepository
+
+        job_repo = JobRepository()
+        resumed = 0
+        for job in paused_jobs:
+            try:
+                await job_repo.update_status(
+                    job.id, JobStatus.QUEUED, error_message=None
+                )
+                resumed += 1
+            except Exception as e:
+                logger.warning(
+                    "Failed to re-queue paused job {}: {}", job.id, e
+                )
+        logger.info(
+            "Resumed {} paused extraction job(s) for notebook {}",
+            resumed,
+            notebook_id,
+        )
+    else:
+        resumed = 0
+
+    return ResumeExtractionResponse(
+        notebook_id=notebook_id,
+        resumed_count=resumed,
+        sentinel_added=sentinel_added,
+    )

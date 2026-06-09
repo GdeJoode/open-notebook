@@ -49,6 +49,21 @@ export const NOTEBOOK_SCHEMA_QUERY_KEY = (id: string) =>
 export const PASS1_RESULTS_QUERY_KEY = (id: string) =>
   ['notebook-schema', id, 'pass1_results'] as const
 
+export const NOTEBOOK_EVENTS_QUERY_KEY = (
+  id: string,
+  opts: { types?: string[]; unread?: boolean } = {},
+) =>
+  [
+    'notebook-events',
+    id,
+    {
+      // Sort the types list so the cache key is stable regardless of
+      // call-site ordering.
+      types: opts.types ? [...opts.types].sort() : undefined,
+      unread: !!opts.unread,
+    },
+  ] as const
+
 export function useNotebookSchema(notebookId: string) {
   return useQuery({
     queryKey: NOTEBOOK_SCHEMA_QUERY_KEY(notebookId),
@@ -92,6 +107,62 @@ function buildMutationHandlers(
         title: 'Error',
         description: errorDescription,
         variant: 'destructive' as const,
+      })
+    },
+  })
+}
+
+/**
+ * Poll `GET /api/notebooks/{id}/events` every 30s for the soft-nudge
+ * banner. Mirrors the cadence the MinerU health chip uses.
+ *
+ * Design notes:
+ *
+ * - `retry: false` because a transient 500 is meaningful state for the
+ *   banner — silently retrying would hide a backend bug.
+ * - `staleTime: 25_000` keeps the data fresh until just before the next
+ *   refetch, avoiding double-fetches on quick re-mounts.
+ * - The hook takes `enabled` so callers can disable polling when the
+ *   notebook id is not yet known (e.g. SSR / first paint).
+ */
+export function useNotebookEvents(
+  notebookId: string,
+  opts: {
+    types?: string[]
+    unread?: boolean
+    enabled?: boolean
+    refetchInterval?: number
+  } = {},
+) {
+  const {
+    types,
+    unread = true,
+    enabled = true,
+    refetchInterval = 30_000,
+  } = opts
+  return useQuery({
+    queryKey: NOTEBOOK_EVENTS_QUERY_KEY(notebookId, { types, unread }),
+    queryFn: () =>
+      notebookSchemaApi.listEvents(notebookId, { types, unread }),
+    enabled: !!notebookId && enabled,
+    refetchInterval,
+    staleTime: Math.max(0, refetchInterval - 5_000),
+    retry: false,
+  })
+}
+
+/**
+ * Mark a single event read. On success invalidates every events query
+ * for the notebook so the banner disappears immediately.
+ */
+export function useMarkEventRead(notebookId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (eventId: string) =>
+      notebookSchemaApi.markEventRead(notebookId, eventId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['notebook-events', notebookId],
       })
     },
   })
@@ -194,5 +265,80 @@ export function useDeleteType(
       'Type deleted',
       'Failed to delete type',
     )(queryClient, toast),
+  })
+}
+
+/**
+ * Dismiss the soft-nudge for this notebook. Optimistically updates the
+ * schema cache so the banner hides without waiting for the next refetch.
+ */
+export function useDismissNudge(notebookId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => notebookSchemaApi.dismissNudge(notebookId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: NOTEBOOK_SCHEMA_QUERY_KEY(notebookId),
+      })
+      queryClient.invalidateQueries({
+        queryKey: ['notebook-events', notebookId],
+      })
+    },
+  })
+}
+
+/** Toggle `review_required` for this notebook. */
+export function useToggleReviewRequired(notebookId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      notebookSchemaApi.setReviewRequired(notebookId, enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: NOTEBOOK_SCHEMA_QUERY_KEY(notebookId),
+      })
+    },
+  })
+}
+
+/**
+ * Resume extraction for paused sources in this notebook. Invalidates
+ * sources + jobs + paused-status caches so the workspace view updates.
+ */
+export function useResumeExtraction(notebookId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => notebookSchemaApi.resumeExtraction(notebookId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: NOTEBOOK_SCHEMA_QUERY_KEY(notebookId),
+      })
+      queryClient.invalidateQueries({
+        queryKey: PAUSED_EXTRACTION_QUERY_KEY(notebookId),
+      })
+      queryClient.invalidateQueries({
+        queryKey: ['sources', notebookId],
+      })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export const PAUSED_EXTRACTION_QUERY_KEY = (id: string) =>
+  ['notebook-schema', id, 'paused-extraction'] as const
+
+/**
+ * Poll `GET /extraction/paused` to know whether any source is paused.
+ * Drives the `ExtractionPausedBanner` — the banner shows when
+ * `paused_count > 0`.
+ */
+export function usePausedExtraction(notebookId: string) {
+  return useQuery({
+    queryKey: PAUSED_EXTRACTION_QUERY_KEY(notebookId),
+    queryFn: () => notebookSchemaApi.listPausedExtraction(notebookId),
+    enabled: !!notebookId,
+    refetchInterval: 30_000,
+    staleTime: 25_000,
+    retry: false,
   })
 }

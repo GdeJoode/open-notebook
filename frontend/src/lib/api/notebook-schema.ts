@@ -37,6 +37,52 @@ export interface SplitTypeRequest {
   criterion: string
 }
 
+/**
+ * View-model of a single notebook event surfaced by the B.3c
+ * SchemaSoftNudge banner. Mirrors `NotebookEventView` in
+ * `apps/app-main/src/app_main/api/routers/notebook_events.py`.
+ */
+export interface NotebookEventView {
+  id: string
+  event_type: string
+  message?: string | null
+  source_id?: string | null
+  created_at?: string | null
+  read_at?: string | null
+}
+
+/** Echo response for POST /schema/review_required (B.3c). */
+export interface ReviewRequiredResponse {
+  notebook_id: string
+  review_required: boolean
+}
+
+/** Echo response for POST /schema/dismiss_nudge (B.3c). */
+export interface DismissNudgeResponse {
+  notebook_id: string
+  soft_nudge_dismissed: boolean
+}
+
+/** Result of POST /extraction/resume (B.3c). */
+export interface ResumeExtractionResponse {
+  notebook_id: string
+  resumed_count: number
+  sentinel_added: boolean
+}
+
+/** Response shape for GET /extraction/paused (B.3c). */
+export interface PausedExtractionStatus {
+  notebook_id: string
+  paused_count: number
+  paused_source_ids: string[]
+}
+
+/** Echo response for POST /events/{id}/mark_read (B.3c). */
+export interface MarkReadResponse {
+  event_id: string
+  success: boolean
+}
+
 const nbPath = (id: string) => `/notebooks/${encodeURIComponent(id)}`
 
 export const notebookSchemaApi = {
@@ -138,6 +184,101 @@ export const notebookSchemaApi = {
   ): Promise<NotebookSchemaResponse> => {
     const response = await apiClient.delete<NotebookSchemaResponse>(
       `${nbPath(notebookId)}/schema/types/${encodeURIComponent(typeName)}`,
+    )
+    return response.data
+  },
+
+  /**
+   * B.3c — toggle the notebook's `review_required` flag. When enabled,
+   * the next extraction halts at the Pass-1 boundary until the user
+   * resumes via `/extraction/resume`.
+   */
+  setReviewRequired: async (
+    notebookId: string,
+    enabled: boolean,
+  ): Promise<ReviewRequiredResponse> => {
+    const response = await apiClient.post<ReviewRequiredResponse>(
+      `/notebooks/${encodeURIComponent(notebookId)}/schema/review_required`,
+      { enabled },
+    )
+    return response.data
+  },
+
+  /**
+   * B.3c — dismiss the soft-nudge banner for this notebook. The flag
+   * persists until the orchestrator re-arms it (coverage drops again).
+   */
+  dismissNudge: async (notebookId: string): Promise<DismissNudgeResponse> => {
+    const response = await apiClient.post<DismissNudgeResponse>(
+      `/notebooks/${encodeURIComponent(notebookId)}/schema/dismiss_nudge`,
+    )
+    return response.data
+  },
+
+  /**
+   * B.3c — resume paused extraction for this notebook. Adds the resume
+   * sentinel if the review-gate predicate would still fire, and moves
+   * any `PAUSED_FOR_REVIEW` jobs back to `QUEUED`.
+   */
+  resumeExtraction: async (
+    notebookId: string,
+  ): Promise<ResumeExtractionResponse> => {
+    const response = await apiClient.post<ResumeExtractionResponse>(
+      `/notebooks/${encodeURIComponent(notebookId)}/extraction/resume`,
+    )
+    return response.data
+  },
+
+  /**
+   * B.3c — list paused extraction jobs for this notebook. Drives the
+   * `ExtractionPausedBanner` — the banner shows when `paused_count > 0`.
+   */
+  listPausedExtraction: async (
+    notebookId: string,
+  ): Promise<PausedExtractionStatus> => {
+    const response = await apiClient.get<PausedExtractionStatus>(
+      `/notebooks/${encodeURIComponent(notebookId)}/extraction/paused`,
+    )
+    return response.data
+  },
+
+  /**
+   * B.3c — list notebook events for the soft-nudge banner. Pass
+   * `unread=true` from the polling loop; pass `type` as a comma-
+   * separated list to filter.
+   */
+  listEvents: async (
+    notebookId: string,
+    opts: { types?: string[]; unread?: boolean; limit?: number } = {},
+  ): Promise<NotebookEventView[]> => {
+    const params: Record<string, string> = {}
+    if (opts.types && opts.types.length > 0) {
+      params.type = opts.types.join(',')
+    }
+    if (opts.unread) {
+      params.unread = 'true'
+    }
+    if (typeof opts.limit === 'number') {
+      params.limit = String(opts.limit)
+    }
+    const response = await apiClient.get<NotebookEventView[]>(
+      `/notebooks/${encodeURIComponent(notebookId)}/events`,
+      { params },
+    )
+    return response.data
+  },
+
+  /**
+   * B.3c — mark a single notebook event read. Idempotent.
+   */
+  markEventRead: async (
+    notebookId: string,
+    eventId: string,
+  ): Promise<MarkReadResponse> => {
+    const response = await apiClient.post<MarkReadResponse>(
+      `/notebooks/${encodeURIComponent(
+        notebookId,
+      )}/events/${encodeURIComponent(eventId)}/mark_read`,
     )
     return response.data
   },
