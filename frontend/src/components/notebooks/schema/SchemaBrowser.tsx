@@ -1,16 +1,27 @@
 'use client'
 
 import { useId, useMemo, useState } from 'react'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, MoreHorizontal } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import {
+  SchemaEditDialog,
+  type SchemaEditMode,
+} from '@/components/notebooks/schema/SchemaEditDialog'
 import type {
   EntityTypeNode,
   ExtensionView,
@@ -19,6 +30,8 @@ import type {
 
 interface SchemaBrowserProps {
   schema: NotebookSchemaResponse
+  /** When set, the per-row ⋯ menu fires edit ops scoped to this notebook. */
+  notebookId?: string
 }
 
 /**
@@ -71,26 +84,33 @@ interface SchemaBrowserProps {
  * Tooltips: each row's name has a tooltip with the description when
  * present — keeps the row label short while preserving discoverability.
  */
-export function SchemaBrowser({ schema }: SchemaBrowserProps) {
+export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
   // Merge base + accepted extensions into a single tree. Accepted
   // extensions are flagged so the UI can render an "Extension" badge.
+  // Types in `excluded_types` (B.3b soft-delete) are filtered out so
+  // the browser reflects the effective schema, not the raw lists.
   const items: TreeItem[] = useMemo(() => {
-    const base: TreeItem[] = schema.base_ontology_types.map((et) => ({
-      kind: 'base',
-      key: `base:${et.name}`,
-      name: et.name,
-      description: et.description ?? null,
-      parent_type: et.parent_type ?? null,
-      properties: et.properties,
-    }))
-    const accepted: TreeItem[] = schema.accepted_extensions.map((ext) => ({
-      kind: 'extension',
-      key: `ext:${ext.extension_id ?? ext.type_name}`,
-      name: ext.type_name,
-      description: ext.description ?? null,
-      parent_type: ext.parent_type ?? null,
-      properties: ext.properties,
-    }))
+    const excluded = new Set(schema.excluded_types ?? [])
+    const base: TreeItem[] = schema.base_ontology_types
+      .filter((et) => !excluded.has(et.name))
+      .map((et) => ({
+        kind: 'base',
+        key: `base:${et.name}`,
+        name: et.name,
+        description: et.description ?? null,
+        parent_type: et.parent_type ?? null,
+        properties: et.properties,
+      }))
+    const accepted: TreeItem[] = schema.accepted_extensions
+      .filter((ext) => !excluded.has(ext.type_name))
+      .map((ext) => ({
+        kind: 'extension',
+        key: `ext:${ext.extension_id ?? ext.type_name}`,
+        name: ext.type_name,
+        description: ext.description ?? null,
+        parent_type: ext.parent_type ?? null,
+        properties: ext.properties,
+      }))
     // Stable order: base types first (preserves YAML order), then
     // accepted extensions in their stored order. Both groups are
     // alphabetised within their group for predictability.
@@ -103,6 +123,16 @@ export function SchemaBrowser({ schema }: SchemaBrowserProps) {
     items.length > 0 ? items[0].key : null,
   )
   const selected = items.find((it) => it.key === selectedKey) ?? null
+
+  // Edit-dialog state — `target` carries the row name the user invoked
+  // the menu on. `mode === null` means dialog is closed.
+  const [editMode, setEditMode] = useState<SchemaEditMode | null>(null)
+  const [editTarget, setEditTarget] = useState<string>('')
+
+  const openEditDialog = (mode: SchemaEditMode, name: string) => {
+    setEditTarget(name)
+    setEditMode(mode)
+  }
 
   // Stable id prefix for option ids. Required so `aria-activedescendant`
   // on the listbox can point at the option DOM node. `useId` keeps the
@@ -139,7 +169,7 @@ export function SchemaBrowser({ schema }: SchemaBrowserProps) {
           {items.map((item) => {
             const isSelected = item.key === selectedKey
             return (
-              <li key={item.key}>
+              <li key={item.key} className="flex items-center gap-1">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -151,7 +181,7 @@ export function SchemaBrowser({ schema }: SchemaBrowserProps) {
                       data-testid={`schema-tree-item-${item.name}`}
                       onClick={() => setSelectedKey(item.key)}
                       className={cn(
-                        'flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
+                        'flex flex-1 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
                         'hover:bg-accent hover:text-accent-foreground',
                         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                         isSelected && 'bg-accent text-accent-foreground',
@@ -182,6 +212,52 @@ export function SchemaBrowser({ schema }: SchemaBrowserProps) {
                     </TooltipContent>
                   )}
                 </Tooltip>
+                {notebookId && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 shrink-0 p-0"
+                        aria-label={`Actions for ${item.name}`}
+                        data-testid={`schema-row-actions-${item.name}`}
+                      >
+                        <MoreHorizontal
+                          aria-hidden="true"
+                          className="h-4 w-4"
+                        />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuItem
+                        data-testid={`schema-row-rename-${item.name}`}
+                        onSelect={() => openEditDialog('rename', item.name)}
+                      >
+                        Rename…
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        data-testid={`schema-row-merge-${item.name}`}
+                        onSelect={() => openEditDialog('merge', item.name)}
+                      >
+                        Merge into…
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        data-testid={`schema-row-split-${item.name}`}
+                        onSelect={() => openEditDialog('split', item.name)}
+                      >
+                        Split…
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        data-testid={`schema-row-delete-${item.name}`}
+                        className="text-destructive focus:text-destructive"
+                        onSelect={() => openEditDialog('delete', item.name)}
+                      >
+                        Hide type
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </li>
             )
           })}
@@ -201,6 +277,17 @@ export function SchemaBrowser({ schema }: SchemaBrowserProps) {
           )}
         </aside>
       </div>
+      {notebookId && editMode && (
+        <SchemaEditDialog
+          notebookId={notebookId}
+          mode={editMode}
+          typeName={editTarget}
+          open={editMode !== null}
+          onOpenChange={(open) => {
+            if (!open) setEditMode(null)
+          }}
+        />
+      )}
     </TooltipProvider>
   )
 }

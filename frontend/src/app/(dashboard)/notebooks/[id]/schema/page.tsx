@@ -92,7 +92,7 @@ export default function NotebookSchemaPage() {
                   Failed to load the notebook schema. Reload to retry.
                 </div>
               ) : (
-                <SchemaBrowser schema={schema} />
+                <SchemaBrowser schema={schema} notebookId={notebookId} />
               )}
             </section>
 
@@ -116,6 +116,7 @@ export default function NotebookSchemaPage() {
               {schema && (
                 <PendingExtensionsPanel
                   extensions={schema.pending_extensions}
+                  notebookId={notebookId}
                 />
               )}
             </section>

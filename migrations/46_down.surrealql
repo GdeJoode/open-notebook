@@ -1,0 +1,19 @@
+-- Migration 46 (down): drop notebook_event + notebook_schema.excluded_types
+--
+-- Reverses migration 46. The order matters when callers replay both up
+-- and down on the same DB:
+--
+--   1. Drop the index first so SurrealDB doesn't complain about a
+--      dangling index when the table goes away.
+--   2. Drop the table itself.
+--   3. Remove the ``excluded_types`` field from notebook_schema. Existing
+--      rows that carry the field will lose it — that's the contract of
+--      a down migration.
+--
+-- ``REMOVE`` does not have an ``IF EXISTS`` clause in SurrealDB 1.x, so
+-- the down migration is intentionally not idempotent. Running it against
+-- a DB that's already at version 45 will error on the first REMOVE.
+
+REMOVE INDEX idx_notebook_event_lookup ON TABLE notebook_event;
+REMOVE TABLE notebook_event;
+REMOVE FIELD excluded_types ON TABLE notebook_schema;

@@ -58,9 +58,16 @@ from app_main.dependencies import (
     get_notebook_schema_repo,
     get_notebook_service,
     get_pass1_result_repo,
+    get_schema_edit_service,
     get_source_repo,
 )
 from app_main.services.notebook_service import NotebookService
+from app_main.services.schema_edit_service import (
+    NotebookSchemaNotFoundError,
+    SchemaEditService,
+    UnknownExtensionError,
+)
+from shared.models import NotebookSchema
 from ontology_manager.rdf_owl_shacl import (
     ON,
     load_yaml_ontology,
@@ -446,6 +453,7 @@ class NotebookSchemaResponse(BaseModel):
     base_ontology_types: List[_EntityTypeNode] = Field(default_factory=list)
     accepted_extensions: List[_ExtensionView] = Field(default_factory=list)
     pending_extensions: List[_ExtensionView] = Field(default_factory=list)
+    excluded_types: List[str] = Field(default_factory=list)
     coverage_pct: float = 0.0
     review_required: bool = False
     soft_nudge_dismissed: bool = False
@@ -611,6 +619,7 @@ async def get_notebook_schema_json(
         base_ontology = _DEFAULT_BASE_ONTOLOGY
         accepted_raw: List[Dict[str, Any]] = []
         pending_raw: List[Dict[str, Any]] = []
+        excluded_types: List[str] = []
         coverage_pct = 0.0
         review_required = False
         soft_nudge_dismissed = False
@@ -618,6 +627,7 @@ async def get_notebook_schema_json(
         base_ontology = notebook_schema.base_ontology or _DEFAULT_BASE_ONTOLOGY
         accepted_raw = notebook_schema.accepted_extensions or []
         pending_raw = notebook_schema.pending_extensions or []
+        excluded_types = list(notebook_schema.excluded_types or [])
         coverage_pct = float(notebook_schema.coverage_pct)
         review_required = bool(notebook_schema.review_required)
         soft_nudge_dismissed = bool(notebook_schema.soft_nudge_dismissed)
@@ -628,6 +638,7 @@ async def get_notebook_schema_json(
         base_ontology_types=_load_base_ontology_types(base_ontology),
         accepted_extensions=[_normalise_extension(e) for e in accepted_raw],
         pending_extensions=[_normalise_extension(e) for e in pending_raw],
+        excluded_types=excluded_types,
         coverage_pct=coverage_pct,
         review_required=review_required,
         soft_nudge_dismissed=soft_nudge_dismissed,
@@ -697,3 +708,288 @@ async def list_notebook_pass1_results(
             )
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Edit-ops endpoints (Phase B.3b)
+# ---------------------------------------------------------------------------
+#
+# Six mutations that drive the Schema-tab edit UI. Each delegates to
+# :class:`SchemaEditService`, which is responsible for state diffing +
+# idempotency + emitting one ``notebook_event{type:"schema_changed"}``
+# row per successful op.
+#
+# The handler layer is intentionally thin: validate inputs, translate
+# service-level exceptions to HTTP status codes, serialise the updated
+# ``NotebookSchema`` into the existing ``NotebookSchemaResponse`` so the
+# client can refresh in place.
+#
+# Design notes
+# ------------
+#
+# * **POST for state-changing ops** (except DELETE for ``delete_type``).
+#   Even rename / merge / split create new "extension" entries in
+#   the per-notebook schema row — they aren't strictly REST-idempotent
+#   on the URL, so POST is the cleaner verb.
+#
+# * **Two flavours of 404**:
+#   - "notebook does not exist" → caught by the notebook_service.get
+#     guard at the top of every handler.
+#   - "notebook exists but no schema row" / "no such extension" →
+#     bubbled up by the service via NotebookSchemaNotFoundError /
+#     UnknownExtensionError.
+#   We deliberately surface both as 404 so the client behaviour is
+#   uniform; the detail message distinguishes them.
+#
+# * **Response shape == GET /schema response shape**. The frontend
+#   uses the same NotebookSchemaResponse for read + write so it can
+#   replace the React Query cache directly. We re-load + re-render the
+#   base ontology types here on each write (B.3c may switch to a
+#   slimmer "delta" response if this becomes a perf concern; the YAML
+#   read is cheap at current scale).
+
+
+class RenameTypeRequest(BaseModel):
+    """Payload for ``POST /api/notebooks/{id}/schema/rename``.
+
+    Both names are required and non-empty; the service short-circuits
+    when ``old_name == new_name`` so the client doesn't have to guard.
+    """
+
+    old_name: str = Field(min_length=1)
+    new_name: str = Field(min_length=1)
+
+
+class MergeTypesRequest(BaseModel):
+    """Payload for ``POST /api/notebooks/{id}/schema/merge``.
+
+    ``type_names`` must contain at least two distinct entries (service
+    raises ValueError otherwise → translated to 422).
+    """
+
+    type_names: List[str] = Field(min_length=2)
+    merged_name: str = Field(min_length=1)
+
+
+class SplitTypeRequest(BaseModel):
+    """Payload for ``POST /api/notebooks/{id}/schema/split``.
+
+    ``criterion`` is a free-form hint passed to Pass 2 prompts so the
+    LLM can disambiguate the source type (e.g. "by year published").
+    """
+
+    type_name: str = Field(min_length=1)
+    into: List[str] = Field(min_length=2)
+    criterion: str = Field(min_length=1)
+
+
+def _schema_to_response(
+    notebook_id: str, schema: NotebookSchema
+) -> NotebookSchemaResponse:
+    """Render an updated NotebookSchema row into the public response shape.
+
+    The base ontology types (loaded from YAML) are re-projected here so
+    the response is self-contained — the client refreshes its cached
+    view from a single POST/DELETE.
+    """
+    base_ontology = schema.base_ontology or _DEFAULT_BASE_ONTOLOGY
+    return NotebookSchemaResponse(
+        notebook_id=notebook_id,
+        base_ontology=base_ontology,
+        base_ontology_types=_load_base_ontology_types(base_ontology),
+        accepted_extensions=[
+            _normalise_extension(e) for e in (schema.accepted_extensions or [])
+        ],
+        pending_extensions=[
+            _normalise_extension(e) for e in (schema.pending_extensions or [])
+        ],
+        excluded_types=list(schema.excluded_types or []),
+        coverage_pct=float(schema.coverage_pct),
+        review_required=bool(schema.review_required),
+        soft_nudge_dismissed=bool(schema.soft_nudge_dismissed),
+    )
+
+
+async def _ensure_notebook_exists(
+    notebook_id: str, notebook_service: NotebookService
+) -> None:
+    """Common 404 guard — every edit-ops handler runs this first."""
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+
+@router.post(
+    "/schema/extensions/{type_name}/accept",
+    response_model=NotebookSchemaResponse,
+    responses={
+        404: {"description": "Notebook, schema row or extension not found."},
+    },
+)
+async def accept_pending_extension(
+    notebook_id: str,
+    type_name: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    edit_service: SchemaEditService = Depends(get_schema_edit_service),
+) -> NotebookSchemaResponse:
+    """Move the matching pending extension into ``accepted_extensions``.
+
+    Idempotent — re-accepting an already-accepted type returns the
+    current state with no new event. Returns 404 if the type_name does
+    not exist in either list (no-op-but-state-mismatch is distinct
+    from "name unknown").
+    """
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        updated = await edit_service.accept_extension(notebook_id, type_name)
+    except NotebookSchemaNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except UnknownExtensionError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return _schema_to_response(notebook_id, updated)
+
+
+@router.post(
+    "/schema/extensions/{type_name}/reject",
+    response_model=NotebookSchemaResponse,
+    responses={
+        404: {"description": "Notebook or schema row not found."},
+    },
+)
+async def reject_pending_extension(
+    notebook_id: str,
+    type_name: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    edit_service: SchemaEditService = Depends(get_schema_edit_service),
+) -> NotebookSchemaResponse:
+    """Drop the matching pending extension.
+
+    Idempotent: rejecting an already-removed type_name returns the
+    current state with no new event. We deliberately do NOT 404 here
+    even when the type_name is unknown — the natural UX flow is "user
+    clicks Reject after the row has disappeared from another tab", and
+    the result they want (no row, no event) is the same.
+    """
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        updated = await edit_service.reject_extension(notebook_id, type_name)
+    except NotebookSchemaNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return _schema_to_response(notebook_id, updated)
+
+
+@router.post(
+    "/schema/rename",
+    response_model=NotebookSchemaResponse,
+    responses={
+        404: {"description": "Notebook or schema row not found."},
+    },
+)
+async def rename_type(
+    notebook_id: str,
+    payload: RenameTypeRequest,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    edit_service: SchemaEditService = Depends(get_schema_edit_service),
+) -> NotebookSchemaResponse:
+    """Record a rename as a synonym in ``accepted_extensions``.
+
+    The base ontology YAML is not mutated. Idempotent on
+    (old_name, new_name).
+    """
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        updated = await edit_service.rename_type(
+            notebook_id, payload.old_name, payload.new_name
+        )
+    except NotebookSchemaNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return _schema_to_response(notebook_id, updated)
+
+
+@router.post(
+    "/schema/merge",
+    response_model=NotebookSchemaResponse,
+    responses={
+        404: {"description": "Notebook or schema row not found."},
+        422: {"description": "merge requires at least two distinct type names."},
+    },
+)
+async def merge_types(
+    notebook_id: str,
+    payload: MergeTypesRequest,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    edit_service: SchemaEditService = Depends(get_schema_edit_service),
+) -> NotebookSchemaResponse:
+    """Record a merge of N types into one in ``accepted_extensions``.
+
+    Idempotent on (sorted source-type set, merged_name).
+    """
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        updated = await edit_service.merge_types(
+            notebook_id, payload.type_names, payload.merged_name
+        )
+    except NotebookSchemaNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return _schema_to_response(notebook_id, updated)
+
+
+@router.post(
+    "/schema/split",
+    response_model=NotebookSchemaResponse,
+    responses={
+        404: {"description": "Notebook or schema row not found."},
+        422: {"description": "split requires at least two distinct target names."},
+    },
+)
+async def split_type(
+    notebook_id: str,
+    payload: SplitTypeRequest,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    edit_service: SchemaEditService = Depends(get_schema_edit_service),
+) -> NotebookSchemaResponse:
+    """Record a split of one type into N new ones.
+
+    ``criterion`` is plumbed through to Pass 2 prompts so the LLM can
+    decide which target each instance belongs to. Idempotent on
+    (source, sorted-into set, criterion).
+    """
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        updated = await edit_service.split_type(
+            notebook_id, payload.type_name, payload.into, payload.criterion
+        )
+    except NotebookSchemaNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return _schema_to_response(notebook_id, updated)
+
+
+@router.delete(
+    "/schema/types/{type_name}",
+    response_model=NotebookSchemaResponse,
+    responses={
+        404: {"description": "Notebook or schema row not found."},
+    },
+)
+async def delete_type(
+    notebook_id: str,
+    type_name: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    edit_service: SchemaEditService = Depends(get_schema_edit_service),
+) -> NotebookSchemaResponse:
+    """Soft-delete a type by adding it to ``excluded_types``.
+
+    The base ontology YAML is never mutated. Idempotent: re-deleting
+    a name already in the exclusion list returns the current state
+    with no new event.
+    """
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        updated = await edit_service.delete_type(notebook_id, type_name)
+    except NotebookSchemaNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return _schema_to_response(notebook_id, updated)

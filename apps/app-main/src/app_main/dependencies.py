@@ -29,6 +29,9 @@ from surrealdb_service.repositories import (
     SummaryRepository,
     TransformationRepository,
 )
+from surrealdb_service.repositories.notebook_event import (
+    NotebookEventRepository,
+)
 from surrealdb_service.repositories.notebook_schema import (
     NotebookSchemaRepository,
     Pass1ResultRepository,
@@ -57,6 +60,7 @@ from app_main.services.source_summarization_orchestrator import (
 from app_main.services.preprocessing_service import PreprocessingService
 from app_main.services.summarization_service import SummarizationService
 from app_main.services.entity_extraction_service import EntityExtractionService
+from app_main.services.schema_edit_service import SchemaEditService
 
 
 # --- Repository providers ---
@@ -158,6 +162,18 @@ def get_pass1_result_repo() -> Pass1ResultRepository:
     consumer.
     """
     return Pass1ResultRepository()
+
+
+def get_notebook_event_repo() -> NotebookEventRepository:
+    """FastAPI provider for the notebook_event stream (Phase B.3b).
+
+    Introduced alongside the schema edit-ops layer — B.3b's
+    ``SchemaEditService`` emits one ``schema_changed`` row per op via
+    this repo. B.3c (soft-nudge banner) and B.3d (re-extract prompt)
+    consume the same stream, and Track G5's webhook fan-out joins the
+    party later, so the factory lives here rather than inline.
+    """
+    return NotebookEventRepository()
 
 
 # --- Service providers ---
@@ -287,6 +303,19 @@ def get_summarization_service() -> SummarizationService:
 
 def get_entity_extraction_service() -> EntityExtractionService:
     return EntityExtractionService(source_repo=get_source_repo())
+
+
+def get_schema_edit_service() -> SchemaEditService:
+    """FastAPI provider for the B.3b schema edit-ops service.
+
+    Wires the notebook_schema + notebook_event repos. The router under
+    ``api/routers/schemas.py`` is the sole HTTP consumer; tests
+    instantiate ``SchemaEditService`` directly with AsyncMock repos.
+    """
+    return SchemaEditService(
+        schema_repo=get_notebook_schema_repo(),
+        event_repo=get_notebook_event_repo(),
+    )
 
 
 def get_preprocessing_service() -> PreprocessingService:

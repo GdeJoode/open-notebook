@@ -1,5 +1,57 @@
 # Track B — KG quality: rolling status
 
+## Phase B.3b — Schema edit operations (2026-06-09)
+
+**Branch**: `track/b-schema-edit-ops`
+**Commits**: `cda3ff7` → `fab7cd7` → `02fd60c` → `965e2a4`
+**State**: All acceptance criteria met; quality gates green; ready for review.
+
+### Scope delivered
+
+Six server-side mutations on `/api/notebooks/{id}/schema/*` driving the Schema-tab edit UI: `accept_extension`, `reject_extension`, `rename_type`, `merge_types`, `split_type`, `delete_type`. Each op:
+
+- Is idempotent (re-running converges + emits zero new events).
+- Emits exactly one `notebook_event{event_type:"schema_changed"}` row.
+- Returns the full updated `NotebookSchemaResponse` so the frontend can replace the React Query cache in a single round-trip.
+
+Plus the supporting infrastructure:
+
+- `migrations/46.surrealql` — new `notebook_event` SCHEMAFULL table (shared across B.3b / B.3c / B.3d + future Track G5 webhooks) + `notebook_schema.excluded_types: option<array<string>>`.
+- `shared.models.NotebookEvent` + `surrealdb_service.repositories.NotebookEventRepository`.
+- `apps.app_main.services.schema_edit_service.SchemaEditService` — pure business logic, idempotent op-ids via deterministic keys.
+- `SchemaEditDialog` (one component, four modes), per-row overflow menu, live Accept/Reject buttons.
+
+### Quality gates
+
+```
+packages/surrealdb-service tests (requires_docker)   : 7/7 passed (234.49s)
+packages/shared full suite                           : 154/154 passed
+apps/app-main schema_edit_service unit               : 18/18 passed
+apps/app-main schemas_edit_router                    : 13/13 passed
+apps/app-main full suite                             : 446/446 passed
+frontend npx tsc --noEmit                            : clean
+frontend npm run lint                                : no new schema-related warnings
+frontend playwright (schema-edit-ops.spec.ts)        : 5/5 passed
+frontend playwright (schema-tab-view.spec.ts updated): 4/4 passed
+```
+
+### Resolved decisions
+
+- **Q-B-8 (shared notebook_event table)**: introduced here in migration 46; used by B.3c soft-nudge + B.3d re-extract prompt + future Track G5 webhooks.
+- **Soft-delete semantic**: chose `excluded_types: List[str]` on the per-notebook row over a separate table — the soft-delete is intrinsic to per-notebook schema state, not a cross-notebook stream.
+- **Deterministic op-ids**: replays detect by `rename_id` / `merge_id` / `split_id` rather than structural comparison of dicts. Keeps idempotency O(N) instead of O(N²).
+- **Frontend cache replacement, no invalidate**: AC#4 200ms guarantee. Mutation hooks call `setQueryData`, not `invalidateQueries`.
+
+### Self-review
+
+See `docs/tracks/B-kg-quality/reviews/phase-B.3b-self-review.md`.
+
+### Coordination notes for B.3c
+
+B.3c (parallel branch `track/b-soft-nudge`) also touches `schemas.py` and `use-notebook-schema.ts` but adds different endpoints (review_required, dismiss_nudge, extraction/resume). The two branches do NOT touch the same lines — expected clean three-way merge.
+
+---
+
 ## Phase B.3a — Schema-tab view-only, attempt 2 (2026-06-08)
 
 **Branch**: `track/b-schema-tab-view`

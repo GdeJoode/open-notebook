@@ -202,16 +202,19 @@ test.describe('B.3a: schema tab view-only', () => {
       '62%',
     )
 
-    // PendingExtensionsPanel lists the pending extension with disabled
-    // Accept/Reject buttons.
+    // PendingExtensionsPanel lists the pending extension with Accept /
+    // Reject buttons. As of B.3b these are LIVE (the B.3a stub had
+    // them disabled with a "coming next release" tooltip — that
+    // behaviour is gone). We assert visibility + enabled state; the
+    // actual click → POST flow is covered in schema-edit-ops.spec.ts.
     const pending = page.getByTestId('pending-extension-Cohort')
     await expect(pending).toBeVisible()
     await expect(pending).toContainText('Three sources mention a cohort.')
 
     const acceptBtn = page.getByTestId('accept-ext-pen-1')
     const rejectBtn = page.getByTestId('reject-ext-pen-1')
-    await expect(acceptBtn).toBeDisabled()
-    await expect(rejectBtn).toBeDisabled()
+    await expect(acceptBtn).toBeEnabled()
+    await expect(rejectBtn).toBeEnabled()
   })
 
   test('selecting a tree item updates the side panel via keyboard', async ({

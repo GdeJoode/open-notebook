@@ -21,6 +21,9 @@ from surrealdb_service.repositories.notebook import (
     NoteRepository,
     NotebookRepository,
 )
+from surrealdb_service.repositories.notebook_event import (
+    NotebookEventRepository,
+)
 from surrealdb_service.repositories.notebook_schema import (
     NotebookSchemaRepository,
     Pass1ResultRepository,
@@ -67,6 +70,8 @@ __all__ = [
     # Notebook schema (Phase B.1b)
     "NotebookSchemaRepository",
     "Pass1ResultRepository",
+    # Notebook event stream (Phase B.3b)
+    "NotebookEventRepository",
     # Podcast
     "SpeakerProfileRepository",
     "EpisodeProfileRepository",
