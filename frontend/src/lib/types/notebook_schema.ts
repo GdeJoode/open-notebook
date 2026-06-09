@@ -47,6 +47,8 @@ export interface NotebookSchemaResponse {
   base_ontology_types: EntityTypeNode[]
   accepted_extensions: ExtensionView[]
   pending_extensions: ExtensionView[]
+  /** Type names hidden via the B.3b soft-delete (DELETE /schema/types/...). */
+  excluded_types: string[]
   coverage_pct: number
   review_required: boolean
   soft_nudge_dismissed: boolean

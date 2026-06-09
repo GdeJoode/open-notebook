@@ -12,6 +12,33 @@ import type {
   Pass1ResultView,
 } from '@/lib/types/notebook_schema'
 
+/**
+ * Payload contracts for the B.3b schema-edit mutations.
+ *
+ * Hand-typed against `RenameTypeRequest` / `MergeTypesRequest` /
+ * `SplitTypeRequest` in `apps/app-main/src/app_main/api/routers/schemas.py`.
+ * Kept here (rather than under `lib/types/`) because they are mutation-
+ * scoped and don't leak into render code — co-locating with the client
+ * keeps the surface narrow.
+ */
+export interface RenameTypeRequest {
+  old_name: string
+  new_name: string
+}
+
+export interface MergeTypesRequest {
+  type_names: string[]
+  merged_name: string
+}
+
+export interface SplitTypeRequest {
+  type_name: string
+  into: string[]
+  criterion: string
+}
+
+const nbPath = (id: string) => `/notebooks/${encodeURIComponent(id)}`
+
 export const notebookSchemaApi = {
   /**
    * Fetch the notebook's effective schema (base ontology + accepted +
@@ -20,7 +47,7 @@ export const notebookSchemaApi = {
    */
   get: async (notebookId: string): Promise<NotebookSchemaResponse> => {
     const response = await apiClient.get<NotebookSchemaResponse>(
-      `/notebooks/${encodeURIComponent(notebookId)}/schema`,
+      `${nbPath(notebookId)}/schema`,
     )
     return response.data
   },
@@ -32,7 +59,85 @@ export const notebookSchemaApi = {
    */
   listPass1Results: async (notebookId: string): Promise<Pass1ResultView[]> => {
     const response = await apiClient.get<Pass1ResultView[]>(
-      `/notebooks/${encodeURIComponent(notebookId)}/pass1_results`,
+      `${nbPath(notebookId)}/pass1_results`,
+    )
+    return response.data
+  },
+
+  // --------------------------------------------------------------------
+  // Phase B.3b edit ops
+  // --------------------------------------------------------------------
+  //
+  // Each mutation returns the FULL `NotebookSchemaResponse` so the
+  // caller can replace the React Query cache directly without a follow-
+  // up GET — guaranteeing UI updates within one round-trip (the AC#4
+  // "Schema tab updates within 200ms" guarantee).
+
+  /** Accept a pending extension by type name. */
+  acceptExtension: async (
+    notebookId: string,
+    typeName: string,
+  ): Promise<NotebookSchemaResponse> => {
+    const response = await apiClient.post<NotebookSchemaResponse>(
+      `${nbPath(notebookId)}/schema/extensions/${encodeURIComponent(typeName)}/accept`,
+    )
+    return response.data
+  },
+
+  /** Reject (drop) a pending extension by type name. */
+  rejectExtension: async (
+    notebookId: string,
+    typeName: string,
+  ): Promise<NotebookSchemaResponse> => {
+    const response = await apiClient.post<NotebookSchemaResponse>(
+      `${nbPath(notebookId)}/schema/extensions/${encodeURIComponent(typeName)}/reject`,
+    )
+    return response.data
+  },
+
+  /** Record a rename as a synonym in `accepted_extensions`. */
+  renameType: async (
+    notebookId: string,
+    payload: RenameTypeRequest,
+  ): Promise<NotebookSchemaResponse> => {
+    const response = await apiClient.post<NotebookSchemaResponse>(
+      `${nbPath(notebookId)}/schema/rename`,
+      payload,
+    )
+    return response.data
+  },
+
+  /** Record a merge of N types into one. */
+  mergeTypes: async (
+    notebookId: string,
+    payload: MergeTypesRequest,
+  ): Promise<NotebookSchemaResponse> => {
+    const response = await apiClient.post<NotebookSchemaResponse>(
+      `${nbPath(notebookId)}/schema/merge`,
+      payload,
+    )
+    return response.data
+  },
+
+  /** Record a split of one type into N new ones. */
+  splitType: async (
+    notebookId: string,
+    payload: SplitTypeRequest,
+  ): Promise<NotebookSchemaResponse> => {
+    const response = await apiClient.post<NotebookSchemaResponse>(
+      `${nbPath(notebookId)}/schema/split`,
+      payload,
+    )
+    return response.data
+  },
+
+  /** Soft-delete a type by adding it to `excluded_types`. */
+  deleteType: async (
+    notebookId: string,
+    typeName: string,
+  ): Promise<NotebookSchemaResponse> => {
+    const response = await apiClient.delete<NotebookSchemaResponse>(
+      `${nbPath(notebookId)}/schema/types/${encodeURIComponent(typeName)}`,
     )
     return response.data
   },
