@@ -923,3 +923,52 @@ Coverage on `orphan_prompts.py`: **100%**.
   until then.
 
 Self-review at `docs/tracks/B-kg-quality/reviews/phase-B.5a-self-review.md`.
+
+## Phase B.5a — attempt 2 (review fix-up, 2026-06-09)
+
+Attempt 1 returned REVISIONS_NEEDED (0 blockers, 3 majors, 7 minors).
+Attempt 2 addresses majors M1-M3 and minors 1/4/5/6/7 (minors 2/3
+explicitly deferred per the prompt).
+
+### Files added / modified
+
+- `packages/surrealdb-service/tests/test_entity_orphan_query.py` (new):
+  6 unit tests for `list_orphans_for_source` covering empty source_id,
+  entity-SELECT failure, edge-probe failure (loop continues), empty
+  source, all-orphan, mixed. Uses a `monkeypatch`-ed `execute_query` so
+  no Docker / SurrealDB instance required.
+- `pipelines/entity-filtering/tests/test_workflow.py`: appended five
+  new tests under `TestStage14OrphanConnector`:
+  - `test_stage14_disabled_skips_orphan_connect`
+  - `test_stage14_enabled_happy_path`
+  - `test_stage14_token_budget_exceeded_recovers`
+  - `test_stage14_enabled_missing_di_logs_warning` (Minor-1)
+  - `test_orphan_relation_type_bypasses_ontology` (M3 behaviour-pin)
+- `pipelines/entity-filtering/tests/test_orphan_connector.py`: new
+  `test_self_pair_never_proposed` (Minor-6).
+- `pipelines/entity-filtering/src/entity_filtering/workflow.py`:
+  Stage 14 now logs a WARNING listing missing DI inputs (Minor-1) and
+  carries a docstring block documenting the ontology-bypass decision
+  (M3).
+- `pipelines/entity-filtering/src/entity_filtering/resolution/orphan_connector.py`:
+  `run()` docstring documents the ontology-bypass contract (M3);
+  `propose_connections` logger emits `"n/a"` for non-list iterables
+  (Minor-4).
+- `packages/surrealdb-service/src/surrealdb_service/repositories/entity.py`:
+  `list_orphans_for_source` docstring documents cross-source semantics
+  (Minor-5).
+
+### Test counts
+
+| Suite | Before attempt 2 | After attempt 2 |
+|---|---|---|
+| `pipelines/entity-filtering` (all extras) | 488 passed + 1 known fail | 494 passed + 1 known fail |
+| `packages/surrealdb-service` (non-docker) | 52 passed | 58 passed |
+| `packages/surrealdb-service` (requires_docker) | 25 passed | 25 passed |
+
+The single pre-existing entity-filtering failure
+(`test_llm_matcher::test_calls_ollama_for_unknown_pair` — missing
+`_agentic_enabled` attribute) is untouched by this branch and remains
+out-of-scope.
+
+Self-review updated in place with "Attempt 2 fixes" section.

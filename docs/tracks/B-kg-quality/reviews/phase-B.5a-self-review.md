@@ -108,7 +108,7 @@ up via the existing relation-write path.
 
 ```
 cd packages/shared && uv run pytest -q               # 154 passed
-cd packages/surrealdb-service && uv run pytest -q    # 77 passed
+cd packages/surrealdb-service && uv run pytest -q    # 52 passed + 25 docker = 77 passed
 cd pipelines/entity-filtering &&
     uv run --all-extras pytest tests/test_orphan_connector.py
     --cov=entity_filtering.resolution.orphan_connector
@@ -146,3 +146,104 @@ not a B.5a regression.
   reviews mentioned `_agentic_enabled`). Not in scope for B.5a.
 
 Ready for review.
+
+---
+
+## Attempt 2 fixes (review attempt 1 -> REVISIONS_NEEDED)
+
+> Author: implementer agent, 2026-06-09 (second pass)
+> Reviewer outcome on attempt 1: REVISIONS_NEEDED — 0 blockers + 3 majors
+> + 7 minors. Majors 1-3 + minors 1/4/5/6/7 addressed; minors 2 and 3
+> deferred per the prompt.
+
+### M1 — `list_orphans_for_source` test coverage
+
+New file `packages/surrealdb-service/tests/test_entity_orphan_query.py`
+pins the 6 paths of the orphan-query contract with a `monkeypatch`-ed
+`execute_query` (no live DB, no testcontainers):
+
+| # | Path | Test |
+|---|------|------|
+| 1 | empty `source_id` -> `[]` + no DB call | `test_empty_source_id_returns_empty_without_db_call` |
+| 2 | entity-SELECT raises -> logged + `[]` | `test_entity_select_raises_returns_empty_without_propagating` |
+| 3 | edge-probe raises -> entity EXCLUDED, loop continues | `test_edge_probe_raises_excludes_entity_and_continues` |
+| 4 | no entities for source -> `[]` | `test_source_with_no_entities_returns_empty` |
+| 5 | all entities orphan -> returns all | `test_all_entities_orphan_returns_all` |
+| 6 | mixed -> returns only orphans | `test_mixed_results_returns_only_orphans` |
+
+### M2 — Stage 14 workflow coverage
+
+Three new tests in `pipelines/entity-filtering/tests/test_workflow.py`
+under `TestStage14OrphanConnector`:
+
+- `test_stage14_disabled_skips_orphan_connect` — `enabled=False` keeps
+  `orphan_connector.run()` out of the call path (monkeypatched sentinel
+  records call attempts).
+- `test_stage14_enabled_happy_path` — full DI + `OrphanConnectorConfig
+  (enabled=True)` -> confirmed orphan relation lands in
+  `result.relations` with `properties.extraction_method ==
+  "orphan_connector"`.
+- `test_stage14_token_budget_exceeded_recovers` — sentinel raises
+  `OrphanTokenBudgetExceeded` mid-call; workflow catches + logs, no
+  orphan relations attached, no exception escapes.
+
+### M3 — Ontology-bypass behaviour pin + docs
+
+**Decision** (B.5a attempt 2): keep current behaviour — Stage 14 runs
+AFTER Stage 11, so orphan-confirmed relations bypass the ontology
+constraint filter. Rationale: the LLM was already prompted with the
+ontology context in the confirm step; a second filter risks dropping
+legitimate edges that passed the LLM's reasoning. Trade-off documented:
+LLM-invented relation_types (e.g. `"KNOWS_SECRETLY"`) can slip through.
+B.4 telemetry tracks orphan-relation types so drift surfaces early.
+
+Documentation:
+- Block docstring on `orphan_connector.run()` explaining the bypass.
+- Comment block on `workflow.py` Stage 14 with the same rationale.
+
+Behaviour-pin test:
+- `test_orphan_relation_type_bypasses_ontology` builds a constrained
+  ontology (PERSON entities, `KNOWS` + `WORKS_WITH` relation types) and
+  asserts an LLM-invented `"ATE_LUNCH_WITH"` relation IS still in
+  `result.relations`. A future refactor that decides to tighten this
+  contract must consciously delete the test.
+
+### Minor fixes
+
+- **Minor 1** (silent skip when enabled+missing DI): Stage 14 now logs
+  a WARNING listing every missing DI field. New test
+  `test_stage14_enabled_missing_di_logs_warning` bridges loguru ->
+  stdlib logging so `caplog` can see it.
+- **Minor 4**: `propose_connections` logger now emits `"n/a"` for
+  non-list `chunks` iterables instead of the magic `-1` sentinel.
+- **Minor 5**: `list_orphans_for_source` docstring documents the
+  cross-source edge-probe semantics (an entity present in N sources is
+  "orphan" only when the global edge count is zero).
+- **Minor 6**: New `test_self_pair_never_proposed` pins that the
+  normalised dedup guard in `propose_connections` rejects self-pairs
+  even when the chunk lists the same surface form twice.
+- **Minor 7**: Quality-gates line corrected — surrealdb-service runs
+  as `52 passed (non-docker) + 25 passed (requires_docker)` = 77.
+
+### Deferrals (per prompt)
+
+- Minor 2 and Minor 3: explicitly out-of-scope for this attempt.
+
+### Updated quality gates
+
+```
+cd packages/surrealdb-service && uv run --extra dev \
+    pytest tests/test_entity_orphan_query.py -v
+# 6 passed in 0.07s
+
+cd pipelines/entity-filtering && uv run --all-extras pytest -q
+# 494 passed, 1 pre-existing failure (test_llm_matcher's _agentic_enabled)
+
+cd packages/surrealdb-service && uv run --extra dev pytest -q
+# 83 passed (58 non-docker + 25 docker)
+```
+
+Baseline before attempt 2: 488 passed + 1 known failure on
+entity-filtering, 52+25 = 77 on surrealdb-service. After attempt 2:
+494 (488 + 6 new) + 1 known failure on entity-filtering, 58+25 = 83
+(52+6 new + 25) on surrealdb-service.
