@@ -572,7 +572,43 @@ class FilteringWorkflow:
         # rows. Skipped silently when any of its DI inputs are missing
         # (e.g. when tests call ``process(extraction_result)`` without
         # an entity repo or LLM caller).
+        #
+        # Ontology validation bypass (decision, B.5a attempt 2):
+        # Stage 14 runs AFTER Stage 11 (ontology constraint filter), so
+        # orphan-confirmed relations BYPASS ontology validation. The LLM
+        # is prompted with the ontology context in the confirm step, so
+        # validating again here risks dropping legitimate connections
+        # that the LLM reasoned through. Trade-off: LLM-invented
+        # ``relation_type`` values (e.g. ``"KNOWS_SECRETLY"``) can slip
+        # past the constraint filter. B.4 telemetry tracks orphan-
+        # relation types so drift surfaces early. See
+        # ``orphan_connector.run`` for the same decision documented at
+        # the module entry point.
         orphan_cfg = self._config.orphan_connector
+
+        # Minor-1 fix (review attempt 1): when the operator enabled the
+        # stage but the caller forgot to pass any DI input, log a
+        # WARNING so the silent-skip doesn't hide a misconfiguration.
+        # The skip predicate below mixes truthiness (``source_id``) and
+        # None-checks (``chunks``, repos, caller); mirror that here so
+        # the WARNING fires exactly when the stage would skip.
+        if orphan_cfg.enabled:
+            missing: list[str] = []
+            if not source_id:
+                missing.append("source_id")
+            if chunks is None:
+                missing.append("chunks")
+            if orphan_entity_repo is None:
+                missing.append("orphan_entity_repo")
+            if orphan_llm_caller is None:
+                missing.append("orphan_llm_caller")
+            if missing:
+                logger.warning(
+                    "Orphan-connector enabled but skipped: missing DI "
+                    "input(s): {missing}",
+                    missing=missing,
+                )
+
         if (
             orphan_cfg.enabled
             and source_id

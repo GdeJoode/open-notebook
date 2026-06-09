@@ -502,7 +502,10 @@ async def propose_connections(
     logger.info(
         "propose_connections: orphans={no} chunks={nc} proposals={np}",
         no=len(orphan_norm_to_text),
-        nc=sum(1 for _ in chunks) if isinstance(chunks, list) else -1,
+        # Minor-4 fix (review attempt 1): avoid the magic ``-1`` token
+        # for non-list iterables — emit ``"n/a"`` so log scrapers don't
+        # accidentally treat the count as numeric data.
+        nc=len(chunks) if isinstance(chunks, list) else "n/a",
         np=len(proposals),
     )
     return proposals
@@ -665,6 +668,19 @@ async def run(
         List of confirmed :class:`ExtractedRelation` records. Empty
         when the source has no orphans, no chunks, or every proposal
         fails confirmation.
+
+    Note (ontology validation bypass, B.5a attempt 2):
+        Relations emitted by this function BYPASS the workflow's
+        ontology constraint filter (Stage 11). The orphan-confirm
+        prompt already includes the ontology context, so re-validating
+        the LLM's output risks dropping legitimate edges that the LLM
+        reasoned through. The trade-off is that LLM-invented relation
+        types (e.g. ``"KNOWS_SECRETLY"`` when the ontology allows only
+        ``"KNOWS"``) can slip past constraint checks. B.4 telemetry
+        tracks orphan-relation types so type-drift surfaces quickly; a
+        behaviour-pin test in
+        ``tests/test_workflow.py::test_orphan_relation_type_bypasses_ontology``
+        guards against accidental tightening of this contract.
     """
     orphans = await find_orphans(source_id, entity_repo)
     if not orphans:
