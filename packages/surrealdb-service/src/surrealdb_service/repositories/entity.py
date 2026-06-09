@@ -593,6 +593,89 @@ class EntityRepository:
             logger.error(f"Failed to get graph data: {e}")
             return {"nodes": [], "edges": []}
 
+    async def list_orphans_for_source(
+        self, source_id: str
+    ) -> List[Dict[str, Any]]:
+        """Return entities of this source with no incoming/outgoing relations.
+
+        An "orphan" for the orphan-connector (B.5a) is an entity that:
+
+        - lists *source_id* in its ``source_documents`` array (the
+          provenance bag populated by ``upsert_entity``), AND
+        - participates in zero rows of the ``relation`` RELATE table
+          (no edge has ``in = entity.id`` and none has
+          ``out = entity.id``).
+
+        The query is implemented in two steps because SurrealDB's
+        sub-select-count syntax for RELATE tables is awkward — we lift
+        the per-entity edge probe to the Python side and reject any
+        entity with non-zero degree. The probe uses ``LIMIT 1`` so each
+        round-trip costs at most one row.
+
+        Args:
+            source_id: Record ID of the source (e.g. ``"source:abc"``).
+
+        Returns:
+            A list of entity-row dicts (``id``, ``canonical_name``,
+            ``entity_type``, ``source_documents``, ``properties``). Empty
+            when the source has no entities or every entity is
+            connected. Always shaped — never ``None``.
+        """
+        if not source_id:
+            logger.warning(
+                "list_orphans_for_source called with empty source_id"
+            )
+            return []
+
+        try:
+            entities = await execute_query(
+                "SELECT id, canonical_name, entity_type, "
+                "source_documents, properties "
+                "FROM entity "
+                "WHERE $source_id IN source_documents",
+                {"source_id": source_id},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to list source entities for orphan-detection "
+                f"on '{source_id}': {e}"
+            )
+            return []
+
+        if not entities:
+            return []
+
+        orphans: List[Dict[str, Any]] = []
+        for entity in entities:
+            eid = entity.get("id")
+            if eid is None:
+                continue
+            try:
+                edges = await execute_query(
+                    "SELECT id FROM relation "
+                    "WHERE in = $eid OR out = $eid LIMIT 1",
+                    {"eid": eid},
+                    self.config,
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to count edges for entity '{eid}' "
+                    f"in orphan-detection: {e}"
+                )
+                continue
+            if not edges:
+                orphans.append(entity)
+
+        logger.info(
+            "list_orphans_for_source: source={source_id} "
+            "total_entities={te} orphans={no}",
+            source_id=source_id,
+            te=len(entities),
+            no=len(orphans),
+        )
+        return orphans
+
     async def get_entity_with_embedding(
         self, entity_id: str
     ) -> Optional[Dict[str, Any]]:
