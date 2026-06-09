@@ -612,6 +612,15 @@ class EntityRepository:
         entity with non-zero degree. The probe uses ``LIMIT 1`` so each
         round-trip costs at most one row.
 
+        Cross-source semantics (Minor-5, B.5a attempt 2):
+            The edge-probe is GLOBAL — it considers every relation row
+            regardless of which source produced it. An entity that
+            appears in multiple sources is therefore "orphan" only when
+            it has zero edges across ALL sources. This is intentional:
+            a relation imported from source X already connects the
+            entity to the graph, so re-running the orphan-connector for
+            source Y has nothing to add.
+
         Args:
             source_id: Record ID of the source (e.g. ``"source:abc"``).
 

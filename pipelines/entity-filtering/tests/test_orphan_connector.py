@@ -309,6 +309,32 @@ class TestProposeConnections:
         proposals = await propose_connections(orphans, chunks)
         assert proposals == []
 
+    async def test_self_pair_never_proposed(self):
+        """Minor-6 fix (review attempt 1): an orphan must never be paired
+        with itself even when the upstream chunk lists the same surface
+        form twice (e.g. anaphora-resolution duplication).
+
+        The dedup guard inside ``propose_connections`` keys on the
+        normalised name, so case- and whitespace-variants of the same
+        entity should also be rejected as self-pairs.
+        """
+        orphans = [{"text": "Alice"}]
+        chunks = [
+            _chunk(
+                "c-1",
+                "Alice spoke about Alice and met Bob.",
+                # Duplicate Alice + a whitespace variant + Bob — only
+                # Alice→Bob should survive.
+                ["Alice", "Alice", "alice ", "Bob"],
+            )
+        ]
+        proposals = await propose_connections(orphans, chunks)
+        # Exactly one proposal (Alice -> Bob). No Alice -> Alice and no
+        # Alice -> "alice " (whitespace variant).
+        assert len(proposals) == 1
+        assert proposals[0].orphan == "Alice"
+        assert proposals[0].candidate_partner == "Bob"
+
 
 # ---------------------------------------------------------------------------
 # Stage 3: confirm_connections
