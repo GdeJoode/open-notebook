@@ -301,9 +301,17 @@ export function useToggleReviewRequired(notebookId: string) {
   })
 }
 
+export const PAUSED_EXTRACTION_QUERY_KEY = (id: string) =>
+  ['notebook-schema', id, 'paused-extraction'] as const
+
 /**
  * Resume extraction for paused sources in this notebook. Invalidates
  * sources + jobs + paused-status caches so the workspace view updates.
+ *
+ * Declared after `PAUSED_EXTRACTION_QUERY_KEY` so the cache-key
+ * reference resolves at module-evaluation time without relying on
+ * function-scope hoisting (the previous ordering was runtime-safe but
+ * awkward to read).
  */
 export function useResumeExtraction(notebookId: string) {
   const queryClient = useQueryClient()
@@ -323,9 +331,6 @@ export function useResumeExtraction(notebookId: string) {
     },
   })
 }
-
-export const PAUSED_EXTRACTION_QUERY_KEY = (id: string) =>
-  ['notebook-schema', id, 'paused-extraction'] as const
 
 /**
  * Poll `GET /extraction/paused` to know whether any source is paused.

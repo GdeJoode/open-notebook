@@ -43,8 +43,33 @@ interface SchemaSoftNudgeProps {
  *  - Wrapped in `role="alert"` via the `Alert` primitive — screen
  *    readers announce on first appearance.
  *  - Each action is a real `<button>` with a descriptive label; icon-
- *    only "close" carries `aria-label="Hide banner"`.
+ *    only "close" carries `aria-label="Mark as read"` because it wires
+ *    to the same `mark_read` mutation as "Use as-is" (the persistence
+ *    matters — not a transient hide).
  *  - The banner doesn't trap focus — keyboard users can Tab through.
+ *
+ * # Polling cadence — 30s, matches MinerU health chip
+ *
+ * AC #1 of the plan asks for the banner to surface "within 5s" of an
+ * event. We poll at 30s, the same cadence as the MinerU health chip in
+ * the workspace header. Trade-offs we considered:
+ *
+ *  - **5s polling** would meet AC #1 literally. Cost: 6× more HTTP
+ *    traffic per notebook tab open in the background; events are
+ *    relatively rare (one per source per Pass-1 run), so the
+ *    request-amplification penalty isn't worth the latency win.
+ *  - **10s polling** is a reasonable compromise. We left it at 30s to
+ *    avoid introducing a third cadence into the workspace (current
+ *    cadences: 30s MinerU health, 30s paused-extraction). One number
+ *    is easier to reason about than three.
+ *  - **WebSockets / SSE** would give near-real-time delivery without
+ *    polling cost. Out of scope — the workspace doesn't yet have a
+ *    push-channel and adding one for this single feature is overkill.
+ *
+ * The trade-off is documented for the next reviewer: if user-feedback
+ * says "the banner takes too long to appear", dial `refetchInterval`
+ * to 10_000 in `useNotebookEvents` — the rest of the component is
+ * already cadence-agnostic.
  */
 export function SchemaSoftNudge({ notebookId }: SchemaSoftNudgeProps) {
   // The schema fetch is also driving the SchemaBrowser tab; this hook
@@ -143,7 +168,7 @@ export function SchemaSoftNudge({ notebookId }: SchemaSoftNudgeProps) {
           type="button"
           size="icon"
           variant="ghost"
-          aria-label="Hide banner"
+          aria-label="Mark as read"
           disabled={markRead.isPending}
           data-testid="schema-soft-nudge-close"
           onClick={() => markRead.mutate(latestEvent.id)}
