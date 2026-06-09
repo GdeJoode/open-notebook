@@ -407,11 +407,11 @@ The 17 sub-phases below map to the 6 roadmap sub-tracks (B1-B6) plus a foundatio
 **Acceptance criteria**:
 
 1. Navigating to `/notebooks/{id}/schema` renders the SchemaBrowser within ≤ 1.5s on a notebook with 3 sources.
-2. The tree shows all base-ontology entity types + accepted extensions; each entry has tooltip with description.
+2. The browser shows all base-ontology entity types + accepted extensions; each entry has a tooltip with its description. (Implemented as a flat `role="listbox"` rather than a recursive tree — see the SchemaBrowser docstring for rationale; the in-scope base ontologies use a shallow `parent_type` hierarchy, and B.3b's rename/merge/split operations do not require tree semantics.)
 3. CoverageStatsTable shows per-source rows with `coverage_pct` values from `pass1_results`.
 4. PendingExtensionsPanel lists each pending extension's `type_name`, `parent_type`, and rationale; `[Accept]`/`[Reject]` buttons present but disabled with tooltip "Edit ops coming in next release" (until B.3b ships).
 5. TTL download button triggers a 200 response that initiates a browser download.
-6. Keyboard accessibility: tab order is logical; tree is expandable via Enter; download button via Space/Enter.
+6. Keyboard accessibility: tab order is logical; Space/Enter activate row selection; download button activatable via Space/Enter.
 7. Playwright spec asserts these states from route mocks (no live DB).
 
 **PR boundary**: ONE PR titled `feat(frontend): schema tab view-only (B.3a)`.

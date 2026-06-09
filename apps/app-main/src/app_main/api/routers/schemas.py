@@ -48,12 +48,18 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from loguru import logger
+from pydantic import BaseModel, Field
 
-from app_main.dependencies import get_notebook_service
+from app_main.dependencies import (
+    get_notebook_schema_repo,
+    get_notebook_service,
+    get_pass1_result_repo,
+    get_source_repo,
+)
 from app_main.services.notebook_service import NotebookService
 from ontology_manager.rdf_owl_shacl import (
     ON,
@@ -64,7 +70,9 @@ from rdflib import Graph, Literal, URIRef
 from rdflib.namespace import OWL, RDF, RDFS
 from surrealdb_service.repositories.notebook_schema import (
     NotebookSchemaRepository,
+    Pass1ResultRepository,
 )
+from surrealdb_service.repositories.source import SourceRepository
 
 
 router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["schemas"])
@@ -110,17 +118,12 @@ def _ontologies_dir() -> Path:
 # ---------------------------------------------------------------------------
 # DI providers
 # ---------------------------------------------------------------------------
-
-
-def get_notebook_schema_repo() -> NotebookSchemaRepository:
-    """FastAPI provider for the notebook_schema repository.
-
-    Defined here rather than in ``app_main.dependencies`` because this is
-    the only router in app-main that uses it today; will lift to the
-    central dependencies module when B.3a/B.3b add the JSON browse + edit
-    endpoints.
-    """
-    return NotebookSchemaRepository()
+#
+# ``get_notebook_schema_repo`` and ``get_pass1_result_repo`` live in
+# ``app_main.dependencies`` — they were originally defined locally
+# (single-consumer rule) but B.3b/B.3c will also import them, so the
+# central location is now the right home. See those provider docstrings
+# for the lift rationale.
 
 
 # ---------------------------------------------------------------------------
@@ -356,3 +359,341 @@ async def export_notebook_schema_ttl(
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# JSON browse endpoints (Phase B.3a)
+# ---------------------------------------------------------------------------
+#
+# These two GETs back the Schema-tab UI. They are intentionally
+# read-only — the four edit ops (rename/merge/split/delete) and the
+# Accept/Reject mutations on pending extensions land in B.3b, which
+# extends this same router.
+#
+# Design notes
+# ------------
+#
+# * **Response shape is decoupled from the DB model.** The frontend
+#   consumes a stable JSON contract regardless of how the FLEXIBLE
+#   storage on ``notebook_schema`` evolves. New keys can be added to
+#   the model without breaking the client, and obsolete keys can be
+#   dropped from the response without forcing a DB migration.
+#
+# * **Empty-state behaviour mirrors the TTL endpoint.** A notebook
+#   that has never been pass-1-processed (no ``notebook_schema`` row)
+#   gets sensible defaults — the configured ``_DEFAULT_BASE_ONTOLOGY``
+#   and empty extension lists. That keeps the Schema tab usable on a
+#   freshly-created notebook.
+#
+# * **pass1_results is append-only** — we surface the full list ordered
+#   newest-first. The frontend deduplicates by ``source_id`` when it
+#   only wants the latest result per source (the table shows one row
+#   per source). Doing the dedup server-side would couple this endpoint
+#   to a presentation concern and lose the audit history.
+
+
+class _PropertyDef(BaseModel):
+    name: str
+    description: Optional[str] = None
+    data_type: str
+    required: bool = False
+
+
+class _EntityTypeNode(BaseModel):
+    """View-model row for one base-ontology entity type.
+
+    Mirrors the fields the SchemaBrowser tree actually renders — name,
+    parent (for the tree hierarchy), tooltip text, and a flat list of
+    properties for the side panel. Aliases / extraction-hints are
+    omitted in B.3a; B.3b's editor surfaces them.
+    """
+
+    name: str
+    description: Optional[str] = None
+    parent_type: Optional[str] = None
+    properties: List[_PropertyDef] = Field(default_factory=list)
+
+
+class _ExtensionView(BaseModel):
+    """View-model row for an accepted or pending extension.
+
+    The DB stores extensions as FLEXIBLE dicts. This model normalises
+    that bag into a predictable shape for the frontend, defending
+    against missing keys at the API boundary so the React side never
+    has to ``ext?.type_name ?? '(unknown)'``-style guard.
+    """
+
+    extension_id: Optional[str] = None
+    type_name: str
+    parent_type: Optional[str] = None
+    description: Optional[str] = None
+    rationale: Optional[str] = None
+    properties: List[_PropertyDef] = Field(default_factory=list)
+
+
+class NotebookSchemaResponse(BaseModel):
+    """JSON contract for ``GET /api/notebooks/{id}/schema``.
+
+    Carries everything the Schema tab needs in a single payload so the
+    page renders without a fan-out of additional calls. The
+    ``base_ontology_types`` list is sourced from the YAML registry — it
+    is the immutable backbone; ``accepted_extensions`` and
+    ``pending_extensions`` come from the DB and evolve over time.
+    """
+
+    notebook_id: str
+    base_ontology: str
+    base_ontology_types: List[_EntityTypeNode] = Field(default_factory=list)
+    accepted_extensions: List[_ExtensionView] = Field(default_factory=list)
+    pending_extensions: List[_ExtensionView] = Field(default_factory=list)
+    coverage_pct: float = 0.0
+    review_required: bool = False
+    soft_nudge_dismissed: bool = False
+
+
+class Pass1ResultView(BaseModel):
+    """View-model row for ``GET /api/notebooks/{id}/pass1_results``.
+
+    Trimmed projection of :class:`shared.models.Pass1Result` plus the
+    parent source's title — the frontend's CoverageStatsTable shows
+    ``[source_title | coverage_pct | uncovered_concept_count]``, so we
+    enrich here rather than asking the client to do a second round-trip
+    per row. ``source_title`` is ``None`` for orphaned rows where the
+    source has been deleted; the UI displays ``"(deleted source)"`` in
+    that case.
+    """
+
+    id: str
+    source_id: str
+    source_title: Optional[str] = None
+    schema_attempted: str
+    detected_schema: str
+    confidence_in_choice: float = 0.0
+    coverage_pct: float = 0.0
+    uncovered_concept_count: int = 0
+    created: Optional[str] = None
+
+
+def _normalise_extension(ext: Dict[str, Any]) -> _ExtensionView:
+    """Coerce a FLEXIBLE extension dict into a typed view-model row.
+
+    Defensive of missing keys: an extension without ``type_name`` is
+    surfaced as ``"(unknown)"`` rather than dropped silently — the
+    frontend should still render a row so the user can reject the
+    invalid extension via the (B.3b) edit ops. Properties is a list
+    of dicts on the DB side; we accept either ``{name, data_type,
+    description, required}`` or just ``{name}``.
+    """
+    props_raw = ext.get("properties") or []
+    props: List[_PropertyDef] = []
+    for p in props_raw:
+        if not isinstance(p, dict):
+            continue
+        name = p.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        # ``data_type`` falls back to ``"string"`` when the LLM-emitted
+        # extension dict omits it (older Pass1 payloads predating the
+        # B.1d schema, or hand-crafted fixtures). String is the safest
+        # default because it round-trips losslessly to TTL
+        # (``xsd:string``) and the frontend treats unknown data-types
+        # as opaque labels. B.3b's editor surfaces the value so users
+        # can correct it if the inference is wrong.
+        props.append(
+            _PropertyDef(
+                name=name,
+                description=p.get("description") if isinstance(p.get("description"), str) else None,
+                data_type=p.get("data_type") if isinstance(p.get("data_type"), str) else "string",
+                required=bool(p.get("required", False)),
+            )
+        )
+
+    type_name = ext.get("type_name")
+    if not isinstance(type_name, str) or not type_name:
+        type_name = "(unknown)"
+
+    return _ExtensionView(
+        extension_id=ext.get("extension_id") if isinstance(ext.get("extension_id"), str) else None,
+        type_name=type_name,
+        parent_type=ext.get("parent_type") if isinstance(ext.get("parent_type"), str) else None,
+        description=ext.get("description") if isinstance(ext.get("description"), str) else None,
+        rationale=ext.get("rationale") if isinstance(ext.get("rationale"), str) else None,
+        properties=props,
+    )
+
+
+def _load_base_ontology_types(base_ontology: str) -> List[_EntityTypeNode]:
+    """Parse a YAML ontology and return its entity types as view-model rows.
+
+    Reuses the same YAML resolution as the TTL endpoint
+    (``_ontologies_dir``). The full :class:`Ontology` model carries
+    relationships, concepts, etc. — B.3a only needs entity types for
+    the tree view, so we project to the slimmer ``_EntityTypeNode``.
+
+    Returns an empty list (and logs an error) if the YAML is missing
+    — this matches the existing TTL endpoint's behaviour of returning
+    a 500 in the same circumstance, but for the JSON endpoint we
+    degrade gracefully: the Schema tab is still useful for showing
+    extensions and coverage even if the base ontology is misconfigured.
+    """
+    yaml_path = _ontologies_dir() / f"{base_ontology}.yaml"
+    if not yaml_path.exists():
+        logger.error(
+            "Base ontology YAML missing: {} not found (asked for {!r})",
+            yaml_path,
+            base_ontology,
+        )
+        return []
+
+    try:
+        # Local import to keep the module import-cost flat — Ontology
+        # pulls in the full pydantic schema tree.
+        from ontology_manager.schema import Ontology
+
+        ontology = Ontology.from_yaml(yaml_path)
+    except Exception as e:
+        logger.exception(
+            "Failed to parse base ontology YAML {}: {}", yaml_path, e
+        )
+        return []
+
+    nodes: List[_EntityTypeNode] = []
+    for name, et in ontology.entity_types.items():
+        props = [
+            _PropertyDef(
+                name=p.name,
+                description=p.description,
+                data_type=str(p.data_type.value) if hasattr(p.data_type, "value") else str(p.data_type),
+                required=bool(p.validation.required) if p.validation else False,
+            )
+            for p in et.properties
+        ]
+        nodes.append(
+            _EntityTypeNode(
+                name=et.name or name,
+                description=et.description,
+                parent_type=et.parent_type,
+                properties=props,
+            )
+        )
+    return nodes
+
+
+@router.get(
+    "/schema",
+    response_model=NotebookSchemaResponse,
+    responses={404: {"description": "Notebook not found."}},
+)
+async def get_notebook_schema_json(
+    notebook_id: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    schema_repo: NotebookSchemaRepository = Depends(get_notebook_schema_repo),
+) -> NotebookSchemaResponse:
+    """Browse the notebook's effective schema as JSON.
+
+    Returns the base ontology's entity types, the currently-accepted
+    extensions, the pending extensions awaiting user decision, and the
+    per-notebook review/soft-nudge toggles. The frontend renders this
+    as the Schema-tab tree + side panels.
+
+    Returns 404 if ``notebook_id`` does not resolve to a real notebook.
+    Returns 200 with the bare base-ontology defaults if the notebook
+    exists but has not been pass-1-processed yet — same contract as
+    the TTL endpoint, so the Schema tab is usable on day 1.
+    """
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    notebook_schema = await schema_repo.get_by_notebook(notebook_id)
+
+    if notebook_schema is None:
+        base_ontology = _DEFAULT_BASE_ONTOLOGY
+        accepted_raw: List[Dict[str, Any]] = []
+        pending_raw: List[Dict[str, Any]] = []
+        coverage_pct = 0.0
+        review_required = False
+        soft_nudge_dismissed = False
+    else:
+        base_ontology = notebook_schema.base_ontology or _DEFAULT_BASE_ONTOLOGY
+        accepted_raw = notebook_schema.accepted_extensions or []
+        pending_raw = notebook_schema.pending_extensions or []
+        coverage_pct = float(notebook_schema.coverage_pct)
+        review_required = bool(notebook_schema.review_required)
+        soft_nudge_dismissed = bool(notebook_schema.soft_nudge_dismissed)
+
+    return NotebookSchemaResponse(
+        notebook_id=notebook_id,
+        base_ontology=base_ontology,
+        base_ontology_types=_load_base_ontology_types(base_ontology),
+        accepted_extensions=[_normalise_extension(e) for e in accepted_raw],
+        pending_extensions=[_normalise_extension(e) for e in pending_raw],
+        coverage_pct=coverage_pct,
+        review_required=review_required,
+        soft_nudge_dismissed=soft_nudge_dismissed,
+    )
+
+
+@router.get(
+    "/pass1_results",
+    response_model=List[Pass1ResultView],
+    responses={404: {"description": "Notebook not found."}},
+)
+async def list_notebook_pass1_results(
+    notebook_id: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    pass1_repo: Pass1ResultRepository = Depends(get_pass1_result_repo),
+    source_repo: SourceRepository = Depends(get_source_repo),
+) -> List[Pass1ResultView]:
+    """List per-source pass-1 results for the notebook, newest-first.
+
+    Powers the CoverageStatsTable on the Schema tab. Each row carries
+    the source title (looked up via ``SourceRepository.get``) so the
+    UI can render ``[source_title | coverage_pct | uncovered_count]``
+    without a second round-trip per row.
+
+    Returns 404 if ``notebook_id`` doesn't resolve. Returns 200 with
+    an empty list if the notebook has no pass-1 history yet.
+    """
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    rows = await pass1_repo.list_by_notebook(notebook_id)
+
+    # Resolve source titles in a single pass. We cache by source_id
+    # because a source can appear multiple times in the list (reprocess
+    # ⇒ multiple Pass1Result rows per source).
+    title_cache: Dict[str, Optional[str]] = {}
+
+    async def _title_for(source_id: str) -> Optional[str]:
+        if source_id in title_cache:
+            return title_cache[source_id]
+        try:
+            src = await source_repo.get(source_id)
+            title = src.title if src else None
+        except Exception as e:
+            logger.warning(
+                "Failed to resolve source title for {}: {}", source_id, e
+            )
+            title = None
+        title_cache[source_id] = title
+        return title
+
+    out: List[Pass1ResultView] = []
+    for row in rows:
+        src_title = await _title_for(row.source)
+        out.append(
+            Pass1ResultView(
+                id=row.id or "",
+                source_id=row.source,
+                source_title=src_title,
+                schema_attempted=row.schema_attempted,
+                detected_schema=row.detected_schema,
+                confidence_in_choice=float(row.confidence_in_choice),
+                coverage_pct=float(row.coverage_pct),
+                uncovered_concept_count=len(row.uncovered_concepts or []),
+                created=row.created.isoformat() if row.created else None,
+            )
+        )
+    return out
