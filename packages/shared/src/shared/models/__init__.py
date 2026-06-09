@@ -24,7 +24,7 @@ from shared.models.jobs import (
 )
 from shared.models.llm import DefaultModels, Model, ModelTypeStr, ModelUsageRecord
 from shared.models.notebook import ChatMessage, ChatSession, Note, Notebook
-from shared.models.notebook_schema import NotebookSchema, Pass1Result
+from shared.models.notebook_schema import NotebookEvent, NotebookSchema, Pass1Result
 from shared.models.podcast import EpisodeProfile, PodcastEpisode, SpeakerProfile
 from shared.models.settings import ContentSettings
 from shared.models.extraction import (
@@ -53,6 +53,8 @@ __all__ = [
     # Notebook schema models (Phase B.1b)
     "NotebookSchema",
     "Pass1Result",
+    # Notebook event stream (Phase B.3b)
+    "NotebookEvent",
     # Source models
     "Source",
     "Chunk",
