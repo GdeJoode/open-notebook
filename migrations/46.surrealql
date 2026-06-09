@@ -1,0 +1,77 @@
+-- Migration 46: notebook_event table + notebook_schema.excluded_types (Phase B.3b)
+--
+-- Track B (KG quality) introduces server-side edit ops on the per-notebook
+-- schema (rename / merge / split / soft-delete). Two things land in this
+-- migration:
+--
+--   notebook_event  → shared append-only event log per notebook. Each
+--                     row records a domain event (``schema_changed``,
+--                     ``extension_suggested``, ``schema_mismatch``, ...)
+--                     with a FLEXIBLE payload. The B.3b edit-ops layer is
+--                     the first writer; B.3c's soft-nudge banner is the
+--                     first reader. Future Track G5 webhook fan-out will
+--                     consume the same stream. ``read_at`` is set when
+--                     the UI marks an event as handled — used by the
+--                     ``list_unread`` query.
+--
+--   notebook_schema.excluded_types → soft-delete list of type names the
+--                     user has hidden via DELETE
+--                     /api/notebooks/{id}/schema/types/{type_name}. The
+--                     base YAML is untouched; downstream consumers must
+--                     filter against this list when projecting the
+--                     effective schema. Optional ``array<string>`` so
+--                     legacy rows that pre-date this migration deserialise
+--                     cleanly.
+--
+-- Design notes
+-- ============
+--
+-- * **Why a shared table rather than per-event-type tables?** B.3c
+--   (soft-nudge) and B.3d (re-extract prompt) plus the future Track G5
+--   webhook stream all want to subscribe to the same stream filtered by
+--   ``event_type``. A single SCHEMAFULL table with a FLEXIBLE payload bag
+--   keeps additive event-types future-safe — exactly the same pattern
+--   used for the ``metrics`` table in migration 47.
+--
+-- * **Why ``record<notebook>`` for the FK?** notebook_events are
+--   semantically owned by a notebook: if the notebook is deleted, every
+--   event on it is moot. The strong record-link makes orphan detection
+--   trivial (``SELECT count() FROM notebook_event WHERE notebook = NONE``).
+--   This differs from ``metrics.notebook`` which is
+--   ``option<string>`` precisely because metrics survive deletion as
+--   historical telemetry. notebook_events do NOT.
+--
+-- * **Why an index on (notebook, event_type, created_at)?** The hot read
+--   path is "unread events of type X for notebook Y, newest first". The
+--   composite index covers that query without a table scan. ``read_at``
+--   is NOT in the index — the unread filter is ``read_at IS NONE``, which
+--   SurrealDB resolves cheaply once the table is partitioned by the
+--   composite key.
+--
+-- * **Idempotent**: every DEFINE uses ``IF NOT EXISTS`` so re-running on
+--   a DB that already has the table is a no-op (validated by the B.0
+--   testcontainer roundtrip).
+
+-- =============================================================================
+-- notebook_event: append-only per-notebook event stream
+-- =============================================================================
+
+DEFINE TABLE IF NOT EXISTS notebook_event SCHEMAFULL;
+
+DEFINE FIELD IF NOT EXISTS notebook ON TABLE notebook_event TYPE record<notebook>;
+DEFINE FIELD IF NOT EXISTS event_type ON TABLE notebook_event TYPE string;
+DEFINE FIELD IF NOT EXISTS payload ON TABLE notebook_event FLEXIBLE TYPE option<object>;
+DEFINE FIELD IF NOT EXISTS created_at ON TABLE notebook_event TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS read_at ON TABLE notebook_event TYPE option<datetime>;
+
+-- Composite covering index for the "unread events of type X for
+-- notebook Y, newest first" read path. ``read_at`` is filtered with
+-- ``IS NONE`` post-index — keeping it out of the key avoids a needless
+-- column on a sparse field.
+DEFINE INDEX IF NOT EXISTS idx_notebook_event_lookup ON notebook_event FIELDS notebook, event_type, created_at;
+
+-- =============================================================================
+-- notebook_schema.excluded_types: soft-delete list (Phase B.3b)
+-- =============================================================================
+
+DEFINE FIELD IF NOT EXISTS excluded_types ON TABLE notebook_schema TYPE option<array<string>>;

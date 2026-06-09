@@ -97,6 +97,16 @@ class NotebookSchema(ObjectModel):
             "again (logic lives in B.3c)."
         ),
     )
+    excluded_types: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Soft-delete list of type names the user has hidden from "
+            "the effective schema. The base YAML is never mutated; "
+            "downstream consumers (TTL export, SchemaBrowser, Pass 2 "
+            "extraction) filter against this list. Populated by the "
+            "B.3b DELETE /schema/types/{type_name} endpoint."
+        ),
+    )
     last_modified_by: Optional[str] = Field(
         default=None,
         description="User id of the last editor; populated once edit-ops land in B.3b.",
@@ -123,6 +133,21 @@ class NotebookSchema(ObjectModel):
         if isinstance(v, dict):
             return v
         return {}
+
+    @field_validator("excluded_types", mode="before")
+    @classmethod
+    def ensure_excluded_types_list(cls, v: Any) -> List[str]:
+        """Coerce a missing/null excluded_types payload to ``[]``.
+
+        The DB column is ``option<array<string>>`` so rows that pre-date
+        migration 46 read back as NONE. Same defensive pattern as the
+        metadata validator above.
+        """
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return [str(item) for item in v if isinstance(item, (str, int, float))]
+        return []
 
 
 class Pass1Result(ObjectModel):
