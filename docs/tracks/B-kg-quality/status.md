@@ -1120,3 +1120,96 @@ The single pre-existing entity-filtering failure
 out-of-scope.
 
 Self-review updated in place with "Attempt 2 fixes" section.
+
+## Phase B.5b — Orphan-prune lifecycle + UI dashboard (2026-06-10)
+
+**Branch**: `track/b-orphan-prune` (off main @ c316459)
+
+**Goal**: layer a managed status lifecycle (`none → pending_reconnect → archived`)
+on top of B.5a so orphans get retried automatically on subsequent
+source-imports + archived after `max_attempts` or `max_age_days`. Add the
+per-notebook orphans dashboard with a manual Reconnect action.
+
+### Deliverables
+
+**Backend (DB + repo + pipeline)**:
+- `migrations/48.surrealql` + `48_down.surrealql` — additive: `orphan_status`,
+  `reconnect_attempts`, `first_orphaned_at`, `last_reconnect_attempt_at`
+  on the `entity` table. Every DEFINE is `IF NOT EXISTS`; idempotent.
+- `packages/surrealdb-service/src/surrealdb_service/repositories/entity.py`:
+  new `list_orphans_with_status(notebook_id, status)` and
+  `update_orphan_status(entity_id, status, *, increment_attempts, ...)`.
+- `pipelines/entity-filtering/src/entity_filtering/resolution/orphan_prune.py`:
+  three transitions — `mark_pending_reconnect`,
+  `retry_pending_reconnects`, `archive_stale_orphans`. The retry function
+  takes an injectable `orphan_connector_run` so unit tests stay free of
+  the production LLM caller.
+
+**API (FastAPI router)**:
+- `apps/app-main/src/app_main/api/routers/orphans.py`:
+  - `GET /api/notebooks/{id}/orphans` → `{pending_count, archived_count, items}`.
+  - `POST /api/notebooks/{id}/orphans/{entity_id}/reconnect` → manual retry.
+- `apps/app-main/src/app_main/api/app.py`: register the new router.
+- `apps/app-main/src/app_main/services/entity_extraction_service.py`: at
+  the end of `run_extraction`, call `retry_pending_reconnects` for the
+  notebook (best-effort, never crashes extraction). The retry skips its
+  LLM-caller build when no pending orphans exist (hot-path optimisation
+  + keeps the existing
+  `test_invokes_default_llm_caller_factory_for_multi_path` test green).
+
+**Frontend (React + dashboard)**:
+- `frontend/src/components/notebooks/orphans/OrphansDashboard.tsx`:
+  tabs (Pending / Archived) with badge counts, per-row table, per-row
+  `[Reconnect]` action. Empty state + loading state + error state.
+- `frontend/src/lib/api/orphans.ts`, `lib/hooks/use-orphans.ts`,
+  `lib/types/orphans.ts`: client + hooks + types.
+- `frontend/src/app/(dashboard)/notebooks/[id]/schema/page.tsx`:
+  added Orphans section under Pending extensions.
+
+**Tests**:
+- `pipelines/entity-filtering/tests/test_orphan_prune.py`: 16 tests
+  covering all three transitions + idempotency + error isolation.
+- `packages/surrealdb-service/tests/test_orphan_status_roundtrip.py`:
+  6 docker-gated tests (migration recorded, idempotent, field roundtrip,
+  status writes, attempts increment, timestamps).
+- `frontend/e2e/track-b/orphan-lifecycle.spec.ts`: 3 Playwright tests
+  (render, reconnect action, empty state).
+
+### Acceptance criteria
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | After a B.5a run produces N failures, those entities have `orphan_status="pending_reconnect"` and `reconnect_attempts=1`. | ✅ Covered by `test_orphan_prune::TestMarkPendingReconnect::test_state_transition_and_timestamps`. |
+| 2 | A second source-import triggers retry; `reconnect_attempts=2`. | ✅ Covered by `TestRetryPendingReconnects::test_failure_path_increments_but_stays_pending` + the service-level integration via `_retry_pending_reconnects_best_effort`. |
+| 3 | `archive_stale_orphans(max_attempts=3, ...)` flips entities at `attempts >= 3` to `archived` (not deleted). | ✅ Covered by `TestArchiveStaleOrphans::test_max_attempts_threshold_archives`. |
+| 4 | UI dashboard renders pending/archived counts + per-orphan row table. | ✅ Covered by playwright `orphan dashboard renders counts and per-row table`. |
+| 5 | Manual `[Reconnect]` action queues a job for that specific orphan. | ✅ Covered by playwright `clicking Reconnect posts to the endpoint and refreshes the dashboard`. The job runs synchronously inside the POST handler (bounded scope; one orphan + ≤3 LLM calls). |
+| 6 | Playwright spec covers dashboard render + reconnect action. | ✅ All 3 playwright tests pass. |
+
+### Test counts
+
+| Suite | Before B.5b | After B.5b |
+|---|---|---|
+| `pipelines/entity-filtering` | 508 passed + 2 known fails | 524 passed + 2 known fails |
+| `packages/surrealdb-service` (non-docker) | 52 passed | 58 passed |
+| `apps/app-main` | 445 passed | 446 passed |
+| `frontend/e2e/track-b` playwright | 13 passed | 16 passed |
+| `frontend npx tsc --noEmit` | clean | clean |
+| `frontend npm run lint` | warnings-only, no errors | unchanged (no new warnings from B.5b files) |
+
+The 2 pre-existing entity-filtering failures (`test_llm_matcher::test_calls_ollama_for_unknown_pair`,
+`test_graph_analyzer::test_analyze_raises_not_implemented`) are unrelated.
+
+### Notes / decisions
+
+- **Manual reconnect runs synchronously, not via job-queue.** The work
+  scope is bounded (one orphan, ≤ `max_proposals_per_orphan` LLM calls)
+  and the API response shape is what the UI needs to refresh. A future
+  scale-out can swap this for a job-queue submission without changing
+  the API contract.
+- **Archive is a SOFT-delete.** The entity row stays; only `orphan_status`
+  flips to `"archived"`. The dashboard hides archived rows from the
+  pending tab; ops can still query history.
+- **Cross-notebook sweep deferred.** `archive_stale_orphans` only operates
+  on a single notebook per call. A cron job iterating notebooks lands in
+  a follow-up if scale demands it.
