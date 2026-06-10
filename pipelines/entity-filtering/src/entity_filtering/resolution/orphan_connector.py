@@ -681,6 +681,18 @@ async def run(
         behaviour-pin test in
         ``tests/test_workflow.py::test_orphan_relation_type_bypasses_ontology``
         guards against accidental tightening of this contract.
+
+    Note (orphan-prune lifecycle wiring, B.5b attempt 2):
+        After ``confirm_connections`` returns, any orphan that received
+        ZERO confirmed relations is flipped to ``pending_reconnect`` via
+        :func:`orphan_prune.mark_pending_reconnect`. This is the
+        production entry point that drives the dashboard counts and the
+        retry-on-next-import behaviour. The mark step is gated on the
+        repository implementing the prune surface (``update_orphan_status``);
+        unit-test mocks that only implement the connector protocol are
+        unaffected -- they skip the mark with a debug log. The mark step
+        is best-effort: any failure logs a warning and the run still
+        returns the relations it confirmed.
     """
     orphans = await find_orphans(source_id, entity_repo)
     if not orphans:
@@ -692,12 +704,129 @@ async def run(
         chunk_list,
         max_proposals_per_orphan=max_proposals_per_orphan,
     )
-    if not proposals:
-        return []
+    # Even with zero proposals we still need to mark all orphans pending
+    # -- they're orphans by definition, the connector saw them but had
+    # no co-occurring partner to propose. Fall through to the mark step.
+    if proposals:
+        relations = await confirm_connections(
+            proposals,
+            llm_caller,
+            model=model,
+            min_confidence=min_confidence,
+        )
+    else:
+        relations = []
 
-    return await confirm_connections(
-        proposals,
-        llm_caller,
-        model=model,
-        min_confidence=min_confidence,
+    # B.5b production wiring: mark any orphan that ended up with zero
+    # confirmed relations as ``pending_reconnect`` so the dashboard can
+    # surface it and the next source-import can retry. Wrapped in a
+    # try/except so a lifecycle hiccup never destroys the relations we
+    # DID confirm -- they're the more valuable output.
+    try:
+        await _mark_unreconciled_orphans_pending(
+            orphans, relations, entity_repo
+        )
+    except Exception as e:
+        logger.warning(
+            "orphan_connector.run: mark_pending_reconnect step failed "
+            "for source={src}: {e}",
+            src=source_id,
+            e=e,
+        )
+
+    return relations
+
+
+async def _mark_unreconciled_orphans_pending(
+    orphans: List[Dict[str, Any]],
+    confirmed_relations: List[ExtractedRelation],
+    entity_repo: Any,
+) -> int:
+    """Flip every orphan that gained no relation to ``pending_reconnect``.
+
+    Called once per ``run`` invocation, AFTER ``confirm_connections``.
+    Matches one of two states per orphan:
+
+    * **Reconnected**: at least one ``ExtractedRelation`` references the
+      orphan's surface form (case- and whitespace-insensitive). The
+      lifecycle is left alone; the workflow's persistence layer will
+      pick up the new edge and the entity is no longer an orphan after
+      the next graph build.
+    * **Still orphan**: NO confirmed relation mentions the orphan.
+      We call :func:`orphan_prune.mark_pending_reconnect` so the row
+      moves to ``pending_reconnect`` with ``reconnect_attempts++``.
+
+    The mark step is gated on the repository implementing
+    ``update_orphan_status``. Unit-test mocks for B.5a that only
+    implement the connector protocol skip the mark with a debug log so
+    pre-B.5b tests stay green without modification.
+
+    Args:
+        orphans: The orphan rows returned by :func:`find_orphans`. Each
+            row carries at least ``id`` and ``canonical_name``.
+        confirmed_relations: Output of :func:`confirm_connections`.
+        entity_repo: The same repository handed to :func:`run`. Must
+            also implement ``update_orphan_status`` for the mark to
+            happen; otherwise the call is a no-op.
+
+    Returns:
+        Number of orphan rows actually flipped to ``pending_reconnect``.
+        Zero when the repo does not support the prune surface or when
+        every orphan was reconciled.
+    """
+    # Duck-typed gate -- avoids tightening the connector's repo
+    # protocol on existing callers that only need find_orphans.
+    if not hasattr(entity_repo, "update_orphan_status"):
+        logger.debug(
+            "orphan_connector.run: entity_repo does not implement "
+            "update_orphan_status; skipping pending-reconnect mark "
+            "(orphans={n})",
+            n=len(orphans),
+        )
+        return 0
+
+    # Build the set of orphan surface forms that DID gain a relation.
+    # The connector emits relations with surface names as
+    # source_entity / target_entity (see confirm_connections).
+    def _norm(s: Any) -> str:
+        return (s or "").strip().lower() if isinstance(s, str) else ""
+
+    reconciled_norms: set[str] = set()
+    for rel in confirmed_relations:
+        src = getattr(rel, "source_entity", None)
+        tgt = getattr(rel, "target_entity", None)
+        reconciled_norms.add(_norm(src))
+        reconciled_norms.add(_norm(tgt))
+
+    pending_ids: List[str] = []
+    for orphan in orphans:
+        eid = orphan.get("id")
+        if not eid:
+            continue
+        name = orphan.get("canonical_name") or ""
+        if _norm(name) in reconciled_norms:
+            # Reconciled -- the persistence layer will downgrade this
+            # row from orphan on the next graph build.
+            continue
+        pending_ids.append(str(eid))
+
+    if not pending_ids:
+        return 0
+
+    # Lazy import -- orphan_prune already imports from this module;
+    # importing it eagerly here would risk a circular import on cold
+    # boot. The lazy path is fine because the mark step only runs
+    # when the repo supports it (i.e. in production).
+    from entity_filtering.resolution.orphan_prune import (
+        mark_pending_reconnect,
     )
+
+    marked = await mark_pending_reconnect(pending_ids, entity_repo)
+    logger.info(
+        "orphan_connector.run: marked {n} orphan(s) pending_reconnect "
+        "(orphans_seen={total} reconciled={r})",
+        n=marked,
+        total=len(orphans),
+        r=len(orphans) - len(pending_ids),
+    )
+    return marked
