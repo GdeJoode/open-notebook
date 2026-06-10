@@ -141,8 +141,22 @@ def _format_accepted_extensions(extensions: List[Dict[str, Any]]) -> List[str]:
     ontology. Missing fields render as ``(unknown parent)`` / no
     rationale to keep the prompt parseable even if upstream sends
     sparse data.
+
+    B.3c — Defence-in-depth: resume-sentinel entries (carrying
+    ``is_resume_sentinel=True``) are filtered out here as well as at
+    the extraction-service seam. They are infrastructure markers for
+    the pause/resume flow — letting them through would render
+    ``_resumed_without_extensions`` into the LLM prompt as a real
+    entity type. If the upstream filter ever regresses, the prompt
+    builder still scrubs the leak before it reaches the LLM.
     """
     if not extensions:
+        return []
+
+    # Filter sentinels up-front so the empty-result branch below
+    # behaves correctly when the entire list is sentinels.
+    visible = [ext for ext in extensions if not ext.get("is_resume_sentinel")]
+    if not visible:
         return []
 
     lines = [
@@ -157,7 +171,7 @@ def _format_accepted_extensions(extensions: List[Dict[str, Any]]) -> List[str]:
         ),
         "",
     ]
-    for ext in extensions:
+    for ext in visible:
         name = str(ext.get("type_name", "")).strip()
         if not name:
             # Skip malformed entries — no usable label.

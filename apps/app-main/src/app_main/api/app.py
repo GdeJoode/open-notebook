@@ -144,6 +144,7 @@ def create_app() -> FastAPI:
         insights,
         knowledge_graph,
         models,
+        notebook_events,
         notebooks,
         notes,
         ontologies,
@@ -167,6 +168,9 @@ def create_app() -> FastAPI:
     application.include_router(config.router, prefix="/api", tags=["config"])
     application.include_router(notebooks.router, prefix="/api", tags=["notebooks"])
     application.include_router(schemas.router, prefix="/api", tags=["schemas"])
+    application.include_router(
+        notebook_events.router, prefix="/api", tags=["notebook-events"]
+    )
     application.include_router(search.router, prefix="/api", tags=["search"])
     application.include_router(models.router, prefix="/api", tags=["models"])
     application.include_router(

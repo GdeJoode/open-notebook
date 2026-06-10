@@ -12,6 +12,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import {
   Tooltip,
   TooltipContent,
@@ -22,6 +24,7 @@ import {
   SchemaEditDialog,
   type SchemaEditMode,
 } from '@/components/notebooks/schema/SchemaEditDialog'
+import { useToggleReviewRequired } from '@/lib/hooks/use-notebook-schema'
 import type {
   EntityTypeNode,
   ExtensionView,
@@ -89,6 +92,13 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
   // extensions are flagged so the UI can render an "Extension" badge.
   // Types in `excluded_types` (B.3b soft-delete) are filtered out so
   // the browser reflects the effective schema, not the raw lists.
+  //
+  // B.3c defence-in-depth: drop resume-sentinel entries and any
+  // underscore-prefixed `type_name` before rendering. The backend
+  // already filters at the JSON schema endpoint (`schemas.py` ~L633),
+  // but matching the pattern here means a future endpoint regression
+  // can't leak the `_resumed_without_extensions` marker into the
+  // SchemaBrowser tree.
   const items: TreeItem[] = useMemo(() => {
     const excluded = new Set(schema.excluded_types ?? [])
     const base: TreeItem[] = schema.base_ontology_types
@@ -101,16 +111,20 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
         parent_type: et.parent_type ?? null,
         properties: et.properties,
       }))
-    const accepted: TreeItem[] = schema.accepted_extensions
-      .filter((ext) => !excluded.has(ext.type_name))
-      .map((ext) => ({
-        kind: 'extension',
-        key: `ext:${ext.extension_id ?? ext.type_name}`,
-        name: ext.type_name,
-        description: ext.description ?? null,
-        parent_type: ext.parent_type ?? null,
-        properties: ext.properties,
-      }))
+    const visibleExtensions = schema.accepted_extensions.filter(
+      (ext) =>
+        !excluded.has(ext.type_name) &&
+        ext.is_resume_sentinel !== true &&
+        !(ext.type_name ?? '').startsWith('_'),
+    )
+    const accepted: TreeItem[] = visibleExtensions.map((ext) => ({
+      kind: 'extension',
+      key: `ext:${ext.extension_id ?? ext.type_name}`,
+      name: ext.type_name,
+      description: ext.description ?? null,
+      parent_type: ext.parent_type ?? null,
+      properties: ext.properties,
+    }))
     // Stable order: base types first (preserves YAML order), then
     // accepted extensions in their stored order. Both groups are
     // alphabetised within their group for predictability.
@@ -144,22 +158,33 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
 
   if (items.length === 0) {
     return (
-      <div
-        role="status"
-        className="rounded-md border border-dashed p-6 text-sm text-muted-foreground"
-      >
-        No entity types in the effective schema yet. Try running pass-1
-        extraction on a source to populate the base ontology.
+      <div className="space-y-4">
+        <ReviewRequiredToggle
+          notebookId={schema.notebook_id}
+          reviewRequired={schema.review_required}
+        />
+        <div
+          role="status"
+          className="rounded-md border border-dashed p-6 text-sm text-muted-foreground"
+        >
+          No entity types in the effective schema yet. Try running pass-1
+          extraction on a source to populate the base ontology.
+        </div>
       </div>
     )
   }
 
   return (
     <TooltipProvider>
-      <div
-        className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]"
-        data-testid="schema-browser"
-      >
+      <div className="space-y-4">
+        <ReviewRequiredToggle
+          notebookId={schema.notebook_id}
+          reviewRequired={schema.review_required}
+        />
+        <div
+          className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]"
+          data-testid="schema-browser"
+        >
         <ul
           role="listbox"
           aria-label="Entity types"
@@ -277,6 +302,7 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
           )}
         </aside>
       </div>
+      </div>
       {notebookId && editMode && (
         <SchemaEditDialog
           notebookId={notebookId}
@@ -289,6 +315,55 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
         />
       )}
     </TooltipProvider>
+  )
+}
+
+/**
+ * B.3c — Switch at the top of the SchemaBrowser that toggles
+ * `notebook_schema.review_required`. When enabled, the next entity
+ * extraction for any source in this notebook will halt at the Pass-1
+ * boundary until the user resumes via the workspace banner.
+ *
+ * We render this in the SchemaBrowser specifically (rather than the
+ * notebook header) because the impact is schema-scoped: pause until
+ * the schema has been reviewed.
+ */
+function ReviewRequiredToggle({
+  notebookId,
+  reviewRequired,
+}: {
+  notebookId: string
+  reviewRequired: boolean
+}) {
+  const id = useId()
+  const toggle = useToggleReviewRequired(notebookId)
+  // The switch is optimistic — Radix's controlled value reflects the
+  // pending toggle while the mutation is in flight. On error we
+  // re-render with the latest `reviewRequired` from the schema query
+  // (parent will refetch via onSuccess invalidation).
+  return (
+    <div
+      className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/30 p-3"
+      data-testid="review-required-toggle"
+    >
+      <div className="min-w-0 space-y-0.5">
+        <Label htmlFor={id} className="text-sm font-medium">
+          Require review before extraction
+        </Label>
+        <p className="text-xs text-muted-foreground">
+          When enabled, entity extraction pauses for newly-added sources
+          until you accept or reject schema extensions.
+        </p>
+      </div>
+      <Switch
+        id={id}
+        checked={reviewRequired}
+        disabled={toggle.isPending}
+        onCheckedChange={(checked) => toggle.mutate(checked)}
+        aria-label="Require review before extraction"
+        data-testid="review-required-switch"
+      />
+    </div>
   )
 }
 

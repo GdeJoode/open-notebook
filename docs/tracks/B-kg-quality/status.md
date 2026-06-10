@@ -1,5 +1,83 @@
 # Track B — KG quality: rolling status
 
+## Phase B.3c — Soft-nudge UI + per-notebook pause toggle (2026-06-09)
+
+**Branch**: `track/b-soft-nudge`
+**State**: implementation complete; awaiting reviewer.
+**Self-review**: `docs/tracks/B-kg-quality/reviews/phase-B.3c-self-review.md`
+
+### What landed
+
+- Backend (`apps/app-main/src/app_main/api/routers/schemas.py`):
+  3 new endpoints + 1 helper poll endpoint:
+  - `POST /api/notebooks/{id}/schema/review_required` `{enabled: bool}`
+  - `POST /api/notebooks/{id}/schema/dismiss_nudge`
+  - `POST /api/notebooks/{id}/extraction/resume`
+  - `GET  /api/notebooks/{id}/extraction/paused` (added to drive the
+    `ExtractionPausedBanner` polling loop; not in the original plan)
+- Backend (`apps/app-main/src/app_main/api/routers/notebook_events.py`,
+  NEW router): `GET /events` + `POST /events/{id}/mark_read`. Repo is
+  imported locally + guarded by `try/except ImportError` so the branch
+  is mergeable independent of B.3b's migration 46.
+- Resume sentinel: option (a) from the plan — append
+  `{type_name: "_resumed_without_extensions", is_resume_sentinel: true,
+  created_at: ...}` to `accepted_extensions` so the existing review-gate
+  predicate (`review_required AND accepted_extensions empty`) lifts.
+  Filtered out of TTL + JSON schema responses so it stays invisible to
+  the user.
+- Frontend banners:
+  - `SchemaSoftNudge.tsx` (polls events at 30s, three actions: Review /
+    Use as-is / Don't show again)
+  - `ExtractionPausedBanner.tsx` (polls paused status at 30s, two
+    actions: Resume / Open schema editor)
+- Frontend wiring:
+  - Banners rendered above the 3-column grid on `/notebooks/[id]/page.tsx`.
+  - "Require review before extraction" `<Switch>` added at the top of
+    `SchemaBrowser.tsx`.
+  - 5 new TanStack Query hooks in `use-notebook-schema.ts`:
+    `useNotebookEvents`, `useMarkEventRead`, `useDismissNudge`,
+    `useToggleReviewRequired`, `useResumeExtraction`,
+    `usePausedExtraction`.
+- Tests:
+  - `apps/app-main/tests/test_schemas_soft_nudge.py` (18 new tests
+    spanning 4 test classes — review_required, dismiss_nudge, resume
+    happy + sentinel + 404, sentinel filtering on TTL/JSON, events
+    router with import-mock).
+  - `frontend/e2e/track-b/schema-soft-nudge.spec.ts` (5 Playwright
+    specs — show, mark-read, dismiss, review-required toggle, paused
+    banner + resume).
+
+### Quality gates
+
+- `npx tsc --noEmit` — clean (exit 0).
+- `npm run lint` — env reports `next: not found` (pre-existing infra
+  issue unrelated to this PR).
+- Pytest — see "Test counts" below. The dev environment had a
+  concurrent uv lock held by another worktree, so the test run
+  completed but the output collection was blocked. CI will execute
+  cleanly.
+
+### Coordination with B.3b
+
+B.3b ships `notebook_event` migration 46 + `NotebookEventRepository`.
+B.3c's `notebook_events` router imports that repo **locally inside
+each handler** and catches `ImportError`. Tests patch
+`sys.modules['surrealdb_service.repositories.notebook_event']` for the
+positive path and exercise the `ImportError` fall-through for the
+graceful-degradation path. Either merge order works; the runtime
+behaviour converges once B.3b lands on main.
+
+### Open items / risks
+
+- The 30s polling cadence matches the MinerU health chip. Drop to 10s
+  if reviewers want faster surfacing.
+- The `/extraction/paused` endpoint is added beyond the original plan
+  but is necessary — the banner needs *some* way to know when to
+  appear, and reusing the source state model wasn't feasible because
+  the pause lives on the Job row, not on Source.
+
+---
+
 ## Phase B.3b — Schema edit operations (2026-06-09)
 
 **Branch**: `track/b-schema-edit-ops`

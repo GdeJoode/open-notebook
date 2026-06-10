@@ -234,6 +234,62 @@ class TestBuildPass2Prompt:
         # 500-char raw rationale must not appear in full
         assert "x" * 200 not in prompt
 
+    def test_format_accepted_extensions_filters_sentinels(self):
+        """B.3c attempt-2 — defence-in-depth at the prompt layer.
+
+        The resume sentinel
+        (``{type_name: "_resumed_without_extensions",
+        is_resume_sentinel: True}``) is appended by the resume endpoint
+        to satisfy the review-gate predicate. It is infrastructure, not
+        ontology — letting it through renders
+        ``_resumed_without_extensions`` into the LLM prompt as a
+        first-class type and pollutes Pass-2 output.
+
+        Primary filter lives in ``entity_extraction_service``; this
+        layer is defence-in-depth. If the upstream filter ever
+        regresses, the LLM still never sees the leak.
+
+        Real types in the same list MUST survive — the filter is
+        sentinel-specific, not a wholesale drop.
+        """
+        extensions = [
+            {
+                "type_name": "RealType",
+                "parent_type": "Researcher",
+                "rationale": "Legitimate extension.",
+            },
+            {
+                "type_name": "_resumed_without_extensions",
+                "is_resume_sentinel": True,
+                "created_at": "2026-06-09T12:00:00Z",
+            },
+        ]
+        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
+        # Sentinel must not leak into the prompt under any spelling.
+        assert "_resumed_without_extensions" not in prompt
+        assert "is_resume_sentinel" not in prompt
+        # The real type comes through and the section renders.
+        assert "RealType" in prompt
+        assert "## Accepted Extension Types" in prompt
+
+    def test_format_accepted_extensions_omits_section_when_all_sentinels(self):
+        """When the only extensions in the list are sentinels, the
+        ``Accepted Extension Types`` section is omitted entirely —
+        matching the behaviour for an empty / ``None`` list. Without
+        this guard the prompt would render an empty section header
+        with no bullets, which is confusing to the LLM.
+        """
+        extensions = [
+            {
+                "type_name": "_resumed_without_extensions",
+                "is_resume_sentinel": True,
+                "created_at": "2026-06-09T12:00:00Z",
+            },
+        ]
+        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
+        assert "Accepted Extension Types" not in prompt
+        assert "_resumed_without_extensions" not in prompt
+
     def test_long_descriptions_truncated_in_entity_types(self):
         """Entity descriptions over 160 chars truncate with ``...``."""
         ontology = Ontology(

@@ -38,6 +38,25 @@ from entity_filtering.workflow import FilteringWorkflow
 from app_main.services.entity_persistence_service import EntityPersistenceService
 
 
+def _is_resume_sentinel(extension: Dict[str, Any]) -> bool:
+    """Return ``True`` for a B.3c resume-sentinel extension entry.
+
+    The sentinel is appended by ``POST /extraction/resume`` to satisfy
+    the review-gate predicate (``review_required AND accepted_extensions
+    empty``). It carries no ontology content — only the marker fields
+    ``type_name="_resumed_without_extensions"`` and
+    ``is_resume_sentinel=True``.
+
+    Any consumer that forwards ``accepted_extensions`` into a downstream
+    artifact (LLM prompt, TTL export, JSON response) MUST filter
+    sentinels first — otherwise the LLM gets instructed to treat
+    ``_resumed_without_extensions`` as a first-class entity type, which
+    pollutes Pass-2 output. This helper centralises the predicate so
+    every filter site agrees on the marker shape.
+    """
+    return bool(extension.get("is_resume_sentinel"))
+
+
 def _avg_entity_confidence(entities: Iterable[Any]) -> float:
     """Mean ``confidence`` across ``entities`` — 0.0 for an empty iterable.
 
@@ -340,9 +359,19 @@ class EntityExtractionService:
         # notebook's accepted extensions. Each extension dict carries
         # an optional ``schema_name`` field; ones without it are
         # broadcast to every schema (conservative default).
+        #
+        # B.3c: resume-sentinel entries are infrastructure markers, not
+        # real entity types. If we forward them, ``_run_pass2`` will
+        # render them into the LLM prompt as first-class extensions
+        # (see ``_format_accepted_extensions``). Filter at this seam so
+        # the prompt builder never sees them; ``_format_accepted_extensions``
+        # also filters defensively (defence-in-depth) in case a future
+        # caller bypasses this service.
         accepted_by_schema: Dict[str, List[Dict[str, Any]]] = {}
         if notebook_schema is not None:
             for ext in notebook_schema.accepted_extensions:
+                if _is_resume_sentinel(ext):
+                    continue
                 schema_name = ext.get("schema_name")
                 if schema_name:
                     accepted_by_schema.setdefault(schema_name, []).append(ext)

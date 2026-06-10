@@ -861,6 +861,96 @@ class TestRunMultiSchemaBody:
         assert forwarded["scholarly"][0]["type_name"] == "GlobalExt"
         assert forwarded["general"][0]["type_name"] == "GlobalExt"
 
+    @pytest.mark.asyncio
+    async def test_run_multi_schema_filters_resume_sentinel(
+        self, svc, notebook_schema_repo_fixture
+    ):
+        """B.3c attempt-2 — Blocker B1.
+
+        The resume sentinel appended by ``POST /extraction/resume``
+        (shape: ``{type_name: "_resumed_without_extensions",
+        is_resume_sentinel: True, ...}``) must NEVER reach the
+        per-schema ``accepted_extensions_by_schema`` map. If it does,
+        ``_format_accepted_extensions`` renders it into the LLM prompt
+        as a first-class entity type — the LLM is then instructed to
+        extract instances of ``_resumed_without_extensions``, which
+        pollutes Pass-2 output for the rest of the notebook's life.
+
+        Real extension types in the same list MUST still come through —
+        the filter is sentinel-specific.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(
+                notebook="notebook:abc",
+                base_ontology="scholarly",
+                accepted_extensions=[
+                    # Real extension — must survive the filter.
+                    {
+                        "type_name": "X",
+                        "schema_name": "scholarly",
+                        "parent_type": "Researcher",
+                    },
+                    # Resume sentinel — must be dropped.
+                    {
+                        "type_name": "_resumed_without_extensions",
+                        "is_resume_sentinel": True,
+                        "created_at": "2026-06-09T12:00:00Z",
+                    },
+                ],
+            )
+        )
+
+        mock_manager = MagicMock()
+        scholarly = _make_ontology("scholarly")
+        mock_manager.list_ontologies = AsyncMock(return_value=["scholarly"])
+        mock_manager.get_ontology = AsyncMock(return_value=scholarly)
+
+        detect_spy = AsyncMock(return_value=[(scholarly, 0.92)])
+        mock_extract = AsyncMock(return_value=ExtractionResult())
+
+        with patch(
+            "ontology_manager.get_ontology_manager",
+            return_value=mock_manager,
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=detect_spy,
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as mock_workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()):
+            mock_workflow = MagicMock()
+            mock_workflow.extract = mock_extract
+            mock_workflow_cls.return_value = mock_workflow
+
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+        forwarded = mock_extract.await_args.kwargs[
+            "accepted_extensions_by_schema"
+        ]
+        assert forwarded is not None
+        # The real extension X is present under its schema.
+        assert "scholarly" in forwarded
+        type_names = [ext["type_name"] for ext in forwarded["scholarly"]]
+        assert "X" in type_names
+        # The sentinel was filtered out at the service seam — no entry
+        # in any schema bucket should carry ``is_resume_sentinel=True``
+        # or the marker ``type_name``.
+        for schema_name, bucket in forwarded.items():
+            for ext in bucket:
+                assert ext.get("is_resume_sentinel") is not True, (
+                    f"Sentinel leaked into schema={schema_name!r}: {ext!r}"
+                )
+                assert ext.get("type_name") != "_resumed_without_extensions", (
+                    f"Sentinel type_name leaked into schema={schema_name!r}: "
+                    f"{ext!r}"
+                )
+
 
 # ---------------------------------------------------------------------------
 # B.4: telemetry hook
