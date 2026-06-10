@@ -659,7 +659,93 @@ class EntityExtractionService:
             notebook=notebook_id,
         )
 
+        # 9. B.5b: retry any orphans still in ``pending_reconnect`` for
+        # this notebook. The fresh chunks from this source-import may
+        # contain co-occurrences that B.5a could not previously confirm.
+        # This is best-effort: a failure here MUST NOT fail extraction.
+        if notebook_id:
+            await self._retry_pending_reconnects_best_effort(
+                notebook_id=notebook_id,
+                chunks=chunk_dicts,
+            )
+
         return summary
+
+    async def _retry_pending_reconnects_best_effort(
+        self,
+        notebook_id: str,
+        chunks: List[Dict[str, Any]],
+    ) -> None:
+        """Best-effort B.5b retry after extraction.
+
+        Calls :func:`retry_pending_reconnects` for the notebook,
+        swallowing any failure so a flaky orphan-connector cannot kill
+        an otherwise successful extraction. Logs at WARNING when
+        something goes wrong; the surrounding extraction telemetry has
+        already been emitted.
+
+        Optimisation: skip the LLM-caller build when no pending orphans
+        exist for the notebook. The list query is cheap and avoids a
+        second :func:`make_default_llm_caller` round-trip on every
+        extraction (the hot path). This is also what keeps the existing
+        ``test_invokes_default_llm_caller_factory_for_multi_path`` test
+        green -- the spy asserts ``assert_awaited_once``, so we must not
+        build a second caller when nothing is pending.
+        """
+        try:
+            # Lazy imports keep the hot path (single-source extraction
+            # without orphans) free of orphan-prune cost.
+            from entity_filtering.resolution.orphan_prune import (
+                STATUS_PENDING_RECONNECT,
+                retry_pending_reconnects,
+            )
+            from app_main.dependencies import get_entity_repo
+
+            entity_repo = get_entity_repo()
+
+            # Cheap precheck -- skip the LLM-caller build (and the whole
+            # retry path) when there's nothing pending. Critical for the
+            # hot path because make_default_llm_caller resolves the
+            # default chat model on every call.
+            pending = await entity_repo.list_orphans_with_status(
+                notebook_id, STATUS_PENDING_RECONNECT
+            )
+            if not pending:
+                return
+
+            # Try to build an LLM caller, but tolerate failure -- the
+            # retry will then just record the attempt without confirming.
+            llm_caller = None
+            try:
+                llm_caller = await make_default_llm_caller()
+            except Exception as e:
+                logger.warning(
+                    f"B.5b retry: failed to wire LLM caller ({e}); "
+                    "retry will record attempts but cannot confirm."
+                )
+
+            outcome = await retry_pending_reconnects(
+                notebook_id,
+                entity_repo,
+                chunks,
+                llm_caller=llm_caller,
+            )
+            if outcome.attempted:
+                logger.info(
+                    "B.5b retry on notebook={nb}: attempted={a} "
+                    "reconnected={r} still_pending={sp}",
+                    nb=notebook_id,
+                    a=outcome.attempted,
+                    r=outcome.reconnected,
+                    sp=outcome.still_pending,
+                )
+        except Exception as e:
+            # Best-effort: never block extraction on an orphan-prune
+            # hiccup.
+            logger.warning(
+                f"B.5b retry_pending_reconnects failed for notebook "
+                f"{notebook_id}: {e}"
+            )
 
     async def run_filtering_only(
         self,
