@@ -497,7 +497,12 @@ class TestNotebookEventsRouter:
         assert call.kwargs["unread_only"] is True
 
     def test_returns_empty_when_repo_unavailable(self):
-        """B.3b not merged yet → graceful empty response."""
+        """B.3b not merged yet → graceful empty response.
+
+        Post-B.3b-merge, the module exists so we explicitly inject a
+        sentinel ``None`` into ``sys.modules`` to force the ``ImportError``
+        branch the router was designed to handle.
+        """
         notebook_svc = AsyncMock(spec=NotebookService)
         notebook_svc.get.return_value = _make_notebook()
 
@@ -506,9 +511,21 @@ class TestNotebookEventsRouter:
             include_events=True,
         )
 
-        # The router catches ImportError; nothing to mock since the real
-        # module doesn't exist on this branch yet.
-        resp = client.get("/api/notebooks/notebook:b3c/events?unread=true")
+        import sys
+        saved = sys.modules.pop(
+            "surrealdb_service.repositories.notebook_event", None
+        )
+        sys.modules["surrealdb_service.repositories.notebook_event"] = None  # type: ignore[assignment]
+        try:
+            resp = client.get(
+                "/api/notebooks/notebook:b3c/events?unread=true"
+            )
+        finally:
+            del sys.modules["surrealdb_service.repositories.notebook_event"]
+            if saved is not None:
+                sys.modules[
+                    "surrealdb_service.repositories.notebook_event"
+                ] = saved
         assert resp.status_code == 200
         assert resp.json() == []
 
@@ -552,9 +569,26 @@ class TestNotebookEventsRouter:
             include_events=True,
         )
 
-        resp = client.post(
-            "/api/notebooks/notebook:b3c/events/notebook_event:e1/mark_read"
+        # Force the local repo import to raise ImportError, simulating
+        # the "B.3b not merged" branch state. Required after B.3b merged
+        # to main: the module now exists, so without this patch the real
+        # repo runs and the test reflects DB state rather than the
+        # graceful-degradation contract under test.
+        import sys
+        saved = sys.modules.pop(
+            "surrealdb_service.repositories.notebook_event", None
         )
+        sys.modules["surrealdb_service.repositories.notebook_event"] = None  # type: ignore[assignment]
+        try:
+            resp = client.post(
+                "/api/notebooks/notebook:b3c/events/notebook_event:e1/mark_read"
+            )
+        finally:
+            del sys.modules["surrealdb_service.repositories.notebook_event"]
+            if saved is not None:
+                sys.modules[
+                    "surrealdb_service.repositories.notebook_event"
+                ] = saved
         assert resp.status_code == 200
         # Best-effort: returns success so the client doesn't loop.
         assert resp.json()["success"] is True
