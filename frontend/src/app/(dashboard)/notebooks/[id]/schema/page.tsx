@@ -7,6 +7,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { NotebookHeader } from '../../components/NotebookHeader'
 import { SchemaBrowser } from '@/components/notebooks/schema/SchemaBrowser'
 import { CoverageStatsTable } from '@/components/notebooks/schema/CoverageStatsTable'
+import { OrphansDashboard } from '@/components/notebooks/orphans/OrphansDashboard'
 import { PendingExtensionsPanel } from '@/components/notebooks/schema/PendingExtensionsPanel'
 import { TtlDownloadButton } from '@/components/notebooks/schema/TtlDownloadButton'
 import { useNotebook } from '@/lib/hooks/use-notebooks'
@@ -119,6 +120,16 @@ export default function NotebookSchemaPage() {
                   notebookId={notebookId}
                 />
               )}
+            </section>
+
+            <section aria-labelledby="orphans-heading">
+              <h2
+                id="orphans-heading"
+                className="mb-3 text-lg font-semibold"
+              >
+                Orphans
+              </h2>
+              <OrphansDashboard notebookId={notebookId} />
             </section>
           </div>
         </div>
