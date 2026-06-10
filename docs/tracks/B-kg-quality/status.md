@@ -924,3 +924,121 @@ Test counts after attempt 2:
 | `apps/app-main/tests/test_schemas_router.py` | 12 passed |
 | `apps/app-main/tests/` (full) | 380 passed (374 + 6 new) |
 | `packages/ontology-manager/tests/` | 191 passed, 1 skipped (unchanged) |
+
+---
+
+## Phase B.5a — orphan-connector module (2026-06-09)
+
+**Status**: implementation complete, all tests green.
+**Branch**: `track/b-orphan-connector`.
+
+### Scope delivered
+
+Ported myKG's `orphan_connector.py` algorithm into
+`pipelines/entity-filtering` minus the clustering pre-step (out of
+scope per plan). Three async stages composed by a top-level `run()`:
+
+1. `find_orphans(source_id, entity_repo)` — entities with zero
+   incoming/outgoing relations for the given source.
+2. `propose_connections(orphans, chunks, *,
+   max_proposals_per_orphan)` — chunk co-occurrence heuristic; one
+   proposal per (orphan, partner) directed pair, multi-chunk dedup.
+3. `confirm_connections(proposals, llm_caller, *, model,
+   min_confidence)` — LLM-confirms with strict JSON contract;
+   token budget enforced **before** LLM call (`OrphanTokenBudgetExceeded`
+   if estimated > 1500 tokens, mirrors Pass-2 pattern).
+
+The workflow exposes Stage 14 (orphan-connector) after edge prediction
+and before persistence. The stage is opt-in by DI presence so the
+existing `workflow.process(extraction_result)` call signature still
+works for every caller that doesn't yet supply `source_id` + `chunks` +
+`orphan_entity_repo` + `orphan_llm_caller`.
+
+### Test results
+
+| Suite | Pass / fail |
+|---|---|
+| `pipelines/entity-filtering/tests/test_orphan_connector.py` (new) | 38 passed |
+| `pipelines/entity-filtering` (full, `--all-extras`) | 488 passed, 1 pre-existing fail (`test_llm_matcher::test_calls_ollama_for_unknown_pair` — missing `_agentic_enabled` attribute, predates this branch; diff of `llm_matcher.py` vs main is empty) |
+| `packages/shared` | 154 passed |
+| `packages/surrealdb-service` | 77 passed |
+
+Coverage on `orphan_connector.py`: **98%** (196 statements, 3 missed).
+Coverage on `orphan_prompts.py`: **100%**.
+
+### Files
+
+- Created
+  - `pipelines/entity-filtering/src/entity_filtering/resolution/orphan_connector.py`
+  - `pipelines/entity-filtering/src/entity_filtering/resolution/orphan_prompts.py`
+  - `pipelines/entity-filtering/tests/test_orphan_connector.py`
+- Modified
+  - `pipelines/entity-filtering/src/entity_filtering/workflow.py` —
+    Stage 14 orphan-connector hook (opt-in via DI args).
+  - `pipelines/entity-filtering/src/entity_filtering/config.py` —
+    new `OrphanConnectorConfig`.
+  - `pipelines/entity-filtering/src/entity_filtering/resolution/__init__.py`
+    — re-exports.
+  - `packages/surrealdb-service/src/surrealdb_service/repositories/entity.py`
+    — new `list_orphans_for_source(source_id)` query (2-step:
+    fetch source entities, then per-entity edge probe with `LIMIT 1`).
+
+### Open items for B.5b
+
+- The `OrphanEntityRepoProtocol` will extend additively with
+  `mark_pending_reconnect` / lifecycle methods; no rename of the
+  current contract needed.
+- DI container wiring in `apps/app-main` is deferred until a service
+  caller adopts the orphan-connector. The workflow stage stays inert
+  until then.
+
+Self-review at `docs/tracks/B-kg-quality/reviews/phase-B.5a-self-review.md`.
+
+## Phase B.5a — attempt 2 (review fix-up, 2026-06-09)
+
+Attempt 1 returned REVISIONS_NEEDED (0 blockers, 3 majors, 7 minors).
+Attempt 2 addresses majors M1-M3 and minors 1/4/5/6/7 (minors 2/3
+explicitly deferred per the prompt).
+
+### Files added / modified
+
+- `packages/surrealdb-service/tests/test_entity_orphan_query.py` (new):
+  6 unit tests for `list_orphans_for_source` covering empty source_id,
+  entity-SELECT failure, edge-probe failure (loop continues), empty
+  source, all-orphan, mixed. Uses a `monkeypatch`-ed `execute_query` so
+  no Docker / SurrealDB instance required.
+- `pipelines/entity-filtering/tests/test_workflow.py`: appended five
+  new tests under `TestStage14OrphanConnector`:
+  - `test_stage14_disabled_skips_orphan_connect`
+  - `test_stage14_enabled_happy_path`
+  - `test_stage14_token_budget_exceeded_recovers`
+  - `test_stage14_enabled_missing_di_logs_warning` (Minor-1)
+  - `test_orphan_relation_type_bypasses_ontology` (M3 behaviour-pin)
+- `pipelines/entity-filtering/tests/test_orphan_connector.py`: new
+  `test_self_pair_never_proposed` (Minor-6).
+- `pipelines/entity-filtering/src/entity_filtering/workflow.py`:
+  Stage 14 now logs a WARNING listing missing DI inputs (Minor-1) and
+  carries a docstring block documenting the ontology-bypass decision
+  (M3).
+- `pipelines/entity-filtering/src/entity_filtering/resolution/orphan_connector.py`:
+  `run()` docstring documents the ontology-bypass contract (M3);
+  `propose_connections` logger emits `"n/a"` for non-list iterables
+  (Minor-4).
+- `packages/surrealdb-service/src/surrealdb_service/repositories/entity.py`:
+  `list_orphans_for_source` docstring documents cross-source semantics
+  (Minor-5).
+
+### Test counts
+
+| Suite | Before attempt 2 | After attempt 2 |
+|---|---|---|
+| `pipelines/entity-filtering` (all extras) | 488 passed + 1 known fail | 494 passed + 1 known fail |
+| `packages/surrealdb-service` (non-docker) | 52 passed | 58 passed |
+| `packages/surrealdb-service` (requires_docker) | 25 passed | 25 passed |
+
+The single pre-existing entity-filtering failure
+(`test_llm_matcher::test_calls_ollama_for_unknown_pair` — missing
+`_agentic_enabled` attribute) is untouched by this branch and remains
+out-of-scope.
+
+Self-review updated in place with "Attempt 2 fixes" section.

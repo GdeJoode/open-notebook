@@ -236,6 +236,33 @@ class IncrementalResolutionConfig:
 
 
 @dataclass
+class OrphanConnectorConfig:
+    """Orphan-connector (B.5a) settings.
+
+    The orphan-connector runs after dedup but before persistence. It
+    detects entities that ended up with zero relations, proposes new
+    relations via chunk co-occurrence, and asks an injected LLM caller
+    to confirm or deny each proposal.
+
+    Attributes:
+        enabled: Whether to run the orphan connector. Default ``True``
+            so the pipeline picks up orphans automatically; flip to
+            ``False`` for evaluation runs that want to measure orphan
+            counts before reconnection.
+        max_proposals_per_orphan: Cap on candidate partners per orphan
+            to bound the LLM-call count on busy sources.
+        min_confidence: Discard confirmations below this LLM-reported
+            confidence. Conservative default — matches the
+            extraction-time confidence threshold used elsewhere in the
+            pipeline.
+    """
+
+    enabled: bool = True
+    max_proposals_per_orphan: int = 3
+    min_confidence: float = 0.6
+
+
+@dataclass
 class EdgePredictionConfig:
     """Edge (relation) prediction and scoring settings.
 
@@ -333,4 +360,7 @@ class FilteringConfig:
     )
     edge_prediction: EdgePredictionConfig = field(
         default_factory=EdgePredictionConfig
+    )
+    orphan_connector: OrphanConnectorConfig = field(
+        default_factory=OrphanConnectorConfig
     )
