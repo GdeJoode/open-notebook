@@ -290,16 +290,23 @@ async def manual_reconnect_orphan(
             "retry will record an attempt but cannot confirm."
         )
 
+    # Attempt-2 M4 fix: pass entity_id_filter so the retry runs ONLY
+    # for the clicked orphan rather than fanning out across every
+    # pending orphan in the notebook (cost amplification + side-effect
+    # surprise per AC #5).
     outcome = await retry_pending_reconnects(
         notebook_id,
         entity_repo,
         chunk_dicts,
         llm_caller=llm_caller,
+        entity_id_filter=entity_id,
     )
 
-    # The outcome counts every pending orphan the connector retried,
-    # not just this one. To narrow to the specific entity, re-read its
-    # status after the run.
+    # Re-read the orphan after the retry to surface its current status.
+    # The outcome counts are now scoped to the filter (1 attempted at
+    # most), but we still re-read so the UI can refresh the row from
+    # the authoritative DB shape rather than reconstructing it from
+    # the outcome.
     updated = await entity_repo.get_entity_detail(entity_id)
     new_status = updated.get("orphan_status") if updated else status
     reconnected = 1 if new_status is None else 0

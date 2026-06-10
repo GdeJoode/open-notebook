@@ -419,6 +419,138 @@ class TestRetryPendingReconnects:
         assert outcome.attempted == 0
         assert outcome.reconnected == 0
 
+    # -----------------------------------------------------------------
+    # M4 (attempt 2): entity_id_filter narrows to a single orphan.
+    # -----------------------------------------------------------------
+
+    async def test_entity_id_filter_narrows_to_one_orphan(self):
+        """``entity_id_filter`` retries ONLY the targeted orphan.
+
+        Three pending orphans in the notebook; the per-row dashboard
+        action should call the connector for the clicked orphan only,
+        not fan out across the other two.
+        """
+        repo = MockRepo(
+            {
+                "entity:o1": _entity(
+                    "entity:o1",
+                    "Alice",
+                    source_id="source:s1",
+                    status=STATUS_PENDING_RECONNECT,
+                    attempts=1,
+                ),
+                "entity:o2": _entity(
+                    "entity:o2",
+                    "Bob",
+                    source_id="source:s2",
+                    status=STATUS_PENDING_RECONNECT,
+                    attempts=1,
+                ),
+                "entity:o3": _entity(
+                    "entity:o3",
+                    "Carol",
+                    source_id="source:s3",
+                    status=STATUS_PENDING_RECONNECT,
+                    attempts=1,
+                ),
+            }
+        )
+        repo.attach_to_notebook(
+            "notebook:nb", ["entity:o1", "entity:o2", "entity:o3"]
+        )
+
+        run, captured = _make_connector_run(by_source={"source:s1": []})
+
+        outcome = await retry_pending_reconnects(
+            "notebook:nb",
+            repo,
+            chunks=[],
+            orphan_connector_run=run,
+            entity_id_filter="entity:o2",
+        )
+
+        # Only entity:o2 was retried -- connector was invoked once with
+        # its source, NOT with s1 or s3.
+        assert captured == ["source:s2"]
+        assert outcome.attempted == 1
+        # The OTHER orphans' attempts counter did not advance.
+        assert repo.entities["entity:o1"]["reconnect_attempts"] == 1
+        assert repo.entities["entity:o3"]["reconnect_attempts"] == 1
+        # Targeted orphan ticked.
+        assert repo.entities["entity:o2"]["reconnect_attempts"] == 2
+
+    async def test_entity_id_filter_default_retries_all(self):
+        """Without the filter, every pending orphan is still retried.
+
+        Locks in backward-compat: the existing post-extraction sweep
+        relies on no-filter calls touching every pending orphan.
+        """
+        repo = MockRepo(
+            {
+                "entity:o1": _entity(
+                    "entity:o1",
+                    "Alice",
+                    source_id="source:s1",
+                    status=STATUS_PENDING_RECONNECT,
+                    attempts=1,
+                ),
+                "entity:o2": _entity(
+                    "entity:o2",
+                    "Bob",
+                    source_id="source:s2",
+                    status=STATUS_PENDING_RECONNECT,
+                    attempts=1,
+                ),
+            }
+        )
+        repo.attach_to_notebook("notebook:nb", ["entity:o1", "entity:o2"])
+
+        run, captured = _make_connector_run(by_source={})
+
+        outcome = await retry_pending_reconnects(
+            "notebook:nb",
+            repo,
+            chunks=[],
+            orphan_connector_run=run,
+            # entity_id_filter explicitly omitted -- the default.
+        )
+
+        assert outcome.attempted == 2
+        assert sorted(captured) == ["source:s1", "source:s2"]
+
+    async def test_entity_id_filter_unknown_id_returns_zero(self):
+        """Unknown filter id -> zero attempts, no connector calls.
+
+        Defensive case: the dashboard could send a stale id after a
+        background sweep already archived the row. The endpoint should
+        return an empty outcome rather than fanning out.
+        """
+        repo = MockRepo(
+            {
+                "entity:o1": _entity(
+                    "entity:o1",
+                    "Alice",
+                    source_id="source:s1",
+                    status=STATUS_PENDING_RECONNECT,
+                    attempts=1,
+                ),
+            }
+        )
+        repo.attach_to_notebook("notebook:nb", ["entity:o1"])
+
+        run, captured = _make_connector_run(by_source={})
+
+        outcome = await retry_pending_reconnects(
+            "notebook:nb",
+            repo,
+            chunks=[],
+            orphan_connector_run=run,
+            entity_id_filter="entity:does-not-exist",
+        )
+
+        assert outcome.attempted == 0
+        assert captured == []  # connector never invoked
+
 
 # ===========================================================================
 # 3. archive_stale_orphans
@@ -562,10 +694,17 @@ class TestArchiveStaleOrphans:
         assert DEFAULT_MAX_ATTEMPTS == 3
         assert DEFAULT_MAX_AGE_DAYS == 90
 
-    async def test_no_notebook_id_returns_zero(self):
-        """Cross-notebook sweep is intentionally unsupported -- returns 0."""
+    async def test_empty_notebook_id_returns_zero(self):
+        """Empty notebook_id short-circuits with a WARNING (Minor-3 fix).
+
+        Attempt 2: ``notebook_id`` is now a required positional argument.
+        Falsy values still short-circuit to 0 with a warning rather than
+        raising, so a stale UI request can't crash the endpoint -- but
+        callers can no longer omit the parameter entirely (caught at
+        type-check time).
+        """
         repo = MockRepo()
-        archived = await archive_stale_orphans(repo, notebook_id=None)
+        archived = await archive_stale_orphans(repo, "")
         assert archived == 0
 
     async def test_clamps_invalid_thresholds(self):

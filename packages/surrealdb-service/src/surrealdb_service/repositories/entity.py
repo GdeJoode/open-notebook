@@ -848,9 +848,12 @@ class EntityRepository:
         set_clauses = ["orphan_status = $status"]
         params: Dict[str, Any] = {"id": rid, "status": status}
         if increment_attempts:
-            # ``math::max([reconnect_attempts, 0])`` guards against the
-            # NONE-on-legacy-row case where the field default did not
-            # apply (rare, but cheap to defend).
+            # Truthy-coalesce ``reconnect_attempts OR 0`` -- guards
+            # against the NONE-on-legacy-row case where the migration
+            # ``DEFAULT 0`` did not apply (rare, but cheap to defend).
+            # Note (attempt 2 Minor-2): an earlier comment claimed
+            # ``math::max([..., 0])`` here; rewritten to match the
+            # actual SurrealQL OR-fallback above.
             set_clauses.append(
                 "reconnect_attempts = "
                 "(reconnect_attempts OR 0) + 1"

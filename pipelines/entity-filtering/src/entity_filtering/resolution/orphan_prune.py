@@ -224,6 +224,7 @@ async def retry_pending_reconnects(
     model: str = "default",
     max_proposals_per_orphan: int = 3,
     min_confidence: float = 0.6,
+    entity_id_filter: Optional[str] = None,
 ) -> RetryOutcome:
     """Re-run B.5a's connector for the notebook's pending orphans.
 
@@ -260,6 +261,13 @@ async def retry_pending_reconnects(
         model: Model identifier forwarded to B.5a.
         max_proposals_per_orphan: Forwarded to B.5a.
         min_confidence: Forwarded to B.5a.
+        entity_id_filter: When supplied, only retry the orphan whose
+            record id equals this value. Powers the dashboard's per-
+            row [Reconnect] action -- attempt-1 review M4 flagged that
+            the manual reconnect was fanning out across every pending
+            orphan in the notebook (cost amplification + side-effect
+            surprise per AC #5). When ``None`` (default), retries
+            every pending orphan -- the original post-extraction sweep.
 
     Returns:
         :class:`RetryOutcome` summarising attempted, reconnected, and
@@ -276,6 +284,19 @@ async def retry_pending_reconnects(
     pending = await entity_repo.list_orphans_with_status(
         notebook_id, STATUS_PENDING_RECONNECT
     )
+    if entity_id_filter is not None:
+        # Per-row dashboard action: narrow to the clicked orphan so the
+        # retry does not fan out across the notebook (M4 attempt 2).
+        pending = [
+            row for row in pending if str(row.get("id")) == entity_id_filter
+        ]
+        if not pending:
+            logger.info(
+                "retry_pending_reconnects: notebook={nb} entity_id_filter="
+                "{eid} matched no pending orphan; nothing to retry",
+                nb=notebook_id,
+                eid=entity_id_filter,
+            )
     if not pending:
         logger.info(
             "retry_pending_reconnects: notebook={nb} no pending orphans",
@@ -419,8 +440,8 @@ def _relation_mentions(relation: Any, orphan_name: str) -> bool:
 
 async def archive_stale_orphans(
     entity_repo: OrphanPruneRepoProtocol,
+    notebook_id: str,
     *,
-    notebook_id: Optional[str] = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     max_age_days: int = DEFAULT_MAX_AGE_DAYS,
     now: Optional[datetime] = None,
@@ -440,13 +461,21 @@ async def archive_stale_orphans(
     ``pending_reconnect`` list, so they're never touched here. Re-running
     on the same DB produces the same row count.
 
+    Scope (attempt 2 Minor-3 fix):
+        ``notebook_id`` is now a **required positional argument**.
+        Attempt 1 accepted ``notebook_id=None`` and returned 0 with a
+        warning, which read as "no work to do" rather than "this call
+        is wrong". Cross-notebook sweeps are a future feature; callers
+        wanting one must iterate notebook ids explicitly. Forcing the
+        argument prevents the "silent zero" footgun and matches the
+        production caller (nightly job dispatches per-notebook).
+
     Args:
         entity_repo: Repository implementing
             :class:`OrphanPruneRepoProtocol`.
-        notebook_id: Optional notebook filter. When ``None``, archives
-            stale orphans across every notebook (intended for the
-            nightly job); when supplied, scopes to a single notebook
-            (intended for the on-demand UI button).
+        notebook_id: Record ID of the notebook to scope to.
+            **Required** -- callers MUST supply one. Empty / falsy
+            values short-circuit to 0 with a WARNING log.
         max_attempts: Inclusive threshold on ``reconnect_attempts``.
             Entities at or above this count are archived. Defaults to
             3 (per the B.5b plan).
@@ -459,6 +488,13 @@ async def archive_stale_orphans(
     Returns:
         The number of entities archived during this run.
     """
+    if not notebook_id:
+        logger.warning(
+            "archive_stale_orphans called with empty notebook_id; "
+            "callers must supply a notebook scope. Returning 0."
+        )
+        return 0
+
     if max_attempts < 1:
         logger.warning(
             "archive_stale_orphans: max_attempts={ma} < 1; clamping to 1",
@@ -475,24 +511,12 @@ async def archive_stale_orphans(
     reference_now = now or datetime.now(timezone.utc)
     cutoff = reference_now - timedelta(days=max_age_days)
 
-    # Walk every "pending_reconnect" row for the requested scope (one
-    # notebook OR every notebook). The list query is cheap because the
-    # status filter is selective; the per-row decision is O(1).
-    if notebook_id:
-        candidates = await entity_repo.list_orphans_with_status(
-            notebook_id, STATUS_PENDING_RECONNECT
-        )
-    else:
-        # Cross-notebook scan: the protocol does not expose a "list all
-        # by status" method (intentional -- the dashboard queries per
-        # notebook). Callers wanting a cross-notebook sweep must invoke
-        # this function with each notebook_id; we still support the
-        # single-notebook case here for completeness.
-        logger.warning(
-            "archive_stale_orphans called with notebook_id=None; "
-            "cross-notebook sweep is not supported. Returning 0."
-        )
-        return 0
+    # Walk every "pending_reconnect" row for the notebook. The list
+    # query is cheap because the status filter is selective; the
+    # per-row decision is O(1).
+    candidates = await entity_repo.list_orphans_with_status(
+        notebook_id, STATUS_PENDING_RECONNECT
+    )
 
     archived = 0
     for row in candidates:
