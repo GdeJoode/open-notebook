@@ -61,6 +61,7 @@ from app_main.services.preprocessing_service import PreprocessingService
 from app_main.services.summarization_service import SummarizationService
 from app_main.services.entity_extraction_service import EntityExtractionService
 from app_main.services.schema_edit_service import SchemaEditService
+from app_main.services.reextract_service import ReextractService
 
 
 # --- Repository providers ---
@@ -315,6 +316,39 @@ def get_schema_edit_service() -> SchemaEditService:
     return SchemaEditService(
         schema_repo=get_notebook_schema_repo(),
         event_repo=get_notebook_event_repo(),
+    )
+
+
+def get_reextract_service() -> ReextractService:
+    """FastAPI provider for the B.3d schema-change re-extract orchestrator.
+
+    Wires the global ``CommandService`` singleton (used by every other
+    job-submitting endpoint) and the ``JobRepository`` it owns. The
+    repo is read for dedup so an idempotent re-call (user double-
+    clicks ``[Re-extract all]``) does not stack duplicate jobs.
+
+    ``CommandService`` is exposed as a class with ``@staticmethod``
+    members; the protocol the service uses is structural, so we wrap
+    it in a lightweight adapter to expose the staticmethod via an
+    instance — keeps tests free of the import-time singleton.
+    """
+    from app_main.services.command_service import CommandService, _repository
+
+    class _CommandServiceAdapter:
+        async def submit_command_job(
+            self,
+            module_name: str,
+            command_name: str,
+            command_args: dict,
+            context: dict | None = None,
+        ) -> str:
+            return await CommandService.submit_command_job(
+                module_name, command_name, command_args, context
+            )
+
+    return ReextractService(
+        command_service=_CommandServiceAdapter(),
+        job_repo=_repository,
     )
 
 
