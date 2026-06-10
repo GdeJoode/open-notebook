@@ -15,6 +15,17 @@ from entity_filtering.resolution.orphan_connector import (
     find_orphans,
     propose_connections,
 )
+from entity_filtering.resolution.orphan_prune import (
+    DEFAULT_MAX_AGE_DAYS,
+    DEFAULT_MAX_ATTEMPTS,
+    STATUS_ARCHIVED,
+    STATUS_PENDING_RECONNECT,
+    OrphanPruneRepoProtocol,
+    RetryOutcome,
+    archive_stale_orphans,
+    mark_pending_reconnect,
+    retry_pending_reconnects,
+)
 
 __all__ = [
     "ContextualClusterer",
@@ -28,4 +39,13 @@ __all__ = [
     "find_orphans",
     "propose_connections",
     "confirm_connections",
+    "OrphanPruneRepoProtocol",
+    "RetryOutcome",
+    "STATUS_ARCHIVED",
+    "STATUS_PENDING_RECONNECT",
+    "DEFAULT_MAX_ATTEMPTS",
+    "DEFAULT_MAX_AGE_DAYS",
+    "mark_pending_reconnect",
+    "retry_pending_reconnects",
+    "archive_stale_orphans",
 ]

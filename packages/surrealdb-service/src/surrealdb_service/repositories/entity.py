@@ -685,6 +685,182 @@ class EntityRepository:
         )
         return orphans
 
+    async def list_orphans_with_status(
+        self,
+        notebook_id: str,
+        status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List entities in a notebook filtered by ``orphan_status``.
+
+        Powers the per-notebook orphans dashboard (B.5b). An entity
+        "belongs" to a notebook when one of its ``source_documents``
+        was imported via that notebook. Because the source row carries
+        the notebook foreign key, the query is a two-step:
+
+        1. resolve every ``source.id`` for the notebook,
+        2. SELECT entities whose ``source_documents`` intersect that set
+           AND ``orphan_status`` matches the requested status.
+
+        Args:
+            notebook_id: Record ID of the notebook
+                (e.g. ``"notebook:abc"``).
+            status: Optional ``orphan_status`` filter. When ``None``,
+                returns entities with ANY non-NONE status
+                (``pending_reconnect`` or ``archived``). When supplied,
+                returns only entities matching that exact value.
+
+        Returns:
+            A list of entity rows shaped for the dashboard:
+            ``id``, ``canonical_name``, ``entity_type``,
+            ``orphan_status``, ``reconnect_attempts``,
+            ``first_orphaned_at``, ``last_reconnect_attempt_at``,
+            ``source_documents``. Empty on failure or no matches.
+        """
+        if not notebook_id:
+            logger.warning(
+                "list_orphans_with_status called with empty notebook_id"
+            )
+            return []
+
+        try:
+            source_rows = await execute_query(
+                "SELECT id FROM source WHERE notebook = $notebook_id",
+                {"notebook_id": notebook_id},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to list sources for orphan dashboard on "
+                f"'{notebook_id}': {e}"
+            )
+            return []
+
+        if not source_rows:
+            return []
+
+        source_ids = [str(row.get("id")) for row in source_rows if row.get("id")]
+        if not source_ids:
+            return []
+
+        try:
+            if status is not None:
+                rows = await execute_query(
+                    "SELECT id, canonical_name, entity_type, "
+                    "orphan_status, reconnect_attempts, first_orphaned_at, "
+                    "last_reconnect_attempt_at, source_documents "
+                    "FROM entity "
+                    "WHERE orphan_status = $status "
+                    "AND source_documents ANYINSIDE $source_ids "
+                    "ORDER BY first_orphaned_at DESC",
+                    {"status": status, "source_ids": source_ids},
+                    self.config,
+                )
+            else:
+                rows = await execute_query(
+                    "SELECT id, canonical_name, entity_type, "
+                    "orphan_status, reconnect_attempts, first_orphaned_at, "
+                    "last_reconnect_attempt_at, source_documents "
+                    "FROM entity "
+                    "WHERE orphan_status != NONE "
+                    "AND source_documents ANYINSIDE $source_ids "
+                    "ORDER BY first_orphaned_at DESC",
+                    {"source_ids": source_ids},
+                    self.config,
+                )
+        except Exception as e:
+            logger.error(
+                f"Failed to list orphans-with-status for notebook "
+                f"'{notebook_id}' (status={status}): {e}"
+            )
+            return []
+        return rows or []
+
+    async def update_orphan_status(
+        self,
+        entity_id: str,
+        status: Optional[str],
+        *,
+        increment_attempts: bool = False,
+        set_first_orphaned_at: bool = False,
+        set_last_reconnect_attempt_at: bool = False,
+    ) -> bool:
+        """Update an entity's orphan-prune lifecycle fields.
+
+        Single helper that drives all three lifecycle transitions in
+        B.5b (mark pending, retry attempt, archive). The flags let the
+        caller compose the exact field-set rather than running multiple
+        round-trips per transition.
+
+        Args:
+            entity_id: Record ID of the entity to update.
+            status: New ``orphan_status`` value. ``None`` clears the
+                field (entity returns to "healthy" state).
+            increment_attempts: When ``True``, ``reconnect_attempts``
+                is incremented atomically. Used on retry-attempt rows.
+            set_first_orphaned_at: When ``True`` AND
+                ``first_orphaned_at`` is currently NONE, sets it to
+                ``time::now()``. Idempotent — never overwrites an
+                existing timestamp.
+            set_last_reconnect_attempt_at: When ``True``,
+                ``last_reconnect_attempt_at`` is set to ``time::now()``.
+
+        Returns:
+            ``True`` when the update query ran successfully (even if
+            no row matched), ``False`` on transport-level failure.
+        """
+        if not entity_id:
+            logger.warning(
+                "update_orphan_status called with empty entity_id"
+            )
+            return False
+
+        try:
+            rid = ensure_record_id(entity_id)
+        except Exception as e:
+            logger.error(
+                f"update_orphan_status: invalid entity_id '{entity_id}': {e}"
+            )
+            return False
+
+        # Build the SET clause dynamically so we only touch the fields
+        # the caller asked for. Each branch is independently testable.
+        set_clauses = ["orphan_status = $status"]
+        params: Dict[str, Any] = {"id": rid, "status": status}
+        if increment_attempts:
+            # ``math::max([reconnect_attempts, 0])`` guards against the
+            # NONE-on-legacy-row case where the field default did not
+            # apply (rare, but cheap to defend).
+            set_clauses.append(
+                "reconnect_attempts = "
+                "(reconnect_attempts OR 0) + 1"
+            )
+        if set_first_orphaned_at:
+            # Idempotent: only writes when the field is currently NONE.
+            set_clauses.append(
+                "first_orphaned_at = IF first_orphaned_at = NONE "
+                "THEN time::now() ELSE first_orphaned_at END"
+            )
+        if set_last_reconnect_attempt_at:
+            set_clauses.append(
+                "last_reconnect_attempt_at = time::now()"
+            )
+
+        query = (
+            "UPDATE type::thing($id) SET "
+            + ", ".join(set_clauses)
+            + ";"
+        )
+
+        try:
+            await execute_query(query, params, self.config)
+        except Exception as e:
+            logger.error(
+                f"update_orphan_status failed for '{entity_id}' "
+                f"(status={status}): {e}"
+            )
+            return False
+        return True
+
     async def get_entity_with_embedding(
         self, entity_id: str
     ) -> Optional[Dict[str, Any]]:
