@@ -51,6 +51,9 @@ const FIX_CANDIDATES = {
 const NB_ID_RE = '(?:notebook:b3d-reextract|notebook%3Ab3d-reextract)'
 
 test.describe('B.3d: schema-change re-extract prompt', () => {
+  // Dev-server cold-start compile for /notebooks/[id] can exceed
+  // 15s on the first navigation; mirror the budget the other Track-B
+  // specs use (60s overall, 45s per nav).
   test.setTimeout(60_000)
   test.use({ navigationTimeout: 45_000 })
 
@@ -68,34 +71,29 @@ test.describe('B.3d: schema-change re-extract prompt', () => {
         }),
     )
 
-    // Sources + notes are needed by the page chrome but we don't care
-    // about their shapes for this spec.
-    await page.route(
-      new RegExp(`/api/notebooks/${NB_ID_RE}/sources(?:\\?.*)?$`),
-      (route) =>
-        route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify([]),
-        }),
+    // Sources + notes + chat sessions list endpoints — the page chrome
+    // fetches these on mount; we don't care about their shapes for
+    // this spec, only that the page renders.
+    await page.route(/\/api\/sources(?:\?.*)?$/, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([]),
+      }),
     )
-    await page.route(
-      new RegExp(`/api/notebooks/${NB_ID_RE}/notes(?:\\?.*)?$`),
-      (route) =>
-        route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify([]),
-        }),
+    await page.route(/\/api\/notes(?:\?.*)?$/, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([]),
+      }),
     )
-    await page.route(
-      new RegExp(`/api/notebooks/${NB_ID_RE}/chat-sessions(?:\\?.*)?$`),
-      (route) =>
-        route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify([]),
-        }),
+    await page.route(/\/api\/chat-sessions(?:\?.*)?$/, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([]),
+      }),
     )
 
     // Candidate list — same for every test
@@ -329,9 +327,15 @@ test.describe('B.3d: schema-change re-extract prompt', () => {
         }),
     )
 
+    // Wait for the first events poll to fire so we know the empty
+    // unread list has been processed; the banner suppresses on
+    // events.length === 0.
+    const firstEventsRequest = page.waitForResponse(
+      (resp) => /\/api\/notebooks\/[^/]+\/events(?:\?.*)?$/.test(resp.url()),
+      { timeout: 30_000 },
+    )
     await page.goto(`/notebooks/${NOTEBOOK_ID}`)
-    // Allow the page to settle.
-    await page.waitForLoadState('networkidle')
+    await firstEventsRequest
     await expect(page.getByTestId('reextract-prompt-banner')).toHaveCount(0)
   })
 })
