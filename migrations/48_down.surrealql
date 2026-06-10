@@ -1,0 +1,11 @@
+-- Migration 48 down: drop the orphan-prune lifecycle fields from entity.
+--
+-- Destructive but expected for a downgrade -- any rows tracking orphan
+-- status, attempt counts, or timestamps lose those columns. The B.5a
+-- orphan_connector itself does not depend on these fields; it falls back
+-- to "always retry" behaviour when the lifecycle layer is absent.
+
+REMOVE FIELD IF EXISTS orphan_status ON TABLE entity;
+REMOVE FIELD IF EXISTS reconnect_attempts ON TABLE entity;
+REMOVE FIELD IF EXISTS first_orphaned_at ON TABLE entity;
+REMOVE FIELD IF EXISTS last_reconnect_attempt_at ON TABLE entity;
