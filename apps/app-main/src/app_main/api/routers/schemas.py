@@ -827,6 +827,9 @@ async def _ensure_notebook_exists(
     notebook_id: str, notebook_service: NotebookService
 ) -> None:
     """Common 404 guard — every edit-ops handler runs this first."""
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
 
 
 # Phase B.3c — soft-nudge UI + per-notebook pause toggle
