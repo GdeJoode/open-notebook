@@ -63,6 +63,37 @@ export interface NotebookSchemaResponse {
   soft_nudge_dismissed: boolean
 }
 
+// ---------------------------------------------------------------------------
+// Phase B.3d — re-extract prompt contracts
+// ---------------------------------------------------------------------------
+
+export interface NotebookEventView {
+  id: string
+  notebook_id: string
+  /** Discriminator e.g. `"schema_changed"`, `"extension_suggested"`. */
+  event_type: string
+  /** Op-specific context bag — e.g. `{ op: "rename", old_name, new_name }`. */
+  payload: Record<string, unknown>
+  /** ISO-8601 timestamp; null for legacy rows. */
+  created_at?: string | null
+  /** ISO-8601 timestamp; null until the consumer calls mark_read. */
+  read_at?: string | null
+}
+
+export interface ReextractCandidatesResponse {
+  notebook_id: string
+  source_ids: string[]
+  count: number
+}
+
+export interface ReextractResponse {
+  notebook_id: string
+  jobs_enqueued: number
+  source_ids: string[]
+  enqueued_source_ids: string[]
+  skipped_source_ids: string[]
+}
+
 export interface Pass1ResultView {
   id: string
   source_id: string
