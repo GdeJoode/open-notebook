@@ -146,10 +146,19 @@ async def _create_test_entity(
 async def _read_orphan_fields(
     config: SurrealDBConfig, entity_id: str
 ) -> Dict[str, Any]:
+    """Read the lifecycle fields back via a record-link SELECT.
+
+    SurrealDB binds ``$id`` as a *plain string*; comparing a RecordID
+    column against a string with ``=`` returns no rows. Coerce the
+    stringified id via ``type::thing($id)`` so the comparison happens
+    in RecordID space -- mirrors the working pattern in
+    ``test_notebook_schema_repo_roundtrip`` and the repository's own
+    ``update_orphan_status`` query.
+    """
     rows = await execute_query(
         "SELECT id, orphan_status, reconnect_attempts, "
         "first_orphaned_at, last_reconnect_attempt_at "
-        "FROM entity WHERE id = $id LIMIT 1",
+        "FROM entity WHERE id = type::thing($id) LIMIT 1",
         {"id": entity_id},
         config=config,
     )
@@ -260,3 +269,125 @@ async def test_update_orphan_status_stamps_timestamps(
     )
     row = await _read_orphan_fields(live_surrealdb, eid)
     assert row["first_orphaned_at"] == first_at
+
+
+# ---------------------------------------------------------------------------
+# list_orphans_with_status end-to-end (B.5b attempt 2: B2 fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_list_orphans_with_status_traverses_reference_edge(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """The dashboard query finds entities via ``reference`` edges.
+
+    Reproduces B.5b attempt-1 blocker B2: the previous query targeted
+    ``source.notebook`` which is not a real column (source -> notebook
+    is the ``reference`` RELATE edge, see migration 1 line 54). The
+    fixed query walks ``reference`` and stringifies the source ids so
+    they match the strings stored in ``entity.source_documents``.
+
+    Setup:
+      1. Create a notebook + a source + a ``reference`` edge.
+      2. Create an entity whose ``source_documents`` carries that
+         source's stringified id.
+      3. Mark the entity ``pending_reconnect`` via the repository.
+      4. Assert the dashboard query surfaces the entity for that status
+         and does NOT surface it for the ``archived`` status.
+    """
+    # 1. Notebook + source + RELATE edge.
+    nb_rows = await execute_query(
+        "CREATE notebook SET name = 'orphan-dash-test';",
+        config=live_surrealdb,
+    )
+    assert nb_rows
+    notebook_id = str(nb_rows[0]["id"])
+
+    src_rows = await execute_query(
+        "CREATE source SET title = 'orphan-dash-src';",
+        config=live_surrealdb,
+    )
+    assert src_rows
+    source_id = str(src_rows[0]["id"])
+
+    # SurrealDB rejects ``type::thing()`` inside the RELATE source/target
+    # positions; bind RecordIDs directly. Mirrors the production pattern
+    # in ``NotebookService.add_source``.
+    from surrealdb_service.connection import ensure_record_id
+
+    await execute_query(
+        "RELATE $src->reference->$nb;",
+        {
+            "src": ensure_record_id(source_id),
+            "nb": ensure_record_id(notebook_id),
+        },
+        config=live_surrealdb,
+    )
+
+    # 2. Entity carrying the source id in source_documents.
+    eid = await _create_test_entity(
+        live_surrealdb,
+        "OrphanForDashboard",
+        source_documents=[source_id],
+    )
+
+    repo = EntityRepository(config=live_surrealdb)
+
+    # 3. Flip to pending_reconnect via the repo + stamp first_orphaned_at
+    # so the dashboard's ORDER BY clause has a value to sort on (defensive
+    # -- without a non-NONE timestamp some SurrealDB versions return zero
+    # rows on the ORDER BY clause).
+    ok = await repo.update_orphan_status(
+        eid,
+        "pending_reconnect",
+        increment_attempts=True,
+        set_first_orphaned_at=True,
+        set_last_reconnect_attempt_at=True,
+    )
+    assert ok
+
+    # 4a. The dashboard surfaces the entity under pending_reconnect.
+    pending = await repo.list_orphans_with_status(
+        notebook_id, "pending_reconnect"
+    )
+    pending_ids = {str(row.get("id")) for row in pending}
+    assert eid in pending_ids, (
+        f"Expected {eid!r} in pending list; got {pending_ids!r}"
+    )
+
+    # 4b. The dashboard does NOT surface it under archived.
+    archived = await repo.list_orphans_with_status(notebook_id, "archived")
+    archived_ids = {str(row.get("id")) for row in archived}
+    assert eid not in archived_ids
+
+    # 4c. status=None returns any-non-NONE -- entity should appear.
+    any_status = await repo.list_orphans_with_status(notebook_id, None)
+    any_ids = {str(row.get("id")) for row in any_status}
+    assert eid in any_ids
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_list_orphans_with_status_empty_when_no_sources(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """A notebook with no ``reference`` edges returns an empty list.
+
+    Guards against a regression where the query accidentally surfaces
+    orphan entities from a different notebook because the source-id
+    filter is no-op.
+    """
+    nb_rows = await execute_query(
+        "CREATE notebook SET name = 'empty-orphan-dash';",
+        config=live_surrealdb,
+    )
+    assert nb_rows
+    notebook_id = str(nb_rows[0]["id"])
+
+    repo = EntityRepository(config=live_surrealdb)
+    pending = await repo.list_orphans_with_status(
+        notebook_id, "pending_reconnect"
+    )
+    assert pending == []

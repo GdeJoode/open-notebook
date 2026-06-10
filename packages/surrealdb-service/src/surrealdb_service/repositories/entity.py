@@ -694,12 +694,26 @@ class EntityRepository:
 
         Powers the per-notebook orphans dashboard (B.5b). An entity
         "belongs" to a notebook when one of its ``source_documents``
-        was imported via that notebook. Because the source row carries
-        the notebook foreign key, the query is a two-step:
+        was imported via that notebook. Because source ↔ notebook is
+        stored on the ``reference`` RELATE edge (NOT a column on
+        ``source`` -- see migration 1), the query is a two-step:
 
-        1. resolve every ``source.id`` for the notebook,
-        2. SELECT entities whose ``source_documents`` intersect that set
-           AND ``orphan_status`` matches the requested status.
+        1. Resolve every source RecordID linked to the notebook via the
+           ``reference`` edge.
+        2. SELECT entities whose ``source_documents`` array intersects
+           that set AND ``orphan_status`` matches the requested status.
+
+        The ``source_documents`` field stores stringified record ids
+        (see ``EntityRepository.upsert_entity`` / ``ExtractedEntity``)
+        rather than ``record<source>`` values. The fix vs the original
+        broken query (B.5b attempt 1):
+
+        * The source-list step now traverses ``reference`` -- the table
+          ``source`` carries no ``notebook`` column, so the previous
+          ``WHERE notebook = $notebook_id`` always returned 0 rows.
+        * Source ids are stringified before being handed to the entity
+          query so the ``ANYINSIDE`` comparison happens in string space
+          (matches how ``source_documents`` actually stores its values).
 
         Args:
             notebook_id: Record ID of the notebook
@@ -723,8 +737,12 @@ class EntityRepository:
             return []
 
         try:
+            # The ``reference`` edge runs source -> notebook (migration
+            # 1, line 54-56); ``in`` is the source RecordID, ``out`` is
+            # the notebook RecordID. Same projection-style query used by
+            # ``SourceRepository.list_sources`` for the per-notebook view.
             source_rows = await execute_query(
-                "SELECT id FROM source WHERE notebook = $notebook_id",
+                "SELECT VALUE in FROM reference WHERE out = type::thing($notebook_id)",
                 {"notebook_id": notebook_id},
                 self.config,
             )
@@ -738,7 +756,10 @@ class EntityRepository:
         if not source_rows:
             return []
 
-        source_ids = [str(row.get("id")) for row in source_rows if row.get("id")]
+        # ``SELECT VALUE in`` returns a flat list of RecordID values;
+        # stringify so the comparison below happens against the same
+        # representation ``source_documents`` stores (see upsert_entity).
+        source_ids = [str(row) for row in source_rows if row]
         if not source_ids:
             return []
 
