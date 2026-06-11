@@ -62,7 +62,17 @@ from loguru import logger
 # remains importable without the heavy ``shared.types.enums`` chain in tests
 # that fake the dependencies. The values mirror :class:`shared.types.enums.JobStatus`.
 
-_INFLIGHT_STATUSES = frozenset({"queued", "processing", "retrying"})
+_INFLIGHT_STATUSES = frozenset(
+    {"queued", "processing", "retrying", "paused_for_review"}
+)
+# M4 (attempt 2) — ``paused_for_review`` is treated as in-flight on
+# purpose. Stacking a fresh re-extract on top of a paused-for-review
+# job would orphan the paused entry: the worker picks up the new
+# QUEUED job, the paused entry can't be resumed via the normal
+# ``/extraction/resume`` path once a parallel job runs against the
+# same source, and the user ends up with two competing entries. The
+# caller (banner / API) must resume the paused review via the
+# existing ``POST /extraction/resume`` endpoint first, then re-extract.
 
 
 @dataclass(frozen=True)
@@ -150,10 +160,13 @@ class ReextractService:
               We log and continue so a transient DB hiccup on source N
               does not stop sources N+1..M from being re-extracted.
             * Dedup is per-source: a source whose latest job is in
-              QUEUED/PROCESSING/RETRYING is skipped silently. The
-              caller can compare ``enqueued_source_ids`` to
-              ``source_ids`` to surface which ones were already
-              running.
+              QUEUED/PROCESSING/RETRYING/PAUSED_FOR_REVIEW is skipped
+              silently. The caller can compare ``enqueued_source_ids``
+              to ``source_ids`` to surface which ones were already
+              running. PAUSED_FOR_REVIEW is treated as in-flight
+              because resuming the paused review via the existing
+              ``POST /extraction/resume`` endpoint is a prerequisite
+              for a clean re-extract.
         """
         ordered: List[str] = list(source_ids)
         enqueued: List[str] = []
@@ -216,11 +229,13 @@ class ReextractService:
     async def _has_inflight_extract_job(self, source_id: str) -> bool:
         """Return True iff the source has an in-flight ENTITY_EXTRACT job.
 
-        "In-flight" means status ∈ {QUEUED, PROCESSING, RETRYING}. We
-        intentionally treat completed / failed / cancelled / paused jobs
-        as eligible for re-extraction — the user explicitly asked for it
-        and the new schema means even a "successful" past extraction is
-        stale.
+        "In-flight" means status ∈ {QUEUED, PROCESSING, RETRYING,
+        PAUSED_FOR_REVIEW}. We treat completed / failed / cancelled
+        jobs as eligible for re-extraction — the user explicitly asked
+        for it and the new schema means even a "successful" past
+        extraction is stale. PAUSED_FOR_REVIEW is in the in-flight set
+        because the user must resume the paused review (see M4 fix
+        comment above) before a fresh re-extract can stack safely.
 
         ``JobRepository.get_by_source`` returns ALL jobs for the source
         in created-DESC order; we filter to entity_extract on the way

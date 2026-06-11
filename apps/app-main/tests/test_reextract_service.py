@@ -205,6 +205,36 @@ class TestDedup:
         command_service.submit_command_job.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_skips_source_with_paused_for_review_job(
+        self,
+        service: ReextractService,
+        command_service: AsyncMock,
+        job_repo: AsyncMock,
+    ) -> None:
+        """M4 (attempt 2): PAUSED_FOR_REVIEW is in-flight for dedup.
+
+        A source whose latest ENTITY_EXTRACT job is awaiting review
+        (status == ``paused_for_review``) must NOT have a fresh
+        re-extract stacked on top — the caller is responsible for
+        resuming via ``POST /extraction/resume`` first. Otherwise the
+        worker picks up the new QUEUED job and the paused entry is
+        orphaned.
+
+        Pin: jobs_enqueued == 0 AND source_id appears in
+        ``skipped_source_ids``.
+        """
+        job_repo.get_by_source.return_value = [
+            _job("entity_extract", "paused_for_review")
+        ]
+        result = await service.enqueue_reextract_jobs(
+            NOTEBOOK_ID, ["source:a"]
+        )
+        assert result.jobs_enqueued == 0
+        assert result.enqueued_source_ids == []
+        assert result.skipped_source_ids == ["source:a"]
+        command_service.submit_command_job.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_completed_job_does_not_dedup(
         self,
         service: ReextractService,
