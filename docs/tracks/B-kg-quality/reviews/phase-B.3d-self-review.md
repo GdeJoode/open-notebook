@@ -108,3 +108,117 @@ env PLAYWRIGHT_BASE_URL=http://localhost:18508 npx playwright test e2e/track-b/s
 - `92ce5eb` — `test(e2e/track-b): schema-reextract Playwright spec passes + standalone helpers`
 
 Branch: `track/b-reextract-prompt` (pushed to origin).
+
+---
+
+## Attempt 2 fixes (post-review REVISIONS_NEEDED)
+
+**Date**: 2026-06-11
+**Review**: `docs/tracks/B-kg-quality/reviews/phase-B.3d-attempt-1.md`
+**Decision delta**: addresses 3 blockers + 2 majors + 2 minors.
+
+### 1. B.3c reconciliation strategy (B1 + B2)
+
+Attempt 1 shipped its own `_NotebookEventView`, `list_notebook_events`, and
+`mark_notebook_event_read` handlers on `schemas.py` because B.3c hadn't merged.
+When B.3c landed on `main` (PR #21), it shipped the *canonical* surface in
+`apps/app-main/src/app_main/api/routers/notebook_events.py` with a different
+JSON contract (`type=str,str&unread=bool` vs the branch's
+`type=str&unread_only=bool`; response `{event_id, success}` vs the branch's
+`{ok: true}`).
+
+The rebase preserved B.3c verbatim and reconciled B.3d by:
+
+- **Dropped from `schemas.py`**: the `_NotebookEventView` model,
+  `list_notebook_events`, `mark_notebook_event_read`. Replaced by a 6-line
+  block-comment pointing at `notebook_events.py` so future drift is obvious.
+- **Dropped from `notebook-schema.ts`**: duplicate `listEvents` and
+  `markEventRead` clients. The canonical typed client lives in the same
+  module above the deprecated block, exported under its original name; the
+  comment notes the de-dup.
+- **Dropped from `use-notebook-schema.ts`**: `useSchemaChangedEvents` and
+  the branch's `useMarkEventRead`. `useNotebookEvents` (from B.3c) is now
+  the single source.
+- **`ReextractPromptBanner.tsx`** now imports `useNotebookEvents` and
+  `useMarkEventRead` from the B.3c hook module and calls
+  `useNotebookEvents(notebookId, { types: ['schema_changed'], unread: true })`.
+- **Playwright spec mock** updated to return
+  `{ event_id, success: true }` shape and adds sibling-banner mocks
+  (`/schema`, `/extraction/paused`) so SchemaSoftNudge and
+  ExtractionPausedBanner don't compete with the banner under test.
+- **`page.tsx`** renders all three banners in order:
+  `SchemaSoftNudge` -> `ExtractionPausedBanner` -> `ReextractPromptBanner`.
+  Convention: informational (coverage) -> state-blocker (paused) -> action
+  prompt (re-extract).
+
+### 2. PAUSED_FOR_REVIEW dedup decision (M4)
+
+**Chose: treat `paused_for_review` as in-flight (skip).**
+
+`_INFLIGHT_STATUSES` now reads
+`frozenset({"queued", "processing", "retrying", "paused_for_review"})`.
+Rationale: the alternative (cancel the paused job before re-enqueueing)
+requires coordinating with the worker's review state machine and is a
+heavier semantic change. The skip path is correct, conservative, and aligns
+with the existing `POST /extraction/resume` flow - the caller must resume
+the paused review before re-extracting that source. The banner already
+surfaces a hint via `ExtractionPausedBanner` so users have a clear path.
+
+**Pin**: `TestDedup::test_skips_source_with_paused_for_review_job` -
+asserts `jobs_enqueued=0`, `enqueued_source_ids=[]`,
+`skipped_source_ids=["source:a"]`, and `submit_command_job.assert_not_awaited()`.
+
+### 3. AC#5 deferral rationale (M5 + Minor 5)
+
+AC#5 specifies a per-source "Schema changed" badge on the workspace
+SourcesColumn. The banner already covers the primary user-facing intent
+("there are sources to re-extract"). Per-source badges live in
+`SourceCard` rendering and require either an entity -> source index (Track G)
+or a per-source events filter - both out of scope for B.3d's "prompt"
+slice. Documented in `Open items` above and explicitly flagged for the
+reviewer. The badge will land as a follow-up either:
+- in B.4 (entity-index work) - narrow per-source; OR
+- as a small SourceCard extension reading `source_id`-scoped events.
+
+### 4. Files preserved from B.3c (verified post-rebase)
+
+- `apps/app-main/src/app_main/api/routers/notebook_events.py` - canonical `/events` + `/mark_read`
+- `apps/app-main/tests/test_schemas_soft_nudge.py` - 19 tests still green
+- `frontend/src/components/notebooks/schema/SchemaSoftNudge.tsx`
+- `frontend/src/components/notebooks/schema/ExtractionPausedBanner.tsx`
+- `frontend/e2e/track-b/schema-soft-nudge.spec.ts` - 5 tests still green
+- `apps/app-main/src/app_main/api/routers/schemas.py::dismiss_soft_nudge` +
+  paused-extraction endpoints
+- `useNotebookEvents`, `useMarkEventRead`, `useDismissSoftNudge`, and
+  paused-extraction hooks in `use-notebook-schema.ts`
+- The B.3c `NotebookEventView` projection type exported from
+  `notebook-schema.ts`
+
+### 5. Annotations and defence-in-depth
+
+- **M5**: `test_returns_all_notebook_sources` now has a docstring explaining
+  that V1 returns ALL sources because the entity -> source index doesn't
+  yet exist; future narrowing requires this test to evolve into a
+  SUBSET assertion.
+- **Minor 1**: `enqueue_reextract` router now filters the requested
+  `source_ids` against the notebook's own candidate list before reaching
+  the service - defence-in-depth vs cross-notebook source-id injection.
+  Falls through to unfiltered on candidate-list read errors so transient
+  DB hiccups don't lock the user out.
+
+### Verification (Attempt 2)
+
+```
+# Backend
+apps/app-main/tests/test_reextract_service.py  -> 14 passed  (added PAUSED skip test)
+apps/app-main/tests/test_reextract_router.py   -> 9 passed   (added cross-notebook filter test)
+apps/app-main/tests/test_schemas_soft_nudge.py -> 19 passed  (B.3c preserved verbatim)
+
+# Frontend
+npx tsc --noEmit                               -> clean
+npm run lint                                   -> no new warnings
+
+# E2E (Playwright @ http://localhost:8606 - built fresh; 8502 stale per B.5b pattern)
+e2e/track-b/schema-reextract.spec.ts          -> 4 passed (6.2s)
+e2e/track-b/schema-soft-nudge.spec.ts         -> 5 passed (4.4s)
+```
