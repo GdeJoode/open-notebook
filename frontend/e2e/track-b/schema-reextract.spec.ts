@@ -108,6 +108,46 @@ test.describe('B.3d: schema-change re-extract prompt', () => {
           body: JSON.stringify(FIX_CANDIDATES),
         }),
     )
+
+    // B.3c sibling banners now mount on the same page. Mock their
+    // endpoints to keep the page rendering deterministically — the
+    // banners self-hide when the schema flag / paused count is empty.
+    await page.route(
+      new RegExp(`/api/notebooks/${NB_ID_RE}/schema(?:\\?.*)?$`),
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            notebook_id: 'notebook:b3d-reextract',
+            base_ontology: 'base',
+            base_ontology_types: [],
+            accepted_extensions: [],
+            pending_extensions: [],
+            excluded_types: [],
+            coverage_pct: 100,
+            review_required: false,
+            // Dismiss the SchemaSoftNudge so its banner doesn't
+            // compete with the B.3d banner under test.
+            soft_nudge_dismissed: true,
+          }),
+        }),
+    )
+    await page.route(
+      new RegExp(
+        `/api/notebooks/${NB_ID_RE}/extraction/paused(?:\\?.*)?$`,
+      ),
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            notebook_id: 'notebook:b3d-reextract',
+            paused_count: 0,
+            paused_source_ids: [],
+          }),
+        }),
+    )
   })
 
   test('banner shows count when schema_changed events exist, then [Re-extract all] POSTs every candidate', async ({
@@ -155,16 +195,23 @@ test.describe('B.3d: schema-change re-extract prompt', () => {
     let markReadCalls = 0
     await page.route(
       new RegExp(
-        `/api/notebooks/${NB_ID_RE}/events/[^/]+/mark_read$`,
+        `/api/notebooks/${NB_ID_RE}/events/([^/]+)/mark_read$`,
       ),
       async (route) => {
         if (route.request().method() === 'POST') {
           markReadCalls += 1
           eventState.unread = []
+          const match = route
+            .request()
+            .url()
+            .match(/\/events\/([^/]+)\/mark_read/)
+          const eventId = match ? decodeURIComponent(match[1]) : ''
+          // B.3c contract shape: { event_id, success } — see
+          // `notebook_events.py::MarkReadResponse` on main.
           await route.fulfill({
             status: 200,
             contentType: 'application/json',
-            body: JSON.stringify({ ok: true }),
+            body: JSON.stringify({ event_id: eventId, success: true }),
           })
         } else {
           await route.fallback()
@@ -226,13 +273,20 @@ test.describe('B.3d: schema-change re-extract prompt', () => {
     )
 
     await page.route(
-      new RegExp(`/api/notebooks/${NB_ID_RE}/events/[^/]+/mark_read$`),
-      (route) =>
-        route.fulfill({
+      new RegExp(`/api/notebooks/${NB_ID_RE}/events/([^/]+)/mark_read$`),
+      (route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/events\/([^/]+)\/mark_read/)
+        const eventId = match ? decodeURIComponent(match[1]) : ''
+        // B.3c contract shape: { event_id, success }.
+        return route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ ok: true }),
-        }),
+          body: JSON.stringify({ event_id: eventId, success: true }),
+        })
+      },
     )
 
     await page.goto(`/notebooks/${NOTEBOOK_ID}`)
@@ -289,12 +343,14 @@ test.describe('B.3d: schema-change re-extract prompt', () => {
       ),
       async (route) => {
         const match = route.request().url().match(/\/events\/([^/]+)\/mark_read/)
-        if (match) markedReadIds.push(decodeURIComponent(match[1]))
+        const eventId = match ? decodeURIComponent(match[1]) : ''
+        if (match) markedReadIds.push(eventId)
         eventState.unread = []
+        // B.3c contract shape: { event_id, success }.
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ ok: true }),
+          body: JSON.stringify({ event_id: eventId, success: true }),
         })
       },
     )
