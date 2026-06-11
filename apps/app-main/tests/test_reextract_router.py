@@ -22,7 +22,6 @@ from fastapi.testclient import TestClient
 
 from app_main.api.routers.schemas import router
 from app_main.dependencies import (
-    get_notebook_event_repo,
     get_notebook_service,
     get_reextract_service,
     get_source_repo,
@@ -32,7 +31,7 @@ from app_main.services.reextract_service import (
     ReextractResult,
     ReextractService,
 )
-from shared.models import Notebook, NotebookEvent
+from shared.models import Notebook
 
 
 _NOW = datetime(2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc)
@@ -55,7 +54,6 @@ def _make_app(
     *,
     source_repo: AsyncMock | None = None,
     reextract_svc: AsyncMock | None = None,
-    event_repo: AsyncMock | None = None,
 ) -> TestClient:
     app = FastAPI()
     app.include_router(router, prefix="/api")
@@ -64,8 +62,6 @@ def _make_app(
         app.dependency_overrides[get_source_repo] = lambda: source_repo
     if reextract_svc is not None:
         app.dependency_overrides[get_reextract_service] = lambda: reextract_svc
-    if event_repo is not None:
-        app.dependency_overrides[get_notebook_event_repo] = lambda: event_repo
     return TestClient(app)
 
 
@@ -76,6 +72,13 @@ def _make_app(
 
 class TestReextractCandidates:
     def test_returns_all_notebook_sources(self):
+        """V1 returns ALL sources, ignoring the schema_changed event payload's
+        op/type_name. Future work narrows via entity → source index. When that
+        lands, this test must evolve — assert that the candidate list is a
+        SUBSET of all sources scoped to the entities of the modified type.
+        Until then, the conservative "every source is potentially affected"
+        invariant is what the banner relies on.
+        """
         notebook_svc = AsyncMock(spec=NotebookService)
         notebook_svc.get.return_value = _make_notebook()
 
@@ -246,114 +249,49 @@ class TestReextractEnqueue:
         assert resp.status_code == 404
         reextract_svc.enqueue_reextract_jobs.assert_not_awaited()
 
+    def test_filters_out_cross_notebook_source_ids(self):
+        """Minor 1 (attempt 2): an out-of-notebook source id in the
+        payload is silently dropped before reaching the service. The
+        candidate list (via `list_with_metadata`) is the source of
+        truth; anything not on it is treated as a bogus client payload.
+        """
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+
+        # Notebook owns only source:a — source:foreign is from a
+        # different notebook (or simply doesn't exist).
+        source_repo = AsyncMock()
+        source_repo.list_with_metadata.return_value = [{"id": "source:a"}]
+
+        reextract_svc = AsyncMock(spec=ReextractService)
+        reextract_svc.enqueue_reextract_jobs.return_value = ReextractResult(
+            jobs_enqueued=1,
+            source_ids=["source:a"],
+            enqueued_source_ids=["source:a"],
+            skipped_source_ids=[],
+        )
+
+        client = _make_app(
+            notebook_svc,
+            source_repo=source_repo,
+            reextract_svc=reextract_svc,
+        )
+        resp = client.post(
+            f"/api/notebooks/{NOTEBOOK_ID}/schema/reextract",
+            json={"source_ids": ["source:a", "source:foreign"]},
+        )
+
+        assert resp.status_code == 200
+        # The service was called with only the in-notebook id; the
+        # foreign id was dropped at the router layer before reaching
+        # the service.
+        _, kwargs = reextract_svc.enqueue_reextract_jobs.call_args
+        assert kwargs.get("source_ids") == ["source:a"]
+
 
 # ---------------------------------------------------------------------------
-# GET /events (used by the banner to poll schema_changed events)
+# /events and /events/{id}/mark_read coverage lives in
+# `test_schemas_soft_nudge.py` (B.3c). Attempt 1 of B.3d carried a
+# duplicate handler pair in this router; both were dropped during the
+# rebase. The canonical surface is `notebook_events.py` on main.
 # ---------------------------------------------------------------------------
-
-
-def _evt(event_id: str, event_type: str, payload: dict | None = None) -> NotebookEvent:
-    return NotebookEvent(
-        id=event_id,
-        notebook=NOTEBOOK_ID,
-        event_type=event_type,
-        payload=payload or {},
-        created_at=_NOW,
-        read_at=None,
-    )
-
-
-class TestNotebookEventsEndpoint:
-    def test_returns_unread_events_filtered_by_type(self):
-        notebook_svc = AsyncMock(spec=NotebookService)
-        notebook_svc.get.return_value = _make_notebook()
-
-        event_repo = AsyncMock()
-        event_repo.list_unread.return_value = [
-            _evt("notebook_event:e1", "schema_changed", {"op": "rename"}),
-            _evt("notebook_event:e2", "schema_changed", {"op": "merge"}),
-        ]
-
-        client = _make_app(notebook_svc, event_repo=event_repo)
-        resp = client.get(
-            f"/api/notebooks/{NOTEBOOK_ID}/events?type=schema_changed"
-        )
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert len(body) == 2
-        assert body[0]["event_type"] == "schema_changed"
-        assert body[0]["id"] == "notebook_event:e1"
-        assert body[0]["payload"]["op"] == "rename"
-        event_repo.list_unread.assert_awaited_once_with(
-            NOTEBOOK_ID, event_type="schema_changed"
-        )
-
-    def test_no_type_filter_returns_all_unread(self):
-        notebook_svc = AsyncMock(spec=NotebookService)
-        notebook_svc.get.return_value = _make_notebook()
-
-        event_repo = AsyncMock()
-        event_repo.list_unread.return_value = []
-
-        client = _make_app(notebook_svc, event_repo=event_repo)
-        resp = client.get(f"/api/notebooks/{NOTEBOOK_ID}/events")
-
-        assert resp.status_code == 200
-        assert resp.json() == []
-        event_repo.list_unread.assert_awaited_once_with(
-            NOTEBOOK_ID, event_type=None
-        )
-
-    def test_unread_only_false_uses_list_by_notebook(self):
-        notebook_svc = AsyncMock(spec=NotebookService)
-        notebook_svc.get.return_value = _make_notebook()
-
-        event_repo = AsyncMock()
-        event_repo.list_by_notebook.return_value = []
-
-        client = _make_app(notebook_svc, event_repo=event_repo)
-        resp = client.get(
-            f"/api/notebooks/{NOTEBOOK_ID}/events?unread_only=false"
-        )
-
-        assert resp.status_code == 200
-        event_repo.list_by_notebook.assert_awaited_once()
-        event_repo.list_unread.assert_not_awaited()
-
-    def test_returns_404_when_notebook_missing(self):
-        notebook_svc = AsyncMock(spec=NotebookService)
-        notebook_svc.get.return_value = None
-
-        client = _make_app(notebook_svc, event_repo=AsyncMock())
-        resp = client.get(f"/api/notebooks/{NOTEBOOK_ID}/events")
-        assert resp.status_code == 404
-
-    def test_mark_read_calls_repo_with_reconstructed_id(self):
-        notebook_svc = AsyncMock(spec=NotebookService)
-        notebook_svc.get.return_value = _make_notebook()
-
-        event_repo = AsyncMock()
-        event_repo.mark_read.return_value = True
-
-        client = _make_app(notebook_svc, event_repo=event_repo)
-        resp = client.post(
-            f"/api/notebooks/{NOTEBOOK_ID}/events/abc-123/mark_read"
-        )
-
-        assert resp.status_code == 200
-        assert resp.json() == {"ok": True}
-        event_repo.mark_read.assert_awaited_once_with("notebook_event:abc-123")
-
-    def test_mark_read_returns_404_when_event_missing(self):
-        notebook_svc = AsyncMock(spec=NotebookService)
-        notebook_svc.get.return_value = _make_notebook()
-
-        event_repo = AsyncMock()
-        event_repo.mark_read.return_value = False
-
-        client = _make_app(notebook_svc, event_repo=event_repo)
-        resp = client.post(
-            f"/api/notebooks/{NOTEBOOK_ID}/events/missing/mark_read"
-        )
-        assert resp.status_code == 404
