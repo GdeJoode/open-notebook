@@ -8,7 +8,6 @@
 
 import apiClient from './client'
 import type {
-  NotebookEventView,
   NotebookSchemaResponse,
   Pass1ResultView,
   ReextractCandidatesResponse,

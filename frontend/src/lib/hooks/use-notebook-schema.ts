@@ -37,12 +37,12 @@ import {
 import {
   notebookSchemaApi,
   type MergeTypesRequest,
+  type NotebookEventView,
   type ReextractRequest,
   type RenameTypeRequest,
   type SplitTypeRequest,
 } from '@/lib/api/notebook-schema'
 import type {
-  NotebookEventView,
   NotebookSchemaResponse,
   ReextractCandidatesResponse,
   ReextractResponse,

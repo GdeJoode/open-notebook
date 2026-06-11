@@ -66,19 +66,14 @@ export interface NotebookSchemaResponse {
 // ---------------------------------------------------------------------------
 // Phase B.3d — re-extract prompt contracts
 // ---------------------------------------------------------------------------
-
-export interface NotebookEventView {
-  id: string
-  notebook_id: string
-  /** Discriminator e.g. `"schema_changed"`, `"extension_suggested"`. */
-  event_type: string
-  /** Op-specific context bag — e.g. `{ op: "rename", old_name, new_name }`. */
-  payload: Record<string, unknown>
-  /** ISO-8601 timestamp; null for legacy rows. */
-  created_at?: string | null
-  /** ISO-8601 timestamp; null until the consumer calls mark_read. */
-  read_at?: string | null
-}
+//
+// `NotebookEventView` is declared in
+// `frontend/src/lib/api/notebook-schema.ts` as the canonical projection
+// returned by the B.3c `/events` endpoint. B.3d intentionally does NOT
+// re-declare it here — duplicating the shape across modules drifted
+// during attempt 1 (B.3d's version added `payload` + `notebook_id` that
+// the B.3c contract does not actually return). Banners that need a
+// `payload` bag should fetch it via a follow-up endpoint instead.
 
 export interface ReextractCandidatesResponse {
   notebook_id: string
