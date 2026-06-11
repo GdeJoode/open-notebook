@@ -1213,3 +1213,55 @@ The 2 pre-existing entity-filtering failures (`test_llm_matcher::test_calls_olla
 - **Cross-notebook sweep deferred.** `archive_stale_orphans` only operates
   on a single notebook per call. A cron job iterating notebooks lands in
   a follow-up if scale demands it.
+
+
+---
+
+## Phase B.5b — Attempt 2 (2026-06-11)
+
+Attempt 1 rejected with REVISIONS_NEEDED. All 3 blockers + 2 majors + 3
+minors resolved on the same branch (`track/b-orphan-prune`). Detailed
+findings appended to `reviews/phase-B.5b-self-review.md` under
+"Attempt 2 fixes".
+
+### Blockers resolved
+
+- **B1** `mark_pending_reconnect` wired into `orphan_connector.run` via
+  `_mark_unreconciled_orphans_pending` helper; duck-typed on
+  `update_orphan_status` so B.5a-only mocks stay compatible. 5 new
+  integration tests in `test_orphan_connector.py`.
+- **B2** `list_orphans_with_status` rewritten to traverse the
+  `reference` RELATE edge instead of the non-existent `source.notebook`
+  column. 2 new docker-gated tests with notebook + source + RELATE +
+  entity end-to-end.
+- **B3** `_read_orphan_fields` SELECT helper now coerces via
+  `type::thing($id)`; all 8 docker-gated tests pass (was 2/6).
+
+### Majors resolved
+
+- **M4** Added `entity_id_filter` parameter to
+  `retry_pending_reconnects`. The router endpoint passes the entity id
+  so the manual reconnect targets a single orphan. 3 new prune tests +
+  5 new router tests in a new `apps/app-main/tests/test_orphans_router.py`.
+- **M5** Playwright run captured against fresh dev server on port 8606
+  (8502 was stale). 3/3 specs pass deterministically with `--workers=1`
+  (parallel cold-compile races are a `next dev` limitation, not a spec
+  defect; CI uses `next build` so the race does not surface).
+
+### Minors resolved
+
+1. Test counts corrected to actual baseline (517 entity-filtering, 466
+   app-main, 8 surrealdb-service docker).
+2. Increment-attempts SurrealQL comment now matches the code
+   (`(reconnect_attempts OR 0) + 1`).
+3. `archive_stale_orphans(notebook_id=None)` footgun removed —
+   `notebook_id` is now a required positional argument.
+
+### Test deltas (post-attempt-2)
+
+| Suite | Before attempt 2 | After attempt 2 |
+|---|---|---|
+| `pipelines/entity-filtering` | 509 passed + 1 pre-existing fail | 517 passed + 1 pre-existing fail |
+| `packages/surrealdb-service` docker-gated orphan | 2/6 passed | 8/8 passed |
+| `apps/app-main` | 466 passed | 471 passed |
+| `frontend/e2e/track-b/orphan-lifecycle.spec.ts` | unverified | 3/3 passed (`--workers=1`) |

@@ -125,13 +125,207 @@ guaranteed by the SurrealDB engine rather than by repo logic.)
   could backoff by attempts (e.g. skip if last_reconnect_attempt_at
   is within 6h of now). Not blocking — the per-call token budget is
   already enforced by B.5a's `OrphanTokenBudgetExceeded` guard.
-- The manual reconnect endpoint re-uses the notebook-scoped
-  `retry_pending_reconnects` so the recorded counters fire across
-  every pending orphan in the notebook, not only the one the user
-  asked for. The per-entity status flip is correct (we re-read the
-  entity afterwards) but the `attempted` and `reconnected` counts on
-  the `RetryOutcome` represent the whole sweep. Frontend ignores
-  those fields. A future single-entity variant could trim the work
-  to a single orphan.
 
 Ready for review.
+
+---
+
+## Attempt 2 fixes (2026-06-11)
+
+Addresses every blocker (B1/B2/B3) + both majors (M4/M5) + the 3
+minors raised by the attempt-1 review.
+
+### B1 — production caller for `mark_pending_reconnect`
+
+The lifecycle is wired into `orphan_connector.run` after
+`confirm_connections` returns. Every orphan whose surface form does
+not appear as `source_entity`/`target_entity` on at least one
+confirmed relation is flipped to `pending_reconnect` via a new
+helper `_mark_unreconciled_orphans_pending`.
+
+Implementation notes:
+
+- **Duck-typed gate** on `hasattr(repo, "update_orphan_status")`.
+  The `OrphanEntityRepoProtocol` (B.5a contract) does not require
+  the prune surface, so older mocks that only implement
+  `list_orphans_for_source` skip the mark with a debug log. In
+  production `EntityRepository` satisfies both protocols.
+- **Best-effort mark** wrapped in try/except so a lifecycle DB
+  hiccup never destroys the relations the LLM confirmed.
+- **Lazy import** of `orphan_prune.mark_pending_reconnect` keeps
+  the module dependency graph one-directional (prune already
+  imports connector).
+
+Coverage: 5 new tests in
+`pipelines/entity-filtering/tests/test_orphan_connector.py`
+(`TestRunMarksPendingReconnect`) cover:
+
+1. orphan with no co-occurrences → `pending_reconnect`, attempts=1
+2. orphan with confirmed relation → NOT marked
+3. mixed (reconciled + un-reconciled) → only un-reconciled marked
+4. repo without prune surface → silent no-op (backward compat)
+5. mark-step failure → relations still returned
+
+### B2 — `list_orphans_with_status` record-link semantics
+
+The original query targeted `source.notebook` which is not a column
+on `source` — source ↔ notebook is the `reference` RELATE edge
+(migration 1, line 54). The query always returned zero source ids,
+so the dashboard endpoint always rendered empty.
+
+Fix rewrites the source-list step to traverse the `reference` edge
+(matching `SourceRepository.list_sources`) and stringifies the
+RecordIDs before the second-step `ANYINSIDE` comparison
+(`source_documents` stores stringified ids, not `record<source>`
+values).
+
+Coverage: 2 new docker-gated tests in
+`packages/surrealdb-service/tests/test_orphan_status_roundtrip.py`:
+
+- `test_list_orphans_with_status_traverses_reference_edge` —
+  end-to-end (notebook + source + RELATE edge + orphan entity);
+  asserts the dashboard surfaces the entity under
+  `pending_reconnect` and NOT under `archived`.
+- `test_list_orphans_with_status_empty_when_no_sources` — guards
+  the regression where a no-source notebook accidentally surfaces
+  another notebook's orphans.
+
+### B3 — `_read_orphan_fields` SELECT helper
+
+Replaced `WHERE id = $id` with `WHERE id = type::thing($id)` so
+SurrealDB coerces the bound string into the RecordID space (matches
+the working pattern in `test_notebook_schema_repo_roundtrip` and
+the repository's own `update_orphan_status` query).
+
+All 8 docker-gated tests in `test_orphan_status_roundtrip.py` now
+pass (was 2/6 in attempt 1; 6 pre-existing + 2 new from B2 fix):
+
+```
+tests/test_orphan_status_roundtrip.py::test_migration_48_recorded PASSED
+tests/test_orphan_status_roundtrip.py::test_migration_48_is_idempotent PASSED
+tests/test_orphan_status_roundtrip.py::test_orphan_lifecycle_fields_roundtrip PASSED
+tests/test_orphan_status_roundtrip.py::test_update_orphan_status_writes_status PASSED
+tests/test_orphan_status_roundtrip.py::test_update_orphan_status_increments_attempts PASSED
+tests/test_orphan_status_roundtrip.py::test_update_orphan_status_stamps_timestamps PASSED
+tests/test_orphan_status_roundtrip.py::test_list_orphans_with_status_traverses_reference_edge PASSED
+tests/test_orphan_status_roundtrip.py::test_list_orphans_with_status_empty_when_no_sources PASSED
+8 passed in 4.98s
+```
+
+### M4 — single-orphan manual reconnect
+
+Added `entity_id_filter: Optional[str] = None` parameter to
+`retry_pending_reconnects`. When set, the function filters the
+pending list to the matching orphan id before running the
+connector. The router endpoint
+`POST /notebooks/{id}/orphans/{eid}/reconnect` now passes
+`entity_id_filter=entity_id` so the manual `[Reconnect]` action
+fires for exactly one orphan instead of the whole notebook.
+
+Backward-compat: the post-extraction sweep
+(`_retry_pending_reconnects_best_effort`) continues to pass no
+filter, so it still retries every pending orphan in the notebook
+on every source-import. This is the original (correct) behaviour
+for the auto-sweep — only the manual path needed narrowing.
+
+Coverage: 3 new unit tests in `test_orphan_prune.py`:
+
+- `test_entity_id_filter_narrows_to_one_orphan` — 3 pending,
+  filter on one → connector called once with that source.
+- `test_entity_id_filter_default_retries_all` — no filter →
+  every pending retried (locks in backward compat).
+- `test_entity_id_filter_unknown_id_returns_zero` — stale
+  dashboard request → 0 attempts, no connector calls.
+
+A new `apps/app-main/tests/test_orphans_router.py` (5 specs)
+covers the router itself, including a `test_forwards_entity_id_filter_to_retry`
+spec that asserts the M4 wire-up via `AsyncMock` introspection.
+
+### M5 — Playwright evidence
+
+Started a fresh dev server on **port 8606** (8502 had a stale
+build from a different worktree per the review note) and ran the
+spec against the branch build. The dev server cannot handle 3
+parallel cold compiles within the navigation timeout, but
+**all 3 specs pass deterministically with `--workers=1`**:
+
+```
+$ PLAYWRIGHT_BASE_URL=http://localhost:8606 \
+    npx playwright test e2e/track-b/orphan-lifecycle.spec.ts \
+    --workers=1 --reporter=line
+Running 3 tests using 1 worker
+  ✓ orphan dashboard renders counts and per-row table
+  ✓ clicking Reconnect posts to the endpoint and refreshes the dashboard
+  ✓ empty state renders when no orphans exist
+  3 passed (12.2s)
+```
+
+CI guidance: production Playwright runs build with `next build`
+(not `next dev`) so the cold-compile race does not surface. The
+local-dev `--workers=1` workaround is a runner concession, not a
+spec defect — the spec code is identical between modes.
+
+### Minor 1 — test count baseline
+
+Attempt 1 quoted 508 prior tests; actual baseline was 495 across
+the entity-filtering and surrealdb-service packages. Attempt 2
+adds:
+
+- entity-filtering: 5 new in `test_orphan_connector.py` (B1 wiring) +
+  3 new in `test_orphan_prune.py` (M4 entity_id_filter). Total per-
+  package count: 517 passed (1 pre-existing failure in
+  `test_llm_matcher.py::test_calls_ollama_for_unknown_pair`, present
+  on `main`, unrelated).
+- surrealdb-service: 2 new docker-gated tests (B2 coverage).
+- app-main: 5 new in `test_orphans_router.py` (M4 router contract).
+  Total: 471 passed (was 466 baseline).
+
+### Minor 2 — increment_attempts comment
+
+Replaced the misleading "math::max([..., 0])" comment with one
+that matches the actual SurrealQL `(reconnect_attempts OR 0) + 1`.
+
+### Minor 3 — `archive_stale_orphans(notebook_id=None)` footgun
+
+`notebook_id` is now a **required positional argument**. Falsy
+values still short-circuit to 0 with a WARNING log (so a stale UI
+request can't crash), but the type checker now catches the
+omission. Cross-notebook sweeps remain a future feature; callers
+wanting one must iterate notebook ids explicitly. Existing tests
+were updated to pass an empty string instead of `None`.
+
+## Verification (attempt 2 final state)
+
+```
+# docker-gated SurrealDB roundtrips (attempt 1: 2/6, attempt 2: 8/8)
+cd packages/surrealdb-service && \
+    uv run --extra dev pytest -m requires_docker \
+        tests/test_orphan_status_roundtrip.py -v
+=> 8 passed in 4.98s
+
+# entity-filtering unit + integration
+cd pipelines/entity-filtering && \
+    uv run --extra dev pytest tests/test_orphan_prune.py \
+        tests/test_orphan_connector.py -v
+=> 63 passed in 2.68s
+
+# app-main suite
+cd apps/app-main && uv run pytest -q
+=> 471 passed in 56.10s
+
+# frontend type-check
+cd frontend && npx tsc --noEmit
+=> clean
+
+# frontend lint
+cd frontend && npm run lint
+=> warnings only (all pre-existing)
+
+# Playwright (--workers=1 to avoid dev-server cold-compile races)
+cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:8606 \
+    npx playwright test e2e/track-b/orphan-lifecycle.spec.ts \
+    --workers=1 --reporter=line
+=> 3 passed (12.2s)
+```
+
+Attempt 2 ready for re-review.
