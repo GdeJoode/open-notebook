@@ -148,6 +148,7 @@ def create_app() -> FastAPI:
         notebooks,
         notes,
         ontologies,
+        orphans,
         podcasts,
         preprocessing,
         resolution_log,
@@ -196,6 +197,7 @@ def create_app() -> FastAPI:
     application.include_router(chat.router, prefix="/api", tags=["chat"])
     application.include_router(source_chat.router, prefix="/api", tags=["source-chat"])
     application.include_router(ontologies.router, prefix="/api", tags=["ontologies"])
+    application.include_router(orphans.router, prefix="/api", tags=["orphans"])
     application.include_router(
         knowledge_graph.router, prefix="/api", tags=["knowledge-graph"]
     )

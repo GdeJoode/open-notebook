@@ -1,0 +1,35 @@
+-- Migration 48: orphan-prune lifecycle fields on entity (Phase B.5b)
+--
+-- Phase B.5b layers a status lifecycle on top of B.5a's orphan_connector so
+-- entities that fail confirmation get a managed retry pathway instead of
+-- silently lingering. The values for ``orphan_status`` are:
+--
+--   * NONE (default)    -- entity is healthy, no orphan-handling needed
+--   * "pending_reconnect" -- last B.5a run produced no confirmed relation;
+--                            subsequent source-imports retry the connector
+--   * "archived"        -- ``reconnect_attempts >= max_attempts`` OR
+--                          ``first_orphaned_at`` exceeded the age threshold.
+--                          The entity is NOT deleted; the UI hides it from
+--                          the active dashboard, ops can still query history.
+--
+-- Companion fields:
+--
+--   * ``reconnect_attempts``      -- monotonic count of B.5a re-run attempts.
+--   * ``first_orphaned_at``       -- timestamp of the FIRST time the entity
+--                                    landed in ``pending_reconnect``. Used
+--                                    by the age-based archive rule.
+--   * ``last_reconnect_attempt_at`` -- timestamp of the most recent retry,
+--                                      so the dashboard can show "last
+--                                      attempted <relative time>".
+--
+-- Additive only: every field has a safe default (``NONE`` for the option
+-- types, ``0`` for the int) so pre-existing rows read back unchanged.
+--
+-- Idempotent: every DEFINE uses ``IF NOT EXISTS`` so re-running on a DB
+-- that already has these fields is a no-op. The B.0 testcontainers harness
+-- validates this by replaying the migration.
+
+DEFINE FIELD IF NOT EXISTS orphan_status ON TABLE entity TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS reconnect_attempts ON TABLE entity TYPE int DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS first_orphaned_at ON TABLE entity TYPE option<datetime>;
+DEFINE FIELD IF NOT EXISTS last_reconnect_attempt_at ON TABLE entity TYPE option<datetime>;

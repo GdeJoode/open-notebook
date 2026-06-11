@@ -566,6 +566,205 @@ class TestRun:
 
 
 # ---------------------------------------------------------------------------
+# B.5b production wiring: mark_pending_reconnect after run() (attempt 2 B1)
+# ---------------------------------------------------------------------------
+
+
+class _PruneRepoMock:
+    """Mock implementing BOTH the connector and prune surfaces.
+
+    Captures every ``update_orphan_status`` call so the integration test
+    can assert the lifecycle write happened with the right shape. Models
+    just enough state to make the assertions exact.
+    """
+
+    def __init__(self, orphans_by_source):
+        self._orphans_by_source = dict(orphans_by_source)
+        # Mirror the entity rows back as a mutable map so the recorded
+        # writes can be checked against the resulting state.
+        self.entities = {
+            row["id"]: dict(row)
+            for rows in orphans_by_source.values()
+            for row in rows
+        }
+        self.update_calls = []
+
+    async def list_orphans_for_source(self, source_id):
+        return [dict(row) for row in self._orphans_by_source.get(source_id, [])]
+
+    async def update_orphan_status(
+        self,
+        entity_id,
+        status,
+        *,
+        increment_attempts=False,
+        set_first_orphaned_at=False,
+        set_last_reconnect_attempt_at=False,
+    ):
+        self.update_calls.append(
+            {
+                "entity_id": entity_id,
+                "status": status,
+                "increment_attempts": increment_attempts,
+                "set_first_orphaned_at": set_first_orphaned_at,
+                "set_last_reconnect_attempt_at": set_last_reconnect_attempt_at,
+            }
+        )
+        row = self.entities.get(entity_id)
+        if row is None:
+            return False
+        row["orphan_status"] = status
+        if increment_attempts:
+            row["reconnect_attempts"] = (
+                int(row.get("reconnect_attempts") or 0) + 1
+            )
+        return True
+
+
+class TestRunMarksPendingReconnect:
+    """B1 (attempt 2): wire ``mark_pending_reconnect`` into ``run``.
+
+    The reviewer rejected attempt 1 because the lifecycle had no
+    production caller. These tests pin the new contract:
+
+    1. When the connector confirms ZERO relations for an orphan, the
+       orphan is flipped to ``pending_reconnect`` with attempts=1.
+    2. When the connector confirms a relation that references the
+       orphan, the orphan is NOT marked pending (it has been
+       reconciled).
+    3. When the repository does not implement the prune surface (i.e.
+       a stripped-down B.5a-only mock), the mark step is a silent
+       no-op so existing tests stay green.
+    """
+
+    async def test_marks_orphan_pending_when_no_relations_confirmed(self):
+        """Orphan with NO co-occurring partner -> pending_reconnect."""
+        repo = _PruneRepoMock(
+            {"source:demo": [_entity_row("entity:o1", "Alice")]}
+        )
+        # Alice doesn't co-occur with anyone -> 0 proposals -> 0 relations.
+        chunks = [_chunk("c-1", "Bob met Carol.", ["Bob", "Carol"])]
+        llm = RecordingLLM("UNREACHED")
+
+        relations = await run("source:demo", chunks, repo, llm)
+
+        assert relations == []
+        # Exactly one update call for entity:o1, flipping to pending.
+        assert len(repo.update_calls) == 1
+        call = repo.update_calls[0]
+        assert call["entity_id"] == "entity:o1"
+        assert call["status"] == "pending_reconnect"
+        assert call["increment_attempts"] is True
+        assert call["set_first_orphaned_at"] is True
+        assert call["set_last_reconnect_attempt_at"] is True
+        # Counter advanced to 1 on the row itself.
+        assert repo.entities["entity:o1"]["reconnect_attempts"] == 1
+        assert (
+            repo.entities["entity:o1"]["orphan_status"] == "pending_reconnect"
+        )
+
+    async def test_does_not_mark_when_orphan_reconciled(self):
+        """Orphan that DID gain a relation stays unflagged.
+
+        ``confirm_connections`` returns a relation referencing Alice;
+        the mark step must skip Alice and leave the lifecycle alone.
+        """
+        repo = _PruneRepoMock(
+            {"source:demo": [_entity_row("entity:o1", "Alice")]}
+        )
+        chunks = [_chunk("c-1", "Alice and Bob met.", ["Alice", "Bob"])]
+        llm = RecordingLLM(_ok_response("MET", 0.9))
+
+        relations = await run("source:demo", chunks, repo, llm)
+
+        assert len(relations) == 1
+        # NO update_orphan_status call for the reconciled orphan.
+        assert repo.update_calls == []
+        # Lifecycle untouched.
+        assert (
+            repo.entities["entity:o1"].get("orphan_status")
+            in (None, "")
+        )
+
+    async def test_marks_unreconciled_subset_when_mixed(self):
+        """Two orphans, one reconciled, one not -> exactly one mark.
+
+        Confirms the mark step targets only the orphan(s) that did NOT
+        gain any relation, not the whole orphan set indiscriminately.
+        """
+        repo = _PruneRepoMock(
+            {
+                "source:demo": [
+                    _entity_row("entity:o1", "Alice"),
+                    _entity_row("entity:o2", "Carol"),
+                ]
+            }
+        )
+        # Alice co-occurs with Bob; Carol has no partner in the chunk.
+        chunks = [
+            _chunk("c-1", "Alice and Bob met.", ["Alice", "Bob"]),
+        ]
+        llm = RecordingLLM(_ok_response("KNOWS", 0.9))
+
+        relations = await run("source:demo", chunks, repo, llm)
+
+        assert len(relations) == 1
+        # Only Carol gets marked pending.
+        assert len(repo.update_calls) == 1
+        assert repo.update_calls[0]["entity_id"] == "entity:o2"
+        assert repo.update_calls[0]["status"] == "pending_reconnect"
+
+    async def test_no_pending_mark_when_repo_lacks_prune_surface(self):
+        """Connector-only mocks (MockOrphanRepo) silently skip the mark.
+
+        This is the backward-compat hatch: the B.5a contract on
+        ``OrphanEntityRepoProtocol`` does not require
+        ``update_orphan_status``, and many older tests inject mocks
+        that don't have it. The wire step must duck-type and skip.
+        """
+        repo = MockOrphanRepo(
+            {"source:demo": [_entity_row("entity:o1", "Alice")]}
+        )
+        chunks = [_chunk("c-1", "Bob met Carol.", ["Bob", "Carol"])]
+        llm = RecordingLLM("UNREACHED")
+
+        # Should not raise even though the repo lacks update_orphan_status.
+        relations = await run("source:demo", chunks, repo, llm)
+
+        assert relations == []
+        # The duck-type gate fires; no AttributeError.
+        assert not hasattr(repo, "update_orphan_status")
+
+    async def test_mark_step_failure_does_not_lose_confirmed_relations(self):
+        """A failing update_orphan_status must not drop the run's output.
+
+        The relations we DID confirm are valuable; an orphan-prune
+        hiccup is not a reason to lose them.
+        """
+
+        class _BrokenPruneRepo(_PruneRepoMock):
+            async def update_orphan_status(self, *args, **kwargs):
+                raise RuntimeError("simulated DB blip")
+
+        repo = _BrokenPruneRepo(
+            {
+                "source:demo": [
+                    _entity_row("entity:o1", "Alice"),
+                    _entity_row("entity:o2", "Carol"),  # un-reconciled
+                ]
+            }
+        )
+        chunks = [_chunk("c-1", "Alice and Bob met.", ["Alice", "Bob"])]
+        llm = RecordingLLM(_ok_response("KNOWS", 0.9))
+
+        relations = await run("source:demo", chunks, repo, llm)
+
+        # The confirmed relation survives the mark-step failure.
+        assert len(relations) == 1
+        assert relations[0].source_entity == "Alice"
+
+
+# ---------------------------------------------------------------------------
 # Prompt + response shape
 # ---------------------------------------------------------------------------
 
