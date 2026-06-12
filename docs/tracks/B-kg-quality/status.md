@@ -1405,3 +1405,61 @@ All 6 ACs verified — see self-review.
 - No audit log / undo for merge operations.
 - No load test for the 1000-entity AC (algorithm is linear, well
   within budget).
+
+## Phase B.6 — Attempt 2 (review fix-up, 2026-06-12)
+
+Reviewer rejected attempt 1 with REVISIONS_NEEDED (B1 + B2 blockers,
+M3 + M4 majors, 5 minors). All addressed in attempt 2.
+
+### Fixes
+
+- **B1 (idempotency)**: replaced `updated_at` snapshot signal with
+  semantic-content comparison
+  (`canonical_name`, `entity_type`, `primary_type`, `confidence`,
+  sorted `type_tags`, sorted `source_documents`, `properties`).
+  Regression test uses a strict-advance mock that mirrors production's
+  `time::now()` bump on every upsert — the old implementation would
+  have failed against this mock.
+- **B2 (self-merge guard)**: router now returns 422 when
+  `target_id ∈ source_ids` (and when sources_ids is empty). Three
+  router tests cover the cases.
+- **M3 (rename + docstring)**: `_find_target_entity` →
+  `_find_canonical_entity`; docstring now accurately describes the
+  global lookup by `(canonical_name, entity_type)` (migration 39
+  keying). Unused `notebook_id` parameter dropped.
+- **M4 (honest mock)**: `_make_service_with_fake_db` now persists the
+  full post-write row from the upserted Entity model and advances
+  `updated_at` via a per-call counter. The strict-advance signal is
+  what made `test_idempotent_re_run` a meaningful regression test.
+- **Minor 1**: `_create_relation` now returns `bool` indicating
+  whether a fresh edge was written (folded the standalone probe in
+  the commit path; one round-trip per relation instead of two). The
+  dry-run path keeps the read-only probe.
+- **Minor 2**: pre-write entity probe replaces the pre+post pair (one
+  query per entity).
+- **Minor 3**: router rejects archived target (422) and archived
+  source notebooks (422 per source). Two tests cover both.
+- **Minor 4**: dialog component-level tests deferred — Playwright e2e
+  exercises the same code paths.
+- **Minor 5**: conflict UX deferral acknowledged as out-of-scope.
+
+### Files touched
+
+- `apps/app-main/src/app_main/services/notebook_merge_service.py`
+  (semantic comparison, rename, fold)
+- `apps/app-main/src/app_main/api/routers/notebooks.py`
+  (overlap/archived guards)
+- `apps/app-main/tests/test_notebook_merge_service.py`
+  (strict-advance mock + tightened idempotency assertions)
+- `apps/app-main/tests/test_notebooks_router.py`
+  (8 new merge router tests)
+
+### Test deltas
+
+| Suite | Before (attempt 1) | After (attempt 2) |
+|---|---|---|
+| `apps/app-main` | 500 passed | 508 passed (+8 router tests) |
+| `packages/shared` | 154 passed | 154 passed |
+| `frontend/e2e/track-b/notebook-merge.spec.ts` | 1/1 | 1/1 |
+
+Rebase on `main` was clean (no conflicts).

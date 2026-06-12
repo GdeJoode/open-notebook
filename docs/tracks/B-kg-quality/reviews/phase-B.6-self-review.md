@@ -151,3 +151,133 @@
   agent environment.
 
 ## Ready for review.
+
+---
+
+## Attempt 2 fixes (2026-06-12)
+
+Reviewer rejected attempt 1 with REVISIONS_NEEDED (2 blockers + 2
+majors + 5 minors). This section explains the fixes.
+
+### B1 — semantic-content idempotency (was timestamp-based)
+
+Attempt 1 used an `updated_at`-mismatch signal:
+
+```
+existing_before = await self._find_target_entity(...)
+await self._entity_repo.upsert_entity(entity_model)
+existing_after  = await self._find_target_entity(...)
+if existing_after["updated_at"] != existing_before["updated_at"]:
+    entities_changed += 1
+```
+
+Production `EntityRepository.upsert_entity` unconditionally runs
+`SET ..., updated_at = time::now()`, so on a second pass the timestamp
+ALWAYS changes — counter inflates to "every contributed entity"
+instead of zero. The mock obscured this because it wrote the same
+constant `"2026-06-12T00:00:00Z"` to the after-row.
+
+Attempt 2 switches to semantic comparison. Algorithm:
+
+1. Compute the would-be merged `Entity` model BEFORE calling upsert.
+2. Read the existing row pre-write via `_find_canonical_entity`.
+3. Compare via `_entity_matches(merged, existing_row)`. Fields:
+   - `canonical_name` (string equality)
+   - `entity_type` (string equality)
+   - `primary_type` (string equality)
+   - `confidence` (float equality)
+   - `type_tags` (sorted-list equality — set semantics)
+   - `source_documents` (sorted-list equality — set semantics)
+   - `properties` (dict equality)
+4. If `existing_before is None` → counter += 1 (CREATE).
+5. Else if NOT `_entity_matches(...)` → counter += 1 (UPDATE that
+   actually changed the row).
+6. Else → counter stays put (true no-op).
+
+`updated_at` and `id` are deliberately NOT in the comparison set so
+the bumped timestamp doesn't trigger a false positive.
+
+Regression test: `test_idempotent_re_run` now uses a strict-advance
+mock (`fake.upsert_call_count` increments on every upsert, producing
+`2026-06-12T00:00:01Z`, `…:02Z`, …). The test asserts:
+
+- First run: `entities_merged=1, relations_created=1`
+- Second run: `entities_merged=0, relations_created=0`
+- `mock_upsert.call_count == 2` (proves we re-ran the upsert)
+- After-write timestamp is `…00:02Z` (proves the strict-advance mock
+  is wired correctly)
+
+Verified stdout from `pytest -v -s tests/test_notebook_merge_service.py::test_idempotent_re_run`:
+
+```
+merge_notebooks: ... entities=1 relations=1 conflicts=0 dry_run=False
+merge_notebooks: ... entities=0 relations=0 conflicts=0 dry_run=False
+PASSED
+```
+
+This test would FAIL on attempt-1 implementation (the strict-advance
+mock makes the timestamp-mismatch always fire).
+
+### B2 — `target_id ∈ source_ids` guard at the API boundary
+
+`apps/app-main/src/app_main/api/routers/notebooks.py:226-244`. Added
+explicit 422 with detail `"target_id cannot appear in source_ids"`.
+Empty-list case already 422 via pydantic `min_length=1` + explicit
+fallback. Tests in `tests/test_notebooks_router.py::TestMergeNotebooks`:
+
+- `test_merge_rejects_overlapping_target_and_source` — 422 +
+  `merge_service.merge_notebooks.assert_not_called()`
+- `test_merge_rejects_target_in_mixed_source_list` — same, multi-source
+- `test_merge_rejects_empty_source_ids` — 422
+
+### M3 — rename `_find_target_entity` → `_find_canonical_entity`
+
+Renamed in place + docstring corrected to describe the actual semantics
+(global lookup by `(canonical_name, entity_type)` keyed per migration
+39). Dropped the unused `notebook_id` parameter.
+
+### M4 — strict-advance mock (covered above)
+
+Mock now persists the FULL post-write row and uses a per-call counter
+to drive `updated_at`. Honest contract.
+
+### Minor 1 — fold `_relation_exists` into `_create_relation` return
+
+`_create_relation` now returns `bool(rows)` based on the IF/RELATE
+SurrealQL block. The dry-run path still calls the standalone
+`_relation_exists` (must not write).
+
+### Minor 2 — fold pre-write probe
+
+B1 fix already eliminated the post-write `_find_target_entity` call;
+only ONE probe per entity now (pre-write).
+
+### Minor 3 — archived-notebook rejection at API boundary
+
+Router now rejects archived target (422 + "archived" detail) and
+archived sources (422 per-source detail). Tests:
+
+- `test_merge_rejects_archived_target`
+- `test_merge_rejects_archived_source`
+
+### Minor 4 — MergeNotebookDialog component tests
+
+Deferred. The Playwright spec covers the dialog's full happy-path UX
+(open → select sources → preview shows counts → confirm → close).
+Adding a vitest unit layer is low marginal value when the e2e already
+exercises the same code-paths against a real DOM.
+
+### Minor 5 — conflict UX deferral
+
+Acknowledged as out-of-scope per attempt 1.
+
+### Verification
+
+- `apps/app-main`: **508 tests pass** (+8 new merge router tests).
+- `packages/shared`: 154 pass.
+- Frontend `npx tsc --noEmit`: clean.
+- Frontend `npm run lint`: zero new warnings (all pre-existing).
+- Playwright `notebook-merge.spec.ts`: 1/1 pass (~7.7s, port 8503).
+
+No new dependencies. No architectural changes. Rebase on `main` was
+clean (no conflicts).
