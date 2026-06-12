@@ -218,16 +218,15 @@ async def merge_notebooks(
     conflicts list, echoed source/target ids).
 
     Errors:
-        404 — the target notebook doesn't exist.
+        404 — the target notebook (or any source notebook) doesn't exist.
         422 — empty ``source_ids`` (pydantic ``min_length=1`` already
               rejects this before we get here, but the explicit guard
-              documents intent for direct service calls).
+              documents intent for direct service calls), or
+              ``target_id`` appears in ``source_ids`` (merging a notebook
+              into itself is meaningless and silently inflates the
+              idempotency counter — reject early at the API boundary),
+              or any of the referenced notebooks is archived.
     """
-    target = await notebook_service.get(body.target_id)
-    if not target:
-        raise HTTPException(
-            status_code=404, detail="Target notebook not found"
-        )
     # Pydantic min_length=1 will reject empty arrays at validation time
     # with a 422 already — this branch only fires for service-side
     # callers and keeps the contract explicit.
@@ -235,6 +234,46 @@ async def merge_notebooks(
         raise HTTPException(
             status_code=422, detail="source_ids must not be empty"
         )
+
+    # B2 guard: a notebook cannot be both a source and the target. The
+    # service would silently "merge it into itself" and inflate the
+    # idempotency counter on a re-run — reject early so the contract is
+    # clear at the boundary.
+    if body.target_id in body.source_ids:
+        raise HTTPException(
+            status_code=422,
+            detail="target_id cannot appear in source_ids",
+        )
+
+    target = await notebook_service.get(body.target_id)
+    if not target:
+        raise HTTPException(
+            status_code=404, detail="Target notebook not found"
+        )
+    if getattr(target, "archived", False):
+        raise HTTPException(
+            status_code=422,
+            detail="Target notebook is archived; unarchive before merging",
+        )
+
+    # Minor 3: validate sources exist + are not archived before the
+    # merge. We hit one extra round-trip per source but the cost is
+    # dominated by the entity scan that follows.
+    for source_id in body.source_ids:
+        source_nb = await notebook_service.get(source_id)
+        if not source_nb:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Source notebook not found: {source_id}",
+            )
+        if getattr(source_nb, "archived", False):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Source notebook is archived: {source_id} "
+                    "(unarchive before merging)"
+                ),
+            )
 
     report = await merge_service.merge_notebooks(
         source_notebook_ids=body.source_ids,
