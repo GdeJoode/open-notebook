@@ -1,5 +1,80 @@
 # Track B — KG quality: rolling status
 
+## Phase B.3d — Schema-change → re-extract prompt (2026-06-10, attempt 2)
+
+**Branch**: `track/b-reextract-prompt`
+**State**: attempt 2 — rebased on B.3c-bearing main; ready for re-review.
+**Self-review**: `docs/tracks/B-kg-quality/reviews/phase-B.3d-self-review.md`
+  (see "Attempt 2 fixes" section for the B.3c reconciliation strategy)
+
+### What landed
+
+Backend (`apps/app-main/src/app_main/api/routers/schemas.py`):
+
+- `GET /api/notebooks/{id}/schema/reextract_candidates` — affected source ids
+  (V1: all notebook sources; conservative pending Track G entity→source index).
+- `POST /api/notebooks/{id}/schema/reextract` with `{source_ids: [...]}` —
+  enqueues one `ENTITY_EXTRACT` job per source via the existing
+  `CommandService` dispatch path. Idempotent per-source dedup; out-of-
+  notebook source ids are filtered before reaching the service layer
+  (Minor 1 defence-in-depth fix).
+
+Service (`apps/app-main/src/app_main/services/reextract_service.py`):
+
+- `ReextractService.enqueue_reextract_jobs(notebook_id, source_ids)` —
+  pure orchestration, AsyncMock-injectable. `_INFLIGHT_STATUSES` now
+  includes `paused_for_review` (M4 fix: paused jobs must be resumed via
+  `/extraction/resume` before a re-extract can stack).
+
+Frontend:
+
+- `<ReextractPromptBanner>` consumes the B.3c `useNotebookEvents` hook
+  with `types: ['schema_changed'], unread: true`. Renders `"Schema
+  gewijzigd. N affected sources can be re-extracted."` with
+  `[Re-extract all]` / `[Re-extract selected…]` / `[Later]`.
+- Hooks: `useReextractCandidates`, `useReextractMutation`. The events
+  poll + mark-read hooks are reused from B.3c (no duplicate surface).
+- `/notebooks/[id]/page.tsx` renders three banners stacked:
+  `SchemaSoftNudge` → `ExtractionPausedBanner` → `ReextractPromptBanner`.
+
+Tests:
+
+- `apps/app-main/tests/test_reextract_service.py` (14 tests, +1 over
+  attempt 1: `test_skips_source_with_paused_for_review_job` pins M4).
+- `apps/app-main/tests/test_reextract_router.py` (router-level dedup +
+  events stubs, retained from attempt 1).
+- `frontend/e2e/track-b/schema-reextract.spec.ts` (4 Playwright specs;
+  `/mark_read` mock now returns `{event_id, success: true}` to match
+  B.3c's contract).
+
+### Attempt 2 — reconciliation with B.3c
+
+Rebased on `origin/main` (which now carries B.3c). Resolution strategy:
+
+1. **Dropped** branch's `_NotebookEventView`, `list_notebook_events`,
+   `mark_notebook_event_read` from `schemas.py`. The B.3c
+   `notebook_events.py` router is the canonical surface.
+2. **Re-pointed** `ReextractPromptBanner` from `useSchemaChangedEvents`
+   onto `useNotebookEvents(id, { types: ['schema_changed'], unread: true })`.
+3. **Removed** duplicate `useSchemaChangedEvents` and `useMarkEventRead`
+   from `use-notebook-schema.ts`; B.3c shipped both.
+4. **Removed** duplicate `notebookSchemaApi.listEvents` /
+   `markEventRead` from `frontend/src/lib/api/notebook-schema.ts`; the
+   B.3c versions (which carry the `MarkReadResponse` shape) are kept.
+5. **Page integration** — `SchemaSoftNudge`, `ExtractionPausedBanner`,
+   and `ReextractPromptBanner` now share one banner stack above the
+   3-column grid. All three self-hide when their data set is empty.
+6. **Playwright mock** — `/events/{id}/mark_read` updated to return
+   `{event_id, success: true}` to match the B.3c contract.
+
+### Coordination notes
+
+- B.3c is merged on main; this branch consumes its `notebook_events.py`
+  + hooks + API surface verbatim. No further coordination needed.
+- B.5b (parallel) doesn't touch reextract or events files.
+
+---
+
 ## Phase B.3c — Soft-nudge UI + per-notebook pause toggle (2026-06-09)
 
 **Branch**: `track/b-soft-nudge`

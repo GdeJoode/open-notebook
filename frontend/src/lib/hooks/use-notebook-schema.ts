@@ -37,10 +37,16 @@ import {
 import {
   notebookSchemaApi,
   type MergeTypesRequest,
+  type NotebookEventView,
+  type ReextractRequest,
   type RenameTypeRequest,
   type SplitTypeRequest,
 } from '@/lib/api/notebook-schema'
-import type { NotebookSchemaResponse } from '@/lib/types/notebook_schema'
+import type {
+  NotebookSchemaResponse,
+  ReextractCandidatesResponse,
+  ReextractResponse,
+} from '@/lib/types/notebook_schema'
 import { useToast } from '@/lib/hooks/use-toast'
 
 export const NOTEBOOK_SCHEMA_QUERY_KEY = (id: string) =>
@@ -347,3 +353,86 @@ export function usePausedExtraction(notebookId: string) {
     retry: false,
   })
 }
+
+// ---------------------------------------------------------------------------
+// Phase B.3d — re-extract prompt
+// ---------------------------------------------------------------------------
+//
+// The ReextractPromptBanner polls `schema_changed` events via the
+// shared B.3c `useNotebookEvents` hook above (with
+// `types: ['schema_changed'], unread: true`). The hooks below cover
+// the bits the B.3c surface does NOT already provide: the candidate
+// list endpoint and the re-extract mutation.
+//
+// We intentionally do NOT duplicate `useSchemaChangedEvents` or
+// `useMarkEventRead` here — those live above (B.3c) and the banner
+// consumes them directly. Keeping a single source of truth avoids the
+// two-hook cache-bust drift that bit attempt 1 of this phase.
+
+export const REEXTRACT_CANDIDATES_QUERY_KEY = (id: string) =>
+  ['notebook-schema', id, 'reextract-candidates'] as const
+
+/**
+ * Fetch the affected-source list for the banner. Lazy — only enabled
+ * when the caller asks for it (the banner queries once when the user
+ * clicks "Re-extract selected" to populate the multi-select).
+ */
+export function useReextractCandidates(
+  notebookId: string,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: REEXTRACT_CANDIDATES_QUERY_KEY(notebookId),
+    queryFn: () => notebookSchemaApi.listReextractCandidates(notebookId),
+    enabled: !!notebookId && (options.enabled ?? true),
+  })
+}
+
+/**
+ * Submit the re-extract request. On success:
+ *
+ *   1. Invalidates the events query so the banner disappears (the
+ *      events the user acted on are marked-read by the markEventRead
+ *      flow; this is belt-and-braces in case the banner is dismissed
+ *      via the action itself rather than via Later).
+ *   2. Toasts the per-source enqueued / skipped split so the user
+ *      sees what happened without staring at the workspace column.
+ */
+export function useReextractMutation(
+  notebookId: string,
+): UseMutationResult<ReextractResponse, Error, ReextractRequest> {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  return useMutation({
+    mutationFn: (payload: ReextractRequest) =>
+      notebookSchemaApi.enqueueReextract(notebookId, payload),
+    onSuccess: (data) => {
+      // Bust the events poll so the banner refetches with the latest
+      // read_at state. Source list isn't invalidated because re-extract
+      // doesn't change the candidate set. We invalidate the entire
+      // `notebook-events` namespace so all event-type filters (B.3c
+      // soft-nudge AND B.3d schema_changed) pick up the change — the
+      // B.3c key structure is opaque to this hook.
+      queryClient.invalidateQueries({
+        queryKey: ['notebook-events', notebookId],
+      })
+      const skipped = data.skipped_source_ids.length
+      const desc =
+        skipped > 0
+          ? `${data.jobs_enqueued} job(s) enqueued, ${skipped} already running`
+          : `${data.jobs_enqueued} re-extract job(s) enqueued`
+      toast({ title: 'Re-extract queued', description: desc })
+    },
+    onError: () => {
+      toast({
+        title: 'Error',
+        description: 'Failed to enqueue re-extract jobs',
+        variant: 'destructive',
+      })
+    },
+  })
+}
+
+// Re-export types the B.3d banner consumes — keeping callers free of
+// `@/lib/types/...` imports for the shapes a hook produces.
+export type { NotebookEventView, ReextractCandidatesResponse }

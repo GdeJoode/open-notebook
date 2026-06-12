@@ -59,10 +59,12 @@ from app_main.dependencies import (
     get_notebook_schema_repo,
     get_notebook_service,
     get_pass1_result_repo,
+    get_reextract_service,
     get_schema_edit_service,
     get_source_repo,
 )
 from app_main.services.notebook_service import NotebookService
+from app_main.services.reextract_service import ReextractService
 from app_main.services.schema_edit_service import (
     NotebookSchemaNotFoundError,
     SchemaEditService,
@@ -1362,4 +1364,198 @@ async def resume_extraction(
         notebook_id=notebook_id,
         resumed_count=resumed,
         sentinel_added=sentinel_added,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Re-extract prompt endpoints (Phase B.3d)
+# ---------------------------------------------------------------------------
+#
+# Backs the ``ReextractPromptBanner``. Two endpoints:
+#
+# * ``GET /schema/reextract_candidates`` — affected source ids the user
+#   should consider re-extracting. V1 returns ALL sources in the
+#   notebook (rationale: every schema edit op can touch any source's
+#   extraction). Future revisions can narrow this to sources containing
+#   entities of the modified type once we wire the entity → source
+#   index.
+#
+# * ``POST /schema/reextract`` — enqueue one ENTITY_EXTRACT job per
+#   source id. Idempotent — dedup is per-source: re-clicking the same
+#   button does not stack duplicate jobs.
+#
+# Reconciliation note (attempt 2): the parallel B.3c branch shipped
+# ``notebook_events.py`` on main with the canonical ``/events`` +
+# ``/events/{event_id}/mark_read`` contract. This router previously
+# carried duplicate handlers with an incompatible payload shape; they
+# were removed during the rebase so the banner now consumes the B.3c
+# endpoints (see ``frontend/src/lib/api/notebook-schema.ts`` for the
+# matching client surface).
+
+
+class ReextractCandidatesResponse(BaseModel):
+    """JSON contract for ``GET /api/notebooks/{id}/schema/reextract_candidates``.
+
+    ``source_ids`` is the affected list (V1: all notebook sources).
+    ``count`` is a convenience for the banner — same as ``len(source_ids)``
+    but serialised separately so the banner header can render without
+    needing to count client-side.
+    """
+
+    notebook_id: str
+    source_ids: List[str] = Field(default_factory=list)
+    count: int = 0
+
+
+class ReextractRequest(BaseModel):
+    """Payload for ``POST /api/notebooks/{id}/schema/reextract``.
+
+    Empty ``source_ids`` is accepted and treated as a no-op (returns
+    200 with zero counts) — matches the "Re-extract selected" UX where
+    the user hits Submit with nothing checked.
+    """
+
+    source_ids: List[str] = Field(default_factory=list)
+
+
+class ReextractResponse(BaseModel):
+    """JSON contract for ``POST /api/notebooks/{id}/schema/reextract``.
+
+    The split between ``enqueued_source_ids`` and ``skipped_source_ids``
+    surfaces which sources the dedup layer caught (already in-flight).
+    The banner can use this to render a "3 jobs queued, 1 already
+    running" status line without re-querying the job table.
+    """
+
+    notebook_id: str
+    jobs_enqueued: int = 0
+    source_ids: List[str] = Field(default_factory=list)
+    enqueued_source_ids: List[str] = Field(default_factory=list)
+    skipped_source_ids: List[str] = Field(default_factory=list)
+
+
+@router.get(
+    "/schema/reextract_candidates",
+    response_model=ReextractCandidatesResponse,
+    responses={404: {"description": "Notebook not found."}},
+)
+async def list_reextract_candidates(
+    notebook_id: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    source_repo=Depends(get_source_repo),
+) -> ReextractCandidatesResponse:
+    """List affected source ids for the re-extract banner.
+
+    V1 returns ALL sources currently linked to the notebook. The
+    rationale is conservative: any rename / merge / split / delete /
+    accept / reject op can in principle change which entities a source
+    produces, so we treat every source as potentially affected. A
+    future B.3d-r1 revision can narrow this to sources containing
+    entities of the modified type once we have an entity → source
+    index (Track G).
+
+    Returns 404 if the notebook doesn't exist; 200 with an empty list
+    when the notebook has no sources.
+    """
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        rows = await source_repo.list_with_metadata(notebook_id=notebook_id)
+    except Exception as e:
+        # Defensive — list_with_metadata returning empty on transient
+        # errors would still serve a useful (albeit zero-entry) banner.
+        logger.warning(
+            "Failed to list re-extract candidates for {}: {}",
+            notebook_id,
+            e,
+        )
+        rows = []
+    source_ids = [str(row["id"]) for row in rows if row.get("id")]
+    return ReextractCandidatesResponse(
+        notebook_id=notebook_id,
+        source_ids=source_ids,
+        count=len(source_ids),
+    )
+
+
+@router.post(
+    "/schema/reextract",
+    response_model=ReextractResponse,
+    responses={
+        404: {"description": "Notebook not found."},
+    },
+)
+async def enqueue_reextract(
+    notebook_id: str,
+    payload: ReextractRequest,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    source_repo=Depends(get_source_repo),
+    reextract_service: ReextractService = Depends(get_reextract_service),
+) -> ReextractResponse:
+    """Enqueue one ENTITY_EXTRACT job per requested source id.
+
+    Idempotent: a source whose latest ``entity_extract`` job is still
+    in-flight (QUEUED / PROCESSING / RETRYING / PAUSED_FOR_REVIEW) is
+    silently skipped, so a double-click never stacks duplicate work.
+    Completed / failed jobs are NOT considered duplicates — re-running
+    after a previous run finished is the normal flow under a schema
+    change.
+
+    Defence-in-depth: requested ``source_ids`` are filtered against the
+    notebook's candidate list before enqueueing, so a malformed client
+    payload cannot enqueue jobs for sources belonging to a different
+    notebook (cross-notebook source-id injection). Out-of-list ids
+    are dropped silently — the candidate-list endpoint is the source
+    of truth and the banner only submits ids it received from there.
+
+    Returns the enqueued / skipped split so the banner can render a
+    precise per-source status line.
+    """
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+
+    # Minor 1 fix — defence-in-depth against cross-notebook source_id
+    # injection. We constrain the requested ids to the notebook's own
+    # candidate set; anything else is dropped before reaching the
+    # service layer. A future refactor could push this guard into the
+    # service, but keeping it at the router avoids loading the source
+    # repo from the service.
+    try:
+        rows = await source_repo.list_with_metadata(notebook_id=notebook_id)
+    except Exception as e:
+        logger.warning(
+            "Failed to list notebook sources during re-extract "
+            "candidate filter for {}: {}; proceeding without filter",
+            notebook_id,
+            e,
+        )
+        rows = []
+    if rows:
+        candidate_ids = {str(row["id"]) for row in rows if row.get("id")}
+        requested = list(payload.source_ids)
+        filtered = [sid for sid in requested if sid in candidate_ids]
+        dropped = [sid for sid in requested if sid not in candidate_ids]
+        if dropped:
+            logger.info(
+                "Dropping {} out-of-notebook source id(s) from re-extract "
+                "request for {}: {!r}",
+                len(dropped),
+                notebook_id,
+                dropped,
+            )
+    else:
+        # If we can't read the candidate list (transient DB issue),
+        # fall through to the unfiltered request rather than block the
+        # user — the service layer's own validity check will still
+        # apply, and the worker can no-op a bogus source_id.
+        filtered = list(payload.source_ids)
+
+    result = await reextract_service.enqueue_reextract_jobs(
+        notebook_id=notebook_id,
+        source_ids=filtered,
+    )
+    return ReextractResponse(
+        notebook_id=notebook_id,
+        jobs_enqueued=result.jobs_enqueued,
+        source_ids=result.source_ids,
+        enqueued_source_ids=result.enqueued_source_ids,
+        skipped_source_ids=result.skipped_source_ids,
     )

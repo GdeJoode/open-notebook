@@ -10,6 +10,8 @@ import apiClient from './client'
 import type {
   NotebookSchemaResponse,
   Pass1ResultView,
+  ReextractCandidatesResponse,
+  ReextractResponse,
 } from '@/lib/types/notebook_schema'
 
 /**
@@ -41,6 +43,10 @@ export interface SplitTypeRequest {
  * View-model of a single notebook event surfaced by the B.3c
  * SchemaSoftNudge banner. Mirrors `NotebookEventView` in
  * `apps/app-main/src/app_main/api/routers/notebook_events.py`.
+ *
+ * Also consumed by the B.3d ReextractPromptBanner (event_type
+ * `schema_changed`); the projection is intentionally shared so a
+ * future banner can re-use the same client without a contract bump.
  */
 export interface NotebookEventView {
   id: string
@@ -81,6 +87,17 @@ export interface PausedExtractionStatus {
 export interface MarkReadResponse {
   event_id: string
   success: boolean
+}
+
+/**
+ * Payload for `POST /api/notebooks/{id}/schema/reextract` (B.3d).
+ *
+ * Empty `source_ids` is accepted by the backend as a no-op — matches
+ * the "Re-extract selected" UX where the user submits with nothing
+ * checked.
+ */
+export interface ReextractRequest {
+  source_ids: string[]
 }
 
 const nbPath = (id: string) => `/notebooks/${encodeURIComponent(id)}`
@@ -246,6 +263,11 @@ export const notebookSchemaApi = {
    * B.3c — list notebook events for the soft-nudge banner. Pass
    * `unread=true` from the polling loop; pass `type` as a comma-
    * separated list to filter.
+   *
+   * Also used by the B.3d ReextractPromptBanner (passes
+   * `types: ['schema_changed'], unread: true`); the surface here is
+   * shared so both banners hit the same B.3c endpoint without contract
+   * duplication.
    */
   listEvents: async (
     notebookId: string,
@@ -269,7 +291,9 @@ export const notebookSchemaApi = {
   },
 
   /**
-   * B.3c — mark a single notebook event read. Idempotent.
+   * B.3c — mark a single notebook event read. Idempotent. Used by both
+   * the SchemaSoftNudge "Dismiss" affordance and the
+   * ReextractPromptBanner "Later" affordance.
    */
   markEventRead: async (
     notebookId: string,
@@ -279,6 +303,44 @@ export const notebookSchemaApi = {
       `/notebooks/${encodeURIComponent(
         notebookId,
       )}/events/${encodeURIComponent(eventId)}/mark_read`,
+    )
+    return response.data
+  },
+
+  // --------------------------------------------------------------------
+  // Phase B.3d — re-extract prompt
+  // --------------------------------------------------------------------
+  //
+  // The banner polls `listEvents(id, { types: ['schema_changed'] })`
+  // (via the shared B.3c endpoint above) to decide whether to render.
+  // On confirm it calls `enqueueReextract` with the selected (or all)
+  // candidate source ids; on dismiss it marks the event read via
+  // `markEventRead`.
+
+  /**
+   * List affected source ids for the re-extract banner. V1 returns
+   * ALL notebook sources; future revisions may narrow by entity-type.
+   */
+  listReextractCandidates: async (
+    notebookId: string,
+  ): Promise<ReextractCandidatesResponse> => {
+    const response = await apiClient.get<ReextractCandidatesResponse>(
+      `${nbPath(notebookId)}/schema/reextract_candidates`,
+    )
+    return response.data
+  },
+
+  /**
+   * Enqueue ENTITY_EXTRACT jobs for the requested source ids.
+   * Idempotent — in-flight jobs are silently deduped server-side.
+   */
+  enqueueReextract: async (
+    notebookId: string,
+    payload: ReextractRequest,
+  ): Promise<ReextractResponse> => {
+    const response = await apiClient.post<ReextractResponse>(
+      `${nbPath(notebookId)}/schema/reextract`,
+      payload,
     )
     return response.data
   },

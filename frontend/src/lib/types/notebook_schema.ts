@@ -63,6 +63,32 @@ export interface NotebookSchemaResponse {
   soft_nudge_dismissed: boolean
 }
 
+// ---------------------------------------------------------------------------
+// Phase B.3d — re-extract prompt contracts
+// ---------------------------------------------------------------------------
+//
+// `NotebookEventView` is declared in
+// `frontend/src/lib/api/notebook-schema.ts` as the canonical projection
+// returned by the B.3c `/events` endpoint. B.3d intentionally does NOT
+// re-declare it here — duplicating the shape across modules drifted
+// during attempt 1 (B.3d's version added `payload` + `notebook_id` that
+// the B.3c contract does not actually return). Banners that need a
+// `payload` bag should fetch it via a follow-up endpoint instead.
+
+export interface ReextractCandidatesResponse {
+  notebook_id: string
+  source_ids: string[]
+  count: number
+}
+
+export interface ReextractResponse {
+  notebook_id: string
+  jobs_enqueued: number
+  source_ids: string[]
+  enqueued_source_ids: string[]
+  skipped_source_ids: string[]
+}
+
 export interface Pass1ResultView {
   id: string
   source_id: string

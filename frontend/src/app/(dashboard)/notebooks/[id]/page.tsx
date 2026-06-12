@@ -9,6 +9,7 @@ import { NotesColumn } from '../components/NotesColumn'
 import { ChatColumn } from '../components/ChatColumn'
 import { SchemaSoftNudge } from '@/components/notebooks/schema/SchemaSoftNudge'
 import { ExtractionPausedBanner } from '@/components/notebooks/schema/ExtractionPausedBanner'
+import { ReextractPromptBanner } from '@/components/notebooks/schema/ReextractPromptBanner'
 import { useNotebook } from '@/lib/hooks/use-notebooks'
 import { useSources } from '@/lib/hooks/use-sources'
 import { useNotes } from '@/lib/hooks/use-notes'
@@ -108,12 +109,20 @@ export default function NotebookPage() {
         </div>
 
         <div className="flex-1 p-6 pt-6 overflow-hidden flex flex-col min-h-0">
-          {/* B.3c banners sit above the 3-column grid so they don't
-              steal column width. They self-hide when there's nothing
-              to surface. */}
+          {/*
+            Banner stack — all three self-hide when there's nothing to
+            surface, so the column grid takes the full height in the
+            common case. SchemaSoftNudge first by convention (it's the
+            informational coverage banner); ExtractionPausedBanner is
+            actionable (Resume) and points to the next user step;
+            ReextractPromptBanner is the B.3d schema-changed prompt
+            and lives below so it doesn't overshadow the paused-blocker
+            when both fire at once.
+          */}
           <div className="flex-shrink-0">
             <SchemaSoftNudge notebookId={notebookId} />
             <ExtractionPausedBanner notebookId={notebookId} />
+            <ReextractPromptBanner notebookId={notebookId} />
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0">
             <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6 h-full min-h-0">
