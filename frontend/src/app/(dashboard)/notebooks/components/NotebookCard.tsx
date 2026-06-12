@@ -71,6 +71,8 @@ export function NotebookCard({ notebook }: NotebookCardProps) {
                   <Button
                     variant="ghost"
                     size="sm"
+                    data-testid={`notebook-card-menu-${notebook.id}`}
+                    aria-label={`Actions for ${notebook.name}`}
                     className="opacity-0 group-hover:opacity-100 transition-opacity"
                     onClick={(e) => e.stopPropagation()}
                   >
