@@ -5,7 +5,7 @@ import { NotebookResponse } from '@/lib/types/api'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { MoreHorizontal, Archive, ArchiveRestore, Trash2, FileText, StickyNote } from 'lucide-react'
+import { MoreHorizontal, Archive, ArchiveRestore, Trash2, FileText, StickyNote, GitMerge } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import {
   DropdownMenu,
@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useUpdateNotebook, useDeleteNotebook } from '@/lib/hooks/use-notebooks'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { MergeNotebookDialog } from '@/components/notebooks/MergeNotebookDialog'
 import { useState } from 'react'
 
 interface NotebookCardProps {
@@ -23,6 +24,7 @@ interface NotebookCardProps {
 
 export function NotebookCard({ notebook }: NotebookCardProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [showMergeDialog, setShowMergeDialog] = useState(false)
   const router = useRouter()
   const updateNotebook = useUpdateNotebook()
   const deleteNotebook = useDeleteNotebook()
@@ -69,6 +71,8 @@ export function NotebookCard({ notebook }: NotebookCardProps) {
                   <Button
                     variant="ghost"
                     size="sm"
+                    data-testid={`notebook-card-menu-${notebook.id}`}
+                    aria-label={`Actions for ${notebook.name}`}
                     className="opacity-0 group-hover:opacity-100 transition-opacity"
                     onClick={(e) => e.stopPropagation()}
                   >
@@ -88,6 +92,16 @@ export function NotebookCard({ notebook }: NotebookCardProps) {
                         Archive
                       </>
                     )}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    data-testid={`notebook-card-merge-${notebook.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setShowMergeDialog(true)
+                    }}
+                  >
+                    <GitMerge className="h-4 w-4 mr-2" />
+                    Merge into…
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={(e) => {
@@ -135,6 +149,13 @@ export function NotebookCard({ notebook }: NotebookCardProps) {
         confirmText="Delete"
         confirmVariant="destructive"
         onConfirm={handleDelete}
+      />
+
+      <MergeNotebookDialog
+        targetNotebookId={notebook.id}
+        targetNotebookName={notebook.name}
+        open={showMergeDialog}
+        onOpenChange={setShowMergeDialog}
       />
     </>
   )

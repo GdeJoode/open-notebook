@@ -62,6 +62,7 @@ from app_main.services.summarization_service import SummarizationService
 from app_main.services.entity_extraction_service import EntityExtractionService
 from app_main.services.schema_edit_service import SchemaEditService
 from app_main.services.reextract_service import ReextractService
+from app_main.services.notebook_merge_service import NotebookMergeService
 
 
 # --- Repository providers ---
@@ -350,6 +351,18 @@ def get_reextract_service() -> ReextractService:
         command_service=_CommandServiceAdapter(),
         job_repo=_repository,
     )
+
+
+def get_notebook_merge_service() -> NotebookMergeService:
+    """FastAPI provider for the B.6 cross-notebook merge service.
+
+    Wires the shared ``EntityRepository`` so entity writes hit the
+    canonical migration-39+44 schema via ``upsert_entity``. Relation
+    writes are issued directly through ``execute_query`` from within
+    the service (no dedicated relation repo today — see B.6 service
+    docstring on relation-write rationale).
+    """
+    return NotebookMergeService(entity_repository=get_entity_repo())
 
 
 def get_preprocessing_service() -> PreprocessingService:

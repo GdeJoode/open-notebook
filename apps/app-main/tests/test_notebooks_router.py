@@ -7,19 +7,29 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app_main.api.routers.notebooks import router
-from app_main.dependencies import get_notebook_service, get_source_service
+from app_main.dependencies import (
+    get_notebook_merge_service,
+    get_notebook_service,
+    get_source_service,
+)
+from app_main.services.notebook_merge_service import (
+    NotebookMergeReport,
+    NotebookMergeService,
+)
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
 from tests.conftest import make_notebook, make_source
 
 
-def _make_app(notebook_svc, source_svc=None):
+def _make_app(notebook_svc, source_svc=None, merge_svc=None):
     """Wire a test app with FastAPI dependency_overrides."""
     app = FastAPI()
     app.include_router(router, prefix="/api")
     app.dependency_overrides[get_notebook_service] = lambda: notebook_svc
     if source_svc:
         app.dependency_overrides[get_source_service] = lambda: source_svc
+    if merge_svc:
+        app.dependency_overrides[get_notebook_merge_service] = lambda: merge_svc
     return TestClient(app)
 
 
@@ -139,3 +149,186 @@ class TestAddSourceToNotebook:
         resp = client.post("/api/notebooks/notebook:1/sources/source:1")
 
         assert resp.status_code == 204
+
+
+class TestMergeNotebooks:
+    """Tests for ``POST /api/notebooks/merge`` (B.6).
+
+    Covers the API-boundary guards added in attempt 2:
+
+    - B2 blocker: ``target_id`` overlap with ``source_ids`` → 422
+    - Minor 3: archived notebooks rejected at the boundary → 422
+    - Pre-existing 404 / 422 paths preserved
+    """
+
+    @staticmethod
+    def _make_merge_svc(report: NotebookMergeReport | None = None):
+        svc = AsyncMock(spec=NotebookMergeService)
+        if report is None:
+            report = NotebookMergeReport(
+                entities_merged=3,
+                relations_created=2,
+                conflicts=[],
+                source_notebook_ids=["notebook:src"],
+                target_notebook_id="notebook:tgt",
+                dry_run=False,
+            )
+        svc.merge_notebooks.return_value = report
+        return svc
+
+    def test_merge_happy_path(self):
+        nb_svc = AsyncMock(spec=NotebookService)
+        nb_svc.get.side_effect = [
+            make_notebook(id="notebook:tgt"),  # target lookup
+            make_notebook(id="notebook:src"),  # source lookup
+        ]
+        merge_svc = self._make_merge_svc()
+        client = _make_app(nb_svc, merge_svc=merge_svc)
+
+        resp = client.post(
+            "/api/notebooks/merge",
+            json={
+                "source_ids": ["notebook:src"],
+                "target_id": "notebook:tgt",
+            },
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["entities_merged"] == 3
+        assert body["relations_created"] == 2
+        merge_svc.merge_notebooks.assert_awaited_once()
+
+    def test_merge_rejects_overlapping_target_and_source(self):
+        """B2: target_id in source_ids → 422 (silent self-merge guard)."""
+        nb_svc = AsyncMock(spec=NotebookService)
+        merge_svc = self._make_merge_svc()
+        client = _make_app(nb_svc, merge_svc=merge_svc)
+
+        resp = client.post(
+            "/api/notebooks/merge",
+            json={
+                "source_ids": ["notebook:n1"],
+                "target_id": "notebook:n1",
+            },
+        )
+
+        assert resp.status_code == 422
+        assert "target_id" in resp.json()["detail"].lower()
+        # Service must not be touched when the guard fires.
+        merge_svc.merge_notebooks.assert_not_called()
+
+    def test_merge_rejects_target_in_mixed_source_list(self):
+        """B2: target overlapping with one of multiple sources → still 422."""
+        nb_svc = AsyncMock(spec=NotebookService)
+        merge_svc = self._make_merge_svc()
+        client = _make_app(nb_svc, merge_svc=merge_svc)
+
+        resp = client.post(
+            "/api/notebooks/merge",
+            json={
+                "source_ids": ["notebook:a", "notebook:tgt", "notebook:b"],
+                "target_id": "notebook:tgt",
+            },
+        )
+
+        assert resp.status_code == 422
+        merge_svc.merge_notebooks.assert_not_called()
+
+    def test_merge_rejects_empty_source_ids(self):
+        """Empty source_ids → 422 (pydantic min_length=1 + explicit guard)."""
+        nb_svc = AsyncMock(spec=NotebookService)
+        merge_svc = self._make_merge_svc()
+        client = _make_app(nb_svc, merge_svc=merge_svc)
+
+        resp = client.post(
+            "/api/notebooks/merge",
+            json={
+                "source_ids": [],
+                "target_id": "notebook:tgt",
+            },
+        )
+
+        assert resp.status_code == 422
+        merge_svc.merge_notebooks.assert_not_called()
+
+    def test_merge_404_when_target_missing(self):
+        nb_svc = AsyncMock(spec=NotebookService)
+        nb_svc.get.return_value = None
+        merge_svc = self._make_merge_svc()
+        client = _make_app(nb_svc, merge_svc=merge_svc)
+
+        resp = client.post(
+            "/api/notebooks/merge",
+            json={
+                "source_ids": ["notebook:src"],
+                "target_id": "notebook:missing",
+            },
+        )
+
+        assert resp.status_code == 404
+        merge_svc.merge_notebooks.assert_not_called()
+
+    def test_merge_404_when_source_missing(self):
+        nb_svc = AsyncMock(spec=NotebookService)
+        # target found, source not
+        nb_svc.get.side_effect = [
+            make_notebook(id="notebook:tgt"),
+            None,
+        ]
+        merge_svc = self._make_merge_svc()
+        client = _make_app(nb_svc, merge_svc=merge_svc)
+
+        resp = client.post(
+            "/api/notebooks/merge",
+            json={
+                "source_ids": ["notebook:missing"],
+                "target_id": "notebook:tgt",
+            },
+        )
+
+        assert resp.status_code == 404
+        assert "source" in resp.json()["detail"].lower()
+        merge_svc.merge_notebooks.assert_not_called()
+
+    def test_merge_rejects_archived_target(self):
+        """Minor 3: archived target → 422 (avoid resurrecting archived data)."""
+        nb_svc = AsyncMock(spec=NotebookService)
+        nb_svc.get.return_value = make_notebook(
+            id="notebook:tgt", archived=True
+        )
+        merge_svc = self._make_merge_svc()
+        client = _make_app(nb_svc, merge_svc=merge_svc)
+
+        resp = client.post(
+            "/api/notebooks/merge",
+            json={
+                "source_ids": ["notebook:src"],
+                "target_id": "notebook:tgt",
+            },
+        )
+
+        assert resp.status_code == 422
+        assert "archived" in resp.json()["detail"].lower()
+        merge_svc.merge_notebooks.assert_not_called()
+
+    def test_merge_rejects_archived_source(self):
+        nb_svc = AsyncMock(spec=NotebookService)
+        nb_svc.get.side_effect = [
+            make_notebook(id="notebook:tgt"),  # target ok
+            make_notebook(id="notebook:src", archived=True),  # source archived
+        ]
+        merge_svc = self._make_merge_svc()
+        client = _make_app(nb_svc, merge_svc=merge_svc)
+
+        resp = client.post(
+            "/api/notebooks/merge",
+            json={
+                "source_ids": ["notebook:src"],
+                "target_id": "notebook:tgt",
+            },
+        )
+
+        assert resp.status_code == 422
+        assert "archived" in resp.json()["detail"].lower()
+        merge_svc.merge_notebooks.assert_not_called()
