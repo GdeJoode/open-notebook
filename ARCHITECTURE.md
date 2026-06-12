@@ -140,8 +140,8 @@ The B-track services follow the section-3 naming convention. They live in
 | `SchemaEditService` | Pure business logic for accept/reject extension, rename, merge, split, delete type; idempotent via deterministic op-ids; emits exactly one `notebook_event` per op | B.3b |
 | `ReextractService` | Enqueues `ENTITY_EXTRACT` jobs after schema edits, with paused-job dedup | B.3d |
 | `NotebookMergeService` | Cross-notebook graph merge (semantic-content idempotency, archived-source guard) | B.6 |
-| `shared.services.metrics.record_metric` | Always-on `INSERT INTO metrics` helper (env-flag `OPEN_NOTEBOOK_DISABLE_METRICS`, exception-swallow contract) | B.4 |
-| `entity_filtering.resolution.orphan_connector` | Co-occurrence-based orphan reconnection with LLM-confirm; prune-lifecycle update writes `orphan_status` transitions | B.5a / B.5b |
+| `shared.services.metrics.record_metric` (in `packages/shared/`) | Always-on `INSERT INTO metrics` helper (env-flag `OPEN_NOTEBOOK_DISABLE_METRICS`, exception-swallow contract) | B.4 |
+| `entity_filtering.resolution.orphan_connector` (in `pipelines/entity-filtering/`) | Co-occurrence-based orphan reconnection with LLM-confirm; prune-lifecycle update writes `orphan_status` transitions | B.5a / B.5b |
 
 ### Extraction-pipeline subsection
 

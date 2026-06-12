@@ -127,15 +127,12 @@ Persisteren confidence in `Source.metadata.extraction_confidence`; UI toont badg
 
 > **Status**: ✅ **COMPLETE (2026-06-12)** — Multi-schema KG extraction,
 > schema-edit UX, telemetry, orphan-lifecycle, cross-notebook merge.
-> All 17 sub-phases (B.0, B.1a–B.1f, B.2a/B.2b, B.3a–B.3d, B.4, B.5a/B.5b,
-> B.6, B.7) merged across 17 PRs. See
-> [`docs/tracks/B-kg-quality/RETRO.md`](./tracks/B-kg-quality/RETRO.md)
+> All 18 PRs merged (17 production sub-phases — B.0, B.1a–B.1f,
+> B.2a/B.2b, B.3a–B.3d, B.4, B.5a/B.5b, B.6 — plus B.7 integration/retro).
+> See [`docs/tracks/B-kg-quality/RETRO.md`](./tracks/B-kg-quality/RETRO.md)
 > for the retrospective and
 > [`docs/tracks/B-kg-quality/status.md`](./tracks/B-kg-quality/status.md)
-> for the rolling per-phase log. **One-line summary**: Track B COMPLETE
-> on 2026-06-12 — multi-schema KG extraction, schema-edit UX, telemetry,
-> orphan-lifecycle, cross-notebook merge. RETRO:
-> [`docs/tracks/B-kg-quality/RETRO.md`](./tracks/B-kg-quality/RETRO.md).
+> for the rolling per-phase log.
 
 | Phase | Title | Status |
 |---|---|---|
