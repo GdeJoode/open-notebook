@@ -2,10 +2,38 @@
 
 ## Track B — COMPLETE on 2026-06-12
 
-All 17 sub-phases merged. Production multi-schema KG extraction wired
-end-to-end. See RETRO.md for lessons learned.
+All 18 PRs merged (17 production sub-phases + 1 integration/retro phase,
+B.7). Production multi-schema KG extraction wired end-to-end. See
+RETRO.md for lessons learned.
 
 Track B handover to Track C / D / E / F / G complete.
+
+### Phase B.7 attempt 2 — count precision + minors (2026-06-13)
+
+Attempt 1 reviewed at HIGH quality bar; reviewer returned
+REVISIONS_NEEDED. One major (phase/PR arithmetic off-by-one in two
+places) + four minors (CHANGELOG kwarg name, missing review-file
+hyperlinks, ARCHITECTURE path parentheticals, FEATURE_ROADMAP
+duplicate sentence). Attempt 2 is docs-only and addresses all five.
+
+- `RETRO.md` count statements now read "18 PRs across 17 production
+  sub-phases + 1 integration/retro phase (B.7)" in summary header,
+  pattern sentence, recommendation #1, and closing. Attempt-count
+  table preceded by a clarifying note that the denominator excludes
+  B.7. Each row now hyperlinks to its specific review file.
+- `FEATURE_ROADMAP.md` Track-B banner rewritten to match RETRO's
+  count statement; redundant "One-line summary" sentence dropped.
+- `CHANGELOG.md` operator note renamed `age_threshold=90 days` to
+  `max_age_days=90` with module-path citation.
+- `ARCHITECTURE.md` service-module table: explicit path parentheticals
+  added to the two rows that deviate from the `apps/app-main/...` default
+  (`shared.services.metrics.record_metric` in `packages/shared/`;
+  `entity_filtering.resolution.orphan_connector` in
+  `pipelines/entity-filtering/`).
+- `status.md` head: also updated to match the new count statement.
+
+Self-review: `reviews/phase-B.7-self-review.md` (attempt 2 fixes
+section). Verification commands in the self-review return clean.
 
 ### Phase B.7 — Track integration + docs (2026-06-12)
 
