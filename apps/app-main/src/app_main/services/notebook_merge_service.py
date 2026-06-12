@@ -36,9 +36,20 @@ Idempotency
 Re-running the same merge produces ``entities_merged=0`` and
 ``relations_created=0``. The accountancy counters reflect *what changed*,
 not what was inspected — the upsert call still runs, but produces
-unchanged rows. Achieved by snapshotting per-entity ``updated_at`` /
-per-relation existence BEFORE the upsert and skipping the counter
-increment if the post-write state matches.
+unchanged rows. Achieved by SEMANTIC CONTENT comparison: before each
+upsert, we read the existing row (if any) and compute the would-be
+merged ``Entity`` model. If the merged content matches the existing row
+along ``(canonical_name, entity_type, type_tags, primary_type,
+confidence, source_documents, properties)`` (with set semantics for
+list-valued fields so reordering is ignored), the counter is NOT
+incremented. Per-relation idempotency uses an existence probe that the
+service also relies on as a "would-this-write-anything" signal.
+
+The earlier approach (``updated_at`` snapshot) was abandoned because
+``EntityRepository.upsert_entity`` unconditionally sets
+``updated_at = time::now()`` on every UPDATE. A timestamp delta is
+therefore present on EVERY second run, which would inflate the counter
+to "all contributed entities" instead of zero.
 
 Telemetry
 =========
@@ -327,23 +338,6 @@ class NotebookMergeService:
                 if s not in merged_sources:
                     merged_sources.append(s)
 
-            if dry_run:
-                # Estimate: if the target doesn't already carry this
-                # exact entity, it will count as a merge.
-                existing = await self._find_target_entity(
-                    target_notebook_id, acc.best_text, acc.best_label
-                )
-                if existing is None:
-                    entities_changed += 1
-                continue
-
-            existing_before = await self._find_target_entity(
-                target_notebook_id, acc.best_text, acc.best_label
-            )
-            existing_updated_at = (
-                existing_before.get("updated_at") if existing_before else None
-            )
-
             entity_model = Entity(
                 canonical_name=acc.best_text,
                 entity_type=acc.best_label,
@@ -355,6 +349,21 @@ class NotebookMergeService:
                 primary_type=acc.best_label,
                 embedding=[],
             )
+
+            existing_before = await self._find_canonical_entity(
+                acc.best_text, acc.best_label
+            )
+
+            if dry_run:
+                # Same "would this write change anything" question as the
+                # commit path, but skip the upsert call. Compare the
+                # would-be merged entity against the existing row.
+                if existing_before is None or not self._entity_matches(
+                    entity_model, existing_before
+                ):
+                    entities_changed += 1
+                continue
+
             try:
                 await self._entity_repo.upsert_entity(entity_model)
             except Exception as e:
@@ -364,25 +373,16 @@ class NotebookMergeService:
                 )
                 continue
 
+            # Semantic comparison: a fresh CREATE always counts; an
+            # UPDATE only counts when the merged content actually
+            # differs from the pre-write row. ``updated_at`` is
+            # intentionally NOT in the comparison — the repo bumps it on
+            # every UPDATE, so it would force a false-positive on
+            # idempotent re-runs.
             if existing_before is None:
-                # Fresh CREATE — always a change.
                 entities_changed += 1
-            else:
-                # Existing row — only a "change" if the upsert actually
-                # touched the row. The repo always refreshes
-                # ``updated_at`` on UPDATE, so a mismatch indicates a
-                # write. We compare the field rather than re-reading the
-                # confidence so the test fixtures don't need to simulate
-                # arithmetic merge correctness — they just need to
-                # return the same row twice for the no-op case.
-                existing_after = await self._find_target_entity(
-                    target_notebook_id, acc.best_text, acc.best_label
-                )
-                if (
-                    existing_after
-                    and existing_after.get("updated_at") != existing_updated_at
-                ):
-                    entities_changed += 1
+            elif not self._entity_matches(entity_model, existing_before):
+                entities_changed += 1
 
         # ----------------------------------------------------------------
         # Phase 5: aggregate + write relations.
@@ -443,11 +443,8 @@ class NotebookMergeService:
                     relations_changed += 1
                 continue
 
-            existed_before = await self._relation_exists(
-                rel["source_text"], rel["target_text"], rel["relation_type"]
-            )
             try:
-                await self._create_relation(
+                created = await self._create_relation(
                     src_text=rel["source_text"],
                     tgt_text=rel["target_text"],
                     rel_type=rel["relation_type"],
@@ -462,7 +459,7 @@ class NotebookMergeService:
                     f"({rel['relation_type']}): {e}"
                 )
                 continue
-            if not existed_before:
+            if created:
                 relations_changed += 1
 
         # ----------------------------------------------------------------
@@ -616,44 +613,78 @@ class NotebookMergeService:
             )
         return out
 
-    async def _find_target_entity(
-        self, notebook_id: str, text: str, label: str
+    async def _find_canonical_entity(
+        self, text: str, label: str
     ) -> Optional[Dict[str, Any]]:
-        """Look up an entity in the target notebook by canonical_name + type.
+        """Look up an entity globally by ``(canonical_name, entity_type)``.
 
-        Used by the idempotency snapshot — we check the row state
-        *before* and *after* the upsert to decide whether to count it as
-        a merge. The lookup is the same ``(canonical_name, entity_type)``
-        pair the repo uses for its upsert dedup, so a hit here
-        guarantees the upsert will UPDATE rather than CREATE.
+        Migration 39 keys entity rows globally by
+        ``(canonical_name, entity_type)``, so this lookup returns the
+        single canonical row regardless of which notebook contributed
+        it. Used by the idempotency check to decide whether the upsert
+        will CREATE a fresh row (counter += 1) or UPDATE an existing one
+        (counter += 1 only when the merged content actually differs).
         """
         try:
             rows = await execute_query(
                 "SELECT id, canonical_name, entity_type, type_tags, "
-                "confidence, updated_at FROM entity "
+                "primary_type, confidence, source_documents, properties "
+                "FROM entity "
                 "WHERE canonical_name = $canonical_name "
                 "AND entity_type = $entity_type LIMIT 1",
                 {"canonical_name": text, "entity_type": label},
             )
         except Exception as e:
             logger.warning(
-                f"_find_target_entity failed for '{text}' ({label}): {e}"
+                f"_find_canonical_entity failed for '{text}' ({label}): {e}"
             )
             return None
         if not rows:
             return None
         return rows[0]
 
+    @staticmethod
+    def _entity_matches(merged: Entity, existing_row: Dict[str, Any]) -> bool:
+        """Decide whether the merged Entity is semantically equal to the row.
+
+        Compares the fields the upsert path actually writes:
+        ``canonical_name``, ``entity_type``, ``type_tags`` (set
+        semantics — order is meaningless), ``primary_type``,
+        ``confidence``, ``source_documents`` (set semantics), and
+        ``properties`` (key-value dict). ``updated_at`` and ``id`` are
+        intentionally excluded so a re-run is recognised as a no-op even
+        though the repo bumps the timestamp on every UPDATE.
+
+        Returns True iff the upsert would produce a byte-equal row.
+        """
+        if merged.canonical_name != (existing_row.get("canonical_name") or ""):
+            return False
+        if merged.entity_type != (existing_row.get("entity_type") or ""):
+            return False
+        if (existing_row.get("primary_type") or "") != merged.primary_type:
+            return False
+        if float(existing_row.get("confidence") or 0.0) != float(merged.confidence):
+            return False
+        # Set semantics for list-valued fields — the upsert path unions
+        # type_tags / source_documents, so order is incidental.
+        if sorted(existing_row.get("type_tags") or []) != sorted(merged.type_tags):
+            return False
+        if sorted(existing_row.get("source_documents") or []) != sorted(
+            merged.source_documents
+        ):
+            return False
+        if dict(existing_row.get("properties") or {}) != dict(merged.properties):
+            return False
+        return True
+
     async def _relation_exists(
         self, src_text: str, tgt_text: str, rel_type: str
     ) -> bool:
-        """Cheap existence probe used by the idempotency counter.
+        """Cheap existence probe used by the dry-run counter.
 
-        Re-using the same RELATE creates an additional edge row in
-        SurrealDB (the RELATE statement is not idempotent at the DB
-        level — there's no ``ON CONFLICT`` for RELATE), so we probe and
-        skip via the IF-block in ``_create_relation`` to keep the merge
-        idempotent end-to-end.
+        The commit path folds this check into ``_create_relation`` so
+        we save one round-trip per relation. The dry-run path keeps
+        the standalone probe because it must NOT write.
         """
         try:
             rows = await execute_query(
@@ -694,40 +725,56 @@ class NotebookMergeService:
         confidence: float,
         properties: Dict[str, Any],
         provenance_source: str,
-    ) -> None:
-        """Idempotent RELATE: probes for an existing edge before writing.
+    ) -> bool:
+        """Idempotent RELATE that reports whether a new edge was written.
 
-        The probe is inside the SurrealQL block so the test mock can
-        stub the entire round-trip with one ``execute_query`` mock.
+        SurrealDB's RELATE is not idempotent (each call creates a new
+        edge row), so we probe-and-RELATE inside a single SurrealQL
+        block to keep this to ONE round-trip per relation. The block
+        returns a non-empty array iff a fresh edge was created; the
+        caller uses the return value as the idempotency counter
+        signal (Minor 1 fold).
         """
-        await execute_query(
-            """
-            LET $src = (SELECT VALUE id FROM entity
-                WHERE canonical_name = $src_name LIMIT 1);
-            LET $tgt = (SELECT VALUE id FROM entity
-                WHERE canonical_name = $tgt_name LIMIT 1);
-            IF array::len($src) > 0 AND array::len($tgt) > 0 THEN {
-                LET $existing = (SELECT id FROM relation
-                    WHERE in = $src[0] AND out = $tgt[0]
-                    AND relation_type = $rel_type LIMIT 1);
-                IF array::len($existing) == 0 THEN {
-                    RELATE $src[0]->relation->$tgt[0] SET
-                        relation_type = $rel_type,
-                        confidence = $confidence,
-                        source_documents = [$source_id],
-                        properties = $properties;
+        try:
+            rows = await execute_query(
+                """
+                LET $src = (SELECT VALUE id FROM entity
+                    WHERE canonical_name = $src_name LIMIT 1);
+                LET $tgt = (SELECT VALUE id FROM entity
+                    WHERE canonical_name = $tgt_name LIMIT 1);
+                IF array::len($src) > 0 AND array::len($tgt) > 0 THEN {
+                    LET $existing = (SELECT id FROM relation
+                        WHERE in = $src[0] AND out = $tgt[0]
+                        AND relation_type = $rel_type LIMIT 1);
+                    IF array::len($existing) == 0 THEN {
+                        RETURN (RELATE $src[0]->relation->$tgt[0] SET
+                            relation_type = $rel_type,
+                            confidence = $confidence,
+                            source_documents = [$source_id],
+                            properties = $properties);
+                    } ELSE {
+                        RETURN [];
+                    } END;
+                } ELSE {
+                    RETURN [];
                 } END;
-            } END;
-            """,
-            {
-                "src_name": src_text,
-                "tgt_name": tgt_text,
-                "rel_type": rel_type,
-                "confidence": confidence,
-                "source_id": provenance_source,
-                "properties": properties,
-            },
-        )
+                """,
+                {
+                    "src_name": src_text,
+                    "tgt_name": tgt_text,
+                    "rel_type": rel_type,
+                    "confidence": confidence,
+                    "source_id": provenance_source,
+                    "properties": properties,
+                },
+            )
+        except Exception:
+            # Caller logs the error; we just signal "no write happened".
+            raise
+        # The IF/RELATE branch returns the inserted edge row; the no-op
+        # branches return an empty list. Either way, a non-empty result
+        # means a fresh edge was written.
+        return bool(rows)
 
     def _tags_by_notebook(
         self,

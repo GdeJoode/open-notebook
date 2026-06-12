@@ -74,6 +74,11 @@ class _FakeExecuteQuery:
         # Track when upsert was called so the post-write probe returns
         # a refreshed updated_at.
         self.upsert_calls: List[tuple] = []
+        # Counter used by the strict-advance mock to produce a monotonically
+        # increasing ``updated_at`` on every upsert — mirrors production
+        # ``time::now()`` semantics so the semantic-content idempotency
+        # path is the only thing that can drive the counter to zero.
+        self.upsert_call_count: int = 0
         # Record raw query history for assertion convenience.
         self.calls: List[tuple] = []
 
@@ -132,11 +137,23 @@ class _FakeExecuteQuery:
 
         # 6. RELATE / existing-edge probe — return [] (no existing)
         if "RELATE" in s or "FROM relation" in s:
-            # Existence probe for the idempotency counter.
             rn = (params or {}).get("src_name", "")
             tn = (params or {}).get("tgt_name", "")
             rt = (params or {}).get("rel_type", "")
-            if (rn, tn, rt) in self.relation_exists_keys:
+            already_exists = (rn, tn, rt) in self.relation_exists_keys
+            if "RELATE" in s:
+                # _create_relation: returns the inserted edge row when
+                # a fresh edge was written, [] when the IF-block found
+                # an existing one. Service uses bool(rows) as the
+                # idempotency signal.
+                if already_exists:
+                    return []
+                # Mark "now exists" so subsequent calls in the same
+                # test recognise the second call as a no-op.
+                self.relation_exists_keys.add((rn, tn, rt))
+                return [{"id": f"relation:{rn}-{tn}-{rt}"}]
+            # Plain probe (_relation_exists, used by dry-run).
+            if already_exists:
                 return [{"id": "relation:exists"}]
             return []
 
@@ -186,21 +203,44 @@ def _relation_row(
 
 
 def _make_service_with_fake_db(fake: _FakeExecuteQuery) -> tuple[NotebookMergeService, AsyncMock]:
-    """Return (service, mock_upsert_entity) with the fake query layer wired in."""
+    """Return (service, mock_upsert_entity) with the fake query layer wired in.
+
+    The mock ``_upsert`` faithfully mimics ``EntityRepository.upsert_entity``:
+
+    - ALWAYS strictly advances ``updated_at`` on every call (production
+      runs ``SET updated_at = time::now()`` unconditionally — the mock
+      must reflect this so a naive timestamp-based idempotency check
+      would fail; this is exactly what review blocker B1 surfaced).
+    - Persists the FULL merged row (canonical_name, entity_type,
+      type_tags, primary_type, confidence, source_documents,
+      properties) so the service's semantic-content comparison sees a
+      faithful "after" view on re-runs.
+    """
     mock_repo = MagicMock()
 
     async def _upsert(entity):
-        # Record + simulate the post-write row state so the idempotency
-        # snapshot can detect the write. We bump ``updated_at`` and
-        # store the after-row keyed by (canonical_name, entity_type).
         fake.upsert_calls.append((entity.canonical_name, entity.entity_type))
-        before = fake.target_existing.get((entity.canonical_name, entity.entity_type))
-        if before is not None:
-            # Update path — refresh updated_at to signal a write happened.
-            fake.target_after_write[(entity.canonical_name, entity.entity_type)] = {
-                **before,
-                "updated_at": "2026-06-12T00:00:00Z",
-            }
+        # Strictly-advancing counter — production repo bumps
+        # ``updated_at`` via ``time::now()`` on every UPDATE, so any
+        # idempotency signal that compares ``updated_at`` would fire
+        # every time. We honour the same contract here.
+        fake.upsert_call_count += 1
+        ts = f"2026-06-12T00:00:{fake.upsert_call_count:02d}Z"
+        key = (entity.canonical_name, entity.entity_type)
+        # Compose the post-write row from the upserted Entity model
+        # rather than the pre-write row — this is what the repo would
+        # produce after the UPDATE (or what a CREATE would emit).
+        fake.target_after_write[key] = {
+            "id": f"entity:{entity.canonical_name}-{entity.entity_type}",
+            "canonical_name": entity.canonical_name,
+            "entity_type": entity.entity_type,
+            "type_tags": list(entity.type_tags),
+            "primary_type": entity.primary_type,
+            "confidence": entity.confidence,
+            "source_documents": list(entity.source_documents),
+            "properties": dict(entity.properties),
+            "updated_at": ts,
+        }
         return f"entity:{entity.canonical_name}-{entity.entity_type}"
 
     mock_repo.upsert_entity = AsyncMock(side_effect=_upsert)
@@ -298,17 +338,35 @@ async def test_multi_source_merges_with_dedup():
 
 @pytest.mark.asyncio
 async def test_idempotent_re_run():
-    """Same merge twice → second run reports zero changes."""
-    entities = [_entity_row("entity:e1", "OECD", "Organization", 0.9)]
+    """Same merge twice → second run reports zero changes.
+
+    REGRESSION TEST FOR B1 — attempt 1 of this phase relied on
+    ``updated_at`` mismatch to drive the idempotency counter; production
+    ``upsert_entity`` always bumps ``updated_at = time::now()``, so the
+    counter would have inflated to 1 (every contributed entity) on
+    re-run. The strict-advance mock (above) faithfully reproduces that
+    production behaviour, so this test PASSES only if the service
+    compares semantic content rather than timestamps.
+    """
+    entities = [
+        _entity_row(
+            "entity:e1",
+            "OECD",
+            "Organization",
+            0.9,
+            source_documents=["source:s1"],
+        )
+    ]
+    relations = [_relation_row("entity:e1", "entity:e1", "RELATED")]
     fake = _FakeExecuteQuery(
         sources_by_notebook={
             "notebook:src": ["source:s1"],
             "notebook:target": ["source:t1"],
         },
         entities_by_source={"source:s1": entities, "source:t1": []},
-        relations_by_source={"source:s1": [], "source:t1": []},
+        relations_by_source={"source:s1": relations, "source:t1": []},
     )
-    svc, _ = _make_service_with_fake_db(fake)
+    svc, mock_upsert = _make_service_with_fake_db(fake)
 
     with patch(
         "app_main.services.notebook_merge_service.execute_query",
@@ -318,31 +376,29 @@ async def test_idempotent_re_run():
             source_notebook_ids=["notebook:src"],
             target_notebook_id="notebook:target",
         )
-        # Simulate post-write state on the target — the second probe
-        # round will find the merged entity already there.
-        fake.target_existing[("OECD", "Organization")] = {
-            "id": "entity:target-oecd",
-            "canonical_name": "OECD",
-            "entity_type": "Organization",
-            "confidence": 0.9,
-            "type_tags": ["Organization"],
-            "updated_at": "2026-06-12T00:00:00Z",
-        }
-        # Clear the after-write cache so the next run sees the existing
-        # row unchanged unless an actual write happens.
-        fake.target_after_write.clear()
-
         second = await svc.merge_notebooks(
             source_notebook_ids=["notebook:src"],
             target_notebook_id="notebook:target",
         )
 
+    # First run plants the row + relation.
     assert first.entities_merged == 1
-    # Second run: the upsert still runs but produces the same updated_at
-    # (the fake records the bumped timestamp + on second pass the
-    # before/after match), so the counter stays at 0.
+    assert first.relations_created == 1
+    # Second run: the upsert STILL runs (so updated_at advances), but
+    # the semantic-content check sees the would-be merged Entity equals
+    # the row that was just persisted ∴ counter stays at zero.
     assert second.entities_merged == 0
     assert second.relations_created == 0
+    # Sanity: both runs DID call upsert (proves we're not just caching
+    # the first run's report).
+    assert mock_upsert.call_count == 2
+    # Sanity: the strict-advance mock did advance the timestamp on the
+    # second call (proves the production ``updated_at = time::now()``
+    # contract is faithfully simulated).
+    second_call_ts = fake.target_after_write[("OECD", "Organization")][
+        "updated_at"
+    ]
+    assert second_call_ts == "2026-06-12T00:00:02Z"
 
 
 @pytest.mark.asyncio
