@@ -1,5 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { notebooksApi } from '@/lib/api/notebooks'
+import {
+  notebooksApi,
+  type NotebookMergeReport,
+  type NotebookMergeRequest,
+} from '@/lib/api/notebooks'
 import { QUERY_KEYS } from '@/lib/api/query-client'
 import { useToast } from '@/lib/hooks/use-toast'
 import { CreateNotebookRequest, UpdateNotebookRequest } from '@/lib/types/api'
@@ -61,6 +65,50 @@ export function useUpdateNotebook() {
       toast({
         title: 'Error',
         description: 'Failed to update notebook',
+        variant: 'destructive',
+      })
+    },
+  })
+}
+
+/**
+ * Mutation hook for the B.6 cross-notebook merge endpoint.
+ *
+ * The mutation never auto-invalidates queries because the merge writes
+ * into a target notebook and the only consumers (graph view, entity
+ * list) refetch on focus / explicit invalidation. The dry-run path
+ * uses the same hook — callers pass `dry_run: true` and read the
+ * returned report off the mutation result.
+ *
+ * Toasts:
+ *  - success (non-dry-run): "Merged N entities, M relations"
+ *  - success (dry-run): no toast (the dialog renders the counts inline)
+ *  - error: generic destructive toast; the dialog stays open for retry
+ */
+export function useMergeNotebooks() {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+
+  return useMutation<NotebookMergeReport, Error, NotebookMergeRequest>({
+    mutationFn: (data) => notebooksApi.merge(data),
+    onSuccess: (report, variables) => {
+      // Invalidate the target notebook's entity / graph data so the
+      // UI reflects the merge — only on commit, never on preview.
+      if (!variables.dry_run) {
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notebooks })
+        queryClient.invalidateQueries({
+          queryKey: QUERY_KEYS.notebook(variables.target_id),
+        })
+        toast({
+          title: 'Merge complete',
+          description: `Merged ${report.entities_merged} entities, ${report.relations_created} relations.`,
+        })
+      }
+    },
+    onError: () => {
+      toast({
+        title: 'Merge failed',
+        description: 'Failed to merge notebooks. Please try again.',
         variant: 'destructive',
       })
     },
