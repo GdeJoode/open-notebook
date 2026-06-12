@@ -1,5 +1,43 @@
 # Track B — KG quality: rolling status
 
+## Track B — COMPLETE on 2026-06-12
+
+All 17 sub-phases merged. Production multi-schema KG extraction wired
+end-to-end. See RETRO.md for lessons learned.
+
+Track B handover to Track C / D / E / F / G complete.
+
+### Phase B.7 — Track integration + docs (2026-06-12)
+
+**Branch**: `track/b-integration-retro`
+**Scope**: docs-only — no new code.
+
+Updates landed:
+
+- `ARCHITECTURE.md` — new §6 "Storage layer additions (Track B)"
+  documenting the four new tables (`notebook_schema`, `pass1_results`,
+  `notebook_event`, `metrics`) and three `entity`-table field
+  additions across migrations 44–48. New §6 subsection lists the
+  Track-B services (`EntityExtractionService` rewire, `SchemaEditService`,
+  `ReextractService`, `NotebookMergeService`, `metrics_service`,
+  `orphan_connector`) and the extraction-pipeline dispatcher pattern.
+- `docs/FEATURE_ROADMAP.md` — Track B header now carries the
+  ✅ COMPLETE banner, RETRO link, and a per-sub-phase status table.
+  Mirrors Track A's done-marker pattern.
+- `docs/tracks/B-kg-quality/RETRO.md` — new retrospective (≥5 what
+  worked, ≥3 what hurt, ≥5 recommendations) including the live-test
+  recommendation that defers the full corpus E2E to a manual session.
+- `CHANGELOG.md` — new file with migration list (44–48), feature list
+  per sub-phase, and operator notes (env-toggle, multi-schema default,
+  prune-lifecycle thresholds, TTL endpoint headers).
+
+The full-corpus E2E from the original B.7 plan is **deferred** to a
+live-test session per the RETRO; each Track-B sub-phase shipped its own
+Playwright spec against the production code paths, so a corpus run
+validates emergent behaviour rather than core wiring.
+
+---
+
 ## Phase B.3d — Schema-change → re-extract prompt (2026-06-10, attempt 2)
 
 **Branch**: `track/b-reextract-prompt`
