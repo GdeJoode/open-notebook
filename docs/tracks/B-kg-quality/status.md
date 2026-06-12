@@ -1340,3 +1340,68 @@ findings appended to `reviews/phase-B.5b-self-review.md` under
 | `packages/surrealdb-service` docker-gated orphan | 2/6 passed | 8/8 passed |
 | `apps/app-main` | 466 passed | 471 passed |
 | `frontend/e2e/track-b/orphan-lifecycle.spec.ts` | unverified | 3/3 passed (`--workers=1`) |
+
+---
+
+## Phase B.6 — Cross-notebook graph merge (2026-06-12)
+
+**Branch**: `track/b-notebook-merge`
+**State**: implementation complete, ready for review.
+**Self-review**: `docs/tracks/B-kg-quality/reviews/phase-B.6-self-review.md`
+
+### What landed
+
+Backend (`apps/app-main`):
+
+- `NotebookMergeService` (`services/notebook_merge_service.py`) —
+  `merge_notebooks(source_notebook_ids, target_notebook_id,
+  type_match_required=True, dry_run=False) -> NotebookMergeReport`.
+  Loads entities/relations per source notebook, buckets by
+  `normalize_entity_name`, unions type_tags, picks `primary_type` by
+  max-confidence (tiebreak first-seen), dedups relations by
+  `(norm_src, norm_tgt, rel_type)`, writes through
+  `EntityRepository.upsert_entity` + guarded RELATE. Emits
+  `notebook_merge` metric.
+- `POST /api/notebooks/merge` endpoint in
+  `api/routers/notebooks.py`: `NotebookMergeRequest` →
+  `NotebookMergeReportResponse`. 404 for missing target, 422 for
+  empty `source_ids` (also enforced by pydantic).
+- `get_notebook_merge_service()` provider in `dependencies.py`.
+
+Frontend:
+
+- `MergeNotebookDialog.tsx` — modal with multi-select source picker
+  (`CheckboxList`), `type_match_required` toggle, Preview button
+  (dry-run), Confirm button. Renders inline counters + conflict rows
+  on Preview.
+- `notebooksApi.merge()` + `useMergeNotebooks()` hook (
+  `lib/api/notebooks.ts`, `lib/hooks/use-notebooks.ts`).
+- Per-notebook "Merge into…" overflow menu item on `NotebookCard`.
+- `e2e/track-b/notebook-merge.spec.ts` — fully mocked happy path.
+
+### Test deltas
+
+| Suite | Before | After |
+|---|---|---|
+| `apps/app-main` | 494 passed | 500 passed |
+| `packages/shared` | 154 passed | 154 passed |
+| `frontend/e2e/track-b/notebook-merge.spec.ts` | n/a | 1/1 passed |
+
+### Acceptance criteria
+
+All 6 ACs verified — see self-review.
+
+### Pre-resolved decisions applied
+
+- Q-B-4: V1 stub `normalize_entity_name` reused (no upgrade in this
+  phase).
+- Q-B-5: `type_match_required: bool = True` default; disjoint
+  cross-notebook type tags surface as conflicts.
+- Q-B-7: stub normalizer reused (Q9 deferred to Track M4).
+
+### Known limitations (deferred)
+
+- Conflict resolution UI is read-only (no per-row "merge anyway").
+- No audit log / undo for merge operations.
+- No load test for the 1000-entity AC (algorithm is linear, well
+  within budget).
