@@ -2,6 +2,7 @@
 Shared utilities.
 """
 
+from shared.utils.external_ids import resolve_external_ids
 from shared.utils.name_normalizer import normalize_entity_name
 from shared.utils.version import (
     compare_versions,
@@ -32,6 +33,7 @@ __all__ = [
     "normalize_entity_name",
     "normalize_whitespace",
     "parse_thinking_content",
+    "resolve_external_ids",
     "split_into_sentences",
     "split_text",
     "token_count",

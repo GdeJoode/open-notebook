@@ -6,6 +6,14 @@ Pure Pydantic models without database operations.
 
 from shared.models.base import ObjectModel, RecordModel
 from shared.models.entity import Entity, Relation
+from shared.models.export import (
+    ExportFilter,
+    ExportReport,
+    JsonlExportRequest,
+    NetworkxExportRequest,
+    NetworkxFormat,
+    ObsidianExportRequest,
+)
 from shared.models.file_tracking import (
     KnowledgeBase,
     PipelineCacheEntry,
@@ -92,4 +100,11 @@ __all__ = [
     # Knowledge-graph entity/relation models (Phase B.1a)
     "Entity",
     "Relation",
+    # Export contracts (Phase D.0) — shared by D.1 / D.2 / D.3
+    "ExportFilter",
+    "ExportReport",
+    "JsonlExportRequest",
+    "NetworkxExportRequest",
+    "NetworkxFormat",
+    "ObsidianExportRequest",
 ]
