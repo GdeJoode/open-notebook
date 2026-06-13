@@ -63,6 +63,7 @@ from app_main.services.entity_extraction_service import EntityExtractionService
 from app_main.services.schema_edit_service import SchemaEditService
 from app_main.services.reextract_service import ReextractService
 from app_main.services.notebook_merge_service import NotebookMergeService
+from app_main.services.networkx_export_service import NetworkxExportService
 
 
 # --- Repository providers ---
@@ -363,6 +364,21 @@ def get_notebook_merge_service() -> NotebookMergeService:
     docstring on relation-write rationale).
     """
     return NotebookMergeService(entity_repository=get_entity_repo())
+
+
+def get_networkx_export_service() -> NetworkxExportService:
+    """FastAPI provider for the D.3 NetworkX export service.
+
+    Both ``list_entities_for_notebook`` and ``list_relations_for_notebook``
+    live on ``EntityRepository`` (see D.0), so we wire the same repo
+    instance into both slots. The split keeps the service's constructor
+    forward-compatible with a future relation-repo extraction.
+    """
+    entity_repo = get_entity_repo()
+    return NetworkxExportService(
+        entity_repository=entity_repo,
+        relation_repository=entity_repo,
+    )
 
 
 def get_preprocessing_service() -> PreprocessingService:

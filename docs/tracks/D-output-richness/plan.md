@@ -325,7 +325,7 @@ The 8 sub-phases below map to the 3 roadmap sub-tracks (D1-D3) plus a foundation
 
 **Files to modify**:
 
-- `frontend/src/components/notebooks/NotebookHeader.tsx` — wire the NetworkX dropdown next to JSONL + Obsidian.
+- `frontend/src/app/(dashboard)/notebooks/[id]/schema/page.tsx` — wire the NetworkX dropdown next to the TTL download button (B.2b). The Schema page is where the export controls live; the original plan reference to `frontend/src/components/notebooks/NotebookHeader.tsx` was incorrect (the TTL button sits on the Schema page, not the notebook header). Reviewer noted this on D.3 attempt 1; future D.1/D.2 plans should target the same Schema page location.
 - `apps/app-main/pyproject.toml` — confirm `networkx` is already a dep (it is — pipelines/entity-filtering uses it; the app-main package needs an explicit dep declaration if not transitive). Add `networkx>=3.0` if not present.
 
 **Acceptance criteria**:

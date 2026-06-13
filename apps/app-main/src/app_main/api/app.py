@@ -140,6 +140,7 @@ def create_app() -> FastAPI:
         embedding,
         embedding_rebuild,
         episode_profiles,
+        exports,
         health,
         insights,
         knowledge_graph,
@@ -201,6 +202,7 @@ def create_app() -> FastAPI:
     application.include_router(
         knowledge_graph.router, prefix="/api", tags=["knowledge-graph"]
     )
+    application.include_router(exports.router, prefix="/api", tags=["exports"])
     application.include_router(summaries.router, prefix="/api", tags=["summaries"])
     application.include_router(
         preprocessing.router, prefix="/api", tags=["preprocessing"]
