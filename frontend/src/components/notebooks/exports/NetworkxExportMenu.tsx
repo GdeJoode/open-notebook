@@ -57,6 +57,15 @@ interface FormatOption {
   label: string
   description: string
   defaultFilename: string
+  /**
+   * Optional per-format caveat surfaced both visually (italic suffix on
+   * the description line) and via aria-label so screen readers announce
+   * it as part of the menu item. Lets the dropdown explain library-level
+   * quirks at the click site -- in particular:
+   *  - `edge-list` discards isolated entities (NetworkX writer behaviour),
+   *  - `pickle.loads` is a code-execution vector on untrusted files.
+   */
+  caveat?: string
 }
 
 // Single source of truth for format-specific UI metadata. Order matches
@@ -84,7 +93,7 @@ const FORMAT_OPTIONS: FormatOption[] = [
   {
     format: 'json-tree',
     label: 'JSON tree',
-    description: 'JSON tree/node-link representation.',
+    description: 'JSON tree (rooted) or node-link fallback.',
     defaultFilename: 'graph.json',
   },
   {
@@ -92,6 +101,11 @@ const FORMAT_OPTIONS: FormatOption[] = [
     label: 'Edge list',
     description: 'Plain-text edge list (one edge per line).',
     defaultFilename: 'graph.edges',
+    // NetworkX `write_edgelist` only emits edges, so entities with no
+    // relations don't survive the round-trip. Documented in the service
+    // module docstring; surfaced here so users picking edge-list aren't
+    // surprised by a smaller node count.
+    caveat: 'drops isolated entities',
   },
   {
     format: 'adjacency-list',
@@ -104,6 +118,9 @@ const FORMAT_OPTIONS: FormatOption[] = [
     label: 'Pickle',
     description: 'Python pickle (lossless, NetworkX-only).',
     defaultFilename: 'graph.pkl',
+    // `pickle.loads` executes arbitrary code -- never load pickles
+    // from untrusted sources. Service docstring also documents this.
+    caveat: 'trust only files you generated yourself',
   },
 ]
 
@@ -196,6 +213,14 @@ export function NetworkxExportMenu({ notebookId }: NetworkxExportMenuProps) {
             key={option.format}
             disabled={isDownloading}
             data-testid={`networkx-format-${option.format}`}
+            // Concatenate caveat into aria-label so screen readers
+            // announce the warning together with the format name. The
+            // visual caveat span below mirrors this for sighted users.
+            aria-label={
+              option.caveat
+                ? `${option.label} — ${option.description} ${option.caveat}`
+                : `${option.label} — ${option.description}`
+            }
             onSelect={(event) => {
               // Radix calls preventDefault from the parent menu after
               // onSelect -- we still need to call it here so the menu
@@ -209,6 +234,14 @@ export function NetworkxExportMenu({ notebookId }: NetworkxExportMenuProps) {
             <span className="text-xs text-muted-foreground">
               {option.description}
             </span>
+            {option.caveat && (
+              <span
+                className="text-xs italic text-amber-600 dark:text-amber-400"
+                data-testid={`networkx-format-${option.format}-caveat`}
+              >
+                {option.caveat}
+              </span>
+            )}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

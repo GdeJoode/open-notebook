@@ -364,6 +364,132 @@ async def test_json_tree_disconnected_graph_uses_node_link_fallback():
     assert g.number_of_edges() == 0
 
 
+async def test_json_tree_multi_rooted_dag_falls_back_to_node_link():
+    """REGRESSION PIN: multi-rooted DAG must NOT silently truncate (D.3 M1).
+
+    ``nx.tree_data`` does not raise on a multi-rooted DAG; it walks
+    from the chosen root and quietly drops unreachable nodes/edges.
+    The previous try/except shape would let those silent losses
+    through. This test pins the documented behaviour: the multi-rooted
+    DAG ``a->c, b->c`` (Alpha + Beta share a child Gamma) must
+    round-trip via the ``node_link_data`` fallback with ALL 3 nodes
+    and BOTH edges intact.
+    """
+    ents = [
+        _entity("entity:a", "Alpha"),
+        _entity("entity:b", "Beta"),
+        _entity("entity:c", "Gamma"),
+    ]
+    rels = [
+        _relation("entity:a", "entity:c"),
+        _relation("entity:b", "entity:c"),
+    ]
+    svc = _make_service(ents, rels)
+
+    payload, report = await svc.export(
+        "notebook:test", _default_request("json-tree")
+    )
+
+    envelope = json.loads(payload)
+
+    # Self-identifying node-link envelope (NOT tree_data's "id"/"children").
+    assert "nodes" in envelope
+    assert "links" in envelope
+    assert envelope.get("directed") is True
+
+    # Round-trip via the matching reader -- ALL nodes/edges preserved.
+    g = nx.node_link_graph(envelope, edges="links")
+    assert g.number_of_nodes() == 3, "multi-rooted DAG truncated by tree_data"
+    assert g.number_of_edges() == 2, "multi-rooted DAG lost an edge"
+
+    # The build summary reports the same shape -- nothing dropped on
+    # the graph-construction side either.
+    assert report.entities_written == 3
+    assert report.relations_written == 2
+
+
+async def test_json_tree_rooted_arborescence_uses_tree_data():
+    """PIN: a true rooted arborescence still goes through ``tree_data``.
+
+    Counterpart to the multi-rooted-DAG pin: a single-rooted tree
+    ``root -> a -> b`` must serialise via ``tree_data`` (not the
+    fallback). We detect the chosen branch by inspecting envelope
+    keys -- ``tree_data`` emits ``id`` + ``children`` at the top
+    level, ``node_link_data`` emits ``nodes`` + ``links``.
+    """
+    ents = [
+        _entity("entity:root", "Alpha", type_tags=["Concept"]),
+        _entity("entity:a", "Beta", type_tags=["Concept"]),
+        _entity("entity:b", "Gamma", type_tags=["Concept"]),
+    ]
+    rels = [
+        _relation("entity:root", "entity:a"),
+        _relation("entity:a", "entity:b"),
+    ]
+    svc = _make_service(ents, rels)
+
+    payload, _ = await svc.export("notebook:test", _default_request("json-tree"))
+
+    envelope = json.loads(payload)
+
+    # tree_data shape: top-level dict has an "id" + nested "children".
+    assert "id" in envelope, "rooted tree should serialise via tree_data"
+    assert "nodes" not in envelope, "tree_data envelope should not have node-link keys"
+    # Round-trip via tree_graph preserves all 3 nodes + 2 edges.
+    g = nx.tree_graph(envelope)
+    assert g.number_of_nodes() == 3
+    assert g.number_of_edges() == 2
+
+
+async def test_edge_list_documented_behavior_drops_isolated_nodes():
+    """REGRESSION PIN: edge-list discards isolated nodes (D.3 M2).
+
+    ``nx.write_edgelist`` only emits edges, so an entity with zero
+    in- and out-relations does not appear in the wire format. We
+    pin this NetworkX-library behaviour explicitly so any future
+    change to either side (writer swap, isolate-as-comment workaround)
+    surfaces in CI rather than silently mutating the export shape.
+
+    The service's module docstring documents this limitation under
+    "Format limitations"; the UI dropdown carries an aria-label and
+    a "(no isolates)" suffix to surface it to users at the click site.
+
+    Fixture: 3 entities ``a, b, c`` with a single edge ``a->b``. The
+    isolated ``c`` must NOT appear in the round-tripped graph; exactly
+    2 nodes + 1 edge must survive.
+    """
+    ents = [
+        _entity("entity:a", "Alpha"),
+        _entity("entity:b", "Beta"),
+        _entity("entity:c", "Gamma"),  # isolated -- no in/out relations
+    ]
+    rels = [
+        _relation("entity:a", "entity:b"),
+    ]
+    svc = _make_service(ents, rels)
+
+    payload, report = await svc.export(
+        "notebook:test", _default_request("edge-list")
+    )
+
+    # The service still *counts* all 3 entities -- it writes the graph
+    # with isolates intact; only the wire format drops them.
+    assert report.entities_written == 3
+    assert report.relations_written == 1
+
+    # Round-trip via the matching reader: only 2 nodes + 1 edge survive.
+    # The isolated ``entity:c`` (Gamma) has vanished from the wire format.
+    g = nx.read_edgelist(io.BytesIO(payload), create_using=nx.DiGraph)
+    assert g.number_of_nodes() == 2, (
+        "edge-list should drop isolated nodes per NetworkX writer behaviour"
+    )
+    assert g.number_of_edges() == 1
+    assert "entity:c" not in g.nodes, "isolated node leaked into edge-list output"
+    # Both endpoints of the single edge survive.
+    assert "entity:a" in g.nodes
+    assert "entity:b" in g.nodes
+
+
 # ---------------------------------------------------------------------------
 # Status post-filter (archived / merged dropped)
 # ---------------------------------------------------------------------------

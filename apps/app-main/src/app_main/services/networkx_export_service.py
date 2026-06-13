@@ -39,13 +39,41 @@ the same attribute shape, simplifying downstream pandas pipelines.
 
 Note on ``json-tree``
 =====================
-``nx.tree_data`` requires a rooted tree (no cycles, single source). Most
-notebook graphs are neither. We fall back to ``nx.node_link_data`` when
-``tree_data`` raises -- this preserves a 1:1 lossless JSON of the graph
-without forcing the caller to know whether their notebook is
-tree-shaped. The mode is reported via the JSON envelope's top-level
-``format`` key so downstream tooling can pick the right reader (the
-node-link envelope already self-identifies in its key set).
+``nx.tree_data`` requires a rooted arborescence (each node reachable
+from a single source via exactly one path -- no cycles, no multi-parent
+diamonds). Most notebook graphs are neither. **Critically**, ``tree_data``
+does *not* raise on multi-rooted DAGs: it silently walks reachable nodes
+from the chosen root and quietly drops the rest. We therefore *pre-check*
+the graph with ``nx.is_arborescence`` and fall straight through to
+``nx.node_link_data`` for anything that isn't a true rooted tree. The
+fallback envelope self-identifies via its key set (``nodes`` + ``links``
++ ``directed``) so downstream tooling can dispatch on shape.
+
+Format limitations
+==================
+* ``edge-list``: ``nx.write_edgelist`` only emits edges, so any entity
+  with zero in- and out-relations *disappears* from the wire format.
+  Pick ``adjacency-list`` (preserves isolated rows as bare lines) or
+  ``graphml`` (preserves isolated nodes by definition) if you need to
+  retain unattached entities. This is a NetworkX library convention,
+  not an open-notebook limitation -- documented here so users picking
+  edge-list aren't surprised by a smaller node count after round-trip.
+* ``json-tree``: best for genuine rooted-tree shapes; multi-rooted DAGs,
+  cyclic graphs, and disconnected graphs all auto-fall-back to
+  ``node_link_data`` (same JSON shape as ``nx.node_link_graph`` reads).
+* ``pickle``: **security caveat** -- ``pickle.loads`` is a code-execution
+  vector. Trust only files you generated yourself; never load a pickle
+  produced by an untrusted user or service.
+
+Attribute flattening edge cases
+===============================
+The ``type_tags`` flattening (comma-join) is one-way ambiguous when a
+tag itself contains a comma: ``["A,B"]`` flattens to ``"A,B"`` and
+re-splits to ``["A", "B"]`` -- two tags rather than one. We accept this
+on the grounds that the type-tag vocabulary is curated (see Track B
+migration 44) and never contains commas in practice. An empty list
+``[]`` flattens to ``""`` and re-splits to ``[""]`` (a single empty
+string); consumers should treat that as the empty list.
 
 Q-D-8 telemetry constraint
 ==========================
@@ -375,11 +403,19 @@ class NetworkxExportService:
     def _serialize_json_tree(graph: nx.DiGraph) -> bytes:
         """JSON serialisation with ``tree_data`` -> ``node_link_data`` fallback.
 
-        ``nx.tree_data`` requires a rooted tree -- exactly one source,
-        no cycles. Most notebook graphs fail that. We try ``tree_data``
-        first (root = alphabetically-first canonical_name to keep
-        deterministic output), and on any failure fall back to
-        ``node_link_data`` which works for any DiGraph.
+        ``nx.tree_data`` requires a rooted *arborescence* -- exactly one
+        source, no cycles, every node reachable from the root via a
+        unique path. **Critically**, ``tree_data`` does NOT raise on
+        multi-rooted DAGs (e.g. ``a->c, b->c``): it silently walks from
+        the chosen root and drops unreachable nodes/edges. The previous
+        try/except shape would let those silent losses leak through.
+
+        We therefore *pre-check* with ``nx.is_arborescence`` (an O(V+E)
+        structural test) and only call ``tree_data`` when the graph is
+        guaranteed tree-shaped. Anything else -- multi-rooted DAGs,
+        cyclic graphs, disconnected components, multi-parent diamonds
+        -- routes through ``nx.node_link_data`` which preserves all
+        nodes and edges by construction.
 
         The fallback envelope is self-identifying (``node_link_data``
         emits keys like ``directed``, ``multigraph``, ``nodes``, ``links``),
@@ -390,10 +426,13 @@ class NetworkxExportService:
             # raises on empty input; node_link_data handles it cleanly.
             return json.dumps(nx.node_link_data(graph, edges="links")).encode("utf-8")
 
-        try:
+        if nx.is_arborescence(graph):
             # Pick a stable root: the node with the smallest
             # ``canonical_name`` (alphabetical). Ties resolved by node id
-            # so the output is deterministic across runs.
+            # so the output is deterministic across runs. On a true
+            # arborescence ``is_arborescence`` already guarantees a
+            # unique root, but ``min`` keeps the output deterministic
+            # regardless of NetworkX's internal node order.
             root = min(
                 graph.nodes,
                 key=lambda n: (
@@ -403,18 +442,18 @@ class NetworkxExportService:
             )
             tree = nx.tree_data(graph, root=root)
             return json.dumps(tree).encode("utf-8")
-        except (nx.NetworkXError, nx.NetworkXNotImplemented, TypeError) as exc:
-            # ``tree_data`` raises ``NetworkXError`` for disconnected
-            # graphs and ``NetworkXNotImplemented`` for ones with cycles.
-            # We catch both and fall back to the universal node-link
-            # representation. Logged at INFO -- this is expected for any
-            # notebook with more than one connected component.
-            logger.info(
-                "json-tree: falling back to node_link_data ({exc_type}: {exc})",
-                exc_type=type(exc).__name__,
-                exc=exc,
-            )
-            return json.dumps(nx.node_link_data(graph, edges="links")).encode("utf-8")
+
+        # Not a rooted tree (multi-root, cyclic, disconnected, or
+        # multi-parent). Fall back to node-link for lossless serialisation.
+        # Logged at INFO -- this is the common case for notebook graphs
+        # and not an error condition.
+        logger.info(
+            "json-tree: graph is not an arborescence "
+            "(nodes={n}, edges={e}); using node_link_data fallback",
+            n=graph.number_of_nodes(),
+            e=graph.number_of_edges(),
+        )
+        return json.dumps(nx.node_link_data(graph, edges="links")).encode("utf-8")
 
 
 __all__ = ["NetworkxExportService"]
