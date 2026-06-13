@@ -22,19 +22,23 @@ Design notes
 
 from __future__ import annotations
 
+import io
 import re
 from typing import Dict, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import StreamingResponse
 from loguru import logger
 
 from app_main.dependencies import (
     get_networkx_export_service,
     get_notebook_service,
+    get_obsidian_export_service,
 )
 from app_main.services.networkx_export_service import NetworkxExportService
 from app_main.services.notebook_service import NotebookService
-from shared.models.export import NetworkxExportRequest
+from app_main.services.obsidian_export_service import ObsidianExportService
+from shared.models.export import NetworkxExportRequest, ObsidianExportRequest
 
 
 router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["exports"])
@@ -134,6 +138,81 @@ async def export_notebook_networkx(
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Obsidian export (D.1a)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/export-obsidian",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {"application/zip": {}},
+            "description": "Obsidian vault streamed back as a zip archive.",
+        },
+        404: {"description": "Notebook not found."},
+        422: {"description": "Invalid request body (e.g. unknown mode)."},
+        501: {"description": "Mode not yet implemented (e.g. vault_path before D.1b)."},
+    },
+)
+async def export_notebook_obsidian(
+    notebook_id: str,
+    request: ObsidianExportRequest,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    export_service: ObsidianExportService = Depends(get_obsidian_export_service),
+) -> StreamingResponse:
+    """Stream the notebook's filtered Obsidian vault back as a zip.
+
+    Only ``mode="zip"`` is implemented in D.1a; ``mode="vault_path"``
+    lands in D.1b and returns 501 here. The synchronous request shape
+    matches D.3 / D.2 -- typical export wall-clock is under 10s for the
+    V1 filter defaults, so no job-queue indirection.
+
+    Filter knobs (``ExportFilter``) flow through the service to the
+    D.0 repository methods, then through the D.1a post-filter for
+    ``min_connections`` + ``Entity.status``.
+    """
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    if request.mode == "vault_path":
+        # D.1b implements the disk-write side. Surface as 501 (Not
+        # Implemented) so a confused FE can show a clear error rather
+        # than a generic 500.
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Obsidian vault-path mode is not implemented yet "
+                "(arrives in D.1b). Use mode='zip' for D.1a."
+            ),
+        )
+
+    try:
+        artifact = await export_service.export(notebook_id, request)
+    except NotImplementedError as exc:
+        # Defence in depth -- the mode check above should cover this,
+        # but the service raises NotImplementedError too so we'd rather
+        # convert it to 501 than leak as 500.
+        logger.warning("export-obsidian rejected: {}", exc)
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+
+    # Stream via BytesIO per Q-D-7 -- the zip already lives in memory
+    # because zipfile.ZipFile needs random access, but the
+    # StreamingResponse wrapper keeps the response object lazy so
+    # FastAPI doesn't double-buffer.
+    safe_name = _safe_filename(notebook_id, "zip")
+    headers = {
+        "Content-Disposition": f'attachment; filename="{safe_name}"',
+    }
+    return StreamingResponse(
+        io.BytesIO(artifact.zip_bytes or b""),
+        media_type="application/zip",
+        headers=headers,
     )
 
 
