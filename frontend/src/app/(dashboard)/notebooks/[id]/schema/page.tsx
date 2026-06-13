@@ -10,6 +10,7 @@ import { CoverageStatsTable } from '@/components/notebooks/schema/CoverageStatsT
 import { OrphansDashboard } from '@/components/notebooks/orphans/OrphansDashboard'
 import { PendingExtensionsPanel } from '@/components/notebooks/schema/PendingExtensionsPanel'
 import { TtlDownloadButton } from '@/components/notebooks/schema/TtlDownloadButton'
+import { NetworkxExportMenu } from '@/components/notebooks/exports/NetworkxExportMenu'
 import { useNotebook } from '@/lib/hooks/use-notebooks'
 import { useNotebookSchema } from '@/lib/hooks/use-notebook-schema'
 
@@ -75,7 +76,10 @@ export default function NotebookSchemaPage() {
                 <h2 id="schema-heading" className="text-lg font-semibold">
                   Effective schema
                 </h2>
-                <TtlDownloadButton notebookId={notebookId} />
+                <div className="flex items-center gap-2">
+                  <TtlDownloadButton notebookId={notebookId} />
+                  <NetworkxExportMenu notebookId={notebookId} />
+                </div>
               </div>
               {schemaLoading ? (
                 <div
