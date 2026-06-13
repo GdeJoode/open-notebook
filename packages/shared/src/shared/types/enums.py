@@ -150,6 +150,11 @@ class JobType(str, Enum):
     EMBEDDING_GENERATE = "embedding_generate"  # Vector embeddings
     INSIGHT_EXTRACT = "insight_extract"  # LLM-based insights
     ENTITY_EXTRACT = "entity_extract"  # Ontology-guided entity extraction
+    # Track D Phase D.0: async Obsidian vault export. JSONL (D.2) and
+    # NetworkX (D.3) stay sync-only in V1 (Q-D-2), so this is the sole
+    # export-side JobType. Track E may add ``RESEARCH`` next to this --
+    # whoever lands first wins, the second track rebases.
+    EXPORT_OBSIDIAN = "export_obsidian"
 
 
 class JobStatus(str, Enum):

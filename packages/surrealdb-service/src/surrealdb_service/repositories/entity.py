@@ -9,7 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from shared.models.entity import Entity
+from shared.models.entity import Entity, Relation
+from shared.models.export import ExportFilter
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
 
@@ -916,3 +917,260 @@ class EntityRepository:
                 f"Failed to get entity with embedding '{entity_id}': {e}"
             )
             return None
+
+    # ------------------------------------------------------------------
+    # Track D Phase D.0 — notebook-scoped export projections
+    # ------------------------------------------------------------------
+    #
+    # ``list_entities_for_notebook`` / ``list_relations_for_notebook``
+    # power every Track D exporter (D.1 Obsidian, D.2 JSONL, D.3 NetworkX).
+    # They reuse the notebook→source→entity traversal proven by
+    # ``list_orphans_with_status`` (line 688) but project away the
+    # ``embedding`` field per Q-D-1 to bound memory — 10K entities * 768
+    # floats * 8 bytes ≈ 60MB the exporter never needs.
+
+    # Field list mirrors the Entity model **minus** ``embedding``. Kept
+    # as a module-private constant so both list_* methods (and any future
+    # export-side projection) share the same projection.
+    _ENTITY_EXPORT_FIELDS = (
+        "id, created_at, updated_at, canonical_name, entity_type, "
+        "description, source_documents, extracted_at, extraction_method, "
+        "confidence, provenance_chain, properties, "
+        "pagerank, betweenness, community_id, status, merged_into, "
+        "type_tags, primary_type, "
+        # B.5b orphan-prune lifecycle. Selected so the WHERE filter can
+        # see them; Entity.model_validate silently ignores extras.
+        "orphan_status, reconnect_attempts, first_orphaned_at, "
+        "last_reconnect_attempt_at"
+    )
+
+    async def list_entities_for_notebook(
+        self,
+        notebook_id: str,
+        filter: ExportFilter,
+    ) -> List[Entity]:
+        """Notebook-scoped projection of the full Track-B entity field set.
+
+        Reuses the reference RELATE edge pattern proven by
+        ``list_orphans_with_status`` (line 688) for the
+        notebook→source→entity traversal: source ↔ notebook lives on the
+        ``reference`` RELATE edge (migration 1), so we resolve the
+        notebook's source-ids first and then filter entities whose
+        ``source_documents`` array intersects that set.
+
+        Projects away the ``embedding`` field per Q-D-1 (Track D plan)
+        to bound memory at scale — 10K entities × 768-float embeddings
+        × 8 bytes ≈ 60MB that Obsidian/JSONL/NetworkX exporters never
+        need. The Entity Pydantic model defaults ``embedding=[]`` so the
+        rehydration is type-safe even without the column.
+
+        Filters applied in SurrealQL (NOT in Python — keep the projection
+        cheap when the notebook is large):
+
+        * ``filter.min_confidence`` → ``confidence >= $min_confidence``
+        * ``filter.entity_types`` → ``primary_type INSIDE $entity_types``
+          (B.1a multi-type tagging: the "best" type is the gating one)
+        * ``filter.include_orphans = False`` →
+          ``orphan_status != 'pending_reconnect'``
+        * ``filter.include_archived = False`` →
+          ``orphan_status != 'archived'``
+
+        ``min_connections`` is NOT enforced in this method -- counting
+        an entity's degree across the ``relation`` table is a join the
+        export pipeline does once via ``list_relations_for_notebook``.
+        Callers (D.1/D.2/D.3) post-filter on degree there.
+
+        Args:
+            notebook_id: Record ID of the notebook (e.g. ``"notebook:abc"``).
+            filter: ``ExportFilter`` from ``shared.models.export``.
+
+        Returns:
+            List of ``Entity`` rows matching the filter. Empty on
+            failure, empty notebook, or fully-filtered output.
+        """
+        if not notebook_id:
+            logger.warning(
+                "list_entities_for_notebook called with empty notebook_id"
+            )
+            return []
+
+        # Step 1: resolve notebook → sources via the reference edge.
+        # Identical pattern to ``list_orphans_with_status`` (line 744).
+        try:
+            source_rows = await execute_query(
+                "SELECT VALUE in FROM reference "
+                "WHERE out = type::thing($notebook_id)",
+                {"notebook_id": notebook_id},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to list sources for notebook export "
+                f"'{notebook_id}': {e}"
+            )
+            return []
+
+        if not source_rows:
+            return []
+
+        # ``source_documents`` stores stringified record ids (see
+        # ``upsert_entity``), so compare in string space.
+        source_ids = [str(row) for row in source_rows if row]
+        if not source_ids:
+            return []
+
+        # Step 2: build the WHERE clause incrementally so the planner
+        # sees the most-selective predicate (source-ids intersection)
+        # first. Unbound knobs (None/include_*=True) don't emit a clause.
+        clauses: List[str] = [
+            "source_documents ANYINSIDE $source_ids",
+            "confidence >= $min_confidence",
+        ]
+        params: Dict[str, Any] = {
+            "source_ids": source_ids,
+            "min_confidence": filter.min_confidence,
+        }
+
+        if filter.entity_types is not None:
+            clauses.append("primary_type INSIDE $entity_types")
+            params["entity_types"] = filter.entity_types
+
+        if not filter.include_orphans:
+            # ``!=`` returns true when the field is NONE (healthy row),
+            # so the negation works cleanly without an explicit IS NONE
+            # branch.
+            clauses.append("orphan_status != 'pending_reconnect'")
+
+        if not filter.include_archived:
+            clauses.append("orphan_status != 'archived'")
+
+        query = (
+            f"SELECT {self._ENTITY_EXPORT_FIELDS} FROM entity "
+            f"WHERE {' AND '.join(clauses)} "
+            "ORDER BY canonical_name"
+        )
+
+        try:
+            rows = await execute_query(query, params, self.config)
+        except Exception as e:
+            logger.error(
+                f"list_entities_for_notebook failed for notebook "
+                f"'{notebook_id}': {e}"
+            )
+            return []
+
+        if not rows:
+            return []
+
+        # ``execute_query`` already stringifies RecordIDs; Entity model
+        # tolerates the extra orphan_* fields (no ``extra="forbid"``).
+        entities: List[Entity] = []
+        for row in rows:
+            try:
+                entities.append(Entity.model_validate(row))
+            except Exception as e:
+                logger.warning(
+                    f"list_entities_for_notebook: skipping malformed "
+                    f"row id={row.get('id')!r}: {e}"
+                )
+        return entities
+
+    async def list_relations_for_notebook(
+        self,
+        notebook_id: str,
+        filter: ExportFilter,
+    ) -> List[Relation]:
+        """Relations between entities in the notebook (after entity filter).
+
+        Two-phase pattern:
+
+        1. Resolve the notebook's entity-id set via
+           ``list_entities_for_notebook(notebook_id, filter)``.
+        2. SELECT relations where BOTH ``in`` AND ``out`` belong to that
+           set, with relation-confidence filtered by
+           ``min_relation_confidence`` (or ``min_confidence`` when the
+           caller left it ``None`` -- the shared-knob fallback documented
+           in ``ExportFilter``).
+
+        Per Q-D-4 (Track D plan), relations whose target was filtered
+        out are silently dropped. The two-phase set-intersection
+        implements that: an edge into a filtered entity disappears
+        because that entity isn't in the id set.
+
+        Args:
+            notebook_id: Record ID of the notebook.
+            filter: ``ExportFilter`` -- the same instance passed to
+                ``list_entities_for_notebook`` for consistency.
+
+        Returns:
+            List of ``Relation`` rows. Empty on failure, empty notebook,
+            or zero edges among filtered entities.
+        """
+        entities = await self.list_entities_for_notebook(notebook_id, filter)
+        if not entities:
+            return []
+
+        # ``in`` / ``out`` on the relation table are ``record<entity>``
+        # columns. SurrealQL compares them in RecordID space -- passing
+        # plain strings here causes ``INSIDE`` to return zero rows, which
+        # silently drops every edge. Coerce via ``ensure_record_id``.
+        entity_ids: List[Any] = []
+        for e in entities:
+            if not e.id:
+                continue
+            try:
+                entity_ids.append(ensure_record_id(e.id))
+            except Exception as exc:
+                logger.warning(
+                    f"list_relations_for_notebook: bad entity id "
+                    f"{e.id!r}: {exc}"
+                )
+        if not entity_ids:
+            return []
+
+        # ``min_relation_confidence`` inherits from ``min_confidence``
+        # when None -- single-knob ergonomics documented on the model.
+        min_rel_conf = (
+            filter.min_relation_confidence
+            if filter.min_relation_confidence is not None
+            else filter.min_confidence
+        )
+
+        try:
+            rows = await execute_query(
+                "SELECT id, in, out, relation_type, properties, "
+                "source_documents, extracted_at, extraction_method, "
+                "confidence, provenance_chain, status, created_at "
+                "FROM relation "
+                "WHERE in INSIDE $entity_ids "
+                "AND out INSIDE $entity_ids "
+                "AND confidence >= $min_rel_conf",
+                {
+                    "entity_ids": entity_ids,
+                    "min_rel_conf": min_rel_conf,
+                },
+                self.config,
+            )
+        except Exception as e:
+            logger.error(
+                f"list_relations_for_notebook failed for notebook "
+                f"'{notebook_id}': {e}"
+            )
+            return []
+
+        if not rows:
+            return []
+
+        relations: List[Relation] = []
+        for row in rows:
+            try:
+                # ``in``/``out`` come back as RecordIDs (already string-
+                # ified by execute_query); Relation has alias fields so
+                # the raw row works.
+                relations.append(Relation.model_validate(row))
+            except Exception as e:
+                logger.warning(
+                    f"list_relations_for_notebook: skipping malformed "
+                    f"row id={row.get('id')!r}: {e}"
+                )
+        return relations
