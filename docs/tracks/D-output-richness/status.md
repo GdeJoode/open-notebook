@@ -72,3 +72,52 @@
 **Self-review**: `docs/tracks/D-output-richness/reviews/phase-D.3-self-review.md`
 
 **Ready for review.** Next: D.1 (Obsidian) per Q-D-9 phase order.
+
+---
+
+## Phase D.1a — Obsidian zip export (DONE)
+
+**Branch**: `track/d-obsidian-zip`
+**Commits**: see PR; commit-range filled in self-review after push.
+
+**Delivered**:
+- `ObsidianExportService` (`apps/app-main/src/app_main/services/obsidian_export_service.py`) builds a flat
+  Obsidian vault for a notebook, with one `.md` per surviving entity
+  plus a `README.md` index, and zips it into an in-memory archive.
+- `POST /api/notebooks/{notebook_id}/export-obsidian` in
+  `apps/app-main/src/app_main/api/routers/exports.py` — streams the
+  zip back as `application/zip`. `mode="vault_path"` returns 501 (D.1b).
+- `get_obsidian_export_service()` factory in `dependencies.py` wired
+  with the entity repo + settings service (settings ready for D.1b).
+- Snapshot baseline fixture
+  `apps/app-main/tests/fixtures/obsidian_export_golden.md` with
+  reviewer-pinned frontmatter shape.
+
+**Decisions honoured (pre-resolved)**:
+- Q-D-3: reused `shared.utils.external_ids.resolve_external_ids` stub
+  (D.0 ship → `external_ids: []` in V1).
+- Q-D-4: relations to filtered-out targets are silently dropped, never
+  rendered as broken `[[…]]`. Covered by
+  `test_broken_wikilinks_silently_dropped`.
+- Q-D-5: filename collisions get `-2`, `-3`, … suffix. Covered by
+  `test_filename_collision_appends_suffix`.
+- Q-D-7: `io.BytesIO` + `StreamingResponse` for the zip surface.
+- Q-D-8: telemetry payload carries counts only. Covered by a recursive
+  walker assertion in
+  `test_telemetry_emits_export_obsidian_with_counts_only`.
+- Q-D-10: `aliases: []` in V1 (matches golden).
+
+**D.0 follow-up #1 (status not in archived/merged)**:
+Same Python-side post-filter as D.3. Documented in the module
+docstring + self-review. Promotion to SurrealQL deferred to D.2 so all
+three exporters can share the gate in one swing (matching the D.3
+self-review recommendation).
+
+**Tests**:
+- `apps/app-main`: 536 → 552 (+16: 12 service + 4 router)
+- `packages/shared`: 199 → 199 (no shared-model edits)
+
+**Self-review**: `docs/tracks/D-output-richness/reviews/phase-D.1a-self-review.md`
+
+**Ready for review.** Next: D.1b (direct-write vault mode) per
+Q-D-9 phase order.
