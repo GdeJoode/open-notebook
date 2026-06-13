@@ -74,3 +74,96 @@ Trade-off: D.1 and D.2 will need the same post-filter when they land, or D.0 sho
 | `npx tsc --noEmit`                                          | clean |
 | `npm run lint`                                              | clean (no new warnings) |
 | `npx playwright test e2e/track-d/networkx-export.spec.ts`   | 2 passed |
+
+---
+
+## Attempt 2 fixes
+
+Reviewer rejected attempt 1 with **REVISIONS_NEEDED** — 0 blockers + 2 majors + 6
+minors. This section records the attempt-2 fixes.
+
+### M1 (json-tree multi-rooted DAG silent truncation) — FIXED
+
+Resolution: **code fix, not document-and-pin**. Pre-check the graph with
+`nx.is_arborescence` and route anything that fails the structural test through
+`nx.node_link_data` instead of `nx.tree_data`. The previous try/except shape
+relied on `tree_data` raising on non-tree input; it doesn't on multi-rooted DAGs,
+which is precisely the silent-loss bug the reviewer pinned.
+
+Two new pin tests:
+
+* `test_json_tree_multi_rooted_dag_falls_back_to_node_link` — 3 entities
+  `a, b, c` with edges `a→c, b→c` (multi-rooted DAG). Asserts the envelope
+  is `node_link_data` shape (keys `nodes` + `links` + `directed`), the
+  round-tripped graph has 3 nodes + 2 edges, and the build summary
+  matches.
+* `test_json_tree_rooted_arborescence_uses_tree_data` — counterpart pin
+  for a true rooted tree (`root → a → b`): envelope must have `id` +
+  `children` keys (tree_data shape), no `nodes` key, and round-trips
+  via `nx.tree_graph` with 3 nodes + 2 edges. Stops a future drift
+  where someone accidentally routes everything through node-link.
+
+### M2 (edge-list drops isolated nodes) — DOCUMENTED + PINNED
+
+Resolution: **Option A — document + pin** (per reviewer's recommendation). Three
+surfaces updated:
+
+1. Service module docstring gains a `Format limitations` section calling
+   out edge-list's isolate-drop behaviour, the json-tree fallback
+   conditions, and the pickle code-execution caveat (minor 2 bundled).
+2. `NetworkxExportMenu.tsx` `FormatOption` gains an optional `caveat`
+   field. Edge-list shows `drops isolated entities` and pickle shows
+   `trust only files you generated yourself` as italic amber-coloured
+   text below the description, plus the same string is concatenated
+   into the menu item's `aria-label` so screen readers announce it.
+3. New pin test `test_edge_list_documented_behavior_drops_isolated_nodes`
+   — 3 entities `a, b, c` with single edge `a→b`. The isolated `c`
+   must NOT appear in the round-tripped graph; exactly 2 nodes + 1 edge
+   survive. The service report still counts all 3 entities (no
+   accountancy regression).
+
+### Pin test stdout (the two new majors-fix tests)
+
+```
+$ uv run --extra dev pytest \
+    apps/app-main/tests/test_networkx_export_service.py::test_json_tree_multi_rooted_dag_falls_back_to_node_link \
+    apps/app-main/tests/test_networkx_export_service.py::test_edge_list_documented_behavior_drops_isolated_nodes \
+    -v
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.4.2, pluggy-1.6.0
+configfile: pyproject.toml
+plugins: anyio-4.11.0, Faker-37.11.0, langsmith-0.4.37, asyncio-1.2.0
+asyncio: mode=Mode.AUTO ...
+collecting ... collected 2 items
+
+apps/app-main/tests/test_networkx_export_service.py::test_json_tree_multi_rooted_dag_falls_back_to_node_link PASSED [ 50%]
+apps/app-main/tests/test_networkx_export_service.py::test_edge_list_documented_behavior_drops_isolated_nodes PASSED [100%]
+
+============================== 2 passed in 4.92s ===============================
+```
+
+### Minors bundled in attempt 2
+
+| # | Minor | Action |
+|---|-------|--------|
+| 1 | `type_tags` flattening edge cases | Documented in module docstring under `Attribute flattening edge cases` |
+| 2 | Pickle security caveat | Added to module docstring AND UI dropdown caveat |
+| 3 | `_FILENAME_UNSAFE_RE` strip set | Deferred (file as separate cleanup with B.2b) |
+| 4 | Plan path discrepancy | Plan §D.3 updated to point at `schema/page.tsx` |
+| 5 | D.0 SurrealQL filter promotion | Deferred (will happen when D.2 lands) |
+| 6 | CORS `expose_headers` global | Deferred (follow-up infra PR) |
+
+### Attempt 2 quality gates
+
+| Gate                                                        | Result |
+|-------------------------------------------------------------|--------|
+| New pin tests (3: 2 majors + 1 counterpart)                | 3 passed |
+| `pytest -q apps/app-main` regression                        | 536 passed (was 533 + 3 new) |
+| `pytest -q packages/shared` regression                      | 199 passed (no change) |
+| `npx tsc --noEmit`                                          | clean |
+| `npm run lint` (NetworkxExportMenu only)                    | clean (no new warnings) |
+| `npx playwright test e2e/track-d/networkx-export.spec.ts`   | 2 passed (against localhost:8513 — 8502/8503/8512 occupied by sibling worktrees) |
+
+### Rebase
+
+`git rebase origin/main` against the post-attempt-1-review tip (`15e824a docs(track-d): D.3 attempt-1 review`). Clean fast-forward of the 3 D.3 commits; no merge markers, no conflict, no manual intervention required.
