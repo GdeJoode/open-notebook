@@ -112,7 +112,66 @@ App-main is the test-coverage hot spot (27 testfiles, 235 tests after Phase 5)
 because it owns the bulk of the orchestration. Pipelines have lower but adequate
 coverage; the under-covered `pipelines/retrieval` got attention in Phase 5.
 
-## 6. Further reading
+## 6. Storage layer additions (Track B — KG quality)
+
+Track B (closed 2026-06-12) extended the SurrealDB layer with four new tables
+and three new fields on `entity`. Migration files live in `migrations/`:
+
+| Table / Field | Migration | Purpose | Owner |
+|---|---|---|---|
+| `entity.type_tags` / `entity.primary_type` | 44 | Multi-schema type-tagging on existing entities; `type_tags` accumulates via union, `primary_type` set from the highest-confidence pass | B.1a |
+| `notebook_schema` | 45 | Per-notebook ontology-evolution state (base ontology, accepted/pending extensions, soft-delete `excluded_types`, review-required toggle) | B.1b |
+| `pass1_results` | 45 | Append-only first-pass LLM schema-validation output per source (coverage_pct, alternative_schemas, proposed_extensions) | B.1b |
+| `notebook_event` | 46 | Shared append-only domain-event log per notebook (`schema_changed`, `extension_suggested`, `schema_mismatch`) consumed by the soft-nudge banner and Track G5 webhooks | B.3b |
+| `metrics` | 47 | Always-on extraction telemetry (composite index on `(event_type, created_at)`, FLEXIBLE payload, env-toggle opt-out) | B.4 |
+| `entity.orphan_status` / `reconnect_attempts` / `first_orphaned_at` / `last_reconnect_attempt_at` | 48 | Prune-lifecycle metadata for B.5a orphan-connector retries; archived rows are kept (recoverable) | B.5b |
+
+All Track-B migrations are idempotent (`IF NOT EXISTS` everywhere) and have
+matching `_down.surrealql` counterparts.
+
+### Track-B service modules
+
+The B-track services follow the section-3 naming convention. They live in
+`apps/app-main/src/app_main/services/` unless noted otherwise:
+
+| Module | Role | Phase |
+|---|---|---|
+| `EntityExtractionService` (rewired) | Branches on `(multi_schema_enabled, notebook_id)`; dispatches to single-schema or multi-schema path; raises `SchemaReviewPendingError` when the notebook gate is active | B.1f |
+| `SchemaEditService` | Pure business logic for accept/reject extension, rename, merge, split, delete type; idempotent via deterministic op-ids; emits exactly one `notebook_event` per op | B.3b |
+| `ReextractService` | Enqueues `ENTITY_EXTRACT` jobs after schema edits, with paused-job dedup | B.3d |
+| `NotebookMergeService` | Cross-notebook graph merge (semantic-content idempotency, archived-source guard) | B.6 |
+| `shared.services.metrics.record_metric` (in `packages/shared/`) | Always-on `INSERT INTO metrics` helper (env-flag `OPEN_NOTEBOOK_DISABLE_METRICS`, exception-swallow contract) | B.4 |
+| `entity_filtering.resolution.orphan_connector` (in `pipelines/entity-filtering/`) | Co-occurrence-based orphan reconnection with LLM-confirm; prune-lifecycle update writes `orphan_status` transitions | B.5a / B.5b |
+
+### Extraction-pipeline subsection
+
+The extraction pipeline (`pipelines/ontology-extraction/`) gained a
+multi-schema mode. Dispatcher pattern:
+
+```
+EntityExtractionService.run_extraction(notebook_id, multi_schema_enabled=True)
+        │
+        ▼
+ExtractionWorkflow.extract(mode="multi"|"single")
+        │
+        ├─ mode="single" → existing single-schema Pass-2 path (default off-notebook)
+        │
+        └─ mode="multi"  → multi_schema_orchestrator.run_multi_schema(...)
+                 1. detect_applicable_schemas(...) → top-3 ontologies, conf ≥ 0.3
+                 2. Sequential Pass-1 per schema → pass1_results rows
+                 3. Cumulative SoftNudgeDecision (NONE / EXTENSION_SUGGESTED / SCHEMA_MISMATCH)
+                 4. Sequential Pass-2 per schema with accepted extensions
+                 5. In-process merge: entity dedup via normalize_entity_name,
+                    type_tags union, primary_type ← highest-confidence pass,
+                    relation dedup with max-confidence wins
+```
+
+Confidence is populated on every entity AND every relation (B.4
+invariant); the merge step uses confidence-max semantics so the highest-
+confidence pass wins. Multi-schema is **on by default** when `notebook_id`
+is provided; flip `multi_schema_enabled=false` per-request to fall back.
+
+## 7. Further reading
 
 - `docs/SUMMARIZATION_APPROACHES.md` — design + status of all 11 summarization strategies
 - `docs/KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md` — KG architecture and roadmap
@@ -120,3 +179,5 @@ coverage; the under-covered `pipelines/retrieval` got attention in Phase 5.
 - `docs/WORKSPACE_REFACTOR_PLAN.md` — the original monolith → workspace migration
 - `docs/REFACTOR_PLAN.md` — the recent god-split + structural cleanup refactor
 - `docs/GRAPH_FEATURES_IMPLEMENTATION_GUIDE.md` — UI/UX implementation of KG features
+- `docs/tracks/A-mineru/RETRO.md` — Track A retrospective (parser-engine routing)
+- `docs/tracks/B-kg-quality/RETRO.md` — Track B retrospective (multi-schema KG)

@@ -125,6 +125,36 @@ Persisteren confidence in `Source.metadata.extraction_confidence`; UI toont badg
 
 ## Track B — KG quality (multi-schema + formele discipline)
 
+> **Status**: ✅ **COMPLETE (2026-06-12)** — Multi-schema KG extraction,
+> schema-edit UX, telemetry, orphan-lifecycle, cross-notebook merge.
+> All 18 PRs merged (17 production sub-phases — B.0, B.1a–B.1f,
+> B.2a/B.2b, B.3a–B.3d, B.4, B.5a/B.5b, B.6 — plus B.7 integration/retro).
+> See [`docs/tracks/B-kg-quality/RETRO.md`](./tracks/B-kg-quality/RETRO.md)
+> for the retrospective and
+> [`docs/tracks/B-kg-quality/status.md`](./tracks/B-kg-quality/status.md)
+> for the rolling per-phase log.
+
+| Phase | Title | Status |
+|---|---|---|
+| B.0 | Testcontainers SurrealDB harness | ✅ |
+| B.1a | Entity/Relation models + persistence drift fix + migration 44 | ✅ |
+| B.1b | `notebook_schema` + `pass1_results` tables + repos + migration 45 | ✅ |
+| B.1c | Pass-1 schema-validation module | ✅ |
+| B.1d | Pass-2 typed-extraction module (confidence-everywhere) | ✅ |
+| B.1e | Multi-schema orchestrator + merge step | ✅ |
+| B.1f | EntityExtractionService rewire + LLMExtractor DI fix | ✅ |
+| B.2a | TTL/RDFS exporter fix + roundtrip test | ✅ |
+| B.2b | `GET /api/notebooks/{id}/schema.ttl` endpoint | ✅ |
+| B.3a | Schema-tab view-only UI | ✅ |
+| B.3b | Schema edit operations (rename / merge / split / delete) + migration 46 | ✅ |
+| B.3c | Soft-nudge banner + per-notebook pause toggle | ✅ |
+| B.3d | Schema-change → re-extract prompt | ✅ |
+| B.4 | Confidence display + filter + always-on telemetry + migration 47 | ✅ |
+| B.5a | Orphan-connector (co-occurrence + LLM-confirm) | ✅ |
+| B.5b | Orphan prune-lifecycle + migration 48 | ✅ |
+| B.6 | Cross-notebook graph merge | ✅ |
+| B.7 | Track integration + ARCHITECTURE + RETRO + CHANGELOG | ✅ |
+
 **Vision**: KG wordt grounded in echte ontology met validatie. Schema is editable in UI. Multi-schema sequentieel voor cross-domain documenten.
 
 ### B1 — Two-pass extractie met multi-schema + extension-detection
