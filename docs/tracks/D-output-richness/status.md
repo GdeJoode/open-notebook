@@ -121,3 +121,67 @@ self-review recommendation).
 
 **Ready for review.** Next: D.1b (direct-write vault mode) per
 Q-D-9 phase order.
+
+---
+
+## Phase D.1b — Obsidian direct-write-to-vault (DONE)
+
+**Branch**: `track/d-obsidian-vault`
+**Commit range**: `043bcf3..HEAD` (single commit `7ff80c6`)
+
+**Delivered**:
+- `ObsidianExportService._export_to_vault` + `_write_to_vault`
+  (`apps/app-main/src/app_main/services/obsidian_export_service.py`)
+  implement the `mode="vault_path"` branch. The vault is built in
+  memory (same logic as zip mode), then each file is written to
+  `<Settings.vault_path>/<Settings.vault_entities_folder>/` via
+  tempfile + `os.replace` (POSIX atomic rename per file).
+- `VaultPathNotConfigured` exception surfaces a friendly 400 at the
+  router boundary when `Settings.vault_path` /
+  `Settings.vault_entities_folder` is missing.
+- `POST /api/notebooks/{notebook_id}/export-obsidian` now dispatches
+  on mode: zip streams as before, vault_path returns the
+  `ExportReport` as JSON. Filesystem failures map to 500 with
+  `entities_written` + `failed_file` in the body so the client knows
+  where the batch stopped.
+- `JobType.EXPORT_OBSIDIAN` handler registered in
+  `apps/app-main/src/app_main/handlers.py`. Always uses
+  `mode="vault_path"` — auto-pipeline entry point.
+
+**Safety guards (defense-in-depth on top of D.1a's `_safe_entity_stem`)**:
+- `vault_path` must be absolute (rejects `./relative/vault`).
+- `vault_path` must exist as a directory and be writable.
+- `vault_entities_folder` cannot escape `vault_path` (rejects
+  `../../etc`).
+- Each per-file write resolves the target path and verifies it's a
+  child of the target dir before opening the tmp file.
+
+**Decisions honoured (pre-resolved)**:
+- Q-D-6: overwrite is default for `<entities_folder>/`. User-added
+  files outside the export's filename set are preserved. Covered by
+  `test_vault_path_overwrite_existing_md` (a `user_added.md` file
+  inside the entities folder survives an export pass).
+- Q-D-8: telemetry payload carries `mode: "vault_path"` +
+  `vault_path_redacted: True`. Raw path NEVER in the payload.
+  Covered by `test_vault_path_telemetry_redacts_path` (recursive walk
+  asserting `str(tmp_path)` is absent in every string value).
+
+**Atomicity**: per-file (not whole-batch) — documented in module
+docstring + self-review. A mid-batch failure leaves earlier files
+written and propagates the exception with
+`{"entities_written": N, "failed_file": "<name>"}` in `exc.args`.
+
+**Tests**:
+- `apps/app-main`: 554 → 566 (+12: 7 service + 3 router + 2 handler).
+  All passing in 1:38.
+- `packages/job-queue`: 38 → 38 (no regression). All passing in 41s.
+- `packages/shared`: unchanged.
+
+**D.0 follow-up #1 (status not in archived/merged)**: still deferred
+to D.2 per the D.1a + D.3 self-reviews — final exporter lands before
+the SurrealQL promotion so all three exporters share the gate in one
+swing.
+
+**Self-review**: `docs/tracks/D-output-richness/reviews/phase-D.1b-self-review.md`
+
+**Ready for review.** Next per plan: D.2 (JSONL stream export).
