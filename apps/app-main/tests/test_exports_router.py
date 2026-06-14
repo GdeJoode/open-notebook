@@ -37,7 +37,10 @@ from app_main.dependencies import (
     get_notebook_service,
     get_obsidian_export_service,
 )
-from app_main.services.obsidian_export_service import ExportArtifact
+from app_main.services.obsidian_export_service import (
+    ExportArtifact,
+    VaultPathNotConfigured,
+)
 
 from tests.conftest import make_notebook
 
@@ -318,11 +321,79 @@ class TestExportObsidianRouter:
         notebook_svc.get.assert_not_called()
         export_svc.export.assert_not_awaited()
 
-    def test_obsidian_vault_path_mode_not_implemented(self):
-        """``mode=vault_path`` returns 501 with a clear error message."""
+    def test_obsidian_vault_path_happy_path(self):
+        """``mode=vault_path`` -> 200 + application/json + ExportReport body.
+
+        D.1b: the router returns the ExportReport as JSON (no file body)
+        when the service writes to disk successfully. The artifact
+        carries the resolved target dir for debugging but the router
+        does not echo it back (the path is server-side; the client
+        doesn't need to know where on disk it landed).
+        """
         notebook_svc = AsyncMock()
         notebook_svc.get.return_value = make_notebook(id="notebook:abc")
+
+        report = ExportReport(
+            entities_written=3,
+            relations_written=2,
+            files_written=4,  # README + 3 entity files
+            bytes_written=512,
+            duration_ms=12,
+            # Match the filter the request body carries so the
+            # round-trip assertion below makes sense (the service
+            # would echo the same filter into the report).
+            filter_applied=ExportFilter(min_connections=0),
+        )
         export_svc = AsyncMock()
+        export_svc.export.return_value = ExportArtifact(
+            mode="vault_path",
+            report=report,
+            zip_bytes=None,
+            vault_dir="/var/vaults/notebook-abc/Entities",
+        )
+
+        client = _make_obsidian_app(notebook_svc, export_svc)
+        resp = client.post(
+            "/api/notebooks/notebook:abc/export-obsidian",
+            json={"mode": "vault_path", "filter": {"min_connections": 0}},
+        )
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/json")
+        # No Content-Disposition -- this is not a download.
+        assert "content-disposition" not in {k.lower() for k in resp.headers}
+
+        body = resp.json()
+        # Body is the ExportReport (counts + filter snapshot + duration).
+        assert body["entities_written"] == 3
+        assert body["relations_written"] == 2
+        assert body["files_written"] == 4
+        assert body["bytes_written"] == 512
+        assert body["duration_ms"] == 12
+        # Filter snapshot round-trips.
+        assert body["filter_applied"]["min_connections"] == 0
+
+        # Service called with the parsed request.
+        export_svc.export.assert_awaited_once()
+        call_args = export_svc.export.await_args
+        assert call_args.args[0] == "notebook:abc"
+        assert isinstance(call_args.args[1], ObsidianExportRequest)
+        assert call_args.args[1].mode == "vault_path"
+
+    def test_obsidian_vault_path_not_configured_400(self):
+        """Settings.vault_path missing -> 400 with a clear error message.
+
+        The service raises ``VaultPathNotConfigured``; the router maps
+        it to 400 (user/operator can fix it via the Settings UI).
+        """
+        notebook_svc = AsyncMock()
+        notebook_svc.get.return_value = make_notebook(id="notebook:abc")
+
+        export_svc = AsyncMock()
+        export_svc.export.side_effect = VaultPathNotConfigured(
+            "Settings.vault_path is not configured. Configure it in "
+            "Settings before exporting in vault_path mode."
+        )
 
         client = _make_obsidian_app(notebook_svc, export_svc)
         resp = client.post(
@@ -330,11 +401,42 @@ class TestExportObsidianRouter:
             json={"mode": "vault_path"},
         )
 
-        assert resp.status_code == 501
+        assert resp.status_code == 400
         body = resp.json()
-        # Router phrases the mode as "vault-path" in prose; accept
-        # either spelling so a copy-edit doesn't break the test.
-        assert "vault" in body["detail"].lower()
-        assert "D.1b" in body["detail"]
-        # The service must not be called -- the router short-circuits.
-        export_svc.export.assert_not_awaited()
+        assert "vault_path" in body["detail"].lower()
+        assert "configure" in body["detail"].lower()
+
+    def test_obsidian_vault_path_filesystem_failure_500_with_partial(self):
+        """Filesystem failure mid-write -> 500 with partial entities_written.
+
+        Verifies the per-file atomicity contract surfaces correctly at
+        the HTTP boundary: when ``_write_to_vault`` propagates an
+        ``OSError`` with ``{"entities_written": N}`` in its args, the
+        router echoes that count in the 500 body so the client knows
+        where the batch stopped.
+        """
+        notebook_svc = AsyncMock()
+        notebook_svc.get.return_value = make_notebook(id="notebook:abc")
+
+        export_svc = AsyncMock()
+        # Mimic the _write_to_vault failure mode: OSError with a
+        # partial-state dict in args.
+        export_svc.export.side_effect = OSError(
+            "simulated disk full",
+            {"entities_written": 2, "failed_file": "carol.md"},
+        )
+
+        client = _make_obsidian_app(notebook_svc, export_svc)
+        resp = client.post(
+            "/api/notebooks/notebook:abc/export-obsidian",
+            json={"mode": "vault_path"},
+        )
+
+        assert resp.status_code == 500
+        body = resp.json()
+        # detail carries the structured failure body.
+        detail = body["detail"]
+        assert isinstance(detail, dict)
+        assert "error" in detail
+        assert detail["entities_written"] == 2
+        assert detail.get("failed_file") == "carol.md"

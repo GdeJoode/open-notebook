@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import io
 import re
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -37,7 +37,10 @@ from app_main.dependencies import (
 )
 from app_main.services.networkx_export_service import NetworkxExportService
 from app_main.services.notebook_service import NotebookService
-from app_main.services.obsidian_export_service import ObsidianExportService
+from app_main.services.obsidian_export_service import (
+    ObsidianExportService,
+    VaultPathNotConfigured,
+)
 from shared.models.export import NetworkxExportRequest, ObsidianExportRequest
 
 
@@ -148,15 +151,33 @@ async def export_notebook_networkx(
 
 @router.post(
     "/export-obsidian",
-    response_class=StreamingResponse,
     responses={
         200: {
-            "content": {"application/zip": {}},
-            "description": "Obsidian vault streamed back as a zip archive.",
+            "content": {
+                "application/zip": {},
+                "application/json": {},
+            },
+            "description": (
+                "Obsidian vault: streamed back as a zip archive "
+                "(mode=zip) or written to Settings.vault_path with an "
+                "ExportReport returned as JSON (mode=vault_path, D.1b)."
+            ),
+        },
+        400: {
+            "description": (
+                "vault_path mode requested but Settings.vault_path is not "
+                "configured (D.1b)."
+            ),
         },
         404: {"description": "Notebook not found."},
         422: {"description": "Invalid request body (e.g. unknown mode)."},
-        501: {"description": "Mode not yet implemented (e.g. vault_path before D.1b)."},
+        500: {
+            "description": (
+                "Filesystem failure during vault_path write. Body carries "
+                "entities_written so the client knows where the batch "
+                "stopped."
+            ),
+        },
     },
 )
 async def export_notebook_obsidian(
@@ -164,45 +185,74 @@ async def export_notebook_obsidian(
     request: ObsidianExportRequest,
     notebook_service: NotebookService = Depends(get_notebook_service),
     export_service: ObsidianExportService = Depends(get_obsidian_export_service),
-) -> StreamingResponse:
-    """Stream the notebook's filtered Obsidian vault back as a zip.
+) -> Response:
+    """Build the notebook's filtered Obsidian vault.
 
-    Only ``mode="zip"`` is implemented in D.1a; ``mode="vault_path"``
-    lands in D.1b and returns 501 here. The synchronous request shape
-    matches D.3 / D.2 -- typical export wall-clock is under 10s for the
-    V1 filter defaults, so no job-queue indirection.
+    Two delivery modes:
+
+    * ``mode="zip"`` -- streams the in-memory archive back as
+      ``application/zip`` (D.1a).
+    * ``mode="vault_path"`` -- writes each file directly to
+      ``<Settings.vault_path>/<vault_entities_folder>/`` using
+      POSIX atomic-rename per file, then returns the
+      :class:`shared.models.export.ExportReport` as JSON (D.1b).
 
     Filter knobs (``ExportFilter``) flow through the service to the
-    D.0 repository methods, then through the D.1a post-filter for
-    ``min_connections`` + ``Entity.status``.
+    D.0 repository methods, then through the D.1 post-filter for
+    ``min_connections`` + ``Entity.status``. The synchronous request
+    shape matches D.3 / D.2 -- typical export wall-clock is under 10s
+    for the V1 filter defaults, so no job-queue indirection on the
+    request path (the async ``JobType.EXPORT_OBSIDIAN`` exists for
+    auto-pipeline triggers, not user-initiated exports).
     """
     notebook = await notebook_service.get(notebook_id)
     if not notebook:
         raise HTTPException(status_code=404, detail="Notebook not found")
 
-    if request.mode == "vault_path":
-        # D.1b implements the disk-write side. Surface as 501 (Not
-        # Implemented) so a confused FE can show a clear error rather
-        # than a generic 500.
-        raise HTTPException(
-            status_code=501,
-            detail=(
-                "Obsidian vault-path mode is not implemented yet "
-                "(arrives in D.1b). Use mode='zip' for D.1a."
-            ),
-        )
-
     try:
         artifact = await export_service.export(notebook_id, request)
-    except NotImplementedError as exc:
-        # Defence in depth -- the mode check above should cover this,
-        # but the service raises NotImplementedError too so we'd rather
-        # convert it to 501 than leak as 500.
-        logger.warning("export-obsidian rejected: {}", exc)
-        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except VaultPathNotConfigured as exc:
+        # Friendly 400 -- the user/operator can fix this by setting
+        # vault_path in Settings. We surface the service-side message
+        # verbatim because it's already user-readable.
+        logger.warning("export-obsidian vault_path rejected: {}", exc)
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc) or "Configure vault_path in Settings first",
+        ) from exc
+    except ValueError as exc:
+        # Defense-in-depth path-traversal / non-absolute / not-writable
+        # rejections from _write_to_vault. Surface as 500 with the
+        # partial state if available -- a misconfigured vault is an
+        # operator problem, not a 400-class user-input problem.
+        logger.error("export-obsidian filesystem rejection: {}", exc)
+        partial = _extract_partial_state(exc)
+        body: Dict[str, Any] = {"error": str(exc)}
+        body.update(partial)
+        raise HTTPException(status_code=500, detail=body) from exc
+    except OSError as exc:
+        # Mid-batch filesystem failure (disk full, permission flip
+        # mid-write, etc.). Partial state is attached by
+        # _write_to_vault via the exception's trailing dict arg.
+        logger.error("export-obsidian filesystem failure: {}", exc)
+        partial = _extract_partial_state(exc)
+        body = {"error": str(exc)}
+        body.update(partial)
+        raise HTTPException(status_code=500, detail=body) from exc
 
-    # Stream via BytesIO per Q-D-7 -- the zip already lives in memory
-    # because zipfile.ZipFile needs random access, but the
+    if artifact.mode == "vault_path":
+        # D.1b: return the report as JSON, no file body. The artifact
+        # carries the resolved target dir for debugging but we don't
+        # echo it back to the client -- the path is on the server and
+        # the client doesn't need it.
+        return Response(
+            content=artifact.report.model_dump_json(),
+            media_type="application/json",
+            status_code=200,
+        )
+
+    # mode="zip": stream via BytesIO per Q-D-7 -- the zip already lives
+    # in memory because zipfile.ZipFile needs random access, but the
     # StreamingResponse wrapper keeps the response object lazy so
     # FastAPI doesn't double-buffer.
     safe_name = _safe_filename(notebook_id, "zip")
@@ -214,6 +264,25 @@ async def export_notebook_obsidian(
         media_type="application/zip",
         headers=headers,
     )
+
+
+def _extract_partial_state(exc: Exception) -> Dict[str, Any]:
+    """Pull the partial-state dict that ``_write_to_vault`` attaches.
+
+    ``_write_to_vault`` raises with ``(message, {"entities_written":
+    N})`` as ``exc.args`` so the router can surface "how many files
+    landed before we stopped". This helper hunts for that dict in
+    ``exc.args`` and returns an empty dict if none is attached
+    (path-traversal-on-config errors don't carry partial state because
+    no writes happened).
+    """
+    for arg in getattr(exc, "args", ()):
+        if isinstance(arg, dict) and "entities_written" in arg:
+            return {
+                "entities_written": int(arg["entities_written"]),
+                **{k: v for k, v in arg.items() if k != "entities_written"},
+            }
+    return {}
 
 
 __all__ = ["router"]
