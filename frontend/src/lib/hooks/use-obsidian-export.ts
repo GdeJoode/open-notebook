@@ -1,0 +1,231 @@
+/**
+ * D.1c -- Obsidian export mutation hook.
+ *
+ * Wraps the ``POST /api/notebooks/{id}/export-obsidian`` call with the
+ * dual-branch response handling the dialog needs:
+ *
+ *   * ``Content-Type: application/zip`` → blob download via a hidden
+ *     ``<a>`` element. Filename pulled from ``Content-Disposition``.
+ *   * ``Content-Type: application/json`` → parse ``ExportReport``,
+ *     expose via ``lastReport``, fire a success toast.
+ *
+ * Errors are surfaced via a destructive toast AND ``error`` so the
+ * dialog can render an inline banner without losing user state.
+ *
+ * The filename parser ``parseFilenameFromContentDisposition`` is
+ * exported so the unit-test spec can pin its behaviour -- regex parsers
+ * are easy to over-simplify (see the mental-inversion test for the
+ * RFC 5987 ``filename*=UTF-8''...`` form).
+ */
+
+'use client'
+
+import { useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
+import type { AxiosResponse } from 'axios'
+
+import { useToast } from '@/lib/hooks/use-toast'
+import type {
+  ExportReport,
+  ObsidianExportRequest,
+} from '@/lib/types/exports'
+
+interface UseObsidianExportResult {
+  /** Trigger the export. */
+  mutate: (request: ObsidianExportRequest) => void
+  /** Mutation in flight. */
+  isPending: boolean
+  /** Last error, ``null`` when the last attempt succeeded or no
+   *  attempt has been made. */
+  error: Error | null
+  /** ExportReport from the most-recent ``mode="vault_path"`` success.
+   *  ``null`` for the zip branch (no report body) or before the first
+   *  success. The dialog reads this to render the success banner. */
+  lastReport: ExportReport | null
+}
+
+/**
+ * Strict-but-permissive ``Content-Disposition`` filename parser.
+ *
+ * Handles the three header forms HTTP commonly produces:
+ *
+ *   1. ``attachment; filename="my-file.zip"``   (RFC 6266 quoted)
+ *   2. ``attachment; filename=my-file.zip``      (unquoted token)
+ *   3. ``attachment; filename*=UTF-8''my-file.zip`` (RFC 5987 percent-encoded)
+ *
+ * The RFC 5987 form takes precedence when both ``filename`` and
+ * ``filename*`` are present (per RFC 6266 §4.3) -- it's the only one
+ * that can carry non-ASCII characters.
+ *
+ * Returns ``null`` for:
+ *   - missing header
+ *   - header with no ``filename``/``filename*`` parameter
+ *   - parameter value that's empty after decoding/unquoting
+ *
+ * The dialog falls back to a default name when the parser returns
+ * ``null`` so the user always gets *something* downloadable.
+ */
+export function parseFilenameFromContentDisposition(
+  header: string | undefined | null,
+): string | null {
+  if (!header) {
+    return null
+  }
+
+  // RFC 5987 first -- precedence rule from RFC 6266 §4.3. The format
+  // is ``filename*=<charset>'<lang>'<percent-encoded-value>``. We only
+  // honour UTF-8; other charsets are rare on the modern web and a
+  // strict implementation would require a TextDecoder.
+  // The regex is intentionally non-greedy + bounded by `;` or end-of-
+  // string so a stray quote in the encoded value doesn't break it.
+  const rfc5987 =
+    /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header)
+  if (rfc5987) {
+    try {
+      const decoded = decodeURIComponent(rfc5987[1].trim())
+      if (decoded) return decoded
+    } catch {
+      // Malformed percent-encoding -- fall through to the next form.
+    }
+  }
+
+  // Quoted form: ``filename="..."``. The capture is everything
+  // between the first pair of double quotes -- escaping isn't
+  // standardised in RFC 6266 so we don't try to unescape.
+  const quoted = /filename\s*=\s*"([^"]+)"/i.exec(header)
+  if (quoted) {
+    return quoted[1].trim() || null
+  }
+
+  // Token form: ``filename=value`` where value is a token (no spaces,
+  // no quotes) bounded by ``;`` or end-of-string.
+  const token = /filename\s*=\s*([^;]+)/i.exec(header)
+  if (token) {
+    const value = token[1].trim()
+    return value || null
+  }
+
+  return null
+}
+
+/**
+ * Pull the filename header from an Axios response. Axios normalises
+ * headers to lowercase but Playwright's ``route.fulfill`` sometimes
+ * passes the casing through, so we check both spellings -- same trick
+ * as ``NetworkxExportMenu``.
+ */
+function extractContentDisposition(
+  response: AxiosResponse<unknown>,
+): string | undefined {
+  const headers = (response.headers ?? {}) as Record<string, string>
+  return (
+    headers['content-disposition'] ?? headers['Content-Disposition']
+  )
+}
+
+/** Trigger the browser download for a zip blob.
+ *
+ * Pulled into its own function so the hook stays linear: hook does
+ * mutation, this helper handles the DOM side-effect. The helper is
+ * NOT exported -- it touches ``document`` and ``URL`` so it can't be
+ * unit-tested in a node-only context anyway.
+ */
+function triggerBlobDownload(blob: Blob, filename: string): void {
+  const objectUrl = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
+/**
+ * React Query mutation hook for the Obsidian export.
+ *
+ * Branches on the response Content-Type so the dialog doesn't need to
+ * know whether the user picked zip vs vault_path -- the mutation
+ * surface looks the same either way.
+ */
+export function useObsidianExport(
+  notebookId: string,
+): UseObsidianExportResult {
+  const { toast } = useToast()
+  const [lastReport, setLastReport] = useState<ExportReport | null>(null)
+
+  const mutation = useMutation({
+    mutationFn: async (request: ObsidianExportRequest) => {
+      // Lazy-import so the bearer-token interceptor fires automatically
+      // (same trick as NetworkxExportMenu).
+      const apiClient = (await import('@/lib/api/client')).default
+
+      // ``responseType: 'blob'`` lets axios hand us the binary zip
+      // payload without trying to parse it. For the JSON branch we
+      // still get a Blob and parse it manually below -- the cost is
+      // negligible and avoids needing two different request paths.
+      const response = await apiClient.post<Blob>(
+        `/notebooks/${encodeURIComponent(notebookId)}/export-obsidian`,
+        request,
+        { responseType: 'blob' },
+      )
+
+      // Axios normalises content-type to lowercase. Compare with a
+      // ``startsWith`` because the server may attach a charset
+      // (e.g. ``application/json; charset=utf-8``).
+      const contentType = (
+        (response.headers?.['content-type'] as string | undefined) ?? ''
+      ).toLowerCase()
+
+      if (contentType.startsWith('application/zip')) {
+        const disposition = extractContentDisposition(response)
+        const filename =
+          parseFilenameFromContentDisposition(disposition) ??
+          'obsidian-vault.zip'
+        triggerBlobDownload(response.data, filename)
+        return { kind: 'zip' as const, filename }
+      }
+
+      if (contentType.startsWith('application/json')) {
+        // Blob -> text -> JSON. We do this synchronously inside the
+        // mutationFn so onSuccess receives the parsed report rather
+        // than a Promise.
+        const text = await response.data.text()
+        const report = JSON.parse(text) as ExportReport
+        return { kind: 'vault_path' as const, report }
+      }
+
+      throw new Error(
+        `Unexpected response content-type: ${contentType || 'unknown'}`,
+      )
+    },
+    onSuccess: (result) => {
+      if (result.kind === 'vault_path') {
+        setLastReport(result.report)
+        toast({
+          title: 'Export complete',
+          description: `Wrote ${result.report.files_written} files (${result.report.entities_written} entities, ${result.report.relations_written} relations).`,
+        })
+      } else {
+        // Zip mode: the download itself is the user-facing
+        // confirmation. We don't toast here because the browser's
+        // own download UI is the SSOT.
+        setLastReport(null)
+      }
+    },
+    onError: (err: Error) => {
+      toast({
+        title: 'Export failed',
+        description: err.message || 'Unable to export the notebook.',
+        variant: 'destructive',
+      })
+    },
+  })
+
+  return {
+    mutate: mutation.mutate,
+    isPending: mutation.isPending,
+    error: mutation.error,
+    lastReport,
+  }
+}
