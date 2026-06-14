@@ -39,6 +39,46 @@ entities with ``canonical_name="Smith"`` and ``"smith."`` collide on
 markdown rendering so wikilinks can reference the resolved filename
 without back-patching.
 
+Filename safety (D.1a attempt-2, M1 follow-up)
+==============================================
+``normalize_entity_name`` is a *content* normalizer (lowercase, collapse
+whitespace, strip trailing punctuation) — it does **not** strip
+filesystem-unsafe characters. ``canonical_name="Hello/World"``
+normalizes to ``"hello/world"`` which would land in the zip as a
+*nested* ``hello/world.md`` path, breaking the flat-vault promise.
+After normalisation we therefore apply ``_ENTITY_FILENAME_UNSAFE``
+(mirroring B.2b's ``_FILENAME_UNSAFE_RE``) which replaces forward
+slash, backslash, internal ``:``, control chars, quotes and shell
+metacharacters with ``_``. Filename stems are then capped at
+``_MAX_STEM_LEN`` (200) chars so a collision suffix + ``.md`` fits
+under the typical 255-byte filesystem limit. Wikilinks reference the
+sanitized stem (the body
+uses ``filename_map[other][:-3]``) so a slash-bearing canonical name
+still produces a valid in-vault link.
+
+YAML escaping (V1 limitation)
+=============================
+``type_tags`` and ``properties`` values are rendered into the
+frontmatter without YAML-string escaping. A tag containing a comma
+(``type_tags=["foo, bar"]``) renders as ``[foo, bar]`` which a strict
+YAML parser splits into two tags. Same for delimiters in property
+values. Acceptable at V1 because the upstream extractor doesn't emit
+delimiter-bearing tags; the proper fix (quote-and-escape via
+``yaml.safe_dump``) lands when D.2 ships YAML-typed frontmatter.
+
+min_connections semantics
+=========================
+The degree used by ``_apply_min_connections_filter`` is computed over
+*all* relations returned by the D.0 repo — including relations whose
+*other* endpoint has been filtered out by the ``status`` post-filter
+or the upstream SurrealQL gate. This makes the threshold a robust
+signal of an entity's structural prominence in the raw graph rather
+than an artifact of the local filter set. Borderline-degree entities
+are therefore included even if half their neighbours dropped out at
+an earlier filter step. **NOT changing semantics** — just documenting
+the choice so operators interpreting `min_connections` know which
+graph they are counting against.
+
 Wikilink graph (Q-D-4)
 ======================
 Relations whose target survived the same filter set are rendered as
@@ -60,6 +100,7 @@ happy path (single call, counts only) and the failure path.
 from __future__ import annotations
 
 import io
+import re
 import time
 import zipfile
 from collections import Counter
@@ -73,6 +114,52 @@ from shared.models.export import ExportFilter, ExportReport, ObsidianExportReque
 from shared.services.metrics import record_metric
 from shared.utils.external_ids import resolve_external_ids
 from shared.utils.name_normalizer import normalize_entity_name
+
+
+# ---------------------------------------------------------------------------
+# Filename safety helpers (M1 — attempt-2 regression for "Hello/World" case)
+# ---------------------------------------------------------------------------
+
+# Mirrors B.2b's ``_FILENAME_UNSAFE_RE`` (apps/app-main/src/app_main/api/
+# routers/exports.py:52) plus the angle-bracket/pipe/wildcard set so a stem
+# survives both POSIX and Windows filesystems as well as ``Content-Disposition``.
+# We replace the unsafe chars with ``_`` rather than dropping them so a value
+# like ``"openai.com/gpt-4"`` becomes ``"openai.com_gpt-4"`` (visible round-trip)
+# instead of ``"openai.comgpt-4"`` (silent fusion).
+_ENTITY_FILENAME_UNSAFE = re.compile(r'[:/\\\r\n\t\x00"\'<>|?*]')
+
+# 255 bytes is the typical filesystem limit (ext4, NTFS, APFS). We cap the
+# *stem* at 200 to leave room for the ``-99`` collision suffix + the ``.md``
+# extension while staying well under the limit even for multibyte chars.
+_MAX_STEM_LEN = 200
+
+
+def _safe_entity_stem(canonical_name: str) -> str:
+    """Normalize + strip filesystem-unsafe chars from an entity name.
+
+    Layered on top of :func:`normalize_entity_name` so the result is a flat
+    Obsidian vault filename — no path separators, no control chars, no
+    shell/CDISP metacharacters. Empty input collapses to ``""`` and the
+    caller substitutes ``"unnamed"`` (matches D.1a empty-name semantics).
+
+    The cap at ``_MAX_STEM_LEN`` chars preserves room for the collision
+    counter (``-2``, ``-3``, ...) plus the ``.md`` extension under common
+    255-byte filesystem limits.
+
+    Examples
+    --------
+    >>> _safe_entity_stem("Hello/World")
+    'hello_world'
+    >>> _safe_entity_stem("Foo:Bar")
+    'foo_bar'
+    """
+    base = normalize_entity_name(canonical_name)
+    safe = _ENTITY_FILENAME_UNSAFE.sub("_", base)
+    # Cap stem length; the collision counter + ``.md`` extension is then
+    # at most ``-99.md`` = 6 extra bytes, comfortably under 255 total.
+    if len(safe) > _MAX_STEM_LEN:
+        safe = safe[:_MAX_STEM_LEN]
+    return safe
 
 
 # ---------------------------------------------------------------------------
@@ -211,9 +298,17 @@ class ObsidianExportService:
         error_payload: Optional[Dict[str, Any]] = None
 
         # Defaults are set so even an early failure produces a
-        # well-formed ExportReport for the telemetry hook.
+        # well-formed ExportReport for the telemetry hook. We also
+        # pre-bind the *computed* values (filename_map, rendered_relation_count)
+        # that the finally block reuses — so the success path computes them
+        # exactly once and the finally block reads from these locals rather
+        # than recomputing _build_filename_map + _count_rendered_relations
+        # (Minor #1 fix from attempt-1 review).
         entities_kept: List[Entity] = []
         relations_kept: List[Relation] = []
+        filename_map: Dict[str, str] = {}
+        rendered_relation_count = 0
+        files_written = 0
         dropped_relations = 0
         zip_bytes = b""
 
@@ -235,7 +330,6 @@ class ObsidianExportService:
                 filename = filename_map[str(entity.id)]
                 body = self._render_entity_markdown(
                     entity,
-                    entities_kept,
                     relations_kept,
                     filename_map,
                 )
@@ -260,13 +354,19 @@ class ObsidianExportService:
                     archive.writestr(filename, body)
             zip_bytes = buf.getvalue()
 
+            # Cache the counts in locals so the finally block reuses them
+            # (Minor #1: no second _build_filename_map / _count_rendered_relations
+            # call inside finally).
+            rendered_relation_count = self._count_rendered_relations(
+                relations_kept, filename_map
+            )
+            files_written = 1 + len(entity_files)  # README + per-entity .md
+
             duration_ms = int((time.monotonic() - started) * 1000)
             report = ExportReport(
                 entities_written=len(entity_files),
-                relations_written=self._count_rendered_relations(
-                    relations_kept, filename_map
-                ),
-                files_written=1 + len(entity_files),  # README + per-entity .md
+                relations_written=rendered_relation_count,
+                files_written=files_written,
                 bytes_written=len(zip_bytes),
                 duration_ms=duration_ms,
                 filter_applied=request.filter,
@@ -309,15 +409,21 @@ class ObsidianExportService:
             # Even on failure, we still want to know: which notebook,
             # which filter, how far we got. The payload is counts-only
             # per Q-D-8 — no IDs ever leave the service.
+            #
+            # We read from the locals (``filename_map``,
+            # ``rendered_relation_count``, ``files_written``) populated in
+            # the success path rather than recompute, which keeps the
+            # ``_build_filename_map`` + ``_count_rendered_relations`` calls
+            # at exactly one per export (Minor #1 from attempt-1 review).
+            # On the failure path these locals retain their pre-bound
+            # defaults (empty map, 0 counts) so the payload still
+            # reflects "how far we got".
             duration_ms = int((time.monotonic() - started) * 1000)
             if error_payload is None:
                 payload = {
                     "entities_written": len(entities_kept),
-                    "relations_written": self._count_rendered_relations(
-                        relations_kept,
-                        self._build_filename_map(entities_kept) if entities_kept else {},
-                    ),
-                    "files_written": 1 + len(entities_kept),
+                    "relations_written": rendered_relation_count,
+                    "files_written": files_written,
                     "bytes_written": len(zip_bytes),
                     "duration_ms": duration_ms,
                     "dropped_relations": dropped_relations,
@@ -434,11 +540,18 @@ class ObsidianExportService:
     def _build_filename_map(entities: List[Entity]) -> Dict[str, str]:
         """Build {entity_id: filename.md}, resolving collisions.
 
-        ``normalize_entity_name`` may collapse two entities onto the
-        same stem (``"Smith"`` and ``"smith."`` both -> ``"smith"``).
-        Resolution per Q-D-5: keep a per-stem counter and emit
-        ``smith.md`` for the first, ``smith-2.md`` for the second,
-        ``smith-3.md`` for the third, etc.
+        ``_safe_entity_stem`` (M1 fix) normalizes + strips filesystem-unsafe
+        chars, so two entities with ``canonical_name="Smith"`` and
+        ``"smith."`` collapse onto the same stem ``"smith"`` *and* an
+        entity with ``canonical_name="Hello/World"`` collapses onto
+        ``"hello_world"`` rather than a nested ``hello/world.md`` path.
+
+        Resolution per Q-D-5: keep a per-stem counter (over the
+        *sanitized* stem) and emit ``smith.md`` for the first,
+        ``smith-2.md`` for the second, ``smith-3.md`` for the third,
+        etc. The collision counter runs on the sanitized stem so two
+        entities with ``canonical_name="Foo:Bar"`` and ``"Foo/Bar"``
+        both land on ``foo_bar`` and properly collide.
 
         Iteration order follows the input list. The order is
         deterministic-per-notebook because the upstream repo returns
@@ -449,7 +562,13 @@ class ObsidianExportService:
         for entity in entities:
             if not entity.id:
                 continue
-            stem = normalize_entity_name(entity.canonical_name or "")
+            # _safe_entity_stem = normalize_entity_name + strip
+            # filesystem-unsafe chars + cap at _MAX_STEM_LEN. The
+            # collision counter operates on the sanitized stem so
+            # entities differing only by unsafe chars (``Foo/Bar`` vs
+            # ``Foo:Bar``) collide on the same ``foo_bar`` and get
+            # ``-2`` suffixes correctly.
+            stem = _safe_entity_stem(entity.canonical_name or "")
             if not stem:
                 # Empty canonical_name is a data-quality issue but we
                 # still emit something rather than crashing the export.
@@ -497,7 +616,6 @@ class ObsidianExportService:
     @staticmethod
     def _render_entity_markdown(
         entity: Entity,
-        all_entities: List[Entity],
         relations: List[Relation],
         filename_map: Dict[str, str],
     ) -> str:
@@ -528,6 +646,12 @@ class ObsidianExportService:
         Wikilinks: only emitted when the target entity survived
         filtering. Relations to filtered-out entities are silently
         dropped (Q-D-4) -- never rendered as broken ``[[...]]``.
+
+        Note: the signature took an unused ``all_entities`` parameter
+        in attempt-1; dropped per Minor #5 of the review. If D.1b's
+        richer related-section logic needs the full entity set, the
+        caller can pass it back through ``filename_map`` (which already
+        carries the surviving id set) or thread a new param.
         """
         entity_id = str(entity.id) if entity.id else ""
 
@@ -601,13 +725,6 @@ class ObsidianExportService:
             lines.append("## Related")
             lines.extend(related_lines)
             lines.append("")
-
-        # Reference ``all_entities`` once so Ruff doesn't flag the
-        # parameter as unused -- the parameter is on the public-ish
-        # signature so D.1b can grow richer related-section logic
-        # (related-entity names, type filters, ...) without changing the
-        # caller.
-        _ = all_entities
 
         return "\n".join(lines)
 

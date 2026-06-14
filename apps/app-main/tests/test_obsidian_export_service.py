@@ -222,6 +222,80 @@ async def test_filename_collision_appends_suffix():
 
 
 # ---------------------------------------------------------------------------
+# 3b. Filename sanitization -- canonical_name with /, :, \\ produces flat
+#     filenames (regression for attempt-1 review Major #1)
+# ---------------------------------------------------------------------------
+
+
+async def test_filename_sanitization_strips_slash_and_colon():
+    """Entities with slash/colon/backslash in canonical_name produce flat filenames.
+
+    Regression for D.1a attempt-1 review Major #1: previously these
+    chars survived ``normalize_entity_name`` (a content normalizer only)
+    and produced *nested* zip paths -- e.g. ``canonical_name="Hello/World"``
+    leaked into the archive as ``hello/world.md`` (a phantom directory
+    that extracted as a nested file), breaking the flat-vault promise.
+
+    Fix: ``_safe_entity_stem`` layers ``_ENTITY_FILENAME_UNSAFE`` on top
+    of ``normalize_entity_name`` so all path separators, control chars,
+    and shell metacharacters get replaced with ``_`` before the zip
+    entry is written.
+
+    Also asserts wikilinks in the body use the sanitized stem (not the
+    raw normalized form) -- so the in-vault link target matches the
+    real filename.
+    """
+    ents = [
+        _entity("entity:slash", "Hello/World"),       # forward slash
+        _entity("entity:colon", "Foo:Bar"),            # internal colon
+        _entity("entity:bslash", "Path\\To\\Note"),    # backslash
+        # Plus one neighbour so wikilinks fire and we can assert against
+        # the sanitized stem rather than just filenames.
+        _entity("entity:neighbour", "Plain Name"),
+    ]
+    rels = [
+        # neighbour -> slash entity; wikilink in neighbour.md must point
+        # at the sanitized stem ``hello_world``, NOT ``hello/world`` (which
+        # would render as a folder-note reference in Obsidian).
+        _relation("entity:neighbour", "entity:slash", "knows"),
+    ]
+    svc = _make_service(ents, rels)
+    artifact = await svc.export("notebook:sanitize", _zip_request())
+
+    files = _open_zip(artifact.zip_bytes or b"")
+
+    # All entity files must be flat -- no path separators anywhere in
+    # the zip namelist.
+    entity_files = [name for name in files if name.endswith(".md") and name != "README.md"]
+    assert len(entity_files) == 4
+    for name in entity_files:
+        assert "/" not in name, f"slash leaked into {name}"
+        assert "\\" not in name, f"backslash leaked into {name}"
+        # Internal colon also gone from the stem (the ``.md`` extension
+        # doesn't count -- we strip it before checking).
+        stem = name[:-3]
+        assert ":" not in stem, f"colon leaked into stem {stem}"
+
+    # Specific stems match the expected sanitized form.
+    assert "hello_world.md" in files
+    assert "foo_bar.md" in files
+    assert "path_to_note.md" in files
+    assert "plain name.md" in files  # normal entity is unaffected
+
+    # Wikilink rendering uses the SANITIZED stem, not the raw normalized
+    # form. neighbour.md links to entity:slash via the new
+    # ``[[hello_world]]`` -- if the renderer accidentally fed the raw
+    # ``normalize_entity_name`` output, we'd see ``[[hello/world]]``
+    # which Obsidian parses as a folder-note reference.
+    neighbour_body = files["plain name.md"]
+    assert "[[hello_world]] (knows)" in neighbour_body, (
+        "Wikilink rendering must use the sanitized stem -- if this fails, "
+        "the renderer is reading from a different source than _build_filename_map."
+    )
+    assert "[[hello/world]]" not in neighbour_body
+
+
+# ---------------------------------------------------------------------------
 # 4. Filter excludes low-confidence entities
 # ---------------------------------------------------------------------------
 
@@ -289,6 +363,77 @@ async def test_min_connections_filter_excludes_isolates():
     assert "c.md" in files
     assert "d.md" in files
     assert artifact.report.entities_written == 4
+
+
+# ---------------------------------------------------------------------------
+# 5b. min_connections boundary: degree==N-1 excluded, degree==N included
+#     (attempt-1 review Major #2 -- pin the strict ``>=`` semantic)
+# ---------------------------------------------------------------------------
+
+
+async def test_min_connections_boundary_at_exact_threshold():
+    """``min_connections=N`` excludes degree==N-1 but includes degree==N.
+
+    Pins the inclusive lower-bound (``>=``) semantic. A buggy strict
+    greater-than (``>``) implementation would still pass
+    :func:`test_min_connections_filter_excludes_isolates` (which only
+    splits degree-0 from degree-1) but would fail this one because it
+    would also drop the degree-2 entity at the boundary.
+
+    Setup
+    -----
+    Three entities, three relations chosen so the in+out degrees are
+    distinct and span the boundary:
+
+        alice -> bob  : alice in=1, out=0; bob in=0, out=1
+        bob -> carol  : bob out=2 total (1+1), carol in=1, out=0
+        carol -> bob  : carol out=1 total, bob in=2 total
+
+    Final in+out degrees:
+        alice = 1   (just the alice->bob edge)
+        bob   = 3   (in 2 + out 1)
+        carol = 2   (in 1 + out 1)
+
+    With ``min_connections=2``:
+        alice (1) -> EXCLUDED
+        carol (2) -> INCLUDED (boundary case -- the one this test pins)
+        bob   (3) -> INCLUDED
+    """
+    ents = [
+        _entity("entity:alice", "alice"),
+        _entity("entity:bob", "bob"),
+        _entity("entity:carol", "carol"),
+    ]
+    rels = [
+        _relation("entity:alice", "entity:bob", "knows"),
+        _relation("entity:bob", "entity:carol", "knows"),
+        _relation("entity:carol", "entity:bob", "knows"),
+    ]
+    svc = _make_service(ents, rels)
+    artifact = await svc.export(
+        "notebook:boundary",
+        ObsidianExportRequest(
+            mode="zip",
+            filter=ExportFilter(min_connections=2, min_confidence=0.0),
+        ),
+    )
+
+    files = _open_zip(artifact.zip_bytes or b"")
+    # alice has degree 1 < 2 -> excluded
+    assert "alice.md" not in files, (
+        "Strict-greater-than bug would still exclude alice -- expected; the "
+        "important assertion is the carol boundary case below."
+    )
+    # carol has degree 2 == min_connections -> INCLUDED (this is the pin
+    # that a buggy ``>`` implementation would fail).
+    assert "carol.md" in files, (
+        "Boundary regression: carol (degree==min_connections) was dropped, "
+        "suggesting a strict greater-than instead of >=."
+    )
+    # bob has degree 3 > 2 -> included
+    assert "bob.md" in files
+    # Sanity: exactly 2 entities + README
+    assert artifact.report.entities_written == 2
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +534,7 @@ def test_snapshot_against_golden():
     filename_map = {"entity:abc123": "alice-de-jong.md"}
 
     body = ObsidianExportService._render_entity_markdown(
-        entity, [entity], [], filename_map
+        entity, [], filename_map
     )
 
     # Normalize trailing whitespace on both sides -- the renderer's
@@ -416,7 +561,7 @@ def test_snapshot_inversion_detects_drift():
     filename_map = {"entity:abc123": "alice-de-jong.md"}
 
     body = ObsidianExportService._render_entity_markdown(
-        entity, [entity], [], filename_map
+        entity, [], filename_map
     )
 
     # Strip one frontmatter line to simulate a regression that lost
