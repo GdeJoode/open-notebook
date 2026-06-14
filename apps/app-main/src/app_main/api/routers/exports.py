@@ -24,13 +24,16 @@ from __future__ import annotations
 
 import io
 import re
-from typing import Any, Dict, Tuple
+from collections import Counter
+from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from app_main.dependencies import (
+    get_entity_repo,
     get_networkx_export_service,
     get_notebook_service,
     get_obsidian_export_service,
@@ -41,7 +44,12 @@ from app_main.services.obsidian_export_service import (
     ObsidianExportService,
     VaultPathNotConfigured,
 )
-from shared.models.export import NetworkxExportRequest, ObsidianExportRequest
+from shared.models.export import (
+    ExportFilter,
+    NetworkxExportRequest,
+    ObsidianExportRequest,
+)
+from surrealdb_service.repositories import EntityRepository
 
 
 router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["exports"])
@@ -263,6 +271,181 @@ async def export_notebook_obsidian(
         io.BytesIO(artifact.zip_bytes or b""),
         media_type="application/zip",
         headers=headers,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Preview-counts endpoint (D.1c)
+# ---------------------------------------------------------------------------
+
+
+class ExportPreviewCounts(BaseModel):
+    """Minimal response shape for the D.1c preview endpoint.
+
+    Counts only -- entity/relation IDs MUST NOT leak through this
+    surface so the dialog can poll on every slider change without
+    exposing per-notebook PII to the request log.
+    """
+
+    entity_count: int = Field(
+        ge=0,
+        description="Number of entities that would survive the filter.",
+    )
+    relation_count: int = Field(
+        ge=0,
+        description=(
+            "Number of relations that would survive the filter "
+            "(both endpoints retained after the min_connections "
+            "post-filter)."
+        ),
+    )
+
+
+@router.get(
+    "/export-preview",
+    response_model=ExportPreviewCounts,
+    responses={
+        200: {"description": "Filtered entity + relation counts."},
+        400: {"description": "Filter knob out of range."},
+        404: {"description": "Notebook not found."},
+    },
+)
+async def export_preview_counts(
+    notebook_id: str,
+    min_connections: int = Query(
+        5, ge=0, description="Minimum entity degree (matches ExportFilter)."
+    ),
+    min_confidence: float = Query(
+        0.9,
+        description="Minimum entity confidence in [0.0, 1.0].",
+    ),
+    min_relation_confidence: float = Query(
+        0.9,
+        description="Minimum relation confidence in [0.0, 1.0].",
+    ),
+    entity_types: Optional[List[str]] = Query(
+        None,
+        description=(
+            "Repeatable; allow-list of entity types. Omit for all types."
+        ),
+    ),
+    include_orphans: bool = Query(False),
+    include_archived: bool = Query(False),
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    entity_repo: EntityRepository = Depends(get_entity_repo),
+) -> ExportPreviewCounts:
+    """Return surviving entity + relation counts for the given filter.
+
+    Powers the D.1c dialog's debounced ``ExportPreviewCounts`` widget so
+    the operator sees what the export would contain BEFORE clicking
+    "Export". The endpoint deliberately mirrors the filter the dialog
+    submits to ``POST /export-obsidian`` and reuses the D.0 repo
+    methods, with the same ``min_connections`` post-filter the export
+    services apply (see ``ObsidianExportService._apply_min_connections_filter``).
+
+    Performance: counts only -- never serialises entities through the
+    response. For a 1000-entity notebook the cost is two SurrealQL
+    SELECTs (one per repo method, both already projected by D.0 to skip
+    the 768-float ``embedding`` column) plus an O(n+m) Python pass over
+    the in-memory entity + relation lists. The dialog debounces at
+    300ms so even rapid slider drags don't hammer the backend.
+
+    Args:
+        notebook_id: Path parameter; looked up via NotebookService.
+        min_connections: ExportFilter.min_connections analogue.
+        min_confidence: ExportFilter.min_confidence analogue. Pydantic
+            does NOT enforce the bound here because Query() decoupling
+            from the body model means the bound has to be validated
+            manually -- see the 400 branch below.
+        min_relation_confidence: ExportFilter.min_relation_confidence
+            analogue. Same manual bound check as min_confidence.
+        entity_types: ExportFilter.entity_types analogue; FastAPI
+            represents repeatable query params as a list.
+        include_orphans / include_archived: ExportFilter analogues.
+        notebook_service: Notebook lookup (404 path).
+        entity_repo: D.0 list_entities_for_notebook +
+            list_relations_for_notebook.
+
+    Returns:
+        ExportPreviewCounts: ``{entity_count, relation_count}``.
+    """
+    # Manual bound checks -- Query() doesn't auto-apply Pydantic Field
+    # constraints from ExportFilter, so we validate here to match the
+    # ExportFilter contract (Pydantic raises on the POST path).
+    if not 0.0 <= min_confidence <= 1.0:
+        raise HTTPException(
+            status_code=400,
+            detail="min_confidence must be in [0.0, 1.0]",
+        )
+    if not 0.0 <= min_relation_confidence <= 1.0:
+        raise HTTPException(
+            status_code=400,
+            detail="min_relation_confidence must be in [0.0, 1.0]",
+        )
+
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    # Build the same ExportFilter the POST endpoint would receive so
+    # the SurrealQL path is identical -- prevents preview/actual drift.
+    export_filter = ExportFilter(
+        min_connections=min_connections,
+        min_confidence=min_confidence,
+        min_relation_confidence=min_relation_confidence,
+        entity_types=entity_types,
+        include_orphans=include_orphans,
+        include_archived=include_archived,
+    )
+
+    entities = await entity_repo.list_entities_for_notebook(
+        notebook_id, export_filter
+    )
+    relations = await entity_repo.list_relations_for_notebook(
+        notebook_id, export_filter
+    )
+
+    # min_connections post-filter (matches
+    # ObsidianExportService._apply_min_connections_filter). We
+    # duplicate the logic here rather than import it so the preview
+    # endpoint stays decoupled from a service whose constructor wants
+    # a settings dependency it doesn't need for counting.
+    if min_connections > 0:
+        degree: Counter[str] = Counter()
+        for relation in relations:
+            src = (
+                str(relation.in_entity) if relation.in_entity else None
+            )
+            dst = (
+                str(relation.out_entity) if relation.out_entity else None
+            )
+            if src:
+                degree[src] += 1
+            if dst:
+                degree[dst] += 1
+        surviving_entities = [
+            e
+            for e in entities
+            if e.id and degree[str(e.id)] >= min_connections
+        ]
+    else:
+        surviving_entities = list(entities)
+
+    # Drop relations whose endpoints didn't survive the post-filter --
+    # otherwise the preview's relation count would overstate what the
+    # exporter will emit (Q-D-4 silent-drop). Build the surviving-id
+    # set once, then membership-test both ends.
+    surviving_ids = {str(e.id) for e in surviving_entities if e.id}
+    surviving_relation_count = 0
+    for relation in relations:
+        src = str(relation.in_entity) if relation.in_entity else None
+        dst = str(relation.out_entity) if relation.out_entity else None
+        if src and dst and src in surviving_ids and dst in surviving_ids:
+            surviving_relation_count += 1
+
+    return ExportPreviewCounts(
+        entity_count=len(surviving_entities),
+        relation_count=surviving_relation_count,
     )
 
 
