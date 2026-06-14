@@ -85,3 +85,59 @@ Trade-off: step 4 means `relations_kept` carries a small amount of dead weight i
 ## Ready for review
 
 Yes. Branch ready to push; awaiting reviewer-merge after CI green.
+
+---
+
+## Attempt 2 fixes (2026-06-14)
+
+Reviewer rejected attempt 1 with **REVISIONS_NEEDED** — 2 majors + 6 minors. See `phase-D.1a-attempt-1.md` for the full review. Fixes shipped in this attempt:
+
+### Major #1 — Filename sanitization
+
+`normalize_entity_name` is a content normalizer (lowercase + collapse whitespace + strip trailing punct); it does NOT strip filesystem-unsafe characters. Result: `canonical_name="Hello/World"` produced a nested zip path `hello/world.md`, breaking the flat-vault promise.
+
+**Fix**: added `_ENTITY_FILENAME_UNSAFE = re.compile(r'[:/\\\r\n\t\x00"\'<>|?*]')` plus a `_safe_entity_stem(canonical_name)` helper that layers the regex on top of `normalize_entity_name` AND caps the stem at `_MAX_STEM_LEN=200` chars (Minor #3 baked in for free). `_build_filename_map` now calls `_safe_entity_stem` before the collision counter, so:
+
+- `"Hello/World"` → `"hello_world.md"` (flat)
+- `"Foo:Bar"` → `"foo_bar.md"` (no internal colon)
+- `"Path\To\Note"` → `"path_to_note.md"` (no backslash)
+
+Collision counter runs on the sanitized stem so `"Foo/Bar"` and `"Foo:Bar"` correctly collide on `foo_bar` and emit `foo_bar.md` + `foo_bar-2.md`. Wikilink rendering pulls from `filename_map` so it transparently uses the sanitized stem.
+
+**Regression test**: `test_filename_sanitization_strips_slash_and_colon` — exercises `/`, `:`, `\` in `canonical_name`, asserts zero path separators in the zip namelist, and confirms wikilinks render `[[hello_world]]` (not `[[hello/world]]`).
+
+### Major #2 — `min_connections` boundary
+
+Attempt-1 test (`test_min_connections_filter_excludes_isolates`) used `min_connections=1` against 5 entities + 1 isolate. A buggy strict-`>` implementation would still pass that test (it splits degree-0 vs degree-1 correctly) but would silently break for higher thresholds.
+
+**Fix (test-only)**: added `test_min_connections_boundary_at_exact_threshold` — 3 entities with computed degrees 1, 3, 2; threshold `min_connections=2`; asserts:
+- alice (degree 1) excluded ← buggy `>` would also exclude
+- carol (degree 2 == threshold) **INCLUDED** ← buggy `>` would FAIL here
+- bob (degree 3) included
+
+This pins the inclusive lower-bound (`>=`) semantic explicitly.
+
+### Minors
+
+1. **Wasted recomputation**: success path now pre-binds `filename_map`, `rendered_relation_count`, `files_written` as locals; the `finally` block reads from them instead of calling `_build_filename_map` + `_count_rendered_relations` a second time. Exactly one call per export now.
+2. **`type_tags` / property YAML escaping**: documented as a V1 limitation in the module docstring. Comma-bearing tags ambiguous in strict YAML; out-of-scope for D.1a (proper fix lands when D.2 ships YAML-typed frontmatter).
+3. **Filename length cap**: stem capped at 200 chars inside `_safe_entity_stem`. Leaves room for `-N` suffix + `.md` under the 255-byte filesystem limit (Minor #3 of attempt-1 review).
+4. **`min_connections` degree scope**: documented in the module docstring that degree is computed over ALL relations (including relations to filtered-out entities). NOT changing semantics — just documenting the choice so operators interpreting `min_connections` know what graph they are counting against.
+5. **Unused `all_entities` param**: dropped from `_render_entity_markdown` signature. Snapshot tests updated to match. If D.1b's richer related-section logic needs the entity set, the caller can plumb it back at that time.
+6. **Notebook name in README**: deferred to D.1c (FE-side plumbing) — flagged in attempt-1 self-review, acceptable V1.
+
+### Verification
+
+```
+apps/app-main: 554 passed (552 baseline + 2 new boundary-pin tests)
+packages/shared: 199 passed (unchanged)
+```
+
+Stdout of the 2 new pin tests:
+```
+tests/test_obsidian_export_service.py::test_filename_sanitization_strips_slash_and_colon PASSED [ 50%]
+tests/test_obsidian_export_service.py::test_min_connections_boundary_at_exact_threshold PASSED [100%]
+============================== 2 passed in 3.14s ===============================
+```
+
+Wikilink-uses-sanitized-stem assertion verified inside `test_filename_sanitization_strips_slash_and_colon`: `assert "[[hello_world]] (knows)" in neighbour_body` PASSES, and the negative `assert "[[hello/world]]" not in neighbour_body` also PASSES.
