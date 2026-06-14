@@ -17,18 +17,27 @@ flattening tests live in ``test_networkx_export_service.py``.
 
 from __future__ import annotations
 
+import io
+import zipfile
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from shared.models.export import ExportFilter, ExportReport, NetworkxExportRequest
+from shared.models.export import (
+    ExportFilter,
+    ExportReport,
+    NetworkxExportRequest,
+    ObsidianExportRequest,
+)
 
 from app_main.api.routers.exports import router
 from app_main.dependencies import (
     get_networkx_export_service,
     get_notebook_service,
+    get_obsidian_export_service,
 )
+from app_main.services.obsidian_export_service import ExportArtifact
 
 from tests.conftest import make_notebook
 
@@ -197,3 +206,135 @@ class TestExportTelemetry:
         assert events[0]["event_type"] == "export.networkx"
         assert events[0]["notebook"] == "notebook:tel-test"
         assert events[0]["payload"]["format"] == "gexf"
+
+
+# ---------------------------------------------------------------------------
+# D.1a -- Obsidian zip export router tests
+# ---------------------------------------------------------------------------
+
+
+def _make_obsidian_app(notebook_svc, export_svc):
+    """Build a FastAPI test app with Obsidian dependencies stubbed."""
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_notebook_service] = lambda: notebook_svc
+    app.dependency_overrides[get_obsidian_export_service] = lambda: export_svc
+    return TestClient(app)
+
+
+def _build_test_zip() -> bytes:
+    """Build a minimal valid zip with a README + one .md for the router test."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("README.md", "# Test export\n")
+        archive.writestr("alice.md", "---\nid: entity:alice\n---\n\n# Alice\n")
+    return buf.getvalue()
+
+
+def _obsidian_report(payload_size: int) -> ExportReport:
+    return ExportReport(
+        entities_written=1,
+        relations_written=0,
+        files_written=2,  # README + alice.md
+        bytes_written=payload_size,
+        duration_ms=8,
+        filter_applied=ExportFilter(),
+    )
+
+
+class TestExportObsidianRouter:
+
+    def test_obsidian_zip_happy_path(self):
+        """POST /export-obsidian -> 200 + application/zip + parseable zip."""
+        notebook_svc = AsyncMock()
+        notebook_svc.get.return_value = make_notebook(id="notebook:abc")
+
+        zip_bytes = _build_test_zip()
+        export_svc = AsyncMock()
+        export_svc.export.return_value = ExportArtifact(
+            mode="zip",
+            report=_obsidian_report(len(zip_bytes)),
+            zip_bytes=zip_bytes,
+        )
+
+        client = _make_obsidian_app(notebook_svc, export_svc)
+        resp = client.post(
+            "/api/notebooks/notebook:abc/export-obsidian",
+            json={"mode": "zip", "filter": {"min_connections": 0}},
+        )
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/zip")
+        # The router rebuilds a sanitised filename: colon -> underscore,
+        # ".zip" extension.
+        assert (
+            resp.headers["content-disposition"]
+            == 'attachment; filename="notebook_abc.zip"'
+        )
+
+        # Zip content parses cleanly and has the expected files.
+        archive = zipfile.ZipFile(io.BytesIO(resp.content))
+        names = archive.namelist()
+        assert "README.md" in names
+        assert "alice.md" in names
+
+        # Service called with the parsed request.
+        export_svc.export.assert_awaited_once()
+        call_args = export_svc.export.await_args
+        assert call_args.args[0] == "notebook:abc"
+        assert isinstance(call_args.args[1], ObsidianExportRequest)
+        assert call_args.args[1].mode == "zip"
+
+    def test_obsidian_404_unknown_notebook(self):
+        """Unknown notebook id -> 404 from the upstream lookup."""
+        notebook_svc = AsyncMock()
+        notebook_svc.get.return_value = None
+        export_svc = AsyncMock()
+
+        client = _make_obsidian_app(notebook_svc, export_svc)
+        resp = client.post(
+            "/api/notebooks/notebook:nope/export-obsidian",
+            json={"mode": "zip"},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json() == {"detail": "Notebook not found"}
+        export_svc.export.assert_not_awaited()
+
+    def test_obsidian_filter_validation(self):
+        """Invalid filter shape -> 422 from Pydantic before the handler runs."""
+        notebook_svc = AsyncMock()
+        notebook_svc.get.return_value = make_notebook(id="notebook:abc")
+        export_svc = AsyncMock()
+
+        client = _make_obsidian_app(notebook_svc, export_svc)
+        # ``min_confidence`` is bounded [0, 1]; 5.0 must trigger 422.
+        resp = client.post(
+            "/api/notebooks/notebook:abc/export-obsidian",
+            json={"mode": "zip", "filter": {"min_confidence": 5.0}},
+        )
+
+        assert resp.status_code == 422
+        notebook_svc.get.assert_not_called()
+        export_svc.export.assert_not_awaited()
+
+    def test_obsidian_vault_path_mode_not_implemented(self):
+        """``mode=vault_path`` returns 501 with a clear error message."""
+        notebook_svc = AsyncMock()
+        notebook_svc.get.return_value = make_notebook(id="notebook:abc")
+        export_svc = AsyncMock()
+
+        client = _make_obsidian_app(notebook_svc, export_svc)
+        resp = client.post(
+            "/api/notebooks/notebook:abc/export-obsidian",
+            json={"mode": "vault_path"},
+        )
+
+        assert resp.status_code == 501
+        body = resp.json()
+        # Router phrases the mode as "vault-path" in prose; accept
+        # either spelling so a copy-edit doesn't break the test.
+        assert "vault" in body["detail"].lower()
+        assert "D.1b" in body["detail"]
+        # The service must not be called -- the router short-circuits.
+        export_svc.export.assert_not_awaited()

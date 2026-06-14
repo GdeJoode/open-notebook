@@ -64,6 +64,7 @@ from app_main.services.schema_edit_service import SchemaEditService
 from app_main.services.reextract_service import ReextractService
 from app_main.services.notebook_merge_service import NotebookMergeService
 from app_main.services.networkx_export_service import NetworkxExportService
+from app_main.services.obsidian_export_service import ObsidianExportService
 
 
 # --- Repository providers ---
@@ -378,6 +379,23 @@ def get_networkx_export_service() -> NetworkxExportService:
     return NetworkxExportService(
         entity_repository=entity_repo,
         relation_repository=entity_repo,
+    )
+
+
+def get_obsidian_export_service() -> ObsidianExportService:
+    """FastAPI provider for the D.1a Obsidian vault export service.
+
+    Mirrors :func:`get_networkx_export_service` -- the entity repo
+    answers both ``list_entities_for_notebook`` and
+    ``list_relations_for_notebook`` per D.0. The settings service is
+    wired in now so D.1b (direct-write-to-vault mode) can read the
+    operator's ``vault_path`` config without another DI churn.
+    """
+    entity_repo = get_entity_repo()
+    return ObsidianExportService(
+        entity_repository=entity_repo,
+        relation_repository=entity_repo,
+        settings_service=get_settings_service(),
     )
 
 
