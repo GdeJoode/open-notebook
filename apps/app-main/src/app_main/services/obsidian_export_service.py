@@ -1,8 +1,15 @@
-"""Obsidian vault export service (Phase D.1a).
+"""Obsidian vault export service (Phase D.1a + D.1b).
 
 Builds a flat Obsidian vault from the notebook's filtered entity/relation
-graph and zips it into an in-memory archive. The router streams the zip
-bytes back to the browser as ``application/zip``.
+graph in two delivery modes:
+
+* ``mode="zip"`` (D.1a) — zips the vault into an in-memory archive and
+  the router streams the bytes back as ``application/zip``.
+* ``mode="vault_path"`` (D.1b) — writes each file directly to
+  ``<Settings.vault_path>/<Settings.vault_entities_folder>/`` with
+  POSIX atomic-rename per file. The router returns the
+  :class:`ExportReport` as JSON. This is the auto-pipeline entry
+  point (``JobType.EXPORT_OBSIDIAN``).
 
 Why a dedicated service?
 ========================
@@ -13,11 +20,31 @@ two formats. The shared concerns (filtering, telemetry, ``ExportReport``)
 flow through ``shared.models.export`` so all three formats stay aligned
 on what gets emitted into ``metrics{event_type: "export.*"}``.
 
-Phase split: D.1a (this file) is **zip mode only**. D.1b adds the
-direct-write-to-disk mode; that is why ``ExportArtifact`` already carries
-a ``vault_dir`` slot and ``ObsidianExportService.export`` raises
-``NotImplementedError`` on ``mode="vault_path"`` — the public surface is
-locked in now so D.1b is a body-only change.
+Filesystem safety (D.1b)
+========================
+* ``vault_path`` must be absolute, exist, be a directory, and be
+  writable -- all checked before any write.
+* The target ``<vault_path>/<entities_folder>/`` is created if missing
+  but NEVER deleted; user-added files in that folder outside the
+  current export's filename set are preserved (Q-D-6: overwrite is
+  scoped to the .md files we explicitly write, not the directory).
+* Each file is written via ``<filename>.tmp.<pid>`` then ``os.replace``
+  to its final name — a half-written ``.md`` is impossible.
+* Defense-in-depth: every resolved target path is verified to be a
+  child of the target directory before writing, catching any ``..``
+  traversal in filenames that survived D.1a's ``_safe_entity_stem``.
+
+Per-file vs whole-batch atomicity
+---------------------------------
+V1 atomicity is **per-file**: a mid-batch filesystem error leaves the
+first N-1 files written and propagates the exception with
+``{"entities_written": N-1}`` so the router surfaces partial state in
+the 500 response body. Whole-batch atomicity would require staging into
+a tempdir sibling and renaming the directory, costing 2x disk space
+during writes and a brief outage window for any in-progress reader.
+For a write-mostly export destination, the per-file choice is the right
+trade-off; a half-applied export is no worse than an interrupted manual
+save inside Obsidian itself.
 
 Filter semantics (D.3 precedent)
 ================================
@@ -100,11 +127,13 @@ happy path (single call, counts only) and the failure path.
 from __future__ import annotations
 
 import io
+import os
 import re
 import time
 import zipfile
 from collections import Counter
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 from loguru import logger
@@ -114,6 +143,16 @@ from shared.models.export import ExportFilter, ExportReport, ObsidianExportReque
 from shared.services.metrics import record_metric
 from shared.utils.external_ids import resolve_external_ids
 from shared.utils.name_normalizer import normalize_entity_name
+
+
+class VaultPathNotConfigured(Exception):
+    """Raised when ``mode="vault_path"`` is requested but Settings is unset.
+
+    Surfaces a friendly 400 at the router boundary; the FE can prompt the
+    user to configure ``vault_path`` in Settings before retrying. We use a
+    dedicated exception (not :class:`ValueError`) so the router can map it
+    to a clear error message without string-matching on a generic type.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -285,14 +324,12 @@ class ObsidianExportService:
             vault directory (vault_path mode, D.1b).
 
         Raises:
-            NotImplementedError: ``mode="vault_path"`` is D.1b's job.
+            VaultPathNotConfigured: ``mode="vault_path"`` but
+                ``Settings.vault_path`` / ``vault_entities_folder`` is
+                missing.
         """
         if request.mode == "vault_path":
-            # D.1b implements this; raising here keeps the public surface
-            # locked in so D.1b is a body-only change.
-            raise NotImplementedError(
-                "Obsidian vault-path mode lands in D.1b; use mode='zip' for D.1a."
-            )
+            return await self._export_to_vault(notebook_id, request)
 
         started = time.monotonic()
         error_payload: Optional[Dict[str, Any]] = None
@@ -444,6 +481,342 @@ class ObsidianExportService:
                 source=None,
                 notebook=notebook_id,
             )
+
+    # ------------------------------------------------------------------
+    # Vault-path mode (D.1b)
+    # ------------------------------------------------------------------
+
+    async def _export_to_vault(
+        self,
+        notebook_id: str,
+        request: ObsidianExportRequest,
+    ) -> ExportArtifact:
+        """Build the vault in memory then write each file to disk.
+
+        Steps mirror :meth:`export` for the zip mode but swap step 8/9:
+        instead of zipping the in-memory file map, we hand it to
+        :meth:`_write_to_vault` which writes each file atomically (via
+        tempfile + ``os.replace``) into
+        ``<vault_path>/<vault_entities_folder>/``.
+
+        Telemetry (Q-D-8): the payload is **counts only** plus a
+        ``vault_path_redacted: True`` flag. The raw filesystem path is
+        never written to the metric — it may contain user-identifying
+        directory names (e.g. ``/Users/<full_name>/Documents/...``) which
+        we treat as PII.
+
+        Raises:
+            VaultPathNotConfigured: ``Settings.vault_path`` or
+                ``Settings.vault_entities_folder`` is None/empty.
+            ValueError: ``vault_path`` is not absolute, or doesn't exist
+                as a directory, or isn't writable. Surfaced as 500 by the
+                router with the partial ``entities_written`` count.
+            OSError / PermissionError: filesystem failure mid-write.
+                The partial state (first N files already written) is
+                preserved; the exception bubbles with ``entities_written``
+                attached via ``exc.args``.
+        """
+        # -- 1) Resolve Settings ----------------------------------------
+        # Surface a friendly 400 at the router if Settings is unset.
+        # Reading via ``settings_service.get`` rather than caching at DI
+        # time so a Settings update between calls takes effect on the
+        # next export without an app restart.
+        if self._settings_service is None:
+            raise VaultPathNotConfigured(
+                "settings_service was not wired into ObsidianExportService; "
+                "vault_path mode requires it. Check the DI factory."
+            )
+        settings = await self._settings_service.get()
+        vault_path_raw = getattr(settings, "vault_path", None)
+        entities_folder = getattr(settings, "vault_entities_folder", None)
+        if not vault_path_raw:
+            raise VaultPathNotConfigured(
+                "Settings.vault_path is not configured. Configure it in "
+                "Settings before exporting in vault_path mode."
+            )
+        if not entities_folder:
+            raise VaultPathNotConfigured(
+                "Settings.vault_entities_folder is not configured. "
+                "Configure it in Settings before exporting in vault_path mode."
+            )
+
+        # -- 2) Build files in memory (same logic as zip mode) ----------
+        started = time.monotonic()
+        error_payload: Optional[Dict[str, Any]] = None
+        entities_kept: List[Entity] = []
+        relations_kept: List[Relation] = []
+        filename_map: Dict[str, str] = {}
+        rendered_relation_count = 0
+        files_written = 0
+        bytes_written = 0
+        target_dir: Optional[Path] = None
+        dropped_relations = 0
+
+        try:
+            entities_kept, relations_kept, dropped_relations = await self._collect(
+                notebook_id, request.filter
+            )
+            filename_map = self._build_filename_map(entities_kept)
+
+            files: Dict[str, str] = {}
+            for entity in entities_kept:
+                if not entity.id:
+                    continue
+                filename = filename_map[str(entity.id)]
+                files[filename] = self._render_entity_markdown(
+                    entity, relations_kept, filename_map
+                )
+            files["README.md"] = self._render_index_readme(
+                entities_kept, relations_kept, request.filter, notebook_id
+            )
+
+            # -- 3) Write each file to disk under <vault>/<entities_folder>/
+            vault_path = Path(vault_path_raw)
+            bytes_written, target_dir = await self._write_to_vault(
+                vault_path, entities_folder, files
+            )
+            files_written = len(files)
+            rendered_relation_count = self._count_rendered_relations(
+                relations_kept, filename_map
+            )
+
+            duration_ms = int((time.monotonic() - started) * 1000)
+            report = ExportReport(
+                entities_written=len(entities_kept),
+                relations_written=rendered_relation_count,
+                files_written=files_written,
+                bytes_written=bytes_written,
+                duration_ms=duration_ms,
+                filter_applied=request.filter,
+                metadata=(
+                    {"dropped_relations": dropped_relations}
+                    if dropped_relations
+                    else None
+                ),
+            )
+
+            logger.info(
+                "obsidian export (vault_path): notebook={nb} entities={ents} "
+                "relations={rels} files={files} bytes={bytes} duration_ms={ms}",
+                nb=notebook_id,
+                ents=report.entities_written,
+                rels=report.relations_written,
+                files=report.files_written,
+                bytes=report.bytes_written,
+                ms=duration_ms,
+            )
+
+            return ExportArtifact(
+                mode="vault_path",
+                report=report,
+                zip_bytes=None,
+                vault_dir=str(target_dir),
+            )
+
+        except VaultPathNotConfigured:
+            # Don't wrap as partial=True -- this is a 400, not a 500.
+            # The metric still fires in the finally block but without
+            # the partial flag (it never started writing anything).
+            raise
+        except Exception as exc:
+            # Per-file atomicity (POSIX rename) means previously-written
+            # files stay on disk. Record how far we got -- the operator
+            # can decide whether to retry or clean up.
+            entities_written_so_far = 0
+            if hasattr(exc, "args") and exc.args:
+                # _write_to_vault attaches the partial count via args[1]
+                # when it fails mid-batch (see that method's docstring).
+                last = exc.args[-1]
+                if isinstance(last, dict) and "entities_written" in last:
+                    entities_written_so_far = int(last["entities_written"])
+            error_payload = {
+                "error": f"{type(exc).__name__}: {exc}",
+                "partial": True,
+                "entities_written_partial": entities_written_so_far,
+            }
+            raise
+        finally:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            # Counts-only per Q-D-8 + redaction flag. The raw path is
+            # NEVER written to the metric: directory names can be PII
+            # (e.g. ``/Users/<full_name>/Documents/...``). The boolean
+            # flag tells observers "we wrote to the filesystem" without
+            # leaking where.
+            if error_payload is None:
+                payload = {
+                    "entities_written": len(entities_kept),
+                    "relations_written": rendered_relation_count,
+                    "files_written": files_written,
+                    "bytes_written": bytes_written,
+                    "duration_ms": duration_ms,
+                    "dropped_relations": dropped_relations,
+                    "mode": "vault_path",
+                    "vault_path_redacted": True,
+                }
+            else:
+                payload = {
+                    "entities_written": len(entities_kept),
+                    "relations_written": 0,
+                    "files_written": 0,
+                    "bytes_written": 0,
+                    "duration_ms": duration_ms,
+                    "dropped_relations": dropped_relations,
+                    "mode": "vault_path",
+                    "vault_path_redacted": True,
+                    **error_payload,
+                }
+            await record_metric(
+                "export.obsidian",
+                payload,
+                source=None,
+                notebook=notebook_id,
+            )
+
+    @staticmethod
+    async def _write_to_vault(
+        vault_path: Path,
+        entities_folder: str,
+        files: Dict[str, str],
+    ) -> tuple[int, Path]:
+        """Write a flat map of ``{filename: content}`` to disk atomically per file.
+
+        Safety guards (defense-in-depth on top of D.1a's ``_safe_entity_stem``):
+
+        * ``vault_path`` must be absolute (rejected if relative -- a
+          relative path resolves against the API server's cwd which is
+          almost never the operator's intent).
+        * ``vault_path`` must exist as a directory.
+        * ``vault_path`` must be writable.
+        * Target directory ``<vault_path>/<entities_folder>/`` is created
+          with ``mkdir -p`` semantics if missing. We never delete an
+          existing directory tree.
+        * For each filename: the *resolved* write target must be a
+          direct child of the resolved target directory. This rejects
+          ``..`` traversal in filenames even though D.1a's
+          ``_safe_entity_stem`` should already have sanitized them.
+
+        Atomicity: **per-file**, not whole-batch. Each file is written
+        via ``<filename>.tmp.<pid>`` then renamed onto the final name
+        with :func:`os.replace` (POSIX atomic rename). The file
+        either fully appears under its final name or doesn't appear at
+        all -- a partial-content half-written ``.md`` is impossible.
+
+        **Mid-batch failure semantics**: a filesystem error on the Nth
+        file leaves files 1..N-1 fully written under their final names
+        (the previous-version's content is replaced) and propagates the
+        exception with ``{"entities_written": N-1}`` attached to the
+        exception's ``args`` so the caller can surface partial state.
+        Files N+1..M are not touched.
+
+        A whole-batch atomic option would require staging into a tempdir
+        sibling of the target then renaming the directory; that costs
+        2x disk space during writes and a brief outage window if a
+        reader is mid-scan. V1 picks per-file atomicity instead --
+        rationale: the Obsidian vault is a *write-mostly* destination,
+        not a transactional store, and a half-applied export is no
+        worse than an interrupted manual save inside Obsidian itself.
+
+        Returns:
+            ``(bytes_written, target_dir)`` tuple. ``target_dir`` is the
+            resolved ``<vault_path>/<entities_folder>/`` so the artifact
+            can carry it for the response payload.
+
+        Raises:
+            ValueError: vault_path not absolute / doesn't exist /
+                not a directory / not writable; or a filename escapes
+                the target directory (defense-in-depth path traversal
+                check).
+            OSError: filesystem failure mid-write. The args carry
+                ``{"entities_written": N-1}`` so the caller knows where
+                the batch stopped.
+        """
+        if not vault_path.is_absolute():
+            raise ValueError(
+                f"vault_path must be absolute; got {vault_path!r}"
+            )
+        if not vault_path.exists():
+            raise ValueError(
+                f"vault_path does not exist: {vault_path!r}"
+            )
+        if not vault_path.is_dir():
+            raise ValueError(
+                f"vault_path is not a directory: {vault_path!r}"
+            )
+        # Defense in depth: explicit writability check before we touch
+        # anything. Avoids partial-state on a clearly-misconfigured path.
+        if not os.access(vault_path, os.W_OK):
+            raise ValueError(
+                f"vault_path is not writable: {vault_path!r}"
+            )
+
+        target_dir = (vault_path / entities_folder).resolve()
+        # Ensure the entities folder is inside the vault (defense in depth
+        # against a ``vault_entities_folder`` like ``../../etc``).
+        vault_resolved = vault_path.resolve()
+        try:
+            target_dir.relative_to(vault_resolved)
+        except ValueError as exc:
+            raise ValueError(
+                f"vault_entities_folder escapes vault_path: "
+                f"{entities_folder!r} -> {target_dir!r}"
+            ) from exc
+
+        # mkdir -p; preserves existing contents (Q-D-6 -- overwrite is
+        # scoped to the .md files we explicitly write, never the dir).
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        # Sort filenames for deterministic write order -- makes partial
+        # failure modes reproducible across runs.
+        bytes_written = 0
+        entities_so_far = 0
+        for filename in sorted(files.keys()):
+            content = files[filename]
+            final_path = (target_dir / filename).resolve()
+            try:
+                final_path.relative_to(target_dir)
+            except ValueError as exc:
+                # Defense in depth: D.1a's _safe_entity_stem should have
+                # stripped ``..`` already. If we land here something
+                # upstream regressed -- fail loud rather than silently
+                # write outside the target dir.
+                raise ValueError(
+                    f"Refusing to write outside vault: {filename!r} -> "
+                    f"{final_path!r} not under {target_dir!r}",
+                    {"entities_written": entities_so_far},
+                ) from exc
+
+            # POSIX atomic rename. tempfile path lives next to the
+            # final path so the rename is intra-filesystem (cross-fs
+            # renames fall back to copy+unlink and lose atomicity).
+            # Tempfile name carries the pid so concurrent exports
+            # (e.g. two operators triggering at once) don't fight over
+            # the same temp name.
+            tmp_path = final_path.with_name(f"{filename}.tmp.{os.getpid()}")
+            try:
+                encoded = content.encode("utf-8")
+                with open(tmp_path, "wb") as fh:
+                    fh.write(encoded)
+                os.replace(tmp_path, final_path)
+                bytes_written += len(encoded)
+                entities_so_far += 1
+            except OSError as exc:
+                # Best-effort cleanup of the tmp file -- the final
+                # file is unchanged (either previous version or absent).
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except OSError:
+                    pass
+                # Re-raise with partial count as the trailing arg so the
+                # caller can attribute the failure to a specific file
+                # index. Keeping the original args[0] preserves the
+                # OSError's original message for logs.
+                raise OSError(
+                    str(exc) if exc.args else "filesystem write failure",
+                    {"entities_written": entities_so_far, "failed_file": filename},
+                ) from exc
+
+        return bytes_written, target_dir
 
     # ------------------------------------------------------------------
     # Filtering pipeline
@@ -820,4 +1193,4 @@ class ObsidianExportService:
         return "\n".join(lines)
 
 
-__all__ = ["ObsidianExportService", "ExportArtifact"]
+__all__ = ["ObsidianExportService", "ExportArtifact", "VaultPathNotConfigured"]

@@ -67,6 +67,21 @@ class EmbeddingPayload(BaseModel):
     include_insights: bool = True
 
 
+class ExportObsidianPayload(BaseModel):
+    """Payload schema for the auto-pipeline ``EXPORT_OBSIDIAN`` job (D.1b).
+
+    ``filter`` is a free-form dict matching
+    :class:`shared.models.export.ExportFilter`. We validate it inside
+    the handler by constructing ``ExportFilter(**filter)`` so the
+    handler still rejects bad knobs at the job-execution boundary
+    (Pydantic validation moves from the router to the handler when
+    the job is submitted asynchronously).
+    """
+
+    notebook_id: str
+    filter: Dict[str, Any] = {}
+
+
 # ---------------------------------------------------------------------------
 # DOCUMENT_PARSE — process_source
 # ---------------------------------------------------------------------------
@@ -372,3 +387,72 @@ async def _handle_rebuild_embeddings(payload: Dict[str, Any]) -> Dict[str, Any]:
         "insights_processed": result.insights_processed,
         "processing_time": processing_time,
     }
+
+
+# ---------------------------------------------------------------------------
+# EXPORT_OBSIDIAN — Obsidian vault export (auto-pipeline entry point, D.1b)
+# ---------------------------------------------------------------------------
+
+
+@registry.register(JobType.EXPORT_OBSIDIAN)
+async def handle_export_obsidian(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Auto-pipeline handler for ``JobType.EXPORT_OBSIDIAN`` (Phase D.1b).
+
+    Always runs in ``mode="vault_path"`` -- the async job pathway is
+    the auto-pipeline write-to-disk surface. The user-initiated zip
+    export stays sync on the ``POST /export-obsidian`` route and never
+    hits this handler.
+
+    Payload contract::
+
+        {"notebook_id": "notebook:abc", "filter": {ExportFilter.model_dump()}}
+
+    The handler returns a flattened summary of the
+    :class:`shared.models.export.ExportReport` so the job result is a
+    plain dict (job-queue contract).
+
+    Raises ``VaultPathNotConfigured`` if Settings is unset -- the
+    worker logs and parks the job as FAILED; the operator fixes the
+    config and resubmits.
+    """
+    validated = ExportObsidianPayload(**payload)
+    start_time = time.time()
+
+    try:
+        from shared.models.export import ExportFilter, ObsidianExportRequest
+
+        from app_main.dependencies import get_obsidian_export_service
+
+        logger.info(
+            f"Starting Obsidian vault export for notebook: "
+            f"{validated.notebook_id}"
+        )
+        service = get_obsidian_export_service()
+        request = ObsidianExportRequest(
+            mode="vault_path",
+            filter=ExportFilter(**validated.filter),
+        )
+        artifact = await service.export(validated.notebook_id, request)
+
+        processing_time = time.time() - start_time
+        logger.info(
+            f"Obsidian vault export completed for notebook "
+            f"{validated.notebook_id} in {processing_time:.2f}s"
+        )
+        report = artifact.report.model_dump(mode="json")
+        return {
+            "success": True,
+            # Flatten report into the result so job consumers can read
+            # counts without an extra nested object. ``mode`` is fixed
+            # to "vault_path" for this handler.
+            "mode": "vault_path",
+            **report,
+            "processing_time": processing_time,
+        }
+
+    except Exception as e:
+        logger.error(
+            f"Obsidian vault export failed for notebook "
+            f"{validated.notebook_id}: {e}"
+        )
+        raise

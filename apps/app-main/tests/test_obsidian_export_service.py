@@ -31,16 +31,21 @@ in-process.
 from __future__ import annotations
 
 import io
+import os
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from shared.models.entity import Entity, Relation
 from shared.models.export import ExportFilter, ObsidianExportRequest
 
-from app_main.services.obsidian_export_service import ObsidianExportService
+from app_main.services.obsidian_export_service import (
+    ObsidianExportService,
+    VaultPathNotConfigured,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -701,3 +706,372 @@ async def test_readme_index_contains_required_sections():
     # Top-20 list (only 3 entities here, but the section heading
     # appears whenever any degree is non-zero).
     assert "Most-connected entities (top 20)" in readme
+
+
+# ===========================================================================
+# D.1b -- vault_path mode
+# ===========================================================================
+#
+# The vault_path mode mirrors the zip mode for vault generation but
+# swaps the in-memory archive for direct-write to
+# ``<Settings.vault_path>/<Settings.vault_entities_folder>/``. Tests
+# cover (a) the happy path, (b) the "not configured" 400 surface,
+# (c) the safety rejection paths (absolute / writable / traversal),
+# (d) the per-file-atomic semantic under mid-batch failure, and
+# (e) the telemetry redaction contract (vault_path_redacted=True,
+# no raw path in payload).
+
+
+def _make_service_with_settings(
+    entities: List[Entity],
+    relations: List[Relation],
+    vault_path: str | None,
+    entities_folder: str | None = "Entities",
+) -> ObsidianExportService:
+    """Like ``_make_service`` but with a settings_service stub."""
+    repo = AsyncMock()
+    repo.list_entities_for_notebook = AsyncMock(return_value=entities)
+    repo.list_relations_for_notebook = AsyncMock(return_value=relations)
+    settings_svc = AsyncMock()
+    settings_svc.get = AsyncMock(
+        return_value=SimpleNamespace(
+            vault_path=vault_path,
+            vault_entities_folder=entities_folder,
+        )
+    )
+    return ObsidianExportService(
+        entity_repository=repo,
+        relation_repository=repo,
+        settings_service=settings_svc,
+    )
+
+
+def _vault_request(min_connections: int = 0, min_confidence: float = 0.0) -> ObsidianExportRequest:
+    """Build a relaxed-filter ObsidianExportRequest in vault_path mode."""
+    return ObsidianExportRequest(
+        mode="vault_path",
+        filter=ExportFilter(
+            min_connections=min_connections,
+            min_confidence=min_confidence,
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 1. Happy path -- writes 3 entity .md + README into <vault>/<folder>/
+# ---------------------------------------------------------------------------
+
+
+async def test_vault_path_happy_path(tmp_path):
+    """Settings has vault_path; service writes files; returns ExportReport.
+
+    Asserts:
+      * artifact.mode == "vault_path"
+      * artifact.vault_dir is the resolved target dir
+      * 3 entity .md + 1 README exist on disk
+      * artifact.report counts match
+    """
+    ents = [
+        _entity("entity:alice", "Alice", type_tags=["Person"]),
+        _entity("entity:bob", "Bob", type_tags=["Person"]),
+        _entity("entity:carol", "Carol", type_tags=["Person"]),
+    ]
+    rels = [_relation("entity:alice", "entity:bob", "knows")]
+    svc = _make_service_with_settings(ents, rels, str(tmp_path))
+
+    artifact = await svc.export("notebook:vault", _vault_request())
+
+    assert artifact.mode == "vault_path"
+    assert artifact.zip_bytes is None
+    assert artifact.vault_dir is not None
+    target_dir = Path(artifact.vault_dir)
+    assert target_dir == (tmp_path / "Entities").resolve()
+    assert target_dir.is_dir()
+
+    # Files exist on disk.
+    assert (target_dir / "README.md").is_file()
+    assert (target_dir / "alice.md").is_file()
+    assert (target_dir / "bob.md").is_file()
+    assert (target_dir / "carol.md").is_file()
+
+    # Report counts match.
+    assert artifact.report.entities_written == 3
+    assert artifact.report.relations_written == 1
+    assert artifact.report.files_written == 4  # README + 3 entity files
+    assert artifact.report.bytes_written > 0
+
+    # Content sanity: alice.md wikilinks to bob (forward edge).
+    alice_md = (target_dir / "alice.md").read_text(encoding="utf-8")
+    assert "[[bob]] (knows)" in alice_md
+
+
+# ---------------------------------------------------------------------------
+# 2. Settings.vault_path is None -> VaultPathNotConfigured
+# ---------------------------------------------------------------------------
+
+
+async def test_vault_path_not_configured_raises():
+    """When Settings.vault_path is None, the service raises VaultPathNotConfigured."""
+    svc = _make_service_with_settings(
+        entities=[_entity("entity:a", "A")],
+        relations=[],
+        vault_path=None,
+    )
+
+    with pytest.raises(VaultPathNotConfigured) as excinfo:
+        await svc.export("notebook:novault", _vault_request())
+
+    assert "vault_path" in str(excinfo.value).lower()
+
+
+async def test_vault_entities_folder_not_configured_raises(tmp_path):
+    """When vault_path is set but entities_folder is None, the service raises."""
+    svc = _make_service_with_settings(
+        entities=[_entity("entity:a", "A")],
+        relations=[],
+        vault_path=str(tmp_path),
+        entities_folder=None,
+    )
+    with pytest.raises(VaultPathNotConfigured):
+        await svc.export("notebook:nofolder", _vault_request())
+
+
+# ---------------------------------------------------------------------------
+# 3. Relative vault_path -> ValueError
+# ---------------------------------------------------------------------------
+
+
+async def test_vault_path_must_be_absolute():
+    """A relative ``vault_path`` is rejected with ValueError.
+
+    A relative path resolves against the API server's cwd, which is
+    almost never the operator's intent. Surface as ValueError -- the
+    router maps it to 500 with the partial state (none, since the
+    rejection is before any write).
+    """
+    svc = _make_service_with_settings(
+        entities=[_entity("entity:a", "A")],
+        relations=[],
+        vault_path="./relative/vault",
+    )
+
+    with pytest.raises(ValueError, match="absolute"):
+        await svc.export("notebook:relpath", _vault_request())
+
+
+async def test_vault_path_must_exist(tmp_path):
+    """A missing vault_path is rejected with ValueError before any write."""
+    missing = tmp_path / "does-not-exist"
+    svc = _make_service_with_settings(
+        entities=[_entity("entity:a", "A")],
+        relations=[],
+        vault_path=str(missing),
+    )
+    with pytest.raises(ValueError, match="does not exist"):
+        await svc.export("notebook:missing", _vault_request())
+
+
+# ---------------------------------------------------------------------------
+# 4. Overwrite existing .md; preserve unrelated user files
+# ---------------------------------------------------------------------------
+
+
+async def test_vault_path_overwrite_existing_md(tmp_path):
+    """Pre-existing .md in target dir is overwritten; user files are preserved.
+
+    Q-D-6: the export is the source of truth for *its own filenames*
+    inside ``<entities_folder>/``. Other user-added files are never
+    touched. We pre-populate the target dir with:
+
+      * ``alice.md`` -- should be overwritten (the export creates one
+        for entity:alice).
+      * ``user_added.md`` -- should survive untouched (not in the
+        export's filename set).
+
+    Plus a file OUTSIDE the entities_folder that must also survive.
+    """
+    # Pre-create the entities folder and seed it.
+    entities_folder = tmp_path / "Entities"
+    entities_folder.mkdir()
+    (entities_folder / "alice.md").write_text("OLD CONTENT - should be overwritten")
+    (entities_folder / "user_added.md").write_text("USER NOTE - should survive")
+    # File outside the entities_folder -- in the vault root.
+    (tmp_path / "vault_root_note.md").write_text(
+        "VAULT ROOT NOTE - definitely should survive"
+    )
+
+    ents = [_entity("entity:alice", "Alice", type_tags=["Person"])]
+    svc = _make_service_with_settings(ents, [], str(tmp_path))
+
+    artifact = await svc.export("notebook:overwrite", _vault_request())
+
+    # alice.md was overwritten with the export's content.
+    alice_content = (entities_folder / "alice.md").read_text(encoding="utf-8")
+    assert "OLD CONTENT" not in alice_content
+    assert "# Alice" in alice_content  # the export's title section
+
+    # User-added .md inside the entities folder is untouched.
+    user_content = (entities_folder / "user_added.md").read_text(encoding="utf-8")
+    assert user_content == "USER NOTE - should survive"
+
+    # File outside the entities folder is untouched.
+    root_content = (tmp_path / "vault_root_note.md").read_text(encoding="utf-8")
+    assert root_content == "VAULT ROOT NOTE - definitely should survive"
+
+    # Report still reports the writes we performed (alice + README),
+    # not the user_added.md we left alone.
+    assert artifact.report.entities_written == 1
+    assert artifact.report.files_written == 2  # alice.md + README.md
+
+
+# ---------------------------------------------------------------------------
+# 5. Atomic per-file: forced mid-batch failure leaves first file written
+# ---------------------------------------------------------------------------
+
+
+async def test_vault_path_atomic_per_file(tmp_path):
+    """Mid-batch filesystem failure leaves earlier files written.
+
+    Pins the per-file atomicity contract (per the module docstring): a
+    failure on the Nth file leaves files 1..N-1 fully written under
+    their final names and propagates the OSError with
+    ``{"entities_written": N-1}`` attached so the router can surface
+    partial state.
+
+    Setup: 3 entities -> the service produces ``aaa.md``, ``bbb.md``,
+    ``ccc.md`` plus a ``README.md``. ``_write_to_vault`` writes them
+    in sorted order so the sequence is:
+    ``README.md`` -> ``aaa.md`` -> ``bbb.md`` -> ``ccc.md``.
+    We force a write failure on ``bbb.md`` (3rd in the sequence) and
+    assert that the 2 preceding files (README.md + aaa.md) survived
+    and the 4th (ccc.md) was never touched.
+
+    We mock ``builtins.open`` to fail only when the tmp path for
+    ``bbb.md`` is opened.
+    """
+    ents = [
+        _entity("entity:aaa", "AAA"),  # filename "aaa.md"
+        _entity("entity:bbb", "BBB"),  # filename "bbb.md" -- will fail
+        _entity("entity:ccc", "CCC"),  # filename "ccc.md" -- never reached
+    ]
+    svc = _make_service_with_settings(ents, [], str(tmp_path))
+
+    real_open = open
+
+    def selective_open(*args, **kwargs):
+        path = args[0] if args else kwargs.get("file")
+        path_str = str(path)
+        # The tmp file is written as ``<final>.tmp.<pid>`` -- match the
+        # bbb.md tmp file and force a write failure.
+        if "bbb.md.tmp." in path_str:
+            raise OSError("simulated disk full")
+        return real_open(*args, **kwargs)
+
+    with patch("builtins.open", selective_open):
+        with pytest.raises(OSError) as excinfo:
+            await svc.export("notebook:partial", _vault_request())
+
+    # OSError carries partial state in args (args may be (message, {dict})).
+    partial = None
+    for arg in excinfo.value.args:
+        if isinstance(arg, dict) and "entities_written" in arg:
+            partial = arg
+            break
+    assert partial is not None, (
+        f"OSError args missing partial-state dict; args={excinfo.value.args!r}"
+    )
+    # The write order is ``sorted(files.keys())``:
+    # ``README.md`` (1st) -> ``aaa.md`` (2nd) -> ``bbb.md`` (3rd, fails).
+    # Two files survived before the failure.
+    assert partial["entities_written"] == 2
+    assert partial.get("failed_file") == "bbb.md"
+
+    # On-disk verification: README.md + aaa.md exist; bbb.md / ccc.md don't.
+    target_dir = tmp_path / "Entities"
+    assert (target_dir / "README.md").is_file()
+    assert (target_dir / "aaa.md").is_file()
+    assert not (target_dir / "bbb.md").exists()
+    assert not (target_dir / "ccc.md").exists()
+    # Defensively check no stale ``.tmp.*`` files leak into the vault.
+    tmp_leftovers = list(target_dir.glob("*.tmp.*"))
+    assert tmp_leftovers == [], (
+        f"Stale tmp files leaked into vault: {tmp_leftovers!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6. Telemetry redacts the raw vault path
+# ---------------------------------------------------------------------------
+
+
+async def test_vault_path_telemetry_redacts_path(tmp_path, monkeypatch):
+    """``record_metric`` payload has ``vault_path_redacted=True`` and no raw path.
+
+    Q-D-8: the raw filesystem path is PII (e.g.
+    ``/Users/<full_name>/Documents/...``) and must NEVER appear in the
+    telemetry payload. The redaction is asserted in two ways:
+
+    1. ``vault_path_redacted`` is True in the payload.
+    2. The raw ``tmp_path`` string does NOT appear in the JSON dump
+       of the payload (recursive check across all string values).
+    """
+    events: list[dict] = []
+
+    async def _spy(event_type, payload, source=None, notebook=None):
+        events.append({"event_type": event_type, "payload": payload, "notebook": notebook})
+
+    monkeypatch.delenv("OPEN_NOTEBOOK_DISABLE_METRICS", raising=False)
+    monkeypatch.setattr(
+        "app_main.services.obsidian_export_service.record_metric", _spy
+    )
+
+    ents = [_entity("entity:a", "A")]
+    svc = _make_service_with_settings(ents, [], str(tmp_path))
+    await svc.export("notebook:tel-vault", _vault_request())
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["event_type"] == "export.obsidian"
+    payload = event["payload"]
+
+    # Mode + redaction flag are present.
+    assert payload["mode"] == "vault_path"
+    assert payload["vault_path_redacted"] is True
+
+    # The raw vault path is NOT in the payload. Recursively walk all
+    # string values and assert tmp_path's string form is absent. We
+    # also assert no key NAMED ``vault_path`` carries the raw value.
+    raw_path = str(tmp_path)
+
+    def _no_raw_path(value):
+        if isinstance(value, str):
+            assert raw_path not in value, (
+                f"Raw vault path leaked into telemetry: {value!r}"
+            )
+        elif isinstance(value, dict):
+            for k, v in value.items():
+                # Defense: no key named vault_path with a raw string.
+                if k == "vault_path":
+                    assert v is None or not isinstance(v, str) or v == ""
+                _no_raw_path(v)
+        elif isinstance(value, list):
+            for v in value:
+                _no_raw_path(v)
+
+    _no_raw_path(payload)
+
+    # Counts-only contract still holds: no entity/source/notebook IDs.
+    def _no_ids(value):
+        if isinstance(value, str):
+            assert not value.startswith("entity:")
+            assert not value.startswith("source:")
+            assert not value.startswith("relation:")
+            assert not value.startswith("notebook:")
+        elif isinstance(value, dict):
+            for v in value.values():
+                _no_ids(v)
+        elif isinstance(value, list):
+            for v in value:
+                _no_ids(v)
+
+    _no_ids(payload)
