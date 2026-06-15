@@ -185,3 +185,74 @@ swing.
 **Self-review**: `docs/tracks/D-output-richness/reviews/phase-D.1b-self-review.md`
 
 **Ready for review.** Next per plan: D.2 (JSONL stream export).
+
+---
+
+## Phase D.1c — Obsidian export UI dialog + E2E (DONE)
+
+**Branch**: `track/d-obsidian-dialog`
+**Commit range**: `9f5aa54..d951b6b` (4 commits on top of `main`)
+
+**Delivered**:
+- ``GET /api/notebooks/{id}/export-preview`` (counts-only) in
+  ``apps/app-main/src/app_main/api/routers/exports.py``. Reuses the
+  D.0 ``list_entities_for_notebook`` + ``list_relations_for_notebook``
+  with the same ``min_connections`` post-filter the Obsidian service
+  applies, plus a Q-D-4-style silent drop of relations whose
+  endpoints didn't survive so the preview matches what the export
+  emits. 404 on unknown notebook, 400 on out-of-range confidence
+  (``Query()`` doesn't auto-apply the ExportFilter Pydantic bound).
+- ``frontend/src/lib/types/exports.ts`` -- TypeScript mirrors of the
+  Pydantic shapes (``ExportFilter``, ``ObsidianExportRequest``,
+  ``ExportReport``, ``ObsidianExportMode``, ``ExportPreviewCounts``).
+- ``frontend/src/lib/hooks/use-obsidian-export.ts`` -- React Query
+  mutation hook. Branches on response Content-Type: zip ->
+  ``URL.createObjectURL`` + hidden ``<a>`` click; JSON -> parse
+  ``ExportReport``, expose via ``lastReport``, fire success toast.
+- ``frontend/src/lib/utils/content-disposition.ts`` -- pure parser
+  for the ``Content-Disposition`` header. Handles RFC 6266 quoted,
+  unquoted token, and RFC 5987 ``filename*=UTF-8''...`` forms with
+  §4.3 precedence.
+- ``frontend/src/lib/hooks/use-export-preview.ts`` -- React Query
+  fetch against ``/export-preview`` with 300ms debounce via
+  ``use-debounce`` and ``staleTime: 30s``.
+- ``frontend/src/components/notebooks/exports/ExportPreviewCounts.tsx``
+  -- presentational widget with loading skeleton + error fallback +
+  ``aria-live="polite"`` for screen-reader updates.
+- ``frontend/src/components/notebooks/exports/ObsidianExportDialog.tsx``
+  -- main dialog. Mode toggle (Tabs, Vault disabled w/ tooltip when
+  ``Settings.vault_path`` empty), three sliders, two switches,
+  comma-separated entity-types input, live preview counts, error
+  banner, vault-mode success state.
+- ``NotebookHeader.tsx`` -- new "Export Obsidian" button + dialog
+  open-state next to Archive.
+
+**Tests**:
+- ``apps/app-main``: +4 router tests (``test_export_preview.py``). All
+  pass in 67s under ``uv run --package app-main pytest``. Existing
+  exports + obsidian service tests: 34/34 still pass.
+- ``frontend`` parser unit (Playwright runner): 7/7 pass in ~1.3s.
+- ``frontend`` E2E (``obsidian-export.spec.ts``): 2 tests, listed
+  clean but not executed in sandbox (requires Next.js dev server
+  running; no live backend dependency since all routes are mocked).
+- TypeScript: ``npx tsc --noEmit`` clean.
+- ESLint: only pre-existing warnings in unrelated files; no new
+  warnings from the D.1c additions.
+
+**Mental-inversion regression checks embedded**:
+1. **Debounce**: E2E presses ArrowRight 5x on the slider; asserts the
+   preview-counts refetch fires AT MOST twice (and at least once
+   after the debounce settles). Removing the debounce makes the
+   assertion fail with delta=5.
+2. **Filename parser**: unit spec has a dedicated test for the
+   RFC 5987 ``filename*=UTF-8''my-file.zip`` form. A simplified
+   ``/filename="([^"]+)"/`` parser returns ``null`` here and fails.
+3. **Vault-path disabled state**: E2E asserts the Tab is
+   ``toBeDisabled()`` AND that clicking it doesn't fire the mutation
+   AND that the vault-path-display label stays hidden. The dialog's
+   ``handleExport`` short-circuits on the same condition, so even a
+   force-click on the disabled tab can't reach the mutation.
+
+**Self-review**: `docs/tracks/D-output-richness/reviews/phase-D.1c-self-review.md`
+
+**Ready for review.** Next per plan: D.2 (JSONL stream export).

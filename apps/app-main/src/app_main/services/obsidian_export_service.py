@@ -243,7 +243,15 @@ class ExportArtifact(BaseModel):
 # orphan_* lifecycle filter. Mirrors the D.3 precedent: ``merged`` rows
 # are tombstones pointing at canonical successors, ``archived`` rows are
 # user-deleted. Both are noise from the analyst's perspective.
-_EXCLUDED_ENTITY_STATUSES = frozenset({"archived", "merged"})
+#
+# Public (no leading underscore) so the D.1c preview router can apply
+# the same filter without redefining the set -- the preview must mirror
+# what the actual export produces (Q-D-1c parity).
+EXCLUDED_ENTITY_STATUSES = frozenset({"archived", "merged"})
+
+# Back-compat alias for any external import path that was using the
+# previous private name. New code should reference the public symbol.
+_EXCLUDED_ENTITY_STATUSES = EXCLUDED_ENTITY_STATUSES
 
 
 # ---------------------------------------------------------------------------

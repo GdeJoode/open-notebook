@@ -5,11 +5,12 @@ import Link from 'next/link'
 import { NotebookResponse } from '@/lib/types/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Archive, ArchiveRestore, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, Download, Trash2 } from 'lucide-react'
 import { useUpdateNotebook, useDeleteNotebook } from '@/lib/hooks/use-notebooks'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { formatDistanceToNow } from 'date-fns'
 import { InlineEdit } from '@/components/common/InlineEdit'
+import { ObsidianExportDialog } from '@/components/notebooks/exports/ObsidianExportDialog'
 import { cn } from '@/lib/utils'
 
 interface NotebookHeaderProps {
@@ -27,7 +28,10 @@ export function NotebookHeader({
   activeTab = 'workspace',
 }: NotebookHeaderProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
-  
+  // D.1c -- Obsidian export dialog open-state. The dialog itself owns
+  // its filter + mode internals; we just gate visibility.
+  const [obsidianDialogOpen, setObsidianDialogOpen] = useState(false)
+
   const updateNotebook = useUpdateNotebook()
   const deleteNotebook = useDeleteNotebook()
 
@@ -79,6 +83,16 @@ export function NotebookHeader({
               )}
             </div>
             <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setObsidianDialogOpen(true)}
+                data-testid="open-obsidian-export-dialog"
+                aria-label="Export this notebook to Obsidian"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export Obsidian
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -156,6 +170,12 @@ export function NotebookHeader({
         confirmText="Delete Forever"
         confirmVariant="destructive"
         onConfirm={handleDelete}
+      />
+
+      <ObsidianExportDialog
+        open={obsidianDialogOpen}
+        onOpenChange={setObsidianDialogOpen}
+        notebookId={notebook.id}
       />
     </>
   )
