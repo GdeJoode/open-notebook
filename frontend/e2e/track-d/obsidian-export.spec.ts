@@ -102,6 +102,12 @@ test.describe('D.1c: Obsidian export dialog', () => {
   test('preview counts render, debounce fires once per drag, zip download closes dialog', async ({
     page,
   }) => {
+    // Console-error watchdog (Nit 12). Any uncaught page error during
+    // the dialog lifecycle is a regression -- React state bugs in the
+    // dialog often manifest here first, before any visible breakage.
+    const pageErrors: string[] = []
+    page.on('pageerror', (err) => pageErrors.push(err.message))
+
     // Track preview calls so we can verify the debounce. The query
     // string carries the current filter -- we don't assert on it here
     // because the debounce assertion is about CALL COUNT, not contents.
@@ -131,17 +137,30 @@ test.describe('D.1c: Obsidian export dialog', () => {
     // headers`` is required so axios on the page side can read the
     // ``content-disposition`` header (same lesson as networkx-export
     // spec).
+    //
+    // M4 follow-up: capture the request payload so we can assert that
+    // the boolean filter switches (``include_orphans`` /
+    // ``include_archived``) actually round-trip into the POST body
+    // when the operator toggles them in the dialog.
+    let capturedExportPayload:
+      | {
+          mode: string
+          filter: {
+            min_connections: number
+            min_confidence: number
+            include_orphans: boolean
+            include_archived: boolean
+          }
+        }
+      | undefined
     const TINY_ZIP_B64 =
       'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA=='
     await page.route(
       new RegExp(`/api/notebooks/${NB_ID_RE}/export-obsidian$`),
       async (route) => {
-        const payload = route.request().postDataJSON() as {
-          mode: string
-          filter: { min_connections: number; min_confidence: number }
-        }
-        expect(payload.mode).toBe('zip')
-        expect(payload.filter.min_confidence).toBe(0.9)
+        capturedExportPayload = route
+          .request()
+          .postDataJSON() as typeof capturedExportPayload
         await route.fulfill({
           status: 200,
           contentType: 'application/zip',
@@ -210,6 +229,14 @@ test.describe('D.1c: Obsidian export dialog', () => {
     expect(refetchDelta).toBeLessThanOrEqual(2)
     expect(refetchDelta).toBeGreaterThanOrEqual(1)
 
+    // M4: toggle both boolean filter switches BEFORE submit so the
+    // captured POST payload proves they round-trip into the request.
+    // The defaults are ``false``; flipping to ``true`` is the only way
+    // to verify the wiring -- a regression that stripped the fields
+    // from the payload would slip through if we relied on defaults.
+    await page.getByTestId('include-orphans-switch').click()
+    await page.getByTestId('include-archived-switch').click()
+
     // Click Export -> browser download fires.
     const [download] = await Promise.all([
       page.waitForEvent('download'),
@@ -217,8 +244,19 @@ test.describe('D.1c: Obsidian export dialog', () => {
     ])
     expect(download.suggestedFilename()).toBe('d1c-notebook-obsidian.zip')
 
+    // M4 assertion: the toggled switches landed in the request body
+    // alongside the mode + min_confidence the original spec covered.
+    expect(capturedExportPayload).toBeDefined()
+    expect(capturedExportPayload!.mode).toBe('zip')
+    expect(capturedExportPayload!.filter.min_confidence).toBe(0.9)
+    expect(capturedExportPayload!.filter.include_orphans).toBe(true)
+    expect(capturedExportPayload!.filter.include_archived).toBe(true)
+
     // Dialog closes after the zip download (success path for zip mode).
     await expect(dialog).toBeHidden({ timeout: 5_000 })
+
+    // Nit 12: no uncaught page errors during the entire flow.
+    expect(pageErrors).toEqual([])
   })
 
   test('vault_path tab is disabled when Settings.vault_path is empty', async ({
