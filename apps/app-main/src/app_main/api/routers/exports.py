@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import io
 import re
-from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -41,6 +40,7 @@ from app_main.dependencies import (
 from app_main.services.networkx_export_service import NetworkxExportService
 from app_main.services.notebook_service import NotebookService
 from app_main.services.obsidian_export_service import (
+    EXCLUDED_ENTITY_STATUSES,
     ObsidianExportService,
     VaultPathNotConfigured,
 )
@@ -338,10 +338,17 @@ async def export_preview_counts(
 
     Powers the D.1c dialog's debounced ``ExportPreviewCounts`` widget so
     the operator sees what the export would contain BEFORE clicking
-    "Export". The endpoint deliberately mirrors the filter the dialog
-    submits to ``POST /export-obsidian`` and reuses the D.0 repo
-    methods, with the same ``min_connections`` post-filter the export
-    services apply (see ``ObsidianExportService._apply_min_connections_filter``).
+    "Export". The endpoint mirrors the filter pipeline that
+    ``ObsidianExportService._collect`` applies, in order:
+
+    1. SurrealQL gate via ``ExportFilter`` (notebook scope, confidence,
+       orphan_status, entity_types).
+    2. ``status`` post-filter (drop ``archived`` + ``merged``) -- shared
+       via ``EXCLUDED_ENTITY_STATUSES``.
+    3. ``min_connections`` post-filter -- delegated to
+       ``ObsidianExportService._apply_min_connections_filter`` so there
+       is exactly one source of truth for degree counting.
+    4. Q-D-4 silent-drop of relations whose endpoints didn't survive.
 
     Performance: counts only -- never serialises entities through the
     response. For a 1000-entity notebook the cost is two SurrealQL
@@ -405,31 +412,29 @@ async def export_preview_counts(
         notebook_id, export_filter
     )
 
-    # min_connections post-filter (matches
-    # ObsidianExportService._apply_min_connections_filter). We
-    # duplicate the logic here rather than import it so the preview
-    # endpoint stays decoupled from a service whose constructor wants
-    # a settings dependency it doesn't need for counting.
-    if min_connections > 0:
-        degree: Counter[str] = Counter()
-        for relation in relations:
-            src = (
-                str(relation.in_entity) if relation.in_entity else None
-            )
-            dst = (
-                str(relation.out_entity) if relation.out_entity else None
-            )
-            if src:
-                degree[src] += 1
-            if dst:
-                degree[dst] += 1
-        surviving_entities = [
-            e
-            for e in entities
-            if e.id and degree[str(e.id)] >= min_connections
-        ]
-    else:
-        surviving_entities = list(entities)
+    # Status post-filter MUST run BEFORE min_connections -- the service
+    # applies them in the same order (see
+    # ``ObsidianExportService._collect``). If the preview counted
+    # archived/merged entities, the user would see "42 entities" but the
+    # actual export would deliver fewer, breaking the dialog's contract.
+    #
+    # ``status`` defaults to "active" in the Entity model; the
+    # ``or "active"`` keeps us safe against legacy rows where the field
+    # is null. The set is the public symbol from the service module so
+    # there's only one source of truth for "what's excluded".
+    entities = [
+        e
+        for e in entities
+        if (e.status or "active") not in EXCLUDED_ENTITY_STATUSES
+    ]
+
+    # min_connections post-filter -- delegate to the service's
+    # @staticmethod so any future tuning of the degree algorithm lands
+    # on both code paths simultaneously (Q-D-1c parity). The method has
+    # no instance state, hence the un-instantiated call.
+    surviving_entities = ObsidianExportService._apply_min_connections_filter(
+        entities, relations, min_connections
+    )
 
     # Drop relations whose endpoints didn't survive the post-filter --
     # otherwise the preview's relation count would overstate what the
