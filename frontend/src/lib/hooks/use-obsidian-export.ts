@@ -30,9 +30,27 @@ import type {
   ObsidianExportRequest,
 } from '@/lib/types/exports'
 
+/** Mutation result shape exposed to the dialog. Discriminated union so
+ *  the dialog can react to the zip vs vault_path branch without
+ *  inspecting the mutation's internal state. */
+export type ObsidianExportResult =
+  | { kind: 'zip'; filename: string }
+  | { kind: 'vault_path'; report: ExportReport }
+
+/** Mutation options forwarded by the dialog's ``mutate(req, opts)`` call.
+ *  React Query v5 exposes these as the second argument of ``mutate``;
+ *  we narrow them to the per-call ``onSuccess`` / ``onError`` we
+ *  actually use. */
+interface MutateOptions {
+  onSuccess?: (result: ObsidianExportResult) => void
+  onError?: (error: Error) => void
+}
+
 interface UseObsidianExportResult {
-  /** Trigger the export. */
-  mutate: (request: ObsidianExportRequest) => void
+  /** Trigger the export. Forward ``opts`` to React Query's per-call
+   *  options so the dialog can branch on success without subscribing
+   *  to ``data`` re-renders. */
+  mutate: (request: ObsidianExportRequest, opts?: MutateOptions) => void
   /** Mutation in flight. */
   isPending: boolean
   /** Last error, ``null`` when the last attempt succeeded or no
@@ -223,7 +241,11 @@ export function useObsidianExport(
   })
 
   return {
-    mutate: mutation.mutate,
+    // React Query's ``mutation.mutate`` already accepts
+    // ``(variables, options)`` -- the narrower local type just hides
+    // the variants we don't surface. ``as unknown as`` is the
+    // minimum-friction cast since the runtime shape matches exactly.
+    mutate: mutation.mutate as unknown as UseObsidianExportResult['mutate'],
     isPending: mutation.isPending,
     error: mutation.error,
     lastReport,
