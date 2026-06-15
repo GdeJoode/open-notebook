@@ -63,6 +63,7 @@ from app_main.services.entity_extraction_service import EntityExtractionService
 from app_main.services.schema_edit_service import SchemaEditService
 from app_main.services.reextract_service import ReextractService
 from app_main.services.notebook_merge_service import NotebookMergeService
+from app_main.services.jsonl_export_service import JsonlExportService
 from app_main.services.networkx_export_service import NetworkxExportService
 from app_main.services.obsidian_export_service import ObsidianExportService
 
@@ -377,6 +378,22 @@ def get_networkx_export_service() -> NetworkxExportService:
     """
     entity_repo = get_entity_repo()
     return NetworkxExportService(
+        entity_repository=entity_repo,
+        relation_repository=entity_repo,
+    )
+
+
+def get_jsonl_export_service() -> JsonlExportService:
+    """FastAPI provider for the D.2 JSONL streaming export service.
+
+    Both ``list_entities_for_notebook`` and ``list_relations_for_notebook``
+    live on ``EntityRepository`` (see D.0), so we wire the same repo into
+    both slots — mirrors :func:`get_networkx_export_service` and
+    :func:`get_obsidian_export_service`. No settings dep because the JSONL
+    surface is a single zip download, never a filesystem-write target.
+    """
+    entity_repo = get_entity_repo()
+    return JsonlExportService(
         entity_repository=entity_repo,
         relation_repository=entity_repo,
     )
