@@ -27,12 +27,14 @@ from fastapi.testclient import TestClient
 from shared.models.export import (
     ExportFilter,
     ExportReport,
+    JsonlExportRequest,
     NetworkxExportRequest,
     ObsidianExportRequest,
 )
 
 from app_main.api.routers.exports import router
 from app_main.dependencies import (
+    get_jsonl_export_service,
     get_networkx_export_service,
     get_notebook_service,
     get_obsidian_export_service,
@@ -440,3 +442,145 @@ class TestExportObsidianRouter:
         assert "error" in detail
         assert detail["entities_written"] == 2
         assert detail.get("failed_file") == "carol.md"
+
+
+# ---------------------------------------------------------------------------
+# D.2 -- JSONL streaming export router tests
+# ---------------------------------------------------------------------------
+
+
+def _make_jsonl_app(notebook_svc, export_svc):
+    """Build a FastAPI test app with the JSONL dependency stubbed."""
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_notebook_service] = lambda: notebook_svc
+    app.dependency_overrides[get_jsonl_export_service] = lambda: export_svc
+    return TestClient(app)
+
+
+class TestExportJsonlRouter:
+
+    def test_jsonl_happy_path(self):
+        """POST /export-jsonl -> 200 + application/zip + parseable zip body.
+
+        Verifies the StreamingResponse passes the service's chunks
+        through unchanged and the Content-Disposition uses the
+        ``.jsonl.zip`` extension so the OS save dialog disambiguates
+        from the Obsidian export's plain ``.zip``.
+        """
+        notebook_svc = AsyncMock()
+        notebook_svc.get.return_value = make_notebook(id="notebook:abc")
+
+        # Hand-build a zip with two .jsonl members so the test asserts
+        # against a known structure. The stream_jsonl method on the mock
+        # is an *async generator*, so we wire it via a sync function
+        # returning the generator directly (AsyncMock would return a
+        # coroutine, breaking StreamingResponse iteration).
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("entities.jsonl", '{"id":"entity:a"}\n')
+            archive.writestr("relations.jsonl", "")
+        payload = buf.getvalue()
+
+        async def _fake_stream(_nb, _req):
+            # Split arbitrarily so the integration test exercises >1
+            # chunk path through StreamingResponse.
+            yield payload[: len(payload) // 2]
+            yield payload[len(payload) // 2 :]
+
+        export_svc = AsyncMock()
+        export_svc.stream_jsonl = _fake_stream  # plain callable, not AsyncMock
+
+        client = _make_jsonl_app(notebook_svc, export_svc)
+        resp = client.post(
+            "/api/notebooks/notebook:abc/export-jsonl",
+            json={"filter": {"min_connections": 0}},
+        )
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/zip")
+        assert (
+            resp.headers["content-disposition"]
+            == 'attachment; filename="notebook_abc.jsonl.zip"'
+        )
+
+        # Parseable zip with the two expected members.
+        archive = zipfile.ZipFile(io.BytesIO(resp.content))
+        names = set(archive.namelist())
+        assert names == {"entities.jsonl", "relations.jsonl"}
+
+    def test_jsonl_404_unknown_notebook(self):
+        """Unknown notebook id -> 404 from the upstream lookup."""
+        notebook_svc = AsyncMock()
+        notebook_svc.get.return_value = None
+        export_svc = AsyncMock()
+
+        client = _make_jsonl_app(notebook_svc, export_svc)
+        resp = client.post(
+            "/api/notebooks/notebook:nope/export-jsonl",
+            json={"filter": {}},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json() == {"detail": "Notebook not found"}
+
+    def test_jsonl_filter_validation(self):
+        """Invalid filter shape -> 422 from Pydantic before the handler runs.
+
+        ``min_confidence`` is bounded [0, 1]; 5.0 must trigger 422 so the
+        client knows to fix the slider, not retry blindly.
+        """
+        notebook_svc = AsyncMock()
+        notebook_svc.get.return_value = make_notebook(id="notebook:abc")
+        export_svc = AsyncMock()
+
+        client = _make_jsonl_app(notebook_svc, export_svc)
+        resp = client.post(
+            "/api/notebooks/notebook:abc/export-jsonl",
+            json={"filter": {"min_confidence": 5.0}},
+        )
+
+        assert resp.status_code == 422
+        notebook_svc.get.assert_not_called()
+
+    def test_jsonl_request_forwards_filter_to_service(self):
+        """The router builds a JsonlExportRequest from the body and forwards it.
+
+        Pins that the filter knobs from the body land in the
+        service-side request object -- a regression where the router
+        instantiated ``JsonlExportRequest()`` with no args would still
+        pass the happy-path test but would silently drop the user's
+        filter.
+        """
+        notebook_svc = AsyncMock()
+        notebook_svc.get.return_value = make_notebook(id="notebook:abc")
+
+        captured: list[tuple] = []
+
+        async def _capture_stream(notebook_id, request):
+            captured.append((notebook_id, request))
+            yield b""
+
+        export_svc = AsyncMock()
+        export_svc.stream_jsonl = _capture_stream
+
+        client = _make_jsonl_app(notebook_svc, export_svc)
+        resp = client.post(
+            "/api/notebooks/notebook:abc/export-jsonl",
+            json={
+                "filter": {
+                    "min_connections": 3,
+                    "min_confidence": 0.85,
+                    "include_orphans": True,
+                }
+            },
+        )
+
+        assert resp.status_code == 200
+        assert len(captured) == 1
+        nb_id, request = captured[0]
+        assert nb_id == "notebook:abc"
+        assert isinstance(request, JsonlExportRequest)
+        assert request.filter.min_connections == 3
+        assert request.filter.min_confidence == 0.85
+        assert request.filter.include_orphans is True

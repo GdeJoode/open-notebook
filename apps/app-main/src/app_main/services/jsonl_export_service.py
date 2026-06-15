@@ -34,9 +34,11 @@ off versus a true chunk-as-you-go pipe is:
   payload during construction is the *compressed* archive only, never
   the raw uncompressed JSONL.
 
-The 64KB chunk size for the yielded bytes mirrors typical TCP send
-buffers and is small enough that the AC "yields >1 chunk for a 5000-
-entity fixture" test passes even with aggressive deflate ratios.
+The 16KB chunk size for the yielded bytes matches Linux's default
+TCP send-buffer (``tcp_wmem``) so we're not pre-fragmenting beyond
+what the kernel would packetise anyway. It's also small enough that
+the AC "yields >1 chunk for a 5000-entity fixture" test passes even
+under aggressive deflate ratios on the repetitive test data.
 
 Memory contract (AC #5)
 =======================
@@ -124,10 +126,12 @@ from app_main.services.obsidian_export_service import (
 )
 
 
-# Yielded chunk size — small enough that even modest 5000-entity fixtures
-# split into multiple chunks (AC #5 streaming assertion), and large enough
-# that we don't thrash the HTTP send buffer on real-world exports.
-_CHUNK_SIZE = 64 * 1024  # 64KB
+# Yielded chunk size — picked so even modest 5000-entity fixtures split
+# into multiple chunks (AC #5 streaming assertion). 16KB matches the
+# typical TCP send-buffer size on Linux (``/proc/sys/net/ipv4/tcp_wmem``
+# default 16384) so we're not artificially fragmenting beyond what the
+# kernel would pack anyway.
+_CHUNK_SIZE = 16 * 1024  # 16KB
 
 # Fields excluded from the entity ``model_dump``. The 768-float embedding
 # is the privacy + size concern; it is never useful in a JSONL export
@@ -263,8 +267,9 @@ class JsonlExportService:
             )
 
             # Yield in chunks so the HTTP response is genuinely streamed.
-            # The 64KB chunk is the canonical TCP send-buffer size; a
-            # 5000-entity fixture compresses to multiple chunks (AC #5).
+            # The 16KB chunk matches Linux's tcp_wmem default; a 5000-
+            # entity fixture compresses to ~55KB which splits into
+            # multiple chunks (AC #5).
             for start in range(0, len(payload), _CHUNK_SIZE):
                 yield payload[start : start + _CHUNK_SIZE]
 
