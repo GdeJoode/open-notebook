@@ -206,3 +206,149 @@ disabled-tab interaction (`expect(exportCallCount).toBe(0)`).
   reference is moot here -- there's no `test` script in
   `frontend/package.json`. Test commands above use `npx playwright
   test ...` directly.
+
+## Attempt 2 -- Revisions
+
+The strict reviewer of attempt 1 returned `REVISIONS_NEEDED` with one
+BLOCKER and two highest-priority Majors. This section documents the
+fixes applied in attempt 2 and the mental-inversion verification that
+the new tests actually catch the bug being guarded against.
+
+### B1 + B2 -- Preview silently overcounted archived/merged entities
+
+**Symptom**: `ObsidianExportService._collect` applies two post-filters
+in order (1. drop `status in {"archived","merged"}`; 2. apply
+`min_connections` degree filter). The preview endpoint duplicated only
+(2). User adjusts the sliders and sees "42 entities" promised, but the
+actual export drops the archived/merged ones and delivers fewer.
+Violates the dialog's user-facing contract.
+
+**Fix**:
+- Promoted `_EXCLUDED_ENTITY_STATUSES` to public
+  `EXCLUDED_ENTITY_STATUSES` in `obsidian_export_service.py` (with a
+  back-compat alias so the in-service use site continues to work).
+- Imported the symbol into `apps/app-main/src/app_main/api/routers/
+  exports.py` and applied the same status filter to `entities` BEFORE
+  the `min_connections` computation -- order matters because degree
+  is computed over the surviving entity set.
+- Added regression test
+  `test_status_archived_and_merged_excluded_from_preview` in
+  `apps/app-main/tests/test_export_preview.py`: 3-entity triangle
+  (active / merged / archived) with min_connections=0 so only the
+  status filter can prune. Pre-fix would have returned `{entity_count:
+  3, relation_count: 3}`; post-fix returns `{entity_count: 1,
+  relation_count: 0}`.
+- Added complementary test
+  `test_status_filter_does_not_count_relation_endpoints`: an active
+  entity whose ONLY relation points at an archived hub. The active
+  entity survives (degree 1 on raw relations passes
+  min_connections=1) but the relation gets silently dropped because
+  the archived endpoint is gone -- proves the Q-D-4 silent-drop
+  applies on top of the status filter.
+
+**Mental inversion -- does the test actually catch it?** Yes. I
+temporarily removed the status-filter block from the router and
+re-ran the new tests. All three new tests failed:
+
+```
+FAILED test_status_archived_and_merged_excluded_from_preview
+FAILED test_status_filter_does_not_count_relation_endpoints
+FAILED test_preview_matches_service_collect_on_mixed_fixture
+  AssertionError: Preview/service drift: preview=3, service=1
+```
+
+Reverted the inversion, all 7 preview tests + 22 service tests pass
+(29 total).
+
+### M3 -- min_connections logic duplicated rather than imported
+
+**Symptom**: `ObsidianExportService._apply_min_connections_filter` is
+a `@staticmethod` with no instance state. The preview endpoint
+reimplemented it inline. Any future tuning of the service-side
+algorithm would create silent drift.
+
+**Fix**:
+- Replaced the inline implementation with a direct call to the
+  service staticmethod:
+  `surviving_entities = ObsidianExportService._apply_min_connections_filter(entities, relations, min_connections)`.
+- Removed the now-unused `from collections import Counter` import
+  from the router.
+- Added parity test
+  `test_preview_matches_service_collect_on_mixed_fixture`: builds an
+  asymmetric fixture (status mix + asymmetric in/out degrees) and
+  asserts the service-side pipeline and preview-side HTTP call agree
+  on the surviving entity count.
+
+**Mental inversion -- does the parity test catch drift?** Yes. I
+re-duplicated the degree filter inline in the router with a subtle
+bug (count only `in_entity`, i.e. in-degree only). With that bug:
+
+```
+FAILED test_preview_matches_service_collect_on_mixed_fixture
+  AssertionError: Preview/service drift: preview=1, service=3
+```
+
+The fixture's `entity:hub` has out-degree 3 and in-degree 0, so the
+in-degree-only bug drops it. The correct staticmethod keeps it
+(in+out=3). The fixture sanity-check (`assert service_count == 3`)
+makes the FIXTURE intent explicit so a future reader understands what
+behaviour the parity assertion is guarding. Reverted the inversion.
+
+### M4 + Nit 12 -- E2E spec did not verify boolean switches reach the request
+
+**Symptom**: The E2E spec asserted `mode` and `min_confidence` in the
+captured POST payload but never toggled the `include_orphans` /
+`include_archived` switches and never asserted they land in the
+request body. Silent regression risk if a future refactor stripped
+those fields from the payload builder.
+
+**Fix in `frontend/e2e/track-d/obsidian-export.spec.ts`**:
+- Captured the full POST payload via `capturedExportPayload` instead
+  of asserting inline inside the route handler.
+- Before clicking submit: clicked
+  `getByTestId('include-orphans-switch')` and
+  `getByTestId('include-archived-switch')` to flip both defaults
+  (`false`) to `true`.
+- After the download fires: asserted
+  `capturedExportPayload!.filter.include_orphans === true` and
+  `... .include_archived === true` alongside the existing mode +
+  min_confidence assertions.
+- Nit 12: added `page.on('pageerror', ...)` at the top of the test
+  to capture uncaught page errors and a final
+  `expect(pageErrors).toEqual([])` to fail the test if anything
+  crashed during the flow.
+
+E2E was syntax-validated via `npx playwright test --list` (2 tests
+collected). Full E2E run is sandbox-limited as documented above.
+
+### Deferred (Minors / Nits) -- not fixed in this PR
+
+- **M5 / Minor 9** (useMemo / double-subscription on
+  `useExportPreview`): not user-facing; a perf cleanup. Captured for
+  a follow-up PR.
+- **M6** (Label `htmlFor` on Slider): small a11y polish; the Slider
+  thumb already has `aria-label` via Radix and the surrounding Label
+  is co-located -- not a blocking gap. Separate PR.
+- **M7** (third guard is cosmetic): updated the prose elsewhere in
+  this review and in commit messages to say "two guards + button
+  disabled" instead of "three guards". No code change.
+- **Minor 8** (`min_relation_confidence ?? min_confidence` dead
+  code): correctly noted by the reviewer; leaving the explicit
+  fallback in for clarity since the dialog defaults to `0.9` for both
+  and the dead-code-elimination would obscure the intent. Follow-up.
+- **Nit 11** (vitest follow-up): runner switch is a project-wide
+  decision, not a D.1c-local one.
+
+## Test results (attempt 2)
+
+```
+apps/app-main && uv run pytest tests/test_export_preview.py tests/test_obsidian_export_service.py
+============================= 29 passed in 50.15s ==============================
+
+frontend && npx playwright test --list e2e/track-d/obsidian-export.spec.ts
+  Total: 2 tests in 1 file
+```
+
+Mental-inversion verifications described above were each run, observed
+to fail with informative messages, and then reverted before the
+commits.
