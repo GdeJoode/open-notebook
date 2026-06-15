@@ -25,10 +25,17 @@ import { useMutation } from '@tanstack/react-query'
 import type { AxiosResponse } from 'axios'
 
 import { useToast } from '@/lib/hooks/use-toast'
+import { parseFilenameFromContentDisposition } from '@/lib/utils/content-disposition'
 import type {
   ExportReport,
   ObsidianExportRequest,
 } from '@/lib/types/exports'
+
+// Re-export so existing import paths against
+// ``use-obsidian-export`` still resolve. The actual implementation
+// lives in ``lib/utils/content-disposition.ts`` so unit tests can
+// import it without dragging in React Query / 'use client'.
+export { parseFilenameFromContentDisposition }
 
 /** Mutation result shape exposed to the dialog. Discriminated union so
  *  the dialog can react to the zip vs vault_path branch without
@@ -60,70 +67,6 @@ interface UseObsidianExportResult {
    *  ``null`` for the zip branch (no report body) or before the first
    *  success. The dialog reads this to render the success banner. */
   lastReport: ExportReport | null
-}
-
-/**
- * Strict-but-permissive ``Content-Disposition`` filename parser.
- *
- * Handles the three header forms HTTP commonly produces:
- *
- *   1. ``attachment; filename="my-file.zip"``   (RFC 6266 quoted)
- *   2. ``attachment; filename=my-file.zip``      (unquoted token)
- *   3. ``attachment; filename*=UTF-8''my-file.zip`` (RFC 5987 percent-encoded)
- *
- * The RFC 5987 form takes precedence when both ``filename`` and
- * ``filename*`` are present (per RFC 6266 §4.3) -- it's the only one
- * that can carry non-ASCII characters.
- *
- * Returns ``null`` for:
- *   - missing header
- *   - header with no ``filename``/``filename*`` parameter
- *   - parameter value that's empty after decoding/unquoting
- *
- * The dialog falls back to a default name when the parser returns
- * ``null`` so the user always gets *something* downloadable.
- */
-export function parseFilenameFromContentDisposition(
-  header: string | undefined | null,
-): string | null {
-  if (!header) {
-    return null
-  }
-
-  // RFC 5987 first -- precedence rule from RFC 6266 §4.3. The format
-  // is ``filename*=<charset>'<lang>'<percent-encoded-value>``. We only
-  // honour UTF-8; other charsets are rare on the modern web and a
-  // strict implementation would require a TextDecoder.
-  // The regex is intentionally non-greedy + bounded by `;` or end-of-
-  // string so a stray quote in the encoded value doesn't break it.
-  const rfc5987 =
-    /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header)
-  if (rfc5987) {
-    try {
-      const decoded = decodeURIComponent(rfc5987[1].trim())
-      if (decoded) return decoded
-    } catch {
-      // Malformed percent-encoding -- fall through to the next form.
-    }
-  }
-
-  // Quoted form: ``filename="..."``. The capture is everything
-  // between the first pair of double quotes -- escaping isn't
-  // standardised in RFC 6266 so we don't try to unescape.
-  const quoted = /filename\s*=\s*"([^"]+)"/i.exec(header)
-  if (quoted) {
-    return quoted[1].trim() || null
-  }
-
-  // Token form: ``filename=value`` where value is a token (no spaces,
-  // no quotes) bounded by ``;`` or end-of-string.
-  const token = /filename\s*=\s*([^;]+)/i.exec(header)
-  if (token) {
-    const value = token[1].trim()
-    return value || null
-  }
-
-  return null
 }
 
 /**
