@@ -18,9 +18,11 @@ emitted into ``metrics{event_type: "export.*"}``.
 
 Streaming strategy (Q-D-7)
 ==========================
-V1 picks **build-then-stream**: assemble a ``zipfile.ZipFile`` inside an
-``io.BytesIO`` then yield the finished bytes in 64KB chunks. The trade-
-off versus a true chunk-as-you-go pipe is:
+V1 picks **build-then-stream**: write uncompressed JSONL one row at a
+time into an in-memory ``zipfile.ZipFile`` (so only the *compressed*
+archive is ever materialised, never the raw uncompressed payload), then
+yield the finished compressed archive in 16KB chunks. The trade-off
+versus a true chunk-as-you-go pipe is:
 
 * Peak memory ≈ zip-archive size, not raw-jsonl size. Deflate compresses
   text-heavy entity rows ~3-5×, so a 5000-entity notebook stays well
@@ -189,7 +191,7 @@ class JsonlExportService:
              exclude={"embedding"})`` then ``json.dumps`` + newline.
           6. Stream relation rows whose BOTH endpoints survived the
              filter into ``relations.jsonl`` (Q-D-4 silent drop).
-          7. Close the zip, yield the bytes in 64KB chunks.
+          7. Close the zip, yield the bytes in 16KB chunks.
           8. Emit ``record_metric("export.jsonl", ...)`` from a
              try/finally so failed exports still record their failure
              mode (Q-D-8).
@@ -273,7 +275,15 @@ class JsonlExportService:
             for start in range(0, len(payload), _CHUNK_SIZE):
                 yield payload[start : start + _CHUNK_SIZE]
 
-        except Exception as exc:
+        except BaseException as exc:
+            # Widened from ``Exception`` to ``BaseException`` so that
+            # ``GeneratorExit`` (Starlette cancelling on client disconnect /
+            # tab close) and ``KeyboardInterrupt`` (Ctrl-C mid-export) are
+            # also flagged as partial exports in the metric. Both are
+            # ``BaseException`` subclasses; the narrower ``except
+            # Exception`` would silently let the finally block emit a
+            # success-looking metric for what is actually a cancelled or
+            # interrupted stream.
             error_payload = {
                 "error": f"{type(exc).__name__}: {exc}",
                 "partial": True,
@@ -362,13 +372,23 @@ class JsonlExportService:
     def _entity_to_line(entity: Entity) -> bytes:
         """Render one entity as a JSONL line (UTF-8 encoded with newline).
 
-        ``model_dump(mode="json", exclude={"embedding"})`` handles datetime
-        ISO serialisation + drops the 768-float embedding vector (privacy
-        + size; Q-D-1). We then pull the canonical shape requested by
-        the plan and re-dump via ``json.dumps`` so the order of keys is
-        stable and the embedding is *provably* absent (a regression that
-        flipped ``exclude=`` to no-op would still pass a "keys present"
-        test if we just dumped model_dump as-is).
+        Embedding exclusion has two independent layers, both load-bearing:
+
+        1. ``model_dump(mode="json", exclude=_ENTITY_EXCLUDE)`` drops the
+           768-float vector from the dumped dict — this is the *memory*
+           guarantee (the vector is never even materialised into a Python
+           list as part of the dump). Verified directly by
+           ``test_embedding_excluded_by_model_dump_directly``.
+        2. The named-key rebuild below (``row = {"id": full.get("id"),
+           ...}``) is the *wire-format whitelist* — only the documented
+           Neo4j/LangChain keys reach the JSONL line, regardless of what
+           ``model_dump`` returns. Verified by ``test_entity_line_shape``.
+
+        Both layers are defence-in-depth: a regression that flipped
+        ``exclude=`` to a no-op would be caught by the direct dump test;
+        a regression that broadened the rebuild whitelist would be caught
+        by the shape test. ``json.dumps`` then re-encodes with a stable
+        key order.
         """
         full = entity.model_dump(mode="json", exclude=_ENTITY_EXCLUDE)
         row = {
