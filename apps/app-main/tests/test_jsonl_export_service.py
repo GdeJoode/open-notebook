@@ -33,7 +33,10 @@ import pytest
 from shared.models.entity import Entity, Relation
 from shared.models.export import ExportFilter, JsonlExportRequest
 
-from app_main.services.jsonl_export_service import JsonlExportService
+from app_main.services.jsonl_export_service import (
+    _ENTITY_EXCLUDE,
+    JsonlExportService,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +254,56 @@ async def test_entity_line_shape():
 
 
 # ---------------------------------------------------------------------------
+# 2b. Direct model_dump check -- embedding excluded at the dump call itself
+# ---------------------------------------------------------------------------
+
+
+def test_embedding_excluded_by_model_dump_directly():
+    """The ``model_dump(exclude=_ENTITY_EXCLUDE)`` call itself drops the
+    ``embedding`` field — independent of the named-key rebuild.
+
+    This is the test the original ``test_entity_line_shape`` claimed to
+    catch (and failed to) because the rebuild in ``_entity_to_line``
+    shadow-masks the exclude=: flipping ``_ENTITY_EXCLUDE`` to ``set()``
+    would NOT regress that test, since the rebuild only copies named
+    whitelisted keys regardless.
+
+    Here we call ``Entity.model_dump(...)`` directly with the same
+    arguments the service uses, so the only thing under test is the
+    Pydantic ``exclude=`` argument. A regression that flipped
+    ``_ENTITY_EXCLUDE`` to ``set()`` would surface the 768-float vector
+    in the dumped dict and trip this assertion.
+
+    Layer accounting (documented in ``_entity_to_line`` docstring):
+    * Layer 1 — ``exclude=_ENTITY_EXCLUDE`` (memory + dumped-dict
+      guarantee). Verified here.
+    * Layer 2 — named-key rebuild (wire-format whitelist). Verified by
+      ``test_entity_line_shape``.
+    """
+    entity = _entity(
+        "entity:dump",
+        "Dump",
+        embedding=[0.5] * 16,  # non-empty so absence is meaningful
+    )
+
+    dumped = entity.model_dump(mode="json", exclude=_ENTITY_EXCLUDE)
+
+    # The direct dump must not surface the embedding field. This is the
+    # invariant the rebuild in ``_entity_to_line`` cannot enforce — the
+    # rebuild only protects the wire format, not the in-memory dump.
+    assert "embedding" not in dumped, (
+        "model_dump(exclude=_ENTITY_EXCLUDE) leaked the embedding field. "
+        "If you changed _ENTITY_EXCLUDE, the memory guarantee + dumped-"
+        "dict whitelist are both broken."
+    )
+
+    # Sanity: other fields ARE present (so the exclude isn't a sledge
+    # that drops everything by accident).
+    assert dumped.get("id") == "entity:dump"
+    assert dumped.get("canonical_name") == "Dump"
+
+
+# ---------------------------------------------------------------------------
 # 3. Per-line relation shape
 # ---------------------------------------------------------------------------
 
@@ -294,6 +347,9 @@ async def test_relation_line_shape():
     assert "in" not in line
     assert "out" not in line
 
+    # Pin the id value (not just key presence) so a regression that
+    # swapped the value for None or a different field is caught.
+    assert line["id"] == "relation:r1"
     assert line["source_entity"] == "entity:a"
     assert line["target_entity"] == "entity:b"
     assert line["relation_type"] == "WORKS_AT"
@@ -434,9 +490,9 @@ async def test_streaming_yields_multiple_chunks():
     ``tracemalloc`` against the AC #5 200MB budget.
 
     Note: we count chunks BEFORE assembling them so a single fat yield
-    triggers the assertion. ``_CHUNK_SIZE`` is 64KB; with deflate on
+    triggers the assertion. ``_CHUNK_SIZE`` is 16KB; with deflate on
     text-heavy entity rows a 5000-row archive should compress to
-    well above 64KB so multiple chunks are inevitable for a real
+    well above 16KB so multiple chunks are inevitable for a real
     fixture.
     """
     ents = [
@@ -637,3 +693,73 @@ async def test_metrics_emitted_once_on_failure(monkeypatch):
     assert events[0]["event_type"] == "export.jsonl"
     assert events[0]["payload"]["partial"] is True
     assert "boom" in events[0]["payload"]["error"]
+
+
+# ---------------------------------------------------------------------------
+# 11. Client cancellation: GeneratorExit must record partial=True metric
+# ---------------------------------------------------------------------------
+
+
+async def test_client_cancellation_records_partial_metric(monkeypatch):
+    """Mid-stream cancellation (client disconnect / tab close) emits a
+    ``partial=True`` metric, not a success-looking one.
+
+    Starlette closes the response generator via ``aclose()`` when the
+    client goes away, which raises ``GeneratorExit`` inside
+    ``stream_jsonl``. ``GeneratorExit`` is a ``BaseException`` subclass,
+    NOT an ``Exception`` subclass, so a narrower ``except Exception``
+    clause would silently let the ``finally`` block emit a metric
+    indistinguishable from a successful export.
+
+    Inversion target: change ``except BaseException`` back to
+    ``except Exception`` and this test must fail with the partial flag
+    coming back as ``None``/missing.
+    """
+    events: list[dict] = []
+
+    async def _spy(event_type, payload, source=None, notebook=None):
+        events.append({"event_type": event_type, "payload": payload})
+
+    monkeypatch.delenv("OPEN_NOTEBOOK_DISABLE_METRICS", raising=False)
+    monkeypatch.setattr(
+        "app_main.services.jsonl_export_service.record_metric", _spy
+    )
+
+    # Build a 10-entity fixture with non-trivial properties so the
+    # zipped payload is large enough to definitely span >1 chunk yield.
+    ents = [
+        _entity(
+            f"entity:{i}",
+            f"Long Entity Name Number {i} Padded To Make Compression Less Friendly",
+            properties={"description": f"a slightly long description for entity {i}"},
+        )
+        for i in range(10)
+    ]
+    svc = _make_service(ents, [])
+
+    gen = svc.stream_jsonl("notebook:cancel", _request())
+
+    # Consume the first chunk so the generator body has actually entered
+    # the yield loop (i.e. the export is mid-stream from Starlette's
+    # POV). Then close the generator -- this raises GeneratorExit at the
+    # yield site inside ``stream_jsonl``.
+    first_chunk = await gen.__anext__()
+    assert len(first_chunk) > 0  # sanity: we got a real chunk before cancel
+
+    await gen.aclose()
+
+    # Exactly one metric, with partial=True and the GeneratorExit class
+    # name surfaced in the error string. A regression that narrowed the
+    # except clause to ``Exception`` would skip the error_payload
+    # assignment, leaving the finally block to emit a success-shaped
+    # ExportReport with no ``partial`` key at all.
+    assert len(events) == 1
+    payload = events[0]["payload"]
+    assert payload.get("partial") is True, (
+        f"Cancellation regression: expected partial=True in metric, got {payload!r}. "
+        "Likely cause: ``except Exception`` doesn't catch GeneratorExit; "
+        "widen to ``except BaseException`` so cancellation is logged as partial."
+    )
+    assert "GeneratorExit" in payload.get("error", ""), (
+        f"Expected GeneratorExit in error string, got {payload.get('error')!r}"
+    )
