@@ -25,6 +25,9 @@ Welcome to the Open Notebook troubleshooting guide. This section provides compre
 ### 🔌 Parser Engines (MinerU + Docling)
 - [Parser engine troubleshooting](./parser-engines.md) — service startup, auto-fallback tuning, rolling back to docling-only, confidence-score diagnostics
 
+### 📤 Knowledge Graph Exports (Obsidian / JSONL / NetworkX)
+- [Export troubleshooting](./exports.md) — Obsidian zip + vault-path failures, JSONL streaming + Neo4j apoc.load.json parse errors, NetworkX 7-format known limitations, preview-vs-export count mismatch diagnostics
+
 ## 🚨 Emergency Quick Fixes
 
 ### Service Not Starting
