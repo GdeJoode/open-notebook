@@ -213,3 +213,173 @@ regressions:
    Downstream loaders are expected to read UTF-8.
 
 End of self-review.
+
+---
+
+## Attempt 2 — Revisions
+
+Strict adversarial review of attempt 1 flagged two Majors + six Minors.
+This section documents the fixes. Original self-review above is left
+intact for honest comparison.
+
+### Major 1 — Embedding-exclusion test was shadow-masked by row rebuild
+
+**What the reviewer found**: my Inversion 4 above claimed
+`test_entity_line_shape` would catch a regression that flipped
+`_ENTITY_EXCLUDE = set()`. It would not. The reviewer verified by
+inversion: setting `_ENTITY_EXCLUDE = set()` and re-running the test
+suite still passes `test_entity_line_shape`, because `_entity_to_line`
+explicitly rebuilds the row dict from a named whitelist
+(`row = {"id": full.get("id"), ...}`). The rebuild dominates; the
+`exclude={"embedding"}` parameter is genuinely useful as a *memory*
+guarantee (the vector is never materialised into the dumped dict) but
+the *wire-format* assertion was a tautology.
+
+**Fix (Option A from the brief, preferred)**: keep both layers as
+defence-in-depth and add a direct test of the dump call itself:
+
+- New test `test_embedding_excluded_by_model_dump_directly` calls
+  `entity.model_dump(mode="json", exclude=_ENTITY_EXCLUDE)` and
+  asserts `"embedding" not in dumped`. No rebuild involved — only the
+  Pydantic `exclude=` argument is under test.
+- Updated `_entity_to_line` docstring to honestly document the two
+  layers: layer 1 (`exclude=`) is the memory + dumped-dict guarantee;
+  layer 2 (named-key rebuild) is the wire-format whitelist.
+
+**Mental inversion for the new test** (verified by patching the source
+file and re-running):
+
+- `_ENTITY_EXCLUDE = {"embedding"}` → `_ENTITY_EXCLUDE = set()`.
+- `test_embedding_excluded_by_model_dump_directly` **fails** with
+  `assert "embedding" not in {'id': 'entity:dump', ..., 'embedding': [...]}`.
+- `test_entity_line_shape` still **passes** under the same regression
+  — exactly the masking the reviewer flagged. This proves the new
+  test is the one carrying the inversion weight, and the old test was
+  always going to be a wire-format check, not an exclude-call check.
+
+**Honest characterisation of the two layers**:
+
+1. **`exclude=_ENTITY_EXCLUDE`** — memory + dumped-dict guarantee.
+   Without it, `model_dump` would materialise the 768-float vector
+   into a Python list before we could whitelist it away. Tested
+   directly by `test_embedding_excluded_by_model_dump_directly`.
+2. **Named-key rebuild in `_entity_to_line`** — wire-format whitelist.
+   Without it, any new Pydantic field added to `Entity` would silently
+   ship into the JSONL by default. Tested by `test_entity_line_shape`
+   via `set(line.keys()) == expected_keys`.
+
+Both layers are independent: a regression in either is caught by a
+distinct test now, instead of one test pretending to cover both.
+
+### Major 2 — Mid-stream cancellation produced misleading success metric
+
+**What the reviewer found**: `except Exception` in `stream_jsonl`
+doesn't catch `GeneratorExit` (which subclasses `BaseException`, not
+`Exception`). When Starlette closes the response generator on client
+disconnect, `GeneratorExit` propagates past the `except`, the
+`error_payload` variable stays `None`, and the `finally` block emits an
+`ExportReport`-shaped metric indistinguishable from a successful
+export.
+
+**Fix**: widen the catch to `except BaseException as exc:` with an
+explicit comment explaining why (`GeneratorExit` and `KeyboardInterrupt`
+are `BaseException`-only). Re-raise after recording the partial flag so
+the cancellation still propagates to Starlette.
+
+**New test** `test_client_cancellation_records_partial_metric`:
+- Build a 10-entity fixture.
+- Start consuming the generator (`await gen.__anext__()` returns the
+  first chunk — proves we're mid-stream).
+- Call `await gen.aclose()` — Starlette's cancellation signal.
+- Assert: exactly one metric, `payload["partial"] is True`,
+  `"GeneratorExit" in payload["error"]`.
+
+**Mental inversion** (verified by reverting):
+
+- Revert `except BaseException as exc:` → `except Exception as exc:`.
+- `test_client_cancellation_records_partial_metric` **fails** because
+  the metric payload now looks like
+  `{'entities_written': 10, ..., 'duration_ms': 0}` with no `partial`
+  key at all — a success-looking metric for what was actually a
+  cancelled stream.
+- This was the reviewer's exact concern: operators couldn't tell from
+  the metrics dashboard whether an export completed or was cut short.
+
+### Minor 1 — Chunk-size docstring drift (64KB → 16KB)
+
+The module + method docstrings said "64KB chunks" but `_CHUNK_SIZE =
+16 * 1024`. Corrected three call sites:
+
+- `jsonl_export_service.py:22` (module docstring).
+- `jsonl_export_service.py:192` (method docstring step 7).
+- `tests/test_jsonl_export_service.py:437` (test docstring).
+
+### Minor 3 — Module docstring overclaimed streaming behaviour
+
+The module docstring described the build-then-stream phase ambiguously,
+which a strict reader could mis-construe as "no full materialisation
+anywhere". Reworded the Streaming Strategy section to honestly state:
+"writes uncompressed JSONL one row at a time into an in-memory ZIP
+buffer (so only the *compressed* archive is materialised, not the raw
+uncompressed payload), then yields the finished compressed archive in
+16KB chunks." The compressed archive IS fully materialised before the
+chunked yield — that's what the AC #5 memory budget is bounded by, and
+the docstring now says so explicitly.
+
+### Minor 4 — Pin relation `id` value in `test_relation_line_shape`
+
+Added `assert line["id"] == "relation:r1"` to the relation shape test.
+The previous assertion only checked key presence (`"id" in line`); a
+regression that swapped the value for `None` or pulled from the wrong
+attribute would have slipped through.
+
+### Minor 5 — E2E spec didn't verify `min_relation_confidence` round-trips
+
+Updated `frontend/e2e/track-d/jsonl-export.spec.ts`:
+
+- Extended `capturedPayload` type to include `min_relation_confidence:
+  number | null`.
+- Added a 10-step ArrowLeft drag on `jsonl-min-relation-confidence-slider`
+  before the submit click.
+- Added assertions:
+  `expect(capturedPayload!.filter.min_relation_confidence).not.toBeNull()`
+  and
+  `expect(capturedPayload!.filter.min_relation_confidence).toBeLessThan(0.9)`.
+
+A regression that stripped `min_relation_confidence` from the request
+body (or wired the third slider to the wrong filter field) now fails
+the spec instead of slipping through.
+
+### Minor 6 — Self-review contradiction (Inversion 4)
+
+Subsumed by Major 1 fix above. The old Inversion 4 is left intact for
+honest comparison; the Attempt 2 description here is the corrected
+characterisation.
+
+### Deferred (noted in PR comment, not fixed in this attempt)
+
+- **Minor 2**: `FILENAME_UNSAFE_RE` is duplicated across
+  `apps/app-main/src/app_main/api/routers/exports.py` and the obsidian
+  service. Extract to a shared util in a follow-up — not in scope for
+  this revision.
+- **Nit 1**: the ISO-8601 check in `test_entity_line_shape` is a
+  substring (`"2026-06-14" in line["extracted_at"]`) rather than a
+  format-validating parse. Acceptable for a smoke check; tightening
+  would land alongside D.4 polish.
+- **Nit 2**: `metric_payload` on the failure path is a hand-built
+  dict instead of `ExportReport.model_dump() | error_payload`.
+  Functionally identical but less DRY; defer to follow-up.
+
+### Verification — Attempt 2 test results
+
+- `apps/app-main/tests/test_jsonl_export_service.py` — **13/13**
+  passed (was 11; +2 new tests for the two Majors).
+- `apps/app-main/tests/test_exports_router.py` — **16/16** passed
+  (unchanged).
+- Combined run: `29 passed in 98.55s` under `uv run --with pytest
+  --with pytest-asyncio pytest`.
+- Frontend typecheck: `npx tsc --noEmit` clean.
+- Playwright list: 1 test enumerated cleanly.
+- Both inversions performed in-process to confirm the new tests bite
+  (results documented above).
+
