@@ -331,6 +331,35 @@ Source-IDs en chunk-IDs uit `sha256(stripped_content)[:16]` i.p.v. path-based.
 
 ## Track D — Output rijkdom (Obsidian / TTL / JSONL / NetworkX)
 
+> **Status**: ✅ **COMPLETE (2026-06-16)** — Obsidian export
+> (zip + direct-to-vault), JSONL streaming export, NetworkX 7-format
+> export, shared counts-only preview surface, async vault-path job.
+> All 8 PRs merged (7 production sub-phases — D.0, D.1a, D.1b, D.1c,
+> D.2, D.3 — plus D.4 integration/retro).
+> See [`docs/tracks/D-output-richness/RETRO.md`](./tracks/D-output-richness/RETRO.md)
+> for the retrospective,
+> [`docs/tracks/D-output-richness/E2E_EVIDENCE.md`](./tracks/D-output-richness/E2E_EVIDENCE.md)
+> for the smoke evidence (live consumer-tool smoke deferred to
+> operator session per sandbox limitation), and
+> [`docs/tracks/D-output-richness/status.md`](./tracks/D-output-richness/status.md)
+> for the rolling per-phase log.
+
+| Phase | Title | Status |
+|---|---|---|
+| D.0 | Export contracts + notebook-scoped repo projections (Q-D-1/2/4) | ✅ |
+| D.1a | Obsidian zip exporter + service + endpoint | ✅ |
+| D.1b | Obsidian direct-write-to-vault + `JobType.EXPORT_OBSIDIAN` handler | ✅ |
+| D.1c | Obsidian export UI dialog + `/export-preview` parity surface + E2E | ✅ |
+| D.2 | JSONL streaming exporter + endpoint + popover | ✅ |
+| D.3 | NetworkX 7-format exporter + endpoint + format dropdown | ✅ |
+| D.4 | Track integration + ARCHITECTURE + RETRO + troubleshooting doc | ✅ |
+
+**Vision**: KG wordt downloadable in de drie consumer-formaten die de
+roadmap §340 finaliseerde — Obsidian (mens-leesbaar), JSONL (Neo4j +
+RAG), NetworkX (Gephi + Python notebooks). Eén filter-pipeline shared
+tussen alle exporters + de preview, zodat "X entities will be
+exported" in de UI **exact** klopt met wat er in het zip-bestand zit.
+
 ### D1 — Obsidian vault export (Q1 finalized)
 
 **myKG-puur, platte vault.**
