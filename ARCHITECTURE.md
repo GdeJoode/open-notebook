@@ -171,7 +171,83 @@ invariant); the merge step uses confidence-max semantics so the highest-
 confidence pass wins. Multi-schema is **on by default** when `notebook_id`
 is provided; flip `multi_schema_enabled=false` per-request to fall back.
 
-## 7. Further reading
+## 7. Knowledge graph export surfaces (Track D — output richness)
+
+Track D (closed 2026-06-16) added three HTTP export surfaces over the
+notebook-scoped KG projections from D.0. All three share a single
+filter pipeline so the "what you'll export" preview the UI shows
+matches the actual export byte-for-byte.
+
+### Endpoints + services
+
+| Endpoint | Service module | Metric event | Notes |
+|---|---|---|---|
+| `POST /api/notebooks/{id}/export-obsidian` | `apps/app-main/src/app_main/services/obsidian_export_service.py` | `export.obsidian` | Two modes: `mode="zip"` streams an in-memory zip (one `.md` per entity + `README.md`); `mode="vault_path"` writes the same files directly to `Settings.vault_path / Settings.vault_entities_folder` via per-file `tempfile + os.replace` (POSIX atomic rename). The vault-path branch is the sole async export surface, dispatched through `JobType.EXPORT_OBSIDIAN` in `apps/app-main/src/app_main/handlers.py` (Q-D-2). |
+| `POST /api/notebooks/{id}/export-jsonl` | `apps/app-main/src/app_main/services/jsonl_export_service.py` | `export.jsonl` | Streaming zip of `entities.jsonl` + `relations.jsonl`. Build-then-stream (Q-D-7): `model_dump(mode="json", exclude={"embedding"})` per row, written into the open ZIP member then yielded in 16KB chunks. Per-line keys are Neo4j-`apoc.load.json`-compatible (`source_entity`/`target_entity` not `in`/`out`). |
+| `POST /api/notebooks/{id}/export-networkx` | `apps/app-main/src/app_main/services/networkx_export_service.py` | `export.networkx` | Builds a `networkx.DiGraph` then serialises to one of 7 formats: **GraphML**, **GEXF**, **GML**, **JSON-tree**, **edge-list**, **adjacency-list**, **pickle**. Attribute flattening contract: `type_tags` → CSV string, `properties` → JSON-encoded string; round-trip tests confirm flatten/unflatten preserves data (Risk 5). |
+| `GET /api/notebooks/{id}/export-preview?filter=…` | inlined `_export_preview` fn in `apps/app-main/src/app_main/api/routers/exports.py` | (no metric — read-only) | Counts-only surface used by the Obsidian dialog + JSONL popover before the user submits an export. Applies the **same** filter pipeline (see below) so dialog counts and actual export counts cannot drift. |
+
+All routers live in `apps/app-main/src/app_main/api/routers/exports.py`;
+DI wiring in `apps/app-main/src/app_main/dependencies.py`
+(`get_obsidian_export_service`, `get_jsonl_export_service`,
+`get_networkx_export_service`).
+
+### Shared filter pipeline
+
+The three exporters + the preview endpoint apply the same four-stage
+pipeline in this exact order:
+
+1. **SurrealQL gate** in
+   `EntityRepository.list_entities_for_notebook` /
+   `list_relations_for_notebook` (D.0) — applies `min_confidence`,
+   `entity_types`, `include_orphans` at the DB layer.
+2. **Status post-filter** —
+   `EXCLUDED_ENTITY_STATUSES = frozenset({"archived", "merged"})`
+   defined in `obsidian_export_service.py`; imported (not duplicated)
+   by `jsonl_export_service.py`, mirrored locally in
+   `networkx_export_service.py` + `exports.py`. Drops tombstones the
+   SurrealQL gate currently doesn't filter on `status`.
+3. **`_apply_min_connections_filter`** — static method on
+   `ObsidianExportService`; computes per-entity degree on the
+   status-filtered relations then drops entities below threshold.
+   Re-used (not re-implemented) by JSONL + preview so future tuning
+   lands on both paths simultaneously.
+4. **Q-D-4 endpoint intersection** — relations whose source or target
+   didn't survive steps 1–3 are silently dropped (never emitted as
+   broken wikilinks / dangling JSONL relation lines / broken NetworkX
+   edges).
+
+Parity is the load-bearing UX invariant: the Obsidian dialog and
+JSONL popover both display "Will export: E entities, R relations"
+before submit, and the live export must produce exactly E `.md` files
+/ E lines in `entities.jsonl` / E nodes in the NetworkX file. This is
+why the preview endpoint shares the pipeline rather than approximating
+it.
+
+### Shared models + filter
+
+Pydantic models live in `packages/shared/src/shared/models/export.py`:
+`ExportFilter` (the slider bundle), `ObsidianExportRequest`,
+`JsonlExportRequest`, `NetworkxExportRequest`, `NetworkxFormat`
+(`Literal` of the 7 names), `ExportReport`, `ExportPreviewCounts`.
+TypeScript mirrors in `frontend/src/lib/types/exports.ts`.
+
+`shared.utils.external_ids.resolve_external_ids` ships as a V1 stub
+that returns `[]`; the Obsidian frontmatter therefore carries
+`external_ids: []` until Track M4 (Q9) lands TOOI + Crossref
+resolution. Swap is a single-file change with no caller migration
+(matches the B.1c `name_normalizer` stub pattern).
+
+### Telemetry
+
+The three `export.*` events join the B.4 `metrics` table. Payloads
+are **counts only** (Q-D-8): no entity IDs, no relation IDs, no raw
+filesystem paths. The Obsidian vault-path branch carries
+`mode: "vault_path"` + `vault_path_redacted: True` in the payload —
+the raw vault path NEVER lands in `metrics`. Recursive-walk
+assertions in the test suite confirm this for all three services.
+
+## 8. Further reading
 
 - `docs/SUMMARIZATION_APPROACHES.md` — design + status of all 11 summarization strategies
 - `docs/KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md` — KG architecture and roadmap
@@ -181,3 +257,5 @@ is provided; flip `multi_schema_enabled=false` per-request to fall back.
 - `docs/GRAPH_FEATURES_IMPLEMENTATION_GUIDE.md` — UI/UX implementation of KG features
 - `docs/tracks/A-mineru/RETRO.md` — Track A retrospective (parser-engine routing)
 - `docs/tracks/B-kg-quality/RETRO.md` — Track B retrospective (multi-schema KG)
+- `docs/tracks/D-output-richness/RETRO.md` — Track D retrospective (export surfaces)
+- `docs/troubleshooting/exports.md` — failure-mode diagnostics for the three export formats
