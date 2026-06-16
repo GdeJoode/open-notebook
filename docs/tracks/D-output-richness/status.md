@@ -256,3 +256,107 @@ swing.
 **Self-review**: `docs/tracks/D-output-richness/reviews/phase-D.1c-self-review.md`
 
 **Ready for review.** Next per plan: D.2 (JSONL stream export).
+
+---
+
+## Phase D.2 — JSONL streaming export + endpoint + button (DONE)
+
+**Branch**: `track/d-jsonl-export`
+**Commit range**: `78e46e6..feeda75` (7 commits on top of `main`)
+
+**Delivered**:
+- `JsonlExportService`
+  (`apps/app-main/src/app_main/services/jsonl_export_service.py`)
+  streams a zip containing `entities.jsonl` + `relations.jsonl`. Build-
+  then-stream (Q-D-7): one Pydantic `model_dump(mode="json",
+  exclude={"embedding"})` per entity, written line-by-line into the
+  open `ZipFile` member via `archive.open(..., "w")`, then yielded in
+  16KB chunks. The `embedding` exclusion is the privacy + memory
+  invariant (Q-D-1).
+- Per-line entity shape: `{id, canonical_name, entity_type, type_tags,
+  primary_type, confidence, properties, source_documents,
+  extracted_at}`. Per-line relation shape: `{id, source_entity,
+  target_entity, relation_type, confidence, properties,
+  source_documents}` -- the `in`/`out` -> `source_entity`/
+  `target_entity` rename is for Neo4j `apoc.load.json` + LangChain RAG
+  loader compatibility.
+- `POST /api/notebooks/{id}/export-jsonl` in
+  `apps/app-main/src/app_main/api/routers/exports.py` -- StreamingResponse
+  with `application/zip` and `Content-Disposition: attachment;
+  filename="<safe>.jsonl.zip"`. The filename uses the same B.2b-
+  derived `_FILENAME_UNSAFE_RE` sanitisation as the other Track-D
+  export endpoints.
+- `get_jsonl_export_service()` DI factory in `dependencies.py`.
+- `JsonlExportRequest` TypeScript mirror in
+  `frontend/src/lib/types/exports.ts`.
+- `useJsonlExport` hook in `frontend/src/lib/hooks/use-jsonl-export.ts`
+  -- React Query mutation, always blob-downloads (no JSON branch --
+  the JSONL surface has no vault-path mode). Reuses the shared
+  `parseFilenameFromContentDisposition` helper from D.1c.
+- `JsonlExportButton`
+  (`frontend/src/components/notebooks/exports/JsonlExportButton.tsx`)
+  -- single button + lightweight `Popover` (NOT a Dialog -- plan
+  directive). Three sliders (`min_connections`, `min_confidence`,
+  `min_relation_confidence`), two switches (`include_orphans`,
+  `include_archived`), live `ExportPreviewCounts` from D.1c, error
+  banner, Download/Cancel buttons. Closes on success via the hook's
+  `onSuccess` callback.
+- `NotebookHeader.tsx` -- "Export JSONL" button added next to "Export
+  Obsidian".
+
+**Filter pipeline (D.1c canonical)**:
+- SurrealQL gate (D.0) -> status post-filter (`EXCLUDED_ENTITY_STATUSES`
+  imported from `obsidian_export_service`, shared symbol) ->
+  `_apply_min_connections_filter` (delegated to the static method on
+  `ObsidianExportService` so any future tuning lands on both paths
+  simultaneously). Q-D-4 silent drop of relations whose endpoints
+  didn't survive.
+
+**Tests**:
+- `apps/app-main`: 552 -> 567 (+15: 11 service + 4 router). Existing
+  62 export tests still pass. Service tests cover line-shape +
+  embedding-absent assertion + min_confidence/min_connections/status
+  filters + Q-D-4 silent drop + empty-notebook + streaming-yields-
+  multiple-chunks + tracemalloc <200MB + single-call telemetry on
+  happy + failure paths.
+- `frontend e2e (track-d)`: +1 spec
+  (`jsonl-export.spec.ts`) -- listed clean. Mocks preview + export
+  endpoints, asserts popover opens, slider triggers debounced
+  refetch, switch toggles round-trip into POST payload, download
+  fires with parsed filename, popover closes on success. Pageerror
+  watchdog asserted empty.
+- TypeScript: `npx tsc --noEmit` clean.
+
+**Mental-inversion regression checks embedded**:
+1. **Status filter removed** -> `test_status_archived_and_merged_excluded`
+   asserts only `entity:active` survives a mixed-status fixture; a
+   regression that skipped `EXCLUDED_ENTITY_STATUSES` would land
+   tombstones in the JSONL.
+2. **min_connections filter removed** ->
+   `test_min_connections_filter_drops_isolated_entities` asserts the
+   isolated `entity:island` is dropped; a regression that skipped the
+   shared staticmethod would include it.
+3. **Full materialisation before zip** ->
+   `test_streaming_yields_multiple_chunks` counts yields with a 5000-
+   entity fixture; a single-yield generator (e.g. one that
+   `return buf.getvalue()` instead of looping chunk_size) fails the
+   `chunk_count > 1` assertion. The same test also smoke-checks
+   `tracemalloc.get_traced_memory()[1] < 200MB`.
+4. **Embedding accidentally serialised** -> `test_entity_line_shape`
+   explicitly asserts `"embedding" not in line`; a regression that
+   flipped `exclude={"embedding"}` to `exclude=set()` would still
+   produce valid JSON but with the 768-float vector included.
+5. **Telemetry fires multiple times** ->
+   `test_metrics_emitted_once_per_export` asserts exactly one
+   `record_metric` call. A naive `await record_metric(...)` inside
+   the per-line loop would fail with `len(events) == 5000`.
+6. **Notebook-name path injection** -> the router uses
+   `_safe_filename(notebook_id, "jsonl.zip")` which strips `:`/`/`/
+   etc. via `_FILENAME_UNSAFE_RE` (same regex the other export
+   endpoints already use). Tested via `test_jsonl_happy_path`
+   asserting `notebook_abc.jsonl.zip` (colon -> underscore).
+
+**Self-review**: `docs/tracks/D-output-richness/reviews/phase-D.2-self-review.md`
+
+**Ready for review.** Next per plan: D.4 (export job UX polish) or
+D.0 SurrealQL promotion (status filter consolidation).

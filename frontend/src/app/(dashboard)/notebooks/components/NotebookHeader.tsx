@@ -10,6 +10,7 @@ import { useUpdateNotebook, useDeleteNotebook } from '@/lib/hooks/use-notebooks'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { formatDistanceToNow } from 'date-fns'
 import { InlineEdit } from '@/components/common/InlineEdit'
+import { JsonlExportButton } from '@/components/notebooks/exports/JsonlExportButton'
 import { ObsidianExportDialog } from '@/components/notebooks/exports/ObsidianExportDialog'
 import { cn } from '@/lib/utils'
 
@@ -93,6 +94,7 @@ export function NotebookHeader({
                 <Download className="h-4 w-4 mr-2" />
                 Export Obsidian
               </Button>
+              <JsonlExportButton notebookId={notebook.id} />
               <Button
                 variant="outline"
                 size="sm"

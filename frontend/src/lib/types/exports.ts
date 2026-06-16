@@ -84,3 +84,16 @@ export interface ExportPreviewCounts {
   entity_count: number
   relation_count: number
 }
+
+/**
+ * Request body for ``POST /api/notebooks/{id}/export-jsonl`` (Phase D.2).
+ *
+ * The JSONL surface is sync-only in V1 and always returns an
+ * ``application/zip`` body containing ``entities.jsonl`` +
+ * ``relations.jsonl``. There's no mode field -- the only knob is the
+ * filter -- so the request payload is a thin wrapper around
+ * ``ExportFilter``.
+ */
+export interface JsonlExportRequest {
+  filter: ExportFilter
+}

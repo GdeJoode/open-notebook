@@ -33,10 +33,12 @@ from pydantic import BaseModel, Field
 
 from app_main.dependencies import (
     get_entity_repo,
+    get_jsonl_export_service,
     get_networkx_export_service,
     get_notebook_service,
     get_obsidian_export_service,
 )
+from app_main.services.jsonl_export_service import JsonlExportService
 from app_main.services.networkx_export_service import NetworkxExportService
 from app_main.services.notebook_service import NotebookService
 from app_main.services.obsidian_export_service import (
@@ -46,6 +48,7 @@ from app_main.services.obsidian_export_service import (
 )
 from shared.models.export import (
     ExportFilter,
+    JsonlExportRequest,
     NetworkxExportRequest,
     ObsidianExportRequest,
 )
@@ -269,6 +272,82 @@ async def export_notebook_obsidian(
     }
     return StreamingResponse(
         io.BytesIO(artifact.zip_bytes or b""),
+        media_type="application/zip",
+        headers=headers,
+    )
+
+
+# ---------------------------------------------------------------------------
+# JSONL streaming export (D.2)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/export-jsonl",
+    responses={
+        200: {
+            "content": {"application/zip": {}},
+            "description": (
+                "Streamed zip containing entities.jsonl + relations.jsonl. "
+                "Each line is a JSON object shaped for Neo4j apoc.load.json "
+                "and LangChain RAG-loader compatibility."
+            ),
+        },
+        404: {"description": "Notebook not found."},
+        422: {"description": "Invalid filter shape in request body."},
+        500: {"description": "Streaming/serialisation failure mid-export."},
+    },
+)
+async def export_notebook_jsonl(
+    notebook_id: str,
+    request: JsonlExportRequest,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    export_service: JsonlExportService = Depends(get_jsonl_export_service),
+) -> StreamingResponse:
+    """Stream the notebook's filtered graph as JSONL inside a zip.
+
+    The response body is a zip archive containing two newline-delimited
+    JSON files:
+
+    * ``entities.jsonl`` -- one entity per line, shaped as
+      ``{id, canonical_name, entity_type, type_tags, primary_type,
+      confidence, properties, source_documents, extracted_at}``.
+      Embedding is deliberately excluded (Q-D-1) -- it would balloon
+      the wire size + leak the vector privacy axis with zero downstream
+      value.
+    * ``relations.jsonl`` -- one relation per line, shaped as
+      ``{id, source_entity, target_entity, relation_type, confidence,
+      properties, source_documents}``. Relations whose endpoint failed
+      the entity filter are silently dropped (Q-D-4).
+
+    The service streams entity-by-entity into the in-memory zip so peak
+    memory stays bounded -- a 5000-entity export holds the compressed
+    archive (~10MB) and one Python row at a time, not the raw JSONL
+    stream (Q-D-7 build-then-stream).
+
+    Filename uses the same B.2b-derived sanitisation as the rest of the
+    router so the ``notebook:abc`` ID survives ``Content-Disposition``.
+    """
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    # ``ExportFilter`` Pydantic validation runs at the request boundary,
+    # so malformed filters are 422'd by FastAPI before this handler
+    # runs. ``stream_jsonl`` returns an async generator -- the actual
+    # work happens during iteration inside StreamingResponse, so we
+    # don't wrap the call in try/except here (errors raised inside the
+    # generator propagate through Starlette and abort the response
+    # naturally, with the failure path metric still firing in the
+    # service's finally block).
+    generator = export_service.stream_jsonl(notebook_id, request)
+
+    safe_name = _safe_filename(notebook_id, "jsonl.zip")
+    headers = {
+        "Content-Disposition": f'attachment; filename="{safe_name}"',
+    }
+    return StreamingResponse(
+        generator,
         media_type="application/zip",
         headers=headers,
     )
