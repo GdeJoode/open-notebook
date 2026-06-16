@@ -140,6 +140,7 @@ test.describe('D.2: JSONL export popover', () => {
           filter: {
             min_connections: number
             min_confidence: number
+            min_relation_confidence: number | null
             include_orphans: boolean
             include_archived: boolean
           }
@@ -215,6 +216,22 @@ test.describe('D.2: JSONL export popover', () => {
     expect(refetchDelta).toBeLessThanOrEqual(2)
     expect(refetchDelta).toBeGreaterThanOrEqual(1)
 
+    // Drag the min_relation_confidence slider DOWN as well so the
+    // POST payload proves the third slider's value round-trips into
+    // the body — not just its sibling. A regression that dropped
+    // ``min_relation_confidence`` from the request would slip past the
+    // ``min_confidence`` assertion below because the entity-confidence
+    // slider is wired independently.
+    //
+    // The slider starts at 0.9 (the default). 10 arrow-left presses at
+    // step 0.05 should take it down to ~0.4, well under the 0.9 default
+    // we assert against.
+    const relSlider = page.getByTestId('jsonl-min-relation-confidence-slider')
+    await relSlider.focus()
+    for (let i = 0; i < 10; i++) {
+      await page.keyboard.press('ArrowLeft')
+    }
+
     // Toggle the include_orphans switch BEFORE submit so the captured
     // POST payload proves it round-trips into the request body. The
     // default is ``false``; flipping to ``true`` is the only way to
@@ -239,6 +256,14 @@ test.describe('D.2: JSONL export popover', () => {
     // rounding; we assert it's *below* the 0.5 threshold rather than
     // pinning a brittle exact float.
     expect(capturedPayload!.filter.min_confidence).toBeLessThan(0.5)
+    // Min_relation_confidence must round-trip the third slider's
+    // post-drag value (starts at 0.9, dragged down by 10 steps of
+    // 0.05 → ~0.4). A regression that dropped the field from the body
+    // (or never wired the slider to filter.min_relation_confidence)
+    // would surface here as either null/undefined or the unchanged
+    // 0.9 default.
+    expect(capturedPayload!.filter.min_relation_confidence).not.toBeNull()
+    expect(capturedPayload!.filter.min_relation_confidence).toBeLessThan(0.9)
 
     // Popover closes after the download completes.
     await expect(popover).toBeHidden({ timeout: 5_000 })
