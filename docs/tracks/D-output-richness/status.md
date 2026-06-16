@@ -360,3 +360,55 @@ swing.
 
 **Ready for review.** Next per plan: D.4 (export job UX polish) or
 D.0 SurrealQL promotion (status filter consolidation).
+
+---
+
+## Phase D.4 — Track integration + RETRO (DONE)
+
+**Branch**: `track/d-integration-retro`
+**Commit range**: starts at `ee465dd` (`docs(track-d): E2E evidence`)
+
+**Delivered (docs-only — no code changes)**:
+- `docs/tracks/D-output-richness/E2E_EVIDENCE.md` (NEW) — sandbox-
+  limited live-smoke acknowledgement + what the 76+ test surface
+  covers + manual smoke checklist for an operator with live external
+  tools (Obsidian, Neo4j+APOC, Gephi). Mirrors Track B RETRO §"Live-
+  test recommendation" deferral pattern.
+- `ARCHITECTURE.md` — new §7 "Knowledge graph export surfaces
+  (Track D — output richness)" documenting the three export
+  endpoints, services, `export.*` metric event types, the shared
+  filter pipeline (EXCLUDED_ENTITY_STATUSES +
+  _apply_min_connections_filter + Q-D-4 endpoint intersection), the
+  Pydantic + TypeScript model surface, and the telemetry redaction
+  contract. §7 "Further reading" renumbered to §8 with D-track RETRO
+  + troubleshooting links appended.
+- `docs/FEATURE_ROADMAP.md` Track D — status block + phase table
+  (D.0–D.4 all ✅) + restated past-tense vision paragraph. Cross-
+  refs to RETRO + E2E_EVIDENCE + status.md.
+- `docs/tracks/D-output-richness/RETRO.md` (NEW) — 7 "what worked"
+  + 4 "what hurt" + 6 "recommendations for future tracks" (exceeds
+  required 5/3/5). Closes Track B RETRO entries 2, 3, 6, 7 with
+  operational evidence. Phase-by-phase attempt count (2/6 first-try
+  APPROVEDs; 4/6 needed attempt-2 — D.1a, D.1c, D.2, D.3).
+- `docs/troubleshooting/exports.md` (NEW) — failure-mode diagnostics
+  for Obsidian zip + vault_path, JSONL + Neo4j apoc.load.json,
+  NetworkX 7-format (per-format limitations table), preview-vs-
+  export drift. Linked from `docs/troubleshooting/index.md`.
+- `docs/tracks/D-output-richness/reviews/phase-D.4-self-review.md`
+  (NEW) — AC-by-AC checklist + deliverables ledger + cross-refs to
+  Track-B RETRO entries this track validated.
+
+**Sandbox limitation acknowledged honestly**: AC #1's "run end-to-end
+against the corpus notebook" is partially satisfied via the
+deterministic test surface (proves the export pipelines produce
+contract-matching bytes) but the live-tool consumer-side smoke
+(Obsidian wikilink rendering, Neo4j apoc.load.json parse, Gephi
+GraphML import) is deferred to operator session per E2E_EVIDENCE.md
+manual checklist. Same trade-off Track B made (see B's RETRO
+§"Live-test recommendation").
+
+**Tests**: no code changes, no test deltas.
+
+**Self-review**: `docs/tracks/D-output-richness/reviews/phase-D.4-self-review.md`
+
+**Ready for review. Track D CLOSED.**
