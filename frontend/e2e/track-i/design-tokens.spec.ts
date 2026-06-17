@@ -3,14 +3,20 @@
  *
  * What we verify (AC mapping → docs/tracks/I-docling-studio/plan.md §I.A):
  *
- *   AC1  No console / pageerror on light theme        → assert pageErrors[] empty
- *                                                       after dashboard hydration.
+ *   AC1  No console / pageerror on light theme        → assert pageErrors[] AND
+ *                                                       consoleErrors[] empty after
+ *                                                       dashboard hydration.
  *   AC2  Theme toggle still flips themes              → click the toggle, assert
  *                                                       <html> class changes from
  *                                                       light↔dark and no errors fire.
  *   AC4  No layout regression on 3 representative
  *        pages: dashboard, source detail, notebook    → navigate to each, assert no
- *        detail                                          pageerror after hydration.
+ *        detail                                          pageerror after hydration. The
+ *                                                       source detail page also opens a
+ *                                                       shadcn DropdownMenu (uses
+ *                                                       --popover / --popover-foreground)
+ *                                                       to inversion-test the popover
+ *                                                       token surface.
  *
  *   AC3  (mono-numerics applied) is deferred to I.E
  *        — out of scope here.
@@ -23,11 +29,15 @@
  * routes are seeded with minimal fixtures sufficient to render their
  * skeletons without hitting the network.
  *
- * Page-error watchdog (registered at the top of every test) is the
- * single most important assertion in this spec: a broken `next/font`
- * subset or a malformed OKLCH token typically surfaces as a hydration
- * error before any visible regression, and this watchdog catches it
- * first.
+ * Two error watchdogs (registered before any navigation):
+ *   - `pageerror`        — catches uncaught exceptions / hydration mismatches.
+ *   - `console.error`    — catches React warnings (key collisions, hydration
+ *                          mismatches that don't throw, ref warnings) and
+ *                          dev-only OKLCH/parse errors that log instead of
+ *                          throwing.
+ * If a `--popover` token were set to invalid OKLCH the DropdownMenu render
+ * would surface either as a pageerror (parse failure during layout) or a
+ * console.error (React warning), and both watchdogs would catch it.
  */
 
 import { expect, test, type Page } from '@playwright/test'
@@ -195,6 +205,15 @@ test.describe('I.A: design tokens visual smoke', () => {
     const pageErrors: string[] = []
     page.on('pageerror', (err) => pageErrors.push(err.message))
 
+    // console.error watchdog. React surfaces hydration mismatches as
+    // console errors (not pageerror) when they don't throw — e.g. a
+    // server-rendered className that diverges from client. Catching
+    // these surfaces silent regressions the pageerror channel misses.
+    const consoleErrors: string[] = []
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+
     await mockDashboardChrome(page)
     await mockNotebookDetail(page)
     await mockSourceDetail(page)
@@ -259,6 +278,29 @@ test.describe('I.A: design tokens visual smoke', () => {
     ).toBeVisible({ timeout: 15_000 })
     expect(pageErrors, 'no pageerror after source detail hydration').toEqual([])
 
+    // -------- Step 3b: exercise a shadcn primitive that paints --popover --
+    // The source-detail header has a MoreVertical DropdownMenu. Opening it
+    // mounts a Radix portal with `bg-popover text-popover-foreground` — if
+    // `--popover` or `--popover-foreground` were set to an invalid OKLCH
+    // value the render would surface as a pageerror or a console error,
+    // and the watchdogs above would catch it. We close the menu by pressing
+    // Escape so it doesn't interfere with later navigation.
+    const moreButton = page
+      .locator('[data-slot="dropdown-menu-trigger"]')
+      .first()
+    await expect(moreButton).toBeVisible({ timeout: 5_000 })
+    await moreButton.click()
+    // Assert at least one menu item is painted — proves the popover
+    // surface rendered with the new tokens.
+    await expect(
+      page.getByRole('menuitem').first(),
+    ).toBeVisible({ timeout: 3_000 })
+    expect(
+      pageErrors,
+      'no pageerror after popover (DropdownMenu) open',
+    ).toEqual([])
+    await page.keyboard.press('Escape')
+
     // -------- Step 4: navigate to notebook detail --------
     await gotoAndWait(page, `/notebooks/${NOTEBOOK_ID}`)
     // The notebook page renders an AppShell + 3-column workspace. The
@@ -272,5 +314,9 @@ test.describe('I.A: design tokens visual smoke', () => {
 
     // -------- Final assertion: zero errors across the whole flow --------
     expect(pageErrors).toEqual([])
+    // React hydration mismatches that don't throw (e.g. server/client class
+    // name drift from next/font, ref warnings) surface only on console.error;
+    // hold this channel to zero too.
+    expect(consoleErrors).toEqual([])
   })
 })
