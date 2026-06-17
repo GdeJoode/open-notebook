@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter, IBM_Plex_Mono } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { QueryProvider } from "@/components/providers/QueryProvider";
@@ -10,27 +10,20 @@ import { themeScript } from "@/lib/theme-script";
 
 // Track I.A — Docling Studio visual identity adoption.
 //
-// Inter is the UI font for the entire app; IBM Plex Mono is reserved for
-// numeric metadata (page pills, token counts, bbox coordinates — applied in
-// phase I.E via the `.mono-num` utility defined in globals.css).
+// Inter is the UI font for the entire app. IBM Plex Mono is RESERVED for
+// numeric metadata (page pills, token counts, bbox coordinates) but is NOT
+// loaded in I.A: nothing consumes `.mono-num` until I.E ships the inspector
+// polish that applies it to `token-count`, `page-pill`, `bbox-coords`. Loading
+// a ~65KB WOFF2 with zero consumers is bundle-waste. The `.mono-num` utility
+// in globals.css falls back to the system monospace stack until I.E lands the
+// IBM Plex Mono load + consumer wiring together.
 //
-// Both fonts are loaded via next/font/google with `display: 'swap'` so the
-// browser uses a fallback while the WOFF2 streams in (zero CLS, no FOIT). The
-// `latin` subset keeps the payload small; the plan bounds total font delta at
-// < 30KB gzipped.
+// Inter is loaded via next/font/google with `display: 'swap'` so the browser
+// uses a fallback while the WOFF2 streams in (zero CLS, no FOIT). The `latin`
+// subset keeps the payload small.
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
-  display: "swap",
-});
-
-const plexMono = IBM_Plex_Mono({
-  subsets: ["latin"],
-  // IBM Plex Mono ships several weights; 400 + 500 cover regular numeric
-  // metadata and emphasised values (e.g. an active page pill). Sticking to
-  // two weights keeps the bundle small.
-  weight: ["400", "500"],
-  variable: "--font-mono-numeric",
   display: "swap",
 });
 
@@ -45,12 +38,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    // Expose both font CSS variables on <html> so descendants -- including
-    // portaled Radix content rendered outside <body> -- can resolve them.
+    // Expose Inter's CSS variable on <html> so descendants -- including
+    // portaled Radix content rendered outside <body> -- can resolve it.
+    // `--font-mono-numeric` is intentionally unset here; the `.mono-num`
+    // utility class falls back to ui-monospace until I.E loads IBM Plex Mono.
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${inter.variable} ${plexMono.variable}`}
+      className={inter.variable}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
