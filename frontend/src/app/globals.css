@@ -1,11 +1,33 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/*
+ * Track I — Phase I.A — Docling Studio (DS) visual identity adoption.
+ *
+ * Source: docs/docling-studio-integration-plan.md §A and
+ *         docs/tracks/I-docling-studio/plan.md §I.A.
+ *
+ * Token mapping (DS → ON shadcn semantic vars):
+ *   --accent #f97316           → --primary, --ring, --sidebar-primary
+ *   --bg/--bg-surface/--bg-elevated → --background, --card, --popover (dark only)
+ *   --accent-muted             → --accent (active chip / pill state)
+ *   8px corners                → --radius: 0.5rem
+ *
+ * Semantic variable names (--primary, --accent, ...) are kept unchanged because
+ * shadcn primitives read them by name; renaming would break the cascade.
+ */
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* I.A — Inter (UI) injected via next/font in layout.tsx and forwarded
+     through Tailwind's `font-sans` utility. `--font-mono` does NOT bind to
+     a loaded webfont yet — IBM Plex Mono is deferred to I.E along with the
+     `.mono-num` consumers. The `var(--font-mono-numeric, ...)` fallback
+     resolves to the system monospace stack until I.E ships the font load.
+     The fallback stacks guarantee something legible regardless. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-mono-numeric, ui-monospace), SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -42,136 +64,190 @@
 }
 
 :root {
-  --radius: 0.65rem;
-  --background: oklch(1 0 0);
+  /* DS uses 8px radii on cards/buttons/inputs (radius-lg == --radius). */
+  --radius: 0.5rem;
+
+  /* Light theme. Surfaces are off-white tinted very slightly warm so the
+     orange accent reads coherently. Foreground is the same near-black as the
+     previous theme — preserves text contrast (AAA on background). */
+  --background: oklch(0.99 0.003 60);
   --foreground: oklch(0.141 0.005 285.823);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.141 0.005 285.823);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.623 0.214 259.815);
-  --primary-foreground: oklch(0.97 0.014 254.604);
-  --secondary: oklch(0.967 0.001 286.375);
+
+  /* DS accent: #f97316 (Tailwind orange-500) → OKLCH ≈ 0.705 / 0.21 / 47.6
+     We use this as --primary, --ring, --sidebar-primary per the plan.
+     Foreground is a NEAR-BLACK in light mode: near-white (oklch ~0.98) on
+     orange yields ~2.15:1 contrast — fails WCAG AA. Near-black (oklch ~0.18)
+     on orange clears ~5.4:1, well above AA's 4.5:1. Dark mode already uses
+     a near-black primary-foreground (see .dark below). */
+  --primary: oklch(0.705 0.21 47.6);
+  --primary-foreground: oklch(0.18 0.005 60);
+
+  --secondary: oklch(0.97 0.005 60);
   --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.97 0.005 60);
+  --muted-foreground: oklch(0.45 0.015 60);
+
+  /* Active state: a low-saturation orange that reads as a "soft pill" rather
+     than the bright primary. In the light theme we keep luminance high so it
+     still feels like a fill. */
+  --accent: oklch(0.93 0.05 60);
+  --accent-foreground: oklch(0.3 0.12 47.6);
+
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.623 0.214 259.815);
-  --chart-1: oklch(0.646 0.222 41.116);
+  --border: oklch(0.9 0.005 60);
+  --input: oklch(0.9 0.005 60);
+  --ring: oklch(0.705 0.21 47.6);
+  --chart-1: oklch(0.705 0.21 47.6);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
+  --sidebar: oklch(0.985 0.003 60);
   --sidebar-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-primary: oklch(0.623 0.214 259.815);
-  --sidebar-primary-foreground: oklch(0.97 0.014 254.604);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.623 0.214 259.815);
+  --sidebar-primary: oklch(0.705 0.21 47.6);
+  /* Near-black for WCAG AA on the orange sidebar-primary (same rationale
+     as --primary-foreground above). */
+  --sidebar-primary-foreground: oklch(0.18 0.005 60);
+  --sidebar-accent: oklch(0.93 0.05 60);
+  --sidebar-accent-foreground: oklch(0.3 0.12 47.6);
+  --sidebar-border: oklch(0.9 0.005 60);
+  --sidebar-ring: oklch(0.705 0.21 47.6);
 }
 
 .dark {
-  --background: oklch(0.141 0.005 285.823);
+  /* DS dark surfaces: near-black bg with two elevated tiers.
+     #0a0a0a ≈ oklch(0.145 0 0)
+     #141414 ≈ oklch(0.185 0 0)
+     #1c1c1c ≈ oklch(0.22 0 0)
+     Hue 60 keeps a faint warm tilt that complements the orange accent. */
+  --background: oklch(0.145 0.002 60);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
+  --card: oklch(0.185 0.002 60);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
+  --popover: oklch(0.22 0.002 60);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.546 0.245 262.881);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.274 0.006 286.033);
+
+  /* DS bright accent #f97316 stays the same hue/chroma in dark mode. */
+  --primary: oklch(0.705 0.21 47.6);
+  --primary-foreground: oklch(0.145 0.002 60);
+
+  --secondary: oklch(0.24 0.005 60);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.24 0.005 60);
+  --muted-foreground: oklch(0.72 0.012 60);
+
+  /* Active state in dark: a desaturated/darker orange so an active pill reads
+     warm but not flashy against the near-black bg. */
+  --accent: oklch(0.35 0.08 47.6);
+  --accent-foreground: oklch(0.97 0.05 60);
+
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.488 0.243 264.376);
-  --chart-1: oklch(0.488 0.243 264.376);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.705 0.21 47.6);
+  --chart-1: oklch(0.705 0.21 47.6);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.21 0.006 285.885);
+  --sidebar: oklch(0.185 0.002 60);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.546 0.245 262.881);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.705 0.21 47.6);
+  --sidebar-primary-foreground: oklch(0.145 0.002 60);
+  --sidebar-accent: oklch(0.35 0.08 47.6);
+  --sidebar-accent-foreground: oklch(0.97 0.05 60);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.488 0.243 264.376);
+  --sidebar-ring: oklch(0.705 0.21 47.6);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
-  
+
   html {
     @apply antialiased;
   }
-  
+
   body {
     @apply bg-background text-foreground transition-colors;
   }
-  
+
   /* Ensure proper theme inheritance for popovers and dropdowns */
   .dark {
     color-scheme: dark;
   }
-  
+
   :root {
     color-scheme: light;
   }
-  
+
   /* Ensure Radix UI components inherit theme properly */
   [data-radix-popper-content-wrapper] {
     @apply z-50;
   }
-  
+
   /* Force theme inheritance for portaled content */
   .dark [data-radix-popper-content-wrapper],
   .dark [data-overlay-container] {
     color-scheme: dark;
   }
-  
+
   /* Ensure sidebar gets proper theme */
   .app-sidebar {
     background-color: var(--sidebar);
     color: var(--sidebar-foreground);
     border-color: var(--sidebar-border);
   }
-  
+
   /* Enhanced hover effects for cards */
   .card-hover {
     @apply transition-all duration-200 cursor-pointer;
   }
-  
+
   .card-hover:hover {
     background-color: var(--muted) !important;
     border-color: var(--border);
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   }
-  
+
   .dark .card-hover:hover {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   }
-  
+
   /* Ensure clickable cards show pointer cursor */
   .clickable-card {
     cursor: pointer !important;
   }
-  
+
   .clickable-card * {
     cursor: pointer !important;
   }
+}
+
+/*
+ * Track I.A — Mono-numerics utility.
+ *
+ * Use this on numeric metadata such as page pills, token counts, and bbox
+ * coordinates. The `tnum` font-feature locks digits to tabular widths so
+ * columns line up.
+ *
+ * NOTE: This class is intentionally only DEFINED here, with a SYSTEM-FONT
+ * FALLBACK. IBM Plex Mono is NOT loaded in I.A — that load + consumer
+ * wiring (`.token-count`, `.page-pill`, `.bbox-coords`, ...) ships together
+ * in Phase I.E per the plan. Keeping the font load out of I.A reserves
+ * bundle headroom; the fallback stack (ui-monospace, SF Mono, ...) keeps
+ * the utility usable today via system fonts. When I.E injects
+ * `--font-mono-numeric` via next/font, the fallback rule below resolves to
+ * IBM Plex Mono automatically.
+ */
+.mono-num {
+  font-family: var(--font-mono-numeric, ui-monospace), "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
 }
