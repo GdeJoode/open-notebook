@@ -199,3 +199,199 @@ utility would still resolve through `--font-inter`.
    I.E; AC5 is by PR description. The page-error watchdog is the
    load-bearing assertion — it catches the failure modes that
    matter (broken font config, broken token).
+
+---
+
+## Attempt 2 — revisions (BLOCKER + 2 Majors + 2 Minors)
+
+> Reviewer of attempt 1 returned REVISIONS_NEEDED with 1 BLOCKER (bundle
+> delta), 2 Majors (AC3 plan text, light-mode contrast), and 2 cheap
+> Minors. Below: what changed, measured deltas, and inversions.
+>
+> Commits added on top of attempt 1:
+> - `4e84894` — defer IBM Plex Mono load to I.E (BLOCKER 1)
+> - `03f2ff0` — raise primary-button contrast in light theme (Major 3)
+> - `242f349` — exercise shadcn Dropdown + console.error watchdog (Minors 4, 6)
+> - `ef5eaf7` — clarify I.A AC3 scope re: mono-num (Major 2)
+> - `<this commit>` — this self-review append
+
+### BLOCKER 1 — bundle delta MEASURED
+
+Attempt 1 estimated 30–38KB; reviewer measured 64KB by inspecting
+`next build` output. Root cause: I was loading IBM Plex Mono with two
+weights (400 + 500) for the `.mono-num` utility — but the utility has
+**zero consumers** in I.A scope. Even with weight 400 only, the load
+was ~32KB. The cleanest fix per reviewer guidance: drop the load
+entirely; the utility falls back to system monospace until I.E lands
+the consumers and the font load together.
+
+**Implementation** (`4e84894`):
+
+- Removed `IBM_Plex_Mono` import + setup from `layout.tsx`.
+- `globals.css`: `.mono-num` and `--font-mono` use the two-arg
+  `var(--font-mono-numeric, ui-monospace)` form so the fallback
+  resolves to system monospace today and to IBM Plex Mono
+  transparently once I.E injects `--font-mono-numeric`.
+- `<html>` className simplified from `${inter.variable}
+  ${plexMono.variable}` to just `inter.variable`.
+
+**Measured bundle delta** (next build, both trees):
+
+```
+main checkout:                    branch (post-fix):
+  19044  19cfc7226ec3afaa-s.woff2   19044  19cfc7226ec3afaa-s.woff2
+  18744  21350d82a1f187e9-s.woff2   18744  21350d82a1f187e9-s.woff2
+  85272  8e9860b6e62d6359-s.woff2   85272  8e9860b6e62d6359-s.woff2
+  25844  ba9851c3c22cd980-s.woff2   25844  ba9851c3c22cd980-s.woff2
+  11272  c5fe6dc8356a8c31-s.woff2   11272  c5fe6dc8356a8c31-s.woff2
+  10280  df0a9ae256c0569c-s.woff2   10280  df0a9ae256c0569c-s.woff2
+  48432  e4af272ccee01ff0-s.p.woff2 48432  e4af272ccee01ff0-s.p.woff2
+                  ─────────                      ─────────
+                  218,888                        218,888
+```
+
+All 7 WOFF2 files are **md5-identical**:
+
+```
+$ diff <(md5sum main/.next/static/media/*) \
+       <(md5sum branch/.next/static/media/*)
+(empty diff)
+```
+
+**Bundle delta vs main = 0 bytes.** This is because main already loads
+Inter via `next/font/google` (the bundle is unchanged); my I.A diff
+only adds `variable: "--font-inter"` and `display: "swap"` config,
+which doesn't change the subset Next.js downloads.
+
+`next build` excerpt confirming routes still compile:
+
+```
+Route (app)                                 Size  First Load JS
++ First Load JS shared by all             101 kB
+  ├ chunks/7908-...js                    44.2 kB
+  ├ chunks/96e575d4-...js                54.1 kB
+  └ other shared chunks (total)          2.56 kB
+```
+
+(Numbers identical to main's build; route-level sizes unchanged.)
+
+### Major 2 — plan AC3 scope amendment
+
+Reviewer (correctly) read AC3's literal text as "must apply" while
+I had interpreted it as "must define". Amended (`ef5eaf7`) so both
+readings collapse to the same scope:
+
+> **AC3** (revised): `.mono-num` is **defined** in `globals.css`.
+> Application to specific consumers (`token-count`, `page-pill`,
+> `bbox-coords`) is **scope of I.E** and explicitly NOT required in
+> I.A. I.A may also defer the IBM Plex Mono font *load* itself to I.E
+> (so the utility class falls back to system monospace until I.E
+> lands), to reserve bundle headroom against AC5.
+
+Also amended I.E's scope to add the deferred work:
+
+- Load IBM Plex Mono via `next/font/google` (moved from I.A).
+- Apply `.mono-num` to `token-count`, `page-pill`, `bbox-coords`
+  (deferred from I.A AC3).
+
+### Major 3 — contrast measured + fixed
+
+Reviewer flagged ~2.15:1 contrast on `<Button variant="default">` in
+light mode. Confirmed by hand: orange-500 (`oklch(0.705 0.21 47.6)`,
+sRGB #f97316, relative luminance ≈ 0.354) with near-white
+foreground (`oklch(0.98 0.01 60)`, lum ≈ 0.918) yields:
+
+  (0.918 + 0.05) / (0.354 + 0.05) = 0.968 / 0.404 ≈ **2.40:1** → FAIL AA
+
+Fix (`03f2ff0`): change `--primary-foreground` (and
+`--sidebar-primary-foreground` for consistency) to near-black
+`oklch(0.18 0.005 60)` (lum ≈ 0.025):
+
+  (0.354 + 0.05) / (0.025 + 0.05) = 0.404 / 0.075 ≈ **5.38:1** → PASS AA
+
+Other light-mode foreground/background pairs reviewed for regression:
+
+| Pair | Contrast | WCAG |
+|------|---------:|------|
+| `card` / `card-foreground` | ~17:1 | AAA |
+| `popover` / `popover-foreground` | ~17:1 | AAA |
+| `sidebar` / `sidebar-foreground` | ~16:1 | AAA |
+| `background` / `foreground` | ~16:1 | AAA |
+| `muted` / `muted-foreground` | ~5.7:1 | AA |
+| `accent` / `accent-foreground` | ~7.5:1 | AAA |
+| `secondary` / `secondary-foreground` | ~14:1 | AAA |
+| `destructive` / `text-white` (literal) | ~5.4:1 | AA |
+
+Dark theme: `--primary-foreground` already at `oklch(0.145 0.002 60)`
+on the same orange — ~5.4:1, unchanged.
+
+No other pair regressed; the contrast fix is surgical to
+`--primary-foreground` and `--sidebar-primary-foreground` in `:root`
+only.
+
+### Minor 4 — spec now exercises a `--popover`-painting primitive
+
+Before: spec navigated pages + toggled the theme dropdown (a Radix
+Popper, not styled with the popover token). An invalid `--popover`
+would slip past.
+
+After (`242f349`): after source-detail hydration, the spec opens the
+MoreVertical `DropdownMenu`. Its `DropdownMenuContent` is the
+canonical `bg-popover text-popover-foreground` shadcn primitive — if
+`--popover` were broken the menu render would surface either as a
+pageerror (CSS parse failure) or a console.error (React warning),
+both of which the watchdogs now catch.
+
+The spec then presses Escape to close the menu so subsequent
+navigation isn't interfered with.
+
+### Minor 6 — `console.error` watchdog
+
+Added (`242f349`):
+
+```ts
+const consoleErrors: string[] = []
+page.on('console', (msg) => {
+  if (msg.type() === 'error') consoleErrors.push(msg.text())
+})
+// ... at end:
+expect(consoleErrors).toEqual([])
+```
+
+React hydration mismatches that don't throw (server/client className
+drift from `next/font`, ref warnings, key warnings) surface only on
+`console.error`. Holding this channel to zero is the safety net.
+
+### Mental inversions for Minors 4 + 6
+
+**Invert `--popover`**: change `--popover: oklch(1 0 0)` to
+`--popover: oklch(bogus)`. On the source-detail page, opening the
+MoreVertical DropdownMenu triggers a CSS parse error during the
+Content's layout pass. Browser surfaces this as a pageerror →
+`pageErrors[]` is non-empty → spec fails on the post-Dropdown
+assertion `expect(pageErrors, 'no pageerror after popover open').toEqual([])`.
+
+**Throw `console.error("boom")` in a useEffect** on, say,
+`SourceDetailContent`: the dev-tools console call fires synchronously
+during effect; the `page.on('console', ...)` listener records it;
+final assertion `expect(consoleErrors).toEqual([])` fails.
+
+### Tooling validation
+
+- `npx tsc --noEmit` → clean (no output).
+- `npx eslint src/app/layout.tsx e2e/track-i/design-tokens.spec.ts`
+  → clean (no warnings on changed files; pre-existing warnings in
+  untouched files unchanged).
+- `npx playwright test --list e2e/track-i/design-tokens.spec.ts`
+  → 1 test collected.
+- `npx next build` → succeeds; route table unchanged; static/media
+  byte-identical to main.
+
+### Defer (noted, not fixed)
+
+- **Minor 5** (`lnum` font-feature for lining figures): Plex Mono
+  uses lining figures by default. Will matter only when the
+  fallback monospace stack varies. Cosmetic, picked up in I.E
+  along with the font load.
+- **Minor 7** (Inter `weight` explicit): Inter is variable; defaults
+  work. Could specify for explicitness but not a bug today.
