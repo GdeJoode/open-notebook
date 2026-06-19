@@ -264,6 +264,26 @@ export const sourcesApi = {
     return response.data
   },
 
+  mergeChunk: async (
+    sourceId: string,
+    chunkId: string,
+    targetChunkId?: string,
+  ) => {
+    const response = await apiClient.post(
+      `/sources/${sourceId}/chunks/${chunkId}/merge`,
+      { target_chunk_id: targetChunkId ?? null },
+    )
+    return response.data
+  },
+
+  splitChunk: async (sourceId: string, chunkId: string, cursorOffset: number) => {
+    const response = await apiClient.post<{ chunks: unknown[] }>(
+      `/sources/${sourceId}/chunks/${chunkId}/split`,
+      { cursorOffset },
+    )
+    return response.data
+  },
+
   getChunks: async (id: string) => {
     const response = await apiClient.get<{
       chunks: Array<{

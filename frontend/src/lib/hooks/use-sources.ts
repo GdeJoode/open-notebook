@@ -351,3 +351,29 @@ export function useCreateChunk(sourceId: string) {
     },
   })
 }
+
+export function useMergeChunk(sourceId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ chunkId, targetChunkId }: {
+      chunkId: string
+      targetChunkId?: string
+    }) => sourcesApi.mergeChunk(sourceId, chunkId, targetChunkId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sourceChunks(sourceId) })
+    },
+  })
+}
+
+export function useSplitChunk(sourceId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ chunkId, cursorOffset }: {
+      chunkId: string
+      cursorOffset: number
+    }) => sourcesApi.splitChunk(sourceId, chunkId, cursorOffset),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sourceChunks(sourceId) })
+    },
+  })
+}
