@@ -202,10 +202,16 @@ class DoclingParser:
         pages_dict: dict[int, PageContent] = {}
         heading_stack: list[tuple[str, int]] = []  # (heading_text, level)
 
+        # Pre-read page dimensions so BoundingBox.from_docling can normalize
+        # to 0–1. prov.page_height is often missing, so we source the real
+        # size from doc.pages[page_no].size (mirrors ChunkExtractor).
+        page_sizes = self._get_page_sizes(doc)
+
         # Iterate through all items in document
         for item, level in doc.iterate_items():
             # Get page number from provenance
             page_num = self._get_page_number(item)
+            page_width, page_height = page_sizes.get(page_num, (None, None))
 
             if page_num not in pages_dict:
                 pages_dict[page_num] = PageContent(page_number=page_num)
@@ -226,15 +232,19 @@ class DoclingParser:
 
             # Handle different item types
             if isinstance(item, TableItem):
-                table = self._extract_table(item, page_num)
+                table = self._extract_table(item, page_num, page_width, page_height)
                 table.section_path = section_path
                 table.section_level = level
                 page.tables.append(table)
             elif isinstance(item, PictureItem):
-                image = self._extract_image(item, page_num, result)
+                image = self._extract_image(
+                    item, page_num, result, page_width, page_height
+                )
                 page.images.append(image)
             else:
-                element = self._extract_element(item, page_num, section_path, level)
+                element = self._extract_element(
+                    item, page_num, section_path, level, page_width, page_height
+                )
                 if element:
                     page.elements.append(element)
 
@@ -246,6 +256,31 @@ class DoclingParser:
             page.text_content = page.to_markdown(include_images=False, include_tables=True)
 
         return sorted_pages
+
+    def _get_page_sizes(self, doc: Any) -> dict[int, tuple[float, float]]:
+        """Map page_no -> (width, height) in points from the DoclingDocument.
+
+        Used to normalize bounding boxes to 0–1. Pages without a usable
+        size are simply omitted; callers then emit a zero bbox for elements
+        on those pages.
+        """
+        sizes: dict[int, tuple[float, float]] = {}
+        pages = getattr(doc, "pages", None)
+        if not pages:
+            return sizes
+        try:
+            items = pages.items()
+        except AttributeError:
+            return sizes
+        for page_no, page_item in items:
+            size = getattr(page_item, "size", None)
+            if not size:
+                continue
+            width = getattr(size, "width", None)
+            height = getattr(size, "height", None)
+            if width and height:
+                sizes[int(page_no)] = (float(width), float(height))
+        return sizes
 
     def _get_page_number(self, item: Any) -> int:
         """Get page number from item provenance."""
@@ -261,6 +296,8 @@ class DoclingParser:
         page_num: int,
         section_path: Optional[list[str]] = None,
         section_level: int = 0,
+        page_width: Optional[float] = None,
+        page_height: Optional[float] = None,
     ) -> Optional[ExtractedElement]:
         """Extract a generic element (text, heading, etc.)."""
         # Get element type
@@ -282,7 +319,9 @@ class DoclingParser:
         bbox = None
         if hasattr(item, "prov") and item.prov:
             for prov in item.prov:
-                bbox = BoundingBox.from_docling(prov, page_num)
+                bbox = BoundingBox.from_docling(
+                    prov, page_num, page_width, page_height
+                )
                 break
 
         return ExtractedElement(
@@ -320,7 +359,13 @@ class DoclingParser:
 
         return None
 
-    def _extract_table(self, item: Any, page_num: int) -> ExtractedTable:
+    def _extract_table(
+        self,
+        item: Any,
+        page_num: int,
+        page_width: Optional[float] = None,
+        page_height: Optional[float] = None,
+    ) -> ExtractedTable:
         """Extract table with multiple format representations."""
         # Get markdown representation
         markdown = ""
@@ -347,7 +392,9 @@ class DoclingParser:
         bbox = None
         if hasattr(item, "prov") and item.prov:
             for prov in item.prov:
-                bbox = BoundingBox.from_docling(prov, page_num)
+                bbox = BoundingBox.from_docling(
+                    prov, page_num, page_width, page_height
+                )
                 break
 
         table = ExtractedTable(
@@ -398,7 +445,14 @@ class DoclingParser:
 
         return headers, rows
 
-    def _extract_image(self, item: Any, page_num: int, result: Any) -> ExtractedImage:
+    def _extract_image(
+        self,
+        item: Any,
+        page_num: int,
+        result: Any,
+        page_width: Optional[float] = None,
+        page_height: Optional[float] = None,
+    ) -> ExtractedImage:
         """Extract image with classification and VLM description."""
         # Get classification
         classification = "unknown"
@@ -439,7 +493,9 @@ class DoclingParser:
         bbox = None
         if hasattr(item, "prov") and item.prov:
             for prov in item.prov:
-                bbox = BoundingBox.from_docling(prov, page_num)
+                bbox = BoundingBox.from_docling(
+                    prov, page_num, page_width, page_height
+                )
                 break
 
         return ExtractedImage(

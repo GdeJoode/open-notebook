@@ -10,3 +10,5 @@ Append-only ledger. One row per phase attempt.
 | I.H1 | upload guards (revisions) | — | `track/i-upload-guards` | 2026-06-19 | all findings resolved; 9/9 tests pass; ready for review (AC5 multi-worker shared-state deferred — in-memory backend) |
 | I.A | design tokens | [PR #34](https://github.com/GdeJoode/open-notebook/pull/34) | `track/i-design-tokens` | 2026-06-18 | merged to main (commit 21e0108) |
 | I.H1 | upload guards + per-IP rate limiting | — | `track/i-upload-guards` | 2026-06-19 | merged to main (commit c577847, `--no-ff`) |
+| I.C | coordinate canonicalization | — | `track/i-coord-canonicalization` | 2026-06-19 | adversarial review attempt 1: REVISIONS_NEEDED (1 BLOCKER: backfill corrupted legacy negative-y rows) |
+| I.C | coordinate canonicalization (revisions) | — | `track/i-coord-canonicalization` | 2026-06-19 | BLOCKER+Major resolved (broken-flip rows skip+re-ingest); 23 backfill tests pass; ready for review |
