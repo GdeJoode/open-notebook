@@ -88,16 +88,54 @@ describe('document-workspace-store', () => {
     expect(useDocumentWorkspaceStore.getState().activeChunkId).toBeNull()
   })
 
+  it('starts with no hidden element types', () => {
+    expect(useDocumentWorkspaceStore.getState().hiddenTypes).toEqual([])
+  })
+
+  it('toggleType adds a type on first toggle and removes it on second', () => {
+    const { toggleType } = useDocumentWorkspaceStore.getState()
+    toggleType('table')
+    expect(useDocumentWorkspaceStore.getState().hiddenTypes).toEqual(['table'])
+    toggleType('table')
+    expect(useDocumentWorkspaceStore.getState().hiddenTypes).toEqual([])
+  })
+
+  it('toggleType keeps set semantics across multiple types (no duplicates)', () => {
+    const { toggleType } = useDocumentWorkspaceStore.getState()
+    toggleType('table')
+    toggleType('picture')
+    toggleType('table') // remove only the one
+    expect(useDocumentWorkspaceStore.getState().hiddenTypes).toEqual(['picture'])
+  })
+
+  it('showAllTypes clears every hidden type', () => {
+    const { toggleType, showAllTypes } = useDocumentWorkspaceStore.getState()
+    toggleType('table')
+    toggleType('picture')
+    showAllTypes()
+    expect(useDocumentWorkspaceStore.getState().hiddenTypes).toEqual([])
+  })
+
+  it('does NOT persist hiddenTypes to storage (navigation-scoped)', () => {
+    useDocumentWorkspaceStore.getState().toggleType('table')
+    const raw = localStorage.getItem(STORAGE_KEY)
+    expect(raw).not.toBeNull()
+    const parsed = JSON.parse(raw as string)
+    expect(parsed.state.hiddenTypes).toBeUndefined()
+  })
+
   it('reset restores defaults', () => {
     const s = useDocumentWorkspaceStore.getState()
     s.setPanelSizes({ left: 40, middle: 30, right: 30 })
     s.setActivePage(7)
     s.setActiveChunkId('chunk:9')
+    s.toggleType('table')
     useDocumentWorkspaceStore.getState().reset()
     const after = useDocumentWorkspaceStore.getState()
     expect(after.panelSizes).toEqual(DEFAULT_PANEL_SIZES)
     expect(after.activePage).toBe(1)
     expect(after.activeChunkId).toBeNull()
+    expect(after.hiddenTypes).toEqual([])
   })
 
   it('persists only panelSizes to storage (navigation state excluded)', () => {

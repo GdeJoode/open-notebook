@@ -31,36 +31,11 @@ import {
 import { toast } from 'sonner'
 import { sourcesApi } from '@/lib/api/sources'
 import { useUpdateChunk, useDeleteChunk, useCreateChunk } from '@/lib/hooks/use-sources'
-
-// ---------------------------------------------------------------------------
-// Element type color scheme (matches Docling Studio)
-// ---------------------------------------------------------------------------
-
-const ELEMENT_COLORS: Record<string, string> = {
-  title: '#EF4444',
-  section_header: '#F97316',
-  text: '#3B82F6',
-  paragraph: '#3B82F6',
-  table: '#8B5CF6',
-  picture: '#22C55E',
-  list_item: '#06B6D4',
-  list: '#06B6D4',
-  formula: '#EC4899',
-  code: '#14B8A6',
-  caption: '#EAB308',
-  heading: '#F97316',
-  page_header: '#9CA3AF',
-  page_footer: '#9CA3AF',
-  footnote: '#9CA3AF',
-}
-
-const ELEMENT_TYPES = Object.keys(ELEMENT_COLORS)
-const DEFAULT_COLOR = '#6B7280'
-
-function getElementColor(elementType: string): string {
-  const key = elementType.toLowerCase().replace(/\s+/g, '_')
-  return ELEMENT_COLORS[key] ?? DEFAULT_COLOR
-}
+import {
+  ELEMENT_TYPES,
+  elementTypeKey,
+  getElementColor,
+} from '@/lib/constants/element-colors'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -116,6 +91,15 @@ interface PdfChunkViewerProps {
    */
   selectedChunkId?: string | null
   onSelectChunkId?: (chunkId: string | null) => void
+  /**
+   * Controlled element-type visibility (fullscreen mode). When provided, the
+   * overlay hides bboxes whose normalized element-type key is in this set and
+   * the internal `LegendBar` is suppressed — the inspect workspace renders its
+   * own `LayersBar` driving this set via the document-workspace store. When
+   * omitted (embed mode), the viewer keeps its own local hidden-types state and
+   * its internal `LegendBar`, so the Chunks tab is unchanged.
+   */
+  hiddenTypes?: Set<string>
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +193,7 @@ function BboxOverlay({
     // Draw existing rects
     if (showOverlay) {
       for (const rect of rects) {
-        if (hiddenTypes.has(rect.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
+        if (hiddenTypes.has(elementTypeKey(rect.elementType))) continue
         const x = rect.x * sx, y = rect.y * sy, w = rect.w * sx, h = rect.h * sy
         const color = getElementColor(rect.elementType)
         const isHighlighted = rect.chunkIndex === highlightedChunkIndex
@@ -304,7 +288,7 @@ function BboxOverlay({
 
     for (let i = rects.length - 1; i >= 0; i--) {
       const r = rects[i]
-      if (hiddenTypes.has(r.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
+      if (hiddenTypes.has(elementTypeKey(r.elementType))) continue
       const rx = r.x * sx, ry = r.y * sy, rw = r.w * sx, rh = r.h * sy
       if (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh) {
         onHoverChunk(r.chunkIndex)
@@ -348,7 +332,7 @@ function BboxOverlay({
 
     for (let i = rects.length - 1; i >= 0; i--) {
       const r = rects[i]
-      if (hiddenTypes.has(r.elementType.toLowerCase().replace(/\s+/g, '_'))) continue
+      if (hiddenTypes.has(elementTypeKey(r.elementType))) continue
       const rx = r.x * sx, ry = r.y * sy, rw = r.w * sx, rh = r.h * sy
       if (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh) {
         onClickChunk(r.chunkIndex)
@@ -397,7 +381,7 @@ function LegendBar({ typeCounts, hiddenTypes, onToggle }: {
   return (
     <div className="absolute top-2 left-2 right-2 z-10 flex flex-wrap gap-1.5 rounded-lg bg-background/80 backdrop-blur-md border p-2 pointer-events-auto">
       {types.map(([type, count]) => {
-        const key = type.toLowerCase().replace(/\s+/g, '_')
+        const key = elementTypeKey(type)
         return (
           <button key={type} onClick={() => onToggle(key)}
             className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-opacity ${hiddenTypes.has(key) ? 'opacity-35' : 'opacity-100'}`}>
@@ -421,9 +405,11 @@ export function PdfChunkViewer({
   mode = 'embed',
   selectedChunkId,
   onSelectChunkId,
+  hiddenTypes: controlledHiddenTypes,
 }: PdfChunkViewerProps) {
   const fullscreen = mode === 'fullscreen'
   const controlledSelection = selectedChunkId !== undefined
+  const controlledLayers = controlledHiddenTypes !== undefined
   const [currentPage, setCurrentPage] = useState(1)
   const [pageInput, setPageInput] = useState('1')
   const [pageCount, setPageCount] = useState(0)
@@ -435,7 +421,10 @@ export function PdfChunkViewer({
   const [selectedChunkIndex, setSelectedChunkIndex] = useState<number | null>(null)
   const [hoveredChunkIndex, setHoveredChunkIndex] = useState<number | null>(null)
   const [showOverlay, setShowOverlay] = useState(true)
-  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set())
+  // Embed mode owns its hidden-types locally (drives the internal LegendBar).
+  // Fullscreen mode is controlled: the workspace's LayersBar supplies the set.
+  const [localHiddenTypes, setLocalHiddenTypes] = useState<Set<string>>(new Set())
+  const hiddenTypes = controlledHiddenTypes ?? localHiddenTypes
   const [pagesAreZeroBased, setPagesAreZeroBased] = useState(false)
 
   // Editing state
@@ -615,7 +604,7 @@ export function PdfChunkViewer({
   }, [pageInput, pageCount, currentPage])
 
   const toggleType = useCallback((type: string) => {
-    setHiddenTypes(prev => { const next = new Set(prev); next.has(type) ? next.delete(type) : next.add(type); return next })
+    setLocalHiddenTypes(prev => { const next = new Set(prev); next.has(type) ? next.delete(type) : next.add(type); return next })
   }, [])
 
   // --- Editing handlers ---
@@ -877,7 +866,7 @@ export function PdfChunkViewer({
             {!imgLoaded && previewUrl && (
               <div className="flex items-center justify-center w-[595px] h-[842px]"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
             )}
-            {imgLoaded && showOverlay && <LegendBar typeCounts={typeCounts} hiddenTypes={hiddenTypes} onToggle={toggleType} />}
+            {imgLoaded && showOverlay && !controlledLayers && <LegendBar typeCounts={typeCounts} hiddenTypes={hiddenTypes} onToggle={toggleType} />}
             {imgLoaded && (
               <BboxOverlay
                 imgRef={imgRef} pageInfo={currentPageInfo} rects={pageRects}
