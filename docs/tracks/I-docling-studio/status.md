@@ -12,3 +12,4 @@ Append-only ledger. One row per phase attempt.
 | I.H1 | upload guards + per-IP rate limiting | — | `track/i-upload-guards` | 2026-06-19 | merged to main (commit c577847, `--no-ff`) |
 | I.C | coordinate canonicalization | — | `track/i-coord-canonicalization` | 2026-06-19 | adversarial review attempt 1: REVISIONS_NEEDED (1 BLOCKER: backfill corrupted legacy negative-y rows) |
 | I.C | coordinate canonicalization (revisions) | — | `track/i-coord-canonicalization` | 2026-06-19 | BLOCKER+Major resolved (broken-flip rows skip+re-ingest); 23 backfill tests pass; ready for review |
+| I.C | coordinate canonicalization | — | `track/i-coord-canonicalization` | 2026-06-19 | merged to main (commit 55183ba, `--no-ff`) — ⚠ run backfill_chunk_positions.py BEFORE frontend ships |
