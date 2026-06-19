@@ -23,11 +23,30 @@ normalized data. "Needs normalization" is detected the same way the old
 frontend heuristic did: any of x1/x2/y1/y2 > 1.0 (the page index pos[0] is
 never inspected).
 
+Unrecoverable legacy rows (broken y-flip)
+-----------------------------------------
+The original bug had two regimes. When ``prov.page_height`` was *present*,
+the old code wrote y as a raw positive point (``page_height - top``) — that
+rescales correctly here (divide by height). When ``prov.page_height`` was
+*missing* it defaulted to ``1.0``, so y was written as ``1.0 - top`` (and
+``1.0 - bottom``) — **negative**, because ``top``/``bottom`` are page points
+(≫1). The original ``top`` is unrecoverable from the stored value, so those
+rows cannot be rescaled — rescaling would just clamp them to a zero-height
+strip at the page top. Any row with a negative coordinate is therefore
+**skipped and flagged for re-ingest** rather than rewritten.
+
 Fallback
 --------
 Rows whose PDF is missing/unreadable, or whose page is out of range, are
 logged and skipped — the operator re-ingests those sources (the only way
 to recover dimensions that no longer exist on disk).
+
+Transactions (deviation from plan Risk 1)
+-----------------------------------------
+The plan suggested wrapping each batch in a transaction. This script instead
+relies on idempotency: each write is a standalone ``UPDATE`` and a re-run
+skips already-0–1 rows, so a mid-run crash is fully recoverable by simply
+re-running. No batch transaction is used.
 
 Run via::
 
@@ -73,6 +92,7 @@ class BackfillStats:
     skipped_no_positions: int = 0
     skipped_missing_pdf: int = 0
     skipped_bad_page: int = 0
+    skipped_broken_flip: int = 0  # legacy negative-y rows → re-ingest required
     skipped_files: set[str] = field(default_factory=set)
 
     def summary(self) -> str:
@@ -84,6 +104,7 @@ class BackfillStats:
             f"  skipped (no pos):    {self.skipped_no_positions}\n"
             f"  skipped (no PDF):    {self.skipped_missing_pdf}\n"
             f"  skipped (bad page):  {self.skipped_bad_page}\n"
+            f"  skipped (broken flip → re-ingest): {self.skipped_broken_flip}\n"
             f"  distinct PDFs unresolved: {len(self.skipped_files)}"
         )
 
@@ -99,14 +120,30 @@ def _needs_normalization(position: list[Any]) -> bool:
     return any(float(c) > 1.0 for c in position[1:5])
 
 
+def _is_unrecoverable_legacy(position: list[Any]) -> bool:
+    """A legacy row from the broken y-flip regime is unrecoverable.
+
+    When ``prov.page_height`` was missing the old ``from_docling`` defaulted
+    it to ``1.0`` and wrote ``y = 1.0 - top`` / ``y2 = 1.0 - bottom`` — both
+    **negative**, since ``top``/``bottom`` are page points (≫1). The original
+    ``top`` cannot be recovered from the stored value, so such rows must be
+    re-ingested rather than rescaled. Any negative coordinate is the
+    signature (a valid raw point or a 0–1 value is never negative).
+    """
+    if not isinstance(position, (list, tuple)) or len(position) < 5:
+        return False
+    return any(float(c) < 0.0 for c in position[1:5])
+
+
 def _normalize_position(
     position: list[Any], page_width: float, page_height: float
 ) -> list[float]:
     """Divide x by width, y by height, and clamp to [0, 1].
 
-    Coordinates are assumed to already be in TOPLEFT image space (raw
-    points). Docling's y-flip happens at extraction; legacy raw rows were
-    written post-flip, so we only rescale here.
+    Coordinates are assumed to be recoverable raw points in TOPLEFT image
+    space (all non-negative). The unrecoverable broken-flip regime (negative
+    y) is filtered out by the caller via ``_is_unrecoverable_legacy`` before
+    this runs, so only a genuine rescale happens here.
     """
     page = position[0]
     x1, x2, y1, y2 = (float(c) for c in position[1:5])
@@ -212,6 +249,18 @@ async def backfill(
             legacy = [p for p in positions if _needs_normalization(p)]
             if not legacy:
                 stats.already_normalized += 1
+                continue
+
+            # Broken y-flip regime (page_height was missing at extraction):
+            # y was stored as 1.0 - top, i.e. negative and unrecoverable.
+            # Rescaling would clamp it to a zero-height strip — skip instead.
+            if any(_is_unrecoverable_legacy(p) for p in positions):
+                stats.skipped_broken_flip += 1
+                logger.warning(
+                    f"Skipping chunk {row.get('id')}: legacy broken y-flip "
+                    f"(page_height missing at extraction; y unrecoverable); "
+                    f"re-ingest required"
+                )
                 continue
 
             pdf_path = row.get("pdf_path")

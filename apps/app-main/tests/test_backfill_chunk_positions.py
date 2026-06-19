@@ -47,6 +47,26 @@ def test_needs_normalization_ignores_page_index():
     assert backfill_mod._needs_normalization([5, 0.1, 0.2, 0.3, 0.4]) is False
 
 
+def test_unrecoverable_legacy_detects_negative_y():
+    # Broken y-flip regime: y = 1.0 - top (top ≫ 1) → negative, unrecoverable.
+    assert (
+        backfill_mod._is_unrecoverable_legacy([1, 119.0, 297.5, -683.04, -514.60])
+        is True
+    )
+
+
+def test_unrecoverable_legacy_false_for_positive_raw_points():
+    # page_height-present regime: y is a valid positive raw point → recoverable.
+    assert (
+        backfill_mod._is_unrecoverable_legacy([1, 119.0, 297.5, 168.0, 336.0])
+        is False
+    )
+
+
+def test_unrecoverable_legacy_false_for_normalized():
+    assert backfill_mod._is_unrecoverable_legacy([1, 0.2, 0.5, 0.2, 0.4]) is False
+
+
 def test_normalize_position_divides_and_clamps():
     out = backfill_mod._normalize_position([2, 119.0, 297.5, 168.0, 336.0], 595.0, 842.0)
     assert out[0] == 2
@@ -130,6 +150,28 @@ async def test_backfill_normalizes_only_legacy_rows(patched):
     written = db.updates["chunk:a"][0]
     assert written[1] == pytest.approx(0.2)
     assert written[2] == pytest.approx(0.5)
+    # y must also be normalized (not collapsed) — guards the broken-flip fix.
+    assert written[3] == pytest.approx(168.0 / 842.0)
+    assert written[4] == pytest.approx(336.0 / 842.0)
+
+
+async def test_backfill_skips_broken_flip_rows(patched):
+    """Legacy negative-y rows (page_height missing at extraction) are
+    unrecoverable — they must be skipped + flagged, never rewritten to a
+    clamped zero-height box."""
+    rows = [
+        {
+            "id": "chunk:broken",
+            "positions": [[1, 119.0, 297.5, -683.04, -514.60]],
+            "pdf_path": "/x.pdf",
+        },
+    ]
+    db = patched(rows)
+    stats = await backfill_mod.backfill(batch_size=10)
+
+    assert stats.skipped_broken_flip == 1
+    assert stats.normalized == 0
+    assert db.updates == {}  # nothing written — no corrupt y persisted
 
 
 async def test_backfill_is_idempotent(patched):
