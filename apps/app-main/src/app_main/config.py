@@ -63,11 +63,3 @@ def get_rate_limit_rpm() -> int:
     DS upstream uses 60; ON gets a little slack per Q-I-H1-1.
     """
     return _int_env("RATE_LIMIT_RPM", 120)
-
-
-# Module-level constants for convenience / introspection. Prefer the getters
-# above in hot code paths so env changes (e.g. in tests) take effect without
-# re-importing.
-MAX_FILE_SIZE_MB = get_max_file_size_mb()
-MAX_PAGE_COUNT = get_max_page_count()
-RATE_LIMIT_RPM = get_rate_limit_rpm()
