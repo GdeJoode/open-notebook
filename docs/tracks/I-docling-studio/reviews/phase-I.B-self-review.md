@@ -90,9 +90,17 @@ chunk-list listbox → separator → (PDF pane controls) → separator → prope
 `aria-label` ("Chunk list" / "PDF preview" / "Properties"). v4's `Separator`
 auto-emits the full WAI-ARIA separator contract: `role="separator"`,
 `aria-orientation`, `aria-valuemin/max/now`, `aria-controls`. The e2e test
-asserts `aria-orientation="horizontal"` on both separators. I also added a
+asserts `aria-orientation="vertical"` on both separators — v4 inverts the
+group orientation for the divider, so a horizontal `Group` yields vertically-
+oriented separators (the divider line is vertical). I also added a
 human-readable `aria-label` to each separator ("Resize chunk list" / "Resize
 properties panel").
+
+> Correction (adversarial review attempt 1, BLOCKER #1): an earlier draft of
+> this section and the e2e spec asserted `aria-orientation="horizontal"`, which
+> is wrong for v4 — the library emits `"vertical"` here, which is what AC5
+> ("handles expose orientation") actually requires. The implementation was
+> always correct; the test assertion and this note were fixed to `"vertical"`.
 
 ### AC6 — No regression in the existing Chunks tab
 

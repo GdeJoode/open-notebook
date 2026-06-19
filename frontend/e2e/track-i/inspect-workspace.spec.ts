@@ -16,7 +16,9 @@
  *        → focus a separator, press ArrowLeft repeatedly, assert the persisted
  *          left size changed and focus stayed inside the workspace.
  *   AC5  ARIA: each panel role="region" + aria-label; handles expose
- *        orientation → assert aria-orientation="horizontal" on the separators.
+ *        orientation → assert aria-orientation="vertical" on the separators.
+ *          (react-resizable-panels v4 inverts: a horizontal Group emits
+ *          vertically-oriented separators — the divider line is vertical.)
  *   AC6  No regression in the existing Chunks tab → covered by the source
  *        detail render in the I.A spec; the "Open Inspect" button is asserted
  *        here as the entry point.
@@ -170,11 +172,13 @@ test.describe('I.B: inspect workspace (3-pane resizable)', () => {
     await expect(page.getByRole('region', { name: 'PDF preview' })).toBeVisible()
     await expect(page.getByRole('region', { name: 'Properties' })).toBeVisible()
 
-    // AC1 + AC5 — two separators, each exposing horizontal orientation.
+    // AC1 + AC5 — two separators. A horizontal Group emits vertically-
+    // oriented separators in react-resizable-panels v4 (the divider line is
+    // vertical), so aria-orientation is "vertical".
     const separators = page.getByRole('separator')
     await expect(separators).toHaveCount(2)
     for (const sep of await separators.all()) {
-      await expect(sep).toHaveAttribute('aria-orientation', 'horizontal')
+      await expect(sep).toHaveAttribute('aria-orientation', 'vertical')
     }
 
     expect(pageErrors).toEqual([])
