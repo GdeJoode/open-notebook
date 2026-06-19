@@ -1,25 +1,29 @@
 'use client'
 
-import { Network } from 'lucide-react'
+import { StructureGraphView } from './StructureGraphView'
+
+interface StructureViewerProps {
+  sourceId: string
+  /** Wired to the workspace's setActiveChunkId so a node click highlights the
+   * matching chunk's bbox in the middle pane (Phase I.F, AC5). */
+  onSelectNode?: (chunkId: string) => void
+  selectedChunkId?: string | null
+}
 
 /**
- * Structure tab of the inspect workspace — intentional placeholder (I.D-4).
- *
- * The real document-structure graph (DoclingDocument tree / reading-order
- * graph rendered with Sigma.js) is Phase I.F. This component reserves the tab
- * slot so the tab strip is complete now; I.F replaces it with
- * <StructureGraphView> per the plan.
+ * Structure tab of the inspect workspace. The I.D-4 placeholder is replaced
+ * (Phase I.F) with the real Sigma.js document-structure graph.
  */
-export function StructureViewer() {
+export function StructureViewer({
+  sourceId,
+  onSelectNode,
+  selectedChunkId,
+}: StructureViewerProps) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-      <Network className="h-8 w-8 text-muted-foreground" />
-      <div>
-        <p className="text-sm font-medium">Structure graph</p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          The document structure graph is coming in a later phase (I.F).
-        </p>
-      </div>
-    </div>
+    <StructureGraphView
+      sourceId={sourceId}
+      onSelectNode={onSelectNode}
+      selectedChunkId={selectedChunkId}
+    />
   )
 }

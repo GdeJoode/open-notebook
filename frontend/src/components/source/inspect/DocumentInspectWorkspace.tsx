@@ -250,7 +250,11 @@ export function DocumentInspectWorkspace({
                 </TabsContent>
 
                 <TabsContent value="structure" className="min-h-0">
-                  <StructureViewer />
+                  <StructureViewer
+                    sourceId={sourceId}
+                    onSelectNode={setActiveChunkId}
+                    selectedChunkId={activeChunkId}
+                  />
                 </TabsContent>
 
                 <TabsContent value="config" className="min-h-0">

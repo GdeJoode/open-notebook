@@ -43,6 +43,33 @@ export interface DoclingPipelineConfig {
   docling_chunking_max_tokens?: number
 }
 
+export interface StructureGraphNode {
+  id: string
+  self_ref: string | null
+  element_type: string | null
+  text: string | null
+  page: number | null
+  level: number | null
+  sequence: number | null
+  bbox: number[] | null
+  // Owning chunk id for leaf nodes (drives the bbox-highlight wiring); null on
+  // section nodes.
+  chunk_id: string | null
+}
+
+export interface StructureGraphEdge {
+  source: string
+  target: string
+  type: 'parent_of' | 'next_node' | 'derived_from'
+}
+
+export interface StructureGraphResponse {
+  nodes: StructureGraphNode[]
+  edges: StructureGraphEdge[]
+  total_nodes: number
+  truncated: boolean
+}
+
 export const DEFAULT_PIPELINE_CONFIG: DoclingPipelineConfig = {
   privacy: 'internal',
   docling_ocr_engine: 'easyocr',
@@ -309,6 +336,22 @@ export const sourcesApi = {
       total_chunks: number
       has_spatial_data: boolean
     }>(`/sources/${id}/chunks`)
+    return response.data
+  },
+
+  // Document structure graph (Track I.F). Returns Sigma/graphology-friendly
+  // nodes + edges. `page_limit` defaults to 100 on the backend (hard cap 500).
+  getStructureGraph: async (
+    id: string,
+    opts?: { page?: number; pageLimit?: number }
+  ) => {
+    const params: Record<string, number> = {}
+    if (opts?.page != null) params.page = opts.page
+    if (opts?.pageLimit != null) params.page_limit = opts.pageLimit
+    const response = await apiClient.get<StructureGraphResponse>(
+      `/sources/${id}/structure-graph`,
+      { params }
+    )
     return response.data
   },
 

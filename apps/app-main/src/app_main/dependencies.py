@@ -42,6 +42,7 @@ from app_main.services.chat_service import ChatService
 from app_main.services.chunking.chunk_mutator import ChunkMutator
 from app_main.services.context_service import ContextService
 from app_main.services.entity_extraction_service import EntityExtractionService
+from app_main.services.graph.doc_graph_builder import DocGraphBuilder
 from app_main.services.insight_service import InsightService
 from app_main.services.jsonl_export_service import JsonlExportService
 from app_main.services.knowledge_graph_service import KnowledgeGraphService
@@ -217,12 +218,17 @@ def get_source_extractor() -> SourceExtractor:
     return SourceExtractor()
 
 
+def get_doc_graph_builder() -> DocGraphBuilder:
+    return DocGraphBuilder()
+
+
 def get_source_processor() -> SourceProcessor:
     return SourceProcessor(
         source_repo=get_source_repo(),
         chunk_repo=get_chunk_repo(),
         settings_repo=get_settings_repo(),
         extractor=get_source_extractor(),
+        graph_builder=get_doc_graph_builder(),
     )
 
 

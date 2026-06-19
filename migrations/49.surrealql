@@ -1,0 +1,60 @@
+-- Migration 49: document structure graph — doc_node + parent_of / next_node /
+-- derived_from RELATION tables (Track I, Phase I.F)
+--
+-- Builds a STRUCTURAL graph alongside Track B's SEMANTIC entity graph
+-- (migration 39). The two graphs are deliberately disjoint:
+--
+--   * Track B (39): entity / relation / entity_alias  -- "who/what is talked
+--     about", semantic edges between canonical entities.
+--   * Track I (49): doc_node / parent_of / next_node / derived_from  -- "how the
+--     document is laid out", structural edges between DoclingDocument elements
+--     (sections, paragraphs, tables, figures) plus a chunk -> element link.
+--
+-- The names below were grepped against migrations 1-48 to confirm no collision
+-- with Track B (which used 44-48 and owns entity/relation/entity_alias/metrics).
+--
+-- doc_node: one row per structural element. ``self_ref`` is the stable
+--   element identifier ("#/sections/3", "#/chunks/12"); the
+--   (source, self_ref) pair is UNIQUE so the delete-rebuild on re-ingest is
+--   idempotent (Q-I-F: re-ingest produces the same graph). ``bbox`` reuses the
+--   0-1 normalized convention from Phase I.C (BoundingBox.from_*).
+--
+-- parent_of / next_node: doc_node -> doc_node RELATION edges for the section
+--   tree and the reading-order chain respectively.
+-- derived_from: chunk -> doc_node RELATION edge linking each persisted chunk
+--   to the leaf element it was extracted from (Q-I-F-1: 1:many allowed, primary
+--   self_ref required).
+--
+-- Idempotent: every DEFINE uses ``IF NOT EXISTS`` so replaying the migration on
+-- a DB that already has these objects is a no-op (matches the B.0
+-- testcontainers replay harness convention used by migrations 44-48).
+
+-- =============================================================================
+-- doc_node: structural element records
+-- =============================================================================
+
+DEFINE TABLE IF NOT EXISTS doc_node SCHEMAFULL;
+
+DEFINE FIELD IF NOT EXISTS source ON doc_node TYPE record<source>;
+DEFINE FIELD IF NOT EXISTS self_ref ON doc_node TYPE string;
+DEFINE FIELD IF NOT EXISTS element_type ON doc_node TYPE string;
+DEFINE FIELD IF NOT EXISTS text ON doc_node TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS page ON doc_node TYPE option<int>;
+DEFINE FIELD IF NOT EXISTS level ON doc_node TYPE option<int>;
+DEFINE FIELD IF NOT EXISTS sequence ON doc_node TYPE int;
+DEFINE FIELD IF NOT EXISTS bbox ON doc_node TYPE option<array<float>>;
+DEFINE FIELD IF NOT EXISTS created_at ON doc_node TYPE datetime DEFAULT time::now();
+
+-- Per-source subgraph reads dominate the access pattern (the structure-graph
+-- API always filters by source); index it. The (source, self_ref) UNIQUE pair
+-- enforces idempotent upserts on re-ingest.
+DEFINE INDEX IF NOT EXISTS dn_source ON doc_node FIELDS source;
+DEFINE INDEX IF NOT EXISTS dn_ref ON doc_node FIELDS source, self_ref UNIQUE;
+
+-- =============================================================================
+-- Structural RELATION edges
+-- =============================================================================
+
+DEFINE TABLE IF NOT EXISTS parent_of SCHEMAFULL TYPE RELATION FROM doc_node TO doc_node;
+DEFINE TABLE IF NOT EXISTS next_node SCHEMAFULL TYPE RELATION FROM doc_node TO doc_node;
+DEFINE TABLE IF NOT EXISTS derived_from SCHEMAFULL TYPE RELATION FROM chunk TO doc_node;
