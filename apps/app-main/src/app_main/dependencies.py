@@ -8,6 +8,7 @@ from functools import lru_cache
 
 from esperanto import EmbeddingModel
 from llm_manager import ModelManager, get_model_manager
+from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories import (
     ChatMessageRepository,
     ChatSessionRepository,
@@ -18,8 +19,8 @@ from surrealdb_service.repositories import (
     EntityRepository,
     EpisodeProfileRepository,
     ModelRepository,
-    NoteRepository,
     NotebookRepository,
+    NoteRepository,
     PodcastEpisodeRepository,
     SearchRepository,
     SourceEmbeddingRepository,
@@ -36,37 +37,36 @@ from surrealdb_service.repositories.notebook_schema import (
     NotebookSchemaRepository,
     Pass1ResultRepository,
 )
-from surrealdb_service.connection import execute_query
 
-from app_main.services.notebook_service import NotebookService
-from app_main.services.source_service import SourceService
-from app_main.services.note_service import NoteService
 from app_main.services.chat_service import ChatService
-from app_main.services.search_service import SearchService
-from app_main.services.model_service import ModelService
-from app_main.services.transformation_service import TransformationService
-from app_main.services.podcast_service import PodcastService
-from app_main.services.settings_service import SettingsService
-from app_main.services.insight_service import InsightService
-from app_main.services.knowledge_graph_service import KnowledgeGraphService
-from app_main.services.ontology_service import OntologyService
+from app_main.services.chunking.chunk_mutator import ChunkMutator
 from app_main.services.context_service import ContextService
+from app_main.services.entity_extraction_service import EntityExtractionService
+from app_main.services.insight_service import InsightService
+from app_main.services.jsonl_export_service import JsonlExportService
+from app_main.services.knowledge_graph_service import KnowledgeGraphService
+from app_main.services.model_service import ModelService
+from app_main.services.networkx_export_service import NetworkxExportService
+from app_main.services.note_service import NoteService
+from app_main.services.notebook_merge_service import NotebookMergeService
+from app_main.services.notebook_service import NotebookService
+from app_main.services.obsidian_export_service import ObsidianExportService
+from app_main.services.ontology_service import OntologyService
+from app_main.services.podcast_service import PodcastService
+from app_main.services.preprocessing_service import PreprocessingService
+from app_main.services.reextract_service import ReextractService
+from app_main.services.schema_edit_service import SchemaEditService
+from app_main.services.search_service import SearchService
+from app_main.services.settings_service import SettingsService
 from app_main.services.source_embedding_orchestrator import SourceEmbeddingOrchestrator
 from app_main.services.source_extractor import SourceExtractor
 from app_main.services.source_processor import SourceProcessor
+from app_main.services.source_service import SourceService
 from app_main.services.source_summarization_orchestrator import (
     SourceSummarizationOrchestrator,
 )
-from app_main.services.preprocessing_service import PreprocessingService
 from app_main.services.summarization_service import SummarizationService
-from app_main.services.entity_extraction_service import EntityExtractionService
-from app_main.services.schema_edit_service import SchemaEditService
-from app_main.services.reextract_service import ReextractService
-from app_main.services.notebook_merge_service import NotebookMergeService
-from app_main.services.jsonl_export_service import JsonlExportService
-from app_main.services.networkx_export_service import NetworkxExportService
-from app_main.services.obsidian_export_service import ObsidianExportService
-
+from app_main.services.transformation_service import TransformationService
 
 # --- Repository providers ---
 
@@ -92,6 +92,10 @@ def get_chat_message_repo() -> ChatMessageRepository:
 
 def get_chunk_repo() -> ChunkRepository:
     return ChunkRepository()
+
+
+def get_chunk_mutator() -> ChunkMutator:
+    return ChunkMutator()
 
 
 def get_insight_repo() -> SourceInsightRepository:

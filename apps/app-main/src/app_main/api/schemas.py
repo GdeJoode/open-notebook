@@ -20,6 +20,25 @@ class ChunkUpdate(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+class ChunkMergeRequest(BaseModel):
+    """Merge a chunk with an adjacent one (Track I.D-3).
+
+    When ``target_chunk_id`` is omitted the chunk is merged with its
+    immediate successor by ``order``; otherwise the named chunk is used and
+    must be adjacent.
+    """
+    target_chunk_id: Optional[str] = Field(
+        None, description="Adjacent chunk to merge with; defaults to the next chunk"
+    )
+
+
+class ChunkSplitRequest(BaseModel):
+    """Split a chunk at a character offset into its text (Track I.D-3)."""
+    cursorOffset: int = Field(
+        ..., ge=0, description="Character offset into the chunk text to split at"
+    )
+
+
 class ChunkCreate(BaseModel):
     """Create a new manual chunk."""
     text: str = Field(..., description="Chunk text content")
