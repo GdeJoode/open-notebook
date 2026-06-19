@@ -15,3 +15,4 @@ Append-only ledger. One row per phase attempt.
 | I.C | coordinate canonicalization | — | `track/i-coord-canonicalization` | 2026-06-19 | merged to main (commit 55183ba, `--no-ff`) — ⚠ run backfill_chunk_positions.py BEFORE frontend ships |
 | I.B | inspect workspace (3-pane resizable) | — | `track/i-inspect-workspace` | 2026-06-19 | implemented; 9/9 store unit tests pass; tsc clean; lint clean (new files); next build OK; e2e collects (full run deferred); ready for review |
 | I.B | inspect workspace (revisions) | — | `track/i-inspect-workspace` | 2026-06-19 | adversarial review attempt 1: REVISIONS_NEEDED (1 BLOCKER: wrong separator aria-orientation in spec) → fixed; code was correct; ready for review |
+| I.B | inspect workspace (3-pane resizable) | — | `track/i-inspect-workspace` | 2026-06-19 | merged to main (commit 63e745e, `--no-ff`) — ⚠ live E2E run still pending local; backfill-before-deploy still applies (I.C) |
