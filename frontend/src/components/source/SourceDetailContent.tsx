@@ -793,8 +793,20 @@ export function SourceDetailContent({
             </Card>
           </TabsContent>
 
-          <TabsContent value="chunks" className="flex-1 min-h-0 overflow-hidden mt-6">
-            <div className="h-full">
+          <TabsContent value="chunks" className="flex-1 min-h-0 overflow-hidden mt-6 flex flex-col">
+            {chunksData && chunksData.chunks.length > 0 && (
+              <div className="flex-shrink-0 flex justify-end pb-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => router.push(`/sources/${encodeURIComponent(sourceId)}/inspect`)}
+                >
+                  <ScanSearch className="mr-2 h-4 w-4" />
+                  Open Inspect
+                </Button>
+              </div>
+            )}
+            <div className="flex-1 min-h-0">
               {chunksLoading ? (
                 <div className="flex items-center justify-center py-12">
                   <LoadingSpinner />
