@@ -14,10 +14,6 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-
-from app_main.services.chunking import chunk_builder
-from app_main.services.log_stream import get_log_stream
-from app_main.services.source_extractor import ExtractionResult, SourceExtractor
 from shared.models import Asset, Source
 from shared.models.settings import ContentSettings
 from shared.utils.text import strip_null_bytes
@@ -26,6 +22,11 @@ from surrealdb_service.repositories import (
     ContentSettingsRepository,
     SourceRepository,
 )
+
+from app_main.services.chunking import chunk_builder
+from app_main.services.graph.doc_graph_builder import DocGraphBuilder
+from app_main.services.log_stream import get_log_stream
+from app_main.services.source_extractor import ExtractionResult, SourceExtractor
 
 
 class SourceProcessor:
@@ -37,11 +38,15 @@ class SourceProcessor:
         chunk_repo: ChunkRepository,
         settings_repo: ContentSettingsRepository,
         extractor: SourceExtractor,
+        graph_builder: Optional[DocGraphBuilder] = None,
     ) -> None:
         self.source_repo = source_repo
         self.chunk_repo = chunk_repo
         self.settings_repo = settings_repo
         self.extractor = extractor
+        # Structure-graph builder (Phase I.F). Optional + best-effort: a build
+        # failure must never fail the ingestion (see process_source).
+        self.graph_builder = graph_builder or DocGraphBuilder()
 
     async def process_source(
         self,
@@ -108,13 +113,21 @@ class SourceProcessor:
 
         # 5. Replace chunks
         chunk_count = 0
+        created_chunks: List[Any] = []
         await self.chunk_repo.delete_by_source(source_id)
         if extracted.chunks:
             prepared = chunk_builder.prepare_for_db(extracted.chunks, source_id)
             log_stream.emit(source_id, f"Saving {len(prepared)} chunks...")
-            await self.chunk_repo.bulk_create(prepared)
+            created_chunks = await self.chunk_repo.bulk_create(prepared)
             chunk_count = len(prepared)
             logger.info(f"Saved {chunk_count} chunks for source {source_id}")
+
+        # 6. Build the document structure graph (Phase I.F). Best-effort: a
+        # graph-build failure must NOT fail the whole ingestion — the chunks are
+        # already persisted and every other downstream feature works without the
+        # structure graph. Log and continue.
+        if created_chunks:
+            await self._build_structure_graph(source_id, created_chunks)
 
         log_stream.emit(
             source_id,
@@ -126,6 +139,42 @@ class SourceProcessor:
             "source_id": str(source.id),
             "chunk_count": chunk_count,
         }
+
+    async def _build_structure_graph(
+        self,
+        source_id: str,
+        created_chunks: List[Any],
+    ) -> None:
+        """Build the document structure graph for a source (Phase I.F).
+
+        Best-effort hook: converts the freshly-persisted ``Chunk`` rows into the
+        dict shape ``DocGraphBuilder`` expects and delegates. Any failure is
+        logged and swallowed so the structure graph can never break ingestion —
+        the chunks are already saved and every other feature is graph-agnostic.
+        """
+        try:
+            chunk_dicts = [
+                {
+                    "id": c.id,
+                    "order": c.order,
+                    "element_type": c.element_type,
+                    "text": c.text,
+                    "physical_page": c.physical_page,
+                    "positions": c.positions,
+                    "metadata": c.metadata,
+                }
+                for c in created_chunks
+            ]
+            graph = await self.graph_builder.build(source_id, chunks=chunk_dicts)
+            logger.info(
+                f"Structure graph built for {source_id}: "
+                f"{len(graph.nodes)} nodes"
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort, never fatal
+            logger.warning(
+                f"Structure-graph build failed for {source_id} "
+                f"(ingestion continues): {e}"
+            )
 
     async def _update_source(
         self,

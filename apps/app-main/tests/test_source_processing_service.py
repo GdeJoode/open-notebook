@@ -9,14 +9,11 @@ transformation graph) are mocked — no DB or GPU required.
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from shared.models import Asset, Source
-from shared.models.settings import ContentSettings
-
 from app_main.services.chunking import chunk_builder
 from app_main.services.ingestion.config_builder import build_ingestion_config
 from app_main.services.source_embedding_orchestrator import (
@@ -31,7 +28,8 @@ from app_main.services.source_processor import SourceProcessor
 from app_main.services.source_summarization_orchestrator import (
     SourceSummarizationOrchestrator,
 )
-
+from shared.models import Asset, Source
+from shared.models.settings import ContentSettings
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -96,12 +94,21 @@ def extractor():
 
 
 @pytest.fixture
-def processor(source_repo, chunk_repo, settings_repo, extractor):
+def graph_builder():
+    """Mock DocGraphBuilder so the structure-graph hook never touches the DB."""
+    builder = AsyncMock()
+    builder.build = AsyncMock(return_value=SimpleNamespace(nodes=[]))
+    return builder
+
+
+@pytest.fixture
+def processor(source_repo, chunk_repo, settings_repo, extractor, graph_builder):
     return SourceProcessor(
         source_repo=source_repo,
         chunk_repo=chunk_repo,
         settings_repo=settings_repo,
         extractor=extractor,
+        graph_builder=graph_builder,
     )
 
 
@@ -1096,6 +1103,80 @@ class TestProcessSource:
         chunk_repo.delete_by_source.assert_awaited_once_with("source:test1")
         chunk_repo.bulk_create.assert_awaited_once()
         source_repo.update.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_builds_structure_graph_when_chunks_created(
+        self, processor, chunk_repo, graph_builder
+    ):
+        """The I.F hook fires with the persisted chunks once they exist."""
+        chunk_repo.bulk_create = AsyncMock(
+            return_value=[
+                SimpleNamespace(
+                    id="chunk:c0",
+                    order=0,
+                    element_type="paragraph",
+                    text="Hello world",
+                    physical_page=0,
+                    positions=[],
+                    metadata={"section_path": ["Intro"], "section_level": 0},
+                )
+            ]
+        )
+
+        await processor.process_source(
+            source_id="source:test1",
+            content_state={"content": "Hello world"},
+        )
+
+        graph_builder.build.assert_awaited_once()
+        args, kwargs = graph_builder.build.call_args
+        assert args[0] == "source:test1"
+        passed_chunks = kwargs.get("chunks") or args[1]
+        assert passed_chunks[0]["id"] == "chunk:c0"
+        assert passed_chunks[0]["metadata"]["section_path"] == ["Intro"]
+
+    @pytest.mark.asyncio
+    async def test_structure_graph_failure_does_not_fail_ingestion(
+        self, processor, chunk_repo, graph_builder
+    ):
+        """A graph-build error is swallowed — ingestion still succeeds (I.F)."""
+        chunk_repo.bulk_create = AsyncMock(
+            return_value=[
+                SimpleNamespace(
+                    id="chunk:c0",
+                    order=0,
+                    element_type="paragraph",
+                    text="Hello world",
+                    physical_page=0,
+                    positions=[],
+                    metadata={},
+                )
+            ]
+        )
+        graph_builder.build = AsyncMock(side_effect=RuntimeError("DB down"))
+
+        result = await processor.process_source(
+            source_id="source:test1",
+            content_state={"content": "Hello world"},
+        )
+
+        # Ingestion completes despite the graph failure.
+        assert result["chunk_count"] == 1
+        graph_builder.build.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_structure_graph_when_no_chunks(
+        self, processor, chunk_repo, graph_builder
+    ):
+        """No chunks persisted -> the builder is not invoked."""
+        chunk_repo.bulk_create = AsyncMock(return_value=[])
+
+        await processor.process_source(
+            source_id="source:test1",
+            content_state={"content": "Hello world"},
+        )
+
+        graph_builder.build.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_missing_source_raises(self, processor, source_repo):
