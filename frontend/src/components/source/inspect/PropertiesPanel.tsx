@@ -56,9 +56,9 @@ export function PropertiesPanel({
                     <dt className="text-muted-foreground">Page</dt>
                     <dd className="mono-num">{firstPos[0]}</dd>
                   </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <dt className="text-muted-foreground">Bbox (0–1)</dt>
-                    <dd className="mono-num">
+                  <div className="flex items-start justify-between gap-2">
+                    <dt className="flex-shrink-0 text-muted-foreground">Bbox (0–1)</dt>
+                    <dd className="mono-num min-w-0 break-words text-right">
                       {firstPos
                         .slice(1)
                         .map((v) => v.toFixed(3))

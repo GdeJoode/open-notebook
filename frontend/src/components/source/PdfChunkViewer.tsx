@@ -832,7 +832,7 @@ export function PdfChunkViewer({
 
       {/* Right Pane — PDF Page + Canvas Overlay */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="p-2 border-b flex items-center gap-2 flex-shrink-0 bg-background">
+        <div className="p-2 border-b flex flex-wrap items-center gap-2 flex-shrink-0 bg-background">
           <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={currentPage <= 1} onClick={() => handlePageNav(-1)}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
