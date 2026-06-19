@@ -100,6 +100,26 @@ class ContentSettings(RecordModel):
     docling_image_scale: Optional[float] = Field(
         2.0, description="Image extraction scale (1.0-4.0)"
     )
+    docling_generate_page_images: Optional[bool] = Field(
+        False, description="Render a full-page image for every page"
+    )
+
+    # Enrichment Settings (Phase I.D-2)
+    # Default False: these were never forwarded to docling before I.D-2, so the
+    # effective historical behavior was OFF. Kept off to preserve it (AC3); the
+    # settings UI / per-run overrides let users opt in.
+    docling_do_code_enrichment: Optional[bool] = Field(
+        False, description="Detect and enrich code blocks"
+    )
+    docling_do_formula_enrichment: Optional[bool] = Field(
+        False, description="Detect and extract math formulas (LaTeX)"
+    )
+    # None means "follow the VLM pipeline" (current behaviour: classification
+    # is on iff docling_pipeline == 'vlm'). Set explicitly to override that
+    # coupling without touching the rest of the VLM stack.
+    docling_do_picture_classification: Optional[bool] = Field(
+        None, description="Classify pictures by type, independent of the VLM toggle"
+    )
 
     # Chunking Settings
     docling_chunking_enabled: Optional[bool] = Field(

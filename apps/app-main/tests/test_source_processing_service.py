@@ -941,6 +941,144 @@ class TestBuildIngestionConfig:
         from ingestion.config import OcrEngine
         assert config.docling.ocr_engine == OcrEngine.TESSERACT
 
+    # ---- Phase I.D-2: enrichment / page-image / classification fields ----
+
+    def test_id2_defaults_preserve_current_behaviour(self):
+        """Defaults must reproduce pre-I.D-2 effective values (AC3).
+
+        Pre-I.D-2, code/formula enrichment were NEVER forwarded to docling, so
+        the effective behavior was OFF (docling's native default). The
+        regression risk is turning them on by default. With a VLM pipeline (the
+        ContentSettings default), classification follows the VLM toggle, page
+        images stay off, and the image scale stays at 2.0.
+        """
+        config = build_ingestion_config(_make_settings()).docling
+
+        assert config.do_code_enrichment is False
+        assert config.do_formula_extraction is False
+        assert config.generate_page_images is False
+        assert config.images_scale == 2.0
+        # VLM is the default pipeline -> classification on, matching the
+        # old `do_picture_classification=use_vlm` coupling.
+        assert config.do_picture_classification is True
+
+    def test_id2_defaults_reach_docling_options_off(self):
+        """AC3 at the real boundary: what reaches docling for an unconfigured
+        user must match pre-I.D-2 (code + formula enrichment OFF).
+
+        This is the assertion that actually fails if the defaults flip on — the
+        DoclingConfig dataclass field alone doesn't prove what docling receives.
+        """
+        opts = build_ingestion_config(_make_settings()).docling.to_docling_options()
+        assert opts.do_code_enrichment is False
+        assert opts.do_formula_enrichment is False
+
+    def test_id2_overrides_reach_docling_options_on(self):
+        """The flip side: an explicit opt-in reaches docling as ON (AC1+AC2)."""
+        opts = build_ingestion_config(
+            _make_settings(
+                docling_do_code_enrichment=True,
+                docling_do_formula_enrichment=True,
+            )
+        ).docling.to_docling_options()
+        assert opts.do_code_enrichment is True
+        assert opts.do_formula_enrichment is True
+
+    def test_id2_classification_follows_vlm_when_unset(self):
+        """Unset classification falls back to the VLM toggle, both ways."""
+        vlm = build_ingestion_config(
+            _make_settings(docling_pipeline="vlm")
+        ).docling
+        standard = build_ingestion_config(
+            _make_settings(docling_pipeline="standard")
+        ).docling
+
+        assert vlm.do_picture_classification is True
+        assert standard.do_picture_classification is False
+
+    def test_id2_classification_decoupled_from_vlm(self):
+        """Explicit classification overrides the VLM coupling in both
+        directions (the core I.D-2 separation)."""
+        on_without_vlm = build_ingestion_config(
+            _make_settings(
+                docling_pipeline="standard",
+                docling_do_picture_classification=True,
+            )
+        ).docling
+        off_with_vlm = build_ingestion_config(
+            _make_settings(
+                docling_pipeline="vlm",
+                docling_do_picture_classification=False,
+            )
+        ).docling
+
+        assert on_without_vlm.do_picture_classification is True
+        assert off_with_vlm.do_picture_classification is False
+
+    def test_id2_override_fields_map_through(self):
+        """All five I.D-2 override fields reach DoclingConfig (AC1)."""
+        config = build_ingestion_config(
+            _make_settings(
+                docling_do_code_enrichment=False,
+                docling_do_formula_enrichment=False,
+                docling_do_picture_classification=True,
+                docling_generate_page_images=True,
+                docling_image_scale=4.0,
+            )
+        ).docling
+
+        assert config.do_code_enrichment is False
+        assert config.do_formula_extraction is False
+        assert config.do_picture_classification is True
+        assert config.generate_page_images is True
+        assert config.images_scale == 4.0
+
+    def test_id2_override_payload_round_trip(self):
+        """Simulate the per-run override merge (source_processor) then the
+        config build, asserting the five fields survive the trip (AC1)."""
+        base = _make_settings()
+        overrides = {
+            "docling_do_code_enrichment": False,
+            "docling_do_formula_enrichment": False,
+            "docling_do_picture_classification": True,
+            "docling_generate_page_images": True,
+            "docling_image_scale": 3.0,
+        }
+        merged_data = base.model_dump()
+        merged_data.update(
+            {k: v for k, v in overrides.items() if v is not None}
+        )
+        merged = ContentSettings(**merged_data)
+
+        config = build_ingestion_config(merged).docling
+        assert config.do_code_enrichment is False
+        assert config.do_formula_extraction is False
+        assert config.do_picture_classification is True
+        assert config.generate_page_images is True
+        assert config.images_scale == 3.0
+
+    def test_id2_forwarded_to_docling_options(self):
+        """to_docling_options() must forward the I.D-2 toggles to the docling
+        PdfPipelineOptions (AC2). Skips when docling is not installed."""
+        pytest.importorskip("docling")
+
+        config = build_ingestion_config(
+            _make_settings(
+                docling_do_code_enrichment=False,
+                docling_do_formula_enrichment=False,
+                docling_do_picture_classification=True,
+                docling_generate_page_images=True,
+                docling_image_scale=3.0,
+            )
+        ).docling
+        opts = config.to_docling_options()
+
+        assert opts.do_code_enrichment is False
+        assert opts.do_formula_enrichment is False
+        assert opts.do_picture_classification is True
+        assert opts.generate_page_images is True
+        assert opts.images_scale == 3.0
+
 
 # ===========================================================================
 # Test: process_source (full orchestration)
