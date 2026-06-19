@@ -205,6 +205,7 @@ export function DocumentInspectWorkspace({
               <PropertiesPanel
                 sourceId={sourceId}
                 activeChunk={activeChunk}
+                chunks={chunks}
                 pageCount={pageCount}
               />
             </div>

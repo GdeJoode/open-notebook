@@ -4,10 +4,14 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
+from surrealdb_service.repositories.source import ChunkRepository
 
+from app_main.api.routers.sources_files import _is_source_file_available
 from app_main.api.schemas import (
     AssetModel,
     ChunkCreate,
+    ChunkMergeRequest,
+    ChunkSplitRequest,
     ChunkUpdate,
     CreateSourceInsightRequest,
     SourceInsightResponse,
@@ -18,18 +22,20 @@ from app_main.api.schemas import (
 )
 from app_main.config import UPLOADS_FOLDER
 from app_main.dependencies import (
+    get_chunk_mutator,
     get_chunk_repo,
     get_notebook_service,
     get_source_service,
     get_transformation_service,
 )
-from surrealdb_service.repositories.source import ChunkRepository
 from app_main.exceptions import InvalidInputError
+from app_main.services.chunking.chunk_mutator import (
+    ChunkMutationError,
+    ChunkMutator,
+)
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
 from app_main.services.transformation_service import TransformationService
-
-from app_main.api.routers.sources_files import _is_source_file_available
 
 router = APIRouter()
 
@@ -205,7 +211,7 @@ async def get_source(
         embedded_chunks = await source_svc.get_embedding_count(source_id)
 
         # Get associated notebooks + counts
-        from surrealdb_service.connection import execute_query, ensure_record_id
+        from surrealdb_service.connection import ensure_record_id, execute_query
 
         notebooks_query = await execute_query(
             "SELECT VALUE out FROM reference WHERE in = $source_id",
@@ -681,3 +687,69 @@ async def create_chunk(
     except Exception as e:
         logger.error(f"Error creating chunk for source {source_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error creating chunk: {str(e)}")
+
+
+@router.post("/{source_id}/chunks/{chunk_id:path}/merge")
+async def merge_chunk(
+    source_id: str,
+    chunk_id: str,
+    body: ChunkMergeRequest,
+    mutator: ChunkMutator = Depends(get_chunk_mutator),
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Merge a chunk with an adjacent chunk (Track I.D-3).
+
+    Defaults to merging with the next chunk by ``order``; an explicit
+    adjacent ``target_chunk_id`` may be supplied in the body. The operation
+    is atomic (SurrealQL transaction).
+    """
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        merged = await mutator.merge(
+            str(source.id), chunk_id, body.target_chunk_id
+        )
+        return merged.model_dump()
+
+    except ChunkMutationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error merging chunk {chunk_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error merging chunk: {str(e)}")
+
+
+@router.post("/{source_id}/chunks/{chunk_id:path}/split")
+async def split_chunk(
+    source_id: str,
+    chunk_id: str,
+    body: ChunkSplitRequest,
+    mutator: ChunkMutator = Depends(get_chunk_mutator),
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Split a chunk at a character offset into two chunks (Track I.D-3).
+
+    The original keeps the text before the offset; a new chunk takes the
+    remainder and is inserted right after. The operation is atomic
+    (SurrealQL transaction).
+    """
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        result = await mutator.split(
+            str(source.id), chunk_id, body.cursorOffset
+        )
+        return {"chunks": [c.model_dump() for c in result]}
+
+    except ChunkMutationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error splitting chunk {chunk_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error splitting chunk: {str(e)}")

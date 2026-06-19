@@ -10,10 +10,12 @@ import {
   type DoclingPipelineConfig,
 } from '@/lib/api/sources'
 import type { InspectChunk } from './ChunkListPanel'
+import { ChunkActionsToolbar } from './ChunkActionsToolbar'
 
 interface PropertiesPanelProps {
   sourceId: string
   activeChunk: InspectChunk | null
+  chunks: InspectChunk[]
   pageCount: number
 }
 
@@ -25,6 +27,7 @@ interface PropertiesPanelProps {
 export function PropertiesPanel({
   sourceId,
   activeChunk,
+  chunks,
   pageCount,
 }: PropertiesPanelProps) {
   const [reprocessConfig, setReprocessConfig] = useState<DoclingPipelineConfig>({
@@ -100,6 +103,15 @@ export function PropertiesPanel({
             <p className="text-xs text-muted-foreground">
               Select a chunk to see its metadata.
             </p>
+          )}
+          {activeChunk && (
+            <div className="mt-3 border-t pt-3">
+              <ChunkActionsToolbar
+                sourceId={sourceId}
+                activeChunk={activeChunk}
+                chunks={chunks}
+              />
+            </div>
           )}
         </section>
 
