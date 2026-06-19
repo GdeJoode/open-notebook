@@ -103,26 +103,28 @@ interface PdfChunkViewerProps {
 }
 
 // ---------------------------------------------------------------------------
-// Format detection
+// Page indexing
 // ---------------------------------------------------------------------------
+//
+// Coordinates in chunk.positions are always 0–1 normalized (TOPLEFT origin)
+// — canonicalized at extraction time by BoundingBox.from_* (Track I.C). The
+// frontend no longer sniffs the coordinate format.
+//
+// Page indexing is a separate concern: positions store a 1-indexed page, but
+// some legacy rows used a 0-indexed page. detectZeroBasedPages() only inspects
+// the page integer (never the coordinates) to keep navigation correct on such
+// rows; it does not affect bbox scaling.
 
-function analyzeChunkFormat(chunks: Chunk[], totalPages: number) {
-  let hasNormalized = true
+function detectZeroBasedPages(chunks: Chunk[], totalPages: number): boolean {
+  if (totalPages <= 0) return false
   let maxPageNum = 0
-
   for (const chunk of chunks) {
     if (!chunk.positions) continue
     for (const pos of chunk.positions) {
-      const [pageNum, xLeft, xRight, yTop, yBottom] = pos
-      if (pageNum > maxPageNum) maxPageNum = pageNum
-      if (xLeft > 1.0 || xRight > 1.0 || yTop > 1.0 || yBottom > 1.0) {
-        hasNormalized = false
-      }
+      if (pos[0] > maxPageNum) maxPageNum = pos[0]
     }
   }
-
-  const pagesAreZeroBased = totalPages > 0 && maxPageNum < totalPages && maxPageNum === totalPages - 1
-  return { isNormalized: hasNormalized, pagesAreZeroBased }
+  return maxPageNum === totalPages - 1
 }
 
 function toViewerPage(positionPage: number, zeroBased: boolean): number {
@@ -410,7 +412,7 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
   const [hoveredChunkIndex, setHoveredChunkIndex] = useState<number | null>(null)
   const [showOverlay, setShowOverlay] = useState(true)
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set())
-  const [chunkFormat, setChunkFormat] = useState<{ isNormalized: boolean; pagesAreZeroBased: boolean }>({ isNormalized: true, pagesAreZeroBased: false })
+  const [pagesAreZeroBased, setPagesAreZeroBased] = useState(false)
 
   // Editing state
   const [editingChunkId, setEditingChunkId] = useState<string | null>(null)
@@ -441,8 +443,8 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
         if (cancelled) return
         setPageCount(data.page_count)
         setPagesInfo(data.pages)
-        const format = analyzeChunkFormat(chunks, data.page_count)
-        setChunkFormat(format)
+        const zeroBased = detectZeroBasedPages(chunks, data.page_count)
+        setPagesAreZeroBased(zeroBased)
 
         // Only set initial page on first load, not after mutation refetch
         if (!initialPageSetRef.current) {
@@ -450,7 +452,7 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
           const firstChunkWithPos = chunks.find(c => c.positions?.length > 0)
           if (firstChunkWithPos?.positions?.length) {
             const rawPage = firstChunkWithPos.positions[0][0]
-            const viewerPage = toViewerPage(rawPage, format.pagesAreZeroBased)
+            const viewerPage = toViewerPage(rawPage, zeroBased)
             setCurrentPage(viewerPage)
             setPageInput(String(viewerPage))
           }
@@ -494,23 +496,26 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
       if (!chunk.positions) continue
       for (const pos of chunk.positions) {
         const [rawPageNum, xLeft, xRight, yTopRaw, yBottomRaw] = pos
-        const viewerPage = toViewerPage(rawPageNum, chunkFormat.pagesAreZeroBased)
+        const viewerPage = toViewerPage(rawPageNum, pagesAreZeroBased)
         if (viewerPage !== currentPage) continue
 
-        let yA = yTopRaw, yB = yBottomRaw
-        if (yA < 0) yA = ph + yA
-        if (yB < 0) yB = ph + yB
-        const yTop = Math.min(yA, yB), yBottom = Math.max(yA, yB)
-
-        if (chunkFormat.isNormalized) {
-          rects.push({ x: xLeft * pw, y: yTop * ph, w: (xRight - xLeft) * pw, h: (yBottom - yTop) * ph, chunkIndex: ci, elementType: chunk.element_type || 'unknown', text: chunk.text || '', isContent: chunk.is_content !== false })
-        } else {
-          rects.push({ x: xLeft, y: yTop, w: xRight - xLeft, h: yBottom - yTop, chunkIndex: ci, elementType: chunk.element_type || 'unknown', text: chunk.text || '', isContent: chunk.is_content !== false })
-        }
+        // Coordinates are always 0–1 normalized; scale into page pixels.
+        const yTop = Math.min(yTopRaw, yBottomRaw)
+        const yBottom = Math.max(yTopRaw, yBottomRaw)
+        rects.push({
+          x: xLeft * pw,
+          y: yTop * ph,
+          w: (xRight - xLeft) * pw,
+          h: (yBottom - yTop) * ph,
+          chunkIndex: ci,
+          elementType: chunk.element_type || 'unknown',
+          text: chunk.text || '',
+          isContent: chunk.is_content !== false,
+        })
       }
     }
     return rects
-  }, [chunks, currentPage, currentPageInfo, chunkFormat])
+  }, [chunks, currentPage, currentPageInfo, pagesAreZeroBased])
 
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = {}
@@ -537,10 +542,10 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
     const chunk = chunks[index]
     if (chunk?.positions?.length > 0) {
       const rawPage = chunk.positions[0][0]
-      const viewerPage = toViewerPage(rawPage, chunkFormat.pagesAreZeroBased)
+      const viewerPage = toViewerPage(rawPage, pagesAreZeroBased)
       if (viewerPage !== currentPage) { setCurrentPage(viewerPage); setPageInput(String(viewerPage)) }
     }
-  }, [chunks, currentPage, chunkFormat])
+  }, [chunks, currentPage, pagesAreZeroBased])
 
   const handlePageNav = useCallback((delta: number) => {
     const next = Math.max(1, Math.min(pageCount, currentPage + delta))
@@ -580,15 +585,11 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
     if (editText !== chunk.text) data.text = editText
     if (editType !== chunk.element_type) data.element_type = editType
 
-    // If bbox was drawn, convert to position format
+    // If bbox was drawn, convert to the canonical 0–1 position format.
     if (drawnRect) {
       const pw = currentPageInfo.width, ph = currentPageInfo.height
-      const pageNum = chunkFormat.pagesAreZeroBased ? currentPage - 1 : currentPage
-      if (chunkFormat.isNormalized) {
-        data.positions = [[pageNum, drawnRect.x / pw, (drawnRect.x + drawnRect.w) / pw, drawnRect.y / ph, (drawnRect.y + drawnRect.h) / ph]]
-      } else {
-        data.positions = [[pageNum, drawnRect.x, drawnRect.x + drawnRect.w, drawnRect.y, drawnRect.y + drawnRect.h]]
-      }
+      const pageNum = pagesAreZeroBased ? currentPage - 1 : currentPage
+      data.positions = [[pageNum, drawnRect.x / pw, (drawnRect.x + drawnRect.w) / pw, drawnRect.y / ph, (drawnRect.y + drawnRect.h) / ph]]
     }
 
     if (Object.keys(data).length === 0) { cancelEdit(); return }
@@ -623,12 +624,8 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
     }
     if (drawnRect) {
       const pw = currentPageInfo.width, ph = currentPageInfo.height
-      const pageNum = chunkFormat.pagesAreZeroBased ? currentPage - 1 : currentPage
-      if (chunkFormat.isNormalized) {
-        data.positions = [[pageNum, drawnRect.x / pw, (drawnRect.x + drawnRect.w) / pw, drawnRect.y / ph, (drawnRect.y + drawnRect.h) / ph]]
-      } else {
-        data.positions = [[pageNum, drawnRect.x, drawnRect.x + drawnRect.w, drawnRect.y, drawnRect.y + drawnRect.h]]
-      }
+      const pageNum = pagesAreZeroBased ? currentPage - 1 : currentPage
+      data.positions = [[pageNum, drawnRect.x / pw, (drawnRect.x + drawnRect.w) / pw, drawnRect.y / ph, (drawnRect.y + drawnRect.h) / ph]]
     }
     createChunk.mutate(data, {
       onSuccess: () => {
