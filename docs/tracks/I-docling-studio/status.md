@@ -26,3 +26,5 @@ Append-only ledger. One row per phase attempt.
 | I.D-3 | chunk merge/split | — | `track/i-d3-chunk-mutate` | 2026-06-19 | merged to main (commit 3d5cf11, `--no-ff`) |
 | I.D-4 | result tabs (Markdown/Images/Structure) | — |  | 2026-06-19 | adversarial review: APPROVED (0 blockers/majors, 3 minors). Markdown rehype-sanitize XSS-safe; ImageGallery 6/page DOM-gated lazy-load; new GET /sources/{id}/images listing; ConfigTab split out; StructureViewer placeholder for I.F. 24 frontend + 4 backend tests |
 | I.D-4 | result tabs (Markdown/Images/Structure) | — |  | 2026-06-19 | merged to main (commit 59c495d, ) — completes Phase I.D |
+| I.E | responsiveness & polish | — |  | 2026-06-19 | implemented; IBM Plex Mono loaded + .mono-num sweep + overflow hardening; 24 frontend tests; tsc/lint/build clean |
+| I.E | responsiveness & polish | — |  | 2026-06-19 | adversarial review attempt 1: REVISIONS_NEEDED (1 MAJOR: +64KB font budget, unused weight 500) → fixed (weight 400 only, ~32KB on-disk / ~10KB effective fetch) |
