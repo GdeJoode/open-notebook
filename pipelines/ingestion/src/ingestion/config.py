@@ -185,6 +185,8 @@ class DoclingConfig:
             images_scale=self.images_scale,
             do_picture_classification=self.do_picture_classification,
             do_picture_description=self.do_picture_description,
+            do_formula_enrichment=self.do_formula_extraction,
+            do_code_enrichment=self.do_code_enrichment,
         )
 
         # Only pass picture_description_options when not None —
