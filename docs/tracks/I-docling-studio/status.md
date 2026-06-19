@@ -20,3 +20,4 @@ Append-only ledger. One row per phase attempt.
 | I.D-1 | LayersBar | — | `track/i-d1-layersbar` | 2026-06-19 | adversarial review: APPROVED (0 blockers/majors, 3 non-blocking minors logged) → merged to main |
 | I.D-2 | full Docling conversion config | — | `track/i-d2-docling-config` | 2026-06-19 | implemented (5 toggles end-to-end; found+fixed unforwarded code/formula enrichment) |
 | I.D-2 | full Docling conversion config | — | `track/i-d2-docling-config` | 2026-06-19 | adversarial review attempt 1: REVISIONS_NEEDED (1 BLOCKER: code/formula enrichment flipped OFF→ON for existing users, AC3) → fixed (defaults off on all layers); 8 backend + 4 frontend tests pass |
+| I.D-2 | full Docling conversion config | — | `track/i-d2-docling-config` | 2026-06-19 | merged to main (commit 4c4e5b0, `--no-ff`) |
