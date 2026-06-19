@@ -11,16 +11,24 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
+    Response,
     UploadFile,
 )
 from loguru import logger
 
+from app_main.api.rate_limit import limiter
 from app_main.api.schemas import (
     AssetModel,
     SourceCreate,
     SourceResponse,
 )
-from app_main.config import UPLOADS_FOLDER
+from app_main.config import (
+    UPLOADS_FOLDER,
+    get_max_file_size_mb,
+    get_max_page_count,
+    get_rate_limit_rpm,
+)
 from app_main.dependencies import (
     get_notebook_service,
     get_source_service,
@@ -78,6 +86,73 @@ async def save_uploaded_file(upload_file: UploadFile) -> str:
         if os.path.exists(file_path):
             os.unlink(file_path)
         raise
+
+
+async def enforce_upload_guards(upload_file: UploadFile) -> None:
+    """Reject oversized or over-paged uploads before they hit disk/processing.
+
+    Two guards, in order:
+
+    1. **Size** (HTTP 413): rejects files larger than ``MAX_FILE_SIZE_MB``.
+       ``UploadFile.size`` is populated by Starlette from the multipart
+       part length, so this is checked without reading the body.
+    2. **Page count** (HTTP 422): for PDFs only, rejects documents with more
+       than ``MAX_PAGE_COUNT`` pages — the OOM vector this phase guards
+       against (large scanned PDFs). Page count is read with ``pypdfium2``,
+       the same library ``/page-count`` uses. The body is read into memory
+       here only after the size guard has already capped it.
+
+    The page-count guard degrades gracefully: if ``pypdfium2`` is unavailable
+    or the file is not a parseable PDF, it is skipped rather than failing the
+    upload (the size guard still applies). This mirrors ``/page-count``'s
+    own tolerance for a missing pdfium install.
+    """
+    max_size_mb = get_max_file_size_mb()
+    size_bytes = upload_file.size
+    if size_bytes is not None and size_bytes > max_size_mb * 1024 * 1024:
+        actual_mb = size_bytes / (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"File too large: {actual_mb:.1f}MB exceeds the "
+                f"{max_size_mb}MB limit (MAX_FILE_SIZE_MB)."
+            ),
+        )
+
+    filename = upload_file.filename or ""
+    if not filename.lower().endswith(".pdf"):
+        return
+
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        logger.warning(
+            "pypdfium2 unavailable — skipping page-count upload guard"
+        )
+        return
+
+    content = await upload_file.read()
+    await upload_file.seek(0)  # rewind so save_uploaded_file re-reads from 0
+
+    try:
+        pdf = pdfium.PdfDocument(content)
+        page_count = len(pdf)
+    except Exception as e:  # noqa: BLE001 — non-PDF / corrupt: skip guard
+        logger.warning(
+            f"Could not read page count for upload '{filename}' "
+            f"({e}); skipping page-count guard"
+        )
+        return
+
+    max_pages = get_max_page_count()
+    if page_count > max_pages:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"PDF has too many pages: {page_count} exceeds the "
+                f"{max_pages}-page limit (MAX_PAGE_COUNT)."
+            ),
+        )
 
 
 def parse_source_form_data(
@@ -149,7 +224,10 @@ def parse_source_form_data(
 
 
 @router.post("/", response_model=SourceResponse)
+@limiter.limit(lambda: f"{get_rate_limit_rpm()}/minute")
 async def create_source(
+    request: Request,
+    response: Response,
     form_data: tuple[SourceCreate, Optional[UploadFile]] = Depends(
         parse_source_form_data
     ),
@@ -159,7 +237,14 @@ async def create_source(
         get_transformation_service
     ),
 ):
-    """Create a new source with support for both JSON and multipart form data."""
+    """Create a new source with support for both JSON and multipart form data.
+
+    The slowapi ``@limiter.limit`` decorator enforces per-IP rate limiting
+    (``RATE_LIMIT_RPM``). It requires ``request`` to extract the remote
+    address and ``response`` to attach rate-limit headers on success (with
+    ``headers_enabled=True``); the ``Retry-After`` header on a tripped limit
+    is added by the slowapi exception handler.
+    """
     source_data, upload_file = form_data
     file_path = None
 
@@ -175,6 +260,9 @@ async def create_source(
 
         # Handle file upload
         if upload_file and source_data.type == "upload":
+            # Preflight guards (size + page count) reject oversized or
+            # over-paged uploads before anything is written to disk.
+            await enforce_upload_guards(upload_file)
             try:
                 file_path = await save_uploaded_file(upload_file)
             except Exception as e:
@@ -445,7 +533,10 @@ async def create_source(
 
 
 @router.post("/json", response_model=SourceResponse)
+@limiter.limit(lambda: f"{get_rate_limit_rpm()}/minute")
 async def create_source_json(
+    request: Request,
+    response: Response,
     source_data: SourceCreate,
     source_svc: SourceService = Depends(get_source_service),
     notebook_svc: NotebookService = Depends(get_notebook_service),
@@ -456,7 +547,12 @@ async def create_source_json(
     """Create a new source using JSON payload (legacy endpoint)."""
     form_data = (source_data, None)
     return await create_source(
-        form_data, source_svc, notebook_svc, transformation_svc
+        request,
+        response,
+        form_data,
+        source_svc,
+        notebook_svc,
+        transformation_svc,
     )
 
 
