@@ -20,12 +20,11 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  /* I.A — Inter (UI) injected via next/font in layout.tsx and forwarded
-     through Tailwind's `font-sans` utility. `--font-mono` does NOT bind to
-     a loaded webfont yet — IBM Plex Mono is deferred to I.E along with the
-     `.mono-num` consumers. The `var(--font-mono-numeric, ...)` fallback
-     resolves to the system monospace stack until I.E ships the font load.
-     The fallback stacks guarantee something legible regardless. */
+  /* I.A / I.E — Inter (UI) and IBM Plex Mono (numerics) injected via next/font
+     in layout.tsx and forwarded through Tailwind's `font-sans` / `font-mono`
+     utilities. `--font-mono-numeric` binds IBM Plex Mono (loaded in I.E with
+     its first `.mono-num` consumer); the trailing fallback stacks guarantee
+     something legible if the webfont fails to load. */
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: var(--font-mono-numeric, ui-monospace), SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
@@ -237,14 +236,9 @@
  * coordinates. The `tnum` font-feature locks digits to tabular widths so
  * columns line up.
  *
- * NOTE: This class is intentionally only DEFINED here, with a SYSTEM-FONT
- * FALLBACK. IBM Plex Mono is NOT loaded in I.A — that load + consumer
- * wiring (`.token-count`, `.page-pill`, `.bbox-coords`, ...) ships together
- * in Phase I.E per the plan. Keeping the font load out of I.A reserves
- * bundle headroom; the fallback stack (ui-monospace, SF Mono, ...) keeps
- * the utility usable today via system fonts. When I.E injects
- * `--font-mono-numeric` via next/font, the fallback rule below resolves to
- * IBM Plex Mono automatically.
+ * The font is IBM Plex Mono, bound via `--font-mono-numeric` (loaded in I.E
+ * with next/font in layout.tsx). The trailing fallback stack (ui-monospace,
+ * SF Mono, ...) keeps the utility legible if the webfont fails to load.
  */
 .mono-num {
   font-family: var(--font-mono-numeric, ui-monospace), "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;

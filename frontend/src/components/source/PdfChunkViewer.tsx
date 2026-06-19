@@ -387,7 +387,7 @@ function LegendBar({ typeCounts, hiddenTypes, onToggle }: {
             className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-opacity ${hiddenTypes.has(key) ? 'opacity-35' : 'opacity-100'}`}>
             <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: getElementColor(type) }} />
             <span>{type}</span>
-            <span className="text-muted-foreground">({count})</span>
+            <span className="text-muted-foreground mono-num">({count})</span>
           </button>
         )
       })}
@@ -696,8 +696,8 @@ export function PdfChunkViewer({
       <div className="w-80 min-w-[280px] border-r bg-muted/30 flex flex-col">
         <div className="p-3 border-b bg-background flex-shrink-0 flex items-center justify-between">
           <div>
-            <h3 className="font-semibold text-sm">Elements on Page {currentPage}</h3>
-            <p className="text-xs text-muted-foreground">{pageChunks.length} elements · {chunks.length} total</p>
+            <h3 className="font-semibold text-sm">Elements on Page <span className="mono-num">{currentPage}</span></h3>
+            <p className="text-xs text-muted-foreground"><span className="mono-num">{pageChunks.length}</span> elements · <span className="mono-num">{chunks.length}</span> total</p>
           </div>
           <Button
             type="button" variant="ghost" size="sm" className="h-7 w-7 p-0"
@@ -832,15 +832,16 @@ export function PdfChunkViewer({
 
       {/* Right Pane — PDF Page + Canvas Overlay */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="p-2 border-b flex items-center gap-2 flex-shrink-0 bg-background">
+        <div className="p-2 border-b flex flex-wrap items-center gap-2 flex-shrink-0 bg-background">
           <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={currentPage <= 1} onClick={() => handlePageNav(-1)}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <div className="flex items-center gap-1 text-sm">
-            <Input className="w-12 h-7 text-center text-xs p-0" value={pageInput}
+            <Input className="w-12 h-7 text-center text-xs p-0 mono-num" value={pageInput}
+              aria-label="Current page"
               onChange={(e) => setPageInput(e.target.value)} onBlur={handlePageInputSubmit}
               onKeyDown={(e) => e.key === 'Enter' && handlePageInputSubmit()} />
-            <span className="text-muted-foreground text-xs">/ {pageCount}</span>
+            <span className="text-muted-foreground text-xs mono-num">/ {pageCount}</span>
           </div>
           <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={currentPage >= pageCount} onClick={() => handlePageNav(1)}>
             <ChevronRight className="h-4 w-4" />
