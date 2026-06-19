@@ -58,8 +58,10 @@ class ReprocessRequest(BaseModel):
     docling_generate_page_images: Optional[bool] = Field(False, description="Render a full-page image per page")
 
     # Enrichment (Phase I.D-2)
-    docling_do_code_enrichment: Optional[bool] = Field(True, description="Detect and enrich code blocks")
-    docling_do_formula_enrichment: Optional[bool] = Field(True, description="Detect and extract math formulas")
+    # Default None -> keep the DoclingConfig default (off), preserving pre-I.D-2
+    # behavior (AC3). An explicit true/false from the UI overrides it.
+    docling_do_code_enrichment: Optional[bool] = Field(None, description="Detect and enrich code blocks")
+    docling_do_formula_enrichment: Optional[bool] = Field(None, description="Detect and extract math formulas")
     # None -> follow the VLM toggle (preserves pre-I.D-2 coupling).
     docling_do_picture_classification: Optional[bool] = Field(None, description="Classify pictures independent of the VLM toggle")
 

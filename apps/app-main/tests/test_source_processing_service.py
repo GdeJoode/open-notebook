@@ -946,19 +946,43 @@ class TestBuildIngestionConfig:
     def test_id2_defaults_preserve_current_behaviour(self):
         """Defaults must reproduce pre-I.D-2 effective values (AC3).
 
-        With a VLM pipeline (the ContentSettings default), classification
-        follows the VLM toggle, enrichment stays on, page images stay off,
-        and the image scale stays at 2.0.
+        Pre-I.D-2, code/formula enrichment were NEVER forwarded to docling, so
+        the effective behavior was OFF (docling's native default). The
+        regression risk is turning them on by default. With a VLM pipeline (the
+        ContentSettings default), classification follows the VLM toggle, page
+        images stay off, and the image scale stays at 2.0.
         """
         config = build_ingestion_config(_make_settings()).docling
 
-        assert config.do_code_enrichment is True
-        assert config.do_formula_extraction is True
+        assert config.do_code_enrichment is False
+        assert config.do_formula_extraction is False
         assert config.generate_page_images is False
         assert config.images_scale == 2.0
         # VLM is the default pipeline -> classification on, matching the
         # old `do_picture_classification=use_vlm` coupling.
         assert config.do_picture_classification is True
+
+    def test_id2_defaults_reach_docling_options_off(self):
+        """AC3 at the real boundary: what reaches docling for an unconfigured
+        user must match pre-I.D-2 (code + formula enrichment OFF).
+
+        This is the assertion that actually fails if the defaults flip on — the
+        DoclingConfig dataclass field alone doesn't prove what docling receives.
+        """
+        opts = build_ingestion_config(_make_settings()).docling.to_docling_options()
+        assert opts.do_code_enrichment is False
+        assert opts.do_formula_enrichment is False
+
+    def test_id2_overrides_reach_docling_options_on(self):
+        """The flip side: an explicit opt-in reaches docling as ON (AC1+AC2)."""
+        opts = build_ingestion_config(
+            _make_settings(
+                docling_do_code_enrichment=True,
+                docling_do_formula_enrichment=True,
+            )
+        ).docling.to_docling_options()
+        assert opts.do_code_enrichment is True
+        assert opts.do_formula_enrichment is True
 
     def test_id2_classification_follows_vlm_when_unset(self):
         """Unset classification falls back to the VLM toggle, both ways."""

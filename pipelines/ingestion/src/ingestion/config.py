@@ -113,10 +113,14 @@ class DoclingConfig:
     vlm_prompt: str = "Describe this image in 2-3 sentences. Focus on key information."
 
     # Formula Extraction
-    do_formula_extraction: bool = True
+    # Off by default: docling's native PdfPipelineOptions default is False, and
+    # before I.D-2 this flag was never forwarded — so the effective historical
+    # behavior was OFF. Kept False to preserve it (AC3); the UI/overrides enable it.
+    do_formula_extraction: bool = False
 
     # Code Block Handling
-    do_code_enrichment: bool = True
+    # Off by default for the same reason as do_formula_extraction above.
+    do_code_enrichment: bool = False
 
     # Output Organization
     organize_by_page: bool = True  # Organize elements by page in output

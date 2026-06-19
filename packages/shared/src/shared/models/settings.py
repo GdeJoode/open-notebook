@@ -105,11 +105,14 @@ class ContentSettings(RecordModel):
     )
 
     # Enrichment Settings (Phase I.D-2)
+    # Default False: these were never forwarded to docling before I.D-2, so the
+    # effective historical behavior was OFF. Kept off to preserve it (AC3); the
+    # settings UI / per-run overrides let users opt in.
     docling_do_code_enrichment: Optional[bool] = Field(
-        True, description="Detect and enrich code blocks"
+        False, description="Detect and enrich code blocks"
     )
     docling_do_formula_enrichment: Optional[bool] = Field(
-        True, description="Detect and extract math formulas (LaTeX)"
+        False, description="Detect and extract math formulas (LaTeX)"
     )
     # None means "follow the VLM pipeline" (current behaviour: classification
     # is on iff docling_pipeline == 'vlm'). Set explicitly to override that

@@ -53,8 +53,10 @@ export const DEFAULT_PIPELINE_CONFIG: DoclingPipelineConfig = {
   docling_auto_export_images: true,
   docling_image_scale: 2.0,
   docling_generate_page_images: false,
-  docling_do_code_enrichment: true,
-  docling_do_formula_enrichment: true,
+  // Off by default to preserve pre-I.D-2 behavior (these enrichments were never
+  // forwarded to docling before, so the effective default was off). Users opt in.
+  docling_do_code_enrichment: false,
+  docling_do_formula_enrichment: false,
   // docling_do_picture_classification intentionally left undefined so the
   // backend keeps it coupled to the VLM toggle unless the user overrides it.
   docling_chunking_enabled: true,
