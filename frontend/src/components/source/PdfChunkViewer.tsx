@@ -100,6 +100,22 @@ interface BboxRect {
 interface PdfChunkViewerProps {
   sourceId: string
   chunks: Chunk[]
+  /**
+   * Layout mode.
+   * - `embed` (default): the self-contained two-pane viewer used by the
+   *   Chunks tab — internal chunk list on the left, PDF + overlay on the right.
+   * - `fullscreen`: PDF + overlay only, filling the available height. The
+   *   surrounding inspect workspace (Phase I.B) supplies its own chunk list and
+   *   properties panes, so the internal chunk list is suppressed.
+   */
+  mode?: 'embed' | 'fullscreen'
+  /**
+   * Controlled selection by chunk id (fullscreen mode). When provided, the
+   * viewer mirrors this selection in the overlay and reports user clicks via
+   * `onSelectChunkId` instead of holding selection state internally.
+   */
+  selectedChunkId?: string | null
+  onSelectChunkId?: (chunkId: string | null) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +415,15 @@ function LegendBar({ typeCounts, hiddenTypes, onToggle }: {
 // Main component
 // ---------------------------------------------------------------------------
 
-export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
+export function PdfChunkViewer({
+  sourceId,
+  chunks,
+  mode = 'embed',
+  selectedChunkId,
+  onSelectChunkId,
+}: PdfChunkViewerProps) {
+  const fullscreen = mode === 'fullscreen'
+  const controlledSelection = selectedChunkId !== undefined
   const [currentPage, setCurrentPage] = useState(1)
   const [pageInput, setPageInput] = useState('1')
   const [pageCount, setPageCount] = useState(0)
@@ -427,7 +451,20 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
   const imgRef = useRef<HTMLImageElement>(null)
   const chunkListRef = useRef<HTMLDivElement>(null)
   const initialPageSetRef = useRef(false)
-  const highlightedIndex = hoveredChunkIndex ?? selectedChunkIndex
+
+  // In controlled (fullscreen) mode the selected chunk is driven by the parent
+  // workspace via `selectedChunkId`; otherwise it's the internal index state.
+  const controlledSelectedIndex = useMemo(() => {
+    if (!controlledSelection) return null
+    if (!selectedChunkId) return null
+    const idx = chunks.findIndex((c) => c.id === selectedChunkId)
+    return idx >= 0 ? idx : null
+  }, [controlledSelection, selectedChunkId, chunks])
+
+  const effectiveSelectedIndex = controlledSelection
+    ? controlledSelectedIndex
+    : selectedChunkIndex
+  const highlightedIndex = hoveredChunkIndex ?? effectiveSelectedIndex
 
   // Mutations
   const updateChunk = useUpdateChunk(sourceId)
@@ -537,15 +574,34 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
     if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [highlightedIndex])
 
+  // Controlled mode: when the parent workspace selects a chunk, follow it to
+  // the page where its bbox lives so the overlay highlight is visible.
+  useEffect(() => {
+    if (!controlledSelection || controlledSelectedIndex === null) return
+    const chunk = chunks[controlledSelectedIndex]
+    if (!chunk?.positions?.length) return
+    const viewerPage = toViewerPage(chunk.positions[0][0], pagesAreZeroBased)
+    if (viewerPage !== currentPage) {
+      setCurrentPage(viewerPage)
+      setPageInput(String(viewerPage))
+    }
+    // currentPage intentionally omitted: we only react to selection changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controlledSelection, controlledSelectedIndex, chunks, pagesAreZeroBased])
+
   const handleSelectChunk = useCallback((index: number) => {
-    setSelectedChunkIndex(index)
     const chunk = chunks[index]
+    if (controlledSelection) {
+      onSelectChunkId?.(chunk?.id ?? null)
+    } else {
+      setSelectedChunkIndex(index)
+    }
     if (chunk?.positions?.length > 0) {
       const rawPage = chunk.positions[0][0]
       const viewerPage = toViewerPage(rawPage, pagesAreZeroBased)
       if (viewerPage !== currentPage) { setCurrentPage(viewerPage); setPageInput(String(viewerPage)) }
     }
-  }, [chunks, currentPage, pagesAreZeroBased])
+  }, [chunks, currentPage, pagesAreZeroBased, controlledSelection, onSelectChunkId])
 
   const handlePageNav = useCallback((delta: number) => {
     const next = Math.max(1, Math.min(pageCount, currentPage + delta))
@@ -644,8 +700,10 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
   if (chunks.length === 0 && !showAddForm) return <Alert><AlertCircle className="h-4 w-4" /><AlertDescription>No chunks available.</AlertDescription></Alert>
 
   return (
-    <div className="flex h-full border rounded-lg overflow-hidden bg-background">
-      {/* Left Pane — Chunk List */}
+    <div className={`flex h-full overflow-hidden bg-background ${fullscreen ? '' : 'border rounded-lg'}`}>
+      {/* Left Pane — Chunk List (embed mode only; fullscreen uses the
+          workspace's ChunkListPanel instead). */}
+      {!fullscreen && (
       <div className="w-80 min-w-[280px] border-r bg-muted/30 flex flex-col">
         <div className="p-3 border-b bg-background flex-shrink-0 flex items-center justify-between">
           <div>
@@ -781,6 +839,7 @@ export function PdfChunkViewer({ sourceId, chunks }: PdfChunkViewerProps) {
           </div>
         </ScrollArea>
       </div>
+      )}
 
       {/* Right Pane — PDF Page + Canvas Overlay */}
       <div className="flex-1 flex flex-col min-w-0">
