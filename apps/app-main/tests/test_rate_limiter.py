@@ -16,6 +16,8 @@ per-IP contract (AC5) cannot silently regress to a per-process key.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 from app_main.api.rate_limit import limiter as production_limiter
 from fastapi import FastAPI, Request, Response
@@ -99,3 +101,64 @@ def test_second_ip_is_unaffected():
 def test_production_limiter_keyed_per_ip():
     """AC5 guard: production limiter keys on remote address, not per-process."""
     assert production_limiter._key_func is get_remote_address
+
+
+def test_json_endpoint_succeeds_through_real_wiring(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression for the decorated-self-call 500 (BLOCKER #1).
+
+    The JSON endpoint must succeed through the *real* slowapi wiring: the
+    ``@limiter.limit`` decorator, ``SlowAPIMiddleware``, and the
+    ``headers_enabled`` success-path header injection. Only the business logic
+    (``_create_source_impl``) is stubbed — the route wrapper, limiter, and
+    header injection are the real artifact. This is exactly the path that
+    raised a 500 when ``create_source_json`` invoked the *decorated* multipart
+    handler with a positional ``response`` (so slowapi injected headers into
+    ``None``). The earlier rate-limiter tests ran a stand-in app and could not
+    catch this.
+    """
+    monkeypatch.setenv("RATE_LIMIT_RPM", "100000")  # keep the limit out of the way
+
+    from app_main.api.routers import sources_upload
+    from app_main.api.schemas import SourceResponse
+    from app_main.dependencies import (
+        get_notebook_service,
+        get_source_service,
+        get_transformation_service,
+    )
+
+    app = FastAPI()
+    app.state.limiter = production_limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+    app.include_router(sources_upload.router, prefix="/sources")
+
+    fake = SourceResponse(
+        id="source:1",
+        title="t",
+        topics=[],
+        asset=None,
+        full_text=None,
+        embedded=False,
+        embedded_chunks=0,
+        created="2026-06-19",
+        updated="2026-06-19",
+    )
+    monkeypatch.setattr(
+        sources_upload,
+        "_create_source_impl",
+        AsyncMock(return_value=fake),
+    )
+    app.dependency_overrides[get_source_service] = lambda: AsyncMock()
+    app.dependency_overrides[get_notebook_service] = lambda: AsyncMock()
+    app.dependency_overrides[get_transformation_service] = lambda: AsyncMock()
+
+    client = TestClient(app)
+    resp = client.post(
+        "/sources/json", json={"type": "text", "content": "hi"}
+    )
+
+    assert resp.status_code == 200  # was 500 before the impl extraction
+    # Success-path header injection ran without error → the wiring is sound.
+    assert "x-ratelimit-limit" in resp.headers

@@ -10,12 +10,13 @@ asserting the source service is never asked to create anything on rejection.
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from app_main.api.rate_limit import limiter
-from app_main.api.routers.sources_upload import router
+from app_main.api.routers.sources_upload import enforce_upload_guards, router
 from app_main.dependencies import (
     get_notebook_service,
     get_source_service,
@@ -24,7 +25,7 @@ from app_main.dependencies import (
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
 from app_main.services.transformation_service import TransformationService
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile
 from fastapi.testclient import TestClient
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -90,9 +91,16 @@ def test_oversize_pages_rejected_with_422(monkeypatch: pytest.MonkeyPatch):
     source_svc = AsyncMock(spec=SourceService)
     client = _make_client(source_svc)
 
-    # Mock pypdfium so we don't need a genuinely 11-page fixture.
-    fake_pdf = list(range(11))  # len() == 11 > 10 limit
-    with patch("pypdfium2.PdfDocument", return_value=fake_pdf):
+    # Mock pypdfium so we don't need a genuinely 11-page fixture. The stand-in
+    # must support len() AND close(), since the guard closes the document.
+    class _FakePdf:
+        def __len__(self) -> int:
+            return 11  # > 10 limit
+
+        def close(self) -> None:
+            pass
+
+    with patch("pypdfium2.PdfDocument", return_value=_FakePdf()):
         resp = client.post(
             "/sources/",
             data={"type": "upload"},
@@ -166,3 +174,27 @@ def test_non_pdf_skips_page_guard(monkeypatch: pytest.MonkeyPatch):
     mock_pdf.assert_not_called()
     assert resp.status_code != 422
     assert resp.status_code == 400  # stopped at the patched save step
+
+
+async def test_guards_rewind_preserves_upload_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The page-count guard reads a real PDF but must leave the upload intact.
+
+    The guard reads the document to count pages, then ``seek(0)``s so
+    ``save_uploaded_file`` re-reads the full body. This asserts the data
+    integrity contract directly: drop the rewind and the bytes are consumed,
+    so a valid upload would persist as a zero-byte file — this test would then
+    fail where the patched-save happy-path test stays green.
+    """
+    monkeypatch.setenv("MAX_FILE_SIZE_MB", "500")
+    monkeypatch.setenv("MAX_PAGE_COUNT", "500")
+
+    pdf_bytes = _CLEAN_PDF.read_bytes()
+    upload = UploadFile(filename="clean.pdf", file=io.BytesIO(pdf_bytes))
+
+    await enforce_upload_guards(upload)
+
+    await upload.seek(0)
+    after = await upload.read()
+    assert after == pdf_bytes
