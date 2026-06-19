@@ -238,6 +238,13 @@ export const sourcesApi = {
     return `${apiUrl}/api/sources/${sourceId}/images/${filename}`
   },
 
+  getImages: async (id: string) => {
+    const response = await apiClient.get<{ images: string[] }>(
+      `/sources/${id}/images`
+    )
+    return response.data
+  },
+
   updateChunk: async (sourceId: string, chunkId: string, data: {
     text?: string
     element_type?: string

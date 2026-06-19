@@ -295,6 +295,69 @@ async def get_page_count(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Image file extensions the gallery is allowed to enumerate / serve. Mirrors
+# the media-type table in get_source_image (description sidecars are .txt and
+# are intentionally excluded).
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
+
+
+def _resolve_output_dir(source) -> Optional[str]:
+    """Resolve a source's ingestion output directory, or None if unavailable.
+
+    Shared by the image-list and image-serve endpoints so both agree on where a
+    source's extracted assets live.
+    """
+    output_dir = getattr(source, "output_directory", None)
+
+    # Fallback: derive from source file path + default ingestion output.
+    if not output_dir and source.asset and source.asset.file_path:
+        stem = Path(source.asset.file_path).stem
+        candidate = Path("ingestion_output") / stem
+        if candidate.exists():
+            output_dir = str(candidate)
+
+    return output_dir
+
+
+@router.get("/{source_id}/images")
+async def list_source_images(
+    source_id: str,
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """List the extracted image filenames for a source.
+
+    The ingestion pipeline writes images to disk but does not persist their
+    filenames on the chunk records, so the only source of truth is the output
+    directory itself. Returns an empty list (not 404) when a source simply has
+    no extracted images, so the gallery can render a clean empty state.
+    """
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        output_dir = _resolve_output_dir(source)
+        if not output_dir:
+            return {"images": []}
+
+        images_dir = Path(output_dir) / "output" / "extracted_info" / "images"
+        if not images_dir.is_dir():
+            return {"images": []}
+
+        filenames = sorted(
+            entry.name
+            for entry in images_dir.iterdir()
+            if entry.is_file() and entry.suffix.lower() in _IMAGE_EXTENSIONS
+        )
+        return {"images": filenames}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing images for source {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{source_id}/images/{filename}")
 async def get_source_image(
     source_id: str,
@@ -313,14 +376,7 @@ async def get_source_image(
                 status_code=400, detail="Invalid filename"
             )
 
-        output_dir = getattr(source, "output_directory", None)
-
-        # Fallback: derive from source file path + default ingestion output
-        if not output_dir and source.asset and source.asset.file_path:
-            stem = Path(source.asset.file_path).stem
-            candidate = Path("ingestion_output") / stem
-            if candidate.exists():
-                output_dir = str(candidate)
+        output_dir = _resolve_output_dir(source)
 
         if not output_dir:
             raise HTTPException(

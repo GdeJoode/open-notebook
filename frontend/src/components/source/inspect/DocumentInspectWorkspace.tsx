@@ -7,10 +7,15 @@ import { Button } from '@/components/ui/button'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { PdfChunkViewer } from '@/components/source/PdfChunkViewer'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ChunkListPanel, type InspectChunk } from './ChunkListPanel'
 import { PropertiesPanel } from './PropertiesPanel'
+import { ConfigTab } from './ConfigTab'
+import { MarkdownViewer } from './MarkdownViewer'
+import { ImageGallery } from './ImageGallery'
+import { StructureViewer } from './StructureViewer'
 import { LayersBar } from './LayersBar'
-import { useSourceChunks } from '@/lib/hooks/use-sources'
+import { useSource, useSourceChunks } from '@/lib/hooks/use-sources'
 import { sourcesApi } from '@/lib/api/sources'
 import {
   DEFAULT_PANEL_SIZES,
@@ -39,6 +44,7 @@ export function DocumentInspectWorkspace({
   onBack,
 }: DocumentInspectWorkspaceProps) {
   const { data: chunksData, isLoading } = useSourceChunks(sourceId)
+  const { data: source } = useSource(sourceId)
   const panelSizes = useDocumentWorkspaceStore((s) => s.panelSizes)
   const setPanelSizes = useDocumentWorkspaceStore((s) => s.setPanelSizes)
   const activeChunkId = useDocumentWorkspaceStore((s) => s.activeChunkId)
@@ -199,15 +205,58 @@ export function DocumentInspectWorkspace({
           >
             <div
               role="region"
-              aria-label="Properties"
+              aria-label="Result tabs"
               className="h-full overflow-hidden border-l"
             >
-              <PropertiesPanel
-                sourceId={sourceId}
-                activeChunk={activeChunk}
-                chunks={chunks}
-                pageCount={pageCount}
-              />
+              <Tabs
+                defaultValue="properties"
+                className="flex h-full flex-col gap-0"
+              >
+                <div className="flex-shrink-0 border-b p-2">
+                  <TabsList className="w-full overflow-x-auto">
+                    <TabsTrigger value="properties" className="px-2 text-xs">
+                      Properties
+                    </TabsTrigger>
+                    <TabsTrigger value="markdown" className="px-2 text-xs">
+                      Markdown
+                    </TabsTrigger>
+                    <TabsTrigger value="images" className="px-2 text-xs">
+                      Images
+                    </TabsTrigger>
+                    <TabsTrigger value="structure" className="px-2 text-xs">
+                      Structure
+                    </TabsTrigger>
+                    <TabsTrigger value="config" className="px-2 text-xs">
+                      Config
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
+
+                <TabsContent value="properties" className="min-h-0">
+                  <PropertiesPanel
+                    sourceId={sourceId}
+                    activeChunk={activeChunk}
+                    chunks={chunks}
+                    pageCount={pageCount}
+                  />
+                </TabsContent>
+
+                <TabsContent value="markdown" className="min-h-0">
+                  <MarkdownViewer content={source?.full_text} />
+                </TabsContent>
+
+                <TabsContent value="images" className="min-h-0">
+                  <ImageGallery sourceId={sourceId} />
+                </TabsContent>
+
+                <TabsContent value="structure" className="min-h-0">
+                  <StructureViewer />
+                </TabsContent>
+
+                <TabsContent value="config" className="min-h-0">
+                  <ConfigTab sourceId={sourceId} />
+                </TabsContent>
+              </Tabs>
             </div>
           </Panel>
         </Group>

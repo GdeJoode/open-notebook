@@ -1,14 +1,6 @@
 'use client'
 
-import { useState } from 'react'
-import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
-import { PipelineConfigPanel } from '@/components/sources/pipeline/PipelineConfigPanel'
-import {
-  DEFAULT_PIPELINE_CONFIG,
-  sourcesApi,
-  type DoclingPipelineConfig,
-} from '@/lib/api/sources'
 import type { InspectChunk } from './ChunkListPanel'
 import { ChunkActionsToolbar } from './ChunkActionsToolbar'
 
@@ -20,9 +12,13 @@ interface PropertiesPanelProps {
 }
 
 /**
- * Right pane of the inspect workspace: metadata for the currently selected
- * chunk plus the Docling pipeline-config reprocess panel. When no chunk is
+ * Properties tab of the inspect workspace right pane (I.B + I.D-4): metadata
+ * for the currently selected chunk plus a document summary. When no chunk is
  * selected it shows a hint rather than an empty void (zero-state, AC).
+ *
+ * The Docling reprocess panel moved to its own "Config" tab in I.D-4; the tab
+ * strip in DocumentInspectWorkspace now provides the section heading, so this
+ * component no longer renders its own header.
  */
 export function PropertiesPanel({
   sourceId,
@@ -30,31 +26,10 @@ export function PropertiesPanel({
   chunks,
   pageCount,
 }: PropertiesPanelProps) {
-  const [reprocessConfig, setReprocessConfig] = useState<DoclingPipelineConfig>({
-    ...DEFAULT_PIPELINE_CONFIG,
-  })
-  const [reprocessing, setReprocessing] = useState(false)
-
-  const handleReprocess = async () => {
-    try {
-      setReprocessing(true)
-      await sourcesApi.reprocess(sourceId, reprocessConfig)
-      toast.success('Reprocessing started — document will be re-ingested')
-    } catch {
-      toast.error('Failed to start reprocessing')
-    } finally {
-      setReprocessing(false)
-    }
-  }
-
   const firstPos = activeChunk?.positions?.[0]
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-card">
-      <div className="flex-shrink-0 border-b px-3 py-2">
-        <h2 className="text-sm font-semibold">Properties</h2>
-      </div>
-
       <div className="flex-1 space-y-4 p-3">
         {/* Active chunk metadata */}
         <section>
@@ -124,21 +99,6 @@ export function PropertiesPanel({
             <span className="text-muted-foreground">Pages</span>
             <span className="mono-num">{pageCount || '—'}</span>
           </div>
-        </section>
-
-        {/* Pipeline config / reprocess */}
-        <section className="border-t pt-3">
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Pipeline
-          </h3>
-          <PipelineConfigPanel
-            config={reprocessConfig}
-            onChange={setReprocessConfig}
-            onReprocess={handleReprocess}
-            reprocessing={reprocessing}
-            collapsible
-            defaultOpen={false}
-          />
         </section>
       </div>
     </div>
