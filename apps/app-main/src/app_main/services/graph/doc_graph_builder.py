@@ -193,14 +193,17 @@ def compute_graph(chunks: Sequence[Dict[str, Any]]) -> ComputedGraph:
     if not chunks:
         return graph
 
-    # Stable reading order: sort by ``order`` (fall back to input order). The
-    # leaf ``sequence`` and the next_node chain both follow this.
-    def _order_key(chunk: Dict[str, Any]) -> int:
+    # Stable reading order: sort by ``order`` with the chunk id as a
+    # deterministic tiebreaker, so chunks sharing an ``order`` (or a missing
+    # one) always sort the same way across re-ingest. The leaf ``sequence``
+    # and the next_node chain both follow this.
+    def _order_key(chunk: Dict[str, Any]) -> tuple[int, str]:
         value = chunk.get("order")
         try:
-            return int(value) if value is not None else 0
+            order = int(value) if value is not None else 0
         except (TypeError, ValueError):
-            return 0
+            order = 0
+        return (order, str(chunk.get("id") or ""))
 
     ordered = sorted(chunks, key=_order_key)
 
@@ -243,7 +246,11 @@ def compute_graph(chunks: Sequence[Dict[str, Any]]) -> ComputedGraph:
         path = _section_path(chunk)
         parent_section_ref = ensure_section(tuple(path)) if path else None
 
-        leaf_ref = f"#/chunks/{chunk.get('order', seq)}"
+        # Derive the leaf ref from the deterministic loop index, NOT the
+        # chunk's ``order`` — a duplicate or missing ``order`` would otherwise
+        # collide two leaf self_refs, violating the UNIQUE (source, self_ref)
+        # index and (via the best-effort hook) silently dropping the whole graph.
+        leaf_ref = f"#/chunks/{seq}"
         bbox = _first_bbox(chunk.get("positions"))
         node = GraphNode(
             self_ref=leaf_ref,

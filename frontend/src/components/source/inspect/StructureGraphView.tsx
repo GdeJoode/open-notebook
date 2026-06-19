@@ -45,6 +45,7 @@ export function StructureGraphView({
 }: StructureGraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sigmaRef = useRef<Sigma | null>(null)
+  const graphRef = useRef<Graph | null>(null)
   const [selected, setSelected] = useState<SelectedNodeInfo | null>(null)
 
   const { data, isLoading, isError, error } = useQuery({
@@ -87,14 +88,14 @@ export function StructureGraphView({
       if (graph.hasNode(node.id)) return
       const seq = node.sequence ?? i
       const level = node.level ?? 0
-      const isSelected = !!node.chunk_id && node.chunk_id === selectedChunkId
+      // Base color only — the active-chunk highlight is applied in a separate
+      // lightweight effect (setNodeAttribute + refresh) so selecting a node
+      // never rebuilds the whole WebGL graph.
       graph.addNode(node.id, {
         x: (seq / Math.max(1, total)) * 100,
         y: -level * 8,
         size: node.element_type === 'section_header' ? 8 : 5,
-        color: isSelected
-          ? '#f97316'
-          : getElementColor(node.element_type ?? 'paragraph'),
+        color: getElementColor(node.element_type ?? 'paragraph'),
         label: node.text ? node.text.slice(0, 40) : node.element_type ?? 'node',
         elementType: node.element_type ?? 'unknown',
         nodeText: node.text,
@@ -150,13 +151,36 @@ export function StructureGraphView({
     sigma.on('clickStage', () => setSelected(null))
 
     sigmaRef.current = sigma
+    graphRef.current = graph
 
     return () => {
       sigma.kill()
       sigmaRef.current = null
+      graphRef.current = null
       document.body.style.cursor = 'default'
     }
-  }, [data, chunkByNode, onSelectNode, selectedChunkId])
+  }, [data, chunkByNode, onSelectNode])
+
+  // Apply the active-chunk highlight in place — recolor nodes via
+  // setNodeAttribute + refresh instead of rebuilding the Sigma instance, so a
+  // click costs O(nodes) attribute writes, not a full WebGL teardown.
+  useEffect(() => {
+    const graph = graphRef.current
+    const sigma = sigmaRef.current
+    if (!graph || !sigma) return
+    graph.forEachNode((nodeId, attrs) => {
+      const chunkId = chunkByNode.get(nodeId)
+      const highlighted = !!chunkId && chunkId === selectedChunkId
+      graph.setNodeAttribute(
+        nodeId,
+        'color',
+        highlighted
+          ? '#f97316'
+          : getElementColor((attrs.elementType as string) ?? 'paragraph')
+      )
+    })
+    sigma.refresh()
+  }, [selectedChunkId, data, chunkByNode])
 
   if (isLoading) {
     return (

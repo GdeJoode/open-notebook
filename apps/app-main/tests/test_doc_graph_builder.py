@@ -171,6 +171,30 @@ class TestComputeGraph:
         # both leaves parent onto the single section
         assert all(n.parent_ref == section_nodes[0].self_ref for n in leaf_nodes)
 
+    def test_duplicate_order_yields_distinct_leaf_refs(self):
+        """Two chunks sharing an ``order`` must still get distinct leaf
+        self_refs. A collision would violate the UNIQUE (source, self_ref)
+        index and — via the best-effort ingestion hook — silently drop the
+        whole structure graph. Leaf refs derive from the deterministic loop
+        index, not the (untrusted) ``order`` field.
+        """
+        chunks = [
+            make_chunk(0, section_path=["A"], text="first", chunk_id="chunk:a"),
+            make_chunk(0, section_path=["A"], text="second", chunk_id="chunk:b"),
+        ]
+        graph = compute_graph(chunks)
+
+        leaf_refs = [
+            n.self_ref for n in graph.nodes if n.element_type != "section_header"
+        ]
+        assert len(leaf_refs) == 2
+        assert len(set(leaf_refs)) == 2  # distinct — no UNIQUE-index collision
+        # both chunks still get their derived_from edge
+        assert {e.source_ref for e in graph.derived_from} == {
+            "chunk:a",
+            "chunk:b",
+        }
+
     def test_next_node_chain_follows_reading_order(self):
         chunks = [
             make_chunk(2, section_path=["A"], text="third"),
