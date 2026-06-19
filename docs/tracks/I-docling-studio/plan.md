@@ -407,7 +407,15 @@ Confirmed sequence: **A → H1 → C → B → D → E → G → F → H2 → H3
 
 ---
 
-### Phase I.H3 — External stores push + stale tracking (IN SCOPE, default-off)
+### Phase I.H3 — External stores push + stale tracking — ❌ OUT OF SCOPE (2026-06-20)
+
+> **DROPPED by user decision (2026-06-20).** External stores (OpenSearch / Neo4j)
+> are the "Option 3" that the source analysis had already **rejected** for
+> re-introducing an external-infra burden (see Risk 8). Adding I.H3 — even
+> default-off — contradicted that rejection. Open Notebook stays **SurrealDB-only**:
+> no Docker OpenSearch/Neo4j, no Fernet key management, no extra infra. Track I
+> therefore ends at I.G + I.H2. The original design is kept below for the record
+> only; it will not be implemented unless explicitly re-scoped.
 
 **Goal**: Push chunks + embeddings to external OpenSearch (knn) or Neo4j; track which sources are Stale relative to upstream. Default-off via `EXTERNAL_STORES_ENABLED=false` (Q-I-H3-2). Port DS's Fernet `STORE_SECRET_KEY` secret-sealing pattern.
 
@@ -494,7 +502,7 @@ Confirmed sequence: **A → H1 → C → B → D → E → G → F → H2 → H3
 | Q-I-H1-1 | `RATE_LIMIT_RPM` default | 120 (DS uses 60; ON gets a little slack) | recommended |
 | Q-I-H2-1 | Snapshot retention | 90 days soft-delete + admin hard-delete | recommended |
 | Q-I-H3-1 | Push sync vs queue | Queue via existing job-queue (B.1 pattern) | recommended |
-| **Q-I-H3-scope** | H3 in Track I scope? | **YES — final phase** | **CONFIRMED** |
+| **Q-I-H3-scope** | H3 in Track I scope? | ~~YES — final phase~~ → **NO, OUT OF SCOPE** (2026-06-20: Option 3 / external-infra burden rejected, see Risk 8) | **REVERSED** |
 | Q-I-H3-2 | `EXTERNAL_STORES_ENABLED` default | `false` (opt-in) | recommended |
 
 User confirms remaining recommended defaults on autopilot unless explicitly contested.
@@ -525,7 +533,7 @@ User confirms remaining recommended defaults on autopilot unless explicitly cont
 | I.G | ANN HNSW vector search | 1–2 | 1 | 13.5d |
 | I.F | Document structure graph | 3–5 | 1 | 18.5d |
 | I.H2 | Audit + snapshots | 2–3 | 1 | 21.5d |
-| I.H3 | External stores | 4–6 | 1 | 27.5d |
+| ~~I.H3~~ | ~~External stores~~ — ❌ OUT OF SCOPE (2026-06-20) | — | — | — |
 | **Total (critical path)** | | **~25 days** | **12 PRs** | |
 | **With ×1.5 reviewer budget** | | **~38 days** | | |
 
