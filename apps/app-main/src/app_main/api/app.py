@@ -10,9 +10,13 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app_main.api.auth import PasswordAuthMiddleware
+from app_main.api.rate_limit import limiter
 from app_main.exceptions import (
     AuthenticationError,
     ConfigurationError,
@@ -26,6 +30,7 @@ from app_main.exceptions import (
 )
 
 from surrealdb_service.migrations import AsyncMigrationManager
+
 
 # Load .env file so all env vars (API keys, HF_TOKEN, etc.) are available
 load_dotenv()
@@ -108,6 +113,18 @@ def create_app() -> FastAPI:
         version="0.2.2",
         lifespan=lifespan,
     )
+
+    # --- Rate limiting (slowapi, per-IP) ---
+    # `SlowAPIMiddleware` reads `app.state.limiter`, and the slowapi
+    # `RateLimitExceeded` handler must be registered so a tripped limit
+    # renders a 429 JSON response carrying `Retry-After` instead of a 500.
+    # This is the *enforcement* layer; the legacy `RateLimitError` handler
+    # below stays active for code paths that raise it explicitly.
+    application.state.limiter = limiter
+    application.add_exception_handler(
+        RateLimitExceeded, _rate_limit_exceeded_handler
+    )
+    application.add_middleware(SlowAPIMiddleware)
 
     # --- Middleware ---
     application.add_middleware(
