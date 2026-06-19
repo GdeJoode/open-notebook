@@ -99,8 +99,8 @@ async def enforce_upload_guards(upload_file: UploadFile) -> None:
     2. **Page count** (HTTP 422): for PDFs only, rejects documents with more
        than ``MAX_PAGE_COUNT`` pages — the OOM vector this phase guards
        against (large scanned PDFs). Page count is read with ``pypdfium2``,
-       the same library ``/page-count`` uses. The body is read into memory
-       here only after the size guard has already capped it.
+       the same library ``/page-count`` uses, streaming from the spooled
+       upload file so the body is never loaded into memory in full.
 
     The page-count guard degrades gracefully: if ``pypdfium2`` is unavailable
     or the file is not a parseable PDF, it is skipped rather than failing the
@@ -131,18 +131,27 @@ async def enforce_upload_guards(upload_file: UploadFile) -> None:
         )
         return
 
-    content = await upload_file.read()
-    await upload_file.seek(0)  # rewind so save_uploaded_file re-reads from 0
-
+    # Read the page count straight from the spooled upload file instead of
+    # pulling the whole body into memory. Starlette spools the multipart part
+    # to a SpooledTemporaryFile (on disk once past ~1MB), and pypdfium2 reads
+    # it in blocks through the buffer interface — so a near-limit PDF (e.g.
+    # 499MB) never materialises as a single in-memory ``bytes`` object, which
+    # is the OOM vector this guard exists to prevent.
+    await upload_file.seek(0)
     try:
-        pdf = pdfium.PdfDocument(content)
-        page_count = len(pdf)
+        pdf = pdfium.PdfDocument(upload_file.file)
+        try:
+            page_count = len(pdf)
+        finally:
+            pdf.close()
     except Exception as e:  # noqa: BLE001 — non-PDF / corrupt: skip guard
         logger.warning(
             f"Could not read page count for upload '{filename}' "
             f"({e}); skipping page-count guard"
         )
+        await upload_file.seek(0)
         return
+    await upload_file.seek(0)  # rewind so save_uploaded_file re-reads from 0
 
     max_pages = get_max_page_count()
     if page_count > max_pages:
@@ -246,6 +255,27 @@ async def create_source(
     is added by the slowapi exception handler.
     """
     source_data, upload_file = form_data
+    return await _create_source_impl(
+        source_data, upload_file, source_svc, notebook_svc, transformation_svc
+    )
+
+
+async def _create_source_impl(
+    source_data: SourceCreate,
+    upload_file: Optional[UploadFile],
+    source_svc: SourceService,
+    notebook_svc: NotebookService,
+    transformation_svc: TransformationService,
+):
+    """Shared create-source logic for the multipart and JSON endpoints.
+
+    Deliberately **not** decorated with ``@limiter.limit``: the two route
+    wrappers own rate-limit accounting and hand slowapi the ``request`` /
+    ``response`` objects. Invoking a decorated route function directly (as the
+    JSON endpoint used to) re-runs slowapi's success-path header injection
+    against a missing ``response`` keyword and raises a 500 — delegating to
+    this undecorated impl avoids that and the double rate-limit pass.
+    """
     file_path = None
 
     try:
@@ -545,14 +575,8 @@ async def create_source_json(
     ),
 ):
     """Create a new source using JSON payload (legacy endpoint)."""
-    form_data = (source_data, None)
-    return await create_source(
-        request,
-        response,
-        form_data,
-        source_svc,
-        notebook_svc,
-        transformation_svc,
+    return await _create_source_impl(
+        source_data, None, source_svc, notebook_svc, transformation_svc
     )
 
 
