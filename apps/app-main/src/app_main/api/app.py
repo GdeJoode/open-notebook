@@ -14,6 +14,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from surrealdb_service.migrations import AsyncMigrationManager
 
 from app_main.api.auth import PasswordAuthMiddleware
 from app_main.api.rate_limit import limiter
@@ -28,9 +29,6 @@ from app_main.exceptions import (
     OpenNotebookError,
     RateLimitError,
 )
-
-from surrealdb_service.migrations import AsyncMigrationManager
-
 
 # Load .env file so all env vars (API keys, HF_TOKEN, etc.) are available
 load_dotenv()
@@ -62,7 +60,6 @@ async def lifespan(app: FastAPI):
 
     # Register job handlers and start the background worker
     import app_main.handlers  # noqa: F401 — triggers @registry.register()
-
     from app_main.services.command_service import start_worker, stop_worker
 
     await start_worker()
@@ -177,6 +174,7 @@ def create_app() -> FastAPI:
         source_chat,
         sources,
         speaker_profiles,
+        structure_graph,
         summaries,
         transformations,
         vault,
@@ -203,6 +201,9 @@ def create_app() -> FastAPI:
     application.include_router(settings.router, prefix="/api", tags=["settings"])
     application.include_router(context.router, prefix="/api", tags=["context"])
     application.include_router(sources.router, prefix="/api", tags=["sources"])
+    application.include_router(
+        structure_graph.router, prefix="/api", tags=["structure-graph"]
+    )
     application.include_router(insights.router, prefix="/api", tags=["insights"])
     application.include_router(commands.router, prefix="/api", tags=["commands"])
     application.include_router(podcasts.router, prefix="/api", tags=["podcasts"])
