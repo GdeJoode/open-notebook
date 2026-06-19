@@ -71,6 +71,27 @@ def build_ingestion_config(content_settings: ContentSettings):
     pipeline = content_settings.docling_pipeline or "vlm"
     use_vlm = pipeline == "vlm"
 
+    # Picture classification is independently controllable (Phase I.D-2).
+    # When the setting is None it falls back to the VLM toggle, preserving the
+    # pre-I.D-2 coupling so existing users see no behaviour change.
+    do_picture_classification = getattr(
+        content_settings, "docling_do_picture_classification", None
+    )
+    if do_picture_classification is None:
+        do_picture_classification = use_vlm
+
+    # Enrichment toggles (Phase I.D-2). getattr with the DoclingConfig default
+    # keeps callers that build ContentSettings without these fields working.
+    do_code_enrichment = getattr(
+        content_settings, "docling_do_code_enrichment", None
+    )
+    do_formula_enrichment = getattr(
+        content_settings, "docling_do_formula_enrichment", None
+    )
+    generate_page_images = getattr(
+        content_settings, "docling_generate_page_images", None
+    )
+
     docling_cfg = DoclingConfig(
         device=device,
         do_ocr=True,
@@ -82,8 +103,15 @@ def build_ingestion_config(content_settings: ContentSettings):
             content_settings.docling_auto_export_images
         ),
         do_picture_description=use_vlm,
-        do_picture_classification=use_vlm,
+        do_picture_classification=do_picture_classification,
         vlm_model=vlm_model,
     )
+
+    if do_code_enrichment is not None:
+        docling_cfg.do_code_enrichment = do_code_enrichment
+    if do_formula_enrichment is not None:
+        docling_cfg.do_formula_extraction = do_formula_enrichment
+    if generate_page_images is not None:
+        docling_cfg.generate_page_images = generate_page_images
 
     return IngestionConfig(docling=docling_cfg)

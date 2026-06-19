@@ -54,7 +54,14 @@ class ReprocessRequest(BaseModel):
 
     # Image extraction
     docling_auto_export_images: Optional[bool] = Field(True, description="Export extracted images")
-    docling_image_scale: Optional[float] = Field(2.0, description="Image scale factor (0.5-2.0)")
+    docling_image_scale: Optional[float] = Field(2.0, ge=1.0, le=4.0, description="Image scale factor (1.0-4.0)")
+    docling_generate_page_images: Optional[bool] = Field(False, description="Render a full-page image per page")
+
+    # Enrichment (Phase I.D-2)
+    docling_do_code_enrichment: Optional[bool] = Field(True, description="Detect and enrich code blocks")
+    docling_do_formula_enrichment: Optional[bool] = Field(True, description="Detect and extract math formulas")
+    # None -> follow the VLM toggle (preserves pre-I.D-2 coupling).
+    docling_do_picture_classification: Optional[bool] = Field(None, description="Classify pictures independent of the VLM toggle")
 
     # Chunking
     docling_chunking_enabled: Optional[bool] = Field(True, description="Enable chunking")

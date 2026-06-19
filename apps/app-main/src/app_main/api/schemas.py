@@ -319,6 +319,10 @@ class SettingsResponse(BaseModel):
     docling_table_mode: Optional[str] = None
     docling_auto_export_images: Optional[bool] = None
     docling_image_scale: Optional[float] = None
+    docling_generate_page_images: Optional[bool] = None
+    docling_do_code_enrichment: Optional[bool] = None
+    docling_do_formula_enrichment: Optional[bool] = None
+    docling_do_picture_classification: Optional[bool] = None
     docling_chunking_enabled: Optional[bool] = None
     docling_chunking_method: Optional[str] = None
     docling_chunking_max_tokens: Optional[int] = None
@@ -353,6 +357,10 @@ class SettingsUpdate(BaseModel):
     docling_table_mode: Optional[str] = None
     docling_auto_export_images: Optional[bool] = None
     docling_image_scale: Optional[float] = None
+    docling_generate_page_images: Optional[bool] = None
+    docling_do_code_enrichment: Optional[bool] = None
+    docling_do_formula_enrichment: Optional[bool] = None
+    docling_do_picture_classification: Optional[bool] = None
     docling_chunking_enabled: Optional[bool] = None
     docling_chunking_method: Optional[str] = None
     docling_chunking_max_tokens: Optional[int] = None
