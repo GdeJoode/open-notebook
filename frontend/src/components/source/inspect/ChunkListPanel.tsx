@@ -3,6 +3,7 @@
 import { useRef, useCallback, useEffect } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Badge } from '@/components/ui/badge'
+import { getElementColor } from '@/lib/constants/element-colors'
 
 export interface InspectChunk {
   id: string
@@ -10,28 +11,6 @@ export interface InspectChunk {
   element_type: string
   is_content?: boolean
   positions: number[][]
-}
-
-// Minimal element-type → color map. The full ported DS palette lands in
-// I.D-1 (`element-colors.ts`); this keeps the left-rail dots meaningful for
-// now without pre-empting that file.
-const ELEMENT_COLORS: Record<string, string> = {
-  title: '#EF4444',
-  section_header: '#F97316',
-  heading: '#F97316',
-  text: '#3B82F6',
-  paragraph: '#3B82F6',
-  table: '#8B5CF6',
-  picture: '#22C55E',
-  list_item: '#06B6D4',
-  list: '#06B6D4',
-  formula: '#EC4899',
-  code: '#14B8A6',
-  caption: '#EAB308',
-}
-
-function elementColor(type: string): string {
-  return ELEMENT_COLORS[type?.toLowerCase().replace(/\s+/g, '_')] ?? '#6B7280'
 }
 
 interface ChunkListPanelProps {
@@ -179,7 +158,7 @@ export function ChunkListPanel({
                   <div className="mb-1 flex items-center gap-1.5">
                     <span
                       className="inline-block h-2 w-2 flex-shrink-0 rounded-full"
-                      style={{ backgroundColor: elementColor(chunk.element_type) }}
+                      style={{ backgroundColor: getElementColor(chunk.element_type) }}
                     />
                     <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
                       {chunk.element_type}

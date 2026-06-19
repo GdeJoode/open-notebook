@@ -9,6 +9,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { PdfChunkViewer } from '@/components/source/PdfChunkViewer'
 import { ChunkListPanel, type InspectChunk } from './ChunkListPanel'
 import { PropertiesPanel } from './PropertiesPanel'
+import { LayersBar } from './LayersBar'
 import { useSourceChunks } from '@/lib/hooks/use-sources'
 import { sourcesApi } from '@/lib/api/sources'
 import {
@@ -42,6 +43,7 @@ export function DocumentInspectWorkspace({
   const setPanelSizes = useDocumentWorkspaceStore((s) => s.setPanelSizes)
   const activeChunkId = useDocumentWorkspaceStore((s) => s.activeChunkId)
   const setActiveChunkId = useDocumentWorkspaceStore((s) => s.setActiveChunkId)
+  const hiddenTypes = useDocumentWorkspaceStore((s) => s.hiddenTypes)
 
   const [pageCount, setPageCount] = useState(0)
 
@@ -54,6 +56,10 @@ export function DocumentInspectWorkspace({
     () => chunks.find((c) => c.id === activeChunkId) ?? null,
     [chunks, activeChunkId]
   )
+
+  // PdfChunkViewer's controlled `hiddenTypes` prop is a Set; derive it once per
+  // change so the overlay only re-renders when the visibility set actually moves.
+  const hiddenTypesSet = useMemo(() => new Set(hiddenTypes), [hiddenTypes])
 
   // Page count drives the Properties summary; loaded once per source.
   useEffect(() => {
@@ -164,15 +170,19 @@ export function DocumentInspectWorkspace({
             <div
               role="region"
               aria-label="PDF preview"
-              className="h-full overflow-hidden"
+              className="flex h-full flex-col overflow-hidden"
             >
-              <PdfChunkViewer
-                sourceId={sourceId}
-                chunks={chunksData!.chunks}
-                mode="fullscreen"
-                selectedChunkId={activeChunkId}
-                onSelectChunkId={setActiveChunkId}
-              />
+              <LayersBar />
+              <div className="min-h-0 flex-1">
+                <PdfChunkViewer
+                  sourceId={sourceId}
+                  chunks={chunksData!.chunks}
+                  mode="fullscreen"
+                  selectedChunkId={activeChunkId}
+                  onSelectChunkId={setActiveChunkId}
+                  hiddenTypes={hiddenTypesSet}
+                />
+              </div>
             </div>
           </Panel>
 
