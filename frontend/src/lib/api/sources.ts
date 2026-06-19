@@ -32,6 +32,12 @@ export interface DoclingPipelineConfig {
   docling_vlm_model?: string
   docling_auto_export_images?: boolean
   docling_image_scale?: number
+  // Full docling conversion config (I.D-2). Page images off, enrichment on
+  // by default. Picture classification undefined => follow the VLM toggle.
+  docling_generate_page_images?: boolean
+  docling_do_code_enrichment?: boolean
+  docling_do_formula_enrichment?: boolean
+  docling_do_picture_classification?: boolean
   docling_chunking_enabled?: boolean
   docling_chunking_method?: string
   docling_chunking_max_tokens?: number
@@ -46,6 +52,11 @@ export const DEFAULT_PIPELINE_CONFIG: DoclingPipelineConfig = {
   docling_vlm_model: 'granite-docling-258m',
   docling_auto_export_images: true,
   docling_image_scale: 2.0,
+  docling_generate_page_images: false,
+  docling_do_code_enrichment: true,
+  docling_do_formula_enrichment: true,
+  // docling_do_picture_classification intentionally left undefined so the
+  // backend keeps it coupled to the VLM toggle unless the user overrides it.
   docling_chunking_enabled: true,
   docling_chunking_method: 'hybrid',
   docling_chunking_max_tokens: 512,

@@ -261,25 +261,64 @@ export function PipelineConfigPanel({
             checked={config.docling_auto_export_images ?? true}
             onCheckedChange={(v) => update('docling_auto_export_images', v)}
             className="scale-75"
+            aria-label="Export extracted images"
           />
           <span className="text-xs">Export extracted images</span>
         </div>
+        <div className="flex items-center gap-2">
+          <Switch
+            checked={config.docling_generate_page_images ?? false}
+            onCheckedChange={(v) => update('docling_generate_page_images', v)}
+            className="scale-75"
+            aria-label="Generate full-page images"
+          />
+          <span className="text-xs">Generate full-page images</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Switch
+            checked={config.docling_do_picture_classification ?? isVlm}
+            onCheckedChange={(v) => update('docling_do_picture_classification', v)}
+            className="scale-75"
+            aria-label="Classify pictures by type"
+          />
+          <span className="text-xs">Classify pictures by type</span>
+        </div>
         <div className="space-y-1">
-          <Label className="text-xs">Scale</Label>
-          <Select
-            value={String(config.docling_image_scale ?? 2.0)}
-            onValueChange={(v) => update('docling_image_scale', parseFloat(v))}
-          >
-            <SelectTrigger className="h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="0.5" className="text-xs">0.5x (small)</SelectItem>
-              <SelectItem value="1.0" className="text-xs">1.0x (standard)</SelectItem>
-              <SelectItem value="1.5" className="text-xs">1.5x (high)</SelectItem>
-              <SelectItem value="2.0" className="text-xs">2.0x (maximum)</SelectItem>
-            </SelectContent>
-          </Select>
+          <Label className="text-xs">
+            Scale: {(config.docling_image_scale ?? 2.0).toFixed(1)}x
+          </Label>
+          <Slider
+            min={1}
+            max={4}
+            step={0.5}
+            value={[config.docling_image_scale ?? 2.0]}
+            onValueChange={(value) => update('docling_image_scale', value[0])}
+            className="w-full"
+            aria-label="Image extraction scale"
+          />
+        </div>
+      </div>
+
+      {/* Enrichment */}
+      <div className="space-y-2">
+        <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Enrichment</h4>
+        <div className="flex items-center gap-2">
+          <Switch
+            checked={config.docling_do_code_enrichment ?? true}
+            onCheckedChange={(v) => update('docling_do_code_enrichment', v)}
+            className="scale-75"
+            aria-label="Enrich code blocks"
+          />
+          <span className="text-xs">Enrich code blocks</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Switch
+            checked={config.docling_do_formula_enrichment ?? true}
+            onCheckedChange={(v) => update('docling_do_formula_enrichment', v)}
+            className="scale-75"
+            aria-label="Extract math formulas"
+          />
+          <span className="text-xs">Extract math formulas (LaTeX)</span>
         </div>
       </div>
 
