@@ -28,3 +28,4 @@ Append-only ledger. One row per phase attempt.
 | I.D-4 | result tabs (Markdown/Images/Structure) | — |  | 2026-06-19 | merged to main (commit 59c495d, ) — completes Phase I.D |
 | I.E | responsiveness & polish | — |  | 2026-06-19 | implemented; IBM Plex Mono loaded + .mono-num sweep + overflow hardening; 24 frontend tests; tsc/lint/build clean |
 | I.E | responsiveness & polish | — |  | 2026-06-19 | adversarial review attempt 1: REVISIONS_NEEDED (1 MAJOR: +64KB font budget, unused weight 500) → fixed (weight 400 only, ~32KB on-disk / ~10KB effective fetch) |
+| I.E | responsiveness & polish | — |  | 2026-06-19 | merged to main (commit 8f0f296, ) |
