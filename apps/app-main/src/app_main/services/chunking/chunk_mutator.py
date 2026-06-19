@@ -11,19 +11,19 @@ source's chunk sequence from the inspect workspace:
 Atomicity (AC3 / Q-I-D3-1)
 --------------------------
 Each mutation runs as a single SurrealQL ``BEGIN ... COMMIT`` transaction
-sent through the canonical ``execute_query`` seam. SurrealDB applies the
-block atomically server-side: if any statement inside the block raises,
-the whole transaction is rolled back and ``execute_query`` re-raises, so
-the chunk table is never left half-mutated.
+sent through ``execute_transaction``. SurrealDB applies the block atomically
+server-side: if any statement inside fails, the whole transaction is rolled
+back. ``execute_transaction`` runs the block via ``query_raw`` and inspects
+*every* statement's status, raising on any ``ERR`` — this matters because the
+plain ``query()`` seam returns only the *first* statement's result and would
+otherwise let a failed statement (statements 2-4 here) look like a silent
+no-op. So a rolled-back transaction always propagates as an exception.
 
-Two things to know about the seam (both verified against surrealdb
-1.0.6's ``AsyncSurreal.query``): a multi-statement query returns only the
-*first* statement's result, and any statement error surfaces as a raised
-exception. Because of the former we do not read mutated rows back from the
-transaction's return value — callers re-fetch via the chunk repository
-after the commit succeeds. All *validation* (ownership, adjacency, offset
-bounds) happens in Python before the transaction is built, so the common
-failure modes never reach the database at all.
+We do not read mutated rows back from the transaction's return value —
+callers re-fetch via the chunk repository after the commit succeeds. All
+*validation* (ownership, adjacency, offset bounds) happens in Python before
+the transaction is built, so the common failure modes never reach the
+database at all.
 
 Audit trail (AC4): each op logs a before/after summary via loguru. The
 durable ``chunk_edit`` table is deferred to phase I.H2 and is intentionally
@@ -37,7 +37,11 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from shared.models import Chunk
 from surrealdb_service.config import SurrealDBConfig
-from surrealdb_service.connection import ensure_record_id, execute_query
+from surrealdb_service.connection import (
+    ensure_record_id,
+    execute_query,
+    execute_transaction,
+)
 
 # Text separator inserted between two merged chunks. Two newlines mirror a
 # paragraph break, which is how Docling/MinerU chunks read when adjacent.
@@ -59,33 +63,46 @@ def _split_positions(
     """Apportion bounding boxes between the two halves of a split.
 
     Positions are ``[page, x1, x2, y1, y2]`` with coordinates normalized
-    to 0–1 (post I.C). We split *vertically* by the text fraction: the
-    first half keeps the top ``fraction`` of each box's height, the second
-    half keeps the remainder. This is an approximation — we don't know the
-    true line geometry — but it is monotonic, conserves the union of the
-    original boxes, and keeps each half's overlay anchored to the correct
-    region of the page.
-
-    Single-box chunks (the common case) are cut into a top and bottom
-    band. Empty position lists yield two empty lists.
+    to 0–1 (post I.C). A chunk usually has one box per line, so we map the
+    text fraction onto *box units*: boxes fully before the cut go to the
+    first half, boxes fully after go to the second, and only the single box
+    straddling the cut is split vertically (at its sub-box fraction). This
+    keeps each whole line-box with the correct half instead of slicing every
+    box at the same height (which would make each half overlay regions that
+    belong to the other). For a single-box chunk this reduces to a top/bottom
+    band cut at ``fraction``. Empty position lists yield two empty lists; the
+    union of inputs is conserved.
     """
     if not positions:
         return [], []
 
     fraction = max(0.0, min(1.0, fraction))
-    first: List[List[float]] = []
+    valid = [list(p) for p in positions if len(p) >= 5]
+    # Malformed boxes can't be geometrically split; keep them with the first
+    # half so they're never silently dropped (conserves the union).
+    malformed = [list(p) for p in positions if len(p) < 5]
+
+    n = len(valid)
+    if n == 0:
+        return malformed, []
+
+    split_point = fraction * n          # cut position in box units
+    boundary = int(split_point)          # index of the straddling box
+    sub = split_point - boundary         # fraction within that box
+
+    first: List[List[float]] = [valid[i] for i in range(min(boundary, n))]
     second: List[List[float]] = []
-    for pos in positions:
-        if len(pos) < 5:
-            # Malformed box — assign whole to both is wrong; keep it on the
-            # first half so it isn't silently dropped.
-            first.append(list(pos))
-            continue
-        page, x1, x2, y1, y2 = pos[0], pos[1], pos[2], pos[3], pos[4]
-        cut = y1 + (y2 - y1) * fraction
-        first.append([page, x1, x2, y1, cut])
-        second.append([page, x1, x2, cut, y2])
-    return first, second
+    if boundary < n:
+        page, x1, x2, y1, y2 = valid[boundary][:5]
+        if sub > 0.0:
+            cut = y1 + (y2 - y1) * sub
+            first.append([page, x1, x2, y1, cut])
+            second.append([page, x1, x2, cut, y2])
+        else:
+            second.append(valid[boundary])
+        second.extend(valid[i] for i in range(boundary + 1, n))
+
+    return malformed + first, second
 
 
 class ChunkMutator:
@@ -100,9 +117,14 @@ class ChunkMutator:
         self.config = config
 
     async def _get_chunk(self, chunk_id: str) -> Optional[Chunk]:
+        try:
+            record_id = ensure_record_id(chunk_id)
+        except Exception:
+            # Malformed id (e.g. no colon) → treat as not found (400), not 500.
+            return None
         rows = await execute_query(
             "SELECT * FROM $id",
-            {"id": ensure_record_id(chunk_id)},
+            {"id": record_id},
             self.config,
         )
         return Chunk(**rows[0]) if rows else None
@@ -197,7 +219,7 @@ class ChunkMutator:
             "WHERE source = $source AND order > $drop_order;\n"
             "COMMIT TRANSACTION;"
         )
-        await execute_query(
+        await execute_transaction(
             transaction,
             {
                 "keep_id": keep_id,
@@ -300,7 +322,7 @@ class ChunkMutator:
             "CREATE chunk CONTENT $new_chunk;\n"
             "COMMIT TRANSACTION;"
         )
-        await execute_query(
+        await execute_transaction(
             transaction,
             {
                 "source": ensure_record_id(source_id),

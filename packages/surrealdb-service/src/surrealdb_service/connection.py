@@ -221,3 +221,60 @@ async def execute_query(
             logger.error(f"Query failed: {query[:200]} params: {params}")
             logger.exception(e)
             raise
+
+
+def _check_transaction_response(response: Any) -> List[Any]:
+    """Validate a ``query_raw`` response, raising on any statement error.
+
+    SurrealDB returns one entry per statement, each ``{"status": "OK"|"ERR",
+    "result": ...}``. A failed statement inside a ``BEGIN ... COMMIT`` block
+    rolls the whole transaction back, but the plain ``query()`` seam only
+    returns the *first* statement's result and so can swallow a later
+    statement's error — making a rolled-back transaction look like a silent
+    no-op. This inspects every statement and raises ``RuntimeError`` if any
+    reports ``ERR`` (or the response carries a top-level error), so a
+    rolled-back transaction always surfaces as an exception.
+
+    Returns the per-statement results on success.
+    """
+    if isinstance(response, dict) and response.get("error") is not None:
+        raise RuntimeError(str(response["error"]))
+    statements = (
+        response.get("result", []) if isinstance(response, dict) else []
+    )
+    errors = [
+        s.get("result")
+        for s in statements
+        if isinstance(s, dict) and s.get("status") == "ERR"
+    ]
+    if errors:
+        raise RuntimeError(f"SurrealQL transaction failed: {errors}")
+    return [
+        s.get("result") for s in statements if isinstance(s, dict)
+    ]
+
+
+async def execute_transaction(
+    query: str,
+    params: Optional[Dict[str, Any]] = None,
+    config: Optional[SurrealDBConfig] = None,
+) -> List[Any]:
+    """Execute a multi-statement SurrealQL transaction, raising on any error.
+
+    Use this instead of :func:`execute_query` for ``BEGIN ... COMMIT`` blocks:
+    it runs the block through ``query_raw`` and inspects every statement's
+    status (see :func:`_check_transaction_response`), so a statement that
+    fails mid-transaction propagates as an exception rather than being
+    silently swallowed.
+    """
+    pool = get_pool(config)
+    async with pool.acquire() as connection:
+        try:
+            response = await connection.query_raw(query, params or {})
+        except Exception as e:
+            logger.error(
+                f"Transaction failed: {query[:200]} params: {params}"
+            )
+            logger.exception(e)
+            raise
+    return parse_record_ids(_check_transaction_response(response))
