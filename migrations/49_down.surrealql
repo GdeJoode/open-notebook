@@ -1,0 +1,14 @@
+-- Migration 49 down: drop the document structure graph tables (Phase I.F).
+--
+-- Removes doc_node and its three RELATION edge tables. The structure graph is
+-- fully rebuildable from the persisted chunk rows by re-running
+-- doc_graph_builder (delete-rebuild on re-ingest), so dropping these tables
+-- loses no irreplaceable data — a re-ingest of each source regenerates them.
+--
+-- Edge tables are dropped before the node table so no dangling RELATE rows
+-- outlive their endpoints.
+
+REMOVE TABLE IF EXISTS derived_from;
+REMOVE TABLE IF EXISTS next_node;
+REMOVE TABLE IF EXISTS parent_of;
+REMOVE TABLE IF EXISTS doc_node;
