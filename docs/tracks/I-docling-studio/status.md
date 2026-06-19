@@ -25,3 +25,4 @@ Append-only ledger. One row per phase attempt.
 | I.D-3 | chunk merge/split | — | `track/i-d3-chunk-mutate` | 2026-06-19 | adversarial review attempt 1: REVISIONS_NEEDED (2 MAJOR: transaction error-propagation unproven + rollback test theater; multi-box split geometry wrong) → fixed (execute_transaction guard + box-unit split); 17 mutator tests pass |
 | I.D-3 | chunk merge/split | — | `track/i-d3-chunk-mutate` | 2026-06-19 | merged to main (commit 3d5cf11, `--no-ff`) |
 | I.D-4 | result tabs (Markdown/Images/Structure) | — |  | 2026-06-19 | adversarial review: APPROVED (0 blockers/majors, 3 minors). Markdown rehype-sanitize XSS-safe; ImageGallery 6/page DOM-gated lazy-load; new GET /sources/{id}/images listing; ConfigTab split out; StructureViewer placeholder for I.F. 24 frontend + 4 backend tests |
+| I.D-4 | result tabs (Markdown/Images/Structure) | — |  | 2026-06-19 | merged to main (commit 59c495d, ) — completes Phase I.D |
