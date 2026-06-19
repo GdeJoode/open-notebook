@@ -37,8 +37,12 @@ class BoundingBox:
     """
     Bounding box for element location on page.
 
-    Coordinates are normalized (0.0 to 1.0) relative to page dimensions.
-    Origin is top-left corner.
+    Canonical coordinate convention (shared by every parser):
+    ``x``, ``y``, ``width``, ``height`` are normalized to 0.0–1.0 relative
+    to page dimensions, with a TOPLEFT origin. Every ``from_*`` constructor
+    MUST emit coordinates in this convention so that ``chunk.positions``
+    is parser-agnostic downstream (frontend overlay, structure graph).
+    A future vision parser (Track H) must follow the same convention.
     """
     x: float  # Left edge
     y: float  # Top edge
@@ -107,31 +111,77 @@ class BoundingBox:
         }
 
     @classmethod
-    def from_docling(cls, prov: Any, page: int) -> "BoundingBox":
+    def from_docling(
+        cls,
+        prov: Any,
+        page: int,
+        page_width: Optional[float] = None,
+        page_height: Optional[float] = None,
+    ) -> "BoundingBox":
         """
-        Create from Docling provenance object.
+        Create a normalized BoundingBox from a Docling provenance object.
 
-        Docling uses BOTTOMLEFT origin, we convert to TOPLEFT.
+        Coordinates are returned in the 0.0–1.0 normalized, TOPLEFT-origin
+        convention shared by every ``BoundingBox.from_*`` constructor (see
+        the class docstring). Docling reports raw PDF points with a
+        BOTTOMLEFT origin, so we divide by the page dimensions and flip the
+        y-axis here, at extraction time, rather than guessing downstream.
+
+        ``page_width``/``page_height`` MUST be the true page size in points
+        (from ``doc.pages[page_no].size``). The provenance object's own
+        ``page_height`` attribute is frequently absent, which is why callers
+        thread the real dimensions in. When dimensions are unknown or
+        non-positive we cannot normalize, so we fall back to a zero box
+        (downstream consumers treat a zero box as "no spatial data").
         """
         if not prov or not hasattr(prov, "bbox"):
             return cls(x=0, y=0, width=0, height=0, page=page)
 
         bbox = prov.bbox
-        # Docling bbox: (left, bottom, right, top) with BOTTOMLEFT origin
-        # Convert to (x, y, width, height) with TOPLEFT origin
-        page_height = getattr(prov, "page_height", 1.0)
 
-        left = getattr(bbox, "l", 0) or 0
-        bottom = getattr(bbox, "b", 0) or 0
-        right = getattr(bbox, "r", 0) or 0
-        top = getattr(bbox, "t", 0) or 0
+        # Fall back to the provenance's own page_height only when the caller
+        # could not supply one (legacy callers). Width has no such fallback.
+        if page_height is None:
+            page_height = getattr(prov, "page_height", None)
 
-        # Convert to normalized coordinates with TOPLEFT origin
+        # Without real dimensions we can't produce normalized coordinates;
+        # emit a zero box rather than raw points masquerading as 0–1.
+        if not page_width or not page_height or page_width <= 0 or page_height <= 0:
+            return cls(x=0, y=0, width=0, height=0, page=page)
+
+        left = float(getattr(bbox, "l", 0) or 0)
+        bottom = float(getattr(bbox, "b", 0) or 0)
+        right = float(getattr(bbox, "r", 0) or 0)
+        top = float(getattr(bbox, "t", 0) or 0)
+
+        # Docling defaults to BOTTOMLEFT origin; honour an explicit
+        # coord_origin when present (mirrors ChunkExtractor._convert_docling_bbox).
+        coord_origin = "BOTTOMLEFT"
+        if hasattr(bbox, "coord_origin"):
+            coord_origin = str(bbox.coord_origin).upper()
+
+        if "TOPLEFT" in coord_origin:
+            y_top = top / page_height
+            y_bottom = bottom / page_height
+        else:
+            # BOTTOMLEFT: flip so the smaller image-space y is the top edge.
+            y_top = (page_height - top) / page_height
+            y_bottom = (page_height - bottom) / page_height
+
+        x1 = left / page_width
+        x2 = right / page_width
+
+        # Clamp to the valid normalized range.
+        x1 = max(0.0, min(1.0, x1))
+        x2 = max(0.0, min(1.0, x2))
+        y_top = max(0.0, min(1.0, y_top))
+        y_bottom = max(0.0, min(1.0, y_bottom))
+
         return cls(
-            x=left,
-            y=page_height - top if page_height else top,
-            width=right - left,
-            height=top - bottom,
+            x=x1,
+            y=y_top,
+            width=max(0.0, x2 - x1),
+            height=max(0.0, y_bottom - y_top),
             page=page,
         )
 

@@ -463,6 +463,19 @@ def _bbox_from_mineru(
 
     width = max(0.0, x1 - x0)
     height = max(0.0, y1 - y0)
+
+    # Dev-mode sanity check: MinerU coords should already be 0–1 after
+    # division by `factor`. This is the shared BoundingBox convention
+    # (see ingestion.models.document.BoundingBox). Guarded by __debug__
+    # so production runs (python -O) skip it; it never fires on valid
+    # MinerU output, only flags a future factor/back-end regression.
+    if __debug__:
+        for coord in (x0, y0, x1, y1):
+            assert -0.01 <= coord <= 1.01, (
+                f"MinerU bbox coord {coord} outside 0–1 after factor {factor}; "
+                f"raw_bbox={raw_bbox}"
+            )
+
     return BoundingBox(x=x0, y=y0, width=width, height=height, page=page)
 
 

@@ -21,6 +21,10 @@ def from_document(document: Any) -> List[Dict[str, Any]]:
 
     Iterates each page's text elements, tables, and images in source
     order; emits one chunk per element with positional metadata.
+
+    Emitted ``positions`` are ``[page, x1, x2, y1, y2]`` with x/y already
+    normalized to 0–1 (TOPLEFT origin) by ``BoundingBox.from_*`` — no
+    rescaling happens here, so every parser's output is uniform.
     """
     chunks: List[Dict[str, Any]] = []
     order = 0
