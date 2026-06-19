@@ -34,8 +34,18 @@ interface DocumentWorkspaceState {
   activePage: number
   activeChunkId: string | null
   panelSizes: PanelSizes
+  /**
+   * Element-type keys whose bbox overlays are hidden in the middle-pane viewer
+   * (Phase I.D-1). Stored as a normalized-key array (not a Set) so it stays
+   * plain-JSON; it is navigation-scoped and intentionally NOT persisted.
+   */
+  hiddenTypes: string[]
   setActivePage: (page: number) => void
   setActiveChunkId: (chunkId: string | null) => void
+  /** Toggle a single element-type key's visibility (idempotent set semantics). */
+  toggleType: (type: string) => void
+  /** Clear all hidden types (show every element type again). */
+  showAllTypes: () => void
   /**
    * Persist the three pane sizes. Each is individually clamped to
    * [MIN_PANEL_PCT, MAX_PANEL_PCT]; the trio is NOT renormalized to 100 here
@@ -52,8 +62,16 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceState>()(
       activePage: 1,
       activeChunkId: null,
       panelSizes: { ...DEFAULT_PANEL_SIZES },
+      hiddenTypes: [],
       setActivePage: (page) => set({ activePage: Math.max(1, Math.floor(page)) }),
       setActiveChunkId: (chunkId) => set({ activeChunkId: chunkId }),
+      toggleType: (type) =>
+        set((state) => ({
+          hiddenTypes: state.hiddenTypes.includes(type)
+            ? state.hiddenTypes.filter((t) => t !== type)
+            : [...state.hiddenTypes, type],
+        })),
+      showAllTypes: () => set({ hiddenTypes: [] }),
       setPanelSizes: (sizes) =>
         set({
           panelSizes: {
@@ -67,6 +85,7 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceState>()(
           activePage: 1,
           activeChunkId: null,
           panelSizes: { ...DEFAULT_PANEL_SIZES },
+          hiddenTypes: [],
         }),
     }),
     {
