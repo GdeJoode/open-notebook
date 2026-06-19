@@ -26,9 +26,12 @@ const inter = Inter({
   display: "swap",
 });
 
+// Weight 400 only: `.mono-num` renders tabular numerics at the normal weight;
+// no consumer requests medium (500), so shipping it would be dead font payload
+// against the track's <30KB bundle budget (plan §I.A AC5).
 const ibmPlexMono = IBM_Plex_Mono({
   subsets: ["latin"],
-  weight: ["400", "500"],
+  weight: ["400"],
   variable: "--font-mono-numeric",
   display: "swap",
 });

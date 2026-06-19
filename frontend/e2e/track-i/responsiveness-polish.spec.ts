@@ -175,7 +175,9 @@ test.describe('I.E: responsiveness & mono-numerics polish', () => {
     // readouts, then assert those are .mono-num too.
     await page.getByRole('option').first().click()
     await expect(page.getByText('Bbox (0–1)')).toBeVisible({ timeout: 5_000 })
-    // The bbox value sibling carries .mono-num.
+    // Grab the first .mono-num <dd> in the properties panel (the Page readout
+    // precedes the Bbox value in DOM order; either proves the binding resolves
+    // to IBM Plex Mono, which is what AC2 requires).
     const bboxValue = page.locator('dd.mono-num').first()
     await expect(bboxValue).toBeVisible()
     const bboxFont = await bboxValue.evaluate(

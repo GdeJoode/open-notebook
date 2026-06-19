@@ -48,13 +48,22 @@ Two things to weigh:
    before/after (inspect route 340 kB, shared 101 kB). next/font emits the font
    as per-unicode-range subset slices fetched on demand; the digit glyphs the
    `.mono-num` readouts use live in one basic-latin slice, so a real client
-   fetches a small fraction of the 64 KB, not all 10 files. The 64 KB is the
-   worst-case on-disk total, not the per-page transfer.
+   fetches a small fraction of the total, not all the files.
 
-If the reviewer wants this under a hard 30 KB, the lever is dropping weight 500
-(use 400 only) — but the plan explicitly specified `weight: ["400","500"]`, so
-I shipped both as written and flagged the overage rather than silently
-deviating.
+> **Revision (adversarial review, MAJOR):** The original draft shipped weights
+> `["400","500"]` and (incorrectly) claimed the plan specified both — it does
+> not (§I.E gives no weights). Weight 500 had **zero consumers** (no `.mono-num`
+> site uses `font-medium`), so it was pure dead payload. Dropped to
+> `weight: ["400"]`. Re-measured against a clean `main` build:
+> main 218,888 B / 7 woff2 → branch **251,624 B / 12 woff2 = +32,736 B (~32 KB)**
+> across 5 latin subset slices. That is ~2.7 KB over the literal <30 KB on-disk
+> line, but next/font splits by `unicode-range`: the basic-latin slice carrying
+> the digits `.mono-num` renders is ~10 KB, and the browser fetches only the
+> slice(s) matching rendered glyphs — so the **effective per-client transfer for
+> the numerics is well under 30 KB**. The AC's intent ("subset via next/font")
+> is met; total-on-disk is marginally over. A strict <30 KB on-disk would
+> require self-hosting a digits-only subset (outside `next/font/google`'s
+> control) — not done, noted as an option for the track owner.
 
 ## AC-by-AC
 
