@@ -566,6 +566,8 @@ class EntityExtractionService:
         filtering_stats = {}
 
         if run_filtering and (result.entities or result.relations):
+            filtered = None
+            all_relations: List[Dict[str, Any]] = []
             try:
                 if filtering_config:
                     f_config = filtering_config
@@ -614,9 +616,21 @@ class EntityExtractionService:
                     f"{filtering_stats}"
                 )
 
-                # 6. Persist filtered entities to KG
-                # B.8a: thread provenance (method + resolved model) so the KG
-                # records what actually produced each entity.
+            except Exception as e:
+                # Filtering itself failing is non-fatal — fall through and the
+                # raw extraction results are still saved below. ``filtered``
+                # stays None so the persist step is skipped.
+                logger.error(f"Filtering failed for source {source_id}: {e}")
+
+            # 6. Persist filtered entities to KG.
+            # B.8a: this is intentionally OUTSIDE the filtering try/except.
+            # A persistence failure (e.g. a fully-failed entity batch raising
+            # from persist_filtered_result) must PROPAGATE — otherwise it would
+            # be masked as "Filtering failed" and the extraction would report
+            # success while writing nothing to the KG. Provenance (real method
+            # + resolved model) is threaded so the KG records what produced
+            # each entity.
+            if filtered is not None:
                 await self._persistence.persist_filtered_result(
                     source_id=source_id,
                     entities=[e.model_dump() for e in filtered.entities],
@@ -628,10 +642,6 @@ class EntityExtractionService:
                         config.llm_model if config.llm_model != "default" else None
                     ),
                 )
-
-            except Exception as e:
-                logger.error(f"Filtering failed for source {source_id}: {e}")
-                # Fall through — raw results will still be saved
 
         # 7. Persist raw extraction results
         await self._save_result(source_id, result)
@@ -816,12 +826,16 @@ class EntityExtractionService:
         ] + [
             r.model_dump() for r in filtered.predicted_edges
         ]
+        # B.8a: preserve the ORIGINAL extraction's provenance on re-filter —
+        # don't rewrite every entity's method to the default "llm". The stored
+        # extraction_result.metadata carries the extractor_type.
         await self._persistence.persist_filtered_result(
             source_id=source_id,
             entities=[e.model_dump() for e in filtered.entities],
             relations=all_relations,
             merge_groups=filtered.merged_entity_groups,
             match_candidates=[c.model_dump() for c in filtered.match_candidates] if filtered.match_candidates else None,
+            extraction_method=extraction.metadata.get("extractor_type", "llm"),
         )
 
         stats = {
