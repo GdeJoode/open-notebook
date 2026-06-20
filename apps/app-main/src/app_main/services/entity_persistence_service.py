@@ -106,6 +106,8 @@ class EntityPersistenceService:
         relations: List[Dict[str, Any]],
         merge_groups: List[List[str]] | None = None,
         match_candidates: List[Dict[str, Any]] | None = None,
+        extraction_method: str = "llm",
+        extraction_model: str | None = None,
     ) -> Dict[str, Any]:
         """Upsert entities and create relations in the knowledge graph.
 
@@ -119,6 +121,7 @@ class EntityPersistenceService:
             Dict with ``entities_upserted`` and ``relations_created`` counts.
         """
         entities_upserted = 0
+        entities_failed = 0
         relations_created = 0
 
         # Build merge group lookup: entity text → group members
@@ -148,11 +151,20 @@ class EntityPersistenceService:
             if text in merge_lookup:
                 stored_props["merged_from"] = merge_lookup[text]
 
+            # Record the model that produced this entity (provenance). The
+            # `entity` table is SCHEMALESS in prod, so an extra prop is safe;
+            # `extraction_method` is a first-class Entity field.
+            if extraction_model:
+                stored_props["extraction_model"] = extraction_model
+
             try:
                 # Route through EntityRepository.upsert_entity so the write
                 # uses the canonical schema field names (canonical_name,
                 # source_documents, embedding=[]) declared in migration 39+44.
                 # See Phase B.1a notes at top of this module for context.
+                #
+                # B.8a: thread the real extraction_method (was silently
+                # defaulting to "llm" for every path — provenance bug).
                 entity_model = Entity(
                     canonical_name=text,
                     entity_type=label,
@@ -160,11 +172,16 @@ class EntityPersistenceService:
                     source_documents=[source_id],
                     properties=stored_props,
                     embedding=[],
+                    extraction_method=extraction_method,
                 )
                 await self._entity_repo.upsert_entity(entity_model)
                 entities_upserted += 1
             except Exception as e:
-                logger.warning(f"Failed to upsert entity '{text}': {e}")
+                # B.8a: do NOT silently swallow. Count the failure and log at
+                # ERROR; a fully-failed batch raises below so the caller can't
+                # report a successful extraction that wrote nothing.
+                entities_failed += 1
+                logger.error(f"Failed to upsert entity '{text}': {e}")
 
         # 2. Create relations
         for rel in relations:
@@ -217,6 +234,25 @@ class EntityPersistenceService:
                 source_id, match_candidates
             )
 
+        # B.8a: if entities were attempted and EVERY one errored, that is a hard
+        # failure, not a silent success — surface it so callers/telemetry see the
+        # extraction wrote nothing rather than reporting 0 quietly. (Entities
+        # skipped for empty text are not failures, so this keys on
+        # ``entities_failed``, not on a zero upsert count.)
+        if entities_failed > 0 and entities_upserted == 0:
+            raise RuntimeError(
+                f"persist_filtered_result wrote 0 of {len(entities)} entities "
+                f"for source {source_id} (all {entities_failed} upserts failed) — "
+                f"see ERROR logs above"
+            )
+
+        if entities_failed:
+            logger.error(
+                f"persist_filtered_result: {entities_failed} of "
+                f"{len(entities)} entities failed to upsert for source "
+                f"{source_id} ({entities_upserted} succeeded)"
+            )
+
         logger.info(
             f"Persisted to KG: {entities_upserted} entities, "
             f"{relations_created} relations, "
@@ -225,6 +261,7 @@ class EntityPersistenceService:
 
         return {
             "entities_upserted": entities_upserted,
+            "entities_failed": entities_failed,
             "relations_created": relations_created,
             "candidates_stored": candidates_stored,
         }

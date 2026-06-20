@@ -615,12 +615,18 @@ class EntityExtractionService:
                 )
 
                 # 6. Persist filtered entities to KG
+                # B.8a: thread provenance (method + resolved model) so the KG
+                # records what actually produced each entity.
                 await self._persistence.persist_filtered_result(
                     source_id=source_id,
                     entities=[e.model_dump() for e in filtered.entities],
                     relations=all_relations,
                     merge_groups=merge_groups,
                     match_candidates=[c.model_dump() for c in filtered.match_candidates] if filtered.match_candidates else None,
+                    extraction_method=extractor_type,
+                    extraction_model=(
+                        config.llm_model if config.llm_model != "default" else None
+                    ),
                 )
 
             except Exception as e:
