@@ -1545,3 +1545,20 @@ Part of the B.8 live-validation follow-up. Three fixes:
 **Tests**: 10/10 `test_entity_persistence_service.py` (3 new: fully-failed-raises, partial-failure-counted, method+model-threaded). Extraction suite collects clean (20).
 **Review**: attempt 1 REVISIONS_NEEDED (1 Major: raise swallowed by run_extraction try/except) → fixed → attempt 2 APPROVED.
 **Deferred to B.8d**: (1) run_extraction integration test asserting persist-RuntimeError propagation with run_filtering=True; (2) relation-write failures still swallow (warning-only).
+
+---
+
+## Phase B.8a-2 — Independent extraction model — 2026-06-20
+
+**Branch**: `track/b8a2-extraction-model` (commits 402756d, 187e9c8)
+**Status**: adversarial-reviewer APPROVED (attempt 2).
+
+B.8a's model swap targeted EXTRACTION_MODEL (the langextract microservice), but the KG entity-extraction path resolves the model via DefaultModels.default_chat_model — so chat and extraction were coupled (a global-chat-model change would be a monkey fix). Added a dedicated, independently-selectable extraction model following the existing per-function-model pattern:
+- `DefaultModels.default_extraction_model` + `resolve_default_model_id()` shared resolver (override → per-function default → chat fallback), used by both make_default_llm_caller and entity provenance.
+- All 4 extraction callers (multi-schema, single-schema, B.5b retry, manual orphan-reconnect) use the extraction model.
+- API GET/PUT /models/defaults + frontend "Extraction Model" dropdown expose it.
+- DB: default_extraction_model = qwen2.5:14b-instruct-q5_K_M; default_chat_model stays llama3.1 — independent.
+
+**Review**: attempt 1 REVISIONS_NEEDED (2 MAJOR: 4th caller missed; provenance stamped None on common path) → fixed via shared resolver → attempt 2 APPROVED.
+**Tests**: 4/4 TestMakeDefaultLLMCaller (incl. 2 new resolver tests). tsc clean. No new ruff errors.
+**Note**: Dockerfile layer-reorder committed (build optimization) — needs validation on next full build.
