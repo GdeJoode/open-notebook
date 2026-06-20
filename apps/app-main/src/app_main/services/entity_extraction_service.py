@@ -78,7 +78,11 @@ def _avg_entity_confidence(entities: Iterable[Any]) -> float:
     return sum(scores) / len(scores)
 
 
-async def make_default_llm_caller(model_id: Optional[str] = None):
+async def make_default_llm_caller(
+    model_id: Optional[str] = None,
+    *,
+    default_field: str = "default_chat_model",
+):
     """Build an async ``LLMCaller`` backed by :class:`ModelManager`.
 
     Phase B.1f fixes the long-standing LLMExtractor "silent empty"
@@ -126,11 +130,19 @@ async def make_default_llm_caller(model_id: Optional[str] = None):
         defaults = await defaults_repo.get()
         mm.set_defaults(defaults)
 
-    resolved_id = model_id or defaults.default_chat_model
+    # Resolve the model: explicit override → the requested per-function default
+    # (e.g. default_extraction_model) → the chat model as the universal
+    # fallback. This lets extraction use a different model than chat without
+    # the two being coupled.
+    resolved_id = (
+        model_id
+        or getattr(defaults, default_field, None)
+        or defaults.default_chat_model
+    )
     if not resolved_id:
         raise RuntimeError(
-            "No chat model configured — set DefaultModels.default_chat_model "
-            "or pass model_id explicitly."
+            f"No model configured — set DefaultModels.{default_field} or "
+            "default_chat_model, or pass model_id explicitly."
         )
 
     model_record = await get_model_repo().get(resolved_id)
@@ -387,7 +399,9 @@ class EntityExtractionService:
         # their lazy-default empty-result paths if no caller arrives.
         llm_caller = None
         try:
-            llm_caller = await make_default_llm_caller()
+            llm_caller = await make_default_llm_caller(
+                default_field="default_extraction_model"
+            )
         except Exception as e:
             logger.warning(
                 f"multi_schema: failed to wire LLM caller ({e}); "
@@ -532,6 +546,7 @@ class EntityExtractionService:
                         model_id=config.llm_model
                         if config.llm_model != "default"
                         else None,
+                        default_field="default_extraction_model",
                     )
                     from ontology_extraction.extractors.llm_extractor import (
                         LLMExtractor,
@@ -733,7 +748,9 @@ class EntityExtractionService:
             # retry will then just record the attempt without confirming.
             llm_caller = None
             try:
-                llm_caller = await make_default_llm_caller()
+                llm_caller = await make_default_llm_caller(
+                    default_field="default_extraction_model"
+                )
             except Exception as e:
                 logger.warning(
                     f"B.5b retry: failed to wire LLM caller ({e}); "

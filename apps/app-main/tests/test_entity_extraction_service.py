@@ -355,6 +355,56 @@ class TestMakeDefaultLLMCaller:
         # The caller unwraps the esperanto ChatCompletion shape.
         assert result == "OK"
 
+    async def _resolve_model_id(self, defaults, default_field):
+        """Run make_default_llm_caller with mocked deps and return the model id
+        it resolved (the id passed to model_repo.get)."""
+        from app_main.services.entity_extraction_service import make_default_llm_caller
+        from shared.models import Model
+
+        mock_lm = MagicMock()
+        model_record = Model(id="model:x", name="n", provider="ollama", type="language")
+        mock_mm = MagicMock()
+        mock_mm.get_defaults = MagicMock(return_value=defaults)
+        mock_mm.get_model_from_config = MagicMock(return_value=mock_lm)
+        mock_model_repo = MagicMock()
+        mock_model_repo.get = AsyncMock(return_value=model_record)
+
+        with patch(
+            "app_main.dependencies.get_model_repo"
+        ) as mock_get_model_repo:
+            import llm_manager
+            with patch.object(llm_manager, "get_model_manager", return_value=mock_mm):
+                mock_get_model_repo.return_value = mock_model_repo
+                with patch("esperanto.LanguageModel", new=type(mock_lm)):
+                    await make_default_llm_caller(default_field=default_field)
+        return mock_model_repo.get.await_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_default_field_resolves_extraction_model(self):
+        """B.8a: default_field='default_extraction_model' selects the extraction
+        model independently of the chat model."""
+        from shared.models import DefaultModels
+
+        defaults = DefaultModels(
+            default_chat_model="model:chat",
+            default_extraction_model="model:extract",
+        )
+        resolved = await self._resolve_model_id(defaults, "default_extraction_model")
+        assert resolved == "model:extract"
+
+    @pytest.mark.asyncio
+    async def test_extraction_model_falls_back_to_chat_when_unset(self):
+        """B.8a: when default_extraction_model is unset, extraction falls back to
+        the chat model (back-compat)."""
+        from shared.models import DefaultModels
+
+        defaults = DefaultModels(
+            default_chat_model="model:chat",
+            default_extraction_model=None,
+        )
+        resolved = await self._resolve_model_id(defaults, "default_extraction_model")
+        assert resolved == "model:chat"
+
     @pytest.mark.asyncio
     async def test_per_call_model_override_logs_warning(self, caplog):
         """When the caller passes a model id that differs from the

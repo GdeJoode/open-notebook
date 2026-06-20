@@ -69,6 +69,14 @@ class DefaultModels(RecordModel):
     default_tools_model: Optional[str] = Field(
         None, description="Default model for tool-using tasks"
     )
+    default_extraction_model: Optional[str] = Field(
+        None,
+        description=(
+            "Default model for knowledge-graph entity/relation extraction. "
+            "Independent of the chat model; falls back to default_chat_model "
+            "when unset."
+        ),
+    )
 
 
 class ModelUsageRecord(ObjectModel):

@@ -83,6 +83,7 @@ async def get_default_models(
         default_speech_to_text_model=defaults.default_speech_to_text_model,
         default_embedding_model=defaults.default_embedding_model,
         default_tools_model=defaults.default_tools_model,
+        default_extraction_model=defaults.default_extraction_model,
     )
 
 
@@ -103,6 +104,7 @@ async def update_default_models(
         default_speech_to_text_model=defaults.default_speech_to_text_model,
         default_embedding_model=defaults.default_embedding_model,
         default_tools_model=defaults.default_tools_model,
+        default_extraction_model=defaults.default_extraction_model,
     )
 
 
