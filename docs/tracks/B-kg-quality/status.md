@@ -1529,3 +1529,19 @@ M3 + M4 majors, 5 minors). All addressed in attempt 2.
 | `frontend/e2e/track-b/notebook-merge.spec.ts` | 1/1 | 1/1 |
 
 Rebase on `main` was clean (no conflicts).
+
+---
+
+## Phase B.8a — Model + provenance fix (follow-up sub-track) — 2026-06-20
+
+**Branch**: `track/b8a-model-provenance` (commits c662354, 8c98ce5)
+**Status**: adversarial-reviewer APPROVED (attempt 2). Ready for human sign-off + merge.
+
+Part of the B.8 live-validation follow-up. Three fixes:
+- `EXTRACTION_MODEL` llama3.1:8b-instruct-q4_0 → qwen2.5:14b-instruct-q5_K_M (docker-compose.yml:130).
+- `extraction_method` provenance bug: every persisted entity silently defaulted to "llm". `persist_filtered_result` now takes `extraction_method`/`extraction_model`, stamps them on the Entity, threaded from `run_extraction` (extractor_type + resolved config.llm_model) and `run_filtering_only` (from stored metadata).
+- Swallowed entity-write failures: a fully-failed batch now logs ERROR, returns `entities_failed`, and RAISES (propagates out of run_extraction — the persist call was moved outside the filtering try/except, the attempt-1 Major). Skipped empty-text entities are not failures.
+
+**Tests**: 10/10 `test_entity_persistence_service.py` (3 new: fully-failed-raises, partial-failure-counted, method+model-threaded). Extraction suite collects clean (20).
+**Review**: attempt 1 REVISIONS_NEEDED (1 Major: raise swallowed by run_extraction try/except) → fixed → attempt 2 APPROVED.
+**Deferred to B.8d**: (1) run_extraction integration test asserting persist-RuntimeError propagation with run_filtering=True; (2) relation-write failures still swallow (warning-only).
