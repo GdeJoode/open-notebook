@@ -415,18 +415,24 @@ class EntityRepository:
         Returns:
             A list of entity dictionaries.
         """
+        # NOTE: ``WITH NOINDEX`` is required here. ``entity.name`` is covered by
+        # the full-text SEARCH index ``idx_entity_fulltext`` (name, description).
+        # In SurrealDB v2 the query planner cannot satisfy ``ORDER BY name`` from
+        # a SEARCH index and aborts the transaction with "No iterator has been
+        # found." Forcing a no-index scan + in-memory sort avoids that planner
+        # path. Entity tables are small enough that the full scan is acceptable.
         try:
             if entity_type:
                 return await execute_query(
                     "SELECT id, name, entity_type, weight, confidence "
-                    "FROM entity WHERE entity_type = $entity_type "
+                    "FROM entity WITH NOINDEX WHERE entity_type = $entity_type "
                     "ORDER BY name LIMIT $limit START $offset",
                     {"entity_type": entity_type, "limit": limit, "offset": offset},
                     self.config,
                 )
             return await execute_query(
                 "SELECT id, name, entity_type, weight, confidence "
-                "FROM entity ORDER BY name LIMIT $limit START $offset",
+                "FROM entity WITH NOINDEX ORDER BY name LIMIT $limit START $offset",
                 {"limit": limit, "offset": offset},
                 self.config,
             )
