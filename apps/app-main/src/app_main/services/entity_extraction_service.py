@@ -78,12 +78,48 @@ def _avg_entity_confidence(entities: Iterable[Any]) -> float:
     return sum(scores) / len(scores)
 
 
+async def resolve_default_model_id(
+    default_field: str = "default_chat_model",
+    model_id: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve the model id for a use case — the single source of truth for
+    model-selection precedence (used by both the LLM-caller factory and entity
+    provenance, so they can never drift):
+
+    explicit ``model_id`` override → the requested per-function default (e.g.
+    ``default_extraction_model``) → ``default_chat_model`` as the universal
+    fallback. Returns ``None`` if nothing is configured.
+    """
+    from llm_manager import get_model_manager
+
+    from app_main.dependencies import get_default_models_repo
+
+    mm = get_model_manager()
+    defaults = mm.get_defaults()
+    if not defaults or not defaults.default_chat_model:
+        defaults = await get_default_models_repo().get()
+        mm.set_defaults(defaults)
+
+    if not defaults:
+        return model_id
+    return (
+        model_id
+        or getattr(defaults, default_field, None)
+        or defaults.default_chat_model
+    )
+
+
 async def make_default_llm_caller(
     model_id: Optional[str] = None,
     *,
     default_field: str = "default_chat_model",
 ):
     """Build an async ``LLMCaller`` backed by :class:`ModelManager`.
+
+    ``default_field`` selects which configured default to resolve (e.g.
+    ``default_extraction_model`` for the KG-extraction path), independent of
+    the chat model. Resolution precedence is owned by
+    :func:`resolve_default_model_id`.
 
     Phase B.1f fixes the long-standing LLMExtractor "silent empty"
     bug. The old code wrote ``from llm_manager.manager import LLMManager``
@@ -117,28 +153,11 @@ async def make_default_llm_caller(
     from esperanto import LanguageModel
     from llm_manager import get_model_manager
 
-    from app_main.dependencies import (
-        get_default_models_repo,
-        get_model_repo,
-    )
+    from app_main.dependencies import get_model_repo
 
     mm = get_model_manager()
 
-    defaults = mm.get_defaults()
-    if not defaults or not defaults.default_chat_model:
-        defaults_repo = get_default_models_repo()
-        defaults = await defaults_repo.get()
-        mm.set_defaults(defaults)
-
-    # Resolve the model: explicit override → the requested per-function default
-    # (e.g. default_extraction_model) → the chat model as the universal
-    # fallback. This lets extraction use a different model than chat without
-    # the two being coupled.
-    resolved_id = (
-        model_id
-        or getattr(defaults, default_field, None)
-        or defaults.default_chat_model
-    )
+    resolved_id = await resolve_default_model_id(default_field, model_id)
     if not resolved_id:
         raise RuntimeError(
             f"No model configured — set DefaultModels.{default_field} or "
@@ -653,8 +672,13 @@ class EntityExtractionService:
                     merge_groups=merge_groups,
                     match_candidates=[c.model_dump() for c in filtered.match_candidates] if filtered.match_candidates else None,
                     extraction_method=extractor_type,
-                    extraction_model=(
-                        config.llm_model if config.llm_model != "default" else None
+                    # Record the model actually used (resolved via the same
+                    # precedence as the LLM caller) — not config.llm_model,
+                    # which is "default" on the common path and would stamp
+                    # None even though the extraction model produced the rows.
+                    extraction_model=await resolve_default_model_id(
+                        "default_extraction_model",
+                        config.llm_model if config.llm_model != "default" else None,
                     ),
                 )
 
