@@ -1562,3 +1562,18 @@ B.8a's model swap targeted EXTRACTION_MODEL (the langextract microservice), but 
 **Review**: attempt 1 REVISIONS_NEEDED (2 MAJOR: 4th caller missed; provenance stamped None on common path) → fixed via shared resolver → attempt 2 APPROVED.
 **Tests**: 4/4 TestMakeDefaultLLMCaller (incl. 2 new resolver tests). tsc clean. No new ruff errors.
 **Note**: Dockerfile layer-reorder committed (build optimization) — needs validation on next full build.
+
+---
+
+## Phase B.8b — Deploy + UI/KG verification — 2026-06-21
+
+**Status**: verified (deploy + UI/KG). New image ca8e8088a360 deployed (ORDER BY fix + B.8a + B.8a-2). Dockerfile reorder build-validated (2 uv-sync layers); its code review folded into B.8d.
+
+Findings:
+- ORDER BY fix LIVE: /api/knowledge-graph/entities + /graph return data (147 nodes; were empty pre-fix). No "No iterator" error.
+- Models resolve independently in the deployed app: extraction=qwen2.5:14b-instruct-q5_K_M, chat=llama3.1.
+- Default filters min_conf=0.9/min_conn=5 are Obsidian-EXPORT params only — NOT applied to the KG browse/graph view; they never hid entities. Empty UI was purely the ORDER BY bug.
+- Entity KG is notebook-wide (/graph has no per-source scoping). "Entity KG per document" is not a current feature; per-document = structure graph (I.F).
+- Minor (→B.8d): /graph shows 0 edges despite 3 relations.
+
+**Infra**: redeploy was blocked by a Docker Desktop WSL stale bind-mount; resolved by a full Docker Desktop restart (user-assisted after an over-aggressive auto-restart attempt). Cred-helper + Dockerfile-reorder fixes hold.
