@@ -1,0 +1,39 @@
+-- Migration 51: model_route table for privacy-aware ordered provider chains (Track J.1)
+--
+-- Track J routes the three LLM pipeline stages (entity extraction, summarization,
+-- chat) through an ORDERED provider chain instead of a single resolved model id.
+-- B.8's ``resolve_default_model_id`` returned one id; J generalizes that into an
+-- ordered route. The chain ordering + per-entry enable flags + a separate
+-- local-only ``private_chain`` do not fit the flat scalar ``DefaultModels``
+-- singleton, so J-D1 chooses a dedicated table: one row per task, edited
+-- independently by the UI (J.5).
+--
+-- ``DefaultModels`` per-function fields (``default_extraction_model`` etc.) stay
+-- as the HEAD-OF-CHAIN default model — the B.8 contract is preserved; this table
+-- only orders the providers around that head.
+--
+-- Chain entry shape (FLEXIBLE object, forward-compat per the A.1c lesson):
+--   { provider: string, model_id: record<model>|string, enabled: bool }
+--
+--   * ``provider_chain``  -- ordered list tried in CLOUD mode (J appends the
+--                            local model as the final fallback at resolve time).
+--   * ``private_chain``   -- ordered list of LOCAL-only providers for PRIVATE
+--                            mode; when empty, the resolver derives it by
+--                            filtering ``provider_chain`` to local providers.
+--
+-- Singleton-per-task semantics are enforced by the UNIQUE index on ``task`` and
+-- the repository's upsert (query-by-task → UPDATE | CREATE).
+--
+-- Additive + idempotent: every DEFINE uses ``IF NOT EXISTS`` so replaying on a
+-- populated DB is a no-op. The B.0 testcontainers harness validates this by
+-- replaying the migration.
+
+DEFINE TABLE IF NOT EXISTS model_route SCHEMAFULL;
+
+DEFINE FIELD IF NOT EXISTS task ON TABLE model_route TYPE string
+    ASSERT $value INSIDE ['entity_extraction', 'summarization', 'chat'];
+DEFINE FIELD IF NOT EXISTS provider_chain ON TABLE model_route FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD IF NOT EXISTS private_chain ON TABLE model_route FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD IF NOT EXISTS updated_at ON TABLE model_route TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX IF NOT EXISTS idx_model_route_task ON model_route FIELDS task UNIQUE;

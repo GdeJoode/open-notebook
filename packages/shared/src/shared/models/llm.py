@@ -4,7 +4,7 @@ LLM and AI model definitions.
 Pure Pydantic models for AI models. Database persistence handled by surrealdb-service.
 """
 
-from typing import ClassVar, Literal, Optional
+from typing import Any, ClassVar, Dict, List, Literal, Optional
 
 from pydantic import Field
 
@@ -76,6 +76,36 @@ class DefaultModels(RecordModel):
             "Independent of the chat model; falls back to default_chat_model "
             "when unset."
         ),
+    )
+
+
+class ModelRoute(ObjectModel):
+    """Ordered provider chain for one LLM task (Track J.1).
+
+    Mirrors the ``model_route`` table (migration 51). One row per task; the
+    ordered ``provider_chain`` is what the route resolver walks in CLOUD mode
+    (appending the local model as the final fallback), while ``private_chain``
+    holds local-only providers for PRIVATE mode.
+
+    Chain entries are FLEXIBLE dicts (forward-compat) shaped like
+    ``{"provider": str, "model_id": str, "enabled": bool}``. They are kept as
+    plain dicts rather than a nested model so a future entry field (e.g. a
+    per-entry weight) does not require a migration + model bump.
+    """
+
+    table_name: ClassVar[str] = "model_route"
+
+    task: str = Field(
+        ...,
+        description="LLM task this route serves: entity_extraction | summarization | chat",
+    )
+    provider_chain: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Ordered provider chain tried in CLOUD mode",
+    )
+    private_chain: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Ordered LOCAL-only provider chain for PRIVATE mode",
     )
 
 

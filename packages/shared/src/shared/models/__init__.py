@@ -30,7 +30,13 @@ from shared.models.jobs import (
     JobStatsResponse,
     JobSubmitRequest,
 )
-from shared.models.llm import DefaultModels, Model, ModelTypeStr, ModelUsageRecord
+from shared.models.llm import (
+    DefaultModels,
+    Model,
+    ModelRoute,
+    ModelTypeStr,
+    ModelUsageRecord,
+)
 from shared.models.notebook import ChatMessage, ChatSession, Note, Notebook
 from shared.models.notebook_schema import NotebookEvent, NotebookSchema, Pass1Result
 from shared.models.podcast import EpisodeProfile, PodcastEpisode, SpeakerProfile
@@ -51,6 +57,7 @@ __all__ = [
     # LLM models
     "Model",
     "DefaultModels",
+    "ModelRoute",
     "ModelUsageRecord",
     "ModelTypeStr",
     # Notebook models
