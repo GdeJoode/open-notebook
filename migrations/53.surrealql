@@ -1,0 +1,19 @@
+-- Migration 53: relax default_privacy_mode to option<string> (fixes the J.3/52 bug)
+--
+-- Migration 52 declared `default_privacy_mode` as a REQUIRED `string` on the
+-- whole `open_notebook` table, intending only the `content_settings` singleton.
+-- But SurrealDB field definitions are TABLE-scoped, not record-scoped: the
+-- sibling `open_notebook:default_models` record (the DefaultModels singleton)
+-- is forced to carry the field too. Any UPDATE to a record that lacks it then
+-- fails with:
+--     Found NONE for field `default_privacy_mode`, with record
+--     `open_notebook:default_models`, but expected a string
+-- which breaks every default-model write (the models settings UI / API).
+--
+-- Fix: relax to `option<string>` so records that don't use the setting are
+-- valid. The global-default semantics are preserved — `content_settings` keeps
+-- its stored 'cloud' value (migration 52's backfill), and the privacy resolver
+-- `_global_mode` already defaults an unset/None global to CLOUD ("cloud by
+-- default"), so no behavior changes. Idempotent: OVERWRITE re-applies cleanly.
+
+DEFINE FIELD OVERWRITE default_privacy_mode ON TABLE open_notebook TYPE option<string> DEFAULT 'cloud';

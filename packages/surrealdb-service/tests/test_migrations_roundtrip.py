@@ -466,3 +466,46 @@ async def test_migration_52_idempotent(
         config=live_surrealdb,
     )
     assert rows[0]["private"] is False
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_default_models_update_without_privacy_field(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """A sibling ``open_notebook`` record updates without default_privacy_mode.
+
+    Regression for the migration 52 bug fixed by migration 53: migration 52
+    declared ``default_privacy_mode`` as a REQUIRED ``string`` on the whole
+    ``open_notebook`` table (intending only the content_settings singleton), so
+    the sibling ``open_notebook:default_models`` record — which never carries the
+    field — failed every UPDATE with "Found NONE for field default_privacy_mode,
+    expected a string". Migration 53 relaxes it to ``option<string>``. This test
+    creates a default_models record WITHOUT the field and updates it; pre-53 this
+    raised, post-53 it succeeds.
+    """
+    await execute_query(
+        "UPSERT open_notebook:default_models SET default_chat_model = 'model:x';",
+        config=live_surrealdb,
+    )
+    # Clear the field so this record carries NONE — the exact state the
+    # required-string definition rejected on the next write.
+    await execute_query(
+        "UPDATE open_notebook:default_models UNSET default_privacy_mode;",
+        config=live_surrealdb,
+    )
+    # The update that the bug rejected ("Found NONE for field
+    # default_privacy_mode, expected a string") — must not raise now.
+    await execute_query(
+        "UPDATE open_notebook:default_models SET default_chat_model = 'model:y';",
+        config=live_surrealdb,
+    )
+    rows = await execute_query(
+        "SELECT default_chat_model, default_privacy_mode "
+        "FROM open_notebook:default_models;",
+        config=live_surrealdb,
+    )
+    assert rows[0]["default_chat_model"] == "model:y"
+    # option<string> allows this sibling record to carry NONE (the global
+    # default lives on content_settings, not here).
+    assert rows[0].get("default_privacy_mode") is None
