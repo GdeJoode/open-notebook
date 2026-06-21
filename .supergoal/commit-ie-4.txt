@@ -1,0 +1,14 @@
+test(e2e): assert mono-numerics font + no horizontal overflow (I.E)
+
+Add e2e/track-i/responsiveness-polish.spec.ts covering the I.E ACs:
+- AC2/AC3: a .mono-num element's computed font-family contains
+  "IBM Plex Mono" (proves --font-mono-numeric is bound), asserted on the
+  page indicator and the Properties bbox readout.
+- AC1: documentElement has no horizontal overflow at 1024x768 and at an
+  ultrawide 2560x1080 viewport, including with the widest bbox readout
+  mounted in the narrow right panel.
+- AC4: page-error + console.error watchdogs held to zero.
+Route-mocked like the I.B spec; validated with `--list` (full headless run
+deferred in this environment).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

@@ -225,8 +225,11 @@ async def test_list_entities_survives_order_by_name_with_fulltext_index(
     cfg = live_surrealdb
 
     # Recreate the production drift: a `name` field + full-text SEARCH index.
+    # ``OVERWRITE`` because migration 50 now also defines ``name`` on ``entity``.
     await execute_query(
-        "DEFINE FIELD name ON entity TYPE option<string>;", {}, config=cfg
+        "DEFINE FIELD OVERWRITE name ON entity TYPE option<string>;",
+        {},
+        config=cfg,
     )
     await execute_query(
         "DEFINE INDEX idx_entity_fulltext ON entity FIELDS name, description "

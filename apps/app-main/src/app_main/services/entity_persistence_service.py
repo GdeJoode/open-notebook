@@ -21,6 +21,34 @@ from shared.models.entity import Entity
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.entity import EntityRepository
 
+# The ``entity.entity_type`` field carries an ``ASSERT $value INSIDE [...]``
+# constraint (enforced even though the table is SCHEMALESS). LLMs — especially
+# local models like qwen2.5 — return free-form / capitalised types
+# ("Location", "Concept", "ABBREVIATION") that violate it, so every upsert
+# fails. Normalise to this canonical set at the persist boundary; unknown
+# types map to "other" (the raw value is preserved in properties). NOTE: this
+# enum lives only on the live DB, not in any migration (schema drift) — keep it
+# in sync if the DB constraint changes.
+_ALLOWED_ENTITY_TYPES = frozenset(
+    {
+        "person", "organization", "topic", "location", "concept", "event",
+        "product", "scholarly_article", "creative_work", "periodical",
+        "dataset", "grant", "research_project", "policy_document",
+        "legislation", "government_organization", "administrative_area",
+        "public_consultation", "social_profile", "other",
+    }
+)
+
+
+def _normalize_entity_type(raw: Any) -> str:
+    """Map an LLM-provided entity type onto the canonical enum.
+
+    Lower-cases and underscores the value; returns ``"other"`` for anything
+    outside the allowed set so the SCHEMAFULL ``ASSERT`` never rejects a write.
+    """
+    norm = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+    return norm if norm in _ALLOWED_ENTITY_TYPES else "other"
+
 
 class EntityPersistenceService:
     """Persists filtered entities and relations to the KG tables."""
@@ -134,7 +162,8 @@ class EntityPersistenceService:
         # 1. Upsert entities
         for entity in entities:
             text = entity.get("text", "")
-            label = entity.get("label", "UNKNOWN")
+            raw_label = entity.get("label", "concept")
+            label = _normalize_entity_type(raw_label)
             confidence = entity.get("confidence", 0.5)
             properties = entity.get("properties", {})
 
@@ -146,6 +175,10 @@ class EntityPersistenceService:
                 k: v for k, v in properties.items()
                 if k != "embedding" and v is not None
             }
+            # Preserve the model's original (un-normalized) type for provenance
+            # when it didn't map cleanly onto the canonical enum.
+            if raw_label and str(raw_label).strip().lower() != label:
+                stored_props["raw_entity_type"] = raw_label
 
             # Add merge history if available
             if text in merge_lookup:
@@ -205,7 +238,9 @@ class EntityPersistenceService:
                     LET $tgt = (SELECT id FROM entity
                         WHERE canonical_name = $tgt_name LIMIT 1);
                     IF array::len($src) > 0 AND array::len($tgt) > 0 THEN {
-                        RELATE $src[0].id->relation->$tgt[0].id SET
+                        LET $sid = $src[0].id;
+                        LET $tid = $tgt[0].id;
+                        RELATE $sid->relation->$tid SET
                             relation_type = $rel_type,
                             confidence = $confidence,
                             source_documents = [$source_id],

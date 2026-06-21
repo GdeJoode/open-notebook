@@ -1,0 +1,24 @@
+fix(graph): deterministic leaf self_ref + in-place node highlight (I.F)
+
+Adversarial review (2 MAJORs):
+
+- MAJOR 1: the leaf self_ref was `#/chunks/{order}`, so two chunks sharing an
+  `order` (or a missing one) collided — violating the UNIQUE (source,self_ref)
+  index, which the best-effort ingestion hook then swallowed, silently dropping
+  the ENTIRE structure graph. Leaf refs now derive from the deterministic loop
+  index (`#/chunks/{seq}`), and the reading-order sort gets a stable id
+  tiebreaker so equal/missing orders sort deterministically across re-ingest.
+  Added test_duplicate_order_yields_distinct_leaf_refs.
+- MAJOR 2: StructureGraphView listed `selectedChunkId` in the Sigma build
+  effect's deps, so every node click did sigma.kill() + a full WebGL rebuild.
+  The active-chunk highlight now runs in a separate lightweight effect
+  (setNodeAttribute + sigma.refresh) against a graphRef; the build effect no
+  longer depends on selection.
+
+27 builder/router tests pass (was 26); ruff + tsc clean.
+
+Minors deferred as follow-ups: AC5 click→bbox has no headless assertion
+(wiring verified); total_nodes reflects returned (not pre-truncation) count;
+idempotency test is in-process (ordering is deterministic by construction).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

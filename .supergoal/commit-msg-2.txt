@@ -1,0 +1,11 @@
+feat(frontend): add mode + controlled selection to PdfChunkViewer (I.B)
+
+Add an optional `mode: "embed" | "fullscreen"` prop (default "embed", so the
+Chunks tab is unchanged) and optional controlled-selection props
+(`selectedChunkId` / `onSelectChunkId`). In fullscreen mode the internal
+chunk-list pane is suppressed and the border dropped, since the inspect
+workspace supplies its own chunk list and paneling. Controlled selection
+lets the workspace's ChunkListPanel drive the overlay highlight and page
+follow without the viewer owning selection state.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

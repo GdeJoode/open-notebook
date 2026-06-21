@@ -1,0 +1,17 @@
+{
+  "slug": "economics",
+  "source_id": "source:1k3c41i456l7ywu6y7iv",
+  "notebook_id": "notebook:t6639pcftyishmguonmc",
+  "parse_status": "completed",
+  "full_text_chars": 37605,
+  "chunk_count": 135,
+  "entity_count": 0,
+  "relation_count": 0,
+  "extraction_metadata": {},
+  "endpoints": {
+    "markdown": "/api/sources/source:1k3c41i456l7ywu6y7iv -> full_text",
+    "chunks": "/api/sources/source:1k3c41i456l7ywu6y7iv/chunks",
+    "entities": "/api/sources/source:1k3c41i456l7ywu6y7iv/extraction-result -> entities",
+    "relations": "/api/sources/source:1k3c41i456l7ywu6y7iv/extraction-result -> relations"
+  }
+}

@@ -1,0 +1,10 @@
+feat(frontend): load IBM Plex Mono for mono-numerics (I.E)
+
+Bind --font-mono-numeric via next/font/google (latin, weights 400/500) so
+the .mono-num utility and the Tailwind font-mono token resolve to IBM Plex
+Mono instead of the system fallback. The load was deferred from I.A until
+its first consumer landed; it ships here with the I.E numeric-readout sweep.
+Refresh the now-stale "deferred to I.E" comments in layout.tsx and
+globals.css.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

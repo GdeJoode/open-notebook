@@ -1,0 +1,25 @@
+fix(scripts): skip unrecoverable broken-flip rows in bbox backfill (I.C)
+
+Addresses the BLOCKER + Major from the I.C adversarial review:
+
+- #1 (BLOCKER): the old from_docling, when prov.page_height was missing,
+  defaulted it to 1.0 and wrote y = 1.0 - top (negative, since top is page
+  points). The backfill assumed stored y was a raw positive point and
+  divided + clamped, collapsing y/height to 0 -- silently corrupting every
+  such legacy Docling row into a zero-height strip at the page top, with no
+  downstream rescue (the frontend negative-y fallback was removed). The
+  original top is unrecoverable. Now detect the broken-flip regime via
+  _is_unrecoverable_legacy (any negative coord) and skip + flag those rows
+  for re-ingest (new skipped_broken_flip tally) instead of writing a corrupt
+  box. x-recoverable-but-y-broken rows are skipped whole.
+- #2 (Major): the backfill tests fed only positive (recoverable) y, so the
+  corruption passed green and y outputs were unasserted. Add unit tests for
+  _is_unrecoverable_legacy, a batch test asserting a negative-y row is
+  skipped + nothing written, and y-output assertions on the recoverable case.
+- #4 (Minor): documented the no-batch-transaction deviation (idempotent
+  re-run is the recovery path) in the script docstring.
+- #3 (Minor): MinerU dev-assert comment left as-is (accurate; non-blocking).
+
+23 tests pass (was 19).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

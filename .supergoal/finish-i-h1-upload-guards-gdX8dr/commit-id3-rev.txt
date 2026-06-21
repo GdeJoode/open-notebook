@@ -1,0 +1,25 @@
+fix(api): real transaction error propagation + correct multi-box split (I.D-3)
+
+Adversarial review (2 MAJORs):
+
+- MAJOR 1 (atomicity): the merge/split BEGIN/COMMIT block was sent via
+  execute_query, whose query() returns only the first statement's result and
+  never checks per-statement status -- so a failure in statements 2-4 could be
+  swallowed and the op report success on a rolled-back (unchanged) DB. The
+  rollback tests used a fake that re-implemented the logic all-or-nothing, so
+  they proved nothing. Added execute_transaction + a pure
+  _check_transaction_response guard (via query_raw) that inspects EVERY
+  statement and raises on any ERR; the mutator now uses it. Added 3 direct
+  unit tests of the guard (OK/statement-ERR/top-level-error) that don't touch
+  the fake, killing the theater.
+- MAJOR 2 (split geometry): _split_positions cut every bbox at the same
+  fraction, so for multi-line chunks each half overlaid the other's regions.
+  Rewrote it to map the text fraction onto box units -- whole line-boxes go to
+  their side, only the straddling box is sliced. Single-box behavior
+  unchanged. Added 2 multi-box tests.
+- Minors: malformed bbox kept with first half (union conserved); split on a
+  malformed chunk_id now 400 not 500.
+
+17 mutator tests pass (was 12); ruff clean.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

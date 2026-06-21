@@ -288,12 +288,52 @@ class EntityExtractionService:
                 f"Entity embedding failed (dedup will use string-only): {e}"
             )
 
+    async def _build_single_schema_workflow(
+        self, config: "ExtractionConfig"
+    ) -> "ExtractionWorkflow":
+        """Build a single-schema ``ExtractionWorkflow`` whose ``LLMExtractor``
+        is wired with the extraction-model caller.
+
+        Single-mode ``ExtractionWorkflow.extract`` ignores any ``llm_caller``
+        kwarg and uses ``self._get_extractor()``, which (when the workflow was
+        built without an extractor) lazily constructs a CALLER-LESS
+        ``LLMExtractor`` that silently returns 0 entities (the B.1f canary). So
+        every single-schema run — including the multi-schema
+        no-applicable-schema fallback — MUST go through this builder, not a bare
+        ``ExtractionWorkflow(config)``.
+        """
+        extractor = None
+        if config.extractor_type == "llm":
+            try:
+                llm_caller = await make_default_llm_caller(
+                    model_id=config.llm_model
+                    if config.llm_model != "default"
+                    else None,
+                    default_field="default_extraction_model",
+                )
+                from ontology_extraction.extractors.llm_extractor import (
+                    LLMExtractor,
+                )
+
+                extractor = LLMExtractor(
+                    llm_model=config.llm_model,
+                    confidence_threshold=config.confidence_threshold,
+                    llm_caller=llm_caller,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"single-schema: failed to wire LLM caller ({e}); "
+                    "extractor will fall back to lazy-default empty path."
+                )
+        return ExtractionWorkflow(config, extractor=extractor)
+
     async def _run_multi_schema(
         self,
         workflow: "ExtractionWorkflow",
         source_id: str,
         notebook_id: str,
         chunks: List[Dict[str, Any]],
+        config: "ExtractionConfig",
     ) -> "ExtractionResult":
         """Detect applicable schemas and invoke the B.1e orchestrator.
 
@@ -384,7 +424,13 @@ class EntityExtractionService:
                 src=source_id,
                 nb=notebook_id,
             )
-            return await workflow.extract(chunks)
+            # B.8c fix: the passed-in ``workflow`` was built bare (no extractor),
+            # so its single-mode path would use a caller-less LLMExtractor and
+            # silently return 0 entities. Rebuild with the wired extractor so the
+            # fallback actually extracts (the common case: a notebook with no
+            # configured schema).
+            fallback_workflow = await self._build_single_schema_workflow(config)
+            return await fallback_workflow.extract(chunks)
 
         # Build the per-schema accepted-extensions map from the
         # notebook's accepted extensions. Each extension dict carries
@@ -549,39 +595,15 @@ class EntityExtractionService:
                 source_id=source_id,
                 notebook_id=notebook_id,
                 chunks=chunk_dicts,
+                config=config,
             )
         else:
-            # Legacy single-schema path — unchanged from B.1e and earlier
-            # in terms of API, but B.1f wires the LLMExtractor through
-            # ``ModelManager`` so production callers actually hit the
-            # LLM (the pre-B.1f code silently returned empty results).
-            # Hit when ``notebook_id`` is omitted (CLI / tests), when
-            # ops disables multi-schema via the flag, or when the caller
-            # selects ``extractor_type="langextract"``.
-            extractor = None
-            if extractor_type == "llm":
-                try:
-                    llm_caller = await make_default_llm_caller(
-                        model_id=config.llm_model
-                        if config.llm_model != "default"
-                        else None,
-                        default_field="default_extraction_model",
-                    )
-                    from ontology_extraction.extractors.llm_extractor import (
-                        LLMExtractor,
-                    )
-
-                    extractor = LLMExtractor(
-                        llm_model=config.llm_model,
-                        confidence_threshold=config.confidence_threshold,
-                        llm_caller=llm_caller,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"single-schema: failed to wire LLM caller ({e}); "
-                        "extractor will fall back to lazy-default empty path."
-                    )
-            workflow = ExtractionWorkflow(config, extractor=extractor)
+            # Legacy single-schema path — hit when ``notebook_id`` is omitted
+            # (CLI / tests), when ops disables multi-schema via the flag, or
+            # when the caller selects ``extractor_type="langextract"``. The
+            # extractor is wired with the extraction-model caller via the shared
+            # builder (B.1f/B.8c) so production callers actually hit the LLM.
+            workflow = await self._build_single_schema_workflow(config)
             result = await workflow.extract(chunk_dicts)
 
         # Store extractor_type in metadata

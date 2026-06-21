@@ -5,6 +5,7 @@ Provides lookup and alias management for canonical entity matching,
 supporting the KG entity resolution pipeline.
 """
 
+import hashlib
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -248,9 +249,18 @@ class EntityRepository:
             return str(existing["id"])
 
         # No existing row — fresh CREATE.
+        # ``hash_id`` is a required string on the live DB (schema drift — not in
+        # any migration, so the testcontainer schema doesn't enforce it and the
+        # roundtrip tests pass while live writes fail with "Found NONE for field
+        # hash_id"). Derive it deterministically from the dedup identity
+        # (canonical_name + entity_type), matching the UNIQUE idx_entity_hash.
+        _hash_basis = (
+            f"{entity.canonical_name}|{entity.entity_type}".strip().lower()
+        )
         create_payload: Dict[str, Any] = {
             "canonical_name": entity.canonical_name,
             "entity_type": entity.entity_type,
+            "hash_id": hashlib.md5(_hash_basis.encode("utf-8")).hexdigest(),
             "description": entity.description,
             "source_documents": list(entity.source_documents),
             "extraction_method": entity.extraction_method,
@@ -268,7 +278,9 @@ class EntityRepository:
                 """
                 CREATE entity SET
                     canonical_name = $canonical_name,
+                    name = $canonical_name,
                     entity_type = $entity_type,
+                    hash_id = $hash_id,
                     description = $description,
                     source_documents = $source_documents,
                     extraction_method = $extraction_method,

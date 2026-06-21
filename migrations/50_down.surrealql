@@ -1,0 +1,15 @@
+-- Migration 50 down: restore the legacy pre-Track-B entity constraints.
+--
+-- Re-requires name/hash_id and restores the entity_type enum ASSERT. This does
+-- NOT un-backfill the identity fields (a data-level, idempotent change); it
+-- will fail if any row has a NONE name or hash_id, which is the expected legacy
+-- shape after a forward-then-back cycle.
+
+DEFINE FIELD OVERWRITE name ON entity TYPE string;
+DEFINE FIELD OVERWRITE hash_id ON entity TYPE string;
+DEFINE FIELD OVERWRITE entity_type ON entity TYPE string
+    ASSERT $value INSIDE ['person', 'organization', 'topic', 'location',
+        'concept', 'event', 'product', 'scholarly_article', 'creative_work',
+        'periodical', 'dataset', 'grant', 'research_project', 'policy_document',
+        'legislation', 'government_organization', 'administrative_area',
+        'public_consultation', 'social_profile', 'other'];

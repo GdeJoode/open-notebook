@@ -1,0 +1,17 @@
+fix(api): JSON-endpoint 500 + page-count OOM in upload guards (I.H1)
+
+Addresses two BLOCKERs and two coupled findings from the I.H1 adversarial
+review:
+
+- #1/#5 (BLOCKER): create_source_json invoked the *decorated* create_source
+  positionally, so slowapi re-ran its success-path header injection against a
+  missing response kwarg and returned 500 on every POST /api/sources/json.
+  Extract an undecorated _create_source_impl that both route wrappers delegate
+  to; the JSON path no longer double-passes through the limiter.
+- #2 (BLOCKER): the page-count guard did await upload_file.read(), pulling up
+  to MAX_FILE_SIZE_MB (500MB) into one bytes object plus a pdfium copy before
+  rejecting -- the OOM this phase exists to prevent. Stream pypdfium2 from the
+  spooled upload file instead; the body is never fully materialised. Rewind on
+  every exit path so save_uploaded_file re-reads from 0.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

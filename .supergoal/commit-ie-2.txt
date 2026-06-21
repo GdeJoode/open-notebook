@@ -1,0 +1,13 @@
+style(frontend): apply .mono-num to inspect numeric readouts (I.E)
+
+Finish the I.A AC3 deferral: tag the remaining tabular/numeric readouts in
+PdfChunkViewer with .mono-num so digits render in IBM Plex Mono with
+tabular widths. Covered here:
+- page indicator (current-page input + "/ pageCount")
+- element-type counts in the LegendBar ("(N)")
+- the embed-mode page header counts ("N elements / N total")
+Bbox coords + page count already carry .mono-num (PropertiesPanel),
+chunk totals (ChunkListPanel) and image-page indicator (ImageGallery) too.
+Also add an aria-label to the page-number input (icon-adjacent control).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

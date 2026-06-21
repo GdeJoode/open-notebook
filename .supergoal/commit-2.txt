@@ -1,0 +1,9 @@
+feat(frontend): add rehype-sanitize dep + image-list API + pagination util (I.D-4)
+
+Groundwork for the result tabs:
+- add rehype-sanitize for defense-in-depth markdown sanitization (AC2)
+- add sourcesApi.getImages() bound to the new list endpoint
+- add framework-free image-pagination helpers that bound concurrent
+  image requests to IMAGE_PAGE_SIZE (=6) per page, with unit tests
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
