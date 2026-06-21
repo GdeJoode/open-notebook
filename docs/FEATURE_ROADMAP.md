@@ -1185,6 +1185,61 @@ See [`docs/tracks/J-model-routing/plan.md`](./tracks/J-model-routing/plan.md).
 
 ---
 
+## Track K — Entity resolution & deduplication (NEW)
+
+> **Status**: 📋 PLANNED (2026-06-22, user-request). Implements the resolution
+> layer the B.8c assessment proved missing: the V1 `name_normalizer` resolves
+> identical surface forms across documents (107 cross-doc entities over the 4
+> Regio Deal docs) but **fragments variants** of the same real entity —
+> `BZK` / `ministerie van BZK` / `(Ministerie van) Binnenlandse Zaken en
+> Koninkrij(k|ks)relaties` split ~8 ways; `"minister"` 23 ways. See
+> [`docs/tracks/B-kg-quality/reviews/phase-B.8c-resolution-assessment.md`](./tracks/B-kg-quality/reviews/phase-B.8c-resolution-assessment.md).
+> This is the Q9 vocabulary stack + the M4 work, now a concrete track.
+
+**Vision**: the same real-world entity collapses to ONE canonical node across
+documents regardless of surface form — abbreviation, role-prefix, spelling
+variant, or vocabulary alias. Two layers: cheap NL-aware normalization first
+(immediate fragmentation drop), then full vocabulary-backed resolution.
+
+**Scope (two layers)**:
+- **K.1–K.2 Quick wins (F1, cheap, high-impact)** — extend the V1
+  `name_normalizer` (`packages/shared/src/shared/utils/name_normalizer.py`, the
+  swap-point everything already calls): strip leading articles + role-prefixes
+  (`De `, `Het `, `Minister(ie) van `, `Gemeente `), a curated NL
+  government-org **abbreviation alias table** (BZK ↔ Binnenlandse Zaken en
+  Koninkrijksrelaties, VRO ↔ Volkshuisvesting en Ruimtelijke Ordening, …), and
+  spelling-variant tolerance (the Koninkrij(k|ks) class). Tighten/measure the
+  entity-filtering similarity-dedup (currently threshold-configurable ~0.85).
+  Must not over-merge distinct entities (precision guard + a measured
+  fragmentation-vs-false-merge metric on the live Convenant set).
+- **K.3+ Full resolution (Q9/M4)** — TOOI (Dutch government vocabulary) +
+  Crossref (research papers) lookup → canonical IDs + `external_ids`; fuzzy /
+  embedding-based candidate dedup with a human-reviewable merge step; per-entity
+  `aliases`; global + per-notebook user-overlay; architecturally prepared for
+  ORCID/arXiv/Wikidata. A canonicalization/merge operation over already-persisted
+  entities (retroactive dedup), not just at-ingest.
+
+**Builds on / touches**: `name_normalizer` (swap-point — entity persistence dedup
+key + filtering both call it), `pipelines/entity-filtering` (similarity dedup),
+the `entity` table (`canonical_name`/`hash_id`/`aliases`/`external_ids`), and the
+Q9 vocabulary decision. Coordinates with B.8's persistence/upsert merge
+semantics — must not regress the hash_id/dedup-key contract (migration 50).
+
+**Phase overview** (Backend → measure → UI):
+- K.1 NL-aware normalizer (article/role-prefix strip + spelling tolerance) +
+  precision guard + measurement harness on the live Convenant set.
+- K.2 Government-org abbreviation alias table (+ extensible alias config).
+- K.3 Retroactive canonicalization/merge over existing entities (dedup the KG
+  already built) with a dry-run + reviewable merges.
+- K.4 TOOI + Crossref vocabulary lookup → external_ids + aliases (Q9 core).
+- K.5 Fuzzy/embedding candidate dedup + merge step; user-overlay (global +
+  per-notebook).
+- K.6 UI: review/merge duplicates + alias management + per-entity external IDs.
+
+See [`docs/tracks/K-entity-resolution/plan.md`](./tracks/K-entity-resolution/plan.md).
+
+---
+
 ## Bijlagen
 
 - `docs/REFACTOR_PLAN.md` — voltooide refactor (Phase 0-7)
