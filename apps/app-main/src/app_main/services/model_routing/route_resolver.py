@@ -374,6 +374,26 @@ def is_provider_healthy(provider: str) -> bool:
     return breaker._state != CircuitState.OPEN  # noqa: SLF001 — advisory peek
 
 
+def _coerce_task(task) -> LLMTask:
+    """Coerce ``task`` to an :class:`LLMTask`, raising on anything that is not
+    one of the three routed stages.
+
+    Guardrail (§1.2): the public ``resolve_route`` surface accepts ONLY the
+    three LLM tasks. Passing a string like ``"embedding"`` (which has no
+    :class:`LLMTask` member) raises ``ValueError`` here rather than silently
+    routing — embeddings must never traverse the cloud provider chain. ``LLMTask``
+    is a ``str`` Enum, so a bare ``"chat"`` resolves correctly while
+    ``"embedding"`` / ``"parsing"`` fail loudly.
+    """
+    if isinstance(task, LLMTask):
+        return task
+    # ``LLMTask(value)`` raises ValueError for an unknown value (e.g.
+    # "embedding"); ``LLMTask[name]`` would raise KeyError — either satisfies
+    # the guardrail AC. We use the value form because callers pass the lowercase
+    # task value.
+    return LLMTask(task)
+
+
 async def resolve_route(
     task: LLMTask,
     mode: PrivacyMode,
@@ -384,7 +404,12 @@ async def resolve_route(
     Builds the resolver from the DI factories so call sites that don't already
     hold a resolver (the B.8 shim, ad-hoc callers) get the same behavior. Tests
     construct :class:`RouteResolver` directly with fakes.
+
+    ``task`` is coerced via :func:`_coerce_task`, so a non-LLM task (the §1.2
+    guardrail canary ``"embedding"``) raises ``ValueError`` instead of routing.
     """
+    task = _coerce_task(task)
+
     from app_main.dependencies import get_route_resolver
 
     resolver = get_route_resolver()

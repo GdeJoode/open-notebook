@@ -35,6 +35,9 @@ from app_main.services.model_routing.rate_limiter import (
     RateLimitTimeout,
     backoff_retry,
 )
+from app_main.services.model_routing.privacy_resolver import (
+    resolve_privacy_mode,
+)
 from app_main.services.model_routing.route_resolver import (
     LLMTask,
     ModelCandidate,
@@ -54,6 +57,8 @@ __all__ = [
     "RouteResolver",
     "resolve_route",
     "is_provider_healthy",
+    # J.3 — privacy resolver
+    "resolve_privacy_mode",
     # J.2 — circuit breaker
     "CircuitState",
     "ProviderCircuitBreaker",
