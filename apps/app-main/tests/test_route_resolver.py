@@ -102,40 +102,37 @@ def _providers(route: ResolvedRoute) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# AC#1 — CLOUD + both keys -> [anthropic, openai, local]
+# AC#1 — CLOUD + NIM key -> [nvidia, local] (J.4 repointed the default chain
+# from the anthropic/openai placeholder to the real cloud provider, NVIDIA NIM)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_cloud_both_keys_orders_anthropic_openai_local(
-    monkeypatch, fake_defaults
-):
-    _set_cloud_keys(monkeypatch, anthropic=True, openai=True)
+async def test_cloud_nvidia_key_orders_nvidia_local(monkeypatch, fake_defaults):
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
     resolver = _resolver()
 
     route = await resolver.resolve(LLMTask.ENTITY_EXTRACTION, PrivacyMode.CLOUD)
 
-    assert _providers(route) == ["anthropic", "openai", "ollama"]
+    assert _providers(route) == ["nvidia", "ollama"]
     # Final candidate is the local fallback.
     assert route.ordered_candidates[-1].is_local is True
     assert route.mode == PrivacyMode.CLOUD
 
 
 # ---------------------------------------------------------------------------
-# AC#2 — CLOUD, anthropic key unset -> [openai, local]
+# AC#2 — CLOUD, NIM key unset -> [local] (J-Q6 drop of the keyless provider)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_cloud_missing_anthropic_key_drops_anthropic(
-    monkeypatch, fake_defaults
-):
-    _set_cloud_keys(monkeypatch, anthropic=False, openai=True)
+async def test_cloud_missing_nvidia_key_drops_nvidia(monkeypatch, fake_defaults):
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     resolver = _resolver()
 
     route = await resolver.resolve(LLMTask.ENTITY_EXTRACTION, PrivacyMode.CLOUD)
 
-    assert _providers(route) == ["openai", "ollama"]
+    assert _providers(route) == ["ollama"]
     assert route.ordered_candidates[-1].is_local is True
 
 

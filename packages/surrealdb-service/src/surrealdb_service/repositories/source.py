@@ -73,6 +73,32 @@ class SourceRepository(BaseRepository[Source]):
             )
             return None
 
+    async def get_notebook_ids(self, source_id: str) -> List[str]:
+        """Return every notebook linked to ``source_id`` (possibly empty).
+
+        Unlike :meth:`get_notebook_id` (which returns only the first link for
+        schema anchoring), this walks the full ``reference`` edge set. The J.4
+        summarization privacy path needs ALL owning notebooks so it can pick the
+        most-private one (any ``private`` notebook -> PRIVATE, fail safe): a
+        source shared into a private notebook must not be summarized via cloud
+        just because some other (cloud) notebook also references it.
+
+        Returns an empty list when the source is unlinked or on any read error
+        (the caller then falls through to the document/global privacy layers).
+        """
+        try:
+            rows = await execute_query(
+                "SELECT VALUE out FROM reference WHERE in = $source;",
+                {"source": ensure_record_id(source_id)},
+                self.config,
+            )
+            return [str(r) for r in (rows or []) if r is not None]
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch notebooks for source {source_id}: {e}"
+            )
+            return []
+
     async def get_insights(self, source_id: str) -> List[SourceInsight]:
         """
         Get all insights for a source.

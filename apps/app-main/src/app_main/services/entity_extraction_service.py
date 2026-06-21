@@ -150,106 +150,157 @@ async def resolve_default_model_id(
     )
 
 
+class RoutedLLMCaller:
+    """An async LLM caller that runs through the J.4 failover executor.
+
+    Preserves the B.8 ``(system, user, model) -> str`` call shape (so every
+    existing extraction caller keeps working) while replacing the single bound
+    ``LanguageModel`` with a privacy-aware ordered route executed via
+    :meth:`FailoverExecutor.execute_with_failover`. The route is resolved per
+    call so circuit-breaker state + key availability are honored fresh.
+
+    After each call, :attr:`served_provider` / :attr:`served_model_id` /
+    :attr:`was_failover` / :attr:`fallback_from` reflect the candidate that
+    actually answered — the extraction path reads these to stamp provenance with
+    the SERVED provider (J-Q7), not just the resolved default.
+    """
+
+    def __init__(
+        self,
+        *,
+        task: "Any",
+        mode: "Any",
+        model_id: Optional[str],
+        source_id: Optional[str] = None,
+        notebook_id: Optional[str] = None,
+    ) -> None:
+        self._task = task
+        self._mode = mode
+        self._model_id = model_id
+        self._source_id = source_id
+        self._notebook_id = notebook_id
+        # Last-served provenance (populated after each successful call).
+        self.served_provider: Optional[str] = None
+        self.served_model_id: Optional[str] = model_id
+        self.was_failover: bool = False
+        self.fallback_from: List[str] = []
+
+    async def __call__(
+        self, system_prompt: str, user_prompt: str, _model: str = "default"
+    ) -> str:
+        from functools import partial
+
+        from app_main.dependencies import get_failover_executor, get_route_resolver
+        from app_main.services.model_routing.error_mapping import (
+            is_failover_eligible,
+        )
+        from app_main.services.model_routing.telemetry import record_routing_event
+
+        # A per-call model override on the B.8 caller shape becomes the head of
+        # the resolved route (mirrors resolve_default_model_id precedence).
+        override = (
+            _model
+            if _model and _model not in ("default",)
+            else self._model_id
+        )
+
+        resolver = get_route_resolver()
+        route = await resolver.resolve(self._task, self._mode, model_id=override)
+        if not route.ordered_candidates:
+            raise RuntimeError(
+                f"No model candidates resolved for task {self._task} "
+                f"(mode={self._mode}). Configure a provider chain or default model."
+            )
+
+        executor = get_failover_executor()
+        # J.4 injects the concrete error-mapping predicate (J.2 left it
+        # injectable on the executor instance).
+        executor._is_failover_eligible = is_failover_eligible  # noqa: SLF001
+
+        result = await executor.execute_with_failover(
+            route,
+            partial(_call_candidate_text, system_prompt, user_prompt),
+        )
+
+        candidate_result = result.value
+        self.served_provider = result.served_provider
+        self.served_model_id = result.served_model_id
+        self.was_failover = result.was_failover
+        self.fallback_from = result.fallback_from
+
+        await record_routing_event(
+            task=self._task,
+            served_provider=result.served_provider,
+            served_model_id=result.served_model_id,
+            was_failover=result.was_failover,
+            fallback_from=result.fallback_from,
+            source_id=self._source_id,
+            notebook_id=self._notebook_id,
+        )
+
+        return candidate_result.text
+
+
+async def _call_candidate_text(system_prompt: str, user_prompt: str, candidate):
+    """Adapter binding (system, user) so the executor's ``call(candidate)``
+    signature reaches :func:`call_candidate` with the prompts."""
+    from app_main.services.model_routing.llm_call import call_candidate
+
+    return await call_candidate(candidate, system_prompt, user_prompt)
+
+
 async def make_default_llm_caller(
     model_id: Optional[str] = None,
     *,
     default_field: str = "default_chat_model",
+    privacy_mode: "Any" = None,
+    source_id: Optional[str] = None,
+    notebook_id: Optional[str] = None,
 ):
-    """Build an async ``LLMCaller`` backed by :class:`ModelManager`.
+    """Build an async ``LLMCaller`` that routes through the J.4 failover executor.
 
     ``default_field`` selects which configured default to resolve (e.g.
-    ``default_extraction_model`` for the KG-extraction path), independent of
-    the chat model. Resolution precedence is owned by
-    :func:`resolve_default_model_id`.
+    ``default_extraction_model`` for the KG-extraction path), independent of the
+    chat model. That field maps to a routing :class:`LLMTask`; the returned
+    caller resolves an ORDERED privacy-aware route for that task and executes it
+    with per-document failover (cloud provider first, local Ollama last in CLOUD
+    mode; local-only in PRIVATE mode).
 
-    Phase B.1f fixes the long-standing LLMExtractor "silent empty"
-    bug. The old code wrote ``from llm_manager.manager import LLMManager``
-    and ``manager.generate(...)`` — both symbols had been renamed
-    (``LLMManager`` → :class:`ModelManager`) and replaced
-    (``.generate`` → ``ModelInstance.achat_complete``). The
-    consequence in production: ``ImportError`` caught silently,
-    extractor returned empty results, no extraction ever happened.
+    Behavioral notes (Track J.4):
 
-    This factory closes the loop. It:
-
-    1. Looks up the configured default chat model via
-       :class:`shared.models.DefaultModels`.
-    2. Resolves the :class:`Model` row from the repository.
-    3. Instantiates the esperanto ``LanguageModel`` via
-       ``ModelManager.get_model_from_config``.
-    4. Returns an async ``(system, user, model) -> str`` callable
-       that dispatches via ``LanguageModel.achat_complete``.
+    * The returned callable matches the B.8 ``LLMCaller`` protocol
+      (``async (system_prompt, user_prompt, model) -> str``) so every existing
+      Pass-1/Pass-2/single-schema caller keeps working unchanged.
+    * ``privacy_mode`` consumes the J.3 resolved :class:`PrivacyMode`. ``None``
+      defaults to CLOUD (the B.8-compatible cloud-head behavior); a ``PRIVATE``
+      mode pins the whole route to local providers — no cloud LanguageModel is
+      ever constructed.
+    * Served-provider provenance is exposed on the returned
+      :class:`RoutedLLMCaller` (``served_provider`` etc.) for J-Q7 stamping.
 
     Args:
-        model_id: Override the default chat model id. ``None`` means
-            "use the configured default".
+        model_id: Override the head model id. ``None`` means "use the configured
+            per-task default".
+        default_field: Which ``DefaultModels`` field selects the head model.
+        privacy_mode: Resolved :class:`PrivacyMode`; ``None`` -> CLOUD.
+        source_id / notebook_id: Carried into routing telemetry.
 
     Returns:
-        An async callable matching the
-        :type:`ontology_extraction.pass2_typed_extraction.LLMCaller`
-        protocol (``async (system_prompt, user_prompt, model) -> str``).
+        A :class:`RoutedLLMCaller` (callable, with served-provenance attributes).
     """
-    # Local imports to keep module-import cheap (these chains are
-    # heavy: esperanto loads provider SDKs lazily).
-    from esperanto import LanguageModel
-    from llm_manager import get_model_manager
+    from app_main.services.model_routing.route_resolver import LLMTask, PrivacyMode
 
-    from app_main.dependencies import get_model_repo
+    task_name = _DEFAULT_FIELD_TO_TASK.get(default_field, "ENTITY_EXTRACTION")
+    task = LLMTask[task_name]
+    mode = privacy_mode if privacy_mode is not None else PrivacyMode.CLOUD
 
-    mm = get_model_manager()
-
-    resolved_id = await resolve_default_model_id(default_field, model_id)
-    if not resolved_id:
-        raise RuntimeError(
-            f"No model configured — set DefaultModels.{default_field} or "
-            "default_chat_model, or pass model_id explicitly."
-        )
-
-    model_record = await get_model_repo().get(resolved_id)
-    if not model_record:
-        raise RuntimeError(
-            f"Model '{resolved_id}' not found in database."
-        )
-
-    instance = mm.get_model_from_config(model_record)
-    if not isinstance(instance, LanguageModel):
-        raise TypeError(
-            f"Model '{resolved_id}' is not a LanguageModel "
-            f"(got {type(instance).__name__})."
-        )
-
-    async def _caller(system_prompt: str, user_prompt: str, _model: str) -> str:
-        # The injected ``model`` arg is for telemetry/parity with
-        # Pass-1/Pass-2 callers; the LanguageModel itself is already
-        # bound. We honour it by logging when the caller asks for a
-        # model id that differs from the bound instance — a sign the
-        # caller wants per-call model overrides that we don't yet
-        # support.
-        if _model and _model not in ("default", model_record.id):
-            logger.warning(
-                f"LLMExtractor caller requested model={_model!r} but "
-                f"this caller is bound to {model_record.id!r}"
-            )
-        response = await instance.achat_complete(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
-        )
-        # esperanto ``ChatCompletion`` shape: ``response.choices[0].message.content``
-        # Defensive extraction — return empty string if the shape changes
-        # rather than raising, because the extractor's JSON parser
-        # tolerates empty/invalid output.
-        try:
-            return response.choices[0].message.content or ""
-        except (AttributeError, IndexError) as e:
-            logger.error(
-                f"Unexpected esperanto ChatCompletion shape: {e}; "
-                f"response={response!r}"
-            )
-            return ""
-
-    return _caller
+    return RoutedLLMCaller(
+        task=task,
+        mode=mode,
+        model_id=model_id,
+        source_id=source_id,
+        notebook_id=notebook_id,
+    )
 
 
 class SchemaReviewPendingError(JobPausedForReviewError):
@@ -294,29 +345,36 @@ class EntityExtractionService:
         self._notebook_schema_repo = notebook_schema_repo
         self._pass1_repo = pass1_repo
         self._persistence = EntityPersistenceService()
+        # Run-scoped routing context (Track J.4), set at the top of
+        # ``run_extraction`` and consumed by the LLM-caller builders so the
+        # whole run shares one resolved privacy mode + source/notebook ids for
+        # routing telemetry. Defaults keep the legacy CLOUD behavior for any
+        # caller that invokes a builder without going through ``run_extraction``.
+        self._privacy_mode: Any = None
+        self._routing_source_id: Optional[str] = None
+        self._routing_notebook_id: Optional[str] = None
+        # The most-recently-built routed caller for this run. After extraction
+        # its ``served_provider`` / ``served_model_id`` carry the provider that
+        # actually answered (J-Q7) — read at provenance-stamp time so the KG
+        # records the SERVED model, not just the resolved head.
+        self._last_routed_caller: Any = None
 
-    async def _resolve_privacy_mode_inert(
+    async def _resolve_privacy_mode(
         self, source_id: str, notebook_id: Optional[str]
     ) -> Any:
         """Resolve the J.3 layered ``PrivacyMode`` for this extraction run.
 
-        ===================== J.3 / J.4 SEAM (read me) =====================
-        This computes + LOGS the privacy mode from ``source.private`` +
-        ``notebook_id`` via :func:`resolve_privacy_mode`, but is deliberately
-        INERT for live behavior: J.3 only proves the data + resolver are
-        correct and wired. The B.8 ``make_default_llm_caller`` shim still drives
-        which model actually runs (always CLOUD-head precedence). J.4 is the
-        phase that flips execution to the failover executor and makes a PRIVATE
-        document actually pin to a local provider.
-
-        DO NOT use the returned mode to change model selection here — doing so
-        would prematurely route around the B.8 caller before the failover
-        executor (J.2) is wired into extraction. The return value exists so J.4
-        can swap this call's consumer without re-plumbing the resolution.
-        ====================================================================
+        J.4 makes this LIVE: the returned mode is threaded into every
+        ``make_default_llm_caller`` for this run so a PRIVATE document pins the
+        whole extraction route to local providers (no cloud LanguageModel is
+        ever constructed) and a CLOUD document tries the cloud provider chain
+        with local as the last-resort fallback.
 
         Best-effort: any failure resolving the mode is logged and swallowed
         (returns CLOUD) so a privacy-resolution hiccup never fails extraction.
+        Note CLOUD is the safe degrade direction only because a *private*
+        document's ``source.private`` flag short-circuits to PRIVATE before any
+        of the fallible reads below.
         """
         from app_main.services.model_routing.privacy_resolver import (
             resolve_privacy_mode,
@@ -330,7 +388,7 @@ class EntityExtractionService:
                 source_private = bool(getattr(source, "private", False))
         except Exception as e:  # noqa: BLE001 — never fail extraction on this
             logger.warning(
-                f"privacy seam: could not read source.private for "
+                f"privacy: could not read source.private for "
                 f"{source_id} ({e}); assuming not private"
             )
 
@@ -340,21 +398,55 @@ class EntityExtractionService:
             )
         except Exception as e:  # noqa: BLE001 — degrade to cloud, log loudly
             logger.warning(
-                f"privacy seam: resolve_privacy_mode failed for {source_id} "
+                f"privacy: resolve_privacy_mode failed for {source_id} "
                 f"({e}); defaulting to CLOUD"
             )
             mode = PrivacyMode.CLOUD
 
         logger.info(
-            "privacy seam (J.3, inert): source={src} notebook={nb} "
-            "source_private={priv} -> mode={mode} "
-            "(execution unchanged until J.4)",
+            "privacy (J.4, live): source={src} notebook={nb} "
+            "source_private={priv} -> mode={mode}",
             src=source_id,
             nb=notebook_id,
             priv=source_private,
             mode=mode.value,
         )
         return mode
+
+    async def _make_routed_caller(self, *, model_id: Optional[str] = None):
+        """Build a J.4-routed LLM caller bound to this run's privacy context.
+
+        Central builder so every extraction call site (single-schema, Pass-1/
+        Pass-2 multi-schema, B.5b orphan retry) shares the same resolved
+        :class:`PrivacyMode` + source/notebook ids. A PRIVATE run thus pins the
+        whole route to local providers at every call site, not just one.
+        """
+        caller = await make_default_llm_caller(
+            model_id=model_id,
+            default_field="default_extraction_model",
+            privacy_mode=self._privacy_mode,
+            source_id=self._routing_source_id,
+            notebook_id=self._routing_notebook_id,
+        )
+        self._last_routed_caller = caller
+        return caller
+
+    async def _served_extraction_model(self, config) -> Optional[str]:
+        """The model id to stamp as extraction provenance (J-Q7).
+
+        Prefers the provider that ACTUALLY served the run (the routed caller's
+        ``served_model_id`` after extraction); falls back to the resolved
+        head-of-chain default (B.8 behavior) when nothing was served — e.g. a
+        zero-entity run where the caller was never invoked, or a caller-build
+        failure.
+        """
+        served = getattr(self._last_routed_caller, "served_model_id", None)
+        if served:
+            return served
+        return await resolve_default_model_id(
+            "default_extraction_model",
+            config.llm_model if config.llm_model != "default" else None,
+        )
 
     async def _embed_entities(
         self, result: "ExtractionResult"
@@ -407,11 +499,10 @@ class EntityExtractionService:
         extractor = None
         if config.extractor_type == "llm":
             try:
-                llm_caller = await make_default_llm_caller(
+                llm_caller = await self._make_routed_caller(
                     model_id=config.llm_model
                     if config.llm_model != "default"
                     else None,
-                    default_field="default_extraction_model",
                 )
                 from ontology_extraction.extractors.llm_extractor import (
                     LLMExtractor,
@@ -566,9 +657,7 @@ class EntityExtractionService:
         # their lazy-default empty-result paths if no caller arrives.
         llm_caller = None
         try:
-            llm_caller = await make_default_llm_caller(
-                default_field="default_extraction_model"
-            )
+            llm_caller = await self._make_routed_caller()
         except Exception as e:
             logger.warning(
                 f"multi_schema: failed to wire LLM caller ({e}); "
@@ -672,13 +761,15 @@ class EntityExtractionService:
                 d["section_heading"] = c.section_path[-1]
             chunk_dicts.append(d)
 
-        # 2b. Resolve the J.3 layered privacy mode (INERT seam — see
-        # ``_resolve_privacy_mode_inert``). Computed + logged so the data path
-        # is proven and wired; J.4 flips this into the actual cloud/local
-        # dispatch. Live model selection below is unchanged (B.8 caller).
-        _privacy_mode = await self._resolve_privacy_mode_inert(
+        # 2b. Resolve the J.3 layered privacy mode and make it LIVE (J.4): stash
+        # it as run-scoped routing context so every LLM-caller built below
+        # (single-schema, Pass-1/Pass-2, B.5b retry) routes through the failover
+        # executor under this mode. A PRIVATE source pins the whole run local.
+        self._privacy_mode = await self._resolve_privacy_mode(
             source_id, notebook_id
         )
+        self._routing_source_id = source_id
+        self._routing_notebook_id = notebook_id
 
         # 3. Build config and workflow
         config_kwargs: Dict[str, Any] = {
@@ -804,14 +895,12 @@ class EntityExtractionService:
                     merge_groups=merge_groups,
                     match_candidates=[c.model_dump() for c in filtered.match_candidates] if filtered.match_candidates else None,
                     extraction_method=extractor_type,
-                    # Record the model actually used (resolved via the same
-                    # precedence as the LLM caller) — not config.llm_model,
-                    # which is "default" on the common path and would stamp
-                    # None even though the extraction model produced the rows.
-                    extraction_model=await resolve_default_model_id(
-                        "default_extraction_model",
-                        config.llm_model if config.llm_model != "default" else None,
-                    ),
+                    # Record the model that actually SERVED this run (J-Q7): the
+                    # routed caller's served_model_id after failover, falling
+                    # back to the resolved head (B.8) when nothing was served.
+                    # Not config.llm_model, which is "default" on the common path
+                    # and would stamp None even though a model produced the rows.
+                    extraction_model=await self._served_extraction_model(config),
                 )
 
         # 7. Persist raw extraction results
@@ -905,9 +994,7 @@ class EntityExtractionService:
             # retry will then just record the attempt without confirming.
             llm_caller = None
             try:
-                llm_caller = await make_default_llm_caller(
-                    default_field="default_extraction_model"
-                )
+                llm_caller = await self._make_routed_caller()
             except Exception as e:
                 logger.warning(
                     f"B.5b retry: failed to wire LLM caller ({e}); "

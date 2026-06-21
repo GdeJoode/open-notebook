@@ -147,4 +147,9 @@ Schermafbeelding*.png
 
 # graphify output (generated knowledge graph artifacts)
 graphify-out/
-graphify-out*/
+graphify-out*/NIM info.txt
+*.local.env
+
+# Secret: NVIDIA NIM credentials (Track J) — never commit
+NIM info.txt
+/NIM info.txt

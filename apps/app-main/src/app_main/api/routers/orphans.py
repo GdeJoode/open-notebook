@@ -149,6 +149,53 @@ async def _ensure_notebook_exists(
         raise HTTPException(status_code=404, detail="Notebook not found")
 
 
+async def _resolve_source_privacy_mode(
+    source_id: str,
+    notebook_id: Optional[str],
+    source_repo: SourceRepository,
+):
+    """Resolve the J.3 layered ``PrivacyMode`` for an orphan's source.
+
+    Mirrors ``EntityExtractionService._resolve_privacy_mode`` so the manual
+    reconnect honors the same invariant as the auto-retry: a ``source.private``
+    document (or a source in a ``private`` notebook) pins the reconnect route to
+    local providers. The privacy resolver's sticky rule guarantees a private
+    source never resolves to CLOUD.
+
+    Best-effort: any failure reading the source flag is logged and treated as
+    "not private", deferring to the notebook/global layers. CLOUD is the safe
+    degrade direction *only* because a private source's flag short-circuits to
+    PRIVATE inside :func:`resolve_privacy_mode` before any fallible read here.
+    """
+    from app_main.services.model_routing.privacy_resolver import (
+        resolve_privacy_mode,
+    )
+
+    source_private: Optional[bool] = None
+    try:
+        source = await source_repo.get(source_id)
+        if source is not None:
+            source_private = bool(getattr(source, "private", False))
+    except Exception as e:  # noqa: BLE001 — never fail reconnect on this read
+        logger.warning(
+            f"manual_reconnect_orphan: could not read source.private for "
+            f"{source_id} ({e}); assuming not private"
+        )
+
+    mode = await resolve_privacy_mode(
+        source_private=source_private, notebook_id=notebook_id
+    )
+    logger.info(
+        "manual_reconnect_orphan privacy (J.4): source={src} notebook={nb} "
+        "source_private={priv} -> mode={mode}",
+        src=source_id,
+        nb=notebook_id,
+        priv=source_private,
+        mode=mode.value,
+    )
+    return mode
+
+
 # ---------------------------------------------------------------------------
 # GET /orphans
 # ---------------------------------------------------------------------------
@@ -277,16 +324,31 @@ async def manual_reconnect_orphan(
     # Wire the LLM caller -- match the service's pattern. Failure to
     # build a caller is non-fatal; the retry simply records the attempt
     # without confirming a relation.
+    #
+    # PRIVACY (J.4): resolve the orphan SOURCE's privacy mode and thread it
+    # into the caller so a ``source.private`` document (or a source in a
+    # ``private`` notebook) pins the reconnect route to local providers — the
+    # in-service B.5b retry already does this via ``_make_routed_caller``.
+    # Without this the caller defaulted to CLOUD and could run NIM calls on a
+    # private document. We resolve per-source (this endpoint operates on a
+    # single orphan -> a single source) rather than batching.
     llm_caller = None
     try:
         from app_main.services.entity_extraction_service import (
             make_default_llm_caller,
         )
 
+        privacy_mode = await _resolve_source_privacy_mode(
+            source_id, notebook_id, source_repo
+        )
+
         # Same KG orphan-reconnect routine as the in-service B.5b retry —
         # use the extraction model so auto- and user-triggered runs match.
         llm_caller = await make_default_llm_caller(
-            default_field="default_extraction_model"
+            default_field="default_extraction_model",
+            privacy_mode=privacy_mode,
+            source_id=source_id,
+            notebook_id=notebook_id,
         )
     except Exception as e:
         logger.warning(

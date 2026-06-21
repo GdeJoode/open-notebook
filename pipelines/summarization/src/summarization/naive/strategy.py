@@ -31,7 +31,10 @@ class NaiveLLMStrategy(BaseSummarizationStrategy):
         self._naive_config = config.naive
 
     def _get_model(self):
-        """Create an Esperanto LanguageModel from config."""
+        """Return the LanguageModel: app-injected (J.4 routed) when present, else
+        constructed from the env-driven LLMConfig (back-compat ollama path)."""
+        if self.injected_model is not None:
+            return self.injected_model
         return AIFactory.create_language(
             self._llm_config.provider,
             model_name=self._llm_config.model_name,

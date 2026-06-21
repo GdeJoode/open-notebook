@@ -44,6 +44,8 @@ class TreeKGStrategy(BaseSummarizationStrategy):
     # ------------------------------------------------------------------
 
     def _get_model(self, max_tokens: int):
+        if self.injected_model is not None:
+            return self.injected_model
         return AIFactory.create_language(
             self._llm_config.provider,
             model_name=self._llm_config.model_name,
