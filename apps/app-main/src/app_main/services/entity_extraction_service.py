@@ -78,18 +78,61 @@ def _avg_entity_confidence(entities: Iterable[Any]) -> float:
     return sum(scores) / len(scores)
 
 
+# Maps the B.8 ``default_field`` selector to the J.1 routing task whose
+# head-of-chain default model id is the same. ``resolve_default_model_id`` is
+# now the HEAD of an ordered route (J.1) rather than a standalone resolver, but
+# its single-id contract is preserved for B.8 callers.
+_DEFAULT_FIELD_TO_TASK = {
+    "default_extraction_model": "ENTITY_EXTRACTION",
+    "default_transformation_model": "SUMMARIZATION",
+    "default_chat_model": "CHAT",
+}
+
+
 async def resolve_default_model_id(
     default_field: str = "default_chat_model",
     model_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Resolve the model id for a use case — the single source of truth for
-    model-selection precedence (used by both the LLM-caller factory and entity
-    provenance, so they can never drift):
+    """Resolve the single model id for a use case — the head of the J.1 route.
+
+    Thin B.8-compat shim: it now delegates to the privacy-aware route resolver
+    (:func:`app_main.services.model_routing.resolve_route`) and returns
+    ``route.ordered_candidates[0].model_id`` — the FIRST candidate the chain
+    would try. The precedence it encodes is unchanged from B.8:
 
     explicit ``model_id`` override → the requested per-function default (e.g.
     ``default_extraction_model``) → ``default_chat_model`` as the universal
     fallback. Returns ``None`` if nothing is configured.
+
+    Keeping this signature/behavior stable is a hard requirement: B.8's
+    extraction tests and the provenance call sites depend on it returning one
+    id. The richer ordered API is :func:`resolve_route`.
     """
+    task_name = _DEFAULT_FIELD_TO_TASK.get(default_field)
+    if task_name is not None:
+        try:
+            from app_main.services.model_routing.route_resolver import (
+                LLMTask,
+                PrivacyMode,
+                resolve_route,
+            )
+
+            route = await resolve_route(
+                LLMTask[task_name], PrivacyMode.CLOUD, model_id=model_id
+            )
+            if route.ordered_candidates:
+                return route.ordered_candidates[0].model_id
+        except Exception as e:
+            # Routing must never regress the B.8 single-id contract. On any
+            # failure fall through to the inline precedence below (identical
+            # to the pre-J.1 implementation).
+            logger.debug(
+                f"resolve_default_model_id: route resolution failed for "
+                f"{default_field!r} ({e}); using inline precedence"
+            )
+
+    # Inline B.8 precedence — the fallback path and the source of truth for
+    # ``default_field`` values that are not routed tasks (e.g. embedding/STT).
     from llm_manager import get_model_manager
 
     from app_main.dependencies import get_default_models_repo

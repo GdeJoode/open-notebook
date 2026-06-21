@@ -19,6 +19,7 @@ from surrealdb_service.repositories import (
     EntityRepository,
     EpisodeProfileRepository,
     ModelRepository,
+    ModelRouteRepository,
     NotebookRepository,
     NoteRepository,
     PodcastEpisodeRepository,
@@ -117,6 +118,26 @@ def get_model_repo() -> ModelRepository:
 
 def get_default_models_repo() -> DefaultModelsRepository:
     return DefaultModelsRepository()
+
+
+def get_model_route_repo() -> ModelRouteRepository:
+    """Provider for the per-task model_route rows (Track J.1)."""
+    return ModelRouteRepository()
+
+
+def get_route_resolver():
+    """Provider for the privacy-aware route resolver (Track J.1).
+
+    Returns a :class:`RouteResolver` wired with the model_route + model repos.
+    Constructed per-call (the repos are cheap, stateless handles) — matches the
+    repo-factory convention above rather than caching a singleton.
+    """
+    from app_main.services.model_routing.route_resolver import RouteResolver
+
+    return RouteResolver(
+        model_route_repo=get_model_route_repo(),
+        model_repo=get_model_repo(),
+    )
 
 
 def get_transformation_repo() -> TransformationRepository:
