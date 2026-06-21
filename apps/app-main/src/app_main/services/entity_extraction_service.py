@@ -173,12 +173,17 @@ class RoutedLLMCaller:
         model_id: Optional[str],
         source_id: Optional[str] = None,
         notebook_id: Optional[str] = None,
+        json_mode: bool = False,
     ) -> None:
         self._task = task
         self._mode = mode
         self._model_id = model_id
         self._source_id = source_id
         self._notebook_id = notebook_id
+        # FU-J4-4: when True, every candidate call requests structured JSON
+        # output (the EXTRACTION path). Left False for chat/summarization so
+        # their prose output is unaffected.
+        self._json_mode = json_mode
         # Last-served provenance (populated after each successful call).
         self.served_provider: Optional[str] = None
         self.served_model_id: Optional[str] = model_id
@@ -219,7 +224,12 @@ class RoutedLLMCaller:
 
         result = await executor.execute_with_failover(
             route,
-            partial(_call_candidate_text, system_prompt, user_prompt),
+            partial(
+                _call_candidate_text,
+                system_prompt,
+                user_prompt,
+                json_mode=self._json_mode,
+            ),
         )
 
         candidate_result = result.value
@@ -241,12 +251,24 @@ class RoutedLLMCaller:
         return candidate_result.text
 
 
-async def _call_candidate_text(system_prompt: str, user_prompt: str, candidate):
+async def _call_candidate_text(
+    system_prompt: str,
+    user_prompt: str,
+    candidate,
+    *,
+    json_mode: bool = False,
+):
     """Adapter binding (system, user) so the executor's ``call(candidate)``
-    signature reaches :func:`call_candidate` with the prompts."""
+    signature reaches :func:`call_candidate` with the prompts.
+
+    ``json_mode`` (FU-J4-4) is forwarded so the EXTRACTION path requests
+    structured JSON output from each candidate; prose paths leave it False.
+    """
     from app_main.services.model_routing.llm_call import call_candidate
 
-    return await call_candidate(candidate, system_prompt, user_prompt)
+    return await call_candidate(
+        candidate, system_prompt, user_prompt, json_mode=json_mode
+    )
 
 
 async def make_default_llm_caller(
@@ -256,6 +278,7 @@ async def make_default_llm_caller(
     privacy_mode: "Any" = None,
     source_id: Optional[str] = None,
     notebook_id: Optional[str] = None,
+    json_mode: Optional[bool] = None,
 ):
     """Build an async ``LLMCaller`` that routes through the J.4 failover executor.
 
@@ -284,15 +307,31 @@ async def make_default_llm_caller(
         default_field: Which ``DefaultModels`` field selects the head model.
         privacy_mode: Resolved :class:`PrivacyMode`; ``None`` -> CLOUD.
         source_id / notebook_id: Carried into routing telemetry.
+        json_mode: FU-J4-4 structured-output switch. ``None`` (the default)
+            auto-enables it for the EXTRACTION task only — so KG-extraction
+            requests JSON output while chat/summarization keep emitting prose.
+            Pass an explicit ``True``/``False`` to override the per-task default.
 
     Returns:
         A :class:`RoutedLLMCaller` (callable, with served-provenance attributes).
     """
     from app_main.services.model_routing.route_resolver import LLMTask, PrivacyMode
 
-    task_name = _DEFAULT_FIELD_TO_TASK.get(default_field, "ENTITY_EXTRACTION")
+    # Unknown/unmapped fields default to CHAT (prose, no forced JSON) — never
+    # ENTITY_EXTRACTION, so a typo'd default_field can't silently force JSON
+    # output onto a prose path.
+    task_name = _DEFAULT_FIELD_TO_TASK.get(default_field, "CHAT")
     task = LLMTask[task_name]
     mode = privacy_mode if privacy_mode is not None else PrivacyMode.CLOUD
+
+    # Default json_mode ON for extraction only. Chat (provision_langchain_model)
+    # and summarization never reach this with ENTITY_EXTRACTION, so their prose
+    # output is never forced to JSON.
+    resolved_json_mode = (
+        json_mode
+        if json_mode is not None
+        else task == LLMTask.ENTITY_EXTRACTION
+    )
 
     return RoutedLLMCaller(
         task=task,
@@ -300,6 +339,7 @@ async def make_default_llm_caller(
         model_id=model_id,
         source_id=source_id,
         notebook_id=notebook_id,
+        json_mode=resolved_json_mode,
     )
 
 

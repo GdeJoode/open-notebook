@@ -81,10 +81,21 @@ def _extract_text(response: Any) -> str:
         return ""
 
 
+# Esperanto's provider-agnostic structured-output config value (FU-J4-4). The
+# base ``LanguageModel`` exposes a ``structured`` field; each provider translates
+# it: openai/openai-compatible (NVIDIA NIM) -> ``response_format={"type":
+# "json_object"}``, ollama -> ``format="json"``. Providers that don't honor it
+# (e.g. anthropic) simply ignore the field, so threading it universally degrades
+# gracefully — no capability gate needed.
+_STRUCTURED_JSON = {"type": "json_object"}
+
+
 async def call_candidate(
     candidate: ModelCandidate,
     system: str,
     user: str,
+    *,
+    json_mode: bool = False,
     **kwargs: Any,
 ) -> CandidateResult:
     """Build the LanguageModel for ``candidate`` and run one chat completion.
@@ -93,6 +104,13 @@ async def call_candidate(
         candidate: The route candidate to dispatch against (provider + model).
         system: System prompt.
         user: User prompt.
+        json_mode: When ``True`` (the EXTRACTION path, FU-J4-4), request
+            structured JSON output from the provider so the model stops emitting
+            malformed/partial JSON that the extractor's parser drops. Threaded
+            into esperanto's provider-agnostic ``structured`` config field, which
+            each provider translates (NIM -> ``response_format``, ollama ->
+            ``format=json``). Chat/summarization callers leave this ``False`` so
+            their prose output is unaffected.
         **kwargs: Reserved for per-call overrides (temperature, max_tokens);
             forwarded to ``get_model_from_config`` so the cache key reflects them.
 
@@ -109,6 +127,13 @@ async def call_candidate(
 
     mm = get_model_manager()
     model_record = _model_for_candidate(candidate)
+
+    if json_mode:
+        # Pass via the esperanto-native ``structured`` config field. It reaches
+        # the model through ``get_model_from_config`` -> ``ModelFactory`` ->
+        # ``AIFactory.create_language(config=...)`` and also keys the model cache,
+        # so a json-mode build never collides with a prose build of the same id.
+        kwargs.setdefault("structured", _STRUCTURED_JSON)
 
     instance = mm.get_model_from_config(model_record, **kwargs)
     if not isinstance(instance, LanguageModel):

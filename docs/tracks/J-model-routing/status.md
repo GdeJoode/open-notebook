@@ -161,3 +161,32 @@ Privacy was resolved with `notebook_id=None`, so a notebook set to `privacy_mode
 - FU-J4-3: factory never passed `model.max_output_tokens` to esperanto → NIM JSON truncated (FIXED, merged — `max_output_tokens` now threaded; NIM seeded at 16384).
 - FU-J4-4: parse-failure noise across local models → make the extractor request JSON mode / structured output (quality win, not yet done).
 - Live perf finding: this host has ~8.7 GiB available → `qwen2.5:14b` spilled to CPU (the 1.5h). `llama3.1:8b` fits fully on GPU (~9x faster, ~10min/doc) and is now the wired extraction model. NIM (cloud) overloaded during testing — disabled for cooldown; re-enable for summarization.
+
+### FU-J4-4 — structured-JSON output for entity extraction (2026-06-22)
+
+**Problem**: the live NIM run + local-model tests showed frequent `Failed to parse LLM response` errors in `pipelines/ontology-extraction/.../extractors/llm_extractor.py::_parse_response` — models (mistral-medium, qwen, llama) emitted malformed/partial/empty JSON and the parser dropped the WHOLE batch (0 entities). The prompt asked for JSON but nothing enforced it at the API level.
+
+**Fix**: request structured JSON output from the model for the EXTRACTION path only, via esperanto's provider-agnostic `structured` config field.
+
+**Esperanto mechanism used** (verified by inspecting the running container's esperanto):
+- The base `esperanto.LanguageModel` exposes a `structured: Optional[Dict]` config field (NOT a per-call `achat_complete` kwarg — `achat_complete` only takes `messages`/`stream`). It's set at build time via `config={"structured": {"type": "json_object"}}` passed to `AIFactory.create_language`.
+- Each provider translates the SAME `structured={"type": "json_object"}` value to its native param: `openai`/`openai-compatible` (NVIDIA NIM) → `response_format={"type": "json_object"}`; `ollama` (local) → `format="json"`. So one provider-agnostic value covers both the cloud and local extraction paths.
+- It threads cleanly through the EXISTING seam: `call_candidate` passes it as a kwarg to `ModelManager.get_model_from_config` → `ModelFactory.create_model(model, kwargs)` → `create_language_model(config=...)` → `AIFactory.create_language(config=...)`. It also keys the model cache, so a json-mode build never collides with a prose build of the same model id.
+
+**Where json_mode is set / NOT set per task**:
+- SET (json_mode=True): `make_default_llm_caller` auto-enables it when the resolved task is `LLMTask.ENTITY_EXTRACTION` (i.e. `default_field="default_extraction_model"`). This covers: single-schema extraction, multi-schema Pass-1/Pass-2, B.5b orphan auto-retry, and the `POST /orphans/.../reconnect` manual reconnect (all use the extraction field).
+- NOT SET (json_mode stays False): CHAT and SUMMARIZATION callers. Chat uses a completely separate path (`graphs/utils.py::provision_langchain_model`, langchain — never touches `call_candidate`). Summarization (`summarization_model.py`) calls `call_candidate` WITHOUT `json_mode`, which defaults to `False`. So prose paths are unaffected.
+- Override: `make_default_llm_caller(json_mode=...)` accepts an explicit `True`/`False` to override the per-task default if ever needed.
+
+**Graceful degradation (AC3)**: no capability gate needed. Esperanto's base `LanguageModel` accepts `structured` in config for EVERY provider; providers that don't implement structured output (verified: anthropic) simply store and ignore the field — no `response_format`/`format` is emitted and no exception is raised. So threading `structured` universally is safe; an unsupporting provider degrades to plain prose-mode without crashing extraction. The existing `json.loads(text, strict=False)` + markdown-fence stripping in `_parse_response` is retained as the defensive fallback (JSON mode reduces but may not fully eliminate stray output).
+
+**Files changed**:
+- `apps/app-main/src/app_main/services/model_routing/llm_call.py` — `call_candidate(..., json_mode=False)` sets `kwargs.setdefault("structured", {"type": "json_object"})` when json_mode.
+- `apps/app-main/src/app_main/services/entity_extraction_service.py` — `RoutedLLMCaller(json_mode=...)` threads it into the `_call_candidate_text` partial; `_call_candidate_text` forwards it; `make_default_llm_caller(json_mode=None)` auto-enables for the ENTITY_EXTRACTION task.
+- `apps/app-main/tests/test_extraction_json_mode.py` — 6 new tests (build-seam spy): extraction threads `structured` for every candidate (incl. ollama fallback), chat/summarization omit it, explicit override, graceful-degradation.
+
+**Validation**: 6 new json-mode tests green. AC4 suites green — `test_entity_extraction_service.py` + `test_routed_extraction.py` + `surrealdb-service` (73 passed, `-k "extraction or routed or roundtrip"`); `pipelines/ontology-extraction/` (243 passed). Changed files lint clean (`llm_call.py` + test file: all checks passed; the 2 pre-existing `F821` forward-ref warnings in untouched `entity_extraction_service.py` methods are not introduced here).
+
+**Live verification pending** (operator): re-run extraction on a doc and confirm the `Failed to parse LLM response` rate drops across mistral-medium / qwen / llama.
+
+| FU-J4-4 | structured-JSON output for entity extraction (json_mode) | `a12e7ec..3c32a35` | `track/j4-json-mode` | 2026-06-22 | Implemented + unit-tested. Extraction requests `structured={"type":"json_object"}` (NIM→response_format, ollama→format=json); chat/summarization unaffected; unsupporting providers degrade gracefully. AC suites + ontology parser tests green. Ready for review; live parse-rate verification pending. |
