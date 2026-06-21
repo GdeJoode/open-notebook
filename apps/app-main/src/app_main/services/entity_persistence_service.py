@@ -40,13 +40,37 @@ _ALLOWED_ENTITY_TYPES = frozenset(
 )
 
 
+# Common short forms / NER tags LLMs emit, mapped onto the canonical enum so
+# they don't degrade to "other".
+_ENTITY_TYPE_ALIASES = {
+    "org": "organization",
+    "organisation": "organization",  # British spelling
+    "norp": "organization",  # nationalities / religious / political groups
+    "company": "organization",
+    "per": "person",
+    "people": "person",
+    "loc": "location",
+    "gpe": "location",  # geopolitical entity (spaCy NER)
+    "geo": "location",
+    "fac": "location",  # facility
+    "place": "location",
+    "gov": "government_organization",
+    "govt": "government_organization",
+    "law": "legislation",
+    "misc": "other",
+}
+
+
 def _normalize_entity_type(raw: Any) -> str:
     """Map an LLM-provided entity type onto the canonical enum.
 
-    Lower-cases and underscores the value; returns ``"other"`` for anything
-    outside the allowed set so the SCHEMAFULL ``ASSERT`` never rejects a write.
+    Lower-cases + underscores, then resolves common short forms / NER tags via
+    ``_ENTITY_TYPE_ALIASES``; anything still outside the allowed set becomes
+    ``"other"`` so the ``entity_type`` ASSERT never rejects a write (the raw
+    value is preserved in ``properties.raw_entity_type``).
     """
     norm = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+    norm = _ENTITY_TYPE_ALIASES.get(norm, norm)
     return norm if norm in _ALLOWED_ENTITY_TYPES else "other"
 
 

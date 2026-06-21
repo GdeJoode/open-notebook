@@ -192,7 +192,8 @@ class TestPersistFilteredResult:
         ent = mock_upsert.call_args.args[0]
         # canonical_name + source_documents, NOT legacy name + source_ids
         assert ent.canonical_name == "BZK"
-        assert ent.entity_type == "ORG"
+        # entity_type is normalized onto the canonical enum: "ORG" -> "organization"
+        assert ent.entity_type == "organization"
         assert ent.source_documents == ["source:doc1"]
         assert ent.confidence == 0.9
 

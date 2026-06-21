@@ -252,11 +252,12 @@ class EntityRepository:
         # ``hash_id`` is a required string on the live DB (schema drift — not in
         # any migration, so the testcontainer schema doesn't enforce it and the
         # roundtrip tests pass while live writes fail with "Found NONE for field
-        # hash_id"). Derive it deterministically from the dedup identity
-        # (canonical_name + entity_type), matching the UNIQUE idx_entity_hash.
-        _hash_basis = (
-            f"{entity.canonical_name}|{entity.entity_type}".strip().lower()
-        )
+        # hash_id"). Derive it deterministically from the EXACT dedup identity
+        # (canonical_name + entity_type) used by the existing-row lookup and the
+        # case-sensitive ``idx_entity_name_type``. Do NOT lower-case/strip here:
+        # the dedup key is case-sensitive, so folding case would make distinct
+        # entities ("BZK" vs "bzk") collide on the UNIQUE ``idx_entity_hash``.
+        _hash_basis = f"{entity.canonical_name}|{entity.entity_type}"
         create_payload: Dict[str, Any] = {
             "canonical_name": entity.canonical_name,
             "entity_type": entity.entity_type,
