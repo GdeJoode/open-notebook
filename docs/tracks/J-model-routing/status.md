@@ -87,3 +87,7 @@ Addresses the J.2 adversarial review (REVISIONS_NEEDED: 1 major + 1 worth-fixing
 - **Fair-use**: "don't overload the endpoint" → J.2 must rate-limit (conservative default, e.g. ~20 req/min, configurable) + exponential backoff on 429, per-document sequential (no parallel hammering). NIM hosts multiple models, so a same-endpoint model fallback (e.g. mistral → llama-3.3-70b) is an option for the 'multiple cloud providers' redundancy the user wanted.
 
 | J.2 | failover executor + circuit-breaker + fair-use rate limiter | — | `track/j2-failover` | 2026-06-21 | adversarial-reviewer APPROVED (attempt 2; 1 major fixed: RateLimitTimeout→failover-to-local w/o breaker penalty). 67 tests green. FU-J2-1/2 deferred. |
+
+| J.3 | layered privacy plumbing + local-embeddings guardrail | — | `track/j3-privacy` | 2026-06-21 | adversarial-reviewer APPROVED (0 blockers/majors; 2 cosmetic minors → J.5). Sticky-private invariant property-tested; migration 52; inert J.4 seam. |
+
+**J.4 prerequisites**: wire `NVIDIA_API_KEY` into the running container env (key in gitignored `NIM info.txt`); seed the NIM `model` row + repoint the `model_route` default chain to `[nvidia-nim → local]`; map esperanto/NIM errors onto the J.2 failover whitelist; **unify the summarization path** (it bypasses DefaultModels via AIFactory — the planner's flagged trap); flip `run_extraction` from the inert seam to the failover executor.
