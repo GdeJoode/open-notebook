@@ -211,3 +211,8 @@ Privacy was resolved with `notebook_id=None`, so a notebook set to `privacy_mode
 - The WSL checkout was missing the linux rolldown native binding (`@rolldown/binding-linux-x64-gnu`; only the win32 binding was present) — even pre-existing vitest tests failed until installed with `npm i --no-save`. Did not touch `package.json`. A reviewer/CI on Linux needs that binding present.
 - `next dev` in this WSL env held a stale route manifest on the default port 8502 (404'd the new route while serving all others 200); a fresh server on another port served `/settings/model-routing` 200 and the E2E passed. No code issue — flagged for the J.6 harness.
 - AC7's **full live ingest-with-private** path (upload a real doc with private on, assert it never reaches cloud) needs a running worker + cloud keys — out of this harness; it is a J.6 operator smoke-checklist item. The badge half of AC7 is covered here.
+
+| FU-J4-4 | structured-JSON output for extraction | — | `track/j4-json-mode` | 2026-06-22 | APPROVED + merged (afe57a8). Live-verified: parse failures ~10/4-batch → ~1/3-batch (~85% drop). |
+| J.5 | UI: routing config + privacy toggles + health | — | `track/j5-ui` | 2026-06-22 | adversarial-reviewer APPROVED (attempt 2; 1 major fixed: private_chain local-only PUT validation). 19 backend + 38 frontend + 2 E2E green. |
+
+**Track J UI complete.** Routing config + layered privacy toggles + provider health are now editable in the UI (no DB edits). Remaining: J.6 (integration/E2E/operator docs). Next user-requested focus: **entity deduplication** (the V1-normalizer resolution work from B.8c — a new track).
