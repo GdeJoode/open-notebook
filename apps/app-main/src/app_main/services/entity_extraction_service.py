@@ -957,7 +957,7 @@ class EntityExtractionService:
             # to the KG (entity/relation tables). The extraction_result record is
             # only a secondary cache for the re-filter path (run_filtering_only).
             # A failure here — notably the surrealdb async-ws client raising
-            # ``KeyError(<request-uuid>)`` on the large serialized entities/
+            # ``KeyError(<request-uuid>)`` likely triggered by the large serialized entities/
             # relations payload — must NOT fail the whole extraction job, or a
             # successful extraction (hundreds of persisted entities) gets marked
             # "failed" and dead-lettered. Log and continue; the re-filter cache

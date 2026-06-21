@@ -1602,3 +1602,5 @@ Live qwen2.5:14b extraction now produces AND persists entities (was 0). Chain of
 - Project memory written (`project-open-notebook-kg.md`).
 
 **Track B.8 outcome**: KG entity extraction fixed + verified end-to-end on live data (qwen2.5:14b); pre-Track-B schema drift reconciled (migration 50); resolution assessed (PARTIALLY MET, V1-capped → M4). All phases adversarial-APPROVED. Pending: human sign-off to merge `track/b8*` branches.
+
+**B.8d review**: adversarial-reviewer APPROVED (0 blockers/majors, 2 trivial minors — root-cause-attribution prose softened). Track B.8 closed pending human merge sign-off.
