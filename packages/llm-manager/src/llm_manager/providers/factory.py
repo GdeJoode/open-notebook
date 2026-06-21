@@ -87,6 +87,14 @@ class ModelFactory:
         config = config or {}
         model_type = model.type
 
+        # Honor the model's configured output-token ceiling. Without this,
+        # OpenAI-compatible endpoints (e.g. NVIDIA NIM, Track J) fall back to
+        # esperanto's small default max_tokens and truncate dense JSON
+        # extraction output mid-string. Local providers (Ollama) stream until
+        # done so they were unaffected. A caller-supplied max_tokens wins.
+        if model.max_output_tokens and "max_tokens" not in config:
+            config["max_tokens"] = model.max_output_tokens
+
         if model_type == "language":
             return ModelFactory.create_language_model(
                 model_name=model.name,

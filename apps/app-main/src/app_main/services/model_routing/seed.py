@@ -48,11 +48,15 @@ async def _ensure_nim_model_row() -> Optional[str]:
     created = await execute_query(
         "CREATE model SET name = $name, provider = $provider, type = 'language', "
         "display_name = $display_name, is_local = false, is_enabled = true, "
-        "supports_tools = true;",
+        "supports_tools = true, context_window = 128000, "
+        "max_output_tokens = $max_output_tokens;",
         {
             "name": _NIM_MODEL_NAME,
             "provider": _NIM_PROVIDER,
             "display_name": "Mistral Medium 3.5 (NVIDIA NIM)",
+            # Dense per-batch entity JSON overflows esperanto's small default
+            # max_tokens and truncates mid-string; give NIM ample output room.
+            "max_output_tokens": 8192,
         },
     )
     model_id = created[0].get("id") if created else None
