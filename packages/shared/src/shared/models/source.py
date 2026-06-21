@@ -138,6 +138,16 @@ class Source(ObjectModel):
         description="Per-source metadata bag (extraction confidence, parser engine used, etc.)",
     )
 
+    # Per-document privacy override (Track J.3). When True, every LLM stage for
+    # this source is forced LOCAL and is NEVER routed to a cloud provider —
+    # this is the STICKY, most-specific layer that wins over the notebook and
+    # global privacy mode. Mirrors ``migrations/52.surrealql``
+    # (``source.private TYPE bool DEFAULT false``). Legacy rows read back False.
+    private: bool = Field(
+        default=False,
+        description="Force this source's LLM stages local (sticky privacy override)",
+    )
+
     @field_validator("topics", mode="before")
     @classmethod
     def ensure_topics_list(cls, v: Any) -> List[str]:

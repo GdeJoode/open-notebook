@@ -1,0 +1,15 @@
+-- Migration 52 down: drop the layered privacy-mode fields (Track J.3).
+--
+-- REMOVE FIELD drops the SCHEMAFULL field definitions on source/notebook and
+-- the settings field. Privacy mode is pure configuration (no irreplaceable
+-- data); a destructive drop is safe and forward re-apply reseeds the defaults.
+-- The singleton's stored ``default_privacy_mode`` value is also unset so a
+-- down-then-up cycle restarts from the migration DEFAULT.
+
+REMOVE FIELD IF EXISTS private ON TABLE source;
+
+REMOVE FIELD IF EXISTS privacy_mode ON TABLE notebook;
+
+UPDATE open_notebook:content_settings UNSET default_privacy_mode;
+
+REMOVE FIELD IF EXISTS default_privacy_mode ON TABLE open_notebook;

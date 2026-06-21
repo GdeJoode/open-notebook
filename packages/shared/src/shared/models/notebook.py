@@ -23,6 +23,16 @@ class Notebook(ObjectModel):
     description: str = Field(default="", description="Notebook description")
     archived: bool = Field(default=False, description="Whether the notebook is archived")
 
+    # Per-notebook privacy layer (Track J.3). ``None`` inherits the global
+    # ``default_privacy_mode``; ``"cloud"`` | ``"private"`` override it for this
+    # notebook. A per-document ``source.private`` still wins over this (sticky).
+    # Mirrors ``migrations/52.surrealql`` (``notebook.privacy_mode TYPE
+    # option<string>``); legacy rows read back None.
+    privacy_mode: Optional[str] = Field(
+        default=None,
+        description="Per-notebook privacy mode: None (inherit global) | 'cloud' | 'private'",
+    )
+
     @field_validator("name")
     @classmethod
     def name_must_not_be_empty(cls, v: str) -> str:

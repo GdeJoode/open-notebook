@@ -173,6 +173,17 @@ class ContentSettings(RecordModel):
         20000, description="Maximum characters of document text sent to LLM for classification (adjust based on model context window)"
     )
 
+    # Privacy / Model-Routing Settings (Track J.3)
+    # Global default privacy mode for the LLM pipeline stages. ``"cloud"``
+    # (Track J's "cloud by default") routes through the provider chain with a
+    # local fallback; ``"private"`` forces every stage local. Per-notebook
+    # (``notebook.privacy_mode``) and per-document (``source.private``) layers
+    # override this most-specific-wins, with ``private`` sticky. Mirrors
+    # ``migrations/52.surrealql`` (``default_privacy_mode DEFAULT 'cloud'``).
+    default_privacy_mode: Optional[Literal["cloud", "private"]] = Field(
+        "cloud", description="Global default privacy mode for LLM routing (cloud | private)"
+    )
+
     # File Operations
     file_operation: Optional[Literal["copy", "move", "none"]] = Field(
         "copy", description="File operation: copy, move, or none"
