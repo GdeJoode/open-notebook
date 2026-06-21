@@ -154,3 +154,10 @@ Privacy was resolved with `notebook_id=None`, so a notebook set to `privacy_mode
 | J.4 | NVIDIA NIM cloud wiring + live flip + summarization unify + provenance | — | `track/j4-cloud-wiring` | 2026-06-21 | adversarial-reviewer APPROVED (attempt 2; 2 major privacy gaps fixed: orphan-reconnect + summarization notebook layer). 136 tests green. FU-J4-1/2 deferred. Ready for merge + live NIM smoke. |
 
 **Track J backend COMPLETE (J.1-J.4 approved).** Cloud routing is live-capable: extraction/summarization run on NVIDIA NIM (`mistralai/mistral-medium-3.5-128b`) by default with per-document failover to local; `private` docs/notebooks never reach cloud; keyless/NIM-down → automatic local fallback. Remaining: live NIM smoke test (deploy J code + `NVIDIA_API_KEY` to container), J.5 UI, J.6 integration/E2E/docs.
+
+**Hotfix (migration 53, 2026-06-21)**: J.3/migration-52 declared `default_privacy_mode` as a required `string` on the table-scoped `open_notebook` table → the sibling `default_models` record was forced to carry it → all default-model UPDATEs failed (would break the models UI). Surfaced during the live NIM test while wiring the extraction model. Fixed by migration 53 (`option<string> DEFAULT 'cloud'`) + roundtrip regression test. Merged to main `38a1b0f`.
+
+**Also found during live test (open follow-ups):**
+- FU-J4-3: factory never passed `model.max_output_tokens` to esperanto → NIM JSON truncated (FIXED, merged — `max_output_tokens` now threaded; NIM seeded at 16384).
+- FU-J4-4: parse-failure noise across local models → make the extractor request JSON mode / structured output (quality win, not yet done).
+- Live perf finding: this host has ~8.7 GiB available → `qwen2.5:14b` spilled to CPU (the 1.5h). `llama3.1:8b` fits fully on GPU (~9x faster, ~10min/doc) and is now the wired extraction model. NIM (cloud) overloaded during testing — disabled for cooldown; re-enable for summarization.
