@@ -317,7 +317,10 @@ async def make_default_llm_caller(
     """
     from app_main.services.model_routing.route_resolver import LLMTask, PrivacyMode
 
-    task_name = _DEFAULT_FIELD_TO_TASK.get(default_field, "ENTITY_EXTRACTION")
+    # Unknown/unmapped fields default to CHAT (prose, no forced JSON) — never
+    # ENTITY_EXTRACTION, so a typo'd default_field can't silently force JSON
+    # output onto a prose path.
+    task_name = _DEFAULT_FIELD_TO_TASK.get(default_field, "CHAT")
     task = LLMTask[task_name]
     mode = privacy_mode if privacy_mode is not None else PrivacyMode.CLOUD
 
