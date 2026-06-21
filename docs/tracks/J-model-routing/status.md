@@ -63,3 +63,5 @@ Addresses the J.2 adversarial review (REVISIONS_NEEDED: 1 major + 1 worth-fixing
 - cloud model: **`mistralai/mistral-medium-3.5-128b`**. Validated live (single call, returns OK).
 - Key lives in gitignored `NIM info.txt` (never committed). J.4 wires the NIM provider into the registry + seeds the `model`/`model_route` rows; J.1's hard-coded default chain gets repointed to `[nvidia-nim → local]`.
 - **Fair-use**: "don't overload the endpoint" → J.2 must rate-limit (conservative default, e.g. ~20 req/min, configurable) + exponential backoff on 429, per-document sequential (no parallel hammering). NIM hosts multiple models, so a same-endpoint model fallback (e.g. mistral → llama-3.3-70b) is an option for the 'multiple cloud providers' redundancy the user wanted.
+
+| J.2 | failover executor + circuit-breaker + fair-use rate limiter | — | `track/j2-failover` | 2026-06-21 | adversarial-reviewer APPROVED (attempt 2; 1 major fixed: RateLimitTimeout→failover-to-local w/o breaker penalty). 67 tests green. FU-J2-1/2 deferred. |
