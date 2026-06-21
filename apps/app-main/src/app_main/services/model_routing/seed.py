@@ -55,8 +55,8 @@ async def _ensure_nim_model_row() -> Optional[str]:
             "provider": _NIM_PROVIDER,
             "display_name": "Mistral Medium 3.5 (NVIDIA NIM)",
             # Dense per-batch entity JSON overflows esperanto's small default
-            # max_tokens and truncates mid-string; give NIM ample output room.
-            "max_output_tokens": 8192,
+            # max_tokens and truncates mid-string; give NIM ample output room (ceiling, not a target — no speed cost).
+            "max_output_tokens": 16384,
         },
     )
     model_id = created[0].get("id") if created else None
