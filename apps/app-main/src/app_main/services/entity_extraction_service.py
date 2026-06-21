@@ -18,7 +18,13 @@ misbehaves in production.
 
 from typing import Any, Dict, Iterable, List, Optional
 
+from entity_filtering.config import FilteringConfig
+from entity_filtering.workflow import FilteringWorkflow
+from job_queue import JobPausedForReviewError
 from loguru import logger
+from ontology_extraction.config import ExtractionConfig
+from ontology_extraction.multi_schema_orchestrator import detect_applicable_schemas
+from ontology_extraction.workflow import ExtractionWorkflow
 from shared.services.metrics import record_metric
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories import (
@@ -26,14 +32,6 @@ from surrealdb_service.repositories import (
     Pass1ResultRepository,
     SourceRepository,
 )
-
-from job_queue import JobPausedForReviewError
-from ontology_extraction.config import ExtractionConfig
-from ontology_extraction.multi_schema_orchestrator import detect_applicable_schemas
-from ontology_extraction.workflow import ExtractionWorkflow
-
-from entity_filtering.config import FilteringConfig
-from entity_filtering.workflow import FilteringWorkflow
 
 from app_main.services.entity_persistence_service import EntityPersistenceService
 
@@ -78,18 +76,61 @@ def _avg_entity_confidence(entities: Iterable[Any]) -> float:
     return sum(scores) / len(scores)
 
 
+# Maps the B.8 ``default_field`` selector to the J.1 routing task whose
+# head-of-chain default model id is the same. ``resolve_default_model_id`` is
+# now the HEAD of an ordered route (J.1) rather than a standalone resolver, but
+# its single-id contract is preserved for B.8 callers.
+_DEFAULT_FIELD_TO_TASK = {
+    "default_extraction_model": "ENTITY_EXTRACTION",
+    "default_transformation_model": "SUMMARIZATION",
+    "default_chat_model": "CHAT",
+}
+
+
 async def resolve_default_model_id(
     default_field: str = "default_chat_model",
     model_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Resolve the model id for a use case — the single source of truth for
-    model-selection precedence (used by both the LLM-caller factory and entity
-    provenance, so they can never drift):
+    """Resolve the single model id for a use case — the head of the J.1 route.
+
+    Thin B.8-compat shim: it now delegates to the privacy-aware route resolver
+    (:func:`app_main.services.model_routing.resolve_route`) and returns
+    ``route.ordered_candidates[0].model_id`` — the FIRST candidate the chain
+    would try. The precedence it encodes is unchanged from B.8:
 
     explicit ``model_id`` override → the requested per-function default (e.g.
     ``default_extraction_model``) → ``default_chat_model`` as the universal
     fallback. Returns ``None`` if nothing is configured.
+
+    Keeping this signature/behavior stable is a hard requirement: B.8's
+    extraction tests and the provenance call sites depend on it returning one
+    id. The richer ordered API is :func:`resolve_route`.
     """
+    task_name = _DEFAULT_FIELD_TO_TASK.get(default_field)
+    if task_name is not None:
+        try:
+            from app_main.services.model_routing.route_resolver import (
+                LLMTask,
+                PrivacyMode,
+                resolve_route,
+            )
+
+            route = await resolve_route(
+                LLMTask[task_name], PrivacyMode.CLOUD, model_id=model_id
+            )
+            if route.ordered_candidates:
+                return route.ordered_candidates[0].model_id
+        except Exception as e:
+            # Routing must never regress the B.8 single-id contract. On any
+            # failure fall through to the inline precedence below (identical
+            # to the pre-J.1 implementation).
+            logger.debug(
+                f"resolve_default_model_id: route resolution failed for "
+                f"{default_field!r} ({e}); using inline precedence"
+            )
+
+    # Inline B.8 precedence — the fallback path and the source of truth for
+    # ``default_field`` values that are not routed tasks (e.g. embedding/STT).
     from llm_manager import get_model_manager
 
     from app_main.dependencies import get_default_models_repo
@@ -253,6 +294,67 @@ class EntityExtractionService:
         self._notebook_schema_repo = notebook_schema_repo
         self._pass1_repo = pass1_repo
         self._persistence = EntityPersistenceService()
+
+    async def _resolve_privacy_mode_inert(
+        self, source_id: str, notebook_id: Optional[str]
+    ) -> Any:
+        """Resolve the J.3 layered ``PrivacyMode`` for this extraction run.
+
+        ===================== J.3 / J.4 SEAM (read me) =====================
+        This computes + LOGS the privacy mode from ``source.private`` +
+        ``notebook_id`` via :func:`resolve_privacy_mode`, but is deliberately
+        INERT for live behavior: J.3 only proves the data + resolver are
+        correct and wired. The B.8 ``make_default_llm_caller`` shim still drives
+        which model actually runs (always CLOUD-head precedence). J.4 is the
+        phase that flips execution to the failover executor and makes a PRIVATE
+        document actually pin to a local provider.
+
+        DO NOT use the returned mode to change model selection here — doing so
+        would prematurely route around the B.8 caller before the failover
+        executor (J.2) is wired into extraction. The return value exists so J.4
+        can swap this call's consumer without re-plumbing the resolution.
+        ====================================================================
+
+        Best-effort: any failure resolving the mode is logged and swallowed
+        (returns CLOUD) so a privacy-resolution hiccup never fails extraction.
+        """
+        from app_main.services.model_routing.privacy_resolver import (
+            resolve_privacy_mode,
+        )
+        from app_main.services.model_routing.route_resolver import PrivacyMode
+
+        source_private: Optional[bool] = None
+        try:
+            source = await self._source_repo.get(source_id)
+            if source is not None:
+                source_private = bool(getattr(source, "private", False))
+        except Exception as e:  # noqa: BLE001 — never fail extraction on this
+            logger.warning(
+                f"privacy seam: could not read source.private for "
+                f"{source_id} ({e}); assuming not private"
+            )
+
+        try:
+            mode = await resolve_privacy_mode(
+                source_private=source_private, notebook_id=notebook_id
+            )
+        except Exception as e:  # noqa: BLE001 — degrade to cloud, log loudly
+            logger.warning(
+                f"privacy seam: resolve_privacy_mode failed for {source_id} "
+                f"({e}); defaulting to CLOUD"
+            )
+            mode = PrivacyMode.CLOUD
+
+        logger.info(
+            "privacy seam (J.3, inert): source={src} notebook={nb} "
+            "source_private={priv} -> mode={mode} "
+            "(execution unchanged until J.4)",
+            src=source_id,
+            nb=notebook_id,
+            priv=source_private,
+            mode=mode.value,
+        )
+        return mode
 
     async def _embed_entities(
         self, result: "ExtractionResult"
@@ -570,6 +672,14 @@ class EntityExtractionService:
                 d["section_heading"] = c.section_path[-1]
             chunk_dicts.append(d)
 
+        # 2b. Resolve the J.3 layered privacy mode (INERT seam — see
+        # ``_resolve_privacy_mode_inert``). Computed + logged so the data path
+        # is proven and wired; J.4 flips this into the actual cloud/local
+        # dispatch. Live model selection below is unchanged (B.8 caller).
+        _privacy_mode = await self._resolve_privacy_mode_inert(
+            source_id, notebook_id
+        )
+
         # 3. Build config and workflow
         config_kwargs: Dict[str, Any] = {
             "ontology_name": ontology_name,
@@ -776,6 +886,7 @@ class EntityExtractionService:
                 STATUS_PENDING_RECONNECT,
                 retry_pending_reconnects,
             )
+
             from app_main.dependencies import get_entity_repo
 
             entity_repo = get_entity_repo()

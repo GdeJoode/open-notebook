@@ -14,6 +14,12 @@ from shared.models.export import (
     NetworkxFormat,
     ObsidianExportRequest,
 )
+from shared.models.extraction import (
+    ExtractedEntity,
+    ExtractedRelation,
+    ExtractionResult,
+    FilteredResult,
+)
 from shared.models.file_tracking import (
     KnowledgeBase,
     PipelineCacheEntry,
@@ -30,17 +36,17 @@ from shared.models.jobs import (
     JobStatsResponse,
     JobSubmitRequest,
 )
-from shared.models.llm import DefaultModels, Model, ModelTypeStr, ModelUsageRecord
+from shared.models.llm import (
+    DefaultModels,
+    Model,
+    ModelRoute,
+    ModelTypeStr,
+    ModelUsageRecord,
+)
 from shared.models.notebook import ChatMessage, ChatSession, Note, Notebook
 from shared.models.notebook_schema import NotebookEvent, NotebookSchema, Pass1Result
 from shared.models.podcast import EpisodeProfile, PodcastEpisode, SpeakerProfile
 from shared.models.settings import ContentSettings
-from shared.models.extraction import (
-    ExtractedEntity,
-    ExtractedRelation,
-    ExtractionResult,
-    FilteredResult,
-)
 from shared.models.source import Asset, Chunk, Source, SourceEmbedding, SourceInsight
 from shared.models.transformation import DefaultPrompts, Transformation
 
@@ -51,6 +57,7 @@ __all__ = [
     # LLM models
     "Model",
     "DefaultModels",
+    "ModelRoute",
     "ModelUsageRecord",
     "ModelTypeStr",
     # Notebook models

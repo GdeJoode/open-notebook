@@ -3,9 +3,6 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from app_main.api.routers.notebooks import router
 from app_main.dependencies import (
     get_notebook_merge_service,
@@ -18,6 +15,9 @@ from app_main.services.notebook_merge_service import (
 )
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from tests.conftest import make_notebook, make_source
 
 
@@ -112,6 +112,57 @@ class TestGetNotebook:
         resp = client.get("/api/notebooks/notebook:missing")
 
         assert resp.status_code == 404
+
+
+class TestNotebookPrivacyMode:
+    """Track J.3: per-notebook privacy_mode persists through update + response."""
+
+    def test_update_persists_privacy_mode(self):
+        svc = AsyncMock(spec=NotebookService)
+        svc.get.return_value = make_notebook()
+        svc.get_with_counts.return_value = {
+            "id": "notebook:1",
+            "name": "NB",
+            "description": "",
+            "archived": False,
+            "created": "2025-01-01",
+            "updated": "2025-01-01",
+            "source_count": 0,
+            "note_count": 0,
+            "privacy_mode": "private",
+        }
+        client = _make_app(svc)
+
+        resp = client.put(
+            "/api/notebooks/notebook:1", json={"privacy_mode": "private"}
+        )
+
+        assert resp.status_code == 200
+        # The update payload forwarded privacy_mode to the service.
+        svc.update.assert_awaited_once()
+        update_arg = svc.update.await_args.args[1]
+        assert update_arg["privacy_mode"] == "private"
+        # And it surfaces on the response.
+        assert resp.json()["privacy_mode"] == "private"
+
+    def test_response_privacy_mode_defaults_none(self):
+        svc = AsyncMock(spec=NotebookService)
+        svc.get_with_counts.return_value = {
+            "id": "notebook:1",
+            "name": "NB",
+            "description": "",
+            "archived": False,
+            "created": "2025-01-01",
+            "updated": "2025-01-01",
+            "source_count": 0,
+            "note_count": 0,
+        }
+        client = _make_app(svc)
+
+        resp = client.get("/api/notebooks/notebook:1")
+
+        assert resp.status_code == 200
+        assert resp.json()["privacy_mode"] is None
 
 
 class TestDeleteNotebook:

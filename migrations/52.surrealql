@@ -1,0 +1,40 @@
+-- Migration 52: layered privacy-mode fields (Track J.3)
+--
+-- Track J routes the three LLM pipeline stages through cloud providers by
+-- default; a layered ``private`` flag (global default -> per-notebook ->
+-- per-document, most-specific-wins, sticky) forces the whole LLM path local.
+-- This migration adds the three storage sites the J.3 ``privacy_resolver``
+-- reads:
+--
+--   * source.private              per-document sticky override (bool, default
+--                                  false). A ``private`` document is NEVER
+--                                  routed to cloud, regardless of notebook/global.
+--   * notebook.privacy_mode       per-notebook layer (option<string>; NONE =
+--                                  inherit the global default, else 'cloud' |
+--                                  'private').
+--   * open_notebook:content_settings.default_privacy_mode
+--                                  global default (string, default 'cloud' —
+--                                  matches Track J's "cloud by default"; a
+--                                  privacy-first operator flips this one setting).
+--
+-- The settings singleton lives on the implicit SCHEMALESS ``open_notebook``
+-- table (record ``content_settings``); ``source`` and ``notebook`` are
+-- SCHEMAFULL (migration 1), so their new fields MUST be declared or writes are
+-- rejected.
+--
+-- Additive + idempotent: every DEFINE uses ``IF NOT EXISTS`` and the singleton
+-- backfill UPDATE no-ops when the field is already set, so replaying on a
+-- populated DB is a no-op. Legacy rows read back as private=false /
+-- privacy_mode=NONE / default_privacy_mode='cloud'.
+
+DEFINE FIELD IF NOT EXISTS private ON TABLE source TYPE bool DEFAULT false;
+
+DEFINE FIELD IF NOT EXISTS privacy_mode ON TABLE notebook TYPE option<string>;
+
+DEFINE FIELD IF NOT EXISTS default_privacy_mode ON TABLE open_notebook TYPE string DEFAULT 'cloud';
+
+-- Backfill the existing settings singleton so a re-fetch returns the default
+-- without waiting for the next settings write. No-op when already set.
+UPDATE open_notebook:content_settings
+  SET default_privacy_mode = 'cloud'
+  WHERE default_privacy_mode = NONE;

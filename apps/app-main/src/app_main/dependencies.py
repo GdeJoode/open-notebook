@@ -19,6 +19,7 @@ from surrealdb_service.repositories import (
     EntityRepository,
     EpisodeProfileRepository,
     ModelRepository,
+    ModelRouteRepository,
     NotebookRepository,
     NoteRepository,
     PodcastEpisodeRepository,
@@ -117,6 +118,70 @@ def get_model_repo() -> ModelRepository:
 
 def get_default_models_repo() -> DefaultModelsRepository:
     return DefaultModelsRepository()
+
+
+def get_model_route_repo() -> ModelRouteRepository:
+    """Provider for the per-task model_route rows (Track J.1)."""
+    return ModelRouteRepository()
+
+
+def get_route_resolver():
+    """Provider for the privacy-aware route resolver (Track J.1).
+
+    Returns a :class:`RouteResolver` wired with the model_route + model repos.
+    Constructed per-call (the repos are cheap, stateless handles) — matches the
+    repo-factory convention above rather than caching a singleton.
+    """
+    from app_main.services.model_routing.route_resolver import RouteResolver
+
+    return RouteResolver(
+        model_route_repo=get_model_route_repo(),
+        model_repo=get_model_repo(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_circuit_breaker_registry():
+    """Process-singleton per-provider circuit-breaker registry (Track J.2).
+
+    Cached so every failover execution in this worker shares the same breaker
+    state. In-memory / per-process (J-D3 multi-worker caveat documented on
+    :class:`CircuitBreakerRegistry`).
+    """
+    from app_main.services.model_routing.circuit_breaker import (
+        CircuitBreakerRegistry,
+    )
+
+    return CircuitBreakerRegistry()
+
+
+@lru_cache(maxsize=1)
+def get_rate_limiter_registry():
+    """Process-singleton per-provider fair-use rate limiter (Track J.2).
+
+    Conservative cloud default (~20 rpm) so the NIM endpoint is not overloaded;
+    local providers are effectively unthrottled. Cached so the sliding windows
+    are shared across all routed calls in this worker.
+    """
+    from app_main.services.model_routing.rate_limiter import ProviderRateLimiter
+
+    return ProviderRateLimiter()
+
+
+def get_failover_executor():
+    """Provider for the per-document failover executor (Track J.2).
+
+    Wired with the process-singleton circuit-breaker + rate-limiter registries.
+    Constructed per-call (cheap; holds references to the shared singletons) with
+    the default failover-eligibility whitelist; J.4 supplies the concrete
+    error-mapping predicates.
+    """
+    from app_main.services.model_routing.failover_executor import FailoverExecutor
+
+    return FailoverExecutor(
+        circuit_breakers=get_circuit_breaker_registry(),
+        rate_limiter=get_rate_limiter_registry(),
+    )
 
 
 def get_transformation_repo() -> TransformationRepository:

@@ -1,0 +1,7 @@
+-- Migration 51 down: drop the model_route table (Track J.1).
+--
+-- REMOVE TABLE also removes the index + field definitions. Route config is
+-- pure configuration (no irreplaceable data) so a destructive drop is safe;
+-- forward re-apply reseeds from the hard-coded default chain in the resolver.
+
+REMOVE TABLE IF EXISTS model_route;
