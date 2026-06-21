@@ -58,6 +58,16 @@ async def lifespan(app: FastAPI):
         logger.exception(e)
         raise RuntimeError(f"Failed to run database migrations: {e}") from e
 
+    # Seed the NVIDIA NIM model row + per-task default routes (Track J.4).
+    # Idempotent + best-effort: never blocks startup. Runs after migrations so
+    # the model_route table (migration 51) exists.
+    try:
+        from app_main.services.model_routing.seed import seed_nim_routes
+
+        await seed_nim_routes()
+    except Exception as e:
+        logger.warning(f"NIM route seed skipped: {e}")
+
     # Register job handlers and start the background worker
     import app_main.handlers  # noqa: F401 — triggers @registry.register()
     from app_main.services.command_service import start_worker, stop_worker
