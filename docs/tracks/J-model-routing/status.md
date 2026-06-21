@@ -124,3 +124,29 @@ Addresses the J.2 adversarial review (REVISIONS_NEEDED: 1 major + 1 worth-fixing
 - Per-conversation chat privacy (chat currently resolves under the global/cloud default — document privacy plumbing is J.3; request-layer chat privacy is out of J.4 scope).
 - E2E forced-outage / private-never-cloud / no-cloud→local with real ingestion + operator docs (J.6).
 - Optional NIM same-endpoint model fallback (mistral → llama-3.3-70b) for cloud redundancy — noted in J-Q3, not implemented (single cloud provider + local last-resort per the resolved default chain).
+
+### J.4 rev2 — adversarial-review fixes (2026-06-21)
+
+Adversarial review returned REVISIONS_NEEDED: 2 MAJOR privacy gaps + 3 minors. Fixed the 2 majors + the 2 trivial minors. The privacy invariant (a `private` document NEVER reaches cloud) is the load-bearing guarantee — both majors were paths that bypassed it.
+
+**MAJOR 1 — orphan-reconnect API bypassed privacy (a PRIVATE source could reach cloud)** (`api/routers/orphans.py`):
+The `POST /orphans/{entity_id}/reconnect` endpoint called `make_default_llm_caller(default_field="default_extraction_model")` with NO `privacy_mode` → defaulted to `PrivacyMode.CLOUD`, so the manual reconnect ran NIM calls on a `source.private=True` document (the in-service B.5b auto-retry already routes correctly via `_make_routed_caller`). Fix: added `_resolve_source_privacy_mode(source_id, notebook_id, source_repo)` (mirrors `EntityExtractionService._resolve_privacy_mode`) — it reads the orphan source's `source.private` flag and resolves the layered `PrivacyMode` against the endpoint's `notebook_id`, then threads the resolved mode + `source_id`/`notebook_id` into `make_default_llm_caller`. The endpoint operates on a single orphan → a single source, so resolution is per-source (no batching a private source through a cloud caller). The resolver's sticky rule guarantees a private source can never resolve CLOUD.
+
+**MAJOR 2 — summarization dropped the notebook privacy layer** (`services/summarization_service.py::_build_routed_model`):
+Privacy was resolved with `notebook_id=None`, so a notebook set to `privacy_mode='private'` (whose sources aren't individually flagged) had summaries routed to CLOUD — the document sticky flag was honored but the notebook layer was silently dropped. Fix: `_build_routed_model` now fetches the source's owning notebook(s) via the new `SourceRepository.get_notebook_ids(source_id)` (returns ALL `reference`-linked notebooks, unlike the schema-anchoring `get_notebook_id` which returns only the first) and resolves the MOST-private mode across them via the new `_resolve_most_private_mode` helper (any owning notebook resolving PRIVATE → PRIVATE; fail safe — a source shared into a private notebook is never summarized via cloud because some other cloud notebook also references it). With no notebooks, the source + global layers still apply.
+
+**MINOR fixes:**
+- Removed the dead `from ...llm_call import call_candidate` import inside `RoutedLLMCaller.__call__` (`entity_extraction_service.py`) — unused; the real call site (`_call_candidate_text`) re-imports it locally.
+- Corrected the chat `provision_langchain_model` docstring (`graphs/utils.py`): failover is **construction-time only**, not "stream start". Once a model is returned the function never observes the stream; a provider that constructs cleanly then errors at runtime/mid-stream surfaces as a chat error and is NOT re-issued on the next candidate (J-D4 scopes runtime chat failover out of V1).
+
+**New privacy regression tests (mirror the AC6 factory-spy pattern):**
+- `test_orphans_router.py::test_private_source_reconnect_builds_only_local_model` — a reconnect on a `source.private=True` orphan: the factory receives `privacy_mode=PrivacyMode.PRIVATE` AND the resulting route constructs only the local provider (`built == ["ollama"]`; no `nvidia`/`openai`).
+- `test_routed_summarization.py::test_private_notebook_source_builds_local_only` — a source in a `private` NOTEBOOK with NO per-doc flag: `_build_routed_model` resolves `_mode == PRIVATE` and the route constructs only the local provider.
+
+**Validation**: 136 tests green across `test_error_mapping`, `test_routed_extraction`, `test_routed_summarization`, `test_entity_extraction_service`, `test_entity_persistence_service`, `test_route_resolver`, `test_privacy_resolver`, `test_orphans_router`, `test_summarization_service`, `test_summaries_router` (incl. the 2 new privacy tests). Changed files lint clean (no new ruff errors; pre-existing `I001`/`F821` in untouched import blocks left as-is — out of scope).
+
+**No private→cloud path remains in any user-reachable LLM entrypoint touched here**: extraction (`run_extraction` → `_make_routed_caller`, threads `_privacy_mode`), orphan auto-retry (`_make_routed_caller`), orphan manual reconnect (now `_resolve_source_privacy_mode` → threaded), and summarization (`_build_routed_model` now consults document + notebook + global layers). Chat resolves under the global/cloud default by design (per-conversation privacy is out of J.4 scope; document privacy plumbing is J.3).
+
+**Deferred follow-ups (NOT fixed in rev2):**
+- **FU-J4-1**: the chat path (`graphs/utils.py::provision_langchain_model`) emits no `record_routing_event` — AC7 telemetry gap for chat. The extraction and summarization routed callers stamp `routing.served`; chat does not. Wire telemetry into the chat route-resolution path when per-conversation routing lands (J.5/J.6).
+- **FU-J4-2**: `error_mapping._STATUS_IN_MESSAGE_RE` edge — a 400-class error whose body text contains a 5xx-range number could be misclassified as failover-eligible. Left as a follow-up (a guard would need to disambiguate "the HTTP status" from "a number that happens to appear in the body"); not trivial enough to fix safely inline without risking the existing 24 mapping cases.

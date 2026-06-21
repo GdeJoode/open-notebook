@@ -34,12 +34,15 @@ async def provision_langchain_model(
 
     Track J.4: the chat/transformation stages now resolve a privacy-aware
     ORDERED route (like extraction/summarization) instead of a single default
-    model. Failover here applies at **stream start** only (J-D4): we walk the
+    model. Failover here is **construction-time only** (J-D4): we walk the
     route's candidates and return the LangChain model of the FIRST candidate
-    whose esperanto ``LanguageModel`` constructs successfully. A provider that
-    fails *mid-stream* surfaces as an error to the caller rather than being
-    transparently re-issued on the next provider — re-issuing mid-stream would
-    double-emit tokens. Mid-stream failover is explicitly out of scope for V1.
+    whose esperanto ``LanguageModel`` *constructs* successfully. Once a model is
+    returned, this function is done — it never observes the stream. A provider
+    that succeeds at construction but then errors at runtime (e.g. mid-stream,
+    or on the first token) surfaces that error to the chat caller; it is NOT
+    re-issued on the next candidate, because by then we've already handed back a
+    single model and emitting on a second provider would double-emit tokens.
+    Runtime/mid-stream chat failover is explicitly out of scope for V1 (J-D4).
 
     A large content (> 105k tokens) forces the large-context head model id when
     one is configured (preserving the pre-J behavior), but still resolves

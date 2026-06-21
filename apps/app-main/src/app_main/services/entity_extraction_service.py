@@ -194,7 +194,6 @@ class RoutedLLMCaller:
         from app_main.services.model_routing.error_mapping import (
             is_failover_eligible,
         )
-        from app_main.services.model_routing.llm_call import call_candidate
         from app_main.services.model_routing.telemetry import record_routing_event
 
         # A per-call model override on the B.8 caller shape becomes the head of

@@ -125,6 +125,85 @@ async def test_routed_cloud_summary(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_private_notebook_source_builds_local_only(monkeypatch):
+    """PRIVACY (J.4 rev2): a source in a ``private`` NOTEBOOK (no per-doc flag)
+
+    must route summarization local. Previously ``_build_routed_model`` resolved
+    privacy with ``notebook_id=None``, silently dropping the notebook layer, so
+    such a source leaked to CLOUD. This builds the routed model through the real
+    ``SummarizationService._build_routed_model`` and asserts the resolved mode is
+    PRIVATE and the resulting route only constructs a LOCAL model.
+    """
+    from app_main import dependencies
+    from app_main.services.model_routing.summarization_model import (
+        FailoverSummarizationModel,
+    )
+    from app_main.services.summarization_service import SummarizationService
+
+    # Source itself is NOT flagged private — the notebook layer must carry it.
+    source = MagicMock()
+    source.private = False
+    source_repo = MagicMock()
+    source_repo.get = AsyncMock(return_value=source)
+    source_repo.get_notebook_ids = AsyncMock(return_value=["notebook:priv"])
+    monkeypatch.setattr(dependencies, "get_source_repo", lambda: source_repo)
+
+    # The owning notebook is set to privacy_mode='private'.
+    notebook = MagicMock()
+    notebook.privacy_mode = "private"
+    notebook_repo = MagicMock()
+    notebook_repo.get = AsyncMock(return_value=notebook)
+    monkeypatch.setattr(dependencies, "get_notebook_repo", lambda: notebook_repo)
+
+    # A PRIVATE route is local-only; the factory spy must never see cloud.
+    route = ResolvedRoute(
+        task=LLMTask.SUMMARIZATION,
+        mode=PrivacyMode.PRIVATE,
+        ordered_candidates=[_candidate("ollama", "model:local", True)],
+    )
+    resolver = MagicMock()
+    resolver.resolve = AsyncMock(return_value=route)
+    monkeypatch.setattr(dependencies, "get_route_resolver", lambda: resolver)
+
+    built = []
+
+    def _fake_get_model_from_config(self, model, **kwargs):
+        built.append(model.provider)
+        return _FakeLM("LOCAL SUMMARY")
+
+    from llm_manager.manager import ModelManager
+
+    monkeypatch.setattr(
+        ModelManager, "get_model_from_config", _fake_get_model_from_config
+    )
+    import esperanto
+
+    monkeypatch.setattr(esperanto, "LanguageModel", _FakeLM)
+
+    service = SummarizationService(summary_repo=MagicMock())
+    model = await service._build_routed_model("source:s1")
+
+    # The notebook layer pinned the route PRIVATE despite no per-doc flag.
+    assert isinstance(model, FailoverSummarizationModel)
+    assert model._mode == PrivacyMode.PRIVATE  # noqa: SLF001 — assert on mode
+
+    # Driving it constructs only the local provider — no cloud leak.
+    chunks = [ChunkInput(text="Hello world.", chunk_id="c:1", order=0)]
+    config = SummarizationConfig(
+        strategy="naive",
+        language_model=model,
+        naive=NaiveConfig(max_input_length=10000),
+        llm=LLMConfig(provider="ollama", model_name="llama3.1:8b", base_url="http://x"),
+    )
+    result = await NaiveLLMStrategy(config).summarize(chunks)
+
+    assert result.document_summary == "LOCAL SUMMARY"
+    assert built == ["ollama"]
+    assert "nvidia" not in built
+    assert "openai" not in built
+
+
+@pytest.mark.asyncio
 async def test_backcompat_no_injection_uses_env_ollama(monkeypatch):
     """No injected model -> the strategy builds via AIFactory.create_language
     from the env-driven LLMConfig (legacy ollama path). Back-compat guard."""
