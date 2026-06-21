@@ -1122,6 +1122,67 @@ Of: **alternatief beginnen met Q9 vocabulary-stack** als foundation voor B + G (
 
 ---
 
+## Track J — Cloud/local model routing (privacy + failover) (NEW)
+
+> **Status**: 📋 PLANNED (2026-06-21, user-request). New capability: route the
+> LLM pipeline stages through cloud providers by default — with multi-provider
+> failover and local as the final fallback — gated by a layered privacy mode
+> where `private` forces the whole LLM path local. Builds directly on the
+> per-function model-resolution layer hardened in Track B.8
+> (`resolve_default_model_id` / `make_default_llm_caller`, `DefaultModels`).
+
+**Vision**: public documents process via cloud APIs by default (fast, strong
+models) with automatic failover across providers and down to local; documents
+tagged `private` run entirely on local models; if no cloud is online, local is
+the fallback. One privacy switch — layered global → notebook → document — drives
+the whole LLM pipeline.
+
+**Scope (resolved decisions)**:
+- **J-Q1 Privacy granularity**: layered — global default + per-notebook setting
+  + per-document `private` override. Most specific wins; `private` is sticky and
+  never escalates to cloud.
+- **J-Q2 Pipeline scope**: **LLM stages only** — entity extraction,
+  summarization, chat. Parsing (docling/MinerU) and **embeddings stay local and
+  fixed**: cloud embeddings change the vector space/dimensions and break HNSW
+  search (Track I.G pins 768-dim). Embeddings + parsing are explicitly OUT of
+  the cloud-routing path.
+- **J-Q3 Provider chain**: proposed default `[Anthropic Claude → OpenAI →
+  local]` per LLM function, fully configurable (order + enable/disable per
+  provider). Track-planner proposes the concrete default; user tunes.
+- **J-Q4 Failover granularity**: **per-document** — a document's LLM stage runs
+  on the first available provider; on a provider failure the whole document
+  fails over to the next provider; local is the last resort (cloud mode only).
+- **J-Q5 Availability**: per-provider health + circuit-breaker; "no cloud online
+  / all cloud failing" → local fallback (cloud mode). Private mode never touches
+  cloud.
+- **J-Q6 Secrets**: cloud API keys via env/secrets per provider; a missing key
+  disables that provider (it drops out of the chain).
+- **J-Q7 Observability**: telemetry per task — provider served, fallback events,
+  latency/cost — surfaced in UI + metrics.
+
+**Builds on / touches**: Track B.8 model-resolution layer
+(`apps/app-main/.../entity_extraction_service.py` `make_default_llm_caller` /
+`resolve_default_model_id`, `DefaultModels`), the esperanto `LanguageModel`
+provider abstraction, summarization + chat services, and the ingestion API.
+Does NOT touch embeddings (I.G) or parsing (A) — by design.
+
+**Phase overview** (Backend → UI → Integration):
+- J.1 Provider-chain config + privacy-aware route resolver (generalize
+  `resolve_default_model_id` to an ordered route per task × privacy mode).
+- J.2 Availability/circuit-breaker + per-document failover executor.
+- J.3 Privacy-flag plumbing (ingestion `private` flag → source/notebook → LLM
+  stages); embeddings/parsing guarded local.
+- J.4 Cloud provider integrations (Anthropic + OpenAI via esperanto; latest
+  Claude models per the claude-api reference; provider-error → failover mapping).
+- J.5 UI — layered privacy toggle (global/notebook/document) + provider-chain
+  config + health/fallback status.
+- J.6 Integration, telemetry, E2E (forced-outage failover; private-never-cloud;
+  no-cloud→local) + operator docs (keys, public-vs-private data-residency note).
+
+See [`docs/tracks/J-model-routing/plan.md`](./tracks/J-model-routing/plan.md).
+
+---
+
 ## Bijlagen
 
 - `docs/REFACTOR_PLAN.md` — voltooide refactor (Phase 0-7)
