@@ -62,6 +62,12 @@ class NotebookUpdate(BaseModel):
     archived: Optional[bool] = Field(
         None, description="Whether the notebook is archived"
     )
+    # Track J.3: per-notebook privacy layer. 'cloud' | 'private' set it; the
+    # value persists through notebook_service.update. (The 'inherit'/None reset
+    # affordance is a J.5 UI concern — PUT here uses exclude_none.)
+    privacy_mode: Optional[str] = Field(
+        None, description="Per-notebook privacy mode: 'cloud' | 'private'"
+    )
 
 
 class NotebookResponse(BaseModel):
@@ -73,6 +79,8 @@ class NotebookResponse(BaseModel):
     updated: str
     source_count: int
     note_count: int
+    # Track J.3: None = inherit global default; 'cloud' | 'private' otherwise.
+    privacy_mode: Optional[str] = None
 
 
 # Search schemas
@@ -352,6 +360,8 @@ class SettingsResponse(BaseModel):
     output_directory_path: Optional[str] = None
     file_operation: Optional[str] = None
     output_naming_scheme: Optional[str] = None
+    # Track J.3: global default privacy mode for LLM routing.
+    default_privacy_mode: Optional[Literal["cloud", "private"]] = None
 
 
 class SettingsUpdate(BaseModel):
@@ -390,6 +400,8 @@ class SettingsUpdate(BaseModel):
     output_directory_path: Optional[str] = None
     file_operation: Optional[str] = None
     output_naming_scheme: Optional[str] = None
+    # Track J.3: global default privacy mode for LLM routing ('cloud' | 'private').
+    default_privacy_mode: Optional[Literal["cloud", "private"]] = None
 
 
 # Sources API schemas
