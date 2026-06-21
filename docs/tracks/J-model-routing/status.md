@@ -150,3 +150,7 @@ Privacy was resolved with `notebook_id=None`, so a notebook set to `privacy_mode
 **Deferred follow-ups (NOT fixed in rev2):**
 - **FU-J4-1**: the chat path (`graphs/utils.py::provision_langchain_model`) emits no `record_routing_event` — AC7 telemetry gap for chat. The extraction and summarization routed callers stamp `routing.served`; chat does not. Wire telemetry into the chat route-resolution path when per-conversation routing lands (J.5/J.6).
 - **FU-J4-2**: `error_mapping._STATUS_IN_MESSAGE_RE` edge — a 400-class error whose body text contains a 5xx-range number could be misclassified as failover-eligible. Left as a follow-up (a guard would need to disambiguate "the HTTP status" from "a number that happens to appear in the body"); not trivial enough to fix safely inline without risking the existing 24 mapping cases.
+
+| J.4 | NVIDIA NIM cloud wiring + live flip + summarization unify + provenance | — | `track/j4-cloud-wiring` | 2026-06-21 | adversarial-reviewer APPROVED (attempt 2; 2 major privacy gaps fixed: orphan-reconnect + summarization notebook layer). 136 tests green. FU-J4-1/2 deferred. Ready for merge + live NIM smoke. |
+
+**Track J backend COMPLETE (J.1-J.4 approved).** Cloud routing is live-capable: extraction/summarization run on NVIDIA NIM (`mistralai/mistral-medium-3.5-128b`) by default with per-document failover to local; `private` docs/notebooks never reach cloud; keyless/NIM-down → automatic local fallback. Remaining: live NIM smoke test (deploy J code + `NVIDIA_API_KEY` to container), J.5 UI, J.6 integration/E2E/docs.
