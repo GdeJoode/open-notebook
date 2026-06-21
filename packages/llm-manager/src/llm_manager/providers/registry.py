@@ -73,6 +73,21 @@ PROVIDER_CONFIGS: Dict[str, ProviderConfig] = {
         supports_vision=False,
         supports_tools=True,
     ),
+    "nvidia": ProviderConfig(
+        name="nvidia",
+        display_name="NVIDIA NIM",
+        env_var_prefix="NVIDIA_",
+        api_key_env_var="NVIDIA_API_KEY",
+        base_url_env_var="NVIDIA_BASE_URL",
+        # NIM exposes an OpenAI-compatible REST surface. esperanto has no native
+        # ``nvidia`` provider, so ModelFactory routes this through esperanto's
+        # ``openai-compatible`` LanguageModel with the base_url below + the
+        # NVIDIA_API_KEY threaded in as the bearer token (Track J.4).
+        default_base_url="https://integrate.api.nvidia.com/v1",
+        supports_vision=False,
+        supports_tools=True,
+        supports_embedding=False,
+    ),
     "ollama": ProviderConfig(
         name="ollama",
         display_name="Ollama (Local)",

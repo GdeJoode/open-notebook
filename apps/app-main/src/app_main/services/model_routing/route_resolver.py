@@ -70,22 +70,21 @@ _TASK_DEFAULT_FIELD = {
     LLMTask.CHAT: "default_chat_model",
 }
 
-# Hard-coded default provider chain per task (J-Q3: Anthropic -> OpenAI ->
-# local). Used only when no ``model_route`` row exists for the task so an empty
-# table never breaks resolution. The model NAMES below are sensible
-# placeholders; the resolver prefers the configured ``model`` row id from
-# DefaultModels for each provider when one exists.
+# Hard-coded default provider chain per task (J-Q3, resolved at J.4: a single
+# cloud provider — NVIDIA NIM — with local Ollama as the last-resort fallback).
+# Used only when no ``model_route`` row exists for the task so an empty table
+# never breaks resolution. The model NAMES below are sensible placeholders; the
+# resolver prefers the configured ``model`` row id from DefaultModels for each
+# provider when one exists, and J.4's startup seed writes a real ``nvidia``
+# model row + a ``model_route`` default so DB-backed resolution is the norm.
 #
-# TODO(J-Q3): the exact Anthropic Claude model id is a J-Q3 decision-point.
-# The ``claude-api`` skill/reference was not available in this implementation
-# sandbox, so "claude-sonnet-4-5" is a placeholder. J.4 seeds the actual
-# Anthropic ``model`` row + final id; this default chain only references it by
-# name when no DB-backed default model id is configured.
-_DEFAULT_CLOUD_PROVIDERS = ["anthropic", "openai"]
+# NIM is an OpenAI-compatible endpoint with no native esperanto provider;
+# ``ModelFactory`` remaps ``provider="nvidia"`` onto esperanto's
+# ``openai-compatible`` LanguageModel + the NIM base_url (see factory.py).
+_DEFAULT_CLOUD_PROVIDERS = ["nvidia"]
 _DEFAULT_LOCAL_PROVIDER = "ollama"
 _DEFAULT_PROVIDER_MODEL_NAME = {
-    "anthropic": "claude-sonnet-4-5",  # TODO(J-Q3): confirm via claude-api ref
-    "openai": "gpt-4o",
+    "nvidia": "mistralai/mistral-medium-3.5-128b",
     "ollama": "llama3.1:8b",
 }
 
