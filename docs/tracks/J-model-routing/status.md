@@ -26,4 +26,8 @@ Append-only ledger. One row per phase attempt.
 | J.1 | provider-chain config + route resolver | — | `track/j1-route-resolver` | 2026-06-21 | adversarial-reviewer APPROVED (0 blockers/majors; 5 minor test-coverage nits → J.2). 51 tests green; B.8 shim safe; I.G guardrail holds. Ready for merge sign-off. |
 
 **J.1 deferred to J.2** (reviewer minors): route-path shim test (currently exercises the fallback), 51_down execution test, convert the PRIVATE-mode `assert` to an explicit raise (python -O strips asserts), test the empty-private_chain derive branch.
-**J-Q3 OPEN**: cloud model id is a `claude-sonnet-4-5` placeholder (TODO) — awaiting the user's cloud-model/endpoint spec to wire in J.4 + set fair-use rate limits in J.2.
+**J-Q3 RESOLVED (2026-06-21, user)**: cloud provider = **NVIDIA NIM** (OpenAI-compatible REST).
+- base_url `https://integrate.api.nvidia.com/v1`, auth `Bearer`, env var **`NVIDIA_API_KEY`**.
+- cloud model: **`mistralai/mistral-medium-3.5-128b`**. Validated live (single call, returns OK).
+- Key lives in gitignored `NIM info.txt` (never committed). J.4 wires the NIM provider into the registry + seeds the `model`/`model_route` rows; J.1's hard-coded default chain gets repointed to `[nvidia-nim → local]`.
+- **Fair-use**: "don't overload the endpoint" → J.2 must rate-limit (conservative default, e.g. ~20 req/min, configurable) + exponential backoff on 429, per-document sequential (no parallel hammering). NIM hosts multiple models, so a same-endpoint model fallback (e.g. mistral → llama-3.3-70b) is an option for the 'multiple cloud providers' redundancy the user wanted.
