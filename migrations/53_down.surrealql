@@ -1,0 +1,9 @@
+-- Migration 53 down: restore migration 52's required-string field definition.
+--
+-- Re-asserts `default_privacy_mode` as a required `string` on `open_notebook`.
+-- This re-introduces the table-scoping issue from migration 52 (any
+-- open_notebook record lacking the field fails on UPDATE), so a down-then-up
+-- cycle is only safe when the content_settings singleton carries the value;
+-- forward migration 53 immediately relaxes it again.
+
+DEFINE FIELD OVERWRITE default_privacy_mode ON TABLE open_notebook TYPE string DEFAULT 'cloud';
