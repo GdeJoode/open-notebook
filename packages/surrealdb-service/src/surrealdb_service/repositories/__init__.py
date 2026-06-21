@@ -19,8 +19,8 @@ from surrealdb_service.repositories.model_route import ModelRouteRepository
 from surrealdb_service.repositories.notebook import (
     ChatMessageRepository,
     ChatSessionRepository,
-    NoteRepository,
     NotebookRepository,
+    NoteRepository,
 )
 from surrealdb_service.repositories.notebook_event import (
     NotebookEventRepository,
@@ -35,7 +35,6 @@ from surrealdb_service.repositories.podcast import (
     SpeakerProfileRepository,
 )
 from surrealdb_service.repositories.search import SearchRepository
-from surrealdb_service.repositories.summary import SummaryRepository
 from surrealdb_service.repositories.settings import ContentSettingsRepository
 from surrealdb_service.repositories.source import (
     ChunkRepository,
@@ -43,6 +42,7 @@ from surrealdb_service.repositories.source import (
     SourceInsightRepository,
     SourceRepository,
 )
+from surrealdb_service.repositories.summary import SummaryRepository
 from surrealdb_service.repositories.transformation import (
     DefaultPromptsRepository,
     TransformationRepository,

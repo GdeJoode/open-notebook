@@ -21,16 +21,13 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 import pytest
-
-from shared.models.llm import Model, ModelRoute
-
 from app_main.services.model_routing.route_resolver import (
     LLMTask,
     PrivacyMode,
     ResolvedRoute,
     RouteResolver,
 )
-
+from shared.models.llm import Model, ModelRoute
 
 # ---------------------------------------------------------------------------
 # Fakes

@@ -14,6 +14,12 @@ from shared.models.export import (
     NetworkxFormat,
     ObsidianExportRequest,
 )
+from shared.models.extraction import (
+    ExtractedEntity,
+    ExtractedRelation,
+    ExtractionResult,
+    FilteredResult,
+)
 from shared.models.file_tracking import (
     KnowledgeBase,
     PipelineCacheEntry,
@@ -41,12 +47,6 @@ from shared.models.notebook import ChatMessage, ChatSession, Note, Notebook
 from shared.models.notebook_schema import NotebookEvent, NotebookSchema, Pass1Result
 from shared.models.podcast import EpisodeProfile, PodcastEpisode, SpeakerProfile
 from shared.models.settings import ContentSettings
-from shared.models.extraction import (
-    ExtractedEntity,
-    ExtractedRelation,
-    ExtractionResult,
-    FilteredResult,
-)
 from shared.models.source import Asset, Chunk, Source, SourceEmbedding, SourceInsight
 from shared.models.transformation import DefaultPrompts, Transformation
 

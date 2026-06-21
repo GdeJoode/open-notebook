@@ -13,8 +13,8 @@ blind CREATE would raise on the second call for the same task.
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-
 from shared.models.llm import ModelRoute
+
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.base import BaseRepository

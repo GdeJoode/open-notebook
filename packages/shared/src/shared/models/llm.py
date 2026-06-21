@@ -10,7 +10,6 @@ from pydantic import Field
 
 from shared.models.base import ObjectModel, RecordModel
 
-
 ModelTypeStr = Literal["language", "embedding", "speech_to_text", "text_to_speech"]
 
 

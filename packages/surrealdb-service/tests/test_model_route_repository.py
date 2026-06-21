@@ -15,12 +15,10 @@ Acceptance criteria mapped to test cases (J.1 AC#7):
 from __future__ import annotations
 
 import pytest
-
 from shared.models.llm import ModelRoute
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.model_route import ModelRouteRepository
-
 
 # ---------------------------------------------------------------------------
 # Smoke: migration 51 applied + idempotent

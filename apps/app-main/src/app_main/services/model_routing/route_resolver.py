@@ -31,9 +31,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional
 
-from loguru import logger
-
 from llm_manager.providers.registry import get_provider_config
+from loguru import logger
 from shared.models.llm import Model, ModelRoute
 
 

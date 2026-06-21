@@ -18,7 +18,13 @@ misbehaves in production.
 
 from typing import Any, Dict, Iterable, List, Optional
 
+from entity_filtering.config import FilteringConfig
+from entity_filtering.workflow import FilteringWorkflow
+from job_queue import JobPausedForReviewError
 from loguru import logger
+from ontology_extraction.config import ExtractionConfig
+from ontology_extraction.multi_schema_orchestrator import detect_applicable_schemas
+from ontology_extraction.workflow import ExtractionWorkflow
 from shared.services.metrics import record_metric
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories import (
@@ -26,14 +32,6 @@ from surrealdb_service.repositories import (
     Pass1ResultRepository,
     SourceRepository,
 )
-
-from job_queue import JobPausedForReviewError
-from ontology_extraction.config import ExtractionConfig
-from ontology_extraction.multi_schema_orchestrator import detect_applicable_schemas
-from ontology_extraction.workflow import ExtractionWorkflow
-
-from entity_filtering.config import FilteringConfig
-from entity_filtering.workflow import FilteringWorkflow
 
 from app_main.services.entity_persistence_service import EntityPersistenceService
 
@@ -819,6 +817,7 @@ class EntityExtractionService:
                 STATUS_PENDING_RECONNECT,
                 retry_pending_reconnects,
             )
+
             from app_main.dependencies import get_entity_repo
 
             entity_repo = get_entity_repo()
