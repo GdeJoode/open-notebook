@@ -1,0 +1,12 @@
+test(e2e): correct separator aria-orientation to vertical (I.B)
+
+Adversarial review BLOCKER #1: react-resizable-panels v4 emits
+aria-orientation="vertical" for a horizontal Group's separators (the divider
+line is vertical), which is exactly what AC5 ("handles expose orientation")
+requires. The spec asserted "horizontal" and the self-review claimed the same;
+the implementation was always correct. Fixed the assertion + AC5 comments +
+the self-review AC5 note, and added the attempt-1 review doc. Spec still
+collects (3 tests). Full E2E execution remains deferred (no headless
+dev-server + browser in this sandbox) and is recorded as such.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

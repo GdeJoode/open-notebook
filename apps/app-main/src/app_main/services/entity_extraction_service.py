@@ -78,8 +78,48 @@ def _avg_entity_confidence(entities: Iterable[Any]) -> float:
     return sum(scores) / len(scores)
 
 
-async def make_default_llm_caller(model_id: Optional[str] = None):
+async def resolve_default_model_id(
+    default_field: str = "default_chat_model",
+    model_id: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve the model id for a use case — the single source of truth for
+    model-selection precedence (used by both the LLM-caller factory and entity
+    provenance, so they can never drift):
+
+    explicit ``model_id`` override → the requested per-function default (e.g.
+    ``default_extraction_model``) → ``default_chat_model`` as the universal
+    fallback. Returns ``None`` if nothing is configured.
+    """
+    from llm_manager import get_model_manager
+
+    from app_main.dependencies import get_default_models_repo
+
+    mm = get_model_manager()
+    defaults = mm.get_defaults()
+    if not defaults or not defaults.default_chat_model:
+        defaults = await get_default_models_repo().get()
+        mm.set_defaults(defaults)
+
+    if not defaults:
+        return model_id
+    return (
+        model_id
+        or getattr(defaults, default_field, None)
+        or defaults.default_chat_model
+    )
+
+
+async def make_default_llm_caller(
+    model_id: Optional[str] = None,
+    *,
+    default_field: str = "default_chat_model",
+):
     """Build an async ``LLMCaller`` backed by :class:`ModelManager`.
+
+    ``default_field`` selects which configured default to resolve (e.g.
+    ``default_extraction_model`` for the KG-extraction path), independent of
+    the chat model. Resolution precedence is owned by
+    :func:`resolve_default_model_id`.
 
     Phase B.1f fixes the long-standing LLMExtractor "silent empty"
     bug. The old code wrote ``from llm_manager.manager import LLMManager``
@@ -113,24 +153,15 @@ async def make_default_llm_caller(model_id: Optional[str] = None):
     from esperanto import LanguageModel
     from llm_manager import get_model_manager
 
-    from app_main.dependencies import (
-        get_default_models_repo,
-        get_model_repo,
-    )
+    from app_main.dependencies import get_model_repo
 
     mm = get_model_manager()
 
-    defaults = mm.get_defaults()
-    if not defaults or not defaults.default_chat_model:
-        defaults_repo = get_default_models_repo()
-        defaults = await defaults_repo.get()
-        mm.set_defaults(defaults)
-
-    resolved_id = model_id or defaults.default_chat_model
+    resolved_id = await resolve_default_model_id(default_field, model_id)
     if not resolved_id:
         raise RuntimeError(
-            "No chat model configured — set DefaultModels.default_chat_model "
-            "or pass model_id explicitly."
+            f"No model configured — set DefaultModels.{default_field} or "
+            "default_chat_model, or pass model_id explicitly."
         )
 
     model_record = await get_model_repo().get(resolved_id)
@@ -257,12 +288,52 @@ class EntityExtractionService:
                 f"Entity embedding failed (dedup will use string-only): {e}"
             )
 
+    async def _build_single_schema_workflow(
+        self, config: "ExtractionConfig"
+    ) -> "ExtractionWorkflow":
+        """Build a single-schema ``ExtractionWorkflow`` whose ``LLMExtractor``
+        is wired with the extraction-model caller.
+
+        Single-mode ``ExtractionWorkflow.extract`` ignores any ``llm_caller``
+        kwarg and uses ``self._get_extractor()``, which (when the workflow was
+        built without an extractor) lazily constructs a CALLER-LESS
+        ``LLMExtractor`` that silently returns 0 entities (the B.1f canary). So
+        every single-schema run — including the multi-schema
+        no-applicable-schema fallback — MUST go through this builder, not a bare
+        ``ExtractionWorkflow(config)``.
+        """
+        extractor = None
+        if config.extractor_type == "llm":
+            try:
+                llm_caller = await make_default_llm_caller(
+                    model_id=config.llm_model
+                    if config.llm_model != "default"
+                    else None,
+                    default_field="default_extraction_model",
+                )
+                from ontology_extraction.extractors.llm_extractor import (
+                    LLMExtractor,
+                )
+
+                extractor = LLMExtractor(
+                    llm_model=config.llm_model,
+                    confidence_threshold=config.confidence_threshold,
+                    llm_caller=llm_caller,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"single-schema: failed to wire LLM caller ({e}); "
+                    "extractor will fall back to lazy-default empty path."
+                )
+        return ExtractionWorkflow(config, extractor=extractor)
+
     async def _run_multi_schema(
         self,
         workflow: "ExtractionWorkflow",
         source_id: str,
         notebook_id: str,
         chunks: List[Dict[str, Any]],
+        config: "ExtractionConfig",
     ) -> "ExtractionResult":
         """Detect applicable schemas and invoke the B.1e orchestrator.
 
@@ -353,7 +424,13 @@ class EntityExtractionService:
                 src=source_id,
                 nb=notebook_id,
             )
-            return await workflow.extract(chunks)
+            # B.8c fix: the passed-in ``workflow`` was built bare (no extractor),
+            # so its single-mode path would use a caller-less LLMExtractor and
+            # silently return 0 entities. Rebuild with the wired extractor so the
+            # fallback actually extracts (the common case: a notebook with no
+            # configured schema).
+            fallback_workflow = await self._build_single_schema_workflow(config)
+            return await fallback_workflow.extract(chunks)
 
         # Build the per-schema accepted-extensions map from the
         # notebook's accepted extensions. Each extension dict carries
@@ -387,7 +464,9 @@ class EntityExtractionService:
         # their lazy-default empty-result paths if no caller arrives.
         llm_caller = None
         try:
-            llm_caller = await make_default_llm_caller()
+            llm_caller = await make_default_llm_caller(
+                default_field="default_extraction_model"
+            )
         except Exception as e:
             logger.warning(
                 f"multi_schema: failed to wire LLM caller ({e}); "
@@ -516,38 +595,15 @@ class EntityExtractionService:
                 source_id=source_id,
                 notebook_id=notebook_id,
                 chunks=chunk_dicts,
+                config=config,
             )
         else:
-            # Legacy single-schema path — unchanged from B.1e and earlier
-            # in terms of API, but B.1f wires the LLMExtractor through
-            # ``ModelManager`` so production callers actually hit the
-            # LLM (the pre-B.1f code silently returned empty results).
-            # Hit when ``notebook_id`` is omitted (CLI / tests), when
-            # ops disables multi-schema via the flag, or when the caller
-            # selects ``extractor_type="langextract"``.
-            extractor = None
-            if extractor_type == "llm":
-                try:
-                    llm_caller = await make_default_llm_caller(
-                        model_id=config.llm_model
-                        if config.llm_model != "default"
-                        else None,
-                    )
-                    from ontology_extraction.extractors.llm_extractor import (
-                        LLMExtractor,
-                    )
-
-                    extractor = LLMExtractor(
-                        llm_model=config.llm_model,
-                        confidence_threshold=config.confidence_threshold,
-                        llm_caller=llm_caller,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"single-schema: failed to wire LLM caller ({e}); "
-                        "extractor will fall back to lazy-default empty path."
-                    )
-            workflow = ExtractionWorkflow(config, extractor=extractor)
+            # Legacy single-schema path — hit when ``notebook_id`` is omitted
+            # (CLI / tests), when ops disables multi-schema via the flag, or
+            # when the caller selects ``extractor_type="langextract"``. The
+            # extractor is wired with the extraction-model caller via the shared
+            # builder (B.1f/B.8c) so production callers actually hit the LLM.
+            workflow = await self._build_single_schema_workflow(config)
             result = await workflow.extract(chunk_dicts)
 
         # Store extractor_type in metadata
@@ -566,6 +622,8 @@ class EntityExtractionService:
         filtering_stats = {}
 
         if run_filtering and (result.entities or result.relations):
+            filtered = None
+            all_relations: List[Dict[str, Any]] = []
             try:
                 if filtering_config:
                     f_config = filtering_config
@@ -614,18 +672,37 @@ class EntityExtractionService:
                     f"{filtering_stats}"
                 )
 
-                # 6. Persist filtered entities to KG
+            except Exception as e:
+                # Filtering itself failing is non-fatal — fall through and the
+                # raw extraction results are still saved below. ``filtered``
+                # stays None so the persist step is skipped.
+                logger.error(f"Filtering failed for source {source_id}: {e}")
+
+            # 6. Persist filtered entities to KG.
+            # B.8a: this is intentionally OUTSIDE the filtering try/except.
+            # A persistence failure (e.g. a fully-failed entity batch raising
+            # from persist_filtered_result) must PROPAGATE — otherwise it would
+            # be masked as "Filtering failed" and the extraction would report
+            # success while writing nothing to the KG. Provenance (real method
+            # + resolved model) is threaded so the KG records what produced
+            # each entity.
+            if filtered is not None:
                 await self._persistence.persist_filtered_result(
                     source_id=source_id,
                     entities=[e.model_dump() for e in filtered.entities],
                     relations=all_relations,
                     merge_groups=merge_groups,
                     match_candidates=[c.model_dump() for c in filtered.match_candidates] if filtered.match_candidates else None,
+                    extraction_method=extractor_type,
+                    # Record the model actually used (resolved via the same
+                    # precedence as the LLM caller) — not config.llm_model,
+                    # which is "default" on the common path and would stamp
+                    # None even though the extraction model produced the rows.
+                    extraction_model=await resolve_default_model_id(
+                        "default_extraction_model",
+                        config.llm_model if config.llm_model != "default" else None,
+                    ),
                 )
-
-            except Exception as e:
-                logger.error(f"Filtering failed for source {source_id}: {e}")
-                # Fall through — raw results will still be saved
 
         # 7. Persist raw extraction results
         await self._save_result(source_id, result)
@@ -717,7 +794,9 @@ class EntityExtractionService:
             # retry will then just record the attempt without confirming.
             llm_caller = None
             try:
-                llm_caller = await make_default_llm_caller()
+                llm_caller = await make_default_llm_caller(
+                    default_field="default_extraction_model"
+                )
             except Exception as e:
                 logger.warning(
                     f"B.5b retry: failed to wire LLM caller ({e}); "
@@ -810,12 +889,16 @@ class EntityExtractionService:
         ] + [
             r.model_dump() for r in filtered.predicted_edges
         ]
+        # B.8a: preserve the ORIGINAL extraction's provenance on re-filter —
+        # don't rewrite every entity's method to the default "llm". The stored
+        # extraction_result.metadata carries the extractor_type.
         await self._persistence.persist_filtered_result(
             source_id=source_id,
             entities=[e.model_dump() for e in filtered.entities],
             relations=all_relations,
             merge_groups=filtered.merged_entity_groups,
             match_candidates=[c.model_dump() for c in filtered.match_candidates] if filtered.match_candidates else None,
+            extraction_method=extraction.metadata.get("extractor_type", "llm"),
         )
 
         stats = {
@@ -870,5 +953,16 @@ class EntityExtractionService:
                 f"Saved extraction result for source {source_id}"
             )
         except Exception as e:
-            logger.error(f"Failed to save extraction result: {e}")
-            raise
+            # B.8d: by this point the entities + relations are ALREADY persisted
+            # to the KG (entity/relation tables). The extraction_result record is
+            # only a secondary cache for the re-filter path (run_filtering_only).
+            # A failure here — notably the surrealdb async-ws client raising
+            # ``KeyError(<request-uuid>)`` likely triggered by the large serialized entities/
+            # relations payload — must NOT fail the whole extraction job, or a
+            # successful extraction (hundreds of persisted entities) gets marked
+            # "failed" and dead-lettered. Log and continue; the re-filter cache
+            # is simply absent (re-extraction regenerates it).
+            logger.warning(
+                f"Could not save raw extraction_result for {source_id} "
+                f"(entities already persisted; re-filter cache skipped): {e}"
+            )

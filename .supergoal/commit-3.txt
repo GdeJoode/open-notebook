@@ -1,0 +1,16 @@
+feat(frontend): result tabs (Markdown / Images / Structure) in inspect right pane (I.D-4)
+
+Add a tab strip to the inspect-workspace right pane —
+Properties / Markdown / Images / Structure / Config — using the shadcn
+Tabs primitive:
+- MarkdownViewer: react-markdown + remark-gfm + rehype-sanitize (XSS-safe)
+- ImageGallery: paginated grid (6/page) with loading="lazy"; honest empty
+  + error states
+- StructureViewer: intentional placeholder for the I.F structure graph
+- ConfigTab: hosts the reprocess PipelineConfigPanel split out of
+  PropertiesPanel, which is now the read-only Properties tab
+
+The existing Properties metadata + ChunkActionsToolbar (I.D-1/I.D-3) and
+the reprocess flow are preserved; only their layout moves under tabs.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

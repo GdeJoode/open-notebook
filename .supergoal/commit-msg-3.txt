@@ -1,0 +1,18 @@
+feat(frontend): inspect workspace 3-pane layout + route (I.B)
+
+Add the resizable 3-pane document inspect workspace:
+
+- DocumentInspectWorkspace: react-resizable-panels Group with left chunk
+  list, middle PDF+overlay (PdfChunkViewer fullscreen), right properties.
+  Panel sizes seed from / persist to the document-workspace store; selection
+  is lifted here so the list and overlay stay in sync. Each pane is a
+  role="region" with an aria-label; Separators carry built-in WAI-ARIA
+  (role=separator + aria-orientation) and keyboard resize.
+- ChunkListPanel: virtualized (TanStack Virtual) listbox with Arrow/Home/End
+  keyboard navigation and a single tab stop.
+- PropertiesPanel: active-chunk metadata + page summary + pipeline config.
+- Route /sources/[id]/inspect wrapping AppShell.
+- SourceDetailContent: "Open Inspect" button in the Chunks tab; the tab
+  itself is unchanged as a fallback (AC6).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

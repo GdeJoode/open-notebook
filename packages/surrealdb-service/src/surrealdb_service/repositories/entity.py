@@ -5,6 +5,7 @@ Provides lookup and alias management for canonical entity matching,
 supporting the KG entity resolution pipeline.
 """
 
+import hashlib
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -248,9 +249,19 @@ class EntityRepository:
             return str(existing["id"])
 
         # No existing row — fresh CREATE.
+        # ``hash_id`` is a required string on the live DB (schema drift — not in
+        # any migration, so the testcontainer schema doesn't enforce it and the
+        # roundtrip tests pass while live writes fail with "Found NONE for field
+        # hash_id"). Derive it deterministically from the EXACT dedup identity
+        # (canonical_name + entity_type) used by the existing-row lookup and the
+        # case-sensitive ``idx_entity_name_type``. Do NOT lower-case/strip here:
+        # the dedup key is case-sensitive, so folding case would make distinct
+        # entities ("BZK" vs "bzk") collide on the UNIQUE ``idx_entity_hash``.
+        _hash_basis = f"{entity.canonical_name}|{entity.entity_type}"
         create_payload: Dict[str, Any] = {
             "canonical_name": entity.canonical_name,
             "entity_type": entity.entity_type,
+            "hash_id": hashlib.md5(_hash_basis.encode("utf-8")).hexdigest(),
             "description": entity.description,
             "source_documents": list(entity.source_documents),
             "extraction_method": entity.extraction_method,
@@ -268,7 +279,9 @@ class EntityRepository:
                 """
                 CREATE entity SET
                     canonical_name = $canonical_name,
+                    name = $canonical_name,
                     entity_type = $entity_type,
+                    hash_id = $hash_id,
                     description = $description,
                     source_documents = $source_documents,
                     extraction_method = $extraction_method,
@@ -415,18 +428,24 @@ class EntityRepository:
         Returns:
             A list of entity dictionaries.
         """
+        # NOTE: ``WITH NOINDEX`` is required here. ``entity.name`` is covered by
+        # the full-text SEARCH index ``idx_entity_fulltext`` (name, description).
+        # In SurrealDB v2 the query planner cannot satisfy ``ORDER BY name`` from
+        # a SEARCH index and aborts the transaction with "No iterator has been
+        # found." Forcing a no-index scan + in-memory sort avoids that planner
+        # path. Entity tables are small enough that the full scan is acceptable.
         try:
             if entity_type:
                 return await execute_query(
                     "SELECT id, name, entity_type, weight, confidence "
-                    "FROM entity WHERE entity_type = $entity_type "
+                    "FROM entity WITH NOINDEX WHERE entity_type = $entity_type "
                     "ORDER BY name LIMIT $limit START $offset",
                     {"entity_type": entity_type, "limit": limit, "offset": offset},
                     self.config,
                 )
             return await execute_query(
                 "SELECT id, name, entity_type, weight, confidence "
-                "FROM entity ORDER BY name LIMIT $limit START $offset",
+                "FROM entity WITH NOINDEX ORDER BY name LIMIT $limit START $offset",
                 {"limit": limit, "offset": offset},
                 self.config,
             )

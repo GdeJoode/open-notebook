@@ -1,0 +1,11 @@
+feat(api): add source image-list endpoint (I.D-4)
+
+The ingestion pipeline writes extracted images to disk but does not
+persist their filenames on chunk records, so the inspect-workspace image
+gallery has no way to enumerate them. Add GET /sources/{id}/images that
+lists the image files in the source's output directory, mirroring the
+directory-resolution and security model of the existing per-image serve
+endpoint. Returns an empty list (not 404) when a source has no images so
+the gallery can render a clean empty state.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

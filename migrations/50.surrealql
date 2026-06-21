@@ -1,0 +1,29 @@
+-- Migration 50: reconcile pre-Track-B entity schema drift (Q-B-1)
+--
+-- Migration 39 (re)defined `entity` for Track B (canonical_name + a free-string
+-- entity_type), but SurrealDB's DEFINE TABLE/FIELD does NOT remove pre-existing
+-- field definitions. On any database that carried a pre-39 `entity` table, the
+-- legacy `name` (required), `hash_id` (required) fields and the `entity_type`
+-- enum ASSERT survived alongside the new fields and are still enforced. The
+-- Track B write-path writes `canonical_name` (not `name`/`hash_id`), so every
+-- live upsert fails with "Found NONE for field `name`/`hash_id`" or an
+-- entity_type enum violation — while fresh databases (which only ever saw
+-- migration 39, e.g. the testcontainers) pass. This is the documented Q-B-1
+-- drift surfacing.
+--
+-- Reconcile by RELAXING the legacy constraints so the Track B write-path
+-- (canonical_name) succeeds. The persistence service dual-writes
+-- name=canonical_name on create, so new entities populate both the new
+-- (canonical_name) and the read-path (name) fields.
+--
+-- We deliberately do NOT backfill the pre-existing legacy rows here: those rows
+-- predate this schema and violate other current field constraints (e.g.
+-- avg_confidence NONE vs required float), so any UPDATE to them re-validates the
+-- whole record and fails. They already carry a populated `name` and render
+-- correctly; a separate purge/normalize of the legacy noise is tracked
+-- independently. New writes are unaffected.
+
+DEFINE FIELD OVERWRITE name ON entity TYPE option<string>;
+DEFINE FIELD OVERWRITE hash_id ON entity TYPE option<string>;
+-- Drop the legacy enum ASSERT (the extraction service normalizes types).
+DEFINE FIELD OVERWRITE entity_type ON entity TYPE string;

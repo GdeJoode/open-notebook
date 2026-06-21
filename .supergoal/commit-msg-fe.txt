@@ -1,0 +1,11 @@
+feat(frontend): chunk merge/split toolbar in inspect workspace (I.D-3)
+
+Add mergeChunk/splitChunk API methods, useMergeChunk/useSplitChunk
+TanStack Query hooks, and a ChunkActionsToolbar rendered in the
+active-chunk section of the inspect properties pane. Merge folds the
+active chunk into the next chunk (disabled when last); split breaks it
+at a typed character offset (1..len-1). Both show pending state,
+aria-labels, and toast on failure, and invalidate the chunks query on
+success.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

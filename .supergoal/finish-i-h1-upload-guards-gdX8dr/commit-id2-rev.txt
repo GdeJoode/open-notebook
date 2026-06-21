@@ -1,0 +1,23 @@
+fix(api): keep code/formula enrichment off by default (I.D-2)
+
+Adversarial review BLOCKER: I.D-2 newly forwarded do_code_enrichment and
+do_formula_enrichment to docling, but their defaults were True at every layer
+-- so every existing user who changed nothing would silently get both
+enrichments turned ON (docling's native default, and the pre-I.D-2 effective
+behavior, was OFF since they were never forwarded). That violates AC3 (no
+behavior change).
+
+Forced the effective default back to OFF on all vectors:
+- DoclingConfig.do_code_enrichment / do_formula_extraction -> False
+- ContentSettings.docling_do_code_enrichment / _formula_enrichment -> False
+- ReprocessRequest per-run override fields default None (not True)
+- frontend DEFAULT_PIPELINE_CONFIG code/formula -> false
+Explicit opt-in (true) still reaches docling as ON, so the new controls work.
+
+Also replaced the theater AC3 test (which asserted dataclass fields that were
+always True) with boundary tests on to_docling_options(): default -> both
+False, explicit override -> both True. Updated the frontend defaults test.
+
+Backend -k id2: 8 passed; frontend tsc clean + sources.id2 4/4.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

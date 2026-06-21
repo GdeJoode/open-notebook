@@ -192,13 +192,16 @@ class TestPersistFilteredResult:
         ent = mock_upsert.call_args.args[0]
         # canonical_name + source_documents, NOT legacy name + source_ids
         assert ent.canonical_name == "BZK"
-        assert ent.entity_type == "ORG"
+        # entity_type is normalized onto the canonical enum: "ORG" -> "organization"
+        assert ent.entity_type == "organization"
         assert ent.source_documents == ["source:doc1"]
         assert ent.confidence == 0.9
 
     @pytest.mark.asyncio
-    async def test_handles_query_failure_gracefully(self):
-        """Repository raising on upsert AND relation execute_query failing — both swallowed."""
+    async def test_fully_failed_entity_batch_raises(self):
+        """B.8a: when EVERY entity upsert fails, persist must RAISE — not report
+        a silent success of 0 written. Previously this was swallowed (the bug
+        that hid extraction failures)."""
 
         async def failing_upsert(_entity):
             raise RuntimeError("DB connection failed")
@@ -214,17 +217,69 @@ class TestPersistFilteredResult:
             "app_main.services.entity_persistence_service.execute_query",
             side_effect=failing_query,
         ):
+            with pytest.raises(RuntimeError, match="wrote 0 of 1 entities"):
+                await svc.persist_filtered_result(
+                    source_id="source:1",
+                    entities=[
+                        {"text": "BZK", "label": "ORG", "confidence": 0.9, "properties": {}},
+                    ],
+                    relations=[],
+                )
+
+    @pytest.mark.asyncio
+    async def test_partial_entity_failure_is_counted_not_raised(self):
+        """B.8a: a partial failure (some succeed) is reported via entities_failed,
+        not raised — only a fully-empty write is fatal."""
+        call_count = {"n": 0}
+
+        async def flaky_upsert(_entity):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise RuntimeError("transient")
+            return "entity:ok"
+
+        mock_repo = MagicMock()
+        mock_repo.upsert_entity = AsyncMock(side_effect=flaky_upsert)
+        svc = EntityPersistenceService(entity_repository=mock_repo)
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
             result = await svc.persist_filtered_result(
                 source_id="source:1",
                 entities=[
                     {"text": "BZK", "label": "ORG", "confidence": 0.9, "properties": {}},
+                    {"text": "EZK", "label": "ORG", "confidence": 0.8, "properties": {}},
                 ],
-                relations=[
-                    {"source_entity": "A", "target_entity": "B",
-                     "relation_type": "X", "confidence": 0.5, "properties": {}},
-                ],
+                relations=[],
             )
 
-        # Failures are logged, counts stay at 0
-        assert result["entities_upserted"] == 0
-        assert result["relations_created"] == 0
+        assert result["entities_upserted"] == 1
+        assert result["entities_failed"] == 1
+
+    @pytest.mark.asyncio
+    async def test_threads_extraction_method_and_model(self):
+        """B.8a: extraction_method/model provenance must reach the persisted
+        Entity instead of silently defaulting to 'llm'."""
+        svc, mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[
+                    {"text": "BZK", "label": "ORG", "confidence": 0.9, "properties": {}},
+                ],
+                relations=[],
+                extraction_method="langextract",
+                extraction_model="qwen2.5:14b-instruct-q5_K_M",
+            )
+
+        ent = mock_upsert.call_args.args[0]
+        assert ent.extraction_method == "langextract"
+        assert ent.properties["extraction_model"] == "qwen2.5:14b-instruct-q5_K_M"

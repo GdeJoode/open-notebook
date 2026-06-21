@@ -1,0 +1,14 @@
+fix(frontend): harden inspect workspace against horizontal overflow (I.E)
+
+Apply the AppShell min-h-0/overflow discipline at the two remaining
+overflow risks so the workspace stays fluid from 1024px to ultrawide with
+no horizontal scrollbars:
+- PropertiesPanel bbox row: let the value cell shrink/wrap (min-w-0,
+  break-words, right-aligned) and pin the label so a long "0–1" readout
+  can't push the narrow right panel wider than its track.
+- PdfChunkViewer page-nav toolbar: flex-wrap so the page input + boxes
+  toggle wrap instead of overflowing at narrow middle-pane widths.
+Panel sizing is already percentage-based via react-resizable-panels (no
+media queries); the inner panes already own their vertical scroll.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

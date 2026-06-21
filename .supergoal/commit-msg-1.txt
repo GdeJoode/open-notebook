@@ -1,0 +1,12 @@
+feat(frontend): document-workspace store + resizable deps (I.B)
+
+Add the Zustand store backing the inspect workspace (active page, active
+chunk id, persisted panel sizes with [10,80] clamp) and the dependencies
+the workspace needs: react-resizable-panels for ARIA/keyboard drag handles
+and @tanstack/react-virtual for the >1K-chunk left pane.
+
+Adds vitest + a node-env config (in-memory localStorage shim) since the
+frontend had no JS unit runner; the store reducer test is required by the
+phase spec.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

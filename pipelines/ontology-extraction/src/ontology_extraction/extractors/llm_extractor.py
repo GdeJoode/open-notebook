@@ -119,7 +119,12 @@ class LLMExtractor(ExtractorBase):
             elif "```" in text:
                 text = text.split("```")[1].split("```")[0].strip()
 
-            data = json.loads(text)
+            # strict=False tolerates raw control characters (newlines/tabs)
+            # inside string values — local models (e.g. qwen2.5) frequently
+            # emit these unescaped, which strict json.loads rejects, silently
+            # dropping an entire batch's entities. (Truncated/unterminated
+            # output is a separate, model-output-limit issue.)
+            data = json.loads(text, strict=False)
 
             entities = []
             for e in data.get("entities", []):

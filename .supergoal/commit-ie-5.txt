@@ -1,0 +1,7 @@
+docs(track-i): I.E self-review (responsiveness & polish)
+
+AC-by-AC + mental inversion. Records the measured font media delta
+(+~64KB woff2, 0 JS) and is explicit about what needs a live browser to
+confirm (no-horizontal-scroll, computed mono font-family, visual smoke).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

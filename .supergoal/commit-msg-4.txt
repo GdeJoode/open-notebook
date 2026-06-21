@@ -1,0 +1,15 @@
+test(e2e): inspect workspace drag, persist, keyboard nav (I.B)
+
+Route-mocked Playwright spec for the 3-pane inspect workspace:
+- renders 3 role="region" panes + 2 role="separator" handles with
+  aria-orientation="horizontal" (AC1/AC5)
+- drags the first separator ~20% left, asserts the left pane shrinks with no
+  horizontal page overflow, persists to localStorage, and restores on reload
+  (AC2/AC3)
+- drives a separator via the keyboard and asserts the layout changed and
+  focus stayed on the separator inside the workspace (AC4)
+
+Validated by collection (`playwright test --list`); full run is deferred to a
+local dev server + browser, matching the I.A spec handling.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

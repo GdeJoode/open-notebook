@@ -21,6 +21,58 @@ from shared.models.entity import Entity
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.entity import EntityRepository
 
+# The ``entity.entity_type`` field carries an ``ASSERT $value INSIDE [...]``
+# constraint (enforced even though the table is SCHEMALESS). LLMs — especially
+# local models like qwen2.5 — return free-form / capitalised types
+# ("Location", "Concept", "ABBREVIATION") that violate it, so every upsert
+# fails. Normalise to this canonical set at the persist boundary; unknown
+# types map to "other" (the raw value is preserved in properties). NOTE: this
+# enum lives only on the live DB, not in any migration (schema drift) — keep it
+# in sync if the DB constraint changes.
+_ALLOWED_ENTITY_TYPES = frozenset(
+    {
+        "person", "organization", "topic", "location", "concept", "event",
+        "product", "scholarly_article", "creative_work", "periodical",
+        "dataset", "grant", "research_project", "policy_document",
+        "legislation", "government_organization", "administrative_area",
+        "public_consultation", "social_profile", "other",
+    }
+)
+
+
+# Common short forms / NER tags LLMs emit, mapped onto the canonical enum so
+# they don't degrade to "other".
+_ENTITY_TYPE_ALIASES = {
+    "org": "organization",
+    "organisation": "organization",  # British spelling
+    "norp": "organization",  # nationalities / religious / political groups
+    "company": "organization",
+    "per": "person",
+    "people": "person",
+    "loc": "location",
+    "gpe": "location",  # geopolitical entity (spaCy NER)
+    "geo": "location",
+    "fac": "location",  # facility
+    "place": "location",
+    "gov": "government_organization",
+    "govt": "government_organization",
+    "law": "legislation",
+    "misc": "other",
+}
+
+
+def _normalize_entity_type(raw: Any) -> str:
+    """Map an LLM-provided entity type onto the canonical enum.
+
+    Lower-cases + underscores, then resolves common short forms / NER tags via
+    ``_ENTITY_TYPE_ALIASES``; anything still outside the allowed set becomes
+    ``"other"`` so the ``entity_type`` ASSERT never rejects a write (the raw
+    value is preserved in ``properties.raw_entity_type``).
+    """
+    norm = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+    norm = _ENTITY_TYPE_ALIASES.get(norm, norm)
+    return norm if norm in _ALLOWED_ENTITY_TYPES else "other"
+
 
 class EntityPersistenceService:
     """Persists filtered entities and relations to the KG tables."""
@@ -106,6 +158,8 @@ class EntityPersistenceService:
         relations: List[Dict[str, Any]],
         merge_groups: List[List[str]] | None = None,
         match_candidates: List[Dict[str, Any]] | None = None,
+        extraction_method: str = "llm",
+        extraction_model: str | None = None,
     ) -> Dict[str, Any]:
         """Upsert entities and create relations in the knowledge graph.
 
@@ -119,6 +173,7 @@ class EntityPersistenceService:
             Dict with ``entities_upserted`` and ``relations_created`` counts.
         """
         entities_upserted = 0
+        entities_failed = 0
         relations_created = 0
 
         # Build merge group lookup: entity text → group members
@@ -131,7 +186,8 @@ class EntityPersistenceService:
         # 1. Upsert entities
         for entity in entities:
             text = entity.get("text", "")
-            label = entity.get("label", "UNKNOWN")
+            raw_label = entity.get("label", "concept")
+            label = _normalize_entity_type(raw_label)
             confidence = entity.get("confidence", 0.5)
             properties = entity.get("properties", {})
 
@@ -143,16 +199,29 @@ class EntityPersistenceService:
                 k: v for k, v in properties.items()
                 if k != "embedding" and v is not None
             }
+            # Preserve the model's original (un-normalized) type for provenance
+            # when it didn't map cleanly onto the canonical enum.
+            if raw_label and str(raw_label).strip().lower() != label:
+                stored_props["raw_entity_type"] = raw_label
 
             # Add merge history if available
             if text in merge_lookup:
                 stored_props["merged_from"] = merge_lookup[text]
+
+            # Record the model that produced this entity (provenance). The
+            # `entity` table is SCHEMALESS in prod, so an extra prop is safe;
+            # `extraction_method` is a first-class Entity field.
+            if extraction_model:
+                stored_props["extraction_model"] = extraction_model
 
             try:
                 # Route through EntityRepository.upsert_entity so the write
                 # uses the canonical schema field names (canonical_name,
                 # source_documents, embedding=[]) declared in migration 39+44.
                 # See Phase B.1a notes at top of this module for context.
+                #
+                # B.8a: thread the real extraction_method (was silently
+                # defaulting to "llm" for every path — provenance bug).
                 entity_model = Entity(
                     canonical_name=text,
                     entity_type=label,
@@ -160,11 +229,16 @@ class EntityPersistenceService:
                     source_documents=[source_id],
                     properties=stored_props,
                     embedding=[],
+                    extraction_method=extraction_method,
                 )
                 await self._entity_repo.upsert_entity(entity_model)
                 entities_upserted += 1
             except Exception as e:
-                logger.warning(f"Failed to upsert entity '{text}': {e}")
+                # B.8a: do NOT silently swallow. Count the failure and log at
+                # ERROR; a fully-failed batch raises below so the caller can't
+                # report a successful extraction that wrote nothing.
+                entities_failed += 1
+                logger.error(f"Failed to upsert entity '{text}': {e}")
 
         # 2. Create relations
         for rel in relations:
@@ -188,7 +262,9 @@ class EntityPersistenceService:
                     LET $tgt = (SELECT id FROM entity
                         WHERE canonical_name = $tgt_name LIMIT 1);
                     IF array::len($src) > 0 AND array::len($tgt) > 0 THEN {
-                        RELATE $src[0].id->relation->$tgt[0].id SET
+                        LET $sid = $src[0].id;
+                        LET $tid = $tgt[0].id;
+                        RELATE $sid->relation->$tid SET
                             relation_type = $rel_type,
                             confidence = $confidence,
                             source_documents = [$source_id],
@@ -217,6 +293,25 @@ class EntityPersistenceService:
                 source_id, match_candidates
             )
 
+        # B.8a: if entities were attempted and EVERY one errored, that is a hard
+        # failure, not a silent success — surface it so callers/telemetry see the
+        # extraction wrote nothing rather than reporting 0 quietly. (Entities
+        # skipped for empty text are not failures, so this keys on
+        # ``entities_failed``, not on a zero upsert count.)
+        if entities_failed > 0 and entities_upserted == 0:
+            raise RuntimeError(
+                f"persist_filtered_result wrote 0 of {len(entities)} entities "
+                f"for source {source_id} (all {entities_failed} upserts failed) — "
+                f"see ERROR logs above"
+            )
+
+        if entities_failed:
+            logger.error(
+                f"persist_filtered_result: {entities_failed} of "
+                f"{len(entities)} entities failed to upsert for source "
+                f"{source_id} ({entities_upserted} succeeded)"
+            )
+
         logger.info(
             f"Persisted to KG: {entities_upserted} entities, "
             f"{relations_created} relations, "
@@ -225,6 +320,7 @@ class EntityPersistenceService:
 
         return {
             "entities_upserted": entities_upserted,
+            "entities_failed": entities_failed,
             "relations_created": relations_created,
             "candidates_stored": candidates_stored,
         }

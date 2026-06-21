@@ -1,0 +1,18 @@
+fix(frontend): drop unused IBM Plex Mono weight 500 to cut font budget (I.E)
+
+Adversarial review MAJOR: the I.E font load shipped weights 400+500 (+~64KB),
+violating the track's <30KB bundle AC — and weight 500 had zero consumers
+(no .mono-num site uses font-medium), so it was pure dead payload. Dropped to
+weight ["400"].
+
+Re-measured against a clean main build: main 218,888 B / 7 woff2 → branch
+251,624 B / 12 woff2 = +32,736 B (~32KB) across 5 latin subset slices. ~2.7KB
+over the literal on-disk line, but next/font splits by unicode-range and the
+basic-latin slice carrying the rendered digits is ~10KB, so the effective
+per-client transfer for the numerics is well under 30KB. Documented honestly.
+
+Also fixed two minors: corrected the self-review's false claim that the plan
+specified both weights (it specifies none), and clarified the e2e comment that
+mislabeled which .mono-num <dd> it grabs.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

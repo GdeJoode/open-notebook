@@ -12,7 +12,6 @@ import asyncio
 import uuid
 
 import pytest
-
 from shared.models import Entity
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import execute_query
@@ -202,3 +201,74 @@ async def test_upsert_roundtrips_created_at_and_updated_at(
         "updated_at should be refreshed on the UPDATE branch"
     )
     assert after_update.confidence == pytest.approx(0.9)
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_list_entities_survives_order_by_name_with_fulltext_index(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Regression: ``list_entities`` must return rows despite ``ORDER BY name``.
+
+    Production databases carry a full-text SEARCH index ``idx_entity_fulltext``
+    on ``entity`` FIELDS (name, description). SurrealDB v2's query planner cannot
+    satisfy ``ORDER BY name`` from a SEARCH index and aborts the transaction with
+    "No iterator has been found." ``list_entities`` swallows the error and
+    returns ``[]`` — so before the ``WITH NOINDEX`` fix this silently dropped
+    every entity, leaving the KG / entity browser empty although the rows exist.
+
+    NOTE: that index is NOT created by the current migration files (it exists
+    only as out-of-band schema drift on the live DB), so this test reconstructs
+    the exact failing condition: a ``name`` field plus the SEARCH index. The
+    ``my_analyzer`` analyzer is defined by migration 1.
+    """
+    cfg = live_surrealdb
+
+    # Recreate the production drift: a `name` field + full-text SEARCH index.
+    # ``OVERWRITE`` because migration 50 now also defines ``name`` on ``entity``.
+    await execute_query(
+        "DEFINE FIELD OVERWRITE name ON entity TYPE option<string>;",
+        {},
+        config=cfg,
+    )
+    await execute_query(
+        "DEFINE INDEX idx_entity_fulltext ON entity FIELDS name, description "
+        "SEARCH ANALYZER my_analyzer BM25 HIGHLIGHTS;",
+        {},
+        config=cfg,
+    )
+
+    prefix = _unique("listcanary")
+    # Insert out of alphabetical order. ``hash_id`` is a required UNIQUE string.
+    names = [f"{prefix}-charlie", f"{prefix}-alpha", f"{prefix}-bravo"]
+    for n in names:
+        await execute_query(
+            "CREATE entity SET canonical_name = $n, name = $n, hash_id = $n, "
+            "entity_type = 'concept', confidence = 0.9, embedding = [];",
+            {"n": n},
+            config=cfg,
+        )
+
+    # Sanity: the unfixed query pattern MUST fail under this index, otherwise the
+    # test is not exercising the bug it claims to guard.
+    with pytest.raises(Exception):
+        await execute_query(
+            "SELECT id, name FROM entity ORDER BY name LIMIT 10", {}, config=cfg
+        )
+
+    repo = EntityRepository(config=cfg)
+
+    rows = await repo.list_entities(limit=500, offset=0)
+    got = [r["name"] for r in rows if str(r.get("name", "")).startswith(prefix)]
+    assert set(got) == set(names), (
+        f"list_entities dropped rows (ORDER BY name vs FTS index). "
+        f"Missing: {set(names) - set(got)}"
+    )
+    assert got == sorted(names), f"rows not ascending by name: {got}"
+
+    # The type-filtered branch travels the same planner path and must also hold.
+    filtered = await repo.list_entities(limit=500, offset=0, entity_type="concept")
+    fgot = [r["name"] for r in filtered if str(r.get("name", "")).startswith(prefix)]
+    assert set(fgot) == set(names), (
+        f"type-filtered list_entities dropped rows. Missing: {set(names) - set(fgot)}"
+    )

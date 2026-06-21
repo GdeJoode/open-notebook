@@ -23,16 +23,48 @@ ENV UV_LINK_MODE=copy
 # Set the working directory in the container to /app
 WORKDIR /app
 
-# UV workspace: copy full source tree before sync (workspace members are
-# editable installs; hatchling also needs README.md for metadata validation).
+# ---------------------------------------------------------------------------
+# Dependency layer — cached unless a manifest or the lockfile changes.
+# Copy ONLY the dependency-defining files first so an app-code change does not
+# bust the (multi-GB, CUDA/torch) external-dependency install. This is a uv
+# workspace, so every member needs its pyproject.toml present for the resolve;
+# the member SOURCE is copied in the next layer. README.md is needed for the
+# root package's hatchling metadata.
+# ---------------------------------------------------------------------------
+COPY pyproject.toml uv.lock README.md ./
+COPY apps/app-main/pyproject.toml apps/app-main/
+COPY packages/file-manager/pyproject.toml packages/file-manager/
+COPY packages/job-queue/pyproject.toml packages/job-queue/
+COPY packages/llm-manager/pyproject.toml packages/llm-manager/
+COPY packages/ontology-manager/pyproject.toml packages/ontology-manager/
+COPY packages/semantic-intelligence/pyproject.toml packages/semantic-intelligence/
+COPY packages/shared/pyproject.toml packages/shared/
+COPY packages/surrealdb-service/pyproject.toml packages/surrealdb-service/
+COPY packages/zotero-integration/pyproject.toml packages/zotero-integration/
+COPY pipelines/embeddings/pyproject.toml pipelines/embeddings/
+COPY pipelines/entity-filtering/pyproject.toml pipelines/entity-filtering/
+COPY pipelines/ingestion/pyproject.toml pipelines/ingestion/
+COPY pipelines/ontology-extraction/pyproject.toml pipelines/ontology-extraction/
+COPY pipelines/retrieval/pyproject.toml pipelines/retrieval/
+COPY pipelines/summarization/pyproject.toml pipelines/summarization/
+
+# Install third-party dependencies only (NOT the workspace packages), with a
+# BuildKit cache mount so wheels survive across builds even if this layer reruns.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-workspace
+
+# ---------------------------------------------------------------------------
+# Source layer — reruns on any code change, but fast: external deps are already
+# installed, so this only adds the editable workspace packages.
+# ---------------------------------------------------------------------------
 COPY . /app
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --all-packages
 
-# Install dependencies
-RUN uv sync --frozen --no-dev --all-packages
-
-# Install frontend dependencies and build
+# Install frontend dependencies and build (npm cache mounted so `npm ci` is fast)
 WORKDIR /app/frontend
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
 RUN npm run build
 
 # Return to app root

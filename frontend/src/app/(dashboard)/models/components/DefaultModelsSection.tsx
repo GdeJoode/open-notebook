@@ -47,6 +47,12 @@ const defaultConfigs: DefaultConfig[] = [
     modelType: 'language'
   },
   {
+    key: 'default_extraction_model',
+    label: 'Extraction Model',
+    description: 'Used for knowledge-graph entity/relation extraction - falls back to the Chat Model when unset',
+    modelType: 'language'
+  },
+  {
     key: 'large_context_model',
     label: 'Large Context Model',
     description: 'Used for processing large documents - Gemini recommended',

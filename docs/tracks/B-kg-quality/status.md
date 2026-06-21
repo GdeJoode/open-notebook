@@ -1529,3 +1529,78 @@ M3 + M4 majors, 5 minors). All addressed in attempt 2.
 | `frontend/e2e/track-b/notebook-merge.spec.ts` | 1/1 | 1/1 |
 
 Rebase on `main` was clean (no conflicts).
+
+---
+
+## Phase B.8a — Model + provenance fix (follow-up sub-track) — 2026-06-20
+
+**Branch**: `track/b8a-model-provenance` (commits c662354, 8c98ce5)
+**Status**: adversarial-reviewer APPROVED (attempt 2). Ready for human sign-off + merge.
+
+Part of the B.8 live-validation follow-up. Three fixes:
+- `EXTRACTION_MODEL` llama3.1:8b-instruct-q4_0 → qwen2.5:14b-instruct-q5_K_M (docker-compose.yml:130).
+- `extraction_method` provenance bug: every persisted entity silently defaulted to "llm". `persist_filtered_result` now takes `extraction_method`/`extraction_model`, stamps them on the Entity, threaded from `run_extraction` (extractor_type + resolved config.llm_model) and `run_filtering_only` (from stored metadata).
+- Swallowed entity-write failures: a fully-failed batch now logs ERROR, returns `entities_failed`, and RAISES (propagates out of run_extraction — the persist call was moved outside the filtering try/except, the attempt-1 Major). Skipped empty-text entities are not failures.
+
+**Tests**: 10/10 `test_entity_persistence_service.py` (3 new: fully-failed-raises, partial-failure-counted, method+model-threaded). Extraction suite collects clean (20).
+**Review**: attempt 1 REVISIONS_NEEDED (1 Major: raise swallowed by run_extraction try/except) → fixed → attempt 2 APPROVED.
+**Deferred to B.8d**: (1) run_extraction integration test asserting persist-RuntimeError propagation with run_filtering=True; (2) relation-write failures still swallow (warning-only).
+
+---
+
+## Phase B.8a-2 — Independent extraction model — 2026-06-20
+
+**Branch**: `track/b8a2-extraction-model` (commits 402756d, 187e9c8)
+**Status**: adversarial-reviewer APPROVED (attempt 2).
+
+B.8a's model swap targeted EXTRACTION_MODEL (the langextract microservice), but the KG entity-extraction path resolves the model via DefaultModels.default_chat_model — so chat and extraction were coupled (a global-chat-model change would be a monkey fix). Added a dedicated, independently-selectable extraction model following the existing per-function-model pattern:
+- `DefaultModels.default_extraction_model` + `resolve_default_model_id()` shared resolver (override → per-function default → chat fallback), used by both make_default_llm_caller and entity provenance.
+- All 4 extraction callers (multi-schema, single-schema, B.5b retry, manual orphan-reconnect) use the extraction model.
+- API GET/PUT /models/defaults + frontend "Extraction Model" dropdown expose it.
+- DB: default_extraction_model = qwen2.5:14b-instruct-q5_K_M; default_chat_model stays llama3.1 — independent.
+
+**Review**: attempt 1 REVISIONS_NEEDED (2 MAJOR: 4th caller missed; provenance stamped None on common path) → fixed via shared resolver → attempt 2 APPROVED.
+**Tests**: 4/4 TestMakeDefaultLLMCaller (incl. 2 new resolver tests). tsc clean. No new ruff errors.
+**Note**: Dockerfile layer-reorder committed (build optimization) — needs validation on next full build.
+
+---
+
+## Phase B.8b — Deploy + UI/KG verification — 2026-06-21
+
+**Status**: verified (deploy + UI/KG). New image ca8e8088a360 deployed (ORDER BY fix + B.8a + B.8a-2). Dockerfile reorder build-validated (2 uv-sync layers); its code review folded into B.8d.
+
+Findings:
+- ORDER BY fix LIVE: /api/knowledge-graph/entities + /graph return data (147 nodes; were empty pre-fix). No "No iterator" error.
+- Models resolve independently in the deployed app: extraction=qwen2.5:14b-instruct-q5_K_M, chat=llama3.1.
+- Default filters min_conf=0.9/min_conn=5 are Obsidian-EXPORT params only — NOT applied to the KG browse/graph view; they never hid entities. Empty UI was purely the ORDER BY bug.
+- Entity KG is notebook-wide (/graph has no per-source scoping). "Entity KG per document" is not a current feature; per-document = structure graph (I.F).
+- Minor (→B.8d): /graph shows 0 edges despite 3 relations.
+
+**Infra**: redeploy was blocked by a Docker Desktop WSL stale bind-mount; resolved by a full Docker Desktop restart (user-assisted after an over-aggressive auto-restart attempt). Cred-helper + Dockerfile-reorder fixes hold.
+
+---
+
+## Phase B.8c — Live validation + resolution assessment — 2026-06-21
+
+**Branch**: `track/b8c-live-validation` (commit 5b41a22 + assessment).
+**Status**: adversarial-reviewer APPROVED (attempt 2). Pipeline FIXED + verified end-to-end; resolution PARTIALLY MET (V1-capped → M4).
+
+Live qwen2.5:14b extraction now produces AND persists entities (was 0). Chain of fixes (all in commit 5b41a22): no-schema-fallback caller wiring, JSON strict=False, entity_type normalization, RELATE syntax, hash_id + name dual-write, **migration 50** (relax pre-Track-B `name`/`hash_id`/enum drift — Q-B-1). Independent extraction model (qwen) vs chat (llama3.1) confirmed in provenance.
+
+**Live results**: bc6xa 421 entities; 4 Regio Deal Convenant docs 200/333/250/274. Cross-doc resolution: 897 distinct canonical, **107 span ≥2 docs** (programme-level entities resolve correctly). V1 fragments variant forms (BZK↔Binnenlandse Zaken; role-prefixes; spelling variants) — the documented Q9/M4 ceiling. See `reviews/phase-B.8c-resolution-assessment.md`.
+
+**B.8d follow-ups**: post-persist `_save_result` KeyError (jobs marked failed despite persisting); cheap partial resolution wins (article/role-prefix strip, spelling tolerance, govt abbreviation aliases); legacy 144-entity purge; relation-failure surfacing.
+
+---
+
+## Phase B.8d — Polish, harden + track ledger — 2026-06-21
+
+**Branch**: `track/b8d-polish`.
+- Fixed the post-persist `_save_result` KeyError: made it NON-FATAL (entities/relations already persisted; the extraction_result is a secondary re-filter cache). Jobs no longer falsely report "failed" + dead-letter after a successful extraction. New test `TestSaveResultNonFatal`.
+- Consolidated B.8 findings → `reviews/phase-B.8-findings.md` (the 7-bug chain + schema-drift root cause + resolution verdict).
+- Documented open follow-ups F1-F6 (resolution quick-wins, M4, idx_entity_fulltext codification, legacy-entity purge, relation-failure surfacing, _save_result large-payload root cause).
+- Project memory written (`project-open-notebook-kg.md`).
+
+**Track B.8 outcome**: KG entity extraction fixed + verified end-to-end on live data (qwen2.5:14b); pre-Track-B schema drift reconciled (migration 50); resolution assessed (PARTIALLY MET, V1-capped → M4). All phases adversarial-APPROVED. Pending: human sign-off to merge `track/b8*` branches.
+
+**B.8d review**: adversarial-reviewer APPROVED (0 blockers/majors, 2 trivial minors — root-cause-attribution prose softened). Track B.8 closed pending human merge sign-off.

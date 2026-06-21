@@ -283,7 +283,11 @@ async def manual_reconnect_orphan(
             make_default_llm_caller,
         )
 
-        llm_caller = await make_default_llm_caller()
+        # Same KG orphan-reconnect routine as the in-service B.5b retry —
+        # use the extraction model so auto- and user-triggered runs match.
+        llm_caller = await make_default_llm_caller(
+            default_field="default_extraction_model"
+        )
     except Exception as e:
         logger.warning(
             f"manual_reconnect_orphan: failed to wire LLM caller ({e}); "

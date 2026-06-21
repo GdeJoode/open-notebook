@@ -1,0 +1,19 @@
+test(api): regression tests for JSON wiring + guard rewind (I.H1)
+
+Addresses the test-coverage findings from the I.H1 adversarial review:
+
+- #3 (Major): the rate-limiter tests ran a stand-in app, never the real
+  endpoint, so the JSON-endpoint 500 (#1) shipped green. Add
+  test_json_endpoint_succeeds_through_real_wiring: mounts the real
+  sources_upload router with SlowAPIMiddleware + the production limiter, stubs
+  only _create_source_impl, and asserts POST /sources/json returns 200 with
+  rate-limit headers -- exercising the exact success-path header injection
+  that broke.
+- #4 (Major): add test_guards_rewind_preserves_upload_bytes, which runs the
+  real page-count guard over a real PDF and asserts the upload bytes are
+  intact afterwards. Dropping the seek(0) now fails a test instead of silently
+  corrupting valid uploads.
+- Fix the #2-coupled mock in test_oversize_pages_rejected_with_422: the guard
+  now closes the pdfium document, so the stand-in needs len() and close().
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
