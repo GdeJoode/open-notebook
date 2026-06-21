@@ -1,0 +1,9 @@
+{"a": {"name": "De Regio Deal", "type": "other"}, "b": {"name": "Regio Deal", "type": "other"}, "why": "leading article stripped"}
+{"a": {"name": "Ministerie van BZK", "type": "organization"}, "b": {"name": "ministerie van BZK", "type": "organization"}, "why": "case + same leader phrase"}
+{"a": {"name": "Ministerie van BZK", "type": "organization"}, "b": {"name": "BZK", "type": "organization"}, "why": "ministerie-van leader stripped to shared tail"}
+{"a": {"name": "Minister van BZK", "type": "organization"}, "b": {"name": "BZK", "type": "organization"}, "why": "minister-van leader stripped to shared tail"}
+{"a": {"name": "Binnenlandse Zaken en Koninkrijkrelaties", "type": "organization"}, "b": {"name": "Binnenlandse Zaken en Koninkrijksrelaties", "type": "organization"}, "why": "Koninkrijk(s)relaties spelling variant"}
+{"a": {"name": "De Minister van Binnenlandse Zaken en Koninkrijksrelaties", "type": "organization"}, "b": {"name": "Binnenlandse Zaken en Koninkrijkrelaties", "type": "organization"}, "why": "article + role prefix strip + spelling"}
+{"a": {"name": "Ministerie van Binnenlandse Zaken en Koninkrijkrelaties", "type": "other"}, "b": {"name": "Binnenlandse Zaken en Koninkrijksrelaties", "type": "other"}, "why": "ministerie leader strip + spelling"}
+{"a": {"name": "De Gemeente Groningen", "type": "organization"}, "b": {"name": "Gemeente Groningen", "type": "organization"}, "why": "article before gemeente"}
+{"a": {"name": "Provincie Drenthe", "type": "organization"}, "b": {"name": "provincie drenthe", "type": "organization"}, "why": "case + provincie leader strip"}

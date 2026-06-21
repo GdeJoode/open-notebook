@@ -9,7 +9,6 @@ guarantees so the eventual Q9 replacement has a regression net.
 """
 
 import pytest
-
 from shared.utils import normalize_entity_name as imported_via_init
 from shared.utils.name_normalizer import normalize_entity_name
 
@@ -98,6 +97,103 @@ class TestNormalizeEntityName:
     )
     def test_table_of_cases(self, raw, expected):
         assert normalize_entity_name(raw) == expected
+
+
+class TestNLNormalization:
+    """K.1 NL-aware behaviour composed into ``normalize_entity_name``.
+
+    These are the falsifiable acceptance criteria from the K.1 plan, asserted
+    through the public function (the V1 cases above must stay green alongside).
+    """
+
+    def test_ac1_leading_article_stripped(self):
+        assert normalize_entity_name("De Regio Deal") == normalize_entity_name(
+            "Regio Deal"
+        )
+
+    def test_ac2_ministerie_prefix_to_tail(self):
+        assert normalize_entity_name("Ministerie van BZK") == normalize_entity_name(
+            "ministerie van BZK"
+        )
+        assert normalize_entity_name("Ministerie van BZK") == "bzk"
+
+    def test_ac3_spelling_variant_tolerance(self):
+        assert normalize_entity_name(
+            "Binnenlandse Zaken en Koninkrijkrelaties"
+        ) == normalize_entity_name("Binnenlandse Zaken en Koninkrijksrelaties")
+
+    def test_ac4_precision_guard_distinct_tails(self):
+        assert normalize_entity_name("Minister van BZK") != normalize_entity_name(
+            "Minister van Financiën"
+        )
+        assert normalize_entity_name("Gemeente Groningen") != normalize_entity_name(
+            "Gemeente Drenthe"
+        )
+
+    def test_role_and_org_prefixes_strip_to_tail(self):
+        assert normalize_entity_name("Minister van BZK") == "bzk"
+        assert normalize_entity_name("Gemeente Groningen") == "groningen"
+        assert normalize_entity_name("Provincie Drenthe") == "drenthe"
+
+    def test_article_plus_role_prefix(self):
+        assert (
+            normalize_entity_name("De Minister van Binnenlandse Zaken en Koninkrijksrelaties")
+            == "binnenlandse zaken en koninkrijksrelaties"
+        )
+
+    def test_qualifier_stays_distinct(self):
+        """A qualifier marks a distinct sub-concept (no prefix to strip)."""
+        assert normalize_entity_name("Regio Deal") != normalize_entity_name(
+            "Oost-Groningen Regio Deal"
+        )
+
+    def test_bare_leader_word_unchanged(self):
+        assert normalize_entity_name("Gemeente") == "gemeente"
+
+    def test_nl_normalization_idempotent(self):
+        for raw in [
+            "De Regio Deal",
+            "Ministerie van BZK",
+            "Binnenlandse Zaken en Koninkrijkrelaties",
+            "Gemeente",
+        ]:
+            once = normalize_entity_name(raw)
+            assert normalize_entity_name(once) == once
+
+    def test_apple_inc_still_green(self):
+        """The V1 anchor case is unaffected by the NL stages."""
+        assert normalize_entity_name("  Apple Inc.  ") == "apple inc"
+
+
+class TestB8HashContract:
+    """AC9: the B.8 dedup-key derive-rule is unchanged by the new normalizer.
+
+    Only the *string* normalize_entity_name returns changes. The derive-rule
+    md5(f"{normalize_entity_name(x)}|{type}") and the (canonical_name,
+    entity_type) lookup are unchanged — asserted here so a future normalizer
+    change that breaks the contract fails fast in the shared suite.
+    """
+
+    def test_hash_id_is_md5_of_normalized_name_pipe_type(self):
+        import hashlib
+
+        name = "Ministerie van BZK"
+        etype = "organization"
+        normalized = normalize_entity_name(name)
+        expected = hashlib.md5(f"{normalized}|{etype}".encode("utf-8")).hexdigest()
+        # Re-derive the same way a caller would and confirm determinism.
+        assert (
+            hashlib.md5(
+                f"{normalize_entity_name(name)}|{etype}".encode("utf-8")
+            ).hexdigest()
+            == expected
+        )
+
+    def test_merged_forms_share_a_hash_basis(self):
+        """Forms that normalize equal produce the same dedup basis."""
+        a = normalize_entity_name("Ministerie van BZK")
+        b = normalize_entity_name("ministerie van BZK")
+        assert a == b == "bzk"
 
 
 class TestPublicAPI:

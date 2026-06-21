@@ -1,0 +1,8 @@
+{"a": {"name": "Minister van BZK", "type": "organization"}, "b": {"name": "Minister van Financiën", "type": "organization"}, "why": "different tail after role-prefix strip"}
+{"a": {"name": "Gemeente Groningen", "type": "organization"}, "b": {"name": "Gemeente Drenthe", "type": "organization"}, "why": "different municipality tail"}
+{"a": {"name": "Regio Deal", "type": "other"}, "b": {"name": "Oost-Groningen Regio Deal", "type": "other"}, "why": "qualifier marks a distinct sub-concept; no leading prefix to strip"}
+{"a": {"name": "Provincie Groningen", "type": "organization"}, "b": {"name": "Groningen", "type": "location"}, "why": "province org vs the city/location - same tail, different type"}
+{"a": {"name": "Ministerie van Onderwijs", "type": "other"}, "b": {"name": "Ministerie van Onderwijs en Arbeid", "type": "other"}, "why": "tail differs - one is a substring of the other"}
+{"a": {"name": "Minister van Volkshuisvesting en Ruimtelijke Ordening", "type": "organization"}, "b": {"name": "Minister van Economische Zaken", "type": "organization"}, "why": "distinct ministries"}
+{"a": {"name": "Gemeente", "type": "organization"}, "b": {"name": "Provincie", "type": "organization"}, "why": "bare leader words are not stripped, stay as distinct concepts"}
+{"a": {"name": "De Regio Deal", "type": "other"}, "b": {"name": "De Stad", "type": "other"}, "why": "article stripped from both but tails differ"}
