@@ -15,6 +15,7 @@ from surrealdb_service.repositories.model import (
     DefaultModelsRepository,
     ModelRepository,
 )
+from surrealdb_service.repositories.model_route import ModelRouteRepository
 from surrealdb_service.repositories.notebook import (
     ChatMessageRepository,
     ChatSessionRepository,
@@ -62,6 +63,7 @@ __all__ = [
     # Model
     "ModelRepository",
     "DefaultModelsRepository",
+    "ModelRouteRepository",
     # Notebook
     "NotebookRepository",
     "NoteRepository",
