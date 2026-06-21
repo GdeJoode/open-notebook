@@ -18,12 +18,17 @@ interface ProcessingConfigStepProps {
   settings?: SettingsResponse
   overrides: Record<string, unknown>
   onOverridesChange: (overrides: Record<string, unknown>) => void
+  /** Track J.3/J.5: process this document privately (LLM stages stay local). */
+  isPrivate?: boolean
+  onPrivateChange?: (value: boolean) => void
 }
 
 export function ProcessingConfigStep({
   settings,
   overrides,
   onOverridesChange,
+  isPrivate = false,
+  onPrivateChange,
 }: ProcessingConfigStepProps) {
   // Get effective value: override if set, else settings default
   const getValue = <T,>(key: keyof SettingsResponse): T | undefined => {
@@ -44,6 +49,26 @@ export function ProcessingConfigStep({
 
   return (
     <div className="space-y-8">
+      {/* Privacy */}
+      <FormSection
+        title="Privacy"
+        description="Process this document privately to keep every LLM call (extraction, summarization, chat) on local models. Sticky: a private document never escalates to a cloud provider."
+      >
+        <div className="flex items-center justify-between col-span-2">
+          <div>
+            <Label className="text-sm">Process privately</Label>
+            <p className="text-xs text-muted-foreground">
+              Keep this document&apos;s LLM stages local-only
+            </p>
+          </div>
+          <Switch
+            checked={isPrivate}
+            onCheckedChange={(v) => onPrivateChange?.(v)}
+            aria-label="Process this document privately"
+          />
+        </div>
+      </FormSection>
+
       {/* Document Processing */}
       <FormSection
         title="Document Processing"

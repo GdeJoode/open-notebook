@@ -479,6 +479,9 @@ class SourceResponse(BaseModel):
     status: Optional[str] = None
     processing_info: Optional[Dict] = None
     notebooks: Optional[List[str]] = None
+    # Track J.3/J.5: per-document privacy override. True forces the document's
+    # LLM stages local (sticky). Surfaced as a read-only "Private" badge.
+    private: bool = False
 
 
 class SourceListResponse(BaseModel):

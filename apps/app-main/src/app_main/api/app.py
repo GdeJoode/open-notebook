@@ -168,6 +168,7 @@ def create_app() -> FastAPI:
         health,
         insights,
         knowledge_graph,
+        model_routes,
         models,
         notebook_events,
         notebooks,
@@ -200,6 +201,9 @@ def create_app() -> FastAPI:
     )
     application.include_router(search.router, prefix="/api", tags=["search"])
     application.include_router(models.router, prefix="/api", tags=["models"])
+    application.include_router(
+        model_routes.router, prefix="/api", tags=["model-routes"]
+    )
     application.include_router(
         transformations.router, prefix="/api", tags=["transformations"]
     )

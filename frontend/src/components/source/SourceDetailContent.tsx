@@ -55,6 +55,7 @@ import {
   BrainCircuit,
   Settings2,
   BookMarked,
+  Lock,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { formatDistanceToNow } from 'date-fns'
@@ -442,6 +443,19 @@ export function SourceDetailContent({
             <Badge variant="secondary" className="text-sm">
               {getSourceType()}
             </Badge>
+
+            {/* Track J.3/J.5: read-only badge for documents processed privately. */}
+            {source.private && (
+              <Badge
+                variant="outline"
+                className="text-sm"
+                data-testid="private-source-badge"
+                aria-label="This source is processed privately"
+              >
+                <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                Private
+              </Badge>
+            )}
 
             {/* Promoted actions */}
             {(source.entity_count ?? 0) > 0 && (
