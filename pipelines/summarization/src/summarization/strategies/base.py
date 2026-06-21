@@ -30,6 +30,17 @@ class BaseSummarizationStrategy(ABC):
     def __init__(self, config: SummarizationConfig, **kwargs) -> None:
         self.config = config
 
+    @property
+    def injected_model(self):
+        """The app-injected routed LanguageModel, or ``None`` (Track J.4).
+
+        Strategies call this from ``_get_model``: when non-``None`` they use it
+        directly (privacy-aware routed model with failover already applied at
+        injection time) instead of constructing one via ``AIFactory`` from the
+        env-driven ``LLMConfig``. ``None`` -> the legacy env path (back-compat).
+        """
+        return getattr(self.config, "language_model", None)
+
     @abstractmethod
     async def summarize(self, chunks: List[ChunkInput]) -> SummarizationResult:
         """Run the strategy on the provided chunks."""

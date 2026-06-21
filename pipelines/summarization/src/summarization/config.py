@@ -7,6 +7,7 @@ Sub-configs group related settings for each strategy.
 
 import os
 from dataclasses import dataclass, field
+from typing import Any, Optional
 
 
 @dataclass
@@ -159,6 +160,14 @@ class SummarizationConfig:
     # Prompt customization (optional — overrides default system message / appends to prompts)
     system_prompt: str = ""
     output_instructions: str = ""
+
+    # Track J.4: an injected, pre-built esperanto LanguageModel (or compatible
+    # ``achat_complete`` object). When the app resolves a privacy-aware route +
+    # failover executor for SUMMARIZATION it injects the routed model here, and
+    # strategies use it instead of constructing one from ``llm`` via AIFactory.
+    # Left ``None`` for CLI/test/back-compat callers, which keep the env-driven
+    # ``AIFactory.create_language`` ollama path (no behavior change).
+    language_model: Optional[Any] = None
 
     llm: LLMConfig = field(default_factory=LLMConfig)
     raptor: RaptorConfig = field(default_factory=RaptorConfig)
