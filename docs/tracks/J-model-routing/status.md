@@ -8,6 +8,28 @@ Append-only ledger. One row per phase attempt.
 | J.1 | Provider-chain config + privacy-aware ordered-route resolver | (pending) | track/j1-route-resolver | 2026-06-21 | Implemented — all 7 ACs met, tests green, ready for review |
 | J.2 | Per-provider circuit-breaker + per-document failover executor + fair-use rate limiter | (pending) | track/j2-failover | 2026-06-21 | Implemented — all 6 plan ACs + fair-use additions met, 29 J.2 tests green, B.8/J.1 regression green, ready for review |
 | J.2 rev2 | Adversarial-review revisions (1 major + 1 minor) | (pending) | track/j2-failover | 2026-06-21 | Major + minor fixed; 32 J.2 tests green (3 new), 35-test regression green, changed files ruff-clean. Ready for re-review |
+| J.3 | Layered privacy-mode plumbing + local-embeddings guardrail | (pending) | track/j3-privacy | 2026-06-21 | Implemented — all 7 ACs met; 45 new unit (privacy resolver + guardrail) + 10 plumbing + 4 router persist tests green; migration-52 roundtrips green vs live SurrealDB; B.8/J.1/J.2 regression green (162 affected tests). Ready for review |
+
+### J.3 implementation notes (2026-06-21)
+- **Settings table found**: the global default lives on the **implicit SCHEMALESS `open_notebook` table**, record **`content_settings`** (`ContentSettings.record_id = "open_notebook:content_settings"`, repo `ContentSettingsRepository`). Migration 52 adds `default_privacy_mode ON TABLE open_notebook TYPE string DEFAULT 'cloud'` + a singleton backfill UPDATE.
+- **Built**:
+  - `migrations/52.surrealql` + `52_down.surrealql` — `source.private bool DEFAULT false` (SCHEMAFULL), `notebook.privacy_mode option<string>` (SCHEMAFULL), `open_notebook.default_privacy_mode string DEFAULT 'cloud'` + singleton backfill. All `DEFINE … IF NOT EXISTS` (idempotent); down drops fields + unsets the singleton value.
+  - `shared.models`: `Source.private: bool=False`, `Notebook.privacy_mode: Optional[str]=None`, `ContentSettings.default_privacy_mode: Literal['cloud','private']='cloud'`.
+  - `services/model_routing/privacy_resolver.py` — `resolve_privacy_mode(*, source_private, notebook_id) -> PrivacyMode`. **Sticky rule = ONE early-return** (`if source_private is True: return PRIVATE`) at the top, so no path turns a private doc cloud; else notebook `privacy_mode` (coerced, unknown→inherit) else global `default_privacy_mode` (defaults CLOUD). Reads degrade to the next layer on any repo error (never crash extraction).
+  - `route_resolver.resolve_route` now coerces its `task` arg via `_coerce_task` → a string like `"embedding"` raises `ValueError` at the public surface (guardrail teeth).
+  - **Plumbing**: `SourceCreate.private` + `parse_source_form_data(private=Form("false"))`→`str_to_bool`; `private` threaded onto `source_svc.create`, `content_state["private"]`, and the `process_source` command args (async + sync paths). **I.H1 upload guards untouched** (purely additive). `NotebookUpdate`/`NotebookResponse` + `SettingsUpdate`/`SettingsResponse` gain the privacy fields (Literal-validated) so the notebook + global values persist through existing router/service paths.
+- **run_extraction inert seam (the J.4 boundary)**: `_resolve_privacy_mode_inert(source_id, notebook_id)` is called in `run_extraction` after chunk-fetch. It reads `source.private` + resolves the `PrivacyMode` and **logs it**, but the return value is deliberately NOT consumed for model selection — extraction still flows through the B.8 `make_default_llm_caller` (CLOUD-head). A prominent docstring marks this as the J.4 seam: J.4 swaps the consumer to the failover executor to make PRIVATE actually pin local. No live behavior change in J.3.
+- **Guardrail (§1.2)** enforced + tested: embedding service source imports nothing from `model_routing` (string + imported-name canary); `LLMTask` is exactly the 3 routed members; `resolve_route("embedding"/"parsing")` raises.
+- **Tests** (all green):
+  - `test_privacy_resolver.py` — 4 precedence ACs + corners + a 32-case cross-product property that `source_private=True` NEVER yields CLOUD.
+  - `test_embedding_local_guardrail.py` — the 3 AC6 canary assertions (+ value-rejection).
+  - `test_source_private_plumbing.py` — AC5: parametrized POST through the real Form binding asserts `private` string→bool reaches `create()` + command args.
+  - `test_migrations_roundtrip.py` (+5, `requires_docker`, green vs live container) — source default+override, notebook option, settings 'cloud', migration-52 idempotent replay, migrations-applied set.
+  - `test_notebooks_router.py` / `test_settings_router.py` — privacy_mode / default_privacy_mode persist + 422 on invalid.
+- **Regression**: `test_route_resolver.py` (12) + `test_failover_executor.py` + `test_entity_extraction_service.py` (23) + `test_entity_persistence_service.py` green = B.8/J.1/J.2 intact.
+- **Lint**: all authored/modified files ruff-clean. Pre-existing repo I001 + 2 F821 forward-ref annotations in `entity_extraction_service.py` left untouched (out of scope, confirmed present on base).
+- **AC5 scope note**: the end-to-end "re-fetch source off the DB and read private==True" check needs a live worker + DB and is deferred to **J.6**; J.3 stops at the service boundary (create + command args), per the plan's fallback guidance.
+- **Deferred to J.4**: consuming the resolved `PrivacyMode` to actually route PRIVATE local / CLOUD via the failover executor; the chat + summarization call-site privacy wiring.
 
 ### J.2 rev2 revision notes (2026-06-21)
 Addresses the J.2 adversarial review (REVISIONS_NEEDED: 1 major + 1 worth-fixing minor).
