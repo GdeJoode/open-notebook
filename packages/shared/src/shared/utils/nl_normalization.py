@@ -35,6 +35,8 @@ whitespace-collapsed); they do not re-run that step.
 
 from __future__ import annotations
 
+import re
+
 # Leading articles, matched after V1 lowercasing. Order is irrelevant (mutually
 # exclusive at the head of a string), but the trailing space is part of the
 # match so we never strip the ``de`` inside ``deal``.
@@ -64,8 +66,9 @@ _ROLE_ORG_PREFIXES: tuple[str, ...] = (
 _MIN_TAIL_LEN = 2
 
 # Curated spelling-variant map for the documented variant classes. Keys/values
-# are post-V1 (lowercased) whole strings or substrings replaced token-wise.
-# This is deliberately tiny and auditable; edit-distance generalization is K.5.
+# are post-V1 (lowercased) tokens; ``canonicalize_spelling`` matches them on
+# word boundaries so only whole tokens are rewritten, never substrings of a
+# longer compound. Deliberately tiny + auditable; edit-distance is K.5.
 _SPELLING_VARIANTS: dict[str, str] = {
     "koninkrijkrelaties": "koninkrijksrelaties",
 }
@@ -126,9 +129,12 @@ def canonicalize_spelling(name: str) -> str:
     """Map documented spelling variants onto a single canonical form.
 
     A curated, closed allow-list — not a fuzzy matcher. Each known variant
-    substring is replaced by its canonical equivalent. Unknown strings pass
-    through untouched so an unrecognized variant fragments (safe) rather than
-    being guessed into the wrong cluster (unsafe).
+    is replaced by its canonical equivalent on a **whole-token** (word
+    boundary) basis: ``koninkrijkrelaties`` is rewritten, but the same
+    fragment inside a longer compound (``koninkrijkrelatiesbeleid``) is
+    left untouched. Unknown strings pass through untouched so an
+    unrecognized variant fragments (safe) rather than being guessed into
+    the wrong cluster (unsafe).
 
     Args:
         name: A post-V1 (lowercased) surface form.
@@ -145,6 +151,9 @@ def canonicalize_spelling(name: str) -> str:
     if not name:
         return name
     for variant, canonical in _SPELLING_VARIANTS.items():
-        if variant in name:
-            name = name.replace(variant, canonical)
+        # ``\b`` anchors the match to token boundaries so the curated map
+        # only rewrites whole tokens, never a substring inside a longer
+        # compound word. ``re.escape`` keeps the variant a literal.
+        pattern = rf"\b{re.escape(variant)}\b"
+        name = re.sub(pattern, canonical, name)
     return name

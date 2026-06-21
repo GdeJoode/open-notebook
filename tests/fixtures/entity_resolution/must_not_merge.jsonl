@@ -6,3 +6,4 @@
 {"a": {"name": "Minister van Volkshuisvesting en Ruimtelijke Ordening", "type": "organization"}, "b": {"name": "Minister van Economische Zaken", "type": "organization"}, "why": "distinct ministries"}
 {"a": {"name": "Gemeente", "type": "organization"}, "b": {"name": "Provincie", "type": "organization"}, "why": "bare leader words are not stripped, stay as distinct concepts"}
 {"a": {"name": "De Regio Deal", "type": "other"}, "b": {"name": "De Stad", "type": "other"}, "why": "article stripped from both but tails differ"}
+{"a": {"name": "Minister van BZK", "type": "person"}, "b": {"name": "Ministerie van BZK", "type": "organization"}, "why": "both normalize to 'bzk' after K.1 prefix strip; the minister (person) and the ministry (organization) are distinct entities - the dedup key MUST include type"}

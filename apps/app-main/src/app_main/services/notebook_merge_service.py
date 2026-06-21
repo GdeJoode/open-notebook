@@ -237,24 +237,33 @@ class NotebookMergeService:
             )
 
         # ----------------------------------------------------------------
-        # Phase 2: aggregate entities by normalized name.
+        # Phase 2: aggregate entities by (normalized name, entity_type).
         # ----------------------------------------------------------------
-        accumulators: Dict[str, _MergedEntityAccumulator] = {}
-        insertion_order: List[str] = []
-        # Map raw text → normalized key so relation-endpoint rewrites
-        # can find the merged canonical surface form.
-        text_to_key: Dict[str, str] = {}
+        # The bucket key includes ``entity_type`` so a PERSON and an
+        # ORGANIZATION that normalize to the same surface form (e.g.
+        # K.1's prefix-strip collapses ``Minister van BZK`` and
+        # ``Ministerie van BZK`` both to ``bzk``) land in DIFFERENT
+        # buckets and stay distinct entities. This matches the
+        # persistence dedup key and the resolution harness — a person
+        # and an org with the same surface name ARE different entities.
+        accumulators: Dict[tuple[str, str], _MergedEntityAccumulator] = {}
+        insertion_order: List[tuple[str, str]] = []
+        # normalized name → canonical text of its best (highest-confidence)
+        # bucket. Relations carry no type, so endpoint rewrites resolve a
+        # normalized name to its dominant typed bucket's canonical form.
+        name_to_canon: Dict[str, str] = {}
+        name_to_canon_conf: Dict[str, float] = {}
 
         for nb_id in source_notebook_ids:
             for row in per_notebook_entities[nb_id]:
                 text = row.get("canonical_name") or ""
                 label = row.get("entity_type") or "UNKNOWN"
-                key = normalize_entity_name(text)
-                if not key:
+                norm_name = normalize_entity_name(text)
+                if not norm_name:
                     # Defensive: an entity with no normalisable name is
                     # noise we can't address. Drop.
                     continue
-                text_to_key[text] = key
+                key = (norm_name, label)
                 conf = float(row.get("confidence") or 0.0)
                 source_docs = list(row.get("source_documents") or [])
                 # Pre-existing ``type_tags`` on the row should also flow
@@ -290,30 +299,48 @@ class NotebookMergeService:
                         source_notebook_id=nb_id,
                     )
 
+                # Track the highest-confidence canonical text per
+                # normalized name so relation endpoints (which carry no
+                # type) rewrite onto the dominant typed bucket.
+                if conf >= name_to_canon_conf.get(norm_name, -1.0):
+                    name_to_canon_conf[norm_name] = conf
+                    name_to_canon[norm_name] = accumulators[key].best_text
+
         # ----------------------------------------------------------------
-        # Phase 3: detect type-collision conflicts (per AC #3 + Q-B-5).
+        # Phase 3: type-collision conflict detection (per AC #3 + Q-B-5).
         # ----------------------------------------------------------------
+        # With the bucket key now ``(normalized_name, entity_type)``,
+        # entities sharing a normalized name but with disjoint types land
+        # in separate buckets and stay distinct entities — so the
+        # "same name, different type" collision can no longer arise by
+        # construction. Same-typed buckets always share their type tag,
+        # so ``_tags_are_disjoint`` never fires either. The detector is
+        # retained (a no-op in practice) to keep the conflict surface and
+        # ``type_match_required`` parameter stable for callers and to
+        # guard against any future row carrying genuinely disjoint
+        # pre-existing ``type_tags`` under one (name, type) key.
         conflicts: List[NotebookMergeConflict] = []
-        skipped_keys: set[str] = set()
+        skipped_keys: set[tuple[str, str]] = set()
         if type_match_required:
             for key in insertion_order:
+                norm_name, _bucket_type = key
                 acc = accumulators[key]
-                # A "collision" is when a single normalized name was
-                # contributed by multiple notebooks with NO overlap in
-                # type tags. A multi-tag entity from a single notebook
-                # is not a conflict — that's just multi-type tagging.
+                # A "collision" is when this bucket was contributed by
+                # multiple notebooks with NO overlap in type tags. A
+                # multi-tag entity from a single notebook is not a
+                # conflict — that's just multi-type tagging.
                 if len(acc.source_notebook_ids) < 2:
                     continue
-                # Build per-notebook tag sets to test disjointness.
-                # Reconstruct from the raw rows so we know which tags
-                # came from which notebook.
+                # Build per-notebook tag sets to test disjointness, scoped
+                # to THIS (name, type) bucket. Reconstruct from the raw
+                # rows so we know which tags came from which notebook.
                 per_nb_tags = self._tags_by_notebook(
                     key, source_notebook_ids, per_notebook_entities
                 )
                 if self._tags_are_disjoint(per_nb_tags):
                     conflicts.append(
                         NotebookMergeConflict(
-                            normalized_name=key,
+                            normalized_name=norm_name,
                             conflicting_type_tags=list(acc.type_tags),
                             source_notebook_ids=list(acc.source_notebook_ids),
                         )
@@ -391,6 +418,11 @@ class NotebookMergeService:
         # wins — same as B.1e's relation merge.
         relation_best: Dict[tuple, Dict[str, Any]] = {}
         relation_insertion_order: List[tuple] = []
+        # Relations carry no type, so a conflict-skip is name-level: if any
+        # typed bucket for a normalized name was dropped, drop relations
+        # touching that name. (In practice ``skipped_keys`` is empty — the
+        # (name, type) keying prevents cross-type collisions entirely.)
+        skipped_names: set[str] = {name for name, _t in skipped_keys}
         for nb_id in source_notebook_ids:
             for row in per_notebook_relations[nb_id]:
                 src_text = row.get("source_text") or ""
@@ -401,13 +433,15 @@ class NotebookMergeService:
                 if not src_norm or not tgt_norm or not rel_type:
                     continue
                 # Drop relations whose endpoints we dropped as conflicts.
-                if src_norm in skipped_keys or tgt_norm in skipped_keys:
+                if src_norm in skipped_names or tgt_norm in skipped_names:
                     continue
                 key = (src_norm, tgt_norm, rel_type)
                 # Re-link endpoint text to the canonical merged form so
                 # the downstream RELATE query can SELECT the entity row.
-                canon_src = accumulators[src_norm].best_text if src_norm in accumulators else src_text
-                canon_tgt = accumulators[tgt_norm].best_text if tgt_norm in accumulators else tgt_text
+                # ``name_to_canon`` resolves a normalized name to its
+                # highest-confidence typed bucket's canonical text.
+                canon_src = name_to_canon.get(src_norm, src_text)
+                canon_tgt = name_to_canon.get(tgt_norm, tgt_text)
                 candidate = {
                     "source_text": canon_src,
                     "target_text": canon_tgt,
@@ -778,23 +812,27 @@ class NotebookMergeService:
 
     def _tags_by_notebook(
         self,
-        key: str,
+        key: tuple[str, str],
         notebook_ids: Sequence[str],
         per_notebook_entities: Dict[str, List[Dict[str, Any]]],
     ) -> List[set[str]]:
-        """Project per-notebook tag sets for the given normalized key.
+        """Project per-notebook tag sets for the given ``(name, type)`` key.
 
         Used by the conflict detector to test disjointness without
-        re-scanning the raw rows from the public algorithm path.
+        re-scanning the raw rows from the public algorithm path. Rows are
+        matched on BOTH the normalized name and the bucket's entity_type
+        so only contributors to this exact bucket are considered.
         """
+        norm_name, bucket_type = key
         out: List[set[str]] = []
         for nb_id in notebook_ids:
             tag_set: set[str] = set()
             for row in per_notebook_entities.get(nb_id, []):
                 text = row.get("canonical_name") or ""
-                if normalize_entity_name(text) != key:
+                label = row.get("entity_type") or "UNKNOWN"
+                if normalize_entity_name(text) != norm_name or label != bucket_type:
                     continue
-                tag_set.add(row.get("entity_type") or "UNKNOWN")
+                tag_set.add(label)
                 for t in row.get("type_tags") or []:
                     if t:
                         tag_set.add(t)
