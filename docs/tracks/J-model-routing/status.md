@@ -190,3 +190,24 @@ Privacy was resolved with `notebook_id=None`, so a notebook set to `privacy_mode
 **Live verification pending** (operator): re-run extraction on a doc and confirm the `Failed to parse LLM response` rate drops across mistral-medium / qwen / llama.
 
 | FU-J4-4 | structured-JSON output for entity extraction (json_mode) | `a12e7ec..3c32a35` | `track/j4-json-mode` | 2026-06-22 | Implemented + unit-tested. Extraction requests `structured={"type":"json_object"}` (NIM→response_format, ollama→format=json); chat/summarization unaffected; unsupporting providers degrade gracefully. AC suites + ontology parser tests green. Ready for review; live parse-rate verification pending. |
+| J.5 | UI — layered privacy toggle + provider-chain config + health/fallback status | (pending) | `track/j5-ui` | 2026-06-22 | IMPLEMENTED — model-routes config/health API + `/settings/model-routing` page (provider-chain editor, global privacy switch, health chips) + reusable `PrivacyModeToggle` (notebook + document scope) + per-document `private` toggle/badge. 8 backend router tests + 14 frontend unit tests + 2 E2E pass. Ready for review. |
+
+### J.5 implementation notes (2026-06-22)
+
+**Backend (rode in this PR per the plan)**
+- `apps/app-main/src/app_main/api/routers/model_routes.py` — new router, registered in `app.py`:
+  - `GET /api/model-routes` → effective chain per task (persisted `model_route` row, else the J.1 default chain mirrored from `route_resolver`'s `_DEFAULT_*` constants, `is_default=true` so the UI empty-state shows a read-only default with "Save to customize").
+  - `PUT /api/model-routes/{task}` → upsert provider_chain (+ private_chain) with reorder/enable; validates `task ∈ {entity_extraction, summarization, chat}`, provider ∈ registry, and each pinned `model_id` exists (400 otherwise).
+  - `GET /api/model-routes/health` → per provider: `configured` (`is_local || os.environ[api_key_env_var]`, reusing the registry helper), `is_local`, circuit state from `get_circuit_breaker_registry().get_nowait(...)`, and `recent_fallback_count` tallied from the J.4 `routing.served` metrics (`fallback_from`). Telemetry-read failure degrades to empty counts.
+- Source/notebook privacy exposure: added `private` to `SourceResponse` (+ populated at the 5 construction sites) and `privacy_mode` to the notebook response/update types so the UI can read/write the J.3-plumbed fields. (Settings GET/PUT already exposed `default_privacy_mode` via generic model_dump.)
+
+**Reorder approach**: accessible **up/down arrow buttons**, NOT drag — the project has no dnd library (only `react-resizable-panels`) and the plan forbids adding one. Each row: provider name, enable/disable `Switch`, up/down `Button`s disabled at the ends, all with `aria-label`s. Reorder/effective-chain logic is in a pure helper (`lib/utils/provider-chain.ts`) so it is unit-testable under the project's node-env vitest.
+
+**Frontend test convention**: the project's vitest runs `environment: 'node'`, includes only `src/**/*.test.ts`, and has **no jsdom/testing-library** (deliberate — "component/DOM behavior is covered by the Playwright E2E suite"). Adding a DOM runner would be a new dependency (forbidden). So the requested `*.test.tsx` component tests are realized as `__tests__/*.test.ts` over the extracted pure logic (reorder callback, effective-chain/AC3, privacy wire-mapping + inherited-value/AC4), and component render/a11y is covered by the Playwright spec. 14 unit tests green.
+
+**E2E**: `frontend/e2e/track-j/model-routing.spec.ts` (route-mocked, matching the project convention; the plan path `tests/e2e/` does not exist — the configured `testDir` is `frontend/e2e/`). Covers load → reorder → Save (asserts the captured PUT body has the swapped provider order) → global privacy toggle → health chips (configured vs unconfigured), plus the private-source badge (AC5). Both pass against a fresh `next dev` server.
+
+**Environment notes / deferred**:
+- The WSL checkout was missing the linux rolldown native binding (`@rolldown/binding-linux-x64-gnu`; only the win32 binding was present) — even pre-existing vitest tests failed until installed with `npm i --no-save`. Did not touch `package.json`. A reviewer/CI on Linux needs that binding present.
+- `next dev` in this WSL env held a stale route manifest on the default port 8502 (404'd the new route while serving all others 200); a fresh server on another port served `/settings/model-routing` 200 and the E2E passed. No code issue — flagged for the J.6 harness.
+- AC7's **full live ingest-with-private** path (upload a real doc with private on, assert it never reaches cloud) needs a running worker + cloud keys — out of this harness; it is a J.6 operator smoke-checklist item. The badge half of AC7 is covered here.
