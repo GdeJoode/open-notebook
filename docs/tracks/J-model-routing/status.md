@@ -22,3 +22,8 @@ Append-only ledger. One row per phase attempt.
 - J-Q2 scope: LLM stages only (extraction/summarization/chat); embeddings + parsing stay local/fixed.
 - J-Q3 providers: track-planner proposes default chain (Anthropic → OpenAI → local), configurable.
 - J-Q4 failover: per-document (whole doc fails over to next provider; local last in cloud mode).
+
+| J.1 | provider-chain config + route resolver | — | `track/j1-route-resolver` | 2026-06-21 | adversarial-reviewer APPROVED (0 blockers/majors; 5 minor test-coverage nits → J.2). 51 tests green; B.8 shim safe; I.G guardrail holds. Ready for merge sign-off. |
+
+**J.1 deferred to J.2** (reviewer minors): route-path shim test (currently exercises the fallback), 51_down execution test, convert the PRIVATE-mode `assert` to an explicit raise (python -O strips asserts), test the empty-private_chain derive branch.
+**J-Q3 OPEN**: cloud model id is a `claude-sonnet-4-5` placeholder (TODO) — awaiting the user's cloud-model/endpoint spec to wire in J.4 + set fair-use rate limits in J.2.
