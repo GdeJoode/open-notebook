@@ -140,6 +140,50 @@ def get_route_resolver():
     )
 
 
+@lru_cache(maxsize=1)
+def get_circuit_breaker_registry():
+    """Process-singleton per-provider circuit-breaker registry (Track J.2).
+
+    Cached so every failover execution in this worker shares the same breaker
+    state. In-memory / per-process (J-D3 multi-worker caveat documented on
+    :class:`CircuitBreakerRegistry`).
+    """
+    from app_main.services.model_routing.circuit_breaker import (
+        CircuitBreakerRegistry,
+    )
+
+    return CircuitBreakerRegistry()
+
+
+@lru_cache(maxsize=1)
+def get_rate_limiter_registry():
+    """Process-singleton per-provider fair-use rate limiter (Track J.2).
+
+    Conservative cloud default (~20 rpm) so the NIM endpoint is not overloaded;
+    local providers are effectively unthrottled. Cached so the sliding windows
+    are shared across all routed calls in this worker.
+    """
+    from app_main.services.model_routing.rate_limiter import ProviderRateLimiter
+
+    return ProviderRateLimiter()
+
+
+def get_failover_executor():
+    """Provider for the per-document failover executor (Track J.2).
+
+    Wired with the process-singleton circuit-breaker + rate-limiter registries.
+    Constructed per-call (cheap; holds references to the shared singletons) with
+    the default failover-eligibility whitelist; J.4 supplies the concrete
+    error-mapping predicates.
+    """
+    from app_main.services.model_routing.failover_executor import FailoverExecutor
+
+    return FailoverExecutor(
+        circuit_breakers=get_circuit_breaker_registry(),
+        rate_limiter=get_rate_limiter_registry(),
+    )
+
+
 def get_transformation_repo() -> TransformationRepository:
     return TransformationRepository()
 

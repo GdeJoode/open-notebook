@@ -352,6 +352,28 @@ class RouteResolver:
         return candidates
 
 
+def is_provider_healthy(provider: str) -> bool:
+    """Return True if ``provider``'s circuit breaker is not OPEN (Track J.2).
+
+    A best-effort, synchronous health peek for pre-sorting / status display. It
+    reads the process-singleton breaker registry without creating a breaker:
+    an unseen provider (no breaker yet) is treated as healthy. The failover
+    executor remains authoritative — this is advisory only and never decides a
+    skip on its own.
+    """
+    from app_main.dependencies import get_circuit_breaker_registry
+    from app_main.services.model_routing.circuit_breaker import CircuitState
+
+    registry = get_circuit_breaker_registry()
+    breaker = registry.get_nowait(provider)
+    if breaker is None:
+        return True
+    # ``_state`` is the last-recorded state; we intentionally do not apply the
+    # cooldown transition here (that needs the async lock). OPEN is the only
+    # state we treat as unhealthy for this advisory check.
+    return breaker._state != CircuitState.OPEN  # noqa: SLF001 — advisory peek
+
+
 async def resolve_route(
     task: LLMTask,
     mode: PrivacyMode,
