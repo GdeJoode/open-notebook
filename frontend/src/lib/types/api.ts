@@ -149,6 +149,10 @@ export interface SettingsResponse {
   vault_path?: string
   vault_entities_folder?: string
   vault_sync_on_startup?: boolean
+
+  // Model routing (Track J): global default privacy mode for LLM routing.
+  // 'cloud' = cloud-first with local fallback; 'private' = local-only.
+  default_privacy_mode?: 'cloud' | 'private'
 }
 
 export interface CreateNotebookRequest {
