@@ -295,6 +295,67 @@ class EntityExtractionService:
         self._pass1_repo = pass1_repo
         self._persistence = EntityPersistenceService()
 
+    async def _resolve_privacy_mode_inert(
+        self, source_id: str, notebook_id: Optional[str]
+    ) -> Any:
+        """Resolve the J.3 layered ``PrivacyMode`` for this extraction run.
+
+        ===================== J.3 / J.4 SEAM (read me) =====================
+        This computes + LOGS the privacy mode from ``source.private`` +
+        ``notebook_id`` via :func:`resolve_privacy_mode`, but is deliberately
+        INERT for live behavior: J.3 only proves the data + resolver are
+        correct and wired. The B.8 ``make_default_llm_caller`` shim still drives
+        which model actually runs (always CLOUD-head precedence). J.4 is the
+        phase that flips execution to the failover executor and makes a PRIVATE
+        document actually pin to a local provider.
+
+        DO NOT use the returned mode to change model selection here — doing so
+        would prematurely route around the B.8 caller before the failover
+        executor (J.2) is wired into extraction. The return value exists so J.4
+        can swap this call's consumer without re-plumbing the resolution.
+        ====================================================================
+
+        Best-effort: any failure resolving the mode is logged and swallowed
+        (returns CLOUD) so a privacy-resolution hiccup never fails extraction.
+        """
+        from app_main.services.model_routing.privacy_resolver import (
+            resolve_privacy_mode,
+        )
+        from app_main.services.model_routing.route_resolver import PrivacyMode
+
+        source_private: Optional[bool] = None
+        try:
+            source = await self._source_repo.get(source_id)
+            if source is not None:
+                source_private = bool(getattr(source, "private", False))
+        except Exception as e:  # noqa: BLE001 — never fail extraction on this
+            logger.warning(
+                f"privacy seam: could not read source.private for "
+                f"{source_id} ({e}); assuming not private"
+            )
+
+        try:
+            mode = await resolve_privacy_mode(
+                source_private=source_private, notebook_id=notebook_id
+            )
+        except Exception as e:  # noqa: BLE001 — degrade to cloud, log loudly
+            logger.warning(
+                f"privacy seam: resolve_privacy_mode failed for {source_id} "
+                f"({e}); defaulting to CLOUD"
+            )
+            mode = PrivacyMode.CLOUD
+
+        logger.info(
+            "privacy seam (J.3, inert): source={src} notebook={nb} "
+            "source_private={priv} -> mode={mode} "
+            "(execution unchanged until J.4)",
+            src=source_id,
+            nb=notebook_id,
+            priv=source_private,
+            mode=mode.value,
+        )
+        return mode
+
     async def _embed_entities(
         self, result: "ExtractionResult"
     ) -> None:
@@ -610,6 +671,14 @@ class EntityExtractionService:
             if c.section_path:
                 d["section_heading"] = c.section_path[-1]
             chunk_dicts.append(d)
+
+        # 2b. Resolve the J.3 layered privacy mode (INERT seam — see
+        # ``_resolve_privacy_mode_inert``). Computed + logged so the data path
+        # is proven and wired; J.4 flips this into the actual cloud/local
+        # dispatch. Live model selection below is unchanged (B.8 caller).
+        _privacy_mode = await self._resolve_privacy_mode_inert(
+            source_id, notebook_id
+        )
 
         # 3. Build config and workflow
         config_kwargs: Dict[str, Any] = {

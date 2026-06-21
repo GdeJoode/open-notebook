@@ -423,6 +423,13 @@ class SourceCreate(BaseModel):
     processing_overrides: Optional[Dict[str, Any]] = Field(
         None, description="Per-submission overrides for processing settings"
     )
+    private: bool = Field(
+        False,
+        description=(
+            "Force this source's LLM stages local (Track J.3 sticky privacy "
+            "override). When True the document is never routed to a cloud provider."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_notebook_fields(self):
