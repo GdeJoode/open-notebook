@@ -159,6 +159,60 @@ class TestUpdateModelRoute:
         )
         assert resp.status_code == 200
 
+    def test_cloud_provider_in_private_chain_is_400(self):
+        """A cloud provider in the private chain violates the LOCAL-only contract."""
+        client = _make_app(route_repo=AsyncMock(), model_svc=AsyncMock())
+        resp = client.put(
+            "/api/model-routes/chat",
+            json={
+                "provider_chain": [{"provider": "ollama", "enabled": True}],
+                "private_chain": [{"provider": "openai", "enabled": True}],
+            },
+        )
+        assert resp.status_code == 400
+        assert "openai" in resp.json()["detail"]
+
+    def test_empty_provider_chain_is_400(self):
+        client = _make_app(route_repo=AsyncMock(), model_svc=AsyncMock())
+        resp = client.put(
+            "/api/model-routes/chat",
+            json={"provider_chain": []},
+        )
+        assert resp.status_code == 400
+
+    def test_duplicate_provider_in_chain_is_400(self):
+        client = _make_app(route_repo=AsyncMock(), model_svc=AsyncMock())
+        resp = client.put(
+            "/api/model-routes/chat",
+            json={
+                "provider_chain": [
+                    {"provider": "openai", "enabled": True},
+                    {"provider": "openai", "enabled": False},
+                ]
+            },
+        )
+        assert resp.status_code == 400
+        assert "openai" in resp.json()["detail"]
+
+    def test_valid_local_private_chain_passes(self):
+        """Valid cloud provider_chain + LOCAL-only private_chain is the happy path."""
+        repo = AsyncMock()
+        repo.get_by_task.return_value = None
+        svc = AsyncMock()
+        client = _make_app(route_repo=repo, model_svc=svc)
+        resp = client.put(
+            "/api/model-routes/chat",
+            json={
+                "provider_chain": [
+                    {"provider": "openai", "enabled": True},
+                    {"provider": "ollama", "enabled": True},
+                ],
+                "private_chain": [{"provider": "ollama", "enabled": True}],
+            },
+        )
+        assert resp.status_code == 200
+        repo.upsert.assert_awaited_once()
+
 
 class TestModelRouteHealth:
 

@@ -193,13 +193,38 @@ async def update_model_route(
             detail=f"Unknown task {task!r}; expected one of {_VALID_TASKS}",
         )
 
-    chains = [body.provider_chain, body.private_chain or []]
-    for chain in chains:
+    if not body.provider_chain:
+        raise HTTPException(
+            status_code=400,
+            detail="provider_chain must contain at least one provider",
+        )
+
+    private_chain = body.private_chain or []
+    # (chain entries, is private-mode chain) — the private chain carries the
+    # extra LOCAL-only contract from ``ModelRoute.private_chain``.
+    for chain, is_private in ((body.provider_chain, False), (private_chain, True)):
+        seen: set[str] = set()
         for entry in chain:
-            if get_provider_config(entry.provider) is None:
+            if entry.provider in seen:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Duplicate provider {entry.provider!r} in chain",
+                )
+            seen.add(entry.provider)
+
+            cfg = get_provider_config(entry.provider)
+            if cfg is None:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Unknown provider {entry.provider!r}",
+                )
+            if is_private and not cfg.is_local:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Provider {entry.provider!r} is not local and cannot be "
+                        "used in the private chain (PRIVATE mode is LOCAL-only)"
+                    ),
                 )
             if entry.model_id:
                 model = await model_service.get(entry.model_id)
