@@ -1577,3 +1577,16 @@ Findings:
 - Minor (→B.8d): /graph shows 0 edges despite 3 relations.
 
 **Infra**: redeploy was blocked by a Docker Desktop WSL stale bind-mount; resolved by a full Docker Desktop restart (user-assisted after an over-aggressive auto-restart attempt). Cred-helper + Dockerfile-reorder fixes hold.
+
+---
+
+## Phase B.8c — Live validation + resolution assessment — 2026-06-21
+
+**Branch**: `track/b8c-live-validation` (commit 5b41a22 + assessment).
+**Status**: extraction pipeline FIXED + verified end-to-end on live data; resolution assessed (PARTIALLY MET, capped by V1 normalizer → M4).
+
+Live qwen2.5:14b extraction now produces AND persists entities (was 0). Chain of fixes (all in commit 5b41a22): no-schema-fallback caller wiring, JSON strict=False, entity_type normalization, RELATE syntax, hash_id + name dual-write, **migration 50** (relax pre-Track-B `name`/`hash_id`/enum drift — Q-B-1). Independent extraction model (qwen) vs chat (llama3.1) confirmed in provenance.
+
+**Live results**: bc6xa 421 entities; 4 Regio Deal Convenant docs 200/333/250/274. Cross-doc resolution: 897 distinct canonical, **107 span ≥2 docs** (programme-level entities resolve correctly). V1 fragments variant forms (BZK↔Binnenlandse Zaken; role-prefixes; spelling variants) — the documented Q9/M4 ceiling. See `reviews/phase-B.8c-resolution-assessment.md`.
+
+**B.8d follow-ups**: post-persist `_save_result` KeyError (jobs marked failed despite persisting); cheap partial resolution wins (article/role-prefix strip, spelling tolerance, govt abbreviation aliases); legacy 144-entity purge; relation-failure surfacing.
