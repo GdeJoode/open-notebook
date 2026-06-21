@@ -311,6 +311,124 @@ async def test_rate_limit_exhausts_retries_then_fails_over():
     assert ft.slept == [1.0, 2.0, 4.0]
 
 
+async def test_backoff_retries_each_consume_a_rate_limit_slot():
+    """Fair-use: every actual request to the cloud endpoint — the initial call
+    AND each backoff retry — must consume a rate-limit slot, so a sustained-429
+    stage isn't under-counted against the rpm cap. A 429 here is retried up to
+    max_retries times; with a cap below that count, a later retry's acquire must
+    saturate, which fails the candidate over WITHOUT a breaker penalty."""
+    ft = FakeTime()
+    # cap 2 over the window, max_wait 0: first two acquires (initial + 1 retry)
+    # succeed instantly; the 3rd request's acquire saturates and times out.
+    ex = FailoverExecutor(
+        circuit_breakers=CircuitBreakerRegistry(clock=ft.now),
+        rate_limiter=ProviderRateLimiter(
+            cloud_rpm=2, max_wait_seconds=0.0, clock=ft.now, sleep=ft.sleep
+        ),
+        sleep=ft.sleep,
+    )
+
+    cloud_calls = {"n": 0}
+
+    async def call(c: ModelCandidate) -> str:
+        if c.provider == "nvidia-nim":
+            cloud_calls["n"] += 1
+            raise RateLimitError("429")  # always rate-limited
+        return f"ok-{c.provider}"
+
+    route = _route(_cloud("nvidia-nim"), _local("ollama"))
+    result = await ex.execute_with_failover(route, call)
+
+    # Two endpoint requests fit the cap (initial + 1 retry, each acquiring a
+    # slot); the 3rd retry's acquire saturated -> RateLimitTimeout -> failover.
+    assert cloud_calls["n"] == 2
+    assert result.served_provider == "ollama"
+    # Saturation path: recorded as rate-limited, breaker stays CLOSED.
+    assert result.attempts[0].outcome == AttemptOutcome.SKIPPED_RATE_LIMITED
+    breaker = await ex._breakers.get("nvidia-nim")
+    assert await breaker.state() == CircuitState.CLOSED
+
+
+# Fair-use — saturated LOCAL rate limiter fails over WITHOUT breaker penalty --
+
+
+async def test_rate_limit_saturation_drains_to_local_without_breaker_penalty():
+    """The "don't overload" saturation scenario (J-Q4): when OUR cloud rate
+    limiter cannot grant a slot within max_wait, the document must fail over to
+    the local candidate (exempt from throttling) and the cloud provider's
+    breaker must stay CLOSED — a saturated throttle is not evidence the provider
+    is down, so opening its breaker would be wrong."""
+    ft = FakeTime()
+    # Cloud cap 1, and max_wait 0 so any contended acquire times out instantly.
+    limiter = ProviderRateLimiter(
+        cloud_rpm=1, max_wait_seconds=0.0, clock=ft.now, sleep=ft.sleep
+    )
+    # Pre-consume the only cloud slot so the executor's acquire saturates.
+    await limiter.acquire("nvidia-nim")
+
+    ex = FailoverExecutor(
+        circuit_breakers=CircuitBreakerRegistry(clock=ft.now),
+        rate_limiter=limiter,
+        sleep=ft.sleep,
+    )
+
+    called: list[str] = []
+
+    async def call(c: ModelCandidate) -> str:
+        called.append(c.provider)
+        return f"ok-{c.provider}"
+
+    route = _route(_cloud("nvidia-nim"), _local("ollama"))
+    result = await ex.execute_with_failover(route, call)
+
+    # Drained to local; the cloud call was never even issued (slot never granted).
+    assert result.served_provider == "ollama"
+    assert result.was_failover is True
+    assert called == ["ollama"]
+
+    # The cloud attempt is recorded as rate-limit saturated, NOT failed.
+    assert result.attempts[0].provider == "nvidia-nim"
+    assert result.attempts[0].outcome == AttemptOutcome.SKIPPED_RATE_LIMITED
+    assert result.attempts[1].outcome == AttemptOutcome.SUCCESS
+
+    # Breaker for the cloud provider must still be CLOSED: our throttle
+    # saturating did NOT record a failure against it.
+    breaker = await ex._breakers.get("nvidia-nim")
+    assert await breaker.state() == CircuitState.CLOSED
+
+
+async def test_rate_limit_saturation_alone_exhausts_to_all_failed():
+    """A saturated cloud limiter with no local fallback drains every candidate
+    and raises AllProvidersFailedError — still without any breaker penalty."""
+    ft = FakeTime()
+    limiter = ProviderRateLimiter(
+        cloud_rpm=1, max_wait_seconds=0.0, clock=ft.now, sleep=ft.sleep
+    )
+    await limiter.acquire("nvidia-nim")
+    await limiter.acquire("openai")
+
+    ex = FailoverExecutor(
+        circuit_breakers=CircuitBreakerRegistry(clock=ft.now),
+        rate_limiter=limiter,
+        sleep=ft.sleep,
+    )
+
+    async def call(c: ModelCandidate) -> str:
+        return "ok"
+
+    route = _route(_cloud("nvidia-nim"), _cloud("openai"))
+    with pytest.raises(AllProvidersFailedError) as ei:
+        await ex.execute_with_failover(route, call)
+
+    assert all(
+        a.outcome == AttemptOutcome.SKIPPED_RATE_LIMITED
+        for a in ei.value.attempts
+    )
+    for provider in ("nvidia-nim", "openai"):
+        breaker = await ex._breakers.get(provider)
+        assert await breaker.state() == CircuitState.CLOSED
+
+
 async def test_injectable_eligibility_predicate():
     """J.4 supplies its own whitelist; the executor honors it."""
     ft = FakeTime()

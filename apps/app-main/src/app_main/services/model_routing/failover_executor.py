@@ -9,14 +9,27 @@ Per attempt the executor:
   1. Skips a candidate whose circuit breaker is OPEN (records a
      ``skipped_open_circuit`` attempt without calling it).
   2. For cloud candidates, ``await``s the per-provider rate limiter BEFORE the
-     call (fair-use), then wraps the call in bounded exponential backoff so a
-     429 is retried on the same provider a few times before that candidate is
-     considered failed.
+     call (fair-use) AND before every backoff retry, so each actual request to
+     the endpoint counts against the rpm cap. The call is wrapped in bounded
+     exponential backoff so a 429 *from the provider* is retried on the same
+     provider a few times before that candidate is considered failed.
   3. Invokes ``call(candidate)``. On success records a breaker success + the
      served provider and returns. On a failover-eligible exception records a
      breaker failure + a fallback telemetry event and advances.
   4. A NON-eligible exception (e.g. a ``TypeError``/``ValueError`` programming
      bug) propagates immediately — we never mask real bugs as failover (AC5).
+
+Three distinct throttle/fault categories drive different behavior:
+  * **Local rate-limiter saturation** (``RateLimitTimeout`` from ``acquire``):
+    OUR throttle could not grant a slot within ``max_wait``. This is not
+    evidence the provider is down, so the executor fails over to the next
+    candidate (ultimately local, which is exempt) WITHOUT recording a circuit
+    breaker failure. The attempt is recorded as ``skipped_rate_limited`` and a
+    fallback telemetry event is emitted (J-Q4: local is the last resort even
+    under saturation; opening the provider's breaker here would be wrong).
+  * **Provider 429** (``RateLimitError`` from the call): bounded backoff-retry
+    on the same provider, then (if still failing) failover + breaker-failure.
+  * **Hard fault** (5xx/timeout/auth): immediate failover + breaker-failure.
 
 When every candidate is exhausted, raises :class:`AllProvidersFailedError`
 carrying the per-attempt records (never a generic exception).
@@ -40,6 +53,7 @@ from loguru import logger
 from app_main.services.model_routing.circuit_breaker import CircuitBreakerRegistry
 from app_main.services.model_routing.rate_limiter import (
     ProviderRateLimiter,
+    RateLimitTimeout,
     backoff_retry,
 )
 from app_main.services.model_routing.route_resolver import (
@@ -100,6 +114,10 @@ class AttemptOutcome(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
     SKIPPED_OPEN_CIRCUIT = "skipped_open_circuit"
+    # Our local rate limiter could not grant a slot within max_wait. We fail
+    # over WITHOUT a breaker failure: a saturated throttle is not a provider
+    # fault. Distinct from FAILED so telemetry never confuses the two.
+    SKIPPED_RATE_LIMITED = "skipped_rate_limited"
 
 
 @dataclass
@@ -223,6 +241,25 @@ class FailoverExecutor:
 
             try:
                 value = await self._invoke(candidate, call)
+            except RateLimitTimeout as exc:
+                # OUR throttle saturated — not the provider being unhealthy.
+                # Fail over to the next candidate (ultimately local, which is
+                # exempt) WITHOUT a breaker failure: penalizing the breaker here
+                # would wrongly mark a healthy provider as down (J-Q4).
+                attempts.append(
+                    AttemptRecord(
+                        provider=candidate.provider,
+                        model_id=candidate.model_id,
+                        is_local=candidate.is_local,
+                        outcome=AttemptOutcome.SKIPPED_RATE_LIMITED,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                )
+                logger.warning(
+                    f"failover: {candidate.provider} rate-limit saturated "
+                    "(local throttle); advancing without breaker penalty"
+                )
+                continue
             except Exception as exc:  # noqa: BLE001 — classify below
                 if not self._is_failover_eligible(exc):
                     # Real bug / non-transient — do not mask as failover (AC5).
@@ -269,18 +306,29 @@ class FailoverExecutor:
     ) -> T:
         """Invoke ``call`` for one candidate.
 
-        Cloud candidates are rate-limited (acquire BEFORE the call) and wrapped
-        in bounded backoff so a 429 is retried on the same provider before being
-        treated as a failure. Local candidates skip both — no fair-use concern.
+        Cloud candidates are rate-limited and wrapped in bounded backoff so a
+        429 is retried on the same provider before being treated as a failure.
+        A rate-limit slot is acquired BEFORE every actual request — both the
+        first call and each backoff retry — so each request to the endpoint
+        counts against the rpm cap (a sustained-429 stage would otherwise issue
+        several requests against one consumed slot, under-counting fair-use).
+
+        Local candidates skip both — no fair-use concern.
+
+        If ``acquire`` cannot grant a slot within ``max_wait`` it raises
+        :class:`RateLimitTimeout`; that is not a 429 so ``backoff_retry`` does
+        not retry it — it propagates to ``execute_with_failover``, which fails
+        over to the next candidate without penalizing the breaker.
         """
         if candidate.is_local:
             return await call(candidate)
 
-        await self._rate_limiter.acquire(
-            candidate.provider, is_local=candidate.is_local
-        )
-
         async def _do() -> T:
+            # Re-acquire per request (initial + each retry) so every endpoint
+            # hit is counted against the fair-use cap.
+            await self._rate_limiter.acquire(
+                candidate.provider, is_local=candidate.is_local
+            )
             return await call(candidate)
 
         return await backoff_retry(
