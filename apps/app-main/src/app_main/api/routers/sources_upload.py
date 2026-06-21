@@ -420,6 +420,7 @@ async def _create_source_impl(
                     command_id=command_id,
                     status="new",
                     processing_info={"async": True, "queued": True},
+                    private=bool(getattr(source, "private", False)),
                 )
 
             except Exception as e:
@@ -539,6 +540,7 @@ async def _create_source_impl(
                     embedded_chunks=embedded_chunks,
                     created=str(processed_source.created),
                     updated=str(processed_source.updated),
+                    private=bool(getattr(processed_source, "private", False)),
                 )
 
             except HTTPException:
@@ -725,6 +727,7 @@ async def retry_source_processing(
                 command_id=command_id,
                 status="queued",
                 processing_info={"retry": True, "queued": True},
+                private=bool(getattr(source, "private", False)),
             )
 
         except HTTPException:

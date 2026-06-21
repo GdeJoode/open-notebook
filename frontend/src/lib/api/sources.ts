@@ -142,6 +142,7 @@ export const sourcesApi = {
     formData.append('embed', String(data.embed ?? false))
     formData.append('delete_source', String(data.delete_source ?? false))
     formData.append('async_processing', String(data.async_processing ?? false))
+    formData.append('private', String(data.private ?? false))
 
     if (data.processing_overrides && Object.keys(data.processing_overrides).length > 0) {
       formData.append('processing_overrides', JSON.stringify(data.processing_overrides))

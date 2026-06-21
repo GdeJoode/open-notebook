@@ -7,6 +7,8 @@ export interface NotebookResponse {
   updated: string
   source_count: number
   note_count: number
+  // Track J.3/J.5: null = inherit the global default; 'cloud' | 'private' override.
+  privacy_mode?: 'cloud' | 'private' | null
 }
 
 export interface NoteResponse {
@@ -75,6 +77,8 @@ export interface SourceDetailResponse extends SourceListResponse {
   full_text: string | null  // Can be null for async processing sources
   notebooks?: string[]  // List of notebook IDs this source is linked to
   metadata?: SourceMetadata
+  // Track J.3/J.5: true when this document was/will be processed privately.
+  private?: boolean
 }
 
 /** Response shape for GET /api/health/mineru. */
@@ -164,6 +168,8 @@ export interface UpdateNotebookRequest {
   name?: string
   description?: string
   archived?: boolean
+  // Track J.3/J.5: null clears the override (inherit global); 'cloud' | 'private' set it.
+  privacy_mode?: 'cloud' | 'private' | null
 }
 
 export interface CreateNoteRequest {
@@ -191,6 +197,8 @@ export interface CreateSourceRequest {
   async_processing?: boolean
   // Per-submission processing config overrides
   processing_overrides?: Partial<SettingsResponse>
+  // Track J.3/J.5: process this document privately (LLM stages stay local).
+  private?: boolean
 }
 
 export interface UpdateNoteRequest {

@@ -270,6 +270,7 @@ async def get_source(
             status=status,
             processing_info=processing_info,
             notebooks=notebook_ids,
+            private=bool(getattr(source, "private", False)),
         )
     except HTTPException:
         raise
@@ -316,6 +317,7 @@ async def update_source(
             embedded_chunks=embedded_chunks,
             created=str(source.created),
             updated=str(source.updated),
+            private=bool(getattr(source, "private", False)),
         )
     except HTTPException:
         raise
