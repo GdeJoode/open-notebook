@@ -1583,10 +1583,22 @@ Findings:
 ## Phase B.8c — Live validation + resolution assessment — 2026-06-21
 
 **Branch**: `track/b8c-live-validation` (commit 5b41a22 + assessment).
-**Status**: extraction pipeline FIXED + verified end-to-end on live data; resolution assessed (PARTIALLY MET, capped by V1 normalizer → M4).
+**Status**: adversarial-reviewer APPROVED (attempt 2). Pipeline FIXED + verified end-to-end; resolution PARTIALLY MET (V1-capped → M4).
 
 Live qwen2.5:14b extraction now produces AND persists entities (was 0). Chain of fixes (all in commit 5b41a22): no-schema-fallback caller wiring, JSON strict=False, entity_type normalization, RELATE syntax, hash_id + name dual-write, **migration 50** (relax pre-Track-B `name`/`hash_id`/enum drift — Q-B-1). Independent extraction model (qwen) vs chat (llama3.1) confirmed in provenance.
 
 **Live results**: bc6xa 421 entities; 4 Regio Deal Convenant docs 200/333/250/274. Cross-doc resolution: 897 distinct canonical, **107 span ≥2 docs** (programme-level entities resolve correctly). V1 fragments variant forms (BZK↔Binnenlandse Zaken; role-prefixes; spelling variants) — the documented Q9/M4 ceiling. See `reviews/phase-B.8c-resolution-assessment.md`.
 
 **B.8d follow-ups**: post-persist `_save_result` KeyError (jobs marked failed despite persisting); cheap partial resolution wins (article/role-prefix strip, spelling tolerance, govt abbreviation aliases); legacy 144-entity purge; relation-failure surfacing.
+
+---
+
+## Phase B.8d — Polish, harden + track ledger — 2026-06-21
+
+**Branch**: `track/b8d-polish`.
+- Fixed the post-persist `_save_result` KeyError: made it NON-FATAL (entities/relations already persisted; the extraction_result is a secondary re-filter cache). Jobs no longer falsely report "failed" + dead-letter after a successful extraction. New test `TestSaveResultNonFatal`.
+- Consolidated B.8 findings → `reviews/phase-B.8-findings.md` (the 7-bug chain + schema-drift root cause + resolution verdict).
+- Documented open follow-ups F1-F6 (resolution quick-wins, M4, idx_entity_fulltext codification, legacy-entity purge, relation-failure surfacing, _save_result large-payload root cause).
+- Project memory written (`project-open-notebook-kg.md`).
+
+**Track B.8 outcome**: KG entity extraction fixed + verified end-to-end on live data (qwen2.5:14b); pre-Track-B schema drift reconciled (migration 50); resolution assessed (PARTIALLY MET, V1-capped → M4). All phases adversarial-APPROVED. Pending: human sign-off to merge `track/b8*` branches.

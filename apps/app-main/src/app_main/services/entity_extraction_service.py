@@ -953,5 +953,16 @@ class EntityExtractionService:
                 f"Saved extraction result for source {source_id}"
             )
         except Exception as e:
-            logger.error(f"Failed to save extraction result: {e}")
-            raise
+            # B.8d: by this point the entities + relations are ALREADY persisted
+            # to the KG (entity/relation tables). The extraction_result record is
+            # only a secondary cache for the re-filter path (run_filtering_only).
+            # A failure here — notably the surrealdb async-ws client raising
+            # ``KeyError(<request-uuid>)`` on the large serialized entities/
+            # relations payload — must NOT fail the whole extraction job, or a
+            # successful extraction (hundreds of persisted entities) gets marked
+            # "failed" and dead-lettered. Log and continue; the re-filter cache
+            # is simply absent (re-extraction regenerates it).
+            logger.warning(
+                f"Could not save raw extraction_result for {source_id} "
+                f"(entities already persisted; re-filter cache skipped): {e}"
+            )

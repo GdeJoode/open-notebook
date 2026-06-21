@@ -131,6 +131,8 @@ Persisteren confidence in `Source.metadata.extraction_confidence`; UI toont badg
 > B.2a/B.2b, B.3a–B.3d, B.4, B.5a/B.5b, B.6 — plus B.7 integration/retro).
 > See [`docs/tracks/B-kg-quality/RETRO.md`](./tracks/B-kg-quality/RETRO.md)
 > for the retrospective and
+> **B.8 follow-up (2026-06-21)**: live-validation surfaced + fixed a 7-bug chain blocking KG persistence + the Q-B-1 schema drift (migration 50); qwen extraction verified end-to-end; cross-doc resolution PARTIALLY MET (V1-capped → M4). See [`reviews/phase-B.8-findings.md`](./tracks/B-kg-quality/reviews/phase-B.8-findings.md).
+>
 > [`docs/tracks/B-kg-quality/status.md`](./tracks/B-kg-quality/status.md)
 > for the rolling per-phase log.
 

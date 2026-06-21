@@ -1154,3 +1154,26 @@ class TestExtractionTelemetryHook:
             )
 
         patched_record_metric.assert_not_awaited()
+
+
+class TestSaveResultNonFatal:
+    """B.8d: _save_result must not fail the extraction job — by the time it
+    runs, entities + relations are already persisted to the KG; the
+    extraction_result record is only a secondary re-filter cache."""
+
+    @pytest.mark.asyncio
+    async def test_save_result_swallows_failure(self, base_source_repo):
+        svc = EntityExtractionService(source_repo=base_source_repo)
+        result = MagicMock(
+            entities=[], relations=[], metadata={}, entity_count=0,
+            relation_count=0,
+        )
+        with patch(
+            "app_main.services.entity_extraction_service.execute_query",
+            new_callable=AsyncMock,
+            # the real-world failure: surrealdb async-ws KeyError on a large payload
+            side_effect=KeyError("ce2a54c9-9c40-456f-8a47-bd06d3d3537a"),
+        ):
+            # Must NOT raise — a raised exception here would mark a successful
+            # extraction "failed" and dead-letter it.
+            await svc._save_result("source:test", result)
