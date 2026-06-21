@@ -19,13 +19,11 @@ from __future__ import annotations
 import inspect
 
 import pytest
-
 from app_main.services.model_routing.route_resolver import (
     LLMTask,
     PrivacyMode,
     resolve_route,
 )
-
 
 # ---------------------------------------------------------------------------
 # (a) The embedding service source must not import model_routing

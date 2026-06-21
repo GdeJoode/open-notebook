@@ -30,13 +30,13 @@ from app_main.services.model_routing.failover_executor import (
     ProviderUnavailableError,
     RateLimitError,
 )
+from app_main.services.model_routing.privacy_resolver import (
+    resolve_privacy_mode,
+)
 from app_main.services.model_routing.rate_limiter import (
     ProviderRateLimiter,
     RateLimitTimeout,
     backoff_retry,
-)
-from app_main.services.model_routing.privacy_resolver import (
-    resolve_privacy_mode,
 )
 from app_main.services.model_routing.route_resolver import (
     LLMTask,

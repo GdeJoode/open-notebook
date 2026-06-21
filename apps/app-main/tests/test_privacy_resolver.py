@@ -19,10 +19,8 @@ from types import SimpleNamespace
 from typing import Optional
 
 import pytest
-
 from app_main.services.model_routing.privacy_resolver import resolve_privacy_mode
 from app_main.services.model_routing.route_resolver import PrivacyMode
-
 
 # ---------------------------------------------------------------------------
 # Fakes
