@@ -1,8 +1,7 @@
 from esperanto import LanguageModel
 from langchain_core.language_models.chat_models import BaseChatModel
-from loguru import logger
-
 from llm_manager import ModelManager
+from loguru import logger
 
 
 def _get_model_manager() -> ModelManager:

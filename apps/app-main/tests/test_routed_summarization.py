@@ -16,17 +16,15 @@ SDKs are mocked at the model-factory seam; no live keys.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from summarization.config import LLMConfig, NaiveConfig, SummarizationConfig
-from summarization.models.result import ChunkInput
-from summarization.naive.strategy import NaiveLLMStrategy
-
 from app_main.services.model_routing.route_resolver import (
     LLMTask,
     ModelCandidate,
     PrivacyMode,
     ResolvedRoute,
 )
+from summarization.config import LLMConfig, NaiveConfig, SummarizationConfig
+from summarization.models.result import ChunkInput
+from summarization.naive.strategy import NaiveLLMStrategy
 
 
 def _chunks():

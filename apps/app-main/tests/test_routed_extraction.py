@@ -18,7 +18,6 @@ All provider behavior is injected by monkeypatching
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from app_main.services.entity_extraction_service import make_default_llm_caller
 from app_main.services.model_routing.route_resolver import (
     LLMTask,

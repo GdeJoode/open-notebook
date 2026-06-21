@@ -13,7 +13,6 @@ from esperanto import (
     TextToSpeechModel,
 )
 from loguru import logger
-
 from shared.models import Model, ModelTypeStr
 
 ModelInstance = Union[LanguageModel, EmbeddingModel, SpeechToTextModel, TextToSpeechModel]

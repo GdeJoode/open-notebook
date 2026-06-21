@@ -11,9 +11,7 @@ that:
 
 import httpx
 import pytest
-
 from app_main.services.model_routing.error_mapping import is_failover_eligible
-
 
 # ---------------------------------------------------------------------------
 # esperanto RuntimeError HTTP wrapper (the live NIM path)

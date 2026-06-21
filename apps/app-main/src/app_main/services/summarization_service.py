@@ -8,9 +8,7 @@ summary table via SummaryRepository.
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-
 from surrealdb_service.repositories.summary import SummaryRepository
-
 
 # All known strategies and their implementation status.
 # Matches SummarizationStrategy enum in summarization.models.result.
@@ -110,10 +108,9 @@ class SummarizationService:
         Loads chunks from the DB, runs the summarization workflow,
         and persists the result.
         """
-        from summarization.models.result import SummarizationStrategy
-        from summarization.workflow import SummarizationWorkflow
         from summarization.config import SummarizationConfig
-        from summarization.models.result import ChunkInput
+        from summarization.models.result import ChunkInput, SummarizationStrategy
+        from summarization.workflow import SummarizationWorkflow
         from surrealdb_service.repositories import ChunkRepository
 
         # Validate strategy
