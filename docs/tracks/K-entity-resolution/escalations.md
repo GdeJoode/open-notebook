@@ -85,3 +85,17 @@ This answers the original options: **1(a) is the path** — there IS a canonical
 2. **Refresh cadence/trigger** — the roadmap says "monthly". Confirm the mechanism: manual `POST /api/vocabulary/refresh` (shipped), a scheduled cron calling it, or app-startup-if-stale (compare `reference_entity.last_validated` age). Shipped: the manual endpoint + `last_validated` stamping; the scheduler is not wired pending this decision.
 
 Everything downstream (the reconciler, lookup, Crossref, `external_ids`) works against `reference_entity` regardless of how TOOI is loaded — this decision only affects how the full org set gets in.
+
+## K.6 — AliasManager has no dedicated alias CRUD endpoint → AC4 DEFERRED (2026-06-22, rev2)
+**Status**: AC4 (per-entity alias add/remove with immediate persistence) **DEFERRED** to a K.6-followup. Dead component removed. Recorded for the reviewer; needs a backend endpoint before it can ship honestly.
+
+The K.6 plan lists `AliasManager.tsx` "backed by `entity.aliases` + `entity_alias`". The merged backend exposes `entity.aliases` for **read** (via `GET /api/knowledge-graph/entities/{id}`, which `SELECT *`s the row) but ships **no per-entity alias add/remove HTTP endpoint** — the only alias-writing surfaces are (a) the K.3 merge apply (creates `entity_alias` rows for losers) and (b) the K.5 `alias_overlay` force-merge (materialized into an `entity_alias` edge on the next dedup scan).
+
+**Initial (rev1) decision — REVERSED.** rev1 wired `AliasManager` to the K.5 overlay endpoints (add alias = global force-merge, remove alias = force-split). The K.6 adversarial review (rev2) flagged this as **dead code AND wrong semantics**: the component had zero importers/tests/E2E and was never mounted, and "add an alias" silently became a **graph-wide force-merge overlay** — conflating "record a surface form for this entity" with "force-merge everywhere", which is misleading and unsafe UX. Shipping a mislabeled alias editor is worse than not shipping one.
+
+**rev2 decision — DEFER AC4, remove the dead component.**
+- Deleted `frontend/src/components/resolution/AliasManager.tsx` (no importer, no test, never mounted; overlay-as-alias semantics are wrong).
+- Per-entity alias *management* (add/remove with immediate persistence) genuinely requires a backend `POST/DELETE /api/.../entities/{id}/aliases` endpoint that writes/removes `entity_alias` rows directly. That endpoint does **not** exist in the merged backend, so AC4 is out of K.6's frontend-only scope.
+- **What stays (the honest, shipped alias surface):** the read-only alias **count/list** on entity detail (from `entity.aliases`), `ExternalIdBadges` (AC6), and `OverlayEditor` (the correctly-labelled force-merge/force-split escape hatch). None of these mislabel a force-merge as an alias edit.
+
+**K.6 follow-up (backend, additive):** add `POST /api/.../entities/{id}/aliases` (add a surface form → insert an `entity_alias` row, immediate) and `DELETE /.../aliases/{alias}` (remove the row). Then a *real* per-entity alias editor can be added that calls those endpoints (distinct from the graph-wide overlay). Until then, AC4 is deferred, not faked.

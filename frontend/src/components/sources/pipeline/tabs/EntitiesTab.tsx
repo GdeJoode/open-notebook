@@ -34,6 +34,7 @@ import type { ExtractionResultResponse, RunEntitiesOptions } from '@/lib/types/a
 import type { StepStatus } from '../PipelineStepper'
 import type { FileEntry } from './ExtractionTab'
 import { EntityGraphView } from './EntityGraphView'
+import { ExternalIdBadges } from '@/components/resolution/ExternalIdBadges'
 
 interface EntitiesTabProps {
   status: StepStatus
@@ -1052,8 +1053,25 @@ function EntityRelationList({
                   const vr = validationLookup.get(entity.text)
                   return (
                     <tr key={i} className="border-t">
-                      <td className="px-2 py-1.5 truncate max-w-[180px]" title={entity.text}>
-                        {entity.text}
+                      <td className="px-2 py-1.5 max-w-[200px]">
+                        <div className="truncate" title={entity.text}>
+                          {entity.text}
+                        </div>
+                        {entity.aliases && entity.aliases.length > 0 && (
+                          <div
+                            className="text-[9px] text-muted-foreground truncate"
+                            title={entity.aliases.join(', ')}
+                          >
+                            aka {entity.aliases.slice(0, 2).join(', ')}
+                            {entity.aliases.length > 2 ? '…' : ''}
+                          </div>
+                        )}
+                        {entity.external_ids && entity.external_ids.length > 0 && (
+                          <ExternalIdBadges
+                            externalIds={entity.external_ids}
+                            className="mt-0.5"
+                          />
+                        )}
                       </td>
                       <td className="px-2 py-1.5">
                         <Badge variant="outline" className="text-[10px]">{entity.label}</Badge>

@@ -226,6 +226,10 @@ export interface ExtractedEntity {
   source_grounding?: { start_pos: number; end_pos: number } | null
   pagerank?: number
   community_id?: number
+  /** Surface-form aliases collapsed onto this entity (Track K resolution). */
+  aliases?: string[]
+  /** Stable external URIs (TOOI / DOI) from K.4 reconciliation. */
+  external_ids?: string[]
 }
 
 export interface ExtractedRelation {

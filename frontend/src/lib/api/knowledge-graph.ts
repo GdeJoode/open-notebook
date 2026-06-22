@@ -16,6 +16,16 @@ export interface Entity {
 export interface EntityDetail extends Entity {
   embedding?: number[]
   relations: EntityRelation[]
+  /**
+   * Surface-form aliases collapsed onto this canonical entity (K.3 merges +
+   * K.4 vocabulary reconciliation). Optional: rows predating Track K omit it.
+   */
+  aliases?: string[]
+  /**
+   * Stable external URIs (TOOI / DOI / …) from K.4 vocabulary reconciliation.
+   * Rendered as linked badges; empty/absent shows nothing.
+   */
+  external_ids?: string[]
   [key: string]: unknown
 }
 

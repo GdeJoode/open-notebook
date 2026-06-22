@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react'
 import dynamic from 'next/dynamic'
+import Link from 'next/link'
 import { AppShell } from '@/components/layout/AppShell'
 import { EmptyState } from '@/components/common/EmptyState'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
@@ -24,6 +25,7 @@ import type { Entity, EntityDetail } from '@/lib/api/knowledge-graph'
 import { ResolutionLogTab } from './components/ResolutionLogTab'
 import { ConfidenceBar } from '@/components/knowledge-graph/ConfidenceBar'
 import { ConfidenceFilter } from '@/components/knowledge-graph/ConfidenceFilter'
+import { ExternalIdBadges } from '@/components/resolution/ExternalIdBadges'
 
 const SigmaGraphView = dynamic(
   () => import('./components/SigmaGraphView'),
@@ -80,7 +82,15 @@ export default function KnowledgeGraphPage() {
       <div className="flex h-full">
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="p-6 pb-0">
-            <h1 className="text-2xl font-bold mb-4">Knowledge Graph</h1>
+            <div className="flex items-center justify-between mb-4">
+              <h1 className="text-2xl font-bold">Knowledge Graph</h1>
+              <Link href="/knowledge-graph/resolution">
+                <Button variant="outline" size="sm" className="gap-1.5">
+                  <GitMerge className="h-3.5 w-3.5" />
+                  Review duplicates
+                </Button>
+              </Link>
+            </div>
 
             <div className="flex items-center gap-3 mb-4">
               <div className="relative flex-1 max-w-sm">
@@ -251,6 +261,27 @@ export default function KnowledgeGraphPage() {
               <Badge variant="secondary" className="mb-4">
                 {selectedEntity.entity_type}
               </Badge>
+
+              {/* External IDs (TOOI/DOI) from K.4 vocabulary reconciliation */}
+              {(() => {
+                const externalIds = (selectedEntity as Record<string, unknown>)
+                  .external_ids as string[] | undefined
+                return <ExternalIdBadges externalIds={externalIds} className="mb-3" />
+              })()}
+
+              {/* Alias count — full management on the resolution hub */}
+              {(() => {
+                const aliases = (selectedEntity as Record<string, unknown>)
+                  .aliases as string[] | undefined
+                if (!aliases || aliases.length === 0) return null
+                return (
+                  <p className="text-xs text-muted-foreground mb-3">
+                    {aliases.length} alias{aliases.length === 1 ? '' : 'es'}:{' '}
+                    {aliases.slice(0, 3).join(', ')}
+                    {aliases.length > 3 ? '…' : ''}
+                  </p>
+                )
+              })()}
 
               {/* Properties: weight, confidence */}
               <div className="mt-3 flex gap-3 text-xs text-muted-foreground">
