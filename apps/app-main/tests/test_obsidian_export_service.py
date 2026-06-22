@@ -39,14 +39,12 @@ from typing import List
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from shared.models.entity import Entity, Relation
-from shared.models.export import ExportFilter, ObsidianExportRequest
-
 from app_main.services.obsidian_export_service import (
     ObsidianExportService,
     VaultPathNotConfigured,
 )
-
+from shared.models.entity import Entity, Relation
+from shared.models.export import ExportFilter, ObsidianExportRequest
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -551,6 +549,40 @@ def test_snapshot_against_golden():
         "Service output drifted from golden file. If the change is "
         "intentional, regenerate the golden file with explicit reviewer "
         "sign-off (RETRO #6 inversion-test pattern)."
+    )
+
+
+def test_reconciled_external_ids_render_into_frontmatter():
+    """Populated ``external_ids`` must surface in the YAML frontmatter.
+
+    K.4 review MAJOR-1: the golden snapshot uses an un-reconciled entity
+    (``external_ids: []``), so it never proved a *populated* list renders.
+    This pins the render side of the contract — given an entity carrying
+    reconciled URIs (the state the K.4 reconciler leaves it in, now that
+    the export projection actually SELECTs ``external_ids``), the frontmatter
+    line must carry those URIs, not ``[]``.
+    """
+    entity = _curated_entity()
+    entity.external_ids = [
+        "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+        "https://doi.org/10.1145/example",
+    ]
+    filename_map = {"entity:abc123": "alice-de-jong.md"}
+
+    body = ObsidianExportService._render_entity_markdown(
+        entity, [], filename_map
+    )
+
+    ext_line = next(
+        line for line in body.splitlines()
+        if line.startswith("external_ids:")
+    )
+    assert "mnre1034" in ext_line and "10.1145/example" in ext_line, (
+        f"reconciled external_ids did not reach the frontmatter; got "
+        f"{ext_line!r}"
+    )
+    assert ext_line.strip() != "external_ids: []", (
+        "frontmatter emitted the empty default despite a populated entity"
     )
 
 

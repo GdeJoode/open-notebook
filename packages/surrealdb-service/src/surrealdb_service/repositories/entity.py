@@ -1398,6 +1398,13 @@ class EntityRepository:
         "confidence, provenance_chain, properties, "
         "pagerank, betweenness, community_id, status, merged_into, "
         "type_tags, primary_type, "
+        # K.4 vocabulary reconciliation. The Track D exporters call
+        # resolve_external_ids(entity) (obsidian_export_service.py:1049),
+        # which reads entity.external_ids; aliases ride along so the
+        # reconciler-populated alt-names survive into exports too. Without
+        # these in the projection the rehydrated Entity defaults both to []
+        # and every reconciled URI is silently dropped on the export path.
+        "external_ids, aliases, "
         # B.5b orphan-prune lifecycle. Selected so the WHERE filter can
         # see them; Entity.model_validate silently ignores extras.
         "orphan_status, reconnect_attempts, first_orphaned_at, "
