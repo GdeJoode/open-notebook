@@ -23,34 +23,18 @@ from typing import Any, Dict, List, Optional
 from unittest.mock import patch
 
 import pytest
-from ontology_manager.schema import (
-    EntityTypeDefinition,
-    Ontology,
-    OntologyMetadata,
-    RelationshipTypeDefinition,
-)
-from shared.config import (
-    MIN_APPLICABLE_CONFIDENCE as SHARED_MIN_APPLICABLE_CONFIDENCE,
-    SOFT_NUDGE_COVERAGE_HIGH as SHARED_SOFT_NUDGE_COVERAGE_HIGH,
-    SOFT_NUDGE_COVERAGE_LOW as SHARED_SOFT_NUDGE_COVERAGE_LOW,
-)
-from shared.models.extraction import (
-    ExtractedEntity,
-    ExtractedRelation,
-    ExtractionResult,
-)
-from shared.models.notebook_schema import Pass1Result
-
 from ontology_extraction.multi_schema_orchestrator import (
     MIN_APPLICABLE_CONFIDENCE,
     SOFT_NUDGE_COVERAGE_HIGH,
     SOFT_NUDGE_COVERAGE_LOW,
     MergedEntity,
     SoftNudgeDecision,
+    _content_signal_phrases,
     _decide_soft_nudge,
     _dedupe_extensions,
     _merge_results,
     _sample_text_for_pass1,
+    _score_content_overlap,
     detect_applicable_schemas,
     run_multi_schema,
 )
@@ -59,7 +43,27 @@ from ontology_extraction.pass2_typed_extraction import (
     _estimate_tokens,
 )
 from ontology_extraction.prompts.pass2 import build_pass2_prompt
-
+from ontology_manager.schema import (
+    EntityTypeDefinition,
+    Ontology,
+    OntologyMetadata,
+    RelationshipTypeDefinition,
+)
+from shared.config import (
+    MIN_APPLICABLE_CONFIDENCE as SHARED_MIN_APPLICABLE_CONFIDENCE,
+)
+from shared.config import (
+    SOFT_NUDGE_COVERAGE_HIGH as SHARED_SOFT_NUDGE_COVERAGE_HIGH,
+)
+from shared.config import (
+    SOFT_NUDGE_COVERAGE_LOW as SHARED_SOFT_NUDGE_COVERAGE_LOW,
+)
+from shared.models.extraction import (
+    ExtractedEntity,
+    ExtractedRelation,
+    ExtractionResult,
+)
+from shared.models.notebook_schema import Pass1Result
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -126,6 +130,80 @@ def _base_ontology() -> Ontology:
             ),
             "Organization": EntityTypeDefinition(
                 name="Organization", description="Any group of people."
+            ),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# L.4 affinity fixtures: the keyword-rich gov stack (deals / government) vs the
+# keyword-poor theme schema (policy_themes). These mirror the real ontologies'
+# defining property: gov/deals type NAMES read like Regio-Deal vocabulary and
+# appear in document bodies, while policy_themes type NAMES are abstract and
+# rarely appear verbatim — exactly why policy_themes is crowded out of top-K.
+# ---------------------------------------------------------------------------
+
+
+def _government_ontology() -> Ontology:
+    return Ontology(
+        metadata=OntologyMetadata(name="government", version="1.0"),
+        entity_types={
+            "Gemeente": EntityTypeDefinition(
+                name="Gemeente", description="A municipality."
+            ),
+            "Provincie": EntityTypeDefinition(
+                name="Provincie", description="A province."
+            ),
+            "Ministerie": EntityTypeDefinition(
+                name="Ministerie", description="A ministry."
+            ),
+        },
+    )
+
+
+def _deals_ontology() -> Ontology:
+    return Ontology(
+        metadata=OntologyMetadata(name="deals", version="1.0"),
+        entity_types={
+            "Deal": EntityTypeDefinition(name="Deal", description="A deal."),
+            "RegioDeal": EntityTypeDefinition(
+                name="RegioDeal", description="A regional deal."
+            ),
+        },
+    )
+
+
+def _policy_themes_ontology() -> Ontology:
+    """Theme schema whose abstract type NAMES keyword-match poorly but whose
+    ``extraction_hints`` carry the real theme vocabulary the L.4 rev2 content
+    scorer matches on (mirrors the production ``policy_themes.yaml``)."""
+    return Ontology(
+        metadata=OntologyMetadata(name="policy_themes", version="1.0"),
+        entity_types={
+            "BeleidsThema": EntityTypeDefinition(
+                name="BeleidsThema",
+                description="An overarching policy theme.",
+                parent_type="Concept",
+                extraction_hints=[
+                    "brede welvaart",
+                    "leefbaarheid",
+                    "vergrijzing",
+                    "bevolkingsdaling",
+                    "gezondheid",
+                    "werkgelegenheid",
+                    "voorzieningenniveau",
+                    "materiele welvaart",
+                ],
+            ),
+            "BeleidsPijler": EntityTypeDefinition(
+                name="BeleidsPijler",
+                description="A pillar within a programme or deal.",
+                parent_type="Concept",
+            ),
+            "Indicator": EntityTypeDefinition(
+                name="Indicator",
+                description="A measurable indicator.",
+                parent_type="Concept",
             ),
         },
     )
@@ -327,6 +405,153 @@ class TestDetectApplicableSchemas:
             mapper=stub_mapper,
         )
         assert ranked[0][0].metadata.name == "policy"
+
+
+# ---------------------------------------------------------------------------
+# L.4 rev2: content-driven applicability of policy_themes
+# ---------------------------------------------------------------------------
+
+
+class TestContentDrivenPolicyThemes:
+    """``policy_themes`` is selected on CONTENT overlap, not on provenance (L.4
+    rev2).
+
+    rev1 gated ``policy_themes`` on the gov/deals stack firing — wrong because
+    policy themes are a property of content, and the gate was inert in
+    production (the real document-type mapper never selects deals/government for
+    these docs). rev2 scores against the schema's content-signal vocabulary
+    (extraction_hints / descriptions / concepts), so ANY document discussing the
+    themes selects ``policy_themes`` — a Regio-Deal doc and a non-gov scientific
+    paper alike — and an unrelated document does not.
+    """
+
+    # A Regio-Deal-style body: gov vocabulary AND theme vocabulary present.
+    _REGIODEAL_TEXT = (
+        "De Gemeente Groningen en de Provincie sluiten een RegioDeal met het "
+        "Ministerie. De Deal investeert in brede welvaart en leefbaarheid, in "
+        "gezondheid en werkgelegenheid."
+    )
+    # A NON-government scientific-paper body: theme vocabulary WITHOUT any
+    # gov/deals provenance. This is the user's requirement — content, not
+    # provenance, drives selection.
+    _SCIPAPER_TEXT = (
+        "This paper studies brede welvaart and leefbaarheid in shrinking "
+        "regions. We analyse vergrijzing and bevolkingsdaling and their effect "
+        "on voorzieningenniveau and gezondheid. We argue materiele welvaart "
+        "alone understates regional leefbaarheid."
+    )
+    # An unrelated ML paper: no policy-theme vocabulary at all.
+    _MLPAPER_TEXT = (
+        "We present a transformer architecture for image classification. Our "
+        "model achieves state-of-the-art accuracy on ImageNet using a novel "
+        "attention mechanism and gradient checkpointing."
+    )
+
+    def _all_ontologies(self) -> List[Ontology]:
+        return [
+            _government_ontology(),
+            _deals_ontology(),
+            _policy_themes_ontology(),
+            _scholarly_ontology(),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_regiodeal_doc_selects_policy_themes_on_content(self):
+        # AC1: a Regio-Deal doc selects policy_themes via content overlap — no
+        # mapper, no affinity, no injected trigger.
+        ranked = await detect_applicable_schemas(
+            document_type=None,
+            document_text=self._REGIODEAL_TEXT,
+            ontologies=self._all_ontologies(),
+            top_k=3,
+        )
+        names = [ont.metadata.name for ont, _conf in ranked]
+        assert "policy_themes" in names
+
+    @pytest.mark.asyncio
+    async def test_non_gov_theme_paper_also_selects_policy_themes(self):
+        # AC2: a non-government scientific paper about the themes ALSO selects
+        # policy_themes — proving content-driven, not provenance-gated. The
+        # gov/deals schemas do NOT fire here.
+        ranked = await detect_applicable_schemas(
+            document_type=None,
+            document_text=self._SCIPAPER_TEXT,
+            ontologies=self._all_ontologies(),
+            top_k=3,
+        )
+        names = [ont.metadata.name for ont, _conf in ranked]
+        assert "policy_themes" in names
+        assert "deals" not in names
+        assert "government" not in names
+
+    @pytest.mark.asyncio
+    async def test_unrelated_doc_does_not_select_policy_themes(self):
+        # AC3: an unrelated ML paper (no theme vocabulary) does NOT select
+        # policy_themes — over-application bounded by MIN_APPLICABLE_CONFIDENCE.
+        ranked = await detect_applicable_schemas(
+            document_type=None,
+            document_text=self._MLPAPER_TEXT,
+            ontologies=self._all_ontologies(),
+            top_k=3,
+        )
+        names = [ont.metadata.name for ont, _conf in ranked]
+        assert "policy_themes" not in names
+
+    @pytest.mark.asyncio
+    async def test_content_score_clears_floor_for_theme_doc(self):
+        # The policy_themes content score is comfortably above the applicability
+        # floor for a theme doc — the selection is not a knife-edge.
+        ranked = await detect_applicable_schemas(
+            document_type=None,
+            document_text=self._SCIPAPER_TEXT,
+            ontologies=self._all_ontologies(),
+            top_k=5,
+        )
+        by_name = {ont.metadata.name: conf for ont, conf in ranked}
+        assert by_name["policy_themes"] >= MIN_APPLICABLE_CONFIDENCE
+
+    def test_content_signal_phrases_include_hints_and_descriptions(self):
+        # The signal set is the union of names + hints + descriptions (+ concept
+        # vocabulary). Pin that hints are included — that is the rev2 fix.
+        phrases = _content_signal_phrases(_policy_themes_ontology())
+        lowered = {p.lower() for p in phrases}
+        assert "beleidsthema" in lowered  # type name
+        assert "brede welvaart" in lowered  # extraction_hint
+        assert "leefbaarheid" in lowered  # extraction_hint
+
+    def test_score_content_overlap_zero_for_unrelated_text(self):
+        score = _score_content_overlap(
+            _policy_themes_ontology(),
+            "a paper on transformer attention and gpu memory",
+        )
+        assert score == 0.0
+
+    def test_score_content_overlap_nonzero_for_theme_text(self):
+        score = _score_content_overlap(
+            _policy_themes_ontology(),
+            "a study of brede welvaart and leefbaarheid in the region",
+        )
+        assert score > 0.0
+
+    def test_score_content_overlap_capped_below_doctype_signal(self):
+        # The content score is capped at 0.9 so a document-type match (0.92)
+        # always dominates when both fire.
+        score = _score_content_overlap(
+            _policy_themes_ontology(),
+            " ".join(
+                [
+                    "brede welvaart",
+                    "leefbaarheid",
+                    "vergrijzing",
+                    "bevolkingsdaling",
+                    "gezondheid",
+                    "werkgelegenheid",
+                    "voorzieningenniveau",
+                    "materiele welvaart",
+                ]
+            ),
+        )
+        assert score <= 0.9
 
 
 # ---------------------------------------------------------------------------

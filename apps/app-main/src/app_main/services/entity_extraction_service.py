@@ -16,14 +16,16 @@ single-schema path regardless of ``notebook_id``. Ops runbook: pass
 misbehaves in production.
 """
 
-from typing import Any, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple
 
 from entity_filtering.config import FilteringConfig
 from entity_filtering.workflow import FilteringWorkflow
 from job_queue import JobPausedForReviewError
 from loguru import logger
 from ontology_extraction.config import ExtractionConfig
-from ontology_extraction.multi_schema_orchestrator import detect_applicable_schemas
+from ontology_extraction.multi_schema_orchestrator import (
+    detect_applicable_schemas,
+)
 from ontology_extraction.workflow import ExtractionWorkflow
 from shared.services.metrics import record_metric
 from surrealdb_service.connection import execute_query
@@ -33,7 +35,25 @@ from surrealdb_service.repositories import (
     SourceRepository,
 )
 
+if TYPE_CHECKING:
+    from ontology_manager.schema import Ontology
+    from shared.models import NotebookSchema
+
 from app_main.services.entity_persistence_service import EntityPersistenceService
+
+
+# Explicit per-notebook override bundle (Track L.4). When an operator configures
+# a ``base_ontology`` for a notebook, that is a declaration that the notebook is
+# *about* a domain — so the related theme schema is bundled in alongside the
+# base, regardless of any per-document content score. This is an EXPLICIT
+# override (config beats auto-detection), NOT the auto-detection path: ordinary
+# auto-detection selects ``policy_themes`` purely on content overlap via
+# ``detect_applicable_schemas`` (no provenance gating). Keeping the bundle as
+# data here means the override is extensible without touching the override logic.
+NOTEBOOK_DEFAULT_BUNDLE: Dict[str, List[str]] = {
+    "deals": ["policy_themes"],
+    "government": ["policy_themes"],
+}
 
 
 def _is_resume_sentinel(extension: Dict[str, Any]) -> bool:
@@ -566,6 +586,84 @@ class EntityExtractionService:
                 )
         return ExtractionWorkflow(config, extractor=extractor)
 
+    def _apply_notebook_schema_default(
+        self,
+        applicable_schemas: List[Tuple["Ontology", float]],
+        candidate_ontologies: List["Ontology"],
+        notebook_schema: "NotebookSchema",
+    ) -> List[Tuple["Ontology", float]]:
+        """Force a per-notebook ``notebook_schema`` default over auto-detection.
+
+        Config beats auto-detection (L.4 AC3): when an operator has configured a
+        ``base_ontology`` for a notebook, that base — plus its explicit override
+        bundle (``NOTEBOOK_DEFAULT_BUNDLE``, e.g. ``deals`` → ``policy_themes``)
+        plus any accepted-extension schemas — is applied regardless of the
+        content score. A document with no theme keywords still gets
+        ``policy_themes`` because the notebook is *declared* to be about policy.
+
+        This is the EXPLICIT-override path. The ordinary auto-detection path
+        (``detect_applicable_schemas``) already selects ``policy_themes`` on
+        content overlap for any document discussing the themes, with no
+        dependency on this bundle — see the orchestrator's content-signal scorer.
+
+        Additive: the auto-detected ``applicable_schemas`` are preserved; the
+        forced schemas are merged in (de-duplicated by name) at a fixed
+        config-confidence so they sort ahead of weakly-keyword-matched ones but
+        the auto-detected set is never dropped. Forced schemas that don't exist
+        in ``candidate_ontologies`` are skipped (a misconfigured base never
+        crashes extraction).
+
+        Pure (no I/O) so the override rule is unit-testable in isolation.
+        """
+        # Config-confidence: above MIN_APPLICABLE_CONFIDENCE and above a weak
+        # keyword score so the operator's choice leads, but it does not need to
+        # beat a 0.92 document-type match — both stay in the applied set.
+        config_conf = 0.85
+
+        by_name: Dict[str, "Ontology"] = {
+            (ont.metadata.name if ont.metadata else ""): ont
+            for ont in candidate_ontologies
+        }
+
+        # Resolve the forced schema names: base + affinity bundle + the schemas
+        # named on accepted extensions (so a notebook that accepted a
+        # policy_themes extension keeps it applied).
+        forced_names: List[str] = [notebook_schema.base_ontology]
+        forced_names.extend(
+            NOTEBOOK_DEFAULT_BUNDLE.get(notebook_schema.base_ontology, [])
+        )
+        for ext in notebook_schema.accepted_extensions:
+            ext_schema = ext.get("schema_name") if isinstance(ext, dict) else None
+            if ext_schema:
+                forced_names.append(ext_schema)
+
+        existing_names = {
+            (ont.metadata.name if ont.metadata else "")
+            for ont, _conf in applicable_schemas
+        }
+
+        result = list(applicable_schemas)
+        appended: set[str] = set()
+        for name in forced_names:
+            if (
+                not name
+                or name in existing_names
+                or name in appended
+                or name not in by_name
+            ):
+                continue
+            result.append((by_name[name], config_conf))
+            appended.add(name)
+            logger.info(
+                "notebook_schema default forced '{name}' for notebook={nb} "
+                "(base={base})",
+                name=name,
+                nb=notebook_schema.notebook,
+                base=notebook_schema.base_ontology,
+            )
+
+        return result
+
     async def _run_multi_schema(
         self,
         workflow: "ExtractionWorkflow",
@@ -650,6 +748,22 @@ class EntityExtractionService:
             ontologies=candidate_ontologies,
             top_k=3,
         )
+
+        # L.4: a per-notebook ``notebook_schema`` default beats auto-detection.
+        # When the notebook has a configured ``base_ontology`` (empty today for
+        # the Regio-Deal corpus, but set via the seed/endpoint), force that base
+        # plus its affinity bundle plus any accepted-extension schemas — config
+        # is an explicit operator choice and must not be overruled by a low
+        # keyword score. ``applicable_schemas`` is the auto-detected set; the
+        # forced schemas are merged in (additive — auto-detected schemas are
+        # kept so a notebook default never *loses* a schema the document clearly
+        # warrants).
+        if notebook_schema is not None and notebook_schema.base_ontology:
+            applicable_schemas = self._apply_notebook_schema_default(
+                applicable_schemas,
+                candidate_ontologies,
+                notebook_schema,
+            )
 
         # L.1: stash the applied ontologies (without the confidence scores) so
         # the persist step can bridge ontology labels -> canonical types and

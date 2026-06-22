@@ -8,6 +8,47 @@ Append-only ledger. One row per phase attempt.
 | L.1 | Ontology→canonical bridge + preserve rich type | — | `track/l1-canonical-bridge` | 2026-06-22 | implemented — ready for review |
 | L.2 | Curated EN+NL residual alias map + non-silent unknown-label fallback | — | `track/l2-nl-aliases` | 2026-06-22 | implemented — ready for review |
 | L.3 | Add `programme` + `technology` canonical types (NO migration — 50 already relaxed live enum) | — | `track/l3-enum-types` | 2026-06-22 | implemented — ready for review |
+| L.4 | Schema application — make `policy_themes` fire (content-driven selection + per-notebook default) | — | `track/l4-schema-application` | 2026-06-23 | implemented — ready for review |
+| L.4 rev2 | Redesign: content-driven selection (drop provenance gating) | — | `track/l4-schema-application` | 2026-06-23 | revised — ready for re-review |
+
+## Phase L.4 rev2 — content-driven redesign (2026-06-23)
+
+**Why rev2 (REVISIONS_NEEDED + user design flaw).** rev1 gated `policy_themes` co-selection on the gov/deals stack firing. That was wrong two ways:
+- **Conceptually too narrow (user's point):** policy themes are a property of **content**, not provenance. A scientific paper about *brede welvaart* / *leefbaarheid* / *vergrijzing* is about policy themes WITHOUT being a deals/government document — the gate wrongly excluded it.
+- **Inert in production (reviewer's blocker):** `document_mapper.py` maps Regio-Deal docs to `policy`/`general`, **never** `deals`/`government`, so the affinity trigger never fired on real data. rev1's integration test only passed by injecting a fake `_deals_mapper` that fabricated a production path. The previous ledger's claim that gov/deals "reach selection via the document-type signal in production" was **false** — the mapper has no `deals`/`government` target.
+
+**Scoring investigation (root cause).** Over the real ontologies, the rev1 keyword scorer scored every schema by **entity-type-NAME** overlap only. Against a Regio-Deal body, `policy_themes` scored **0.000** — its 3 abstract type names (`BeleidsThema`/`BeleidsPijler`/`Indicator`) never appear verbatim. Yet the document literally contains the theme vocabulary (`brede welvaart`, `leefbaarheid`, `gezondheid`, `werkgelegenheid`, `bereikbaarheid`) — which lives in the schema's `extraction_hints` / `description` / `concepts`, never scanned by rev1's scorer. So `policy_themes` was crowded out for documents that are *about* it.
+
+**The fix — content-driven selection (mechanism: BOTH a + b).**
+- **(b) Matcher reads the full content signal** (`multi_schema_orchestrator.py`). New pure helpers `_content_signal_phrases(ontology)` + `_score_content_overlap(ontology, text_lower)` replace the type-name-only keyword path. The signal is the union of entity-type **names + `extraction_hints` + `description` text + concept names/descriptions/`related_concepts`/`indicators`**. Phrases <4 chars are skipped (avoid spurious substring hits); score = `min(0.9, matches / type_count)` (capped below the 0.92 document-type signal). General + data-driven: every schema benefits, no per-schema special-casing.
+- **(a) `policy_themes.yaml` carries the theme vocabulary as `extraction_hints`** on `BeleidsThema` (brede welvaart, leefbaarheid, vergrijzing, ontgroening, bevolkingsdaling, gezondheid, werkgelegenheid, bereikbaarheid, wonen, leefomgeving, voorzieningenniveau, materiele welvaart, bestaanszekerheid, kansenongelijkheid, woningmarkt). These double as the application signal and the LLM extraction hints.
+
+**Affinity gating REMOVED.** `SCHEMA_AFFINITY`, `SCHEMA_AFFINITY_CONFIDENCE`, `_apply_schema_affinity`, and the `affinity=` param are deleted from the orchestrator (no dangling references repo-wide). The content path is now the **sole, honest** selection mechanism — no cosmetic no-op.
+
+**Proof on the REAL mapper + REAL ontologies (no injection):**
+- **AC1 — Regio-Deal doc** (`document_type="policy_document"` → real mapper → `policy`): selects `policy` (0.92, mapper) **and** `policy_themes` (0.90, content). Also fires on content alone with `document_type=None`.
+- **AC2 — NON-gov scientific paper** (`document_type="academic_paper"` → `scholarly`): selects `scholarly` (0.92) **and** `policy_themes` (0.90, content); `deals`/`government` do NOT fire. Proves content-driven, not provenance-gated — the user's requirement.
+- **AC3 — unrelated ML paper:** `policy_themes` scores 0.0 → dropped by `MIN_APPLICABLE_CONFIDENCE` (0.3). Over-application bounded.
+
+**Per-notebook default KEPT** (reviewer-approved rev1 path). `_apply_notebook_schema_default` now reads a **local** `NOTEBOOK_DEFAULT_BUNDLE` (in `entity_extraction_service.py`), decoupled from the removed orchestrator affinity. This is the **explicit operator-config override** ("this notebook is about policy"), distinct from auto-detection — config beats auto-detection (AC5). Additive; misconfigured/absent base skipped, never crashes. Set mechanism unchanged (`scripts/l4_seed_notebook_schema.py`; no settings-UI in scope).
+
+**ACs verified (revised):**
+- AC1 — Regio-Deal selects `policy_themes` via the REAL production path on content (`test_schema_application_regiodeal.py::test_regiodeal_selects_policy_themes_real_path`).
+- AC2 — non-gov theme paper ALSO selects `policy_themes`, gov stack absent (`::test_non_gov_theme_paper_selects_policy_themes`).
+- AC3 — unrelated doc excludes `policy_themes` (`::test_unrelated_document_excludes_policy_themes` + orchestrator `test_unrelated_doc_does_not_select_policy_themes`).
+- AC4 — `BeleidsThema`/`BeleidsPijler` → `entity_type=="topic"`, rich `primary_type` (L.1 bridge, unchanged).
+- AC5 — per-notebook default forces `deals`+`policy_themes` over empty/non-empty auto-detected sets; misconfigured base skipped.
+- AC6 (conservative) — existing detection/merge tests stay green; no schema that fired today was removed.
+
+**Masking test removed.** The injected `_deals_mapper` stub (which fabricated a `deals` mapping production never produces) is deleted. `test_schema_application_regiodeal.py` now tests the REAL content-driven selection against the real mapper + real ontologies for a Regio-Deal doc, a non-gov theme paper, and an unrelated paper.
+
+**Tests / validation (all green):**
+- `pipelines/ontology-extraction/tests/test_multi_schema_orchestrator.py` — 58 (content-driven `TestContentDrivenPolicyThemes` replaces the affinity class; existing detection/merge tests stay green).
+- `apps/app-main/tests/test_schema_application_regiodeal.py` — real-path AC1/AC2/AC3 + L.1 typing + per-notebook default + `NOTEBOOK_DEFAULT_BUNDLE` data contract.
+- `apps/app-main/tests/test_entity_extraction_service.py` + `test_entity_persistence_service.py` — regression green.
+- Combined suite: **124 passed**. `from app_main.api.app import create_app` → OK. Ruff clean on changed files (2 pre-existing `F821 ExtractionResult` forward-ref warnings in `entity_extraction_service.py` are unrelated and untouched).
+
+**Decisions honoured:** L-D2 = content-driven auto-detection (primary) + per-notebook default (explicit override). Real package path `pipelines/ontology-extraction/` (the plan's `packages/...` path does not exist).
 
 ## Phase L.3 — implemented (2026-06-22)
 
@@ -108,3 +149,5 @@ Append-only ledger. One row per phase attempt.
 | L.2 | curated EN+NL residual alias map + non-silent fallback | — | `track/l2-nl-aliases` | 2026-06-22 | adversarial-reviewer APPROVED (0 blockers/majors). Dutch aliases in one isolated module (grep-guarded); unmapped labels preserve raw in primary_type (not silent other); noise flagged non_type_label; 11/11 other-recovery (3 pending L.3 enum). technology/programme = option-a (alias→real target, guard re-pins until L.3). B.8 intact, 64 tests. |
 
 | L.3 | add programme + technology canonical types | — | `track/l3-enum-types` | 2026-06-22 | adversarial-reviewer APPROVED (0 blockers/majors). programme+technology added to code enum; bridge Deal/GovernmentService→programme + tech bases→technology. **NO migration** — migration 50 already dropped the live entity_type ASSERT (verified migrations 51-57 add none). L-D1 = extend-enum. L.1/L.2 tests activated (RegioDeal→programme, Technologie→technology). 99 tests. |
+
+| L.4 | content-driven policy_themes selection (rev2) | — | `track/l4-schema-application` | 2026-06-23 | adversarial-reviewer APPROVED attempt 2 (0 blockers/majors). REDESIGN after rev1 blocker + user feedback: dropped the deals/government affinity gating (was a production no-op AND conceptually too narrow — themes are a content property, not provenance). Matcher now scores against extraction_hints/description/concepts (not just type names); policy_themes carries the theme vocabulary. Fires on the REAL mapper for a Regio-Deal doc AND a non-gov scientific paper about themes; unrelated docs score 0.0 (bounded by MIN_APPLICABLE_CONFIDENCE). Per-notebook default kept. 124 tests. Follow-up: rename stale "affinity"→"override" comments (entity_extraction_service.py:628,755). |
