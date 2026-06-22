@@ -1,0 +1,31 @@
+-- Migration 55: per-entity `external_ids` array + reference_entity lookup index
+--               (Phase K.4 — TOOI + Crossref vocabulary reconciliation)
+--
+-- K.4 reconciles persisted `entity` rows against the `reference_entity`
+-- vocabulary table (migration 41) and writes the matched stable identifiers
+-- (TOOI URIs, Crossref DOIs, ...) back onto the entity. This migration adds the
+-- first-class `external_ids` array that the reconciler populates and that the
+-- Track D exporters (via `resolve_external_ids`) read. Migration 54 already added
+-- the sibling `aliases` array (K.3); the two together give cheap per-entity
+-- read/display + exporter use (decision K-D1: keep `entity_alias`/`reference_entity`
+-- as the authoritative tables, denormalize onto `entity` for reads).
+--
+-- B.8 caution: the `entity` table carries pre-Track-B schema drift (migration 50
+-- relaxed `name`/`hash_id`/`entity_type`). This migration is ADDITIVE only —
+-- every statement is `IF NOT EXISTS`, never OVERWRITE — and does NOT touch
+-- `canonical_name`, `hash_id`, or `entity_type`, so the B.8 dedup-key / upsert
+-- contract is intact. The new field has a safe default (`[]`) so pre-existing
+-- rows read back unchanged and re-applying the migration is a no-op (validated by
+-- the B.0 testcontainers roundtrip harness).
+
+DEFINE FIELD IF NOT EXISTS external_ids ON entity FLEXIBLE TYPE array DEFAULT [];
+
+-- The `reference_entity` table + its fields/indexes already exist from
+-- migration 41 (canonical_name, entity_type, source_vocabulary, external_uri,
+-- external_id, aliases, parent_name, last_validated; indexes idx_ref_name,
+-- idx_ref_type, idx_ref_source, idx_ref_name_source UNIQUE). The provider
+-- lookups (lookup_by_name / lookup_by_alias) and the upsert key all rely on
+-- those. We re-declare the lookup index defensively with IF NOT EXISTS so a
+-- database that lost it through drift regains it WITHOUT overwriting the
+-- migration-41 definition on a healthy DB.
+DEFINE INDEX IF NOT EXISTS idx_ref_name ON reference_entity FIELDS canonical_name;

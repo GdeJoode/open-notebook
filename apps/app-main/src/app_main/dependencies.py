@@ -23,6 +23,7 @@ from surrealdb_service.repositories import (
     NotebookRepository,
     NoteRepository,
     PodcastEpisodeRepository,
+    ReferenceEntityRepository,
     SearchRepository,
     SourceEmbeddingRepository,
     SourceInsightRepository,
@@ -210,6 +211,10 @@ def get_podcast_episode_repo() -> PodcastEpisodeRepository:
 
 def get_entity_repo() -> EntityRepository:
     return EntityRepository()
+
+
+def get_reference_entity_repo() -> ReferenceEntityRepository:
+    return ReferenceEntityRepository()
 
 
 def get_summary_repo() -> SummaryRepository:

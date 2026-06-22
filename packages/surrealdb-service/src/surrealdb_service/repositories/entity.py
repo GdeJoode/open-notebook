@@ -556,6 +556,61 @@ class EntityRepository:
             return False
         return True
 
+    async def update_external_ids(
+        self,
+        entity_id: str,
+        external_ids: List[str],
+        aliases: Optional[List[str]] = None,
+    ) -> bool:
+        """Union the reconciled external_ids (+ aliases) onto an entity (K.4).
+
+        The vocabulary reconciler (K.4) calls this after linking an entity to a
+        single high-confidence ``reference_entity``. The write is dedup-preserving
+        union, NOT a replace, so a later reconcile against another vocabulary
+        (e.g. ORCID after TOOI) accrues rather than clobbers. Never touches
+        ``canonical_name`` / ``entity_type`` / ``hash_id`` (B.8 contract intact).
+
+        Args:
+            entity_id: Record id of the entity to annotate.
+            external_ids: URIs to union onto ``entity.external_ids``.
+            aliases: Optional canonical/alias surface forms to union onto
+                ``entity.aliases``.
+
+        Returns:
+            ``True`` when the update ran, ``False`` on a bad id / transport error.
+        """
+        if not entity_id:
+            return False
+        try:
+            rid = ensure_record_id(entity_id)
+        except Exception as e:
+            logger.error(f"update_external_ids: invalid id '{entity_id}': {e}")
+            return False
+        try:
+            existing_rows = await execute_query(
+                "SELECT external_ids, aliases FROM type::thing($id) LIMIT 1;",
+                {"id": rid},
+                self.config,
+            )
+            existing = existing_rows[0] if existing_rows else {}
+            merged_ids = _union_preserve_order(
+                existing.get("external_ids") or [], list(external_ids or [])
+            )
+            merged_aliases = _union_preserve_order(
+                existing.get("aliases") or [], list(aliases or [])
+            )
+            await execute_query(
+                "UPDATE type::thing($id) SET "
+                "external_ids = $ext, aliases = $aliases, "
+                "updated_at = time::now();",
+                {"id": rid, "ext": merged_ids, "aliases": merged_aliases},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"update_external_ids failed for '{entity_id}': {e}")
+            return False
+        return True
+
     async def list_active_entities(
         self, source_ids: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
@@ -1343,6 +1398,13 @@ class EntityRepository:
         "confidence, provenance_chain, properties, "
         "pagerank, betweenness, community_id, status, merged_into, "
         "type_tags, primary_type, "
+        # K.4 vocabulary reconciliation. The Track D exporters call
+        # resolve_external_ids(entity) (obsidian_export_service.py:1049),
+        # which reads entity.external_ids; aliases ride along so the
+        # reconciler-populated alt-names survive into exports too. Without
+        # these in the projection the rehydrated Entity defaults both to []
+        # and every reconciled URI is silently dropped on the export path.
+        "external_ids, aliases, "
         # B.5b orphan-prune lifecycle. Selected so the WHERE filter can
         # see them; Entity.model_validate silently ignores extras.
         "orphan_status, reconnect_attempts, first_orphaned_at, "

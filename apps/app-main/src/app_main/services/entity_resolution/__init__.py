@@ -11,10 +11,16 @@ from app_main.services.entity_resolution.recanonicalization_service import (
     MergeResult,
     RecanonicalizationService,
 )
+from app_main.services.entity_resolution.vocabulary_reconciler import (
+    ReconcileResult,
+    VocabularyReconciler,
+)
 
 __all__ = [
     "MergeCluster",
     "MergePlan",
     "MergeResult",
     "RecanonicalizationService",
+    "ReconcileResult",
+    "VocabularyReconciler",
 ]

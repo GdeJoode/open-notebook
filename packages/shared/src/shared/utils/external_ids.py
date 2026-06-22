@@ -1,24 +1,27 @@
 """
 External identifier resolution for knowledge-graph entities.
 
-V1 stub introduced in Track D Phase D.0. Track M4 Q9 replaces this with
-TOOI (Thesaurus of Open-source Ontology Identifiers) and Crossref
-lookups so exported Obsidian/JSONL/NetworkX artifacts can carry stable
-cross-system identifiers (DOIs, ORCIDs, Wikidata QIDs, ...).
+Introduced as a stub in Track D Phase D.0; the body landed in Track K Phase K.4
+(the FEATURE_ROADMAP Q9 swap). It returns the stable cross-system identifiers
+(TOOI URIs, Crossref DOIs, ...) for an entity so exported Obsidian/JSONL/NetworkX
+artifacts can carry them.
 
-Why a stub at this point in the timeline
-========================================
-Track D's three export formats (D.1 Obsidian vault, D.2 JSONL,
-D.3 NetworkX) all want to emit an ``external_ids`` slot per entity, but
-the upstream resolution pipeline is Track M4 work. Threading a single
-function through the export call sites today means the Q9 swap is a
-one-file change rather than a fan-out across three exporters.
+How resolution works (K.4)
+==========================
+The async :class:`~app_main.services.entity_resolution.vocabulary_reconciler.VocabularyReconciler`
+queries the external authorities (TOOI, Crossref) and, under a strict
+single-high-confidence-match precision guard, writes the matched URI(s) onto
+``entity.external_ids``. THIS function — the synchronous swap-point every Track D
+exporter funnels through — reads that already-reconciled field. Keeping it
+synchronous and side-effect-free preserves the exporter contract (no DB/network
+call inside an export loop) while letting reconciled entities emit real URIs.
 
-The single import point ``shared.utils.external_ids`` is intentional --
-downstream callers should depend only on the public
-``resolve_external_ids`` function. This file is structurally identical
-to ``shared.utils.name_normalizer`` (the B.1c stub for entity-name
-normalization) so the two stub modules upgrade in parallel.
+Contract (MUST NOT change — Track D exporters depend on it)
+===========================================================
+* signature ``resolve_external_ids(entity: Entity) -> List[str]`` is unchanged;
+* an entity with no reconciled identifiers (e.g. ``canonical_name=""`` or an
+  un-reconciled entity) still returns ``[]``;
+* the single import point ``shared.utils.external_ids`` is preserved.
 """
 
 from __future__ import annotations
@@ -31,36 +34,45 @@ from shared.models.entity import Entity
 def resolve_external_ids(entity: Entity) -> List[str]:
     """Return the stable external identifiers for an entity.
 
-    V1 stub. Always returns ``[]`` so Track D exporters can emit a
-    well-formed (but empty) ``external_ids`` field without breaking when
-    the real resolver lands.
+    Reads ``entity.external_ids`` — the field the K.4 vocabulary reconciler
+    populates when an entity links (under the precision guard) to a single
+    high-confidence authority record. Un-reconciled entities (and entities the
+    reconciler refused to link) carry an empty list, so this returns ``[]`` for
+    them — preserving the Track D exporters' empty-input contract.
 
-    Track M4 Q9 will replace this body with TOOI + Crossref lookups
-    keyed off ``entity.canonical_name`` and ``entity.entity_type`` --
-    no other plumbing required, because every Track D exporter funnels
-    through this single function.
+    The returned list is a defensive copy of deduplicated, truthy string URIs, so
+    a caller cannot mutate the entity's field through the result.
 
     Args:
-        entity: The canonical entity to resolve identifiers for. The
-            ``canonical_name`` and ``entity_type`` fields are the
-            inputs the Q9 implementation will key off.
+        entity: The canonical entity to resolve identifiers for. ``external_ids``
+            (populated by reconciliation) is the field read here; the legacy
+            ``canonical_name`` / ``entity_type`` inputs drove the now-removed
+            stub and are no longer consulted directly.
 
     Returns:
-        Empty list. The Q9 swap will return URIs like
-        ``["https://doi.org/10.1145/...", "https://orcid.org/..."]``.
+        The entity's stable external identifier URIs, or ``[]`` when none are
+        reconciled. e.g.
+        ``["https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"]`` or
+        ``["https://doi.org/10.1145/..."]``.
 
     Examples:
         >>> from shared.models.entity import Entity
         >>> e = Entity(canonical_name="Ada Lovelace", entity_type="Person")
         >>> resolve_external_ids(e)
         []
+        >>> e.external_ids = ["https://doi.org/10.1/x"]
+        >>> resolve_external_ids(e)
+        ['https://doi.org/10.1/x']
     """
-    # Reference ``entity`` to make the V1 contract explicit -- when Q9
-    # ships, the body uses entity.canonical_name + entity.entity_type as
-    # the resolver inputs. Touching ``entity`` here also documents the
-    # required argument shape for downstream callers.
-    _ = entity
-    return []
+    raw = getattr(entity, "external_ids", None) or []
+    out: List[str] = []
+    for value in raw:
+        if not value:
+            continue
+        text = str(value)
+        if text not in out:
+            out.append(text)
+    return out
 
 
 __all__ = ["resolve_external_ids"]

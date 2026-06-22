@@ -1,22 +1,20 @@
 """Tests for ``shared.utils.external_ids.resolve_external_ids``.
 
-V1 stub coverage. The acceptance criterion for Phase D.0 is:
+K.4 upgraded the D.0 stub: ``resolve_external_ids`` now returns the entity's
+reconciled ``external_ids`` (populated by the vocabulary reconciler). These tests
+hold the **two contracts Track D's exporters depend on**:
 
-    resolve_external_ids(entity) == []
+1. an entity with NO reconciled identifiers still returns ``[]`` (the original
+   empty-input contract — exporters never break);
+2. the signature is unchanged: ``Entity -> List[str]``, single import point.
 
-Beyond that, these tests pin the import surface so the Track M4 Q9 swap
-(TOOI + Crossref resolution) only has to swap the function body and
-nothing else in the rest of the codebase.
-
-These are the regression-guard tests the Q9 implementation should keep
-green for the "stub still resolves to []" call-site contract on entities
-that have no external identifier mapping.
+The ``TestReconciledLookups`` class is the K.4 upgrade — it asserts a reconciled
+entity emits its real URIs.
 """
 
 from __future__ import annotations
 
 import pytest
-
 from shared.models.entity import Entity
 from shared.utils import resolve_external_ids as imported_via_init
 from shared.utils.external_ids import resolve_external_ids
@@ -32,7 +30,7 @@ def sample_entity() -> Entity:
 
 
 class TestResolveExternalIds:
-    """V1 stub returns empty for every input."""
+    """Un-reconciled entities resolve to [] (the preserved empty-input contract)."""
 
     def test_acceptance_criterion(self, sample_entity: Entity):
         """The exact case the plan calls out."""
@@ -89,10 +87,62 @@ class TestPublicAPI:
     def test_function_signature_returns_list_of_str(self, sample_entity: Entity):
         """Signature contract: ``Entity -> List[str]``.
 
-        Pin the return-type shape so Q9 can't drift to a different
+        Pin the return-type shape so the swap can't drift to a different
         container without an explicit caller update.
         """
         result = resolve_external_ids(sample_entity)
         assert isinstance(result, list)
-        for item in result:  # vacuous today, but pins the element type
+        for item in result:
             assert isinstance(item, str)
+
+
+class TestReconciledLookups:
+    """K.4 upgrade: a reconciled entity emits its real external URIs."""
+
+    def test_reconciled_entity_returns_uris(self):
+        """An entity the reconciler linked carries its URI(s) through."""
+        e = Entity(
+            canonical_name="Binnenlandse Zaken en Koninkrijksrelaties",
+            entity_type="organization",
+            external_ids=[
+                "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+            ],
+        )
+        assert resolve_external_ids(e) == [
+            "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+        ]
+
+    def test_multiple_uris_preserved(self):
+        e = Entity(
+            canonical_name="Some Paper",
+            entity_type="scholarly_article",
+            external_ids=["https://doi.org/10.1/a", "https://doi.org/10.1/b"],
+        )
+        assert resolve_external_ids(e) == [
+            "https://doi.org/10.1/a",
+            "https://doi.org/10.1/b",
+        ]
+
+    def test_result_is_a_copy_not_the_field(self):
+        """Mutating the result must not mutate the entity's field."""
+        e = Entity(
+            canonical_name="X",
+            entity_type="organization",
+            external_ids=["https://doi.org/10.1/x"],
+        )
+        result = resolve_external_ids(e)
+        result.append("https://evil/injected")
+        assert e.external_ids == ["https://doi.org/10.1/x"]
+
+    def test_empty_canonical_name_still_empty(self):
+        """AC5: an empty-canonical-name entity returns [] (stub contract kept)."""
+        e = Entity(canonical_name="", entity_type="organization")
+        assert resolve_external_ids(e) == []
+
+    def test_dedups_and_drops_falsy(self):
+        e = Entity(
+            canonical_name="X",
+            entity_type="organization",
+            external_ids=["https://doi.org/10.1/x", "https://doi.org/10.1/x"],
+        )
+        assert resolve_external_ids(e) == ["https://doi.org/10.1/x"]

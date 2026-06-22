@@ -33,12 +33,11 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 import pytest
-
 from shared.models.export import ExportFilter
+from shared.utils.external_ids import resolve_external_ids
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
 from surrealdb_service.repositories.entity import EntityRepository
-
 
 # ---------------------------------------------------------------------------
 # Fixture helpers
@@ -90,6 +89,8 @@ async def _create_entity(
     primary_type: str | None = None,
     orphan_status: str | None = None,
     embedding: List[float] | None = None,
+    external_ids: List[str] | None = None,
+    aliases: List[str] | None = None,
 ) -> str:
     payload: Dict[str, Any] = {
         "canonical_name": canonical_name,
@@ -103,6 +104,8 @@ async def _create_entity(
         "status": "active",
         "type_tags": [entity_type],
         "primary_type": primary_type or entity_type,
+        "external_ids": list(external_ids) if external_ids else [],
+        "aliases": list(aliases) if aliases else [],
     }
     rows = await execute_query(
         """
@@ -118,7 +121,9 @@ async def _create_entity(
             embedding = $embedding,
             status = $status,
             type_tags = $type_tags,
-            primary_type = $primary_type;
+            primary_type = $primary_type,
+            external_ids = $external_ids,
+            aliases = $aliases;
         """,
         payload,
         config=config,
@@ -662,3 +667,90 @@ async def test_notebook_with_no_sources_returns_empty(
     repo = EntityRepository(config=live_surrealdb)
     result = await repo.list_entities_for_notebook(nb_id, ExportFilter())
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# K.4 rev2: reconciled external_ids/aliases survive DB -> projection -> exporter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_external_ids_and_aliases_reach_exporter_through_projection(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """The reconciled URIs must survive the real DB->export read path.
+
+    K.4 review MAJOR-1: ``_ENTITY_EXPORT_FIELDS`` previously omitted
+    ``external_ids`` and ``aliases``, so ``list_entities_for_notebook``
+    (the *only* loader the Track D exporters use) rehydrated those fields
+    to the model default ``[]`` and every reconciled URI was silently
+    dropped — the YAML frontmatter always emitted ``external_ids: []``.
+
+    This test exercises the exact path the prior AC5 unit test skipped:
+    persist an entity *with* reconciled ``external_ids``/``aliases`` set on
+    the DB row, load it back through ``list_entities_for_notebook``, then
+    call the exporter swap-point ``resolve_external_ids(loaded_entity)`` and
+    assert it returns the populated URIs (NOT ``[]``).
+    """
+    notebook_id = await _create_notebook(live_surrealdb, "extids-nb")
+    source_id = await _create_source(live_surrealdb, "extids-src")
+    await _link_source_to_notebook(live_surrealdb, source_id, notebook_id)
+
+    reconciled_uris = [
+        "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+        "https://doi.org/10.1145/example",
+    ]
+    reconciled_aliases = ["Min. BZK", "Binnenlandse Zaken"]
+
+    target_id = await _create_entity(
+        live_surrealdb,
+        canonical_name="Ministerie van BZK",
+        entity_type="Organization",
+        source_documents=[source_id],
+        confidence=0.99,
+        external_ids=reconciled_uris,
+        aliases=reconciled_aliases,
+    )
+
+    repo = EntityRepository(config=live_surrealdb)
+    entities = await repo.list_entities_for_notebook(
+        notebook_id,
+        ExportFilter(
+            min_connections=0,
+            min_confidence=0.0,
+            include_orphans=True,
+            include_archived=True,
+        ),
+    )
+
+    by_id = {e.id: e for e in entities}
+    assert target_id in by_id, "reconciled entity missing from export projection"
+    loaded = by_id[target_id]
+
+    # The projection must carry the real DB values, not the model default [].
+    assert loaded.external_ids == reconciled_uris, (
+        f"external_ids dropped by projection -- got {loaded.external_ids!r}; "
+        f"expected {reconciled_uris!r}"
+    )
+    assert loaded.aliases == reconciled_aliases, (
+        f"aliases dropped by projection -- got {loaded.aliases!r}; "
+        f"expected {reconciled_aliases!r}"
+    )
+
+    # The exporter swap-point must surface the reconciled URIs, not [].
+    resolved = resolve_external_ids(loaded)
+    assert resolved == reconciled_uris, (
+        f"resolve_external_ids returned {resolved!r} after the DB->projection "
+        f"round-trip; expected the reconciled URIs {reconciled_uris!r}. A [] "
+        f"here means the K.4 feature is inert end-to-end (MAJOR-1 regression)."
+    )
+
+    # Belt-and-braces: the projection constant itself must keep both fields.
+    assert "external_ids" in EntityRepository._ENTITY_EXPORT_FIELDS, (
+        "external_ids regressed out of _ENTITY_EXPORT_FIELDS -- exporter path "
+        "would silently drop reconciled URIs again"
+    )
+    assert "aliases" in EntityRepository._ENTITY_EXPORT_FIELDS, (
+        "aliases regressed out of _ENTITY_EXPORT_FIELDS"
+    )

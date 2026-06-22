@@ -115,6 +115,16 @@ class Entity(ObjectModel):
         description="Denormalized surface forms collapsed into this entity on merge",
     )
 
+    # First-class denormalized external identifiers (migration 55 — Phase K.4).
+    # The vocabulary reconciler links an entity to a single high-confidence
+    # ``reference_entity`` (TOOI / Crossref) and writes its stable URI(s) here.
+    # ``resolve_external_ids`` (Track D exporter swap-point) reads this field, so
+    # a reconciled entity exports real URIs while an un-reconciled one stays [].
+    external_ids: List[str] = Field(
+        default_factory=list,
+        description="Stable external identifiers (TOOI URIs, Crossref DOIs, ...) from vocabulary reconciliation",
+    )
+
     # Multi-type tagging (migration 44 — Phase B.1a)
     type_tags: List[str] = Field(
         default_factory=list,
@@ -126,7 +136,12 @@ class Entity(ObjectModel):
     )
 
     @field_validator(
-        "type_tags", "source_documents", "provenance_chain", "aliases", mode="before"
+        "type_tags",
+        "source_documents",
+        "provenance_chain",
+        "aliases",
+        "external_ids",
+        mode="before",
     )
     @classmethod
     def ensure_list(cls, v: Any) -> List[Any]:
