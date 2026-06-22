@@ -14,12 +14,17 @@ canaries; this service now routes entity writes through
 write-path stay aligned.
 """
 
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger
+from ontology_manager.canonical_bridge import resolve_ontology_type
 from shared.models.entity import Entity
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.entity import EntityRepository
+
+if TYPE_CHECKING:
+    from ontology_manager.schema import Ontology
 
 # The ``entity.entity_type`` field carries an ``ASSERT $value INSIDE [...]``
 # constraint (enforced even though the table is SCHEMALESS). LLMs — especially
@@ -72,6 +77,66 @@ def _normalize_entity_type(raw: Any) -> str:
     norm = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
     norm = _ENTITY_TYPE_ALIASES.get(norm, norm)
     return norm if norm in _ALLOWED_ENTITY_TYPES else "other"
+
+
+@dataclass
+class ResolvedType:
+    """The outcome of resolving an extracted label to a persistable type.
+
+    ``entity_type`` is always a member of ``_ALLOWED_ENTITY_TYPES`` (the B.8
+    enum contract). ``primary_type`` / ``type_tags`` carry the rich ontology
+    type when the L.1 bridge resolved the label, and are empty when only the
+    coarse alias/enum path applied (the rich type isn't known there yet — L.2
+    extends the residual path).
+    """
+
+    entity_type: str
+    primary_type: Optional[str] = None
+    type_tags: List[str] = field(default_factory=list)
+
+
+def _resolve_entity_type(
+    raw_label: Any, schemas: Optional[List["Ontology"]] = None
+) -> ResolvedType:
+    """Resolve an extracted label to a canonical type, preserving rich typing.
+
+    Order (L.1):
+
+    1. **Ontology bridge** — if ``schemas`` are supplied and the label is a
+       type in one of them, walk its ``parent_type`` chain to a schema.org
+       base and map to the canonical enum. The original ontology label is
+       preserved in ``primary_type`` and the parent trail in ``type_tags``.
+    2. **Alias / enum fallback** — otherwise drop to ``_normalize_entity_type``
+       (the existing English/NER alias map; L.2 extends it with the EN+NL
+       residual map). ``primary_type`` / ``type_tags`` stay empty here.
+
+    The bridge degrades gracefully: absent schemas (cross-batch / re-ingest),
+    an unknown label, or an orphaned chain all return ``None`` from the bridge
+    and fall through to the alias path — persistence never crashes (AC7).
+    """
+    if schemas:
+        try:
+            resolution = resolve_ontology_type(str(raw_label or ""), schemas)
+        except Exception as e:
+            # A bridge failure must never break the hot persist path; degrade
+            # to the alias/enum fallback.
+            logger.warning(f"canonical bridge failed for {raw_label!r}: {e}")
+            resolution = None
+        if resolution is not None:
+            # Defensive: the bridge map only emits valid enum values, but pin
+            # the B.8 contract — a non-enum canonical falls back to "other".
+            canonical = (
+                resolution.canonical
+                if resolution.canonical in _ALLOWED_ENTITY_TYPES
+                else "other"
+            )
+            return ResolvedType(
+                entity_type=canonical,
+                primary_type=resolution.ontology_type,
+                type_tags=list(resolution.type_tags),
+            )
+
+    return ResolvedType(entity_type=_normalize_entity_type(raw_label))
 
 
 class EntityPersistenceService:
@@ -160,6 +225,7 @@ class EntityPersistenceService:
         match_candidates: List[Dict[str, Any]] | None = None,
         extraction_method: str = "llm",
         extraction_model: str | None = None,
+        applicable_schemas: Optional[List["Ontology"]] = None,
     ) -> Dict[str, Any]:
         """Upsert entities and create relations in the knowledge graph.
 
@@ -168,6 +234,14 @@ class EntityPersistenceService:
             entities: Filtered entity dicts (text, label, confidence, properties).
             relations: Filtered relation dicts (source_entity, target_entity, relation_type, confidence).
             merge_groups: Optional dedup merge groups for provenance.
+            applicable_schemas: The ontologies applied for this source's
+                extraction (L.1). When supplied, an extracted ontology label
+                is bridged to its canonical ``entity_type`` and the rich type
+                is preserved in ``primary_type`` / ``type_tags``. Threaded down
+                from ``entity_extraction_service`` (already computed by
+                ``detect_applicable_schemas`` — never re-detected here). Absent
+                (cross-batch / re-ingest) the bridge degrades to the alias/enum
+                path.
 
         Returns:
             Dict with ``entities_upserted`` and ``relations_created`` counts.
@@ -192,20 +266,27 @@ class EntityPersistenceService:
         # lookup matches the row this batch persisted. A relation whose
         # endpoint name is NOT in this batch (cross-batch) stays unmapped and
         # falls back to name-only resolution (zero regression).
+        # L.1: resolve through the same bridge-aware path the upsert uses so the
+        # relation endpoint type matches the canonical the row persisted with.
         type_by_name: Dict[str, str] = {}
         for entity in entities:
             etext = entity.get("text", "")
             if not etext.strip():
                 continue
-            type_by_name[etext] = _normalize_entity_type(
-                entity.get("label", "concept")
-            )
+            type_by_name[etext] = _resolve_entity_type(
+                entity.get("label", "concept"), applicable_schemas
+            ).entity_type
 
         # 1. Upsert entities
         for entity in entities:
             text = entity.get("text", "")
             raw_label = entity.get("label", "concept")
-            label = _normalize_entity_type(raw_label)
+            # L.1: bridge the rich ontology label to its canonical enum value
+            # AND preserve the original type. ``entity_type`` (coarse) drives
+            # dedup / the K (name,type) guard; ``primary_type`` / ``type_tags``
+            # carry the rich type the LLM emitted.
+            resolved = _resolve_entity_type(raw_label, applicable_schemas)
+            label = resolved.entity_type
             confidence = entity.get("confidence", 0.5)
             properties = entity.get("properties", {})
 
@@ -218,8 +299,11 @@ class EntityPersistenceService:
                 if k != "embedding" and v is not None
             }
             # Preserve the model's original (un-normalized) type for provenance
-            # when it didn't map cleanly onto the canonical enum.
-            if raw_label and str(raw_label).strip().lower() != label:
+            # when it didn't map cleanly onto the canonical enum. The check is
+            # against the COARSE alias projection (not the bridge's primary_type)
+            # so a bridged ``Gemeente`` (-> administrative_area) still records its
+            # raw label even though L.1 also stamps it into primary_type.
+            if raw_label and str(raw_label).strip().lower() != _normalize_entity_type(raw_label):
                 stored_props["raw_entity_type"] = raw_label
 
             # Add merge history if available
@@ -243,6 +327,10 @@ class EntityPersistenceService:
                 entity_model = Entity(
                     canonical_name=text,
                     entity_type=label,
+                    # L.1: stamp the rich ontology type (empty when only the
+                    # coarse alias/enum path applied — L.2 extends the residual).
+                    primary_type=resolved.primary_type,
+                    type_tags=resolved.type_tags,
                     confidence=confidence,
                     source_documents=[source_id],
                     properties=stored_props,

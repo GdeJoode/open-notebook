@@ -397,3 +397,202 @@ class TestPersistFilteredResult:
         ent = mock_upsert.call_args.args[0]
         assert ent.extraction_method == "langextract"
         assert ent.properties["extraction_model"] == "qwen2.5:14b-instruct-q5_K_M"
+
+
+# --- L.1: ontology->canonical bridge at the persist boundary -------------
+
+from app_main.services.entity_persistence_service import (  # noqa: E402
+    _ALLOWED_ENTITY_TYPES,
+    _resolve_entity_type,
+)
+from ontology_manager.schema import (  # noqa: E402
+    EntityTypeDefinition,
+    Ontology,
+    OntologyMetadata,
+)
+
+
+def _gov_schema() -> Ontology:
+    """government ontology fragment with the live parent_type chains.
+
+    AdministrativeArea / GovernmentOrganization are intentionally NOT loaded
+    here (they live in policy.yaml in prod) — the bridge terminates on the
+    base NAME.
+    """
+    return Ontology(
+        metadata=OntologyMetadata(name="government", version="1.0"),
+        entity_types={
+            "Gemeente": EntityTypeDefinition(
+                name="Gemeente", parent_type="AdministrativeArea"
+            ),
+            "Ministerie": EntityTypeDefinition(
+                name="Ministerie", parent_type="GovernmentOrganization"
+            ),
+        },
+    )
+
+
+def _deals_schema() -> Ontology:
+    return Ontology(
+        metadata=OntologyMetadata(name="deals", version="1.0"),
+        entity_types={
+            "Deal": EntityTypeDefinition(name="Deal", parent_type="GovernmentService"),
+            "RegioDeal": EntityTypeDefinition(name="RegioDeal", parent_type="Deal"),
+        },
+    )
+
+
+def _instruments_schema() -> Ontology:
+    return Ontology(
+        metadata=OntologyMetadata(name="instruments", version="1.0"),
+        entity_types={"Wet": EntityTypeDefinition(name="Wet", parent_type="Legislation")},
+    )
+
+
+def _policy_themes_schema() -> Ontology:
+    return Ontology(
+        metadata=OntologyMetadata(name="policy_themes", version="1.0"),
+        entity_types={
+            "BeleidsThema": EntityTypeDefinition(
+                name="BeleidsThema", parent_type="Concept"
+            )
+        },
+    )
+
+
+class TestResolveEntityType:
+    """Unit tests on the bridge-aware resolver used at the persist boundary."""
+
+    def test_gemeente_bridges_and_preserves(self):
+        res = _resolve_entity_type("Gemeente", [_gov_schema()])
+        assert res.entity_type == "administrative_area"
+        assert res.primary_type == "Gemeente"
+        assert "Gemeente" in res.type_tags
+
+    def test_ministerie_bridges(self):
+        res = _resolve_entity_type("Ministerie", [_gov_schema()])
+        assert res.entity_type == "government_organization"
+        assert res.primary_type == "Ministerie"
+
+    def test_regiodeal_includes_deal_parent(self):
+        res = _resolve_entity_type("RegioDeal", [_deals_schema()])
+        # interim canonical until L.3 introduces ``programme``
+        assert res.entity_type == "creative_work"
+        assert res.primary_type == "RegioDeal"
+        assert "Deal" in res.type_tags
+
+    def test_wet_bridges_to_legislation(self):
+        res = _resolve_entity_type("Wet", [_instruments_schema()])
+        assert res.entity_type == "legislation"
+        assert res.primary_type == "Wet"
+
+    def test_beleidsthema_bridges_to_topic(self):
+        res = _resolve_entity_type("BeleidsThema", [_policy_themes_schema()])
+        assert res.entity_type == "topic"
+        assert res.primary_type == "BeleidsThema"
+
+    def test_unknown_label_falls_through_to_alias_path(self):
+        # Not in the applied ontology -> None from bridge -> alias/enum path.
+        res = _resolve_entity_type("Quux", [_gov_schema()])
+        assert res.entity_type == "other"
+        assert res.primary_type is None
+        assert res.type_tags == []
+
+    def test_no_schemas_uses_alias_path(self):
+        # Graceful degradation (AC7): no schemas -> alias/enum path, no crash.
+        res = _resolve_entity_type("ORG", None)
+        assert res.entity_type == "organization"
+        assert res.primary_type is None
+
+    def test_canonical_always_in_allowed_enum(self):
+        # B.8 contract: every bridged canonical is a valid enum member.
+        for label, schema in [
+            ("Gemeente", _gov_schema()),
+            ("Ministerie", _gov_schema()),
+            ("RegioDeal", _deals_schema()),
+            ("Wet", _instruments_schema()),
+            ("BeleidsThema", _policy_themes_schema()),
+        ]:
+            res = _resolve_entity_type(label, [schema])
+            assert res.entity_type in _ALLOWED_ENTITY_TYPES
+
+
+class TestPersistStampsRichType:
+    """The persist path stamps primary_type/type_tags + keeps raw_entity_type."""
+
+    @pytest.mark.asyncio
+    async def test_bridge_stamps_primary_type_and_type_tags(self):
+        svc, mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[
+                    {
+                        "text": "Gemeente Groningen",
+                        "label": "Gemeente",
+                        "confidence": 0.9,
+                        "properties": {},
+                    }
+                ],
+                relations=[],
+                applicable_schemas=[_gov_schema()],
+            )
+
+        ent = mock_upsert.call_args.args[0]
+        assert ent.entity_type == "administrative_area"
+        assert ent.primary_type == "Gemeente"
+        assert "Gemeente" in ent.type_tags
+        # raw label preserved for provenance / L.5 retro re-typing
+        assert ent.properties["raw_entity_type"] == "Gemeente"
+
+    @pytest.mark.asyncio
+    async def test_no_schemas_leaves_rich_type_empty(self):
+        # Without schemas the alias/enum path runs; rich-type slots stay empty.
+        svc, mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[
+                    {"text": "BZK", "label": "ORG", "confidence": 0.9, "properties": {}}
+                ],
+                relations=[],
+            )
+
+        ent = mock_upsert.call_args.args[0]
+        assert ent.entity_type == "organization"
+        assert ent.primary_type is None
+        assert ent.type_tags == []
+
+    @pytest.mark.asyncio
+    async def test_bridge_failure_degrades_not_crashes(self):
+        # AC7: an unknown label with schemas present still persists (falls to
+        # alias path), never raising.
+        svc, mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[
+                    {"text": "Frobnicator", "label": "Quux", "confidence": 0.5, "properties": {}}
+                ],
+                relations=[],
+                applicable_schemas=[_gov_schema()],
+            )
+
+        assert result["entities_upserted"] == 1
+        ent = mock_upsert.call_args.args[0]
+        assert ent.entity_type == "other"
