@@ -8,6 +8,38 @@ Append-only ledger. One row per phase attempt.
 | K.1 | NL-aware normalizer + precision guard + measurement harness | (pending) | `track/k1-nl-normalizer` | 2026-06-22 | implemented — all 9 ACs green, ready for review |
 | K.1 rev3 | Option A: no cross-type NAME collisions; name-only false-merge gate | (pending) | `track/k1-nl-normalizer` | 2026-06-22 | implemented — 0 name-only false-merges, ready for review |
 | K.1 rev4 | Articles + spelling only; NO content-prefix strip (ministerie van collides cross-type) | (pending) | `track/k1-nl-normalizer` | 2026-06-22 | implemented — 0 name-only false-merges, −14 fragmentation, ready for review |
+| K.2 | Curated NL gov-org alias table + extensible override config | (pending) | `track/k2-org-aliases` | 2026-06-22 | implemented — all 7 ACs green; full-form keys (no blind strip); 0 name-only false-merges over combined corpus; K.1 1346 → K.2 1337 (BZK 6, VRO 3); ready for review |
+
+## Phase K.2 — Government-org abbreviation alias table + extensible alias config — 2026-06-22
+
+**Branch**: `track/k2-org-aliases` (off main, which has APPROVED K.1). Commits: source modules → corpora + tests.
+
+**Spec correction applied**: the plan's "strip `ministerie van` first then expand `bzk`" ordering is stale (K.1 rev4 removed ALL content-prefix stripping — it collided cross-type). K.2 instead keys the **full surface forms directly** in the alias table (`ministerie van bzk` is its own key), never relying on prefix stripping, so it cannot collapse a ministry onto a bare different-typed token.
+
+**Delivered**
+- `packages/shared/src/shared/utils/org_aliases.py` — `_GOV_ORG_ALIASES: dict[str,str]` (normalized full-form keys → normalized canonical) + `expand_org_alias(name, *, aliases=None)` (exact-whole-string match only; unknown → pass through untouched, no fuzzy guessing). Curated 13-ministry set: BZK, VRO, EZK, OCW, VWS, IenW, JenV, SZW, LNV, BuZa, Financiën, Defensie, AZ. Per ministry: abbreviation + `ministerie van <abbrev>` + bare full-form + `ministerie van <full-form>` → one canonical. `minister van …` (person) role forms deliberately NOT keyed.
+- `packages/shared/src/shared/config/alias_overrides.py` (+ `config/__init__.py`) — 3-layer loader (built-in floor → file `ONB_ALIAS_OVERRIDES_PATH` JSON → DB-overlay seam `set_db_overlay` for K.5). Validates on load: empty key/value rejected (logged, skipped); keys/values normalized through the same pre-alias pipeline (`normalize_alias_key`). Cached; `reload_alias_overrides()` rebuilds.
+- `packages/shared/src/shared/utils/nl_normalization.py` — added `normalize_alias_key` (shared pre-alias pipeline; placed here to break the name_normalizer↔alias_overrides import cycle).
+- `name_normalizer.py` — composes `expand_org_alias(name, aliases=get_resolved_aliases())` as the FINAL stage, after article-strip + spelling (alias keys are post-K.1 forms). Public signature unchanged; docstrings + doctests updated.
+- `packages/shared/tests/test_org_aliases.py` — expansion, exact-match-only (noisy `vro (...)` untouched), distinct-canonical precision, type-safety (OCW≠onderwijs, no person-role keys), override config (AC4 honoured, empty rejected, malformed-file ignored, DB-overlay seam).
+
+**Curated alias set** (abbrev → canonical full-form, each a DISTINCT org name, never a bare concept):
+BZK→binnenlandse zaken en koninkrijksrelaties · VRO→volkshuisvesting en ruimtelijke ordening · EZK→economische zaken en klimaat · OCW→onderwijs cultuur en wetenschap · VWS→volksgezondheid welzijn en sport · IenW→infrastructuur en waterstaat · JenV→justitie en veiligheid · SZW→sociale zaken en werkgelegenheid · LNV→landbouw natuur en voedselkwaliteit · BuZa→buitenlandse zaken · Fin→financien · Def→defensie · AZ→algemene zaken.
+
+**Measured over the frozen 1402-entity Convenant fixture**
+- Distinct-canonical: **K.1 1346 → K.2 1337** = **further −9** (V1 1360 → −23 cumulative). Drop comes from the BZK + VRO org-form merges.
+- BZK cluster (`binnenlandse zaken en koninkrijksrelaties`): **6 surface forms → 1** (`BZK`, `ministerie van BZK`, `Ministerie van Binnenlandse Zaken en Koninkrijk(s)relaties` ×2 spellings, both bare spellings).
+- VRO cluster (`volkshuisvesting en ruimtelijke ordening`): **3 → 1** (`VRO`, `Ministerie van Volkshuisvesting en Ruimtelijke Ordening`, bare full-form).
+- **Name-only false-merges over the FULL combined must_not_merge corpus: 0.** Unmerged over must_merge: 0.
+- Org/concept non-collision confirmed: `Ministerie van Onderwijs` (`ministerie van onderwijs`) ≠ `Onderwijs` (`onderwijs`); `Ministerie van OCW` (`onderwijs cultuur en wetenschap`) ≠ `Onderwijs`. `BZK` ≠ `EZK`.
+
+**AC ledger**: AC1✓ (BZK forms collapse) AC2✓ (VRO) AC3✓ (BZK≠EZK; `expand_org_alias("xyz")=="xyz"`) AC4✓ (override `{"min az":"algemene zaken"}` honoured, no code change) AC5✓ (0 false-merges over combined corpus) AC6✓ (further drop; BZK/VRO each single canonical) AC7✓ (B.8 hash derive-rule unchanged).
+
+**Corpus changes**
+- `must_merge.jsonl`: +5 org-form pairs (`Ministerie van BZK`↔`BZK`↔`Binnenlandse Zaken en Koninkrijksrelaties`; `VRO`↔full-form; `Ministerie van VRO`↔full-form).
+- `must_not_merge.jsonl`: +`BZK`↔`EZK`, +unknown-abbrev (`XYZ`↔`Onderwijs`), +`Ministerie van OCW`↔`Onderwijs` (org/concept), +`Minister van VRO`↔`Ministerie van VRO` (person/org). **Removed** the stale K.1 line `Ministerie van BZK`(org)↔`BZK`(person) — K.2 now legitimately merges that org-form pair (it is in must_merge), and the person/org role split stays protected by `Minister van BZK`↔`Ministerie van BZK` (kept) and the new `Minister van VRO`↔`Ministerie van VRO`. See escalations.md note.
+
+**Regression**: `packages/shared/tests/` 299 passed; combined validation (shared + persistence + entity-repo roundtrip + notebook-merge) **322 passed**. B.8 `TestB8HashContract` green (derive-rule unchanged). ruff + mypy clean on changed src + test files. (Pre-existing unrelated failure `test_llm_matcher.py::test_calls_ollama_for_unknown_pair` confirmed present on clean tree — not a K.2 regression.)
 
 ## Phase K.1 — NL-aware normalizer + precision guard + measurement harness — 2026-06-22
 
