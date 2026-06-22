@@ -25,17 +25,16 @@ from unittest.mock import patch
 import pytest
 from ontology_extraction.multi_schema_orchestrator import (
     MIN_APPLICABLE_CONFIDENCE,
-    SCHEMA_AFFINITY,
-    SCHEMA_AFFINITY_CONFIDENCE,
     SOFT_NUDGE_COVERAGE_HIGH,
     SOFT_NUDGE_COVERAGE_LOW,
     MergedEntity,
     SoftNudgeDecision,
-    _apply_schema_affinity,
+    _content_signal_phrases,
     _decide_soft_nudge,
     _dedupe_extensions,
     _merge_results,
     _sample_text_for_pass1,
+    _score_content_overlap,
     detect_applicable_schemas,
     run_multi_schema,
 )
@@ -175,7 +174,9 @@ def _deals_ontology() -> Ontology:
 
 
 def _policy_themes_ontology() -> Ontology:
-    """Theme schema with abstract type names that keyword-match poorly."""
+    """Theme schema whose abstract type NAMES keyword-match poorly but whose
+    ``extraction_hints`` carry the real theme vocabulary the L.4 rev2 content
+    scorer matches on (mirrors the production ``policy_themes.yaml``)."""
     return Ontology(
         metadata=OntologyMetadata(name="policy_themes", version="1.0"),
         entity_types={
@@ -183,6 +184,16 @@ def _policy_themes_ontology() -> Ontology:
                 name="BeleidsThema",
                 description="An overarching policy theme.",
                 parent_type="Concept",
+                extraction_hints=[
+                    "brede welvaart",
+                    "leefbaarheid",
+                    "vergrijzing",
+                    "bevolkingsdaling",
+                    "gezondheid",
+                    "werkgelegenheid",
+                    "voorzieningenniveau",
+                    "materiele welvaart",
+                ],
             ),
             "BeleidsPijler": EntityTypeDefinition(
                 name="BeleidsPijler",
@@ -397,23 +408,43 @@ class TestDetectApplicableSchemas:
 
 
 # ---------------------------------------------------------------------------
-# L.4 schema-affinity co-selection tests
+# L.4 rev2: content-driven applicability of policy_themes
 # ---------------------------------------------------------------------------
 
 
-class TestSchemaAffinityCoSelection:
-    """Affinity co-selection: gated, additive, data-driven (L.4).
+class TestContentDrivenPolicyThemes:
+    """``policy_themes`` is selected on CONTENT overlap, not on provenance (L.4
+    rev2).
 
-    A Regio-Deal document body mentions concrete gov/deals vocabulary
-    (``Gemeente``, ``RegioDeal``) so those schemas keyword-fire. The abstract
-    ``policy_themes`` type names (``BeleidsThema`` …) do NOT appear verbatim, so
-    without affinity ``policy_themes`` is crowded out — themes degrade to generic
-    ``concept``/``topic``. The affinity bundle rescues it.
+    rev1 gated ``policy_themes`` on the gov/deals stack firing — wrong because
+    policy themes are a property of content, and the gate was inert in
+    production (the real document-type mapper never selects deals/government for
+    these docs). rev2 scores against the schema's content-signal vocabulary
+    (extraction_hints / descriptions / concepts), so ANY document discussing the
+    themes selects ``policy_themes`` — a Regio-Deal doc and a non-gov scientific
+    paper alike — and an unrelated document does not.
     """
 
+    # A Regio-Deal-style body: gov vocabulary AND theme vocabulary present.
     _REGIODEAL_TEXT = (
         "De Gemeente Groningen en de Provincie sluiten een RegioDeal met het "
-        "Ministerie. De Deal investeert in brede welvaart en leefbaarheid."
+        "Ministerie. De Deal investeert in brede welvaart en leefbaarheid, in "
+        "gezondheid en werkgelegenheid."
+    )
+    # A NON-government scientific-paper body: theme vocabulary WITHOUT any
+    # gov/deals provenance. This is the user's requirement — content, not
+    # provenance, drives selection.
+    _SCIPAPER_TEXT = (
+        "This paper studies brede welvaart and leefbaarheid in shrinking "
+        "regions. We analyse vergrijzing and bevolkingsdaling and their effect "
+        "on voorzieningenniveau and gezondheid. We argue materiele welvaart "
+        "alone understates regional leefbaarheid."
+    )
+    # An unrelated ML paper: no policy-theme vocabulary at all.
+    _MLPAPER_TEXT = (
+        "We present a transformer architecture for image classification. Our "
+        "model achieves state-of-the-art accuracy on ImageNet using a novel "
+        "attention mechanism and gradient checkpointing."
     )
 
     def _all_ontologies(self) -> List[Ontology]:
@@ -425,25 +456,9 @@ class TestSchemaAffinityCoSelection:
         ]
 
     @pytest.mark.asyncio
-    async def test_before_policy_themes_not_keyword_selected(self):
-        # AC1 (BEFORE): with affinity disabled, policy_themes does NOT make the
-        # cut for a Regio-Deal doc — its type names keyword-match poorly.
-        ranked = await detect_applicable_schemas(
-            document_type=None,
-            document_text=self._REGIODEAL_TEXT,
-            ontologies=self._all_ontologies(),
-            top_k=3,
-            affinity={},
-        )
-        names = [ont.metadata.name for ont, _conf in ranked]
-        assert "policy_themes" not in names
-        # The gov stack DOES fire on this document.
-        assert "deals" in names or "government" in names
-
-    @pytest.mark.asyncio
-    async def test_after_affinity_co_selects_policy_themes(self):
-        # AC1 (AFTER): with the default affinity, policy_themes is co-selected
-        # because deals/government fired.
+    async def test_regiodeal_doc_selects_policy_themes_on_content(self):
+        # AC1: a Regio-Deal doc selects policy_themes via content overlap — no
+        # mapper, no affinity, no injected trigger.
         ranked = await detect_applicable_schemas(
             document_type=None,
             document_text=self._REGIODEAL_TEXT,
@@ -454,106 +469,89 @@ class TestSchemaAffinityCoSelection:
         assert "policy_themes" in names
 
     @pytest.mark.asyncio
-    async def test_conservative_keyword_schemas_retained(self):
-        # AC4: co-selection is additive — every keyword-selected schema is
-        # still present after the affinity bundle is appended.
-        baseline = await detect_applicable_schemas(
-            document_type=None,
-            document_text=self._REGIODEAL_TEXT,
-            ontologies=self._all_ontologies(),
-            top_k=3,
-            affinity={},
-        )
-        with_affinity = await detect_applicable_schemas(
-            document_type=None,
-            document_text=self._REGIODEAL_TEXT,
-            ontologies=self._all_ontologies(),
-            top_k=3,
-        )
-        baseline_names = {ont.metadata.name for ont, _conf in baseline}
-        affinity_names = {ont.metadata.name for ont, _conf in with_affinity}
-        # No schema removed; the bundle is strictly additive.
-        assert baseline_names.issubset(affinity_names)
-
-    @pytest.mark.asyncio
-    async def test_gated_non_policy_doc_excludes_policy_themes(self):
-        # AC5: a non-policy document (neither deals nor government fires) does
-        # NOT pull in policy_themes — the bundle is gated on its trigger.
-        text = "The researcher published a paper about graph theory."
+    async def test_non_gov_theme_paper_also_selects_policy_themes(self):
+        # AC2: a non-government scientific paper about the themes ALSO selects
+        # policy_themes — proving content-driven, not provenance-gated. The
+        # gov/deals schemas do NOT fire here.
         ranked = await detect_applicable_schemas(
             document_type=None,
-            document_text=text,
+            document_text=self._SCIPAPER_TEXT,
             ontologies=self._all_ontologies(),
             top_k=3,
         )
         names = [ont.metadata.name for ont, _conf in ranked]
-        assert "policy_themes" not in names
+        assert "policy_themes" in names
         assert "deals" not in names
         assert "government" not in names
 
     @pytest.mark.asyncio
-    async def test_top_k_does_not_truncate_the_bundle(self):
-        # The bundle is appended AFTER top-K truncation, so even with a tight
-        # top_k=1 (only the single best keyword schema survives), the gated
-        # bundle still rides along.
+    async def test_unrelated_doc_does_not_select_policy_themes(self):
+        # AC3: an unrelated ML paper (no theme vocabulary) does NOT select
+        # policy_themes — over-application bounded by MIN_APPLICABLE_CONFIDENCE.
         ranked = await detect_applicable_schemas(
             document_type=None,
-            document_text=self._REGIODEAL_TEXT,
+            document_text=self._MLPAPER_TEXT,
             ontologies=self._all_ontologies(),
-            top_k=1,
-            affinity={"deals": ["policy_themes"], "government": ["policy_themes"]},
+            top_k=3,
         )
         names = [ont.metadata.name for ont, _conf in ranked]
-        # Exactly one keyword schema + the co-selected bundle.
-        assert "policy_themes" in names
+        assert "policy_themes" not in names
 
-    def test_apply_affinity_is_additive_and_ordered(self):
-        # Pure-helper contract: selected list is preserved verbatim at the
-        # front; the bundle is appended at the end with the affinity confidence.
-        gov = _government_ontology()
-        themes = _policy_themes_ontology()
-        selected = [(gov, 0.7)]
-        result = _apply_schema_affinity(
-            selected, [gov, themes], {"government": ["policy_themes"]}
+    @pytest.mark.asyncio
+    async def test_content_score_clears_floor_for_theme_doc(self):
+        # The policy_themes content score is comfortably above the applicability
+        # floor for a theme doc — the selection is not a knife-edge.
+        ranked = await detect_applicable_schemas(
+            document_type=None,
+            document_text=self._SCIPAPER_TEXT,
+            ontologies=self._all_ontologies(),
+            top_k=5,
         )
-        names = [ont.metadata.name for ont, _conf in result]
-        assert names == ["government", "policy_themes"]
-        assert result[-1][1] == SCHEMA_AFFINITY_CONFIDENCE
-        # Original list untouched.
-        assert len(selected) == 1
+        by_name = {ont.metadata.name: conf for ont, conf in ranked}
+        assert by_name["policy_themes"] >= MIN_APPLICABLE_CONFIDENCE
 
-    def test_apply_affinity_skips_already_selected_bundle(self):
-        # Idempotent: a bundle schema already in the selected set is not
-        # duplicated.
-        gov = _government_ontology()
-        themes = _policy_themes_ontology()
-        selected = [(gov, 0.7), (themes, 0.6)]
-        result = _apply_schema_affinity(
-            selected, [gov, themes], {"government": ["policy_themes"]}
+    def test_content_signal_phrases_include_hints_and_descriptions(self):
+        # The signal set is the union of names + hints + descriptions (+ concept
+        # vocabulary). Pin that hints are included — that is the rev2 fix.
+        phrases = _content_signal_phrases(_policy_themes_ontology())
+        lowered = {p.lower() for p in phrases}
+        assert "beleidsthema" in lowered  # type name
+        assert "brede welvaart" in lowered  # extraction_hint
+        assert "leefbaarheid" in lowered  # extraction_hint
+
+    def test_score_content_overlap_zero_for_unrelated_text(self):
+        score = _score_content_overlap(
+            _policy_themes_ontology(),
+            "a paper on transformer attention and gpu memory",
         )
-        names = [ont.metadata.name for ont, _conf in result]
-        assert names.count("policy_themes") == 1
+        assert score == 0.0
 
-    def test_apply_affinity_missing_bundle_ontology_is_skipped(self):
-        # The bundle schema isn't in the candidate list → nothing to append,
-        # no crash.
-        gov = _government_ontology()
-        selected = [(gov, 0.7)]
-        result = _apply_schema_affinity(
-            selected, [gov], {"government": ["policy_themes"]}
+    def test_score_content_overlap_nonzero_for_theme_text(self):
+        score = _score_content_overlap(
+            _policy_themes_ontology(),
+            "a study of brede welvaart and leefbaarheid in the region",
         )
-        names = [ont.metadata.name for ont, _conf in result]
-        assert names == ["government"]
+        assert score > 0.0
 
-    def test_empty_affinity_is_noop(self):
-        gov = _government_ontology()
-        selected = [(gov, 0.7)]
-        assert _apply_schema_affinity(selected, [gov], {}) == selected
-
-    def test_default_affinity_declares_policy_themes_bundle(self):
-        # The affinity is declared as DATA — assert the contract.
-        assert SCHEMA_AFFINITY["deals"] == ["policy_themes"]
-        assert SCHEMA_AFFINITY["government"] == ["policy_themes"]
+    def test_score_content_overlap_capped_below_doctype_signal(self):
+        # The content score is capped at 0.9 so a document-type match (0.92)
+        # always dominates when both fire.
+        score = _score_content_overlap(
+            _policy_themes_ontology(),
+            " ".join(
+                [
+                    "brede welvaart",
+                    "leefbaarheid",
+                    "vergrijzing",
+                    "bevolkingsdaling",
+                    "gezondheid",
+                    "werkgelegenheid",
+                    "voorzieningenniveau",
+                    "materiele welvaart",
+                ]
+            ),
+        )
+        assert score <= 0.9
 
 
 # ---------------------------------------------------------------------------

@@ -1,50 +1,84 @@
-"""Track L.4 — schema application over a Regio-Deal document.
+"""Track L.4 rev2 — content-driven schema application over policy-theme docs.
 
 The 44% generic ``concept``/``topic`` bucket is a schema-APPLICATION gap: the
 ``policy_themes`` schema (``BeleidsThema`` / ``BeleidsPijler`` / ``Indicator`` /
-``BredeWelvaart`` / ``Leefbaarheid`` …) exists for exactly the Regio-Deal
-themes, but its abstract type NAMES keyword-match poorly so it is crowded out of
-``detect_applicable_schemas``' top-K. L.4 closes the gap two ways:
+``BredeWelvaart`` / ``Leefbaarheid`` …) exists for exactly the brede-welvaart
+themes, but its abstract type NAMES match poorly so it was crowded out of
+``detect_applicable_schemas``' top-K.
 
-* **schema-affinity co-selection** — when the keyword-rich gov stack
-  (``deals`` / ``government``) is selected, ``policy_themes`` is co-selected
-  (gated + additive). AC1 / AC4 / AC5.
-* **per-notebook default** — a configured ``notebook_schema`` forces the base +
-  its affinity bundle regardless of keyword score (config beats auto-detection).
-  AC3.
+rev1 tried to fix this by gating ``policy_themes`` co-selection on the gov/deals
+stack firing. That was wrong: policy themes are a property of CONTENT, not
+provenance (a scientific paper about brede welvaart is about policy themes
+without being a gov document), AND the gate was inert in production — the real
+``document_mapper`` maps Regio-Deal docs to ``policy`` / ``general``, never
+``deals`` / ``government``, so the trigger never fired on real data. rev1's test
+only passed by injecting a fake ``_deals_mapper`` the production path lacks.
+
+rev2 makes ``policy_themes`` earn selection on its OWN content merit: the
+applicability scorer now scores the schema's ``extraction_hints`` /
+``description`` text / ``concepts`` (the real theme vocabulary — ``brede
+welvaart``, ``leefbaarheid``, ``vergrijzing`` …), not just abstract type names.
+So ANY document discussing the themes selects ``policy_themes`` on content:
+
+* a Regio-Deal document (AC1),
+* a NON-government scientific paper about the themes (AC2),
+
+while an unrelated document does not (AC3, bounded by
+``MIN_APPLICABLE_CONFIDENCE``). The per-notebook default stays as the explicit
+operator override (AC5).
 
 With ``policy_themes`` applied, the L.1 canonical bridge maps a ``BeleidsThema``
 to ``entity_type == "topic"`` with the rich ``primary_type == "BeleidsThema"``
-(not generic ``concept``). AC2.
+(not generic ``concept``). AC4.
 
-These tests run against the REAL ontologies (loaded from YAML by the registry —
-no DB, no LLM, no network) so they assert the production vocabulary, not a
-synthetic fixture.
+These tests run against the REAL ontologies and the REAL document_mapper (loaded
+from YAML by the registry — no DB, no LLM, no network, NO injected mapper) so
+they prove the production path, not a synthetic fixture.
 """
 
 from __future__ import annotations
 
 import pytest
-from app_main.services.entity_extraction_service import EntityExtractionService
+from app_main.services.entity_extraction_service import (
+    NOTEBOOK_DEFAULT_BUNDLE,
+    EntityExtractionService,
+)
 from app_main.services.entity_persistence_service import _resolve_entity_type
 from ontology_extraction.multi_schema_orchestrator import (
-    SCHEMA_AFFINITY,
     detect_applicable_schemas,
 )
 from ontology_manager import get_ontology_manager
 from shared.models.notebook_schema import NotebookSchema
 
-# A representative Regio-Deal document body. Mentions the concrete gov/deals
-# vocabulary (``Gemeente`` / ``Provincie`` / ``Ministerie`` / ``RegioDeal``) that
-# keyword-fires, while the abstract policy-theme NAMES (``BeleidsThema`` …) do NOT
-# appear verbatim — which is exactly why policy_themes is crowded out without
-# affinity co-selection.
+# A representative Regio-Deal document body. Mentions both the concrete gov/deals
+# vocabulary (``Gemeente`` / ``Provincie`` / ``Ministerie`` / ``RegioDeal``) AND
+# the brede-welvaart theme vocabulary (``brede welvaart`` / ``leefbaarheid`` /
+# ``gezondheid`` …) that the rev2 content scorer matches on. ``document_type`` is
+# ``policy_document`` — what the REAL mapper assigns to these docs (it maps to
+# ``policy``, never ``deals``), so the test exercises the production path.
 REGIODEAL_TEXT = (
     "Regio Deal Groningen Noord. De Gemeente Groningen, de Provincie Groningen "
     "en het Ministerie van Binnenlandse Zaken sluiten deze Regio Deal. De Deal "
     "versterkt de brede welvaart en leefbaarheid in de regio. Wethouder Jansen "
     "ondertekent het convenant. De RegioDeal investeert in werkgelegenheid, "
     "gezondheid en bereikbaarheid."
+)
+
+# A NON-government scientific paper discussing the same themes WITHOUT any
+# gov/deals provenance. policy_themes must still be selected — purely on content.
+SCIPAPER_TEXT = (
+    "Abstract. This paper studies brede welvaart and leefbaarheid in shrinking "
+    "Dutch regions. Drawing on CBS Monitor data we analyse vergrijzing and "
+    "bevolkingsdaling and their effect on voorzieningenniveau, gezondheid and "
+    "wonen. We argue that materiele welvaart alone understates regional "
+    "leefbaarheid and propose a composite welfare index."
+)
+
+# An unrelated technical paper with no policy-theme vocabulary at all.
+MLPAPER_TEXT = (
+    "We present a transformer architecture for image classification. Our model "
+    "achieves state-of-the-art accuracy on ImageNet using a novel attention "
+    "mechanism and gradient checkpointing to reduce GPU memory consumption."
 )
 
 
@@ -59,62 +93,56 @@ async def _load_real_ontologies():
     return ontologies
 
 
-def _deals_mapper(_document_type):
-    """Stub mapper: a Regio-Deal document maps to the ``deals`` ontology.
-
-    In production the document-type signal is how the keyword-rich gov stack is
-    selected for these documents (the keyword-overlap score is diluted by the
-    real ontologies' large type-count). We inject the mapping here so the test
-    exercises the AFFINITY mechanism — the unit under test for L.4 — against the
-    real ontologies rather than re-testing the keyword scorer.
-    """
-    return "deals"
-
-
 class TestRegioDealSchemaDetection:
     @pytest.mark.asyncio
-    async def test_before_policy_themes_not_selected(self):
-        # AC1 (BEFORE): with affinity disabled, policy_themes is NOT among the
-        # applied schemas even though deals fires — it loses on keywords.
+    async def test_regiodeal_selects_policy_themes_real_path(self):
+        # AC1: a Regio-Deal document selects policy_themes via the REAL
+        # production path — real document_mapper (policy_document -> policy),
+        # real ontologies, NO injected mapper — on CONTENT overlap.
         ontologies = await _load_real_ontologies()
         ranked = await detect_applicable_schemas(
-            document_type="regio_deal",
+            document_type="policy_document",
             document_text=REGIODEAL_TEXT,
             ontologies=ontologies,
             top_k=3,
-            mapper=_deals_mapper,
-            affinity={},
-        )
-        names = [ont.metadata.name for ont, _conf in ranked]
-        assert "deals" in names, f"deals should fire via the mapper; got {names}"
-        assert "policy_themes" not in names
-
-    @pytest.mark.asyncio
-    async def test_after_policy_themes_co_selected(self):
-        # AC1 (AFTER): with the default affinity, policy_themes is co-selected
-        # because deals fired.
-        ontologies = await _load_real_ontologies()
-        ranked = await detect_applicable_schemas(
-            document_type="regio_deal",
-            document_text=REGIODEAL_TEXT,
-            ontologies=ontologies,
-            top_k=3,
-            mapper=_deals_mapper,
         )
         names = [ont.metadata.name for ont, _conf in ranked]
         assert "policy_themes" in names, (
-            f"policy_themes should be co-selected via affinity; got {names}"
+            f"policy_themes must be selected on content via the real path; "
+            f"got {names}"
         )
-        assert "deals" in names  # conservative — trigger retained
 
     @pytest.mark.asyncio
-    async def test_gated_non_policy_document_excludes_policy_themes(self):
-        # AC5: a non-policy document (no gov/deals trigger) does NOT pull in
-        # policy_themes. Use the real mapper so no trigger is forced.
+    async def test_non_gov_theme_paper_selects_policy_themes(self):
+        # AC2: a NON-government scientific paper about the themes ALSO selects
+        # policy_themes — proving content-driven, not provenance-gated. This is
+        # the user's requirement: themes are a property of content. The mapper
+        # routes academic_paper -> scholarly (no gov/deals anywhere).
         ontologies = await _load_real_ontologies()
         ranked = await detect_applicable_schemas(
             document_type="academic_paper",
-            document_text="A short paper on graph theory by a researcher.",
+            document_text=SCIPAPER_TEXT,
+            ontologies=ontologies,
+            top_k=3,
+        )
+        names = [ont.metadata.name for ont, _conf in ranked]
+        assert "policy_themes" in names, (
+            f"policy_themes must be selected on content alone for a non-gov "
+            f"theme paper; got {names}"
+        )
+        # No provenance dependency: the gov stack does not fire on this paper.
+        assert "deals" not in names
+        assert "government" not in names
+
+    @pytest.mark.asyncio
+    async def test_unrelated_document_excludes_policy_themes(self):
+        # AC3: an unrelated technical paper (no theme vocabulary) does NOT
+        # select policy_themes — over-application bounded by the applicability
+        # floor. Real mapper, real ontologies.
+        ontologies = await _load_real_ontologies()
+        ranked = await detect_applicable_schemas(
+            document_type="academic_paper",
+            document_text=MLPAPER_TEXT,
             ontologies=ontologies,
             top_k=3,
         )
@@ -219,8 +247,10 @@ class TestPerNotebookDefault:
         assert forced == []
 
 
-def test_affinity_contract_is_data_driven():
-    # The affinity is declared as DATA so it is extensible without touching the
-    # selection logic.
-    assert SCHEMA_AFFINITY["deals"] == ["policy_themes"]
-    assert SCHEMA_AFFINITY["government"] == ["policy_themes"]
+def test_notebook_default_bundle_is_data_driven():
+    # The explicit per-notebook override bundle is declared as DATA so it is
+    # extensible without touching the override logic. This is the EXPLICIT
+    # operator-config path — distinct from auto-detection, which selects
+    # policy_themes on content with no bundle dependency.
+    assert NOTEBOOK_DEFAULT_BUNDLE["deals"] == ["policy_themes"]
+    assert NOTEBOOK_DEFAULT_BUNDLE["government"] == ["policy_themes"]

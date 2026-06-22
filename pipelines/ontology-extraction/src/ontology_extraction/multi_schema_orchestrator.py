@@ -74,8 +74,6 @@ __all__ = [
     "MIN_APPLICABLE_CONFIDENCE",
     "PASS1_TOKEN_BUDGET",
     "PASS2_SAMPLE_CHAR_BUDGET",
-    "SCHEMA_AFFINITY",
-    "SCHEMA_AFFINITY_CONFIDENCE",
     "SOFT_NUDGE_COVERAGE_HIGH",
     "SOFT_NUDGE_COVERAGE_LOW",
     "MergedEntity",
@@ -86,33 +84,39 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Schema-affinity co-selection (Track L.4)
+# Content-signal schema applicability (Track L.4 rev2)
 # ---------------------------------------------------------------------------
 # The 44% generic ``concept``/``topic`` bucket is a schema-APPLICATION gap, not
-# a schema-quality gap. ``detect_applicable_schemas`` scores ontologies by
-# keyword-overlap against the document body. The ``policy_themes`` types
-# (``BeleidsThema`` / ``BeleidsPijler`` / ``Indicator`` / ``BredeWelvaart`` /
-# ``Leefbaarheid`` …) are abstract theme NAMES that rarely appear verbatim in a
-# document, so they keyword-match poorly and get crowded out of the top-K — even
-# though Regio-Deal documents are *about* policy themes by construction.
+# a schema-quality gap: ``policy_themes`` exists for exactly the brede-welvaart
+# themes, but it was being crowded out of ``detect_applicable_schemas``' top-K.
 #
-# ``SCHEMA_AFFINITY`` declares, as DATA, that whenever a "trigger" schema fires
-# (``deals`` or ``government`` — the concrete keyword-rich gov stack), a "bundle"
-# of related-but-keyword-poor schemas should be co-selected. This is:
+# rev1 tried to fix this by *gating* ``policy_themes`` co-selection on the
+# gov/deals stack firing. That was wrong two ways:
 #
-#   * GATED      — the bundle is added ONLY when its trigger is among the
-#                  keyword-selected schemas. A non-policy document (neither
-#                  ``deals`` nor ``government`` fires) never gets ``policy_themes``
-#                  (no over-application — risk (a)).
-#   * ADDITIVE   — co-selection NEVER removes a schema that fired today; the
-#                  bundle is appended ON TOP of the keyword-selected set, after
-#                  top-K truncation, so the bundle is never itself truncated.
-#   * DATA-DRIVEN — extend by editing this map, not by touching the selection
-#                  logic. ``{trigger_schema: [bundle_schema, ...]}``.
-SCHEMA_AFFINITY: Dict[str, List[str]] = {
-    "deals": ["policy_themes"],
-    "government": ["policy_themes"],
-}
+#   1. Too narrow — policy themes are a property of CONTENT, not provenance. A
+#      scientific paper about ``brede welvaart`` / ``leefbaarheid`` IS about
+#      policy themes without being a deals/government document; gating on
+#      provenance wrongly excludes it.
+#   2. Inert in production — the document-type mapper maps Regio-Deal docs to
+#      ``policy`` / ``general``, never ``deals`` / ``government``, so the gate's
+#      trigger never fired on real data. rev1's integration test only passed by
+#      injecting a fake mapper the production path does not have.
+#
+# rev2 makes ``policy_themes`` earn selection on its OWN content merit. The root
+# cause of the poor score was that the matcher only looked at entity-type NAMES
+# (``BeleidsThema`` / ``BeleidsPijler`` / ``Indicator``) — abstract identifiers
+# that essentially never appear verbatim in a document. The real theme
+# vocabulary (``brede welvaart``, ``leefbaarheid``, ``vergrijzing``,
+# ``gezondheid`` …) lives in the schema's ``extraction_hints``, ``description``
+# text, and ``concepts``. The matcher now scores against ALL of that signal, so
+# any document discussing the themes selects ``policy_themes`` on content alone —
+# a Regio-Deal doc and a non-gov scientific paper both, with no provenance
+# dependency. Over-application is bounded by ``MIN_APPLICABLE_CONFIDENCE``: a
+# document that does not overlap the theme vocabulary scores 0 and is dropped.
+#
+# This is general and data-driven: every ontology benefits from hints/description
+# scoring, and ``policy_themes`` carries the theme vocabulary as hints (see
+# ``policy_themes.yaml``). No per-schema special-casing in the scorer.
 
 # Approximate character budget for the text sample we feed Pass-1.
 # 1500 tokens × ~4 chars/token = 6000 chars. Pass-1's own token-budget
@@ -239,7 +243,6 @@ async def detect_applicable_schemas(
     ontologies: List[Ontology],
     top_k: int = 3,
     mapper: Optional[DocumentTypeMapper] = None,
-    affinity: Optional[Dict[str, List[str]]] = None,
 ) -> List[Tuple[Ontology, float]]:
     """Score each ontology by applicability to a source and return the top-K.
 
@@ -250,47 +253,48 @@ async def detect_applicable_schemas(
        ``ontology_manager.document_mapper.get_ontology_for_document_type``,
        that ontology gets the floor confidence ``0.92`` (matches the
        AC #4 single-schema-input contract).
-    2. **Keyword overlap** (broad recall). For every ontology, count
-       how many of its entity-type names appear case-insensitively in
-       ``document_text``. The score is ``min(0.9, matches / type_count)``
-       capped so the keyword path never beats the document-type
-       mapping when both fire.
+    2. **Content overlap** (broad recall, L.4 rev2). For every ontology,
+       count how many of its *content-signal phrases* appear
+       case-insensitively in ``document_text``. The signal is the union of
+       entity-type NAMES, ``extraction_hints``, type ``description`` text,
+       concept names, concept ``description`` text, ``related_concepts`` and
+       concept ``indicators`` — see :func:`_content_signal_phrases`. The
+       score is ``min(0.9, matches / type_count)``, capped so the content
+       path never beats the document-type mapping when both fire.
 
     The two signals are combined per ontology by ``max(...)`` so an
     ontology that wins either path lands in the shortlist.
 
-    **Schema-affinity co-selection (L.4)**: after keyword scoring and
-    top-K truncation, any affinity *bundle* whose *trigger* schema is in
-    the selected set is appended ON TOP (gated + additive). This rescues
-    keyword-poor theme schemas (``policy_themes``) for documents that are
-    *about* those themes by construction (Regio-Deal docs trigger via
-    ``deals`` / ``government``). The bundle is appended post-truncation so
-    top-K never drops it; co-selection never removes a keyword-selected
-    schema. See :data:`SCHEMA_AFFINITY`.
+    **Why content, not type-names (L.4 rev2)**: abstract type names like
+    ``BeleidsThema`` / ``Indicator`` almost never appear verbatim in a
+    document, so a type-name-only scorer scored ``policy_themes`` ~0 and
+    crowded it out of the top-K even for documents that are *about* policy
+    themes. The real theme vocabulary (``brede welvaart``, ``leefbaarheid``,
+    ``vergrijzing`` …) lives in the hints/descriptions/concepts; scoring
+    against that lets ``policy_themes`` earn selection on its own content
+    merit — for a Regio-Deal doc and a non-gov scientific paper alike — with
+    no provenance dependency. Over-application stays bounded by
+    ``MIN_APPLICABLE_CONFIDENCE``: a document that does not overlap the
+    vocabulary scores 0 and is filtered out.
 
     Args:
         document_type: ``Source.metadata['document_type']`` or
             similar. ``None`` skips the mapper signal entirely.
         document_text: A sample of the source's text. ``None`` skips
-            the keyword path entirely (the document-type mapper still
+            the content path entirely (the document-type mapper still
             runs).
         ontologies: All ontologies the caller wants considered.
         top_k: Maximum number of candidates to return. Defaults to 3
-            per the plan §Phase B.1e. Applies to the *keyword-selected*
-            set; affinity-bundled schemas are appended after truncation.
+            per the plan §Phase B.1e.
         mapper: Optional override for the document-type mapper, used
             in tests so we don't need to monkey-patch the
             ontology_manager module.
-        affinity: Optional override for :data:`SCHEMA_AFFINITY`
-            (``{trigger_schema: [bundle_schema, ...]}``). Tests inject a
-            custom map; production uses the module default. Pass ``{}``
-            to disable co-selection entirely.
 
     Returns:
         A list of ``(ontology, confidence)`` tuples sorted by
         confidence descending, filtered to those scoring at least
-        ``MIN_APPLICABLE_CONFIDENCE``, plus any gated affinity-bundle
-        ontologies appended at the end. Empty list when nothing applies.
+        ``MIN_APPLICABLE_CONFIDENCE``, truncated to ``top_k``. Empty list
+        when nothing applies.
     """
     mapper_fn = mapper or get_ontology_for_document_type
     preferred_name = mapper_fn(document_type) if document_type else None
@@ -304,101 +308,95 @@ async def detect_applicable_schemas(
         # Signal 1: document-type mapping. ``0.92`` mirrors the
         # single-schema-input snapshot value (AC #4). When the mapper
         # returns a name, the orchestrator's intent is "this is the
-        # right ontology", and we want it to dominate the keyword
+        # right ontology", and we want it to dominate the content
         # signal even if a much larger ontology happens to spam more
-        # keyword matches.
+        # phrase matches.
         doc_score = 0.92 if preferred_name and name == preferred_name else 0.0
 
-        # Signal 2: keyword overlap. Iterate entity-type names — they
-        # are short identifiers that read like keywords. Lowercased
-        # substring match is intentionally lenient; the goal is recall
-        # so a generic ontology shows up as the 3rd-best candidate.
-        if text_lower and ontology.entity_types:
-            type_names = list(ontology.entity_types.keys())
-            matches = sum(
-                1
-                for type_name in type_names
-                if type_name.lower() in text_lower
-            )
-            # Normalise by type-count so a 100-type ontology doesn't
-            # auto-win on raw match count. Cap at 0.9 so the keyword
-            # path can never beat the document-type signal.
-            kw_score = min(0.9, matches / max(1, len(type_names)))
-        else:
-            kw_score = 0.0
+        # Signal 2: content overlap. Score the union of type names,
+        # extraction_hints, descriptions and concept vocabulary against
+        # the document body. This is what lets a theme schema whose type
+        # NAMES never appear verbatim (``policy_themes``) still earn
+        # selection when the document discusses the themes.
+        content_score = _score_content_overlap(ontology, text_lower)
 
-        final_score = max(doc_score, kw_score)
+        final_score = max(doc_score, content_score)
         if final_score >= MIN_APPLICABLE_CONFIDENCE:
             scored.append((ontology, final_score))
 
     scored.sort(key=lambda pair: pair[1], reverse=True)
-    selected = scored[:top_k]
-
-    return _apply_schema_affinity(
-        selected,
-        ontologies,
-        affinity if affinity is not None else SCHEMA_AFFINITY,
-    )
+    return scored[:top_k]
 
 
-# Confidence stamped on an affinity-co-selected schema. Below the
-# keyword/document-type scores so the bundle sorts last and the soft-nudge
-# coverage logic still treats the keyword-selected schemas as primary, but
-# comfortably above ``MIN_APPLICABLE_CONFIDENCE`` so downstream filters keep it.
-SCHEMA_AFFINITY_CONFIDENCE: float = 0.5
+# A content-signal phrase shorter than this is too generic to be a reliable
+# substring match (e.g. ``Wet`` would match ``Wethouder`` / ``geweten``). Type
+# NAMES are exempt — they are deliberately distinctive identifiers.
+_MIN_SIGNAL_PHRASE_LEN = 4
 
 
-def _apply_schema_affinity(
-    selected: List[Tuple[Ontology, float]],
-    ontologies: List[Ontology],
-    affinity: Dict[str, List[str]],
-) -> List[Tuple[Ontology, float]]:
-    """Append gated affinity-bundle schemas to the keyword-selected set.
+def _content_signal_phrases(ontology: Ontology) -> List[str]:
+    """Collect the content-signal phrases the applicability scorer matches on.
 
-    For each ``(trigger, [bundle...])`` in ``affinity``, when ``trigger`` is
-    among the names already in ``selected``, every ``bundle`` schema that
-    exists in ``ontologies`` and is not already selected is appended with
-    :data:`SCHEMA_AFFINITY_CONFIDENCE`.
+    The phrase set is the union of (L.4 rev2):
 
-    Gated (the bundle only fires when its trigger is selected — non-policy
-    documents never pull in ``policy_themes``), additive (the input
-    ``selected`` list is never reordered or truncated; the bundle is appended
-    after it), and idempotent (a bundle schema already selected is skipped).
+    - entity-type names (the rev1 signal — kept),
+    - entity-type ``extraction_hints`` (where the real domain vocabulary
+      lives, e.g. ``policy_themes`` carries ``brede welvaart`` /
+      ``leefbaarheid`` here),
+    - entity-type ``description`` text,
+    - concept names + their ``description`` text,
+    - concept ``related_concepts`` and ``indicators``.
 
-    Pure helper — no scoring, no I/O — so the co-selection rule is unit-testable
-    in isolation from the keyword scorer.
+    Pure helper so the signal extraction is unit-testable and so every caller
+    (and future schema) gets the same broadened signal without per-schema
+    special-casing. Returns raw phrases; the scorer lowercases + length-filters.
     """
-    if not affinity:
-        return selected
+    phrases: List[str] = []
+    for type_name, etype in ontology.entity_types.items():
+        phrases.append(type_name)
+        if etype.description:
+            phrases.append(etype.description)
+        for hint in etype.extraction_hints or []:
+            phrases.append(hint)
+    for concept_name, concept in ontology.concepts.items():
+        phrases.append(concept_name)
+        if concept.description:
+            phrases.append(concept.description)
+        for related in concept.related_concepts or []:
+            phrases.append(related)
+        for indicator in concept.indicators or []:
+            phrases.append(indicator)
+    return phrases
 
-    by_name: Dict[str, Ontology] = {
-        (ont.metadata.name if ont.metadata else ""): ont for ont in ontologies
-    }
-    selected_names = {
-        (ont.metadata.name if ont.metadata else "") for ont, _conf in selected
-    }
 
-    result = list(selected)
-    appended: set[str] = set()
-    for trigger, bundle in affinity.items():
-        if trigger not in selected_names:
+def _score_content_overlap(ontology: Ontology, text_lower: str) -> float:
+    """Score one ontology's content overlap against a lowercased document.
+
+    Counts the distinct content-signal phrases
+    (:func:`_content_signal_phrases`) that appear as a case-insensitive
+    substring of ``text_lower``, normalised by the ontology's entity-type
+    count and capped at ``0.9`` (so it never beats the document-type signal).
+
+    Normalising by type-count keeps a large ontology from auto-winning on raw
+    phrase count, and lets a small-but-vocabulary-rich schema (``policy_themes``
+    has 3 types but a deep theme vocabulary) score highly when its vocabulary
+    genuinely appears — which is exactly the L.4 rev2 intent. The
+    ``MIN_APPLICABLE_CONFIDENCE`` floor downstream bounds over-application: an
+    unrelated document yields 0 matches and is dropped.
+    """
+    if not text_lower or not ontology.entity_types:
+        return 0.0
+
+    matched = 0
+    for phrase in _content_signal_phrases(ontology):
+        candidate = phrase.lower().strip()
+        if len(candidate) < _MIN_SIGNAL_PHRASE_LEN:
             continue
-        for bundle_name in bundle:
-            if (
-                bundle_name in selected_names
-                or bundle_name in appended
-                or bundle_name not in by_name
-            ):
-                continue
-            result.append((by_name[bundle_name], SCHEMA_AFFINITY_CONFIDENCE))
-            appended.add(bundle_name)
-            logger.info(
-                "schema_affinity co-selected '{bundle}' (triggered by '{trig}')",
-                bundle=bundle_name,
-                trig=trigger,
-            )
+        if candidate in text_lower:
+            matched += 1
 
-    return result
+    type_count = max(1, len(ontology.entity_types))
+    return min(0.9, matched / type_count)
 
 
 def _decide_soft_nudge(best_coverage: float) -> SoftNudgeDecision:

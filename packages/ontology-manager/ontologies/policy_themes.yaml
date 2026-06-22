@@ -8,13 +8,32 @@ metadata:
 
 entity_types:
   - name: "BeleidsThema"
-    description: "Overkoepelend beleidsthema"
+    description: "Overkoepelend beleidsthema rond brede welvaart en leefbaarheid"
     parent_type: "Concept"
     graph_relevance: "active"
+    # The extraction_hints double as the schema-APPLICATION signal (Track L.4):
+    # ``detect_applicable_schemas`` scores these phrases against the document body
+    # so a document *about* these themes selects ``policy_themes`` on content,
+    # independent of whether a gov/deals schema also fires. Keep the concrete
+    # Dutch theme vocabulary here so the matcher has real keywords to bite on —
+    # the type NAME ``BeleidsThema`` itself almost never appears verbatim.
     extraction_hints:
-      - "Brede welvaart thema's: gezondheid, werkgelegenheid, leefbaarheid"
-      - "Vergrijzing, ontgroening, bevolkingskrimp, bereikbaarheid"
-      - "Bestaanszekerheid, kansenongelijkheid, woningmarkt"
+      - "brede welvaart"
+      - "leefbaarheid"
+      - "vergrijzing"
+      - "ontgroening"
+      - "bevolkingsdaling"
+      - "bevolkingskrimp"
+      - "gezondheid"
+      - "werkgelegenheid"
+      - "bereikbaarheid"
+      - "wonen"
+      - "leefomgeving"
+      - "voorzieningenniveau"
+      - "materiele welvaart"
+      - "bestaanszekerheid"
+      - "kansenongelijkheid"
+      - "woningmarkt"
       - "Alleen herkenbare, benoemde thema's"
 
   - name: "BeleidsPijler"

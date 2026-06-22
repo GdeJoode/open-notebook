@@ -24,7 +24,6 @@ from job_queue import JobPausedForReviewError
 from loguru import logger
 from ontology_extraction.config import ExtractionConfig
 from ontology_extraction.multi_schema_orchestrator import (
-    SCHEMA_AFFINITY,
     detect_applicable_schemas,
 )
 from ontology_extraction.workflow import ExtractionWorkflow
@@ -41,6 +40,20 @@ if TYPE_CHECKING:
     from shared.models import NotebookSchema
 
 from app_main.services.entity_persistence_service import EntityPersistenceService
+
+
+# Explicit per-notebook override bundle (Track L.4). When an operator configures
+# a ``base_ontology`` for a notebook, that is a declaration that the notebook is
+# *about* a domain — so the related theme schema is bundled in alongside the
+# base, regardless of any per-document content score. This is an EXPLICIT
+# override (config beats auto-detection), NOT the auto-detection path: ordinary
+# auto-detection selects ``policy_themes`` purely on content overlap via
+# ``detect_applicable_schemas`` (no provenance gating). Keeping the bundle as
+# data here means the override is extensible without touching the override logic.
+NOTEBOOK_DEFAULT_BUNDLE: Dict[str, List[str]] = {
+    "deals": ["policy_themes"],
+    "government": ["policy_themes"],
+}
 
 
 def _is_resume_sentinel(extension: Dict[str, Any]) -> bool:
@@ -582,11 +595,16 @@ class EntityExtractionService:
         """Force a per-notebook ``notebook_schema`` default over auto-detection.
 
         Config beats auto-detection (L.4 AC3): when an operator has configured a
-        ``base_ontology`` for a notebook, that base — plus its affinity bundle
-        (``SCHEMA_AFFINITY``, e.g. ``deals`` → ``policy_themes``) plus any
-        accepted-extension schemas — is applied regardless of the keyword score.
-        A document with no theme keywords still gets ``policy_themes`` because
-        the notebook is declared to be *about* policy.
+        ``base_ontology`` for a notebook, that base — plus its explicit override
+        bundle (``NOTEBOOK_DEFAULT_BUNDLE``, e.g. ``deals`` → ``policy_themes``)
+        plus any accepted-extension schemas — is applied regardless of the
+        content score. A document with no theme keywords still gets
+        ``policy_themes`` because the notebook is *declared* to be about policy.
+
+        This is the EXPLICIT-override path. The ordinary auto-detection path
+        (``detect_applicable_schemas``) already selects ``policy_themes`` on
+        content overlap for any document discussing the themes, with no
+        dependency on this bundle — see the orchestrator's content-signal scorer.
 
         Additive: the auto-detected ``applicable_schemas`` are preserved; the
         forced schemas are merged in (de-duplicated by name) at a fixed
@@ -611,7 +629,9 @@ class EntityExtractionService:
         # named on accepted extensions (so a notebook that accepted a
         # policy_themes extension keeps it applied).
         forced_names: List[str] = [notebook_schema.base_ontology]
-        forced_names.extend(SCHEMA_AFFINITY.get(notebook_schema.base_ontology, []))
+        forced_names.extend(
+            NOTEBOOK_DEFAULT_BUNDLE.get(notebook_schema.base_ontology, [])
+        )
         for ext in notebook_schema.accepted_extensions:
             ext_schema = ext.get("schema_name") if isinstance(ext, dict) else None
             if ext_schema:
