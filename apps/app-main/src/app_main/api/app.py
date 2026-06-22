@@ -190,6 +190,7 @@ def create_app() -> FastAPI:
         summaries,
         transformations,
         vault,
+        vocabulary,
         zotero,
     )
 
@@ -246,6 +247,9 @@ def create_app() -> FastAPI:
     )
     application.include_router(
         entity_resolution.router, prefix="/api", tags=["entity-resolution"]
+    )
+    application.include_router(
+        vocabulary.router, prefix="/api", tags=["vocabulary"]
     )
     application.include_router(zotero.router, prefix="/api", tags=["zotero"])
     application.include_router(
