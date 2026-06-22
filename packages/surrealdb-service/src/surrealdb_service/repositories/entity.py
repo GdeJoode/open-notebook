@@ -341,6 +341,340 @@ class EntityRepository:
         # ``execute_query`` already converts RecordIDs to strings.
         return Entity(**rows[0])
 
+    # ------------------------------------------------------------------
+    # Track K Phase K.3 — retroactive merge primitives
+    # ------------------------------------------------------------------
+    #
+    # These helpers are the DB-side seam the ``RecanonicalizationService``
+    # composes into one logical merge. They are ID-based (never name-based)
+    # so a relation pointing at "the org named X" can never be re-attached to
+    # "the person named X" — the cross-type ambiguity the K.7 plan calls out.
+
+    async def repoint_relations(
+        self, loser_id: str, winner_id: str
+    ) -> int:
+        """Re-point every ``relation`` edge incident on ``loser`` onto ``winner``.
+
+        SurrealDB RELATE edges anchor their ``in`` / ``out`` record links at
+        creation; mutating them in place is unreliable on v2.x. So this does a
+        **delete-and-recreate**: for each edge touching the loser, RELATE an
+        equivalent edge with the loser endpoint swapped for the winner, then
+        delete the original edge. Edges that would become self-loops on the
+        winner (``winner -> winner``) are dropped rather than recreated.
+
+        **Parallel-edge dedup**: before recreating an edge, we probe for an
+        existing ``(in, out, relation_type)`` triple on the winner; if one
+        already exists we skip the RELATE (the original is still deleted), so
+        re-pointing two parallel loser edges onto the winner collapses to one.
+
+        Idempotency: when ``loser`` has no incident edges (e.g. a re-run after
+        a prior merge already moved them) this is a no-op returning 0.
+
+        Args:
+            loser_id: Record ID of the entity being merged away.
+            winner_id: Record ID of the surviving canonical entity.
+
+        Returns:
+            The number of edges deleted from the loser (re-pointed or dropped).
+        """
+        if not loser_id or not winner_id:
+            return 0
+        try:
+            loser = ensure_record_id(loser_id)
+            winner = ensure_record_id(winner_id)
+        except Exception as e:
+            logger.error(
+                f"repoint_relations: bad id loser={loser_id!r} "
+                f"winner={winner_id!r}: {e}"
+            )
+            return 0
+
+        try:
+            edges = await execute_query(
+                "SELECT id, in, out, relation_type, properties, "
+                "source_documents, extracted_at, extraction_method, "
+                "confidence, provenance_chain, status "
+                "FROM relation WHERE in = $loser OR out = $loser",
+                {"loser": loser},
+                self.config,
+            )
+        except Exception as e:
+            logger.exception(
+                f"repoint_relations: failed to load edges for "
+                f"loser={loser_id}: {e}"
+            )
+            raise
+
+        if not edges:
+            return 0
+
+        winner_str = str(winner)
+        loser_str = str(loser)
+        moved = 0
+        for edge in edges:
+            src = str(edge.get("in"))
+            tgt = str(edge.get("out"))
+            new_src = winner_str if src == loser_str else src
+            new_tgt = winner_str if tgt == loser_str else tgt
+
+            edge_id = edge.get("id")
+            # Drop self-loops that the merge would create.
+            if new_src == new_tgt:
+                await self._delete_relation(edge_id)
+                moved += 1
+                continue
+
+            rel_type = edge.get("relation_type") or ""
+            # Parallel-edge dedup: skip RELATE if the winner already carries
+            # an equivalent (in, out, relation_type) edge.
+            existing = await execute_query(
+                "SELECT id FROM relation "
+                "WHERE in = type::thing($src) AND out = type::thing($tgt) "
+                "AND relation_type = $rt LIMIT 1",
+                {"src": new_src, "tgt": new_tgt, "rt": rel_type},
+                self.config,
+            )
+            if not existing:
+                # RELATE arrow syntax needs bare record-id literals in the
+                # source/target positions (SurrealDB issue #4232); the ids are
+                # ``entity:<alnum>`` record ids straight from the DB (no user
+                # input), so interpolation is safe. Metadata is bound as params.
+                await execute_query(
+                    f"RELATE {new_src}->relation->{new_tgt} SET "
+                    "relation_type = $rt, properties = $properties, "
+                    "source_documents = $source_documents, "
+                    "extraction_method = $extraction_method, "
+                    "confidence = $confidence, "
+                    "provenance_chain = $provenance_chain, "
+                    "status = $status;",
+                    {
+                        "rt": rel_type,
+                        "properties": edge.get("properties") or {},
+                        "source_documents": edge.get("source_documents") or [],
+                        "extraction_method": edge.get("extraction_method")
+                        or "llm",
+                        "confidence": float(edge.get("confidence") or 1.0),
+                        "provenance_chain": edge.get("provenance_chain") or [],
+                        "status": edge.get("status") or "active",
+                    },
+                    self.config,
+                )
+            await self._delete_relation(edge_id)
+            moved += 1
+
+        logger.info(
+            "repoint_relations: loser={loser} winner={winner} moved={moved}",
+            loser=loser_id,
+            winner=winner_id,
+            moved=moved,
+        )
+        return moved
+
+    async def _delete_relation(self, edge_id: Any) -> None:
+        """Delete a single relation edge by record id (helper for repoint)."""
+        if edge_id is None:
+            return
+        await execute_query(
+            "DELETE type::thing($id);",
+            {"id": str(edge_id)},
+            self.config,
+        )
+
+    async def mark_merged(self, loser_id: str, winner_id: str) -> bool:
+        """Soft-merge ``loser`` into ``winner`` (status + merged_into).
+
+        Sets ``status='merged'`` and ``merged_into=<winner id>`` on the loser.
+        The loser row is **never hard-deleted** — the merge is reversible via
+        ``merged_into``. Idempotent: re-marking an already-merged loser is a
+        cheap no-op UPDATE.
+
+        Args:
+            loser_id: Record ID of the entity being merged away.
+            winner_id: Record ID of the surviving canonical entity.
+
+        Returns:
+            ``True`` when the update ran (even if nothing changed),
+            ``False`` on a transport-level failure or bad id.
+        """
+        if not loser_id or not winner_id:
+            return False
+        try:
+            rid = ensure_record_id(loser_id)
+        except Exception as e:
+            logger.error(f"mark_merged: invalid loser_id '{loser_id}': {e}")
+            return False
+        try:
+            await execute_query(
+                "UPDATE type::thing($id) SET "
+                "status = 'merged', merged_into = $winner, "
+                "updated_at = time::now();",
+                {"id": rid, "winner": str(winner_id)},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(
+                f"mark_merged failed for loser='{loser_id}' "
+                f"winner='{winner_id}': {e}"
+            )
+            return False
+        return True
+
+    async def list_active_entities(
+        self, source_ids: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """Load ``status='active'`` entities for retroactive-merge planning.
+
+        Returns the fields the planner needs to compute the new canonical form,
+        group collisions, and pick a winner: identity, the provenance bag, the
+        winner-selection inputs (``confidence``, ``source_documents``,
+        ``created_at``), plus ``aliases`` so a re-plan after a partial merge
+        carries them forward. ``merged`` / ``archived`` rows are excluded.
+
+        Args:
+            source_ids: Optional list of source record ids — when supplied, only
+                entities whose ``source_documents`` intersect this set are
+                returned (the per-notebook scope; the caller resolves the
+                notebook → sources mapping). ``None`` = global.
+
+        Returns:
+            A list of active-entity row dicts. Empty on failure / no matches.
+        """
+        try:
+            if source_ids is not None:
+                if not source_ids:
+                    return []
+                return await execute_query(
+                    "SELECT id, canonical_name, entity_type, confidence, "
+                    "source_documents, type_tags, primary_type, "
+                    "provenance_chain, properties, aliases, status, "
+                    "created_at "
+                    "FROM entity "
+                    "WHERE status = 'active' "
+                    "AND source_documents ANYINSIDE $source_ids",
+                    {"source_ids": source_ids},
+                    self.config,
+                )
+            return await execute_query(
+                "SELECT id, canonical_name, entity_type, confidence, "
+                "source_documents, type_tags, primary_type, "
+                "provenance_chain, properties, aliases, status, created_at "
+                "FROM entity WHERE status = 'active'",
+                {},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"list_active_entities failed: {e}")
+            return []
+
+    async def merge_into_winner(
+        self, winner_id: str, losers: List[Dict[str, Any]]
+    ) -> bool:
+        """Fold loser provenance/scoring fields into the winner row.
+
+        Applies the **same merge semantics as ``upsert_entity``** — reusing the
+        shared ``_union_preserve_order`` helper, not a reimplementation:
+
+        - ``confidence``: ``max`` over winner + all losers (monotonic)
+        - ``source_documents``: union (dedup-preserving)
+        - ``type_tags``: union
+        - ``provenance_chain``: union
+        - ``properties``: dict overlay — loser keys fill gaps, winner keys win
+        - ``aliases``: union of winner aliases + each loser's canonical_name
+          and prior aliases (the denormalized surface-form list, migration 54)
+
+        The winner's own ``canonical_name`` / ``entity_type`` / ``hash_id`` are
+        left untouched (the B.8 dedup-key contract). Idempotent: re-folding the
+        same losers re-derives the identical union (no growth).
+
+        Args:
+            winner_id: Record ID of the surviving canonical entity.
+            losers: Loser entity rows (each a dict with the provenance fields).
+
+        Returns:
+            ``True`` when the update ran, ``False`` on failure / bad id.
+        """
+        if not winner_id:
+            return False
+        try:
+            rid = ensure_record_id(winner_id)
+            existing_rows = await execute_query(
+                "SELECT * FROM entity WHERE id = $id LIMIT 1",
+                {"id": rid},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"merge_into_winner: load winner '{winner_id}': {e}")
+            return False
+        if not existing_rows:
+            logger.warning(f"merge_into_winner: winner '{winner_id}' not found")
+            return False
+
+        winner = existing_rows[0]
+        merged_confidence = float(winner.get("confidence", 0.0) or 0.0)
+        merged_sources = list(winner.get("source_documents") or [])
+        merged_type_tags = list(winner.get("type_tags") or [])
+        merged_provenance = list(winner.get("provenance_chain") or [])
+        merged_aliases = list(winner.get("aliases") or [])
+        # Winner keys must win the overlay, so start from losers and let the
+        # winner's own properties overwrite — same direction as upsert (new
+        # caller-supplied keys win; here the winner is the surviving "new").
+        merged_properties: Dict[str, Any] = {}
+
+        for loser in losers:
+            merged_confidence = max(
+                merged_confidence, float(loser.get("confidence", 0.0) or 0.0)
+            )
+            merged_sources = _union_preserve_order(
+                merged_sources, list(loser.get("source_documents") or [])
+            )
+            merged_type_tags = _union_preserve_order(
+                merged_type_tags, list(loser.get("type_tags") or [])
+            )
+            merged_provenance = _union_preserve_order(
+                merged_provenance, list(loser.get("provenance_chain") or [])
+            )
+            # Loser surface form + its own prior aliases become winner aliases.
+            loser_surface = loser.get("canonical_name")
+            incoming_aliases = list(loser.get("aliases") or [])
+            if loser_surface:
+                incoming_aliases = [loser_surface, *incoming_aliases]
+            merged_aliases = _union_preserve_order(
+                merged_aliases, incoming_aliases
+            )
+            merged_properties.update(dict(loser.get("properties") or {}))
+
+        # Winner's own properties overlay last so they win on key conflict.
+        merged_properties.update(dict(winner.get("properties") or {}))
+        # Never let the winner alias itself.
+        winner_name = winner.get("canonical_name")
+        merged_aliases = [a for a in merged_aliases if a and a != winner_name]
+
+        try:
+            await execute_query(
+                "UPDATE type::thing($id) SET "
+                "confidence = $confidence, "
+                "source_documents = $source_documents, "
+                "type_tags = $type_tags, "
+                "provenance_chain = $provenance_chain, "
+                "properties = $properties, "
+                "aliases = $aliases, "
+                "updated_at = time::now();",
+                {
+                    "id": rid,
+                    "confidence": merged_confidence,
+                    "source_documents": merged_sources,
+                    "type_tags": merged_type_tags,
+                    "provenance_chain": merged_provenance,
+                    "properties": merged_properties,
+                    "aliases": merged_aliases,
+                },
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"merge_into_winner update '{winner_id}': {e}")
+            return False
+        return True
+
     async def register_alias(
         self,
         canonical_entity_id: str,
