@@ -17,13 +17,13 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-
-from app_main.dependencies import get_reference_entity_repo
 from shared.vocabulary.crossref_provider import CrossrefProvider
 from shared.vocabulary.tooi_provider import TOOIProvider
 from surrealdb_service.repositories.reference_entity import (
     ReferenceEntityRepository,
 )
+
+from app_main.dependencies import get_reference_entity_repo
 
 router = APIRouter(prefix="/vocabulary", tags=["vocabulary"])
 

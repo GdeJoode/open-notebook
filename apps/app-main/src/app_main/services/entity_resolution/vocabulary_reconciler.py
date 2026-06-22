@@ -28,7 +28,6 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional, Sequence
 
 from loguru import logger
-
 from shared.models.entity import Entity
 from shared.vocabulary.provider import VocabMatch, VocabularyProvider
 
