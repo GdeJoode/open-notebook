@@ -206,6 +206,58 @@ async def test_must_not_corpus_zero_auto_merges() -> None:
     assert false_auto == 0, f"{false_auto} must-NOT pairs auto-merged"
 
 
+# --- K.5 rev2: discriminator guard --------------------------------------------
+
+
+_DISCRIMINATOR_PAIRS = [
+    ("Gemeente Bergen NH", "Gemeente Bergen NB"),  # province code NH/NB
+    ("Wet open overheid 2021", "Wet open overheid 2022"),  # annual version
+    ("Kamerstuk 35000-A", "Kamerstuk 35000-B"),  # trailing -A/-B suffix
+    ("Tranche I Regio Deal", "Tranche II Regio Deal"),  # short ordinal token
+]
+
+
+@pytest.mark.parametrize("name_a,name_b", _DISCRIMINATOR_PAIRS)
+@pytest.mark.asyncio
+async def test_discriminator_pair_never_auto_merges(
+    name_a: str, name_b: str
+) -> None:
+    """A short trailing/embedded discriminator → REVIEW, never AUTO (K.5 rev2).
+
+    Each pair scores in the fuzzy AUTO band (≈0.94) over a long shared prefix,
+    yet the differing discriminator (NH/NB, a year, -A/-B, an ordinal) marks two
+    genuinely distinct entities. The guard demotes them to REVIEW so nothing is
+    silently collapsed.
+    """
+    rows = [
+        _entity("entity:a", name_a, etype="other"),
+        _entity("entity:b", name_b, etype="other"),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert report.auto_merge_count == 0, f"{name_a} / {name_b} auto-merged"
+    # The pair is preserved for a human, not dropped.
+    assert frozenset({name_a, name_b}) in _all_pairs(report)
+    assert report.review_count == 1
+    assert report.review[0].band == REVIEW
+
+
+@pytest.mark.asyncio
+async def test_typo_still_auto_merges_through_guard() -> None:
+    """A 1-char typo INSIDE a word is unaffected by the discriminator guard.
+
+    The guard only fires on a differing discriminator *token* or digit run; a
+    substitution inside a single word preserves token structure, so the typo
+    pair still auto-merges (AC1).
+    """
+    rows = [
+        _entity("entity:a", "Koninkrijksrelaties"),
+        _entity("entity:b", "Koninkrijksreiaties"),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert report.auto_merge_count == 1
+    assert report.auto_merge[0].method == "fuzzy"
+
+
 # --- type-awareness -----------------------------------------------------------
 
 
@@ -348,3 +400,26 @@ async def test_candidate_maps_to_merge_cluster() -> None:
     assert cluster.winner_id == "entity:a"
     assert cluster.loser_ids == ["entity:b"]
     assert cluster.entity_type == "organization"
+    # new_canonical reports the WINNER's name.
+    assert cluster.new_canonical == "Koninkrijksrelaties"
+
+
+@pytest.mark.asyncio
+async def test_merge_cluster_new_canonical_follows_winner_when_b_wins() -> None:
+    """When id_b wins on confidence, new_canonical is name_b, not name_a (MAJOR 2).
+
+    K.3's apply repoints relations onto ``winner_id``; reporting the loser's
+    name would mislabel the surviving entity. Here entity:b has the higher
+    confidence, so it must win and ``new_canonical`` must be its name.
+    """
+    rows = [
+        _entity("entity:a", "Koninkrijksreiaties", confidence=0.4),
+        _entity("entity:b", "Koninkrijksrelaties", confidence=0.95),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert report.auto_merge_count == 1
+    cluster = report.auto_merge[0].to_merge_cluster()
+    assert cluster.winner_id == "entity:b"
+    assert cluster.loser_ids == ["entity:a"]
+    # The winner is id_b → new_canonical must be name_b, NOT the hardcoded name_a.
+    assert cluster.new_canonical == "Koninkrijksrelaties"

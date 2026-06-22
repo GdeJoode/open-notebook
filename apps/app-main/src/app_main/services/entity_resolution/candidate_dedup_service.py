@@ -17,6 +17,12 @@ The over-merge guards (this is the ×2.0 risk surface):
   ``auto_merge`` (score ≥ auto-threshold), ``review``
   (review-threshold ≤ score < auto-threshold → queued for a human, NEVER
   auto-applied), and ``reject`` (below review-threshold, dropped).
+* **Discriminator guard** — a short trailing/embedded discriminator (``NH``/
+  ``NB``, ``2021``/``2022``, ``-A``/``-B``, an ordinal) carries the entire
+  semantic difference yet scores ≈0.94 on edit distance. Such a pair is
+  demoted from ``auto_merge`` to ``review`` regardless of score, so two
+  genuinely distinct entities are never silently collapsed. A typo (a
+  substitution INSIDE a word) preserves token structure and still auto-merges.
 * **force-split overlay = hard veto** — an ``alias_overlay`` split rule removes a
   pair from EVERY band even if its similarity is 1.0 (the ultimate backstop).
 * **force-merge overlay = hard include** — a merge rule injects a pair as an
@@ -32,6 +38,7 @@ entity has no vector (``embedding=[]``).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -82,12 +89,21 @@ class MergeCandidate:
         Reuses the K.3 reviewable-merge machinery for the destructive apply
         (relation repointing, provenance fold, alias rows, soft status) — this
         service never re-implements the merge.
+
+        ``new_canonical`` MUST be the WINNER entity's name: K.3's apply
+        repoints relations onto ``winner_id``, so reporting the loser's name
+        (e.g. when ``id_b`` wins on confidence) would mislabel the surviving
+        entity. The winner is whichever of ``id_a``/``id_b`` equals
+        ``winner_id``; default to ``id_a`` for the legacy unset case.
         """
+        winner_id = self.winner_id or self.id_a
+        loser_id = self.loser_id or self.id_b
+        new_canonical = self.name_b if winner_id == self.id_b else self.name_a
         return MergeCluster(
-            new_canonical=self.name_a,
+            new_canonical=new_canonical,
             entity_type=self.entity_type,
-            winner_id=self.winner_id or self.id_a,
-            loser_ids=[self.loser_id or self.id_b],
+            winner_id=winner_id,
+            loser_ids=[loser_id],
             member_surface_forms=[self.name_a, self.name_b],
             total_source_docs=0,
         )
@@ -179,6 +195,86 @@ class CandidateDedupService:
         return None
 
     # ------------------------------------------------------------------
+    # Discriminator guard (K.5 rev2 — over-merge backstop)
+    # ------------------------------------------------------------------
+
+    # A short trailing token that *distinguishes* two otherwise-identical names
+    # (``NH``/``NB``, ``2021``/``2022``, ``-A``/``-B``, an ordinal) carries the
+    # entire semantic difference, yet pure Levenshtein scores it ≈0.94 over a
+    # long shared prefix — high enough to AUTO-merge two genuinely distinct
+    # entities (two municipalities, two annual law versions, two documents).
+    # Levenshtein cannot tell such a discriminator from a 1-char *typo*, so we
+    # add a deterministic structural check: when two normalized names differ
+    # ONLY in a short trailing/embedded discriminator, the pair is demoted to
+    # REVIEW regardless of score. A typo (a substitution/transposition INSIDE a
+    # word) leaves the token structure intact and is unaffected — it can still
+    # AUTO. The conservative bias is the whole track's lesson: when uncertain,
+    # never auto-merge.
+    _MAX_DISCRIMINATOR_TOKEN_LEN = 3
+
+    @classmethod
+    def _is_discriminator_difference(cls, norm_a: str, norm_b: str) -> bool:
+        """True when two normalized names differ only by a short discriminator.
+
+        Detects three realistic discriminator classes that pure edit-distance
+        cannot separate from a typo:
+
+        * **Numeric** — identical once every digit run is removed, but the digit
+          runs differ (``... overheid 2021`` vs ``... overheid 2022``; annual
+          versions, ID numbers).
+        * **Short trailing/embedded token** — same token count, exactly one
+          token differs, and BOTH differing tokens are short (``... bergen nh``
+          vs ``... bergen nb``; province/region codes, ordinals).
+        * **Short trailing suffix on a shared stem** — same token count, exactly
+          one equal-length token differs, sharing a long common prefix and
+          diverging only in a ≤2-char tail (``... 35000-a`` vs ``... 35000-b``;
+          document/version suffixes).
+
+        Returns ``False`` for a substitution/transposition inside a word (a
+        typo), which preserves token structure and digit content.
+        """
+        if norm_a == norm_b:
+            return False
+
+        # Numeric discriminator: strip all digits; if the remainder is identical
+        # but the digit content differed, the digits carried the meaning.
+        if cls._digits(norm_a) != cls._digits(norm_b):
+            if cls._strip_digits(norm_a) == cls._strip_digits(norm_b):
+                return True
+
+        ta = norm_a.split()
+        tb = norm_b.split()
+        if len(ta) != len(tb) or not ta:
+            return False
+        diff = [k for k in range(len(ta)) if ta[k] != tb[k]]
+        if len(diff) != 1:
+            return False
+
+        wa, wb = ta[diff[0]], tb[diff[0]]
+        lim = cls._MAX_DISCRIMINATOR_TOKEN_LEN
+        # Two short whole tokens that differ -> discriminator code (NH/NB).
+        if len(wa) <= lim and len(wb) <= lim:
+            return True
+        # Equal-length tokens sharing a long stem, diverging only in a short
+        # trailing run (35000-a / 35000-b) -> trailing discriminator suffix.
+        if len(wa) == len(wb):
+            prefix = 0
+            while prefix < len(wa) and wa[prefix] == wb[prefix]:
+                prefix += 1
+            tail_len = len(wa) - prefix
+            if prefix >= 3 and tail_len <= 2:
+                return True
+        return False
+
+    @staticmethod
+    def _digits(text: str) -> str:
+        return re.sub(r"[^0-9]", "", text)
+
+    @staticmethod
+    def _strip_digits(text: str) -> str:
+        return re.sub(r"[0-9]+", "", text)
+
+    # ------------------------------------------------------------------
     # Propose
     # ------------------------------------------------------------------
 
@@ -267,6 +363,17 @@ class CandidateDedupService:
             band = self._band(score, review_floor, auto)
             if band is None:
                 continue
+
+            # Discriminator guard: a short trailing/embedded discriminator
+            # (NH/NB, 2021/2022, -A/-B) carries the whole semantic difference
+            # but scores high on edit distance. Such a pair is never auto-merged
+            # — demote it to REVIEW so a human confirms (the matcher scored it
+            # over both normalized names, the same forms we check here).
+            if band == AUTO_MERGE and self._is_discriminator_difference(
+                self._fuzzy._normalize(rec_a["name"]),
+                self._fuzzy._normalize(rec_b["name"]),
+            ):
+                band = REVIEW
 
             candidate = self._make_candidate(
                 rec_a, rec_b, score, band, method

@@ -65,7 +65,12 @@ class FuzzyDedupConfig:
     # over the must_not_merge corpus: 0.93/0.86 keeps the fuzzy near-miss pairs
     # (``Regio Deal Groningen`` ↔ ``Regio Deal Drenthe`` ≈ 0.83) below the review
     # floor while catching the OCR-typo class (``Koninkrijksrelaties`` ↔
-    # ``Koninkrijksreiaties`` ≈ 0.94) as an auto-merge.
+    # ``Koninkrijksreiaties`` ≈ 0.94) as an auto-merge. Edit distance alone
+    # cannot separate a 1-char typo from a 1-char *discriminator* in a long
+    # shared-prefix name (``Bergen NH``/``Bergen NB`` ≈ 0.94), so the threshold
+    # is NOT the sole over-merge guard: candidate_dedup_service applies a
+    # deterministic discriminator guard that demotes such pairs to REVIEW
+    # regardless of score. See ``CandidateDedupService._is_discriminator_difference``.
     auto_merge_threshold: Optional[float] = 0.93
     review_threshold: Optional[float] = 0.86
 
