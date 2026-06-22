@@ -14,3 +14,9 @@ K.1 strips role-prefixes `minister van` (PERSON) and org-prefixes `ministerie va
 **RESOLVED (2026-06-22, user): A now, B planned.**
 - A (K.1 rev3): adjust the strip list so NO must_not_merge pair collides at the NAME level (relations are name-only) — drop person-role prefixes (`minister van`, `staatssecretaris van`) AND `gemeente`/`provincie` (org↔location); keep articles + `ministerie van`/`het ministerie van` (org→org tail, no cross-type). The over-merge canary now checks at name-only. No legitimate merges lost (a person/municipality ≠ the org/city — they SHOULD stay distinct).
 - B planned as **K.7 — Type-safe relation endpoints** (carry entity type/ID through relations end-to-end so cross-type homographs never mis-attach; enables re-introducing the aggressive prefixes safely). See plan.md K.7.
+
+**RESOLVED-2 (2026-06-22, user): continue as planned (Option 1); K.7 KEPT.**
+Blind content-prefix stripping (even `ministerie van`) collides cross-type in the live data (`Ministerie van Onderwijs`→`onderwijs` == the bare `onderwijs` concept). Context-free stripping can't avoid this. So:
+- **K.1 (rev4) narrowed**: strip only collision-safe leading articles (`de`/`het`/`een`) + curated spelling tolerance + the harness/corpora. NO blind content-prefix stripping (drop `ministerie van` too).
+- **K.2 absorbs org-form merging**: the curated, type-aware alias/equivalence table (BZK ↔ Ministerie van BZK ↔ Binnenlandse Zaken…) merges ONLY explicitly-listed equivalences — never blind stripping, so it can't accidentally collide. This is where the org merges land, safely.
+- **K.7 REMAINS PLANNED** (not dropped): type-safe relation endpoints — later enables re-introducing aggressive normalization. User explicitly wants it kept.

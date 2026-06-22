@@ -71,7 +71,18 @@ Six phases, two layers: K.1–K.2 = cheap NL normalization (Layer 1, immediate w
 
 ## 3. Per-phase detail
 
-### Phase K.1 — NL-aware normalizer + precision guard + measurement harness
+### Phase K.1 — Collision-safe normalizer (articles + spelling) + precision guard + measurement harness
+
+> **SCOPE REVISION (2026-06-22, after K.1 attempt-4)**: blind content-prefix
+> stripping collides cross-type in live data (`Ministerie van Onderwijs` →
+> `onderwijs` == the bare `onderwijs` concept), and a context-free normalizer
+> can't avoid it (relations are name-only). So **K.1 is narrowed to leading
+> articles + spelling only** (no blind content-prefix stripping), and **K.2's
+> curated alias/equivalence table absorbs ALL org-form merging** (`Ministerie
+> van BZK` ↔ `BZK` ↔ `Binnenlandse Zaken…`) — explicit, type-aware equivalences
+> only, never blind stripping. K.7 (type-safe relations) stays planned and later
+> re-enables aggressive normalization safely.
+
 
 **Goal**: extend `normalize_entity_name` in place so it strips leading articles (`De `/`Het `/`Een `) and role/org prefixes (`Minister(ie) van `, `Staatssecretaris van `, `Gemeente `, `Provincie `) and tolerates the documented spelling-variant class (`Koninkrij(k|ks)relaties`), **without over-merging tail-distinct names**. Build the measurement harness that quantifies the fragmentation drop vs false-merge count over the live Convenant entity set, and the must-NOT-merge adversarial corpus. **No behaviour change to the upsert/hash_id contract** — only the normalized string changes; the derive-rule is unchanged.
 
