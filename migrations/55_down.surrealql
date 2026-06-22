@@ -1,0 +1,10 @@
+-- Migration 55 down: remove the K.4 first-class `external_ids` field on entity.
+--
+-- Only the `external_ids` field is owned by migration 55. The `reference_entity`
+-- table, its fields, and `idx_ref_name` predate it (migration 41), so the
+-- down-migration does NOT drop them (dropping them would regress migration 41's
+-- schema and discard loaded vocabulary). Removing `external_ids` is a clean
+-- reverse of the single field 55 introduced. Idempotent: IF EXISTS makes re-run
+-- a no-op.
+
+REMOVE FIELD IF EXISTS external_ids ON entity;
