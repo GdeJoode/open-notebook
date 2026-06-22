@@ -322,6 +322,9 @@ async def routing_summary(
     """
     from app_main.services.model_routing.route_resolver import _provider_is_local
 
+    # Bound the scan window so a caller can't request an unbounded telemetry read.
+    limit = max(1, min(limit, 1000))
+
     try:
         from surrealdb_service.connection import execute_query
 
