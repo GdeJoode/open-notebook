@@ -9,9 +9,9 @@ import hashlib
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-
 from shared.models.entity import Entity, Relation
 from shared.models.export import ExportFilter
+
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
 
@@ -362,6 +362,18 @@ class EntityRepository:
         delete the original edge. Edges that would become self-loops on the
         winner (``winner -> winner``) are dropped rather than recreated.
 
+        **Field completeness**: the recreated edge carries EVERY data field the
+        original held — every ``DEFINE FIELD ... ON relation`` from migration 39:
+        ``relation_type``, ``properties``, ``source_documents``, ``extracted_at``,
+        ``extraction_method``, ``confidence``, ``provenance_chain``, ``status``,
+        and ``created_at``. Both timestamp fields are provenance and are copied
+        through verbatim — without that, migration 39's
+        ``DEFAULT time::now()`` on ``extracted_at`` / ``created_at`` would
+        silently re-stamp every re-pointed edge with the merge time, destroying
+        the original extraction/creation provenance. The only field that may
+        legitimately differ on the recreate is the edge's own record ``id``
+        (RELATE mints a fresh one); no other data is lost or mutated.
+
         **Parallel-edge dedup**: before recreating an edge, we probe for an
         existing ``(in, out, relation_type)`` triple on the winner; if one
         already exists we skip the RELATE (the original is still deleted), so
@@ -393,7 +405,7 @@ class EntityRepository:
             edges = await execute_query(
                 "SELECT id, in, out, relation_type, properties, "
                 "source_documents, extracted_at, extraction_method, "
-                "confidence, provenance_chain, status "
+                "confidence, provenance_chain, status, created_at "
                 "FROM relation WHERE in = $loser OR out = $loser",
                 {"loser": loser},
                 self.config,
@@ -439,24 +451,49 @@ class EntityRepository:
                 # source/target positions (SurrealDB issue #4232); the ids are
                 # ``entity:<alnum>`` record ids straight from the DB (no user
                 # input), so interpolation is safe. Metadata is bound as params.
+                # Copy EVERY relation data field through the recreate so the
+                # re-pointed edge is byte-for-byte equivalent to the original
+                # save for its fresh record id. ``extracted_at`` / ``created_at``
+                # MUST be passed explicitly: omitting them lets migration 39's
+                # ``DEFAULT time::now()`` re-stamp the edge with the merge time,
+                # silently destroying the original extraction/creation
+                # provenance (the K.3 BLOCKER). They round-trip as datetime
+                # objects from the SELECT, so SurrealDB stores them verbatim.
+                set_clauses = [
+                    "relation_type = $rt",
+                    "properties = $properties",
+                    "source_documents = $source_documents",
+                    "extraction_method = $extraction_method",
+                    "confidence = $confidence",
+                    "provenance_chain = $provenance_chain",
+                    "status = $status",
+                ]
+                params: Dict[str, Any] = {
+                    "rt": rel_type,
+                    "properties": edge.get("properties") or {},
+                    "source_documents": edge.get("source_documents") or [],
+                    "extraction_method": edge.get("extraction_method") or "llm",
+                    "confidence": float(edge.get("confidence") or 1.0),
+                    "provenance_chain": edge.get("provenance_chain") or [],
+                    "status": edge.get("status") or "active",
+                }
+                # Preserve provenance timestamps only when the original carried
+                # them; on a (theoretical) null we let the DEFAULT apply rather
+                # than write an explicit null into a non-optional datetime field.
+                extracted_at = edge.get("extracted_at")
+                if extracted_at is not None:
+                    set_clauses.append("extracted_at = $extracted_at")
+                    params["extracted_at"] = extracted_at
+                created_at = edge.get("created_at")
+                if created_at is not None:
+                    set_clauses.append("created_at = $created_at")
+                    params["created_at"] = created_at
+
                 await execute_query(
                     f"RELATE {new_src}->relation->{new_tgt} SET "
-                    "relation_type = $rt, properties = $properties, "
-                    "source_documents = $source_documents, "
-                    "extraction_method = $extraction_method, "
-                    "confidence = $confidence, "
-                    "provenance_chain = $provenance_chain, "
-                    "status = $status;",
-                    {
-                        "rt": rel_type,
-                        "properties": edge.get("properties") or {},
-                        "source_documents": edge.get("source_documents") or [],
-                        "extraction_method": edge.get("extraction_method")
-                        or "llm",
-                        "confidence": float(edge.get("confidence") or 1.0),
-                        "provenance_chain": edge.get("provenance_chain") or [],
-                        "status": edge.get("status") or "active",
-                    },
+                    + ", ".join(set_clauses)
+                    + ";",
+                    params,
                     self.config,
                 )
             await self._delete_relation(edge_id)
@@ -571,16 +608,30 @@ class EntityRepository:
     ) -> bool:
         """Fold loser provenance/scoring fields into the winner row.
 
-        Applies the **same merge semantics as ``upsert_entity``** — reusing the
-        shared ``_union_preserve_order`` helper, not a reimplementation:
+        Reuses the shared ``_union_preserve_order`` helper (not a
+        reimplementation). The union/max math is **identical to
+        ``upsert_entity``**:
 
         - ``confidence``: ``max`` over winner + all losers (monotonic)
         - ``source_documents``: union (dedup-preserving)
         - ``type_tags``: union
         - ``provenance_chain``: union
-        - ``properties``: dict overlay — loser keys fill gaps, winner keys win
         - ``aliases``: union of winner aliases + each loser's canonical_name
           and prior aliases (the denormalized surface-form list, migration 54)
+
+        **One intentional difference from ``upsert_entity``** — the
+        ``properties`` overlay direction is *reversed*:
+
+        - ``upsert_entity``: existing is the base, the INCOMING (caller-supplied)
+          row overlays it, so on a key conflict the incoming value wins.
+        - ``merge_into_winner``: the losers form the base, the WINNER (the
+          surviving canonical row) overlays them, so on a key conflict the
+          winner's own value wins.
+
+        This is deliberate: in a retroactive merge the winner is authoritative,
+        so its property values must survive the fold rather than be clobbered by
+        a loser. Loser-only keys still fill gaps. Every other merged field uses
+        identical semantics to ``upsert_entity``.
 
         The winner's own ``canonical_name`` / ``entity_type`` / ``hash_id`` are
         left untouched (the B.8 dedup-key contract). Idempotent: re-folding the
@@ -616,8 +667,9 @@ class EntityRepository:
         merged_provenance = list(winner.get("provenance_chain") or [])
         merged_aliases = list(winner.get("aliases") or [])
         # Winner keys must win the overlay, so start from losers and let the
-        # winner's own properties overwrite — same direction as upsert (new
-        # caller-supplied keys win; here the winner is the surviving "new").
+        # winner's own properties overwrite last. This is the REVERSE of
+        # upsert_entity (which lets the incoming row win): in a merge the winner
+        # is the authoritative survivor, so its values must not be clobbered.
         merged_properties: Dict[str, Any] = {}
 
         for loser in losers:

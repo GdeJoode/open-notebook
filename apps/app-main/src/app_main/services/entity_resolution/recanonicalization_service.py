@@ -222,7 +222,16 @@ class RecanonicalizationService:
 
         Steps (idempotent throughout):
             1. Re-point every ``relation`` edge from each loser onto the winner
-               by ENTITY ID (parallel edges dedup'd by the repo helper).
+               by ENTITY ID (parallel edges dedup'd by the repo helper). A
+               pre-merge loser↔winner edge becomes a winner→winner self-loop
+               under the re-point; such edges are **silently removed**, not
+               recreated — a self-relation between the merged entity and the
+               survivor is meaningless once they are the same node. This counts
+               toward ``relations_repointed`` (the loser's edge IS consumed) but
+               leaves no surviving edge. Likewise, when two losers each held an
+               equivalent ``(in, out, relation_type)`` edge to the same third
+               entity, the re-point collapses them to a single deduped edge on
+               the winner.
             2. Merge the losers' provenance/scoring fields into the winner using
                the SAME semantics as ``upsert_entity`` (union source_documents /
                type_tags / provenance_chain, max confidence, overlay properties,

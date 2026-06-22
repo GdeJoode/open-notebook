@@ -50,12 +50,36 @@ async def _create_entity(
     return str(rows[0]["id"])
 
 
-async def _relate(config: SurrealDBConfig, src_id: str, tgt_id: str, rel_type: str):
+async def _relate(
+    config: SurrealDBConfig,
+    src_id: str,
+    tgt_id: str,
+    rel_type: str,
+    *,
+    confidence: float = 0.9,
+    properties: dict | None = None,
+    extracted_at: str | None = None,
+):
     # RELATE needs bare record-id literals (SurrealDB #4232); ids are DB-issued.
+    set_clauses = [
+        "relation_type = $rt",
+        "confidence = $confidence",
+        "status = 'active'",
+        "properties = $properties",
+    ]
+    params: dict = {
+        "rt": rel_type,
+        "confidence": confidence,
+        "properties": properties or {},
+    }
+    if extracted_at is not None:
+        # Bind a literal datetime so the seed carries a distinctive provenance
+        # timestamp (not the DEFAULT time::now()); ``d"..."`` is SurrealDB's
+        # datetime literal syntax, interpolated into the query (no user input).
+        set_clauses.append(f'extracted_at = d"{extracted_at}"')
     await execute_query(
-        f"RELATE {src_id}->relation->{tgt_id} SET "
-        "relation_type = $rt, confidence = 0.9, status = 'active';",
-        {"rt": rel_type},
+        f"RELATE {src_id}->relation->{tgt_id} SET " + ", ".join(set_clauses) + ";",
+        params,
         config=config,
     )
 
@@ -221,6 +245,210 @@ async def test_apply_merge_idempotent(live_surrealdb: SurrealDBConfig) -> None:
     # Loser still merged into the same winner.
     ent = await repo.get_entity(loser)
     assert ent is not None and ent.status == "merged" and ent.merged_into == winner
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_repoint_preserves_all_relation_fields(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """BLOCKER regression guard: re-point copies EVERY relation field.
+
+    Seeds one loser→neighbour edge carrying a *distinctive* ``extracted_at``,
+    ``properties`` and ``confidence``, then asserts the winner's re-pointed edge
+    reproduces all three byte-for-byte. Before the K.3 rev2 fix the recreate
+    omitted ``extracted_at``, so migration 39's ``DEFAULT time::now()``
+    silently re-stamped it with the merge time.
+    """
+    repo = EntityRepository(config=live_surrealdb)
+    svc = RecanonicalizationService(entity_repo=repo)
+
+    tail = _u("FieldFidelity")
+    winner = await _create_entity(
+        live_surrealdb, tail, "organization", confidence=0.95
+    )
+    loser = await _create_entity(
+        live_surrealdb, f"De {tail}", "organization", confidence=0.5
+    )
+    neighbour = await _create_entity(live_surrealdb, _u("Neighbour"), "person")
+
+    # Distinctive provenance the recreate must carry through verbatim.
+    seeded_extracted_at = "2021-03-04T05:06:07Z"
+    seeded_props = {"role": "minister", "weight": 7}
+    seeded_confidence = 0.42
+    await _relate(
+        live_surrealdb,
+        loser,
+        neighbour,
+        "GOVERNS",
+        confidence=seeded_confidence,
+        properties=seeded_props,
+        extracted_at=seeded_extracted_at,
+    )
+
+    cluster = next(
+        c
+        for c in (await svc.plan_merges()).clusters
+        if c.winner_id == winner and loser in c.loser_ids
+    )
+    result = await svc.apply_merge(cluster)
+    assert not result.skipped
+
+    rows = await execute_query(
+        "SELECT relation_type, properties, confidence, extracted_at, "
+        "extraction_method, status, source_documents, provenance_chain "
+        "FROM relation WHERE in = type::thing($w) AND out = type::thing($n);",
+        {"w": winner, "n": neighbour},
+        config=live_surrealdb,
+    )
+    assert len(rows) == 1, "exactly one re-pointed edge on the winner"
+    edge = rows[0]
+    assert edge["relation_type"] == "GOVERNS"
+    assert edge["properties"] == seeded_props
+    assert edge["confidence"] == pytest.approx(seeded_confidence)
+    # extracted_at must be the seeded value (2021-03-04T05:06:07Z), NOT a
+    # merge-time (2026) re-stamp. SurrealDB returns a tz-aware datetime, whose
+    # str() is "2021-03-04 05:06:07+00:00".
+    assert str(edge["extracted_at"]).startswith("2021-03-04 05:06:07"), (
+        f"extracted_at re-stamped (BLOCKER regression): {edge['extracted_at']!r}"
+    )
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_parallel_loser_edges_collapse_to_one(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Parallel-edge dedup: two losers' edges to the same target collapse.
+
+    Both losers hold an edge to the SAME neighbour with the SAME relation_type.
+    After the merge the winner must carry exactly ONE deduped edge, and that
+    surviving edge keeps its provenance (``properties`` / ``confidence`` /
+    ``extracted_at``).
+    """
+    repo = EntityRepository(config=live_surrealdb)
+    svc = RecanonicalizationService(entity_repo=repo)
+
+    tail = _u("ParallelDedup")
+    winner = await _create_entity(
+        live_surrealdb, tail, "organization", confidence=0.95
+    )
+    loser1 = await _create_entity(
+        live_surrealdb, f"De {tail}", "organization", confidence=0.6
+    )
+    loser2 = await _create_entity(
+        live_surrealdb, f"Het {tail}", "organization", confidence=0.5
+    )
+    neighbour = await _create_entity(live_surrealdb, _u("Shared"), "person")
+
+    seeded_extracted_at = "2020-01-02T03:04:05Z"
+    seeded_props = {"channel": "primary"}
+    # Two parallel (in, out, relation_type) edges, one per loser.
+    await _relate(
+        live_surrealdb,
+        loser1,
+        neighbour,
+        "MENTIONS",
+        confidence=0.6,
+        properties=seeded_props,
+        extracted_at=seeded_extracted_at,
+    )
+    await _relate(
+        live_surrealdb,
+        loser2,
+        neighbour,
+        "MENTIONS",
+        confidence=0.6,
+        properties=seeded_props,
+        extracted_at=seeded_extracted_at,
+    )
+
+    cluster = next(
+        c
+        for c in (await svc.plan_merges()).clusters
+        if c.winner_id == winner and set(c.loser_ids) == {loser1, loser2}
+    )
+    result = await svc.apply_merge(cluster)
+    assert not result.skipped
+
+    edges = await execute_query(
+        "SELECT properties, confidence, extracted_at FROM relation "
+        "WHERE in = type::thing($w) AND out = type::thing($n) "
+        "AND relation_type = 'MENTIONS';",
+        {"w": winner, "n": neighbour},
+        config=live_surrealdb,
+    )
+    assert len(edges) == 1, "parallel loser edges must collapse to one on winner"
+    surviving = edges[0]
+    assert surviving["properties"] == seeded_props
+    assert surviving["confidence"] == pytest.approx(0.6)
+    assert str(surviving["extracted_at"]).startswith("2020-01-02 03:04:05")
+
+    # No edge may reference either merged loser.
+    dangling = await execute_query(
+        "SELECT id FROM relation WHERE in = type::thing($l1) "
+        "OR out = type::thing($l1) OR in = type::thing($l2) "
+        "OR out = type::thing($l2);",
+        {"l1": loser1, "l2": loser2},
+        config=live_surrealdb,
+    )
+    assert dangling == []
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_loser_winner_edge_dropped_as_self_loop(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Self-loop drop: a pre-merge loser↔winner edge is silently removed.
+
+    A loser→winner edge becomes a winner→winner self-loop under the re-point.
+    The documented contract is to DROP it (a self-relation between the merged
+    entity and its survivor is meaningless), not recreate it. The loser's edge
+    is still consumed (counts toward ``relations_repointed``) but no surviving
+    self-loop remains on the winner.
+    """
+    repo = EntityRepository(config=live_surrealdb)
+    svc = RecanonicalizationService(entity_repo=repo)
+
+    tail = _u("SelfLoop")
+    winner = await _create_entity(
+        live_surrealdb, tail, "organization", confidence=0.95
+    )
+    loser = await _create_entity(
+        live_surrealdb, f"De {tail}", "organization", confidence=0.5
+    )
+
+    # An edge directly between loser and winner — the future self-loop.
+    await _relate(live_surrealdb, loser, winner, "ALIASES")
+
+    cluster = next(
+        c
+        for c in (await svc.plan_merges()).clusters
+        if c.winner_id == winner and loser in c.loser_ids
+    )
+    result = await svc.apply_merge(cluster)
+    assert not result.skipped
+    # The loser's edge was consumed by the re-point.
+    assert result.relations_repointed >= 1
+
+    # No self-loop survives on the winner.
+    self_loops = await execute_query(
+        "SELECT id FROM relation "
+        "WHERE in = type::thing($w) AND out = type::thing($w);",
+        {"w": winner},
+        config=live_surrealdb,
+    )
+    assert self_loops == [], "loser↔winner edge must be dropped, not recreated"
+
+    # And nothing dangles on the loser either.
+    dangling = await execute_query(
+        "SELECT id FROM relation WHERE in = type::thing($l) "
+        "OR out = type::thing($l);",
+        {"l": loser},
+        config=live_surrealdb,
+    )
+    assert dangling == []
 
 
 @pytest.mark.requires_docker
