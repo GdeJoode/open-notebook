@@ -65,6 +65,16 @@ const DEFAULT_ROUTES = [
   },
 ]
 
+const SUMMARY = {
+  total_events: 5,
+  cloud_count: 2,
+  local_count: 3,
+  fallback_count: 1,
+  by_provider: { nvidia: 2, ollama: 3 },
+  by_task: { entity_extraction: 3, summarization: 2 },
+  notebook_id: null,
+}
+
 const HEALTH = {
   providers: [
     {
@@ -104,6 +114,10 @@ async function mockRoutingApis(
   capture: { lastPut?: { task: string; body: unknown } },
 ): Promise<void> {
   await page.route('**/api/model-routes/health', (route) => json(route, HEALTH))
+
+  await page.route('**/api/model-routes/summary*', (route) =>
+    json(route, SUMMARY),
+  )
 
   await page.route('**/api/model-routes', (route) =>
     json(route, DEFAULT_ROUTES),
@@ -166,6 +180,13 @@ test.describe('Track J.5 — model routing settings', () => {
     await expect(
       page.getByLabel('anthropic: not configured'),
     ).toBeVisible()
+
+    // J.6: the recent-routing summary card renders the cloud/local/fallback
+    // counts read from the routing.served telemetry.
+    await expect(page.getByText('Recent Routing', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('Cloud: 2')).toBeVisible()
+    await expect(page.getByLabel('Local: 3')).toBeVisible()
+    await expect(page.getByLabel('Fallbacks: 1')).toBeVisible()
 
     // AC4: the global privacy radio group renders and is focusable.
     const globalCloud = page.getByLabel('Global default: Cloud')

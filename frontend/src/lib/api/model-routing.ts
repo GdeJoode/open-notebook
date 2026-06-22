@@ -11,6 +11,7 @@ import {
   ModelRoute,
   ModelRouteHealth,
   ModelRouteUpdate,
+  RoutingSummary,
   RoutingTask,
 } from '@/lib/types/model-routing'
 
@@ -33,6 +34,13 @@ export const modelRoutingApi = {
 
   health: async (): Promise<ModelRouteHealth> => {
     const response = await apiClient.get<ModelRouteHealth>('/model-routes/health')
+    return response.data
+  },
+
+  summary: async (notebookId?: string): Promise<RoutingSummary> => {
+    const response = await apiClient.get<RoutingSummary>('/model-routes/summary', {
+      params: notebookId ? { notebook_id: notebookId } : undefined,
+    })
     return response.data
   },
 }

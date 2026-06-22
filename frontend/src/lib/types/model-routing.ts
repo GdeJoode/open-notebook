@@ -40,3 +40,18 @@ export interface ProviderHealth {
 export interface ModelRouteHealth {
   providers: ProviderHealth[]
 }
+
+/**
+ * A "recent routing" summary (Track J.6), optionally scoped to one notebook.
+ * Aggregates the `routing.served` telemetry into cloud-vs-local + fallback
+ * counts so the UI can show how routed work split across providers.
+ */
+export interface RoutingSummary {
+  total_events: number
+  cloud_count: number
+  local_count: number
+  fallback_count: number
+  by_provider: Record<string, number>
+  by_task: Record<string, number>
+  notebook_id: string | null
+}

@@ -16,6 +16,8 @@ import { ModelRouteUpdate, RoutingTask } from '@/lib/types/model-routing'
 export const ROUTING_QUERY_KEYS = {
   routes: ['model-routes'] as const,
   health: ['model-routes', 'health'] as const,
+  summary: (notebookId?: string) =>
+    ['model-routes', 'summary', notebookId ?? 'global'] as const,
 }
 
 export function useModelRoutes() {
@@ -29,6 +31,20 @@ export function useModelRouteHealth() {
   return useQuery({
     queryKey: ROUTING_QUERY_KEYS.health,
     queryFn: () => modelRoutingApi.health(),
+    refetchInterval: 30_000,
+    staleTime: 25_000,
+    retry: false,
+  })
+}
+
+/**
+ * Recent-routing summary (Track J.6), optionally scoped to a notebook. Polls so
+ * the cloud-vs-local + fallback counts stay current after ingestion runs.
+ */
+export function useRoutingSummary(notebookId?: string) {
+  return useQuery({
+    queryKey: ROUTING_QUERY_KEYS.summary(notebookId),
+    queryFn: () => modelRoutingApi.summary(notebookId),
     refetchInterval: 30_000,
     staleTime: 25_000,
     retry: false,
