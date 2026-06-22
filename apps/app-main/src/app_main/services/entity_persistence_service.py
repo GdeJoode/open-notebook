@@ -20,6 +20,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from loguru import logger
 from ontology_manager.canonical_bridge import resolve_ontology_type
 from shared.models.entity import Entity
+from shared.utils.entity_type_aliases import (
+    ENTITY_TYPE_ALIASES,
+    resolve_residual_type,
+)
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.entity import EntityRepository
 
@@ -45,37 +49,24 @@ _ALLOWED_ENTITY_TYPES = frozenset(
 )
 
 
-# Common short forms / NER tags LLMs emit, mapped onto the canonical enum so
-# they don't degrade to "other".
-_ENTITY_TYPE_ALIASES = {
-    "org": "organization",
-    "organisation": "organization",  # British spelling
-    "norp": "organization",  # nationalities / religious / political groups
-    "company": "organization",
-    "per": "person",
-    "people": "person",
-    "loc": "location",
-    "gpe": "location",  # geopolitical entity (spaCy NER)
-    "geo": "location",
-    "fac": "location",  # facility
-    "place": "location",
-    "gov": "government_organization",
-    "govt": "government_organization",
-    "law": "legislation",
-    "misc": "other",
-}
-
-
 def _normalize_entity_type(raw: Any) -> str:
-    """Map an LLM-provided entity type onto the canonical enum.
+    """Map an LLM-provided entity type onto the canonical enum (coarse projection).
 
-    Lower-cases + underscores, then resolves common short forms / NER tags via
-    ``_ENTITY_TYPE_ALIASES``; anything still outside the allowed set becomes
-    ``"other"`` so the ``entity_type`` ASSERT never rejects a write (the raw
-    value is preserved in ``properties.raw_entity_type``).
+    Lower-cases + underscores, then resolves short forms / NER tags + the curated
+    EN+NL residual map (``ENTITY_TYPE_ALIASES``, L.2); anything still outside the
+    allowed set becomes ``"other"`` so the ``entity_type`` ASSERT never rejects a
+    write. This is the enum-GUARDED coarse value — it is used by the relation
+    endpoint resolution (which type-filters a RELATE and so must pass a valid
+    enum member) and as the ``entity_type`` projection for an aliased label.
+
+    A not-yet-in-enum alias target (``technology`` / ``programme`` pre-L.3) is
+    re-pinned to ``other`` HERE; the rich label is preserved separately via the
+    L.2 fallback in :func:`_resolve_entity_type` (never lost). When L.3 adds
+    these to ``_ALLOWED_ENTITY_TYPES`` this guard passes them through unchanged —
+    the alias map needs no edit (option (a)).
     """
     norm = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
-    norm = _ENTITY_TYPE_ALIASES.get(norm, norm)
+    norm = ENTITY_TYPE_ALIASES.get(norm, norm)
     return norm if norm in _ALLOWED_ENTITY_TYPES else "other"
 
 
@@ -84,15 +75,23 @@ class ResolvedType:
     """The outcome of resolving an extracted label to a persistable type.
 
     ``entity_type`` is always a member of ``_ALLOWED_ENTITY_TYPES`` (the B.8
-    enum contract). ``primary_type`` / ``type_tags`` carry the rich ontology
-    type when the L.1 bridge resolved the label, and are empty when only the
-    coarse alias/enum path applied (the rich type isn't known there yet — L.2
-    extends the residual path).
+    enum contract — the enum-guard re-pins anything outside it to ``other``).
+    ``primary_type`` / ``type_tags`` carry the rich type:
+
+    - L.1 bridge hit: the ontology type + its parent trail.
+    - L.2 residual hit / fallback: the raw label, ALWAYS preserved when it
+      carried a non-trivial signal (never the historical silent ``other`` that
+      discarded it).
+
+    ``is_noise`` flags an extraction-noise label (``ABBREVIATION`` / ``Amount``)
+    so the caller can mark it; ``False`` for a bridge/alias hit or a
+    genuine-unknown label.
     """
 
     entity_type: str
     primary_type: Optional[str] = None
     type_tags: List[str] = field(default_factory=list)
+    is_noise: bool = False
 
 
 def _resolve_entity_type(
@@ -100,26 +99,37 @@ def _resolve_entity_type(
 ) -> ResolvedType:
     """Resolve an extracted label to a canonical type, preserving rich typing.
 
-    Order (L.1):
+    Order:
 
-    1. **Ontology bridge** — if ``schemas`` are supplied and the label is a
-       type in one of them, walk its ``parent_type`` chain to a schema.org
+    1. **Ontology bridge (L.1)** — if ``schemas`` are supplied and the label is
+       a type in one of them, walk its ``parent_type`` chain to a schema.org
        base and map to the canonical enum. The original ontology label is
        preserved in ``primary_type`` and the parent trail in ``type_tags``.
-    2. **Alias / enum fallback** — otherwise drop to ``_normalize_entity_type``
-       (the existing English/NER alias map; L.2 extends it with the EN+NL
-       residual map). ``primary_type`` / ``type_tags`` stay empty here.
+    2. **EN+NL residual alias map (L.2)** — a curated alias hit returns the
+       canonical target (enum-guarded) and preserves the raw label in
+       ``primary_type``.
+    3. **Non-silent unknown-label fallback (L.2)** — an unmapped label coarses to
+       a sensible default BUT ALWAYS preserves the raw label in ``primary_type``
+       / ``type_tags`` (the anti-flattening guarantee). Extraction noise
+       (``ABBREVIATION`` / ``Amount``) is flagged ``is_noise`` but still
+       preserved — it is never the historical silent ``other``.
 
     The bridge degrades gracefully: absent schemas (cross-batch / re-ingest),
     an unknown label, or an orphaned chain all return ``None`` from the bridge
-    and fall through to the alias path — persistence never crashes (AC7).
+    and fall through to the residual path — persistence never crashes (AC7).
+
+    The returned ``entity_type`` is always enum-guarded here. An alias map target
+    that is not yet in ``_ALLOWED_ENTITY_TYPES`` (``technology`` / ``programme``
+    pre-L.3, option (a)) is re-pinned to ``other`` — but the rich label survives
+    in ``primary_type``, so L.3 (a pure enum addition) lights it up with no alias
+    edit.
     """
     if schemas:
         try:
             resolution = resolve_ontology_type(str(raw_label or ""), schemas)
         except Exception as e:
             # A bridge failure must never break the hot persist path; degrade
-            # to the alias/enum fallback.
+            # to the residual fallback.
             logger.warning(f"canonical bridge failed for {raw_label!r}: {e}")
             resolution = None
         if resolution is not None:
@@ -136,7 +146,23 @@ def _resolve_entity_type(
                 type_tags=list(resolution.type_tags),
             )
 
-    return ResolvedType(entity_type=_normalize_entity_type(raw_label))
+    # (2)+(3) L.2 residual: curated EN+NL alias hit, else non-silent fallback.
+    # The residual resolver may emit a not-yet-in-enum target (technology /
+    # programme); the enum-guard re-pins it to "other" while the residual's
+    # preserved label (primary_type / type_tags) is kept intact — the rich
+    # signal is never lost even when the coarse projection is "other".
+    residual = resolve_residual_type(raw_label)
+    entity_type = (
+        residual.entity_type
+        if residual.entity_type in _ALLOWED_ENTITY_TYPES
+        else "other"
+    )
+    return ResolvedType(
+        entity_type=entity_type,
+        primary_type=residual.primary_type,
+        type_tags=list(residual.type_tags),
+        is_noise=residual.is_noise,
+    )
 
 
 class EntityPersistenceService:
@@ -306,6 +332,13 @@ class EntityPersistenceService:
             if raw_label and str(raw_label).strip().lower() != _normalize_entity_type(raw_label):
                 stored_props["raw_entity_type"] = raw_label
 
+            # L.2: flag an extraction-noise label (ABBREVIATION / Amount) so a
+            # reviewer / L.6 metric can tell genuine-unknown types apart from
+            # mis-tagged mention-forms. The label is still preserved in
+            # primary_type — the flag is provenance, not a discard.
+            if resolved.is_noise:
+                stored_props["non_type_label"] = True
+
             # Add merge history if available
             if text in merge_lookup:
                 stored_props["merged_from"] = merge_lookup[text]
@@ -327,8 +360,9 @@ class EntityPersistenceService:
                 entity_model = Entity(
                     canonical_name=text,
                     entity_type=label,
-                    # L.1: stamp the rich ontology type (empty when only the
-                    # coarse alias/enum path applied — L.2 extends the residual).
+                    # L.1: the rich ontology type (bridge). L.2: the raw label
+                    # for an aliased / unmapped residual — always preserved when
+                    # a non-trivial label exists (never silently dropped).
                     primary_type=resolved.primary_type,
                     type_tags=resolved.type_tags,
                     confidence=confidence,
