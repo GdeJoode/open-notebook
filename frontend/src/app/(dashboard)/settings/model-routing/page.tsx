@@ -6,6 +6,7 @@ import { AppShell } from '@/components/layout/AppShell'
 import { PrivacyModeToggle } from '@/components/routing/PrivacyModeToggle'
 import { ProviderChainEditor } from '@/components/routing/ProviderChainEditor'
 import { ProviderHealthChip } from '@/components/routing/ProviderHealthChip'
+import { RoutingSummaryCard } from '@/components/routing/RoutingSummaryCard'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -146,6 +147,8 @@ export default function ModelRoutingPage() {
               )}
             </CardContent>
           </Card>
+
+          <RoutingSummaryCard />
 
           {routesQuery.data.map((route) => (
             <TaskRouteCard

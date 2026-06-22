@@ -1126,12 +1126,23 @@ Of: **alternatief beginnen met Q9 vocabulary-stack** als foundation voor B + G (
 
 ## Track J — Cloud/local model routing (privacy + failover) (NEW)
 
-> **Status**: 📋 PLANNED (2026-06-21, user-request). New capability: route the
-> LLM pipeline stages through cloud providers by default — with multi-provider
-> failover and local as the final fallback — gated by a layered privacy mode
-> where `private` forces the whole LLM path local. Builds directly on the
-> per-function model-resolution layer hardened in Track B.8
+> **Status**: ✅ COMPLETE (2026-06-22). All six phases (J.1-J.6) implemented +
+> reviewed + merged. Cloud routing is live-capable: the three LLM stages (entity
+> extraction, summarization, chat) route through NVIDIA NIM by default with
+> per-document failover to local; `private` documents/notebooks never reach
+> cloud; keyless/NIM-down → automatic local fallback. Embeddings + parsing stay
+> local-and-fixed (768-dim invariant). Per-task routing telemetry
+> (`routing.served`) + provider health + per-notebook routing summary surfaced
+> in the UI. Operator runbook at `docs/tracks/J-model-routing/OPERATOR_GUIDE.md`.
+> Built on the per-function model-resolution layer from Track B.8
 > (`resolve_default_model_id` / `make_default_llm_caller`, `DefaultModels`).
+>
+> **Phase ledger**: J.1 route resolver · J.2 failover executor + circuit-breaker
+> + rate limiter · J.3 layered privacy plumbing + local-embeddings guardrail ·
+> J.4 NVIDIA NIM cloud wiring + summarization unification + provenance · J.5
+> routing config + privacy toggles + health UI · J.6 chat telemetry (FU-J4-1) +
+> per-notebook routing summary + E2E failover/privacy/no-cloud scenarios +
+> operator docs. See `docs/tracks/J-model-routing/status.md`.
 
 **Vision**: public documents process via cloud APIs by default (fast, strong
 models) with automatic failover across providers and down to local; documents
