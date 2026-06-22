@@ -325,3 +325,5 @@ The tuned auto=0.93 catches the typo class; review=0.86 sits comfortably above t
 - Regression: 348 shared+K.5 unit, 18 K.3/K.4 unit, 10 B.8 persistence, 50 entity-filtering config/fuzzy, 12 migration roundtrip — all green. `create_app()` imports clean; `/candidates` + `/overlay` routes registered. Lint clean (ruff).
 
 **Decision points honoured**: K-D3 (review-only for the uncertain band; auto only ≥ auto-threshold, applied via explicit K.3 op) and K-D4 (notebook > global; force-split is an absolute veto). No new escalations.
+
+| K.5 | fuzzy/embedding candidate dedup + review queue + alias overlay | — | `track/k5-fuzzy-dedup` | 2026-06-22 | adversarial-reviewer APPROVED-equiv (3 cycles; majors fixed: over-merge discriminator guard [NH/NB, 2021/2022, -A/-B, Roman-numeral ordinals III/VIII → REVIEW not AUTO], winner-aware new_canonical). Review-band + force-split veto + per-notebook overlay. 356 tests; 0 must-NOT auto-merges. |
