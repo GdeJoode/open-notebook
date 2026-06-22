@@ -13,16 +13,25 @@ fields this provider keys off (verified live 2026-06-22):
 so e.g. ``mnre1034`` →
 ``https://identifier.overheid.nl/tooi/id/ministerie/mnre1034`` is the BZK URI.
 
-Load model (decision K-D2 — see escalations.md)
------------------------------------------------
-``refresh()`` ingests a **bulk file** of TOOI organisation records (the
-documented JSON shape below) into ``reference_entity`` (``source_vocabulary
-= "tooi"``) and stamps ``last_validated``. A bundled representative seed
-(``_SEED_RECORDS``, the verified ministries) is the default source so the
-provider works out-of-the-box and the tests are deterministic without a network.
-The exact production bulk-download URL + refresh cadence is the open K-D2 item;
-when confirmed, point ``refresh(source=<url-or-path>)`` at it — the ingest format
-and the lookup are unchanged.
+Load model (decision K-D2 — RESOLVED, see escalations.md)
+---------------------------------------------------------
+``refresh()`` ingests TOOI organisation records into ``reference_entity``
+(``source_vocabulary = "tooi"``) and stamps ``last_validated``. Three sources,
+tried in priority order, each a fail-soft fallback for the next:
+
+1. **Remote bulk fetch** (the resolved K-D2 source) — when a
+   :class:`~shared.vocabulary.tooi_bulk.TOOIBulkFetcher` is attached, the FULL
+   government-organisation vocabulary is pulled from the official versioned
+   JSON-LD registers under ``repository.officiele-overheidspublicaties.nl``
+   through the disciplined HTTP client (timeout + rate-limit + cache + fail-soft).
+   See :mod:`shared.vocabulary.tooi_bulk` for the exact URLs/format.
+2. **Operator bulk file** — ``refresh(source=<path>)`` reads a
+   ``tooi_organisations.json`` dump (the documented JSON shape below) for an
+   air-gapped or version-pinned deploy.
+3. **Bundled verified seed** (``_SEED_RECORDS``, the real ministries) — the
+   always-present floor so a fresh install and the offline tests resolve BZK
+   without any network. Used when the remote fetch yields nothing and no file is
+   given.
 
 The bulk file format (``tooi_organisations.json``) is a JSON list of records::
 
@@ -52,6 +61,7 @@ from loguru import logger
 
 from shared.utils.name_normalizer import normalize_entity_name
 from shared.vocabulary.provider import VocabMatch
+from shared.vocabulary.tooi_bulk import TOOIBulkFetcher
 
 _TOOI_BASE_URI = "https://identifier.overheid.nl/tooi/id"
 
@@ -80,13 +90,21 @@ def _record_uri(record: Dict[str, str]) -> str:
     return f"{_TOOI_BASE_URI}/{soort}/{code}"
 
 
-def _record_aliases(record: Dict[str, str]) -> List[str]:
-    """All recognised surface forms for a TOOI organisation (deduped, ordered)."""
-    candidates = [
+def _record_aliases(record: Dict[str, Any]) -> List[str]:
+    """All recognised surface forms for a TOOI organisation (deduped, ordered).
+
+    Combines the canonical-shape fields (incl-soort / afkorting / excl-soort) with
+    any explicit ``aliases`` the source already carries (the bulk fetcher adds the
+    org's historical names + abbreviations), preserving order and removing dupes.
+    """
+    candidates: List[Any] = [
         record.get("naam_incl_soort"),
         record.get("afkorting"),
         record.get("naam_excl_soort"),
     ]
+    extra = record.get("aliases")
+    if isinstance(extra, (list, tuple)):
+        candidates.extend(extra)
     seen: List[str] = []
     for c in candidates:
         if c and c not in seen:
@@ -109,17 +127,24 @@ class TOOIProvider:
         repository: Any,
         *,
         source: Optional[str] = None,
+        bulk_fetcher: Optional[TOOIBulkFetcher] = None,
     ) -> None:
         """Args:
 
         repository: A ``ReferenceEntityRepository``-shaped object exposing
             ``async bulk_load(records)``, ``async lookup_by_name(name, source)``
             and ``async lookup_by_alias(alias, source)``.
-        source: Optional path to a bulk ``tooi_organisations.json`` file. When
-            ``None``, ``refresh`` ingests the bundled verified seed.
+        source: Optional path to a bulk ``tooi_organisations.json`` file. Takes
+            priority over the remote fetch when set (operator-pinned dump).
+        bulk_fetcher: Optional :class:`TOOIBulkFetcher` that pulls the full
+            vocabulary from the live TOOI registers. When attached (and no
+            ``source`` file is given) ``refresh`` uses it, falling back to the
+            bundled seed if nothing is reachable. ``None`` ⇒ no network; the seed
+            (or the file) is the source — this keeps the unit tests offline.
         """
         self._repo = repository
         self._source = source
+        self._bulk_fetcher = bulk_fetcher
 
     # ------------------------------------------------------------------
     # refresh — bulk ingest into reference_entity (idempotent)
@@ -128,21 +153,56 @@ class TOOIProvider:
     async def refresh(self, source: Optional[str] = None) -> int:
         """Ingest TOOI organisations into ``reference_entity``. Returns rows upserted.
 
+        Source priority (each fails soft into the next): an explicit/operator
+        ``source`` file > the attached remote bulk fetcher > the bundled seed.
+
         Idempotent: each record upserts on the ``(canonical_name,
         source_vocabulary)`` key (migration 41's UNIQUE index), so a second
         refresh over the same data creates no duplicates and only refreshes
-        ``last_validated``.
+        ``last_validated``. A code that appears under two surface forms is
+        deduped (by ``external_id``) before load so one org is never split into
+        two reference rows.
         """
-        records = self._read_source(source or self._source)
-        rows = [self._to_reference_row(r) for r in records]
-        loaded = await self._repo.bulk_load(rows)
+        records = await self._resolve_records(source or self._source)
+        rows = self._dedupe_rows(self._to_reference_row(r) for r in records)
+        loaded = int(await self._repo.bulk_load(rows))
         logger.info("TOOI refresh: ingested {n} organisations", n=loaded)
         return loaded
 
+    async def _resolve_records(self, source: Optional[str]) -> List[Dict[str, str]]:
+        """Pick the highest-priority reachable source. Never raises."""
+        if source is not None:
+            return self._read_file_source(source)
+        if self._bulk_fetcher is not None:
+            try:
+                fetched = await self._bulk_fetcher.fetch_records()
+            except Exception as exc:  # defensive — the fetcher is fail-soft already
+                logger.error("TOOI remote bulk fetch raised ({e}) — using seed", e=exc)
+                fetched = []
+            if fetched:
+                return fetched
+            logger.warning("TOOI remote bulk fetch empty — falling back to seed")
+        return list(_SEED_RECORDS)
+
     @staticmethod
-    def _read_source(source: Optional[str]) -> List[Dict[str, str]]:
-        if source is None:
-            return list(_SEED_RECORDS)
+    def _dedupe_rows(rows: Any) -> List[Dict[str, Any]]:
+        """Collapse rows sharing an ``external_id`` (keep first, union aliases)."""
+        by_id: Dict[str, Dict[str, Any]] = {}
+        order: List[str] = []
+        for row in rows:
+            ext_id = row.get("external_id") or row.get("canonical_name") or ""
+            existing = by_id.get(ext_id)
+            if existing is None:
+                by_id[ext_id] = row
+                order.append(ext_id)
+                continue
+            for alias in row.get("aliases") or []:
+                if alias not in existing["aliases"]:
+                    existing["aliases"].append(alias)
+        return [by_id[k] for k in order]
+
+    @staticmethod
+    def _read_file_source(source: str) -> List[Dict[str, str]]:
         path = Path(source)
         if not path.exists():
             logger.warning(
@@ -160,7 +220,7 @@ class TOOIProvider:
             return list(_SEED_RECORDS)
         return data
 
-    def _to_reference_row(self, record: Dict[str, str]) -> Dict[str, Any]:
+    def _to_reference_row(self, record: Dict[str, Any]) -> Dict[str, Any]:
         canonical = record.get("naam_excl_soort") or record.get("afkorting") or ""
         return {
             "canonical_name": canonical,

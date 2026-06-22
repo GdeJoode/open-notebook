@@ -16,5 +16,6 @@ no-match instead of breaking ingest/reconcile.
 """
 
 from shared.vocabulary.provider import VocabMatch, VocabularyProvider
+from shared.vocabulary.tooi_bulk import TOOIBulkFetcher
 
-__all__ = ["VocabMatch", "VocabularyProvider"]
+__all__ = ["VocabMatch", "VocabularyProvider", "TOOIBulkFetcher"]
