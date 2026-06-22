@@ -105,6 +105,16 @@ class Entity(ObjectModel):
         default=None, description="Record ID of canonical merge target if status=merged"
     )
 
+    # First-class denormalized alias list (migration 54 — Phase K.3).
+    # On retroactive merge, each loser's surface form is recorded both as an
+    # ``entity_alias`` edge (authoritative) AND appended here for cheap
+    # read/display + exporter use (K-D1). Defaults to [] so pre-54 rows and
+    # fresh entities read back cleanly.
+    aliases: List[str] = Field(
+        default_factory=list,
+        description="Denormalized surface forms collapsed into this entity on merge",
+    )
+
     # Multi-type tagging (migration 44 — Phase B.1a)
     type_tags: List[str] = Field(
         default_factory=list,
@@ -115,7 +125,9 @@ class Entity(ObjectModel):
         description="The 'best' / highest-confidence type when multiple type_tags apply",
     )
 
-    @field_validator("type_tags", "source_documents", "provenance_chain", mode="before")
+    @field_validator(
+        "type_tags", "source_documents", "provenance_chain", "aliases", mode="before"
+    )
     @classmethod
     def ensure_list(cls, v: Any) -> List[Any]:
         """Coerce None/NONE/missing into [] for resilience against legacy rows."""
