@@ -393,6 +393,12 @@ class EntityExtractionService:
         self._privacy_mode: Any = None
         self._routing_source_id: Optional[str] = None
         self._routing_notebook_id: Optional[str] = None
+        # Run-scoped applied schemas (Track L.1). Set in ``_run_multi_schema``
+        # after ``detect_applicable_schemas`` and consumed at the persist site
+        # so the canonical bridge has them WITHOUT re-detecting. Reset at the
+        # top of each ``run_extraction`` so a single-schema / no-schema run does
+        # not inherit a prior run's schemas.
+        self._applicable_schemas: Optional[List[Any]] = None
         # The most-recently-built routed caller for this run. After extraction
         # its ``served_provider`` / ``served_model_id`` carry the provider that
         # actually answered (J-Q7) — read at provenance-stamp time so the KG
@@ -645,6 +651,14 @@ class EntityExtractionService:
             top_k=3,
         )
 
+        # L.1: stash the applied ontologies (without the confidence scores) so
+        # the persist step can bridge ontology labels -> canonical types and
+        # preserve the rich type. ``detect_applicable_schemas`` returns
+        # ``(ontology, confidence)`` tuples — keep only the ontologies.
+        self._applicable_schemas = [
+            ontology for ontology, _conf in applicable_schemas
+        ]
+
         if not applicable_schemas:
             # No schema cleared the floor — fall back to the configured
             # default ontology via the legacy single-schema path. This
@@ -810,6 +824,10 @@ class EntityExtractionService:
         )
         self._routing_source_id = source_id
         self._routing_notebook_id = notebook_id
+        # L.1: clear any prior run's applied schemas — only a multi-schema run
+        # populates this (below). A single-schema run leaves it None so the
+        # persist bridge degrades to the alias/enum path.
+        self._applicable_schemas = None
 
         # 3. Build config and workflow
         config_kwargs: Dict[str, Any] = {
@@ -941,6 +959,11 @@ class EntityExtractionService:
                     # Not config.llm_model, which is "default" on the common path
                     # and would stamp None even though a model produced the rows.
                     extraction_model=await self._served_extraction_model(config),
+                    # L.1: the schemas detected for this run (set by
+                    # _run_multi_schema; None for the single-schema path) so the
+                    # persist bridge can re-type ontology labels and preserve the
+                    # rich type. No re-detection here.
+                    applicable_schemas=self._applicable_schemas,
                 )
 
         # 7. Persist raw extraction results
@@ -1137,6 +1160,11 @@ class EntityExtractionService:
             merge_groups=filtered.merged_entity_groups,
             match_candidates=[c.model_dump() for c in filtered.match_candidates] if filtered.match_candidates else None,
             extraction_method=extraction.metadata.get("extractor_type", "llm"),
+            # L.1: the re-filter path does not re-detect schemas, so the bridge
+            # has none to work with — it degrades to the alias/enum path (AC7).
+            # Pass None explicitly so a reused service instance can't leak a
+            # prior run's schemas onto a different source's re-filter.
+            applicable_schemas=None,
         )
 
         stats = {

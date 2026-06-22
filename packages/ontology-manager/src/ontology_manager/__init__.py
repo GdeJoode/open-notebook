@@ -5,6 +5,10 @@ Manages ontology schemas, versioning, validation, and evolution for
 the open-notebook knowledge extraction system.
 """
 
+from ontology_manager.canonical_bridge import (
+    CanonicalResolution,
+    resolve_ontology_type,
+)
 from ontology_manager.config import OntologyManagerConfig, get_config, set_config
 from ontology_manager.document_mapper import (
     get_document_types_for_ontology,
@@ -21,10 +25,6 @@ from ontology_manager.evolution import (
 )
 from ontology_manager.manager import OntologyManager, get_ontology_manager
 from ontology_manager.prompts import OntologyPromptGenerator
-from ontology_manager.canonical_bridge import (
-    CanonicalResolution,
-    resolve_ontology_type,
-)
 from ontology_manager.registry import OntologyRegistry, get_ontology_registry
 from ontology_manager.schema import (
     Cardinality,
