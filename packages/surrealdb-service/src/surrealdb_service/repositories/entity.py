@@ -658,6 +658,49 @@ class EntityRepository:
             logger.error(f"list_active_entities failed: {e}")
             return []
 
+    async def list_active_entities_with_embeddings(
+        self, source_ids: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """Like :meth:`list_active_entities` but also projects ``embedding``.
+
+        The K.5 candidate dedup service needs the per-entity ``embedding`` vector
+        to run the embedding resolver. Kept SEPARATE from
+        :meth:`list_active_entities` so the K.3 row contract (which the
+        recanonicalization service depends on) stays byte-identical. The
+        embedding is a top-level ``entity`` field; rows without one come back
+        with ``embedding=[]`` so the dedup service falls back to fuzzy-only.
+
+        Args:
+            source_ids: Optional notebook scope (same semantics as
+                :meth:`list_active_entities`).
+
+        Returns:
+            Active-entity rows including ``embedding``. Empty on failure.
+        """
+        try:
+            if source_ids is not None:
+                if not source_ids:
+                    return []
+                return await execute_query(
+                    "SELECT id, canonical_name, entity_type, confidence, "
+                    "source_documents, aliases, status, created_at, embedding "
+                    "FROM entity "
+                    "WHERE status = 'active' "
+                    "AND source_documents ANYINSIDE $source_ids",
+                    {"source_ids": source_ids},
+                    self.config,
+                )
+            return await execute_query(
+                "SELECT id, canonical_name, entity_type, confidence, "
+                "source_documents, aliases, status, created_at, embedding "
+                "FROM entity WHERE status = 'active'",
+                {},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"list_active_entities_with_embeddings failed: {e}")
+            return []
+
     async def merge_into_winner(
         self, winner_id: str, losers: List[Dict[str, Any]]
     ) -> bool:

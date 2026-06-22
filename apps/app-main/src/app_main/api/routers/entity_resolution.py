@@ -1,12 +1,19 @@
-"""Entity-resolution router — retroactive canonicalization (K.3).
+"""Entity-resolution router — retroactive canonicalization (K.3) + dedup (K.5).
 
-Two endpoints:
+K.3 endpoints (deterministic-collision merges):
 
 * ``POST /api/entity-resolution/plan`` returns the **dry-run** ``MergePlan``
   (no writes) for an optional notebook scope.
 * ``POST /api/entity-resolution/apply`` applies a **reviewed** list of clusters.
   It requires explicit cluster ids — there is intentionally NO "apply all"
   affordance; the caller must echo back the exact clusters from a prior plan.
+
+K.5 endpoints (fuzzy/embedding candidate dedup + user overlay):
+
+* ``GET /api/entity-resolution/candidates`` — the review queue: fuzzy/embedding
+  merge proposals partitioned into auto-merge / review bands (read-only).
+* ``POST /api/entity-resolution/overlay`` — add a force-merge/force-split rule.
+* ``DELETE /api/entity-resolution/overlay/{id}`` — remove a rule.
 """
 
 from typing import List, Optional
@@ -15,7 +22,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app_main.services.entity_resolution import (
+    CandidateDedupService,
     MergeCluster,
+    OverlayService,
     RecanonicalizationService,
 )
 
@@ -24,6 +33,14 @@ router = APIRouter(prefix="/entity-resolution", tags=["entity-resolution"])
 
 def get_recanonicalization_service() -> RecanonicalizationService:
     return RecanonicalizationService()
+
+
+def get_candidate_dedup_service() -> CandidateDedupService:
+    return CandidateDedupService()
+
+
+def get_overlay_service() -> OverlayService:
+    return OverlayService()
 
 
 # --- Response/request schemas -------------------------------------------------
@@ -166,3 +183,117 @@ async def apply_merges(
         )
 
     return ApplyResponse(applied=applied, skipped=skipped, results=results)
+
+
+# --- K.5: candidate dedup review queue -----------------------------------------
+
+
+class CandidateOut(BaseModel):
+    id_a: str
+    id_b: str
+    name_a: str
+    name_b: str
+    entity_type: str
+    score: float
+    band: str
+    method: str
+    winner_id: str
+    loser_id: str
+
+
+class CandidatesResponse(BaseModel):
+    scope: str
+    total_active_entities: int
+    auto_merge_count: int
+    review_count: int
+    auto_merge: List[CandidateOut]
+    review: List[CandidateOut]
+
+
+@router.get("/candidates", response_model=CandidatesResponse)
+async def list_candidates(
+    notebook_id: Optional[str] = None,
+    svc: CandidateDedupService = Depends(get_candidate_dedup_service),
+) -> CandidatesResponse:
+    """Return the fuzzy/embedding merge proposals (read-only review queue).
+
+    The ``review`` band is queued for a human and is NEVER auto-applied; only
+    ``auto_merge`` candidates may be applied (via ``POST /apply``).
+    """
+    report = await svc.propose_candidates(notebook_id=notebook_id)
+
+    def _out(c) -> CandidateOut:
+        return CandidateOut(
+            id_a=c.id_a,
+            id_b=c.id_b,
+            name_a=c.name_a,
+            name_b=c.name_b,
+            entity_type=c.entity_type,
+            score=c.score,
+            band=c.band,
+            method=c.method,
+            winner_id=c.winner_id,
+            loser_id=c.loser_id,
+        )
+
+    return CandidatesResponse(
+        scope=report.scope,
+        total_active_entities=report.total_active_entities,
+        auto_merge_count=report.auto_merge_count,
+        review_count=report.review_count,
+        auto_merge=[_out(c) for c in report.auto_merge],
+        review=[_out(c) for c in report.review],
+    )
+
+
+# --- K.5: user overlay (force-merge / force-split) -----------------------------
+
+
+class OverlayCreateIn(BaseModel):
+    kind: str = Field(..., description="'merge' (force-include) or 'split' (veto)")
+    name_a: str = Field(..., min_length=1)
+    name_b: str = Field(..., min_length=1)
+    entity_type: str = Field(
+        default="",
+        description="Shared entity type the rule binds (type-discipline).",
+    )
+    scope: str = Field(default="global", description="'global' or 'notebook'")
+    notebook_id: Optional[str] = Field(
+        default=None, description="Required when scope='notebook'."
+    )
+
+
+class OverlayCreateResponse(BaseModel):
+    id: str
+
+
+@router.post("/overlay", response_model=OverlayCreateResponse)
+async def add_overlay(
+    body: OverlayCreateIn,
+    svc: OverlayService = Depends(get_overlay_service),
+) -> OverlayCreateResponse:
+    """Add a force-merge or force-split overlay rule (the human escape hatch)."""
+    try:
+        rid = await svc.add_rule(
+            kind=body.kind,
+            name_a=body.name_a,
+            name_b=body.name_b,
+            entity_type=body.entity_type,
+            scope=body.scope,
+            notebook_id=body.notebook_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return OverlayCreateResponse(id=rid)
+
+
+@router.delete("/overlay/{overlay_id:path}")
+async def delete_overlay(
+    overlay_id: str,
+    svc: OverlayService = Depends(get_overlay_service),
+) -> dict:
+    """Remove an overlay rule by id."""
+    ok = await svc.remove_rule(overlay_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="overlay rule not found")
+    return {"deleted": overlay_id}

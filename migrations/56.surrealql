@@ -1,0 +1,49 @@
+-- Migration 56: `alias_overlay` table — the user escape hatch over the
+--               automated matcher (Phase K.5 — fuzzy/embedding candidate dedup).
+--
+-- K.5 proposes merges the deterministic K.1/K.2 normalizer cannot catch (typos,
+-- near-duplicate phrasings) via the entity-filtering fuzzy/embedding resolvers,
+-- partitioned into auto-merge / review / reject bands. The `alias_overlay` table
+-- is the human override on that automation:
+--
+--   * kind='split'  → force-SPLIT: A and B must NEVER be proposed as a merge,
+--     even above the auto-threshold. The ultimate over-merge backstop (a hard
+--     veto the matcher cannot beat).
+--   * kind='merge'  → force-MERGE: A and B are treated as the same entity (a
+--     hard include), feeding the K.3 reviewable-merge machinery.
+--
+-- Scope (most-specific wins, K-D4): a `notebook`-scoped overlay applies only
+-- within that notebook; a `global` overlay applies everywhere. A notebook
+-- overlay overrides a conflicting global one for that notebook.
+--
+-- B.8 caution: this migration is ADDITIVE only — it defines a brand-new table
+-- and never touches `entity`, `canonical_name`, `hash_id`, or `entity_type`, so
+-- the B.8 dedup-key / upsert contract is untouched. Every statement is
+-- `IF NOT EXISTS`, so re-applying the migration is a no-op (validated by the
+-- B.0 testcontainers roundtrip harness).
+
+DEFINE TABLE IF NOT EXISTS alias_overlay SCHEMAFULL;
+
+-- scope: 'global' (applies everywhere) | 'notebook' (applies in `notebook` only).
+DEFINE FIELD IF NOT EXISTS scope ON alias_overlay TYPE string
+    ASSERT $value IN ['global', 'notebook'];
+-- The owning notebook for a notebook-scoped rule; NONE for a global rule.
+DEFINE FIELD IF NOT EXISTS notebook ON alias_overlay TYPE option<record<notebook>>;
+-- kind: 'merge' (force-include) | 'split' (force-veto, the over-merge backstop).
+DEFINE FIELD IF NOT EXISTS kind ON alias_overlay TYPE string
+    ASSERT $value IN ['merge', 'split'];
+-- The two surface forms the rule binds together (order-insensitive at read time).
+DEFINE FIELD IF NOT EXISTS name_a ON alias_overlay TYPE string
+    ASSERT string::len($value) > 0;
+DEFINE FIELD IF NOT EXISTS name_b ON alias_overlay TYPE string
+    ASSERT string::len($value) > 0;
+-- Type-discipline: a rule binds two entities OF THE SAME TYPE (the recurring
+-- Track-K over-merge lesson — a person and an org named X never merge).
+DEFINE FIELD IF NOT EXISTS entity_type ON alias_overlay TYPE string DEFAULT '';
+DEFINE FIELD IF NOT EXISTS created_at ON alias_overlay TYPE datetime
+    DEFAULT time::now();
+
+-- Lookup indexes: scope-filter on read, and a notebook path for the
+-- per-notebook overlay scans the dedup service runs.
+DEFINE INDEX IF NOT EXISTS idx_alias_overlay_scope ON alias_overlay FIELDS scope;
+DEFINE INDEX IF NOT EXISTS idx_alias_overlay_notebook ON alias_overlay FIELDS notebook;

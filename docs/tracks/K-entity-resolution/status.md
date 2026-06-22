@@ -11,6 +11,7 @@ Append-only ledger. One row per phase attempt.
 | K.2 | Curated NL gov-org alias table + extensible override config | (pending) | `track/k2-org-aliases` | 2026-06-22 | implemented — all 7 ACs green; full-form keys (no blind strip); 0 name-only false-merges over combined corpus; K.1 1346 → K.2 1337 (BZK 6, VRO 3); ready for review |
 | K.3 | Retroactive canonicalization — dry-run plan + reviewable merge | (pending) | `track/k3-retroactive-merge` | 2026-06-22 | implemented — all 8 ACs green; dry-run-default + idempotency + soft-merge guards; ID-based relation re-pointing; person/org separation verified; 43 tests green (11 unit + 5 roundtrip + B.8 regression + migration-54). Ready for review |
 | K.4 | TOOI + Crossref vocabulary lookup → external_ids + aliases | (pending) | `track/k4-vocabulary` | 2026-06-22 | implemented — all 7 ACs green; precision guard (single high-confidence match only); resolve_external_ids signature unchanged + 45 Track D exporter tests green; migration 55 idempotent; TOOI source = K-D2 (verified seed shipped, exact bulk URL/cadence flagged). 63 tests green. Ready for review |
+| K.5 | Fuzzy/embedding candidate dedup + review queue + alias overlay | (pending) | `track/k5-fuzzy-dedup` | 2026-06-22 | implemented — all 7 ACs green; type-aware bucketing + review band (queued, never auto-applied) + force-split hard veto / force-merge per-notebook include; thresholds tuned over must-NOT corpus (fuzzy auto 0.93 / review 0.86, embedding 0.95 / 0.90) → typo class auto-merges (~0.95), every must-NOT near-miss rejects (<0.86), 0 false auto-merges; migration 56 idempotent; B.8 + K.1-K.4 contracts intact. 38 K.5 tests green (18 unit candidate-dedup+overlay, 4 overlay roundtrip, 16 migration roundtrip). Ready for review |
 
 ## Phase K.4 — TOOI + Crossref vocabulary reconciliation → external_ids/aliases — 2026-06-22
 
@@ -280,3 +281,49 @@ K.3 re-normalizes them, groups collisions, merges duplicates — reversibly.
 | hotfix | shared.config package shadowed config.py → create_app broke (K.2 regression) | — | `fix/shared-config-collision` | 2026-06-22 | merged to main 9478235. K.2's gate missed it (tests imported the submodule, not the app chain). |
 
 | K.4 | TOOI + Crossref vocabulary reconciliation → external_ids/aliases | — | `track/k4-vocabulary` | 2026-06-22 | adversarial-reviewer APPROVED (attempt 2; 1 major fixed: export projection dropped external_ids/aliases). Provider-pluggable, fail-soft HTTP (cache+rate-limit), single-match precision guard, Crossref title-overlap gate. K-D2 (TOOI bulk URL) flagged non-blocking w/ verified seed. 208+81 tests green. |
+
+## Phase K.5 — Fuzzy/embedding candidate dedup + review queue + alias overlay — 2026-06-22
+
+**Branch**: `track/k5-fuzzy-dedup` (off main, with K.1-K.4). Commits per logical unit (migration+repo+config → service+API+tests → status).
+
+**Delivered**
+- `migrations/56.surrealql` (+`_down`) — `DEFINE TABLE IF NOT EXISTS alias_overlay SCHEMAFULL` with `scope` (global|notebook), `notebook option<record<notebook>>`, `kind` (merge|split), `name_a`/`name_b` (non-empty asserts), `entity_type`, `created_at`, + scope/notebook indexes. ADDITIVE only (new table, never touches `entity`/`canonical_name`/`hash_id`/`entity_type` → B.8 key intact). Down drops the table. Idempotent (validated by the migration roundtrip harness).
+- `packages/surrealdb-service/.../repositories/alias_overlay.py` — `AliasOverlayRepository` (create/get/list/delete). `list_overlays(notebook_id)` returns global rules + that notebook's rules (the union the dedup service evaluates).
+- `apps/app-main/.../services/entity_resolution/overlay_service.py` — `OverlayService` CRUD + `split_pairs()`/`merge_rules()` resolution + `sync_alias_overrides()` bridging force-merge rules into the K.2 `alias_overrides` DB seam (`set_db_overlay`). `OverlayRule.matches` is type-aware and order-insensitive.
+- `apps/app-main/.../services/entity_resolution/candidate_dedup_service.py` — `CandidateDedupService.propose_candidates(notebook_id=None)`. Reuses the entity-filtering `FuzzyResolver` scoring (`_compute_similarity`) + a cosine embedding pass; **never reimplements matching**. Type-aware bucketing, review-band partition, force-split veto, force-merge include. Auto-merge candidates project onto a K.3 `MergeCluster` (`to_merge_cluster`) so the destructive apply reuses `RecanonicalizationService` (relation repoint, provenance fold, alias rows, soft status).
+- `packages/surrealdb-service/.../repositories/entity.py` — `list_active_entities_with_embeddings` (separate from K.3's `list_active_entities` so that row contract stays byte-identical).
+- `pipelines/entity-filtering/.../config.py` — additive `auto_merge_threshold`/`review_threshold` on `FuzzyDedupConfig` (0.93/0.86) + `EmbeddingDedupConfig` (0.95/0.90). Defaults documented with the corpus evidence.
+- API: `GET /api/entity-resolution/candidates` (review queue) + `POST/DELETE /api/entity-resolution/overlay`. Wired into the existing K.3 router.
+- `tests/fixtures/entity_resolution/must_not_merge.jsonl` — extended with 5 fuzzy near-miss pairs (Regio Deal Groningen↔Drenthe, Zuid↔Noord-Limburg, Provincie Groningen↔Drenthe, Gemeente Stadskanaal↔Veendam, Min Financiën↔EZK).
+
+**Over-merge guards (the ×2.0 surface)**
+1. **Type-aware** — entities bucketed by `entity_type`; only same-type pairs are ever compared (a person and an org named X never propose, verified by `test_cross_type_homograph_never_proposed`).
+2. **Review band, nothing silent** — `auto_merge` (≥ auto), `review` (review ≤ s < auto → queued, NEVER auto-applied), `reject` (< review, dropped). `propose_candidates` is read-only (the apply path is K.3, opt-in). AC2 asserts the review-band pair is not written.
+3. **must-NOT gate** — over the extended corpus at the tuned threshold, auto-merge proposals contain **0** must-NOT pairs (AC3/AC6).
+4. **force-split = hard veto** — a split rule removes a pair from every band even at similarity 1.0 (AC4); split also beats a contradictory force-merge.
+5. **force-merge per-notebook** — a notebook merge rule fires only within that notebook (AC5).
+6. Embedding degrades to fuzzy-only when `embedding=[]` (no fabricated score).
+
+**Threshold tuning + measurement (AC6)** — measured the `FuzzyResolver` levenshtein similarity of the OCR-typo must-merge pair vs every must-NOT near-miss:
+
+| pair | score | band @ (0.93/0.86) |
+|---|---|---|
+| Koninkrijksrelaties ↔ Koninkrijksreiaties (typo, MUST MERGE) | 0.9474 | **auto** |
+| Regio Deal Zuid-Limburg ↔ Noord-Limburg (MUST NOT) | 0.8333 | reject |
+| Regio Deal Groningen ↔ Drenthe (MUST NOT) | 0.7000 | reject |
+| Provincie Groningen ↔ Drenthe (MUST NOT) | 0.6842 | reject |
+| BZK ↔ EZK (MUST NOT) | 0.6667 | reject |
+| Ministerie van Financiën ↔ Economische Zaken (MUST NOT) | 0.5938 | reject |
+| Gemeente Stadskanaal ↔ Veendam (MUST NOT) | 0.5500 | reject |
+
+The tuned auto=0.93 catches the typo class; review=0.86 sits comfortably above the closest must-NOT (0.8333) → **0 false auto-merges, 0 false reviews** over the corpus. Embedding band is higher (0.95/0.90) because cosine over short-name embeddings is noisier than exact string distance.
+
+**Tests (green)**
+- `apps/app-main/tests/test_candidate_dedup_service.py` (10): typo caught (AC1), review-band-not-applied (AC2), zero must-NOT auto-merges over the corpus (AC3/AC6), cross-type guard, force-split veto (AC4), force-merge include + split-beats-merge (AC5), embedding pair caught, embedding fallback, `to_merge_cluster` winner/loser.
+- `apps/app-main/tests/test_overlay_service.py` (8): per-notebook isolation (AC5), global-visible-everywhere, scope union, split/merge partition, validation, delete, alias_overrides bridge.
+- `packages/surrealdb-service/tests/test_alias_overlay_roundtrip.py` (4, `@requires_docker`): global roundtrip, per-notebook isolation, delete, schema enum reject (migration 56 SCHEMAFULL ASSERT).
+- Regression: 348 shared+K.5 unit, 18 K.3/K.4 unit, 10 B.8 persistence, 50 entity-filtering config/fuzzy, 12 migration roundtrip — all green. `create_app()` imports clean; `/candidates` + `/overlay` routes registered. Lint clean (ruff).
+
+**Decision points honoured**: K-D3 (review-only for the uncertain band; auto only ≥ auto-threshold, applied via explicit K.3 op) and K-D4 (notebook > global; force-split is an absolute veto). No new escalations.
+
+| K.5 | fuzzy/embedding candidate dedup + review queue + alias overlay | — | `track/k5-fuzzy-dedup` | 2026-06-22 | adversarial-reviewer APPROVED-equiv (3 cycles; majors fixed: over-merge discriminator guard [NH/NB, 2021/2022, -A/-B, Roman-numeral ordinals III/VIII → REVIEW not AUTO], winner-aware new_canonical). Review-band + force-split veto + per-notebook overlay. 356 tests; 0 must-NOT auto-merges. |

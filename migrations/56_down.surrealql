@@ -1,0 +1,7 @@
+-- Migration 56 down: remove the K.5 `alias_overlay` table.
+--
+-- Migration 56 owns the whole `alias_overlay` table (it is a brand-new table,
+-- not a field on a pre-existing one), so the clean reverse is to drop it. No
+-- other migration depends on it. Idempotent: IF EXISTS makes a re-run a no-op.
+
+REMOVE TABLE IF EXISTS alias_overlay;
