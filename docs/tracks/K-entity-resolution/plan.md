@@ -71,7 +71,18 @@ Six phases, two layers: K.1–K.2 = cheap NL normalization (Layer 1, immediate w
 
 ## 3. Per-phase detail
 
-### Phase K.1 — NL-aware normalizer + precision guard + measurement harness
+### Phase K.1 — Collision-safe normalizer (articles + spelling) + precision guard + measurement harness
+
+> **SCOPE REVISION (2026-06-22, after K.1 attempt-4)**: blind content-prefix
+> stripping collides cross-type in live data (`Ministerie van Onderwijs` →
+> `onderwijs` == the bare `onderwijs` concept), and a context-free normalizer
+> can't avoid it (relations are name-only). So **K.1 is narrowed to leading
+> articles + spelling only** (no blind content-prefix stripping), and **K.2's
+> curated alias/equivalence table absorbs ALL org-form merging** (`Ministerie
+> van BZK` ↔ `BZK` ↔ `Binnenlandse Zaken…`) — explicit, type-aware equivalences
+> only, never blind stripping. K.7 (type-safe relations) stays planned and later
+> re-enables aggressive normalization safely.
+
 
 **Goal**: extend `normalize_entity_name` in place so it strips leading articles (`De `/`Het `/`Een `) and role/org prefixes (`Minister(ie) van `, `Staatssecretaris van `, `Gemeente `, `Provincie `) and tolerates the documented spelling-variant class (`Koninkrij(k|ks)relaties`), **without over-merging tail-distinct names**. Build the measurement harness that quantifies the fragmentation drop vs false-merge count over the live Convenant entity set, and the must-NOT-merge adversarial corpus. **No behaviour change to the upsert/hash_id contract** — only the normalized string changes; the derive-rule is unchanged.
 
@@ -367,3 +378,22 @@ Six phases, two layers: K.1–K.2 = cheap NL normalization (Layer 1, immediate w
 3. **K-D1** (both `entity_alias` table + denormalized arrays), **K-D4** (overlay precedence: notebook > global > matcher), **K-D5** (per-notebook vs global retroactive scope) — recommendations above; confirm or override.
 
 All other Track K behaviour is resolved by the roadmap + the B.8c evidence and encoded above.
+
+---
+
+### Phase K.7 — Type-safe relation endpoints (Option B, planned 2026-06-22)
+
+**Goal**: make relation endpoints carry the entity TYPE (or resolve to the entity's stable ID) end-to-end, so a relation pointing at "the org named X" can never be re-attached to "the person named X". This removes the structural reason K.1 had to stay conservative (a normalized name is not a unique entity key across types; relations are type-less today — `RELATE ... WHERE canonical_name = $name LIMIT 1`). Once landed, the aggressive K.1 prefixes (`minister van`, `gemeente`, `provincie`) can be re-introduced safely.
+
+**Scope / files (to detail when scheduled)**:
+- Data model: `relation` records store `source_type`/`target_type` (or resolved `source_id`/`target_id` record links); a migration adds the fields. Decide IDs vs (name,type) — IDs are stronger but need resolution at persist time.
+- Extraction → persist: pass-2 already types each entity in a batch; thread the endpoint type from the extracted relation's typed endpoints into persistence; the `RELATE` resolves by `(canonical_name, entity_type)` / ID, not name alone (`entity_persistence_service`).
+- Merge layers: `notebook_merge_service` relation rewrite + K.3 retroactive merge resolve endpoints by `(name, type)`/ID (removes the `name_to_canon` name-only hack).
+- Backfill: a migration/dry-run to disambiguate already-persisted name-only relations where possible (best-effort; unresolvable ones flagged).
+- Then: re-enable the conservative-dropped prefixes in `nl_normalization` behind the now-safe relation layer; re-measure fragmentation (expect a further drop).
+
+**Acceptance criteria (sketch)**: a relation whose endpoint is a cross-type homograph (`bzk` person vs org) attaches to the type-correct entity (the bug from K.1 attempt-3); persisted relations gain endpoint types; the re-enabled prefixes pass the name-only over-merge canary because the canary is no longer the binding constraint (type disambiguates).
+
+**Effort**: multi-phase-sized (core extraction→persist→relate path that B.8 stabilized — high regression risk). Sequence AFTER K.3 (retroactive merge already touches relation re-pointing). Reviewer budget ×2.0.
+
+**Risk**: touches the B.8-stabilized core. Mitigate: additive fields (no removal), dry-run backfill, and the K.1 over-merge corpus as the regression gate throughout.

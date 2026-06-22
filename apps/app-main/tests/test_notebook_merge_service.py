@@ -1,17 +1,21 @@
 """Tests for the B.6 ``NotebookMergeService``.
 
-Six fixtures cover the acceptance criteria:
+The fixtures cover the acceptance criteria:
 
 1. ``test_single_source_merges_into_target`` — N=1 source with 5 entities
    + 3 relations writes them all into the target.
-2. ``test_multi_source_merges_with_dedup`` — same canonical name across
-   two notebooks merges with union ``type_tags`` and max confidence.
-3. ``test_idempotent_re_run`` — a second run is a no-op (counters zero).
-4. ``test_type_collision_records_conflict_when_required`` — disjoint
-   ``type_tags`` with ``type_match_required=True`` records a conflict
-   and skips the merge.
-5. ``test_type_collision_unions_when_not_required`` — same scenario,
-   ``type_match_required=False`` unions the tags and merges anyway.
+2. ``test_multi_source_merges_with_dedup`` — same canonical name AND same
+   type across two notebooks merges with union ``type_tags`` and max
+   confidence (the legitimate cross-notebook dedup case).
+3. ``test_same_name_different_type_stays_distinct`` — K.1 rev2 regression:
+   same normalized name + different type in the SAME notebook stay two
+   distinct entities (no silent cross-type over-merge).
+4. ``test_idempotent_re_run`` — a second run is a no-op (counters zero).
+5. ``test_cross_type_homographs_stay_distinct_when_required`` /
+   ``test_cross_type_homographs_stay_distinct_when_not_required`` — a
+   name shared across notebooks with disjoint types is kept as separate
+   entities (no conflict, no union) under both ``type_match_required``
+   values, because the ``(name, type)`` bucket key never collides them.
 6. ``test_dry_run_returns_counts_without_writing`` — counts populated
    but ``upsert_entity`` is never invoked.
 
@@ -293,9 +297,33 @@ async def test_single_source_merges_into_target():
 
 @pytest.mark.asyncio
 async def test_multi_source_merges_with_dedup():
-    """Same canonical name with two different labels → one entity, two type_tags."""
-    src_a_entities = [_entity_row("entity:a-oecd", "OECD", "Organization", 0.9)]
-    src_b_entities = [_entity_row("entity:b-oecd", "OECD", "Org", 0.7)]
+    """Same canonical name AND same type across two notebooks → one entity.
+
+    The legitimate cross-notebook dedup case: two notebooks each carry an
+    ``OECD`` Organization. The (name, type) bucket key collapses them into
+    a single entity, max-confidence label/text winning. Different-typed
+    homographs are covered by
+    ``test_same_name_different_type_stays_distinct`` instead — they must
+    NOT collapse.
+    """
+    src_a_entities = [
+        _entity_row(
+            "entity:a-oecd",
+            "OECD",
+            "Organization",
+            0.9,
+            type_tags=["Organization", "IGO"],
+        )
+    ]
+    src_b_entities = [
+        _entity_row(
+            "entity:b-oecd",
+            "OECD",
+            "Organization",
+            0.7,
+            type_tags=["Organization", "Institution"],
+        )
+    ]
     fake = _FakeExecuteQuery(
         sources_by_notebook={
             "notebook:a": ["source:a"],
@@ -317,12 +345,9 @@ async def test_multi_source_merges_with_dedup():
         report = await svc.merge_notebooks(
             source_notebook_ids=["notebook:a", "notebook:b"],
             target_notebook_id="notebook:target",
-            # Disjoint type_tags by default would conflict; allow the
-            # union here since the AC asks for the union outcome.
-            type_match_required=False,
         )
 
-    # One write — the dedup collapsed the two surface forms.
+    # One write — the dedup collapsed the two same-typed surface forms.
     assert mock_upsert.call_count == 1
     assert report.entities_merged == 1
     # The Entity model the service handed the repo should carry the
@@ -330,10 +355,124 @@ async def test_multi_source_merges_with_dedup():
     call = mock_upsert.call_args
     entity = call.args[0]
     assert entity.canonical_name == "OECD"
-    # Higher-confidence pass was "Organization" → that label wins
-    # primary_type and the surface text.
+    # Higher-confidence pass (0.9) wins primary_type and the surface text.
     assert entity.primary_type == "Organization"
-    assert set(entity.type_tags) == {"Organization", "Org"}
+    assert set(entity.type_tags) == {"Organization", "IGO", "Institution"}
+
+
+@pytest.mark.asyncio
+async def test_same_name_different_type_stays_distinct():
+    """REGRESSION (K.1 rev2/rev3): minister vs ministry → 2 distinct entities.
+
+    ``Minister van BZK`` (person) and ``Ministerie van BZK`` (organization)
+    must stay two entities. rev2 kept them apart via the ``(name, type)``
+    bucket key (both normalized to ``bzk``). rev3 goes further and stops
+    stripping the person-role leader, so the two now normalize to DIFFERENT
+    strings (``minister van bzk`` vs ``bzk``) — they are trivially distinct at
+    BOTH the name level and the (name, type) level, and their relations route
+    to different endpoints. Two separate entities are written from the SAME
+    notebook and no conflict is raised.
+    """
+    entities = [
+        _entity_row("entity:minister", "Minister van BZK", "person", 0.9),
+        _entity_row("entity:ministerie", "Ministerie van BZK", "organization", 0.8),
+    ]
+    fake = _FakeExecuteQuery(
+        sources_by_notebook={
+            "notebook:src": ["source:s1"],
+            "notebook:target": [],
+        },
+        entities_by_source={"source:s1": entities},
+        relations_by_source={"source:s1": []},
+    )
+    svc, mock_upsert = _make_service_with_fake_db(fake)
+
+    with patch(
+        "app_main.services.notebook_merge_service.execute_query",
+        new=fake,
+    ):
+        report = await svc.merge_notebooks(
+            source_notebook_ids=["notebook:src"],
+            target_notebook_id="notebook:target",
+            type_match_required=True,
+        )
+
+    # Two distinct entities written — NOT collapsed into one.
+    assert report.entities_merged == 2
+    assert mock_upsert.call_count == 2
+    # No conflict: distinct types never share a bucket, so the cross-type
+    # collision can't arise by construction.
+    assert report.conflicts == []
+    written = {
+        (c.args[0].canonical_name, c.args[0].entity_type)
+        for c in mock_upsert.call_args_list
+    }
+    assert written == {
+        ("Minister van BZK", "person"),
+        ("Ministerie van BZK", "organization"),
+    }
+    # Each entity keeps ONLY its own type tag — no cross-type leakage.
+    tags_by_type = {
+        c.args[0].entity_type: set(c.args[0].type_tags)
+        for c in mock_upsert.call_args_list
+    }
+    assert tags_by_type == {
+        "person": {"person"},
+        "organization": {"organization"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_relation_endpoints_do_not_cross_types():
+    """REGRESSION (K.1 rev3): a relation touching a minister vs ministry routes
+    to the correct, distinct endpoint.
+
+    Because ``Minister van BZK`` (person) and ``Ministerie van BZK`` (org) now
+    normalize to DIFFERENT strings, the relation-endpoint rewrite
+    (``name_to_canon``) resolves each name to its own bucket — the RELATE is
+    issued against the right canonical text and never collapses the person and
+    the org onto one endpoint.
+    """
+    entities = [
+        _entity_row("entity:minister", "Minister van BZK", "person", 0.9),
+        _entity_row("entity:ministerie", "Ministerie van BZK", "organization", 0.8),
+        _entity_row("entity:wet", "Klimaatwet", "other", 0.7),
+    ]
+    # Two relations: the minister signs the law; the ministry drafts it. They
+    # must keep distinct source endpoints.
+    relations = [
+        _relation_row("entity:minister", "entity:wet", "SIGNS"),
+        _relation_row("entity:ministerie", "entity:wet", "DRAFTS"),
+    ]
+    fake = _FakeExecuteQuery(
+        sources_by_notebook={
+            "notebook:src": ["source:s1"],
+            "notebook:target": [],
+        },
+        entities_by_source={"source:s1": entities},
+        relations_by_source={"source:s1": relations},
+    )
+    svc, _ = _make_service_with_fake_db(fake)
+
+    with patch(
+        "app_main.services.notebook_merge_service.execute_query",
+        new=fake,
+    ):
+        report = await svc.merge_notebooks(
+            source_notebook_ids=["notebook:src"],
+            target_notebook_id="notebook:target",
+        )
+
+    assert report.relations_created == 2
+    # Inspect the RELATE calls: each relation's source endpoint text must be
+    # the original (now-distinct) canonical surface form, not a shared 'BZK'.
+    relate_sources = {
+        (params or {}).get("src_name")
+        for sql, params in fake.calls
+        if "RELATE" in sql.strip()
+    }
+    assert "Minister van BZK" in relate_sources
+    assert "Ministerie van BZK" in relate_sources
 
 
 @pytest.mark.asyncio
@@ -402,8 +541,17 @@ async def test_idempotent_re_run():
 
 
 @pytest.mark.asyncio
-async def test_type_collision_records_conflict_when_required():
-    """Disjoint type_tags + type_match_required=True → conflict, no merge."""
+async def test_cross_type_homographs_stay_distinct_when_required():
+    """K.1 rev2: same name, different type across notebooks → 2 distinct entities.
+
+    Formerly ``test_type_collision_records_conflict_when_required``, which
+    asserted a CONFLICT was raised for ``Smith`` (Organization) vs
+    ``Smith`` (Person) under a name-only bucket key. The (name, type) key
+    keeps them in separate buckets, so no collision arises by construction
+    — both entities are written, no conflict recorded. This is the correct
+    behaviour: a person and an org with the same surface name ARE
+    different entities.
+    """
     src_a_entities = [_entity_row("entity:a-smith", "Smith", "Organization", 0.9)]
     src_b_entities = [_entity_row("entity:b-smith", "Smith", "Person", 0.85)]
     fake = _FakeExecuteQuery(
@@ -430,19 +578,28 @@ async def test_type_collision_records_conflict_when_required():
             type_match_required=True,
         )
 
-    assert len(report.conflicts) == 1
-    conflict = report.conflicts[0]
-    assert conflict.normalized_name == "smith"
-    assert set(conflict.conflicting_type_tags) == {"Organization", "Person"}
-    assert set(conflict.source_notebook_ids) == {"notebook:a", "notebook:b"}
-    # No merge took place — upsert was never called for this entity.
-    assert mock_upsert.call_count == 0
-    assert report.entities_merged == 0
+    # No conflict — distinct types never collide on the (name, type) key.
+    assert report.conflicts == []
+    # Two distinct entities written, one per type.
+    assert report.entities_merged == 2
+    assert mock_upsert.call_count == 2
+    written = {
+        (c.args[0].canonical_name, c.args[0].entity_type)
+        for c in mock_upsert.call_args_list
+    }
+    assert written == {("Smith", "Organization"), ("Smith", "Person")}
 
 
 @pytest.mark.asyncio
-async def test_type_collision_unions_when_not_required():
-    """Same disjoint scenario with type_match_required=False → merged anyway."""
+async def test_cross_type_homographs_stay_distinct_when_not_required():
+    """Same scenario with type_match_required=False → still two distinct entities.
+
+    The disjoint-type "union into one entity" outcome is no longer
+    reachable: the (name, type) key separates the buckets before any
+    union could occur, regardless of ``type_match_required``. Both flag
+    values yield two distinct entities — which is the correct, non-corrupt
+    result.
+    """
     src_a_entities = [_entity_row("entity:a-smith", "Smith", "Organization", 0.9)]
     src_b_entities = [_entity_row("entity:b-smith", "Smith", "Person", 0.85)]
     fake = _FakeExecuteQuery(
@@ -470,12 +627,17 @@ async def test_type_collision_unions_when_not_required():
         )
 
     assert report.conflicts == []
-    # One write — both contributors collapsed into a single merged entity.
-    assert mock_upsert.call_count == 1
-    entity = mock_upsert.call_args.args[0]
-    assert set(entity.type_tags) == {"Organization", "Person"}
-    # Higher-confidence pass (0.9) supplies primary_type.
-    assert entity.primary_type == "Organization"
+    # Two writes — the entities stay distinct, never unioned into one.
+    assert mock_upsert.call_count == 2
+    written = {
+        (c.args[0].canonical_name, c.args[0].entity_type)
+        for c in mock_upsert.call_args_list
+    }
+    assert written == {("Smith", "Organization"), ("Smith", "Person")}
+    for c in mock_upsert.call_args_list:
+        entity = c.args[0]
+        # Each entity keeps only its own type tag — no cross-type union.
+        assert set(entity.type_tags) == {entity.entity_type}
 
 
 @pytest.mark.asyncio
