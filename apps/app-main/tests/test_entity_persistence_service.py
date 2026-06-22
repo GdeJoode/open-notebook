@@ -13,7 +13,6 @@ keep mocking ``app_main.services.entity_persistence_service.execute_query``.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from app_main.services.entity_persistence_service import EntityPersistenceService
 
 

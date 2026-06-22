@@ -30,10 +30,8 @@ from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from app_main.services.notebook_merge_service import NotebookMergeService
 from shared.utils.name_normalizer import normalize_entity_name
-
 
 # ---------------------------------------------------------------------------
 # Helpers — a programmable fake of the per-notebook query layer.

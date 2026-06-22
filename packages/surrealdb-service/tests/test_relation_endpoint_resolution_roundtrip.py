@@ -25,7 +25,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-
 from app_main.services import entity_persistence_service as eps_module
 from app_main.services.entity_persistence_service import EntityPersistenceService
 from surrealdb_service.config import SurrealDBConfig
