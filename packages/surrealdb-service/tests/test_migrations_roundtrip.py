@@ -509,3 +509,52 @@ async def test_default_models_update_without_privacy_field(
     # option<string> allows this sibling record to carry NONE (the global
     # default lives on content_settings, not here).
     assert rows[0].get("default_privacy_mode") is None
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_migration_54_aliases_roundtrip_and_idempotent(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Migration 54 (K.3): ``aliases`` reads back ``[]``; replay is a no-op.
+
+    The K.3 retroactive merge denormalizes loser surface forms onto the
+    winner's ``aliases`` array (migration 54). A fresh entity must read back
+    ``aliases=[]`` (safe default), and re-applying the migration body — all
+    ``IF NOT EXISTS`` — must not raise and must leave the field usable. Asserts
+    the B.8 caution holds: ``status`` defaults to 'active' and the additive
+    field does not disturb the canonical write-path.
+    """
+    from surrealdb_service.testing import fixtures as fx
+
+    name = _unique("alias-rt")
+    await execute_query(
+        "CREATE entity SET canonical_name = $n, name = $n, "
+        "entity_type = 'organization', embedding = [];",
+        {"n": name},
+        config=live_surrealdb,
+    )
+    rows = await execute_query(
+        "SELECT aliases, status FROM entity WHERE canonical_name = $n;",
+        {"n": name},
+        config=live_surrealdb,
+    )
+    assert rows[0]["aliases"] == []
+    assert rows[0]["status"] == "active"
+
+    # Replay the forward migration — IF NOT EXISTS makes this a no-op.
+    migration_sql = (fx._MIGRATIONS_DIR / "54.surrealql").read_text()
+    await execute_query(migration_sql, config=live_surrealdb)
+
+    # The field still writes after replay.
+    await execute_query(
+        "UPDATE entity SET aliases = ['x', 'y'] WHERE canonical_name = $n;",
+        {"n": name},
+        config=live_surrealdb,
+    )
+    rows2 = await execute_query(
+        "SELECT aliases FROM entity WHERE canonical_name = $n;",
+        {"n": name},
+        config=live_surrealdb,
+    )
+    assert sorted(rows2[0]["aliases"]) == ["x", "y"]
