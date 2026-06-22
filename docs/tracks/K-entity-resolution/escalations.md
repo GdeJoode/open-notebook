@@ -60,7 +60,7 @@ This answers the original options: **1(a) is the path** — there IS a canonical
 
 **Wired in:**
 - `shared/vocabulary/tooi_bulk.py::TOOIBulkFetcher` fetches + parses all eight registers through the K.4 fail-soft HTTP client (timeout + rate-limit 1s + cache), groups by canonical URI, collects historical names/abbreviations as aliases, unions + dedupes by organisatiecode.
-- `tooi_provider.refresh()` source priority: operator file > remote fetcher > bundled seed (each fails soft into the next; unreachable registers → seed, never crash). Idempotent at scale (upsert on `(canonical_name, source_vocabulary)` + pre-load dedupe by `external_id`).
+- `tooi_provider.refresh()` source priority: operator file > remote fetcher > bundled seed (each fails soft into the next; unreachable registers → seed, never crash). Idempotent at scale (upsert on `(external_id, source_vocabulary)` + pre-load dedupe by `external_id`).
 - `POST /api/vocabulary/refresh` attaches the fetcher by default; `TOOI_DISABLE_REMOTE=1` opts out of the network (air-gapped → seed/file only).
 - Tests mock HTTP (no live CI calls): `test_tooi_bulk.py` (parse + union + fail-soft + dedupe) and the remote-refresh integration cases in `test_tooi_provider.py`.
 
