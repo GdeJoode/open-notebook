@@ -47,6 +47,13 @@ from __future__ import annotations
 
 import re
 
+# Shared with ``name_normalizer`` so alias-config keys/values can be normalized
+# through the *same* pre-alias pipeline (lowercase / whitespace / trailing punct
+# / article-strip / spelling) without importing ``name_normalizer`` (which would
+# create an import cycle: name_normalizer -> alias_overrides -> name_normalizer).
+_WHITESPACE_RE = re.compile(r"\s+")
+_TRAILING_PUNCT_RE = re.compile(r"[\s\.,;:!\?]+$")
+
 # Leading articles, matched after V1 lowercasing. Order is irrelevant (mutually
 # exclusive at the head of a string), but the trailing space is part of the
 # match so we never strip the ``de`` inside ``deal``.
@@ -114,6 +121,43 @@ def strip_leading_noise(name: str) -> str:
                 return candidate
             return name
 
+    return name
+
+
+def normalize_alias_key(name: str) -> str:
+    """Run the full pre-alias normalization pipeline on an alias-config string.
+
+    Operator/user-supplied alias entries (``{"Min AZ": "Algemene Zaken"}``) must
+    be keyed in the *same* normalized space the resolver sees at lookup time, or
+    they would never match. This applies the exact stages
+    ``normalize_entity_name`` runs *before* alias expansion — lowercase,
+    whitespace-collapse, trailing-punct strip, leading-article strip, spelling
+    canonicalization — so a raw config key lands on the post-K.1 form that
+    :func:`shared.utils.org_aliases.expand_org_alias` is asked to resolve.
+
+    Kept here (not in ``name_normalizer``) purely to avoid an import cycle, since
+    the alias-config loader needs it.
+
+    Args:
+        name: A raw alias-config key or value.
+
+    Returns:
+        The post-K.1 normalized form (empty string for empty/blank input).
+
+    Examples:
+        >>> normalize_alias_key("Min AZ")
+        'min az'
+        >>> normalize_alias_key("De Regio Deal")
+        'regio deal'
+    """
+    if not name:
+        return ""
+    name = name.lower()
+    name = _WHITESPACE_RE.sub(" ", name)
+    name = _TRAILING_PUNCT_RE.sub("", name)
+    name = name.strip()
+    name = strip_leading_noise(name)
+    name = canonicalize_spelling(name)
     return name
 
 

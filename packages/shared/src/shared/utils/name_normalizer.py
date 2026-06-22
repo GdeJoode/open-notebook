@@ -22,21 +22,27 @@ Pipeline
 3. **NL spelling canonicalization** (K.1): map a small curated set of documented
    spelling variants (``koninkrijkrelaties`` → ``koninkrijksrelaties``) onto one
    form.
+4. **Curated org-alias expansion** (K.2): resolve a known NL government-org
+   surface form (``bzk`` / ``ministerie van bzk`` / the bare full-form) to one
+   canonical full-form via an exact-match closed allow-list (built-in floor +
+   operator overrides). Runs LAST, on the post-K.1 string, because its keys are
+   already-normalized forms. See :mod:`shared.utils.org_aliases`.
 
 Precision over recall
 ======================
 Over-merging two distinct real entities is silently-wrong data; fragmentation
 is merely annoying. Relations resolve their endpoints by name ALONE
 (``WHERE canonical_name = $name``, no entity_type filter), so a normalized name
-shared by two different-typed real entities corrupts the graph. The NL stages
-are therefore restricted to *collision-safe* edits: stripping a (meaning-free)
+shared by two different-typed real entities corrupts the graph. The K.1 NL
+stages are restricted to *collision-safe* edits: stripping a (meaning-free)
 article and rewriting curated spelling variants — neither can fold a content
-token onto another entity's name. ``Ministerie van Onderwijs`` and ``Onderwijs``
-deliberately stay distinct (``ministerie van onderwijs`` ≠ ``onderwijs``).
-
-Curated, type-aware org-form / abbreviation merging (``Ministerie van BZK`` ↔
-``BZK``) is **out of scope here** and lives in Track K.2's alias table. See
-:mod:`shared.utils.nl_normalization` for the rule details.
+token onto another entity's name. K.2's org-alias expansion stays collision-safe
+a different way: it is **exact-match against a curated allow-list** whose values
+are distinct org canonicals (``ocw`` → ``onderwijs cultuur en wetenschap``, never
+the bare ``onderwijs``), and it never keys the ``minister van …`` person-role
+forms — so it cannot fold a ministry onto a bare different-typed token.
+``Ministerie van Onderwijs`` and ``Onderwijs`` deliberately stay distinct
+(``onderwijs cultuur en wetenschap`` ≠ ``onderwijs``).
 
 The B.8 dedup-key contract is unaffected: callers derive
 ``hash_id = md5(f"{normalize_entity_name(name)}|{entity_type}")`` and the upsert
@@ -48,10 +54,12 @@ from __future__ import annotations
 
 import re
 
+from shared.config.alias_overrides import get_resolved_aliases
 from shared.utils.nl_normalization import (
     canonicalize_spelling,
     strip_leading_noise,
 )
+from shared.utils.org_aliases import expand_org_alias
 
 # Collapse all runs of any whitespace (spaces, tabs, newlines) to a
 # single space. Compiled at module load so callers pay the cost once.
@@ -68,10 +76,12 @@ def normalize_entity_name(name: str) -> str:
 
     Composes content normalization (lowercase, collapse whitespace, strip
     trailing punctuation) with the K.1 NL rules (leading-article strip,
-    documented spelling-variant canonicalization). The NL rules are
-    collision-safe: only a meaning-free article is stripped, so distinct
-    entities never end up sharing a name through normalization.
-    ``Ministerie van Onderwijs`` and ``Onderwijs`` stay distinct.
+    documented spelling-variant canonicalization) and the K.2 curated org-alias
+    expansion (``bzk`` / ``ministerie van bzk`` → one full-form). Every stage is
+    collision-safe: distinct entities never end up sharing a name through
+    normalization. ``Ministerie van Onderwijs`` and ``Onderwijs`` stay distinct
+    (the OCW canonical is ``onderwijs cultuur en wetenschap``, not the bare
+    concept), and ``BZK`` ≠ ``EZK``.
 
     Args:
         name: Raw surface form as emitted by the LLM or upstream extractor.
@@ -91,6 +101,10 @@ def normalize_entity_name(name: str) -> str:
         'regio deal'
         >>> normalize_entity_name("Ministerie van Onderwijs")
         'ministerie van onderwijs'
+        >>> normalize_entity_name("BZK")
+        'binnenlandse zaken en koninkrijksrelaties'
+        >>> normalize_entity_name("Ministerie van BZK")
+        'binnenlandse zaken en koninkrijksrelaties'
         >>> normalize_entity_name("Binnenlandse Zaken en Koninkrijkrelaties")
         'binnenlandse zaken en koninkrijksrelaties'
         >>> normalize_entity_name("")
@@ -105,4 +119,11 @@ def normalize_entity_name(name: str) -> str:
     # NL-aware stages run on the post-V1 string.
     name = strip_leading_noise(name)
     name = canonicalize_spelling(name)
+    # Curated org-alias expansion (K.2) runs LAST, after article-strip and
+    # spelling canonicalization, because its keys are post-K.1-normalized forms
+    # (e.g. ``ministerie van bzk``, ``binnenlandse zaken en koninkrijksrelaties``)
+    # — the spelling fix must already have rewritten ``koninkrijkrelaties`` for
+    # the full-form key to match. Exact-match only against the built-in+override
+    # allow-list; unknown forms pass through untouched.
+    name = expand_org_alias(name, aliases=get_resolved_aliases())
     return name
