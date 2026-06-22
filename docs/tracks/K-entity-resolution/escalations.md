@@ -85,3 +85,10 @@ This answers the original options: **1(a) is the path** — there IS a canonical
 2. **Refresh cadence/trigger** — the roadmap says "monthly". Confirm the mechanism: manual `POST /api/vocabulary/refresh` (shipped), a scheduled cron calling it, or app-startup-if-stale (compare `reference_entity.last_validated` age). Shipped: the manual endpoint + `last_validated` stamping; the scheduler is not wired pending this decision.
 
 Everything downstream (the reconciler, lookup, Crossref, `external_ids`) works against `reference_entity` regardless of how TOOI is loaded — this decision only affects how the full org set gets in.
+
+## K.6 — AliasManager has no dedicated alias CRUD endpoint (2026-06-22)
+**Status**: DECIDED in-task (non-blocking) — recorded for the reviewer, no user action needed.
+
+The K.6 plan lists `AliasManager.tsx` "backed by `entity.aliases` + `entity_alias`". The merged backend exposes `entity.aliases` for **read** (via `GET /api/knowledge-graph/entities/{id}`, which `SELECT *`s the row) but ships **no per-entity alias add/remove HTTP endpoint** — the only alias-writing surfaces are (a) the K.3 merge apply (creates `entity_alias` rows for losers) and (b) the K.5 `alias_overlay` force-merge (materialized into an `entity_alias` edge on the next dedup scan). Adding a new alias CRUD router would be backend scope-creep outside this frontend-only phase (and unvalidatable here).
+
+**Decision**: `AliasManager` is wired to the existing K.5 overlay endpoints — **add alias = global force-merge** (`canonical ⇔ alias`), **remove alias = force-split**. It reads existing aliases from the entity detail. This needs no new backend surface and stays consistent with the "overlay is the human escape hatch" model. If a first-class `POST/DELETE /api/knowledge-graph/entities/{id}/aliases` is later desired (immediate write vs. next-scan materialization), it is an additive backend follow-up; the component's `onAddAlias`/`onRemoveAlias` callbacks would just be re-pointed.
