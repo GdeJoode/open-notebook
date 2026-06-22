@@ -3,31 +3,12 @@
 import { Badge } from '@/components/ui/badge'
 import { ExternalLink } from 'lucide-react'
 
+import { providerLabel, toHref } from '@/lib/utils/external-ids'
+
 interface ExternalIdBadgesProps {
   /** The entity's `external_ids` (stable URIs from K.4 vocabulary reconciliation). */
   externalIds?: string[]
   className?: string
-}
-
-/** Classify a stable URI into a short provider label for the badge. */
-function providerLabel(uri: string): string {
-  const u = uri.toLowerCase()
-  if (u.includes('doi.org') || u.startsWith('doi:') || u.includes('10.')) {
-    if (u.includes('doi')) return 'DOI'
-  }
-  if (u.includes('tooi') || u.includes('standaarden.overheid.nl')) return 'TOOI'
-  if (u.includes('orcid')) return 'ORCID'
-  if (u.includes('wikidata')) return 'Wikidata'
-  if (u.includes('arxiv')) return 'arXiv'
-  return 'ID'
-}
-
-/** Turn a bare DOI / scheme-less id into something linkable. */
-function toHref(uri: string): string {
-  if (/^https?:\/\//i.test(uri)) return uri
-  if (/^10\.\d{4,}/.test(uri)) return `https://doi.org/${uri}`
-  if (/^doi:/i.test(uri)) return `https://doi.org/${uri.slice(4)}`
-  return uri
 }
 
 /**

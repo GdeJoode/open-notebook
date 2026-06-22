@@ -5,12 +5,12 @@ import Link from 'next/link'
 
 import { AppShell } from '@/components/layout/AppShell'
 import { EmptyState } from '@/components/common/EmptyState'
+import { CandidateMergeCard } from '@/components/resolution/CandidateMergeCard'
 import { MergeClusterCard } from '@/components/resolution/MergeClusterCard'
 import { OverlayEditor } from '@/components/resolution/OverlayEditor'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   useAddOverlay,
@@ -26,7 +26,6 @@ import type {
 import {
   buildCandidateRejectOverlay,
   buildRejectOverlay,
-  candidateToApplyCluster,
 } from '@/lib/utils/entity-resolution'
 import {
   AlertTriangle,
@@ -85,8 +84,11 @@ export default function EntityResolutionPage() {
     dismiss(`plan:${cluster.winner_id}`)
   }
 
-  const onApproveCandidate = (candidate: MergeCandidate) => {
-    applyMerge.mutate([candidateToApplyCluster(candidate)])
+  const onApproveCandidate = (
+    candidate: MergeCandidate,
+    cluster: ApplyClusterInput,
+  ) => {
+    applyMerge.mutate([cluster])
     dismiss(`cand:${candidate.id_a}:${candidate.id_b}`)
   }
 
@@ -212,42 +214,13 @@ export default function EntityResolutionPage() {
                     never merged automatically — approve to merge, or keep apart.
                   </p>
                   {reviewCandidates.map((c) => (
-                    <Card key={`${c.id_a}:${c.id_b}`} className="p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0 space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium truncate">
-                              {c.name_a}
-                            </span>
-                            <span className="text-muted-foreground">↔</span>
-                            <span className="text-sm font-medium truncate">
-                              {c.name_b}
-                            </span>
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {c.entity_type} · {(c.score * 100).toFixed(0)}% ·{' '}
-                            {c.method}
-                          </div>
-                        </div>
-                        <div className="flex gap-2 shrink-0">
-                          <Button
-                            size="sm"
-                            disabled={applyMerge.isPending}
-                            onClick={() => onApproveCandidate(c)}
-                          >
-                            Merge
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={addOverlay.isPending}
-                            onClick={() => onRejectCandidate(c)}
-                          >
-                            Keep apart
-                          </Button>
-                        </div>
-                      </div>
-                    </Card>
+                    <CandidateMergeCard
+                      key={`${c.id_a}:${c.id_b}`}
+                      candidate={c}
+                      onApprove={(cluster) => onApproveCandidate(c, cluster)}
+                      onReject={onRejectCandidate}
+                      disabled={applyMerge.isPending || addOverlay.isPending}
+                    />
                   ))}
                 </section>
               )}

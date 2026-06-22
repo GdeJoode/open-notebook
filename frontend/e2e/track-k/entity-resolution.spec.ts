@@ -9,6 +9,7 @@
  *   AC2  Approve → confirmation step showing what merges → POST /apply    → click
  *        Approve, assert the confirm dialog lists the survivor + losers, confirm,
  *        and assert the captured POST /apply body carries that cluster's ids.
+ *        The fuzzy-candidate "Merge" goes through the SAME gate — asserted below.
  *   AC3  Reject → force-split overlay (so it is not re-proposed)           → click
  *        Keep separate, assert POST /overlay with kind=split.
  *   AC5  OverlayEditor is keyboard-accessible (Tab/focus, aria-label).     → the
@@ -61,6 +62,28 @@ const EMPTY_CANDIDATES = {
   review_count: 0,
   auto_merge: [],
   review: [],
+}
+
+const CANDIDATES_WITH_REVIEW = {
+  scope: 'global',
+  total_active_entities: 12,
+  auto_merge_count: 0,
+  review_count: 1,
+  auto_merge: [],
+  review: [
+    {
+      id_a: 'entity:vws1',
+      id_b: 'entity:vws2',
+      name_a: 'VWS',
+      name_b: 'Volksgezondheid',
+      entity_type: 'organization',
+      score: 0.82,
+      band: 'review',
+      method: 'embedding',
+      winner_id: 'entity:vws1',
+      loser_id: 'entity:vws2',
+    },
+  ],
 }
 
 function json(route: Route, body: unknown, status = 200): Promise<void> {
@@ -169,6 +192,62 @@ test.describe('Track K.6 — entity-resolution review hub', () => {
     const body = capture.overlayBody as { kind: string; scope: string }
     expect(body.kind).toBe('split')
     expect(body.scope).toBe('global')
+  })
+
+  test('a fuzzy candidate merge also requires the confirmation gate (AC2)', async ({
+    page,
+  }) => {
+    const capture: { applyBody?: unknown } = {}
+    await mockDashboardChrome(page)
+
+    await page.route('**/api/entity-resolution/plan', (route) =>
+      json(route, EMPTY_PLAN),
+    )
+    await page.route('**/api/entity-resolution/candidates*', (route) =>
+      json(route, CANDIDATES_WITH_REVIEW),
+    )
+    await page.route('**/api/entity-resolution/apply', (route) => {
+      capture.applyBody = route.request().postDataJSON()
+      return json(route, {
+        applied: 1,
+        skipped: 0,
+        results: [
+          {
+            new_canonical: 'VWS',
+            entity_type: 'organization',
+            winner_id: 'entity:vws1',
+            merged_loser_ids: ['entity:vws2'],
+            relations_repointed: 1,
+            aliases_created: 1,
+            skipped: false,
+          },
+        ],
+      })
+    })
+
+    await gotoAndWait(page, '/knowledge-graph/resolution')
+    if (page.url().includes('/login')) {
+      test.skip(true, 'auth-gated stack — covered by the auth-disabled run')
+    }
+
+    const card = page.getByTestId('merge-candidate-entity:vws1:entity:vws2')
+    await expect(card).toBeVisible()
+
+    // No apply must fire until the confirmation gate is confirmed.
+    await card.getByRole('button', { name: 'Merge' }).click()
+    const dialog = page.getByTestId('merge-confirm-dialog')
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByText('Survives:')).toBeVisible()
+    expect(capture.applyBody).toBeUndefined()
+
+    // Confirm → POST /apply carries the candidate's winner + loser ids.
+    await page.getByTestId('merge-confirm-apply').click()
+    await expect.poll(() => capture.applyBody).toBeTruthy()
+    const body = capture.applyBody as {
+      clusters: { winner_id: string; loser_ids: string[] }[]
+    }
+    expect(body.clusters[0].winner_id).toBe('entity:vws1')
+    expect(body.clusters[0].loser_ids).toEqual(['entity:vws2'])
   })
 
   test('empty plan + candidates shows the "No duplicates pending" affordance (AC1)', async ({

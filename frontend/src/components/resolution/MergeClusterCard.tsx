@@ -3,24 +3,12 @@
 import { useMemo, useState } from 'react'
 
 import type { MergeCluster } from '@/lib/api/entity-resolution'
-import {
-  buildApplyCluster,
-  describeMerge,
-} from '@/lib/utils/entity-resolution'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { buildApplyCluster, describeMerge } from '@/lib/utils/entity-resolution'
+import { MergeConfirmDialog } from '@/components/resolution/MergeConfirmDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
-import { Crown, GitMerge, Scissors, X } from 'lucide-react'
+import { Crown, GitMerge, Scissors } from 'lucide-react'
 
 interface MergeClusterCardProps {
   cluster: MergeCluster
@@ -58,6 +46,16 @@ export function MergeClusterCard({
 
   const applyCluster = buildApplyCluster(cluster, winnerId)
   const summary = describeMerge(applyCluster)
+
+  // Surface-form labels for the confirm dialog, positionally aligned to the
+  // resolved [winner, ...losers] membership.
+  const winnerLabel =
+    cluster.member_surface_forms[memberIds.indexOf(winnerId)] ??
+    cluster.new_canonical
+  const loserLabels = memberIds
+    .map((id, index) => ({ id, label: labelFor(id, index) }))
+    .filter(({ id }) => id !== winnerId)
+    .map(({ label }) => label)
 
   return (
     <Card data-testid={`merge-cluster-${cluster.winner_id}`}>
@@ -135,60 +133,16 @@ export function MergeClusterCard({
         </div>
       </CardContent>
 
-      {/* Destructive-merge confirmation step (AC2). */}
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent data-testid="merge-confirm-dialog">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Merge {summary.loserCount + 1} entities?</AlertDialogTitle>
-            <AlertDialogDescription asChild>
-              <div className="space-y-2 text-sm">
-                <p>
-                  This is destructive. The entities below will be merged into a
-                  single canonical entity. The losers are marked merged
-                  (reversible), and their relations re-point to the winner.
-                </p>
-                <div className="rounded-md border p-2 space-y-1">
-                  <div className="flex items-center gap-1.5 text-xs">
-                    <Crown className="h-3 w-3 text-primary" aria-hidden="true" />
-                    <span className="font-medium">Survives:</span>
-                    <span>{summary.winnerLabel}</span>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    Merged away: {summary.loserCount} entit
-                    {summary.loserCount === 1 ? 'y' : 'ies'}
-                  </div>
-                  <div className="flex flex-wrap gap-1 pt-1">
-                    {memberIds.map((id, index) =>
-                      id === winnerId ? null : (
-                        <Badge
-                          key={id}
-                          variant="outline"
-                          className="gap-1 text-[10px]"
-                        >
-                          <X className="h-2.5 w-2.5" aria-hidden="true" />
-                          {labelFor(id, index)}
-                        </Badge>
-                      ),
-                    )}
-                  </div>
-                </div>
-              </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              data-testid="merge-confirm-apply"
-              onClick={() => {
-                onApprove(applyCluster)
-                setConfirmOpen(false)
-              }}
-            >
-              Merge entities
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Destructive-merge confirmation step (AC2) — shared gate. */}
+      <MergeConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        applyCluster={applyCluster}
+        winnerLabel={winnerLabel}
+        loserLabels={loserLabels}
+        onConfirm={onApprove}
+        confirmDisabled={disabled}
+      />
     </Card>
   )
 }
