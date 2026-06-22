@@ -163,3 +163,5 @@ changed src + shared test files.
 - B.8c assessment: V1 normalizer resolves identical surface forms (107 cross-doc) but fragments variants (BZK 8-way, "minister" 23-way). See `../B-kg-quality/reviews/phase-B.8c-resolution-assessment.md`.
 - Swap-point: `packages/shared/src/shared/utils/name_normalizer.py::normalize_entity_name` (persistence dedup key + filtering both call it).
 - Two layers: K.1-K.2 cheap NL normalization (quick wins) → K.3+ full Q9/M4 vocabulary resolution.
+
+| K.1 | collision-safe normalizer (articles+spelling) + harness + corpora | — | `track/k1-nl-normalizer` | 2026-06-22 | adversarial-reviewer APPROVED (attempt 5). Name-only 0 false-merges over 13-pair corpus; frag −14; 296 tests green. The gate caught the cross-type collision class (person/org, org/location, org/concept) across 4 prior attempts — would have silently corrupted relations. FU: pinned live-collision allow-list test. |
