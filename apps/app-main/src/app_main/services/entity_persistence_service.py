@@ -44,7 +44,17 @@ _ALLOWED_ENTITY_TYPES = frozenset(
         "product", "scholarly_article", "creative_work", "periodical",
         "dataset", "grant", "research_project", "policy_document",
         "legislation", "government_organization", "administrative_area",
-        "public_consultation", "social_profile", "other",
+        "public_consultation", "social_profile",
+        # L.3: domain canonical types. ``programme`` is the coarse projection for
+        # Deal / RegioDeal / Programma / Project (the deals stack); ``technology``
+        # for Technology / Technologie. The live DB accepts any ``entity_type``
+        # string since migration 50 (B.8) dropped the ASSERT — this set is the
+        # CODE-side enum guard, so adding the type here lets the L.2 aliases and
+        # the L.1 bridge land on the real canonical instead of re-pinning to
+        # ``other``. No migration is needed (migration 50 already relaxed the
+        # live constraint).
+        "programme", "technology",
+        "other",
     }
 )
 
@@ -59,11 +69,12 @@ def _normalize_entity_type(raw: Any) -> str:
     endpoint resolution (which type-filters a RELATE and so must pass a valid
     enum member) and as the ``entity_type`` projection for an aliased label.
 
-    A not-yet-in-enum alias target (``technology`` / ``programme`` pre-L.3) is
-    re-pinned to ``other`` HERE; the rich label is preserved separately via the
-    L.2 fallback in :func:`_resolve_entity_type` (never lost). When L.3 adds
-    these to ``_ALLOWED_ENTITY_TYPES`` this guard passes them through unchanged —
-    the alias map needs no edit (option (a)).
+    As of L.3, ``technology`` and ``programme`` ARE members of
+    ``_ALLOWED_ENTITY_TYPES``, so the EN+NL aliases (``technologie`` →
+    ``technology``; ``programma`` / ``regiodeal`` / ``deal`` / ``project`` →
+    ``programme``) pass through this guard unchanged and land on the real
+    canonical (no longer re-pinned to ``other``). Any other not-yet-in-enum value
+    is still re-pinned to ``other`` while the rich label is preserved separately.
     """
     norm = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
     norm = ENTITY_TYPE_ALIASES.get(norm, norm)
@@ -118,11 +129,10 @@ def _resolve_entity_type(
     an unknown label, or an orphaned chain all return ``None`` from the bridge
     and fall through to the residual path — persistence never crashes (AC7).
 
-    The returned ``entity_type`` is always enum-guarded here. An alias map target
-    that is not yet in ``_ALLOWED_ENTITY_TYPES`` (``technology`` / ``programme``
-    pre-L.3, option (a)) is re-pinned to ``other`` — but the rich label survives
-    in ``primary_type``, so L.3 (a pure enum addition) lights it up with no alias
-    edit.
+    The returned ``entity_type`` is always enum-guarded here. As of L.3,
+    ``technology`` / ``programme`` are valid enum members, so the L.2 aliases that
+    target them land on the real canonical; any value still outside the enum is
+    re-pinned to ``other`` while the rich label survives in ``primary_type``.
     """
     if schemas:
         try:
@@ -147,10 +157,10 @@ def _resolve_entity_type(
             )
 
     # (2)+(3) L.2 residual: curated EN+NL alias hit, else non-silent fallback.
-    # The residual resolver may emit a not-yet-in-enum target (technology /
-    # programme); the enum-guard re-pins it to "other" while the residual's
-    # preserved label (primary_type / type_tags) is kept intact — the rich
-    # signal is never lost even when the coarse projection is "other".
+    # As of L.3 the residual's ``technology`` / ``programme`` targets are valid
+    # enum members and pass the guard; any other not-yet-in-enum value re-pins to
+    # "other" while the residual's preserved label (primary_type / type_tags) is
+    # kept intact — the rich signal is never lost.
     residual = resolve_residual_type(raw_label)
     entity_type = (
         residual.entity_type

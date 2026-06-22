@@ -79,6 +79,19 @@ def _policy_themes() -> Ontology:
     )
 
 
+def _general() -> Ontology:
+    # The ``general`` ontology declares Technology with schema_org_type
+    # ``schema:TechArticle`` (no parent_type) — exactly as in general.yaml.
+    return _ontology(
+        "general",
+        {
+            "Technology": EntityTypeDefinition(
+                name="Technology", schema_org_type="schema:TechArticle"
+            ),
+        },
+    )
+
+
 class TestParentTypeWalk:
     def test_gemeente_to_administrative_area(self):
         res = resolve_ontology_type("Gemeente", [_government()])
@@ -95,11 +108,11 @@ class TestParentTypeWalk:
         assert res.ontology_type == "Ministerie"
 
     def test_regiodeal_walks_two_levels_to_deal(self):
-        # RegioDeal -> Deal (Deal is in the map -> interim creative_work).
+        # RegioDeal -> Deal (Deal is in the map -> programme as of L.3).
         # "Deal" must appear in the tag trail (parent included).
         res = resolve_ontology_type("RegioDeal", [_deals()])
         assert res is not None
-        assert res.canonical == "creative_work"  # interim until L.3 programme
+        assert res.canonical == "programme"  # L.3: Deal/GovernmentService->programme
         assert res.ontology_type == "RegioDeal"
         assert "Deal" in res.type_tags
 
@@ -115,6 +128,30 @@ class TestParentTypeWalk:
         assert res.canonical == "topic"
         assert res.ontology_type == "BeleidsThema"
         assert "Concept" in res.type_tags
+
+
+class TestProgrammeAndTechnology:
+    """L.3: Deal/GovernmentService -> programme; tech bases -> technology."""
+
+    def test_deal_to_programme(self):
+        res = resolve_ontology_type("Deal", [_deals()])
+        assert res is not None
+        assert res.canonical == "programme"
+        assert res.ontology_type == "Deal"
+
+    def test_regiodeal_to_programme(self):
+        res = resolve_ontology_type("RegioDeal", [_deals()])
+        assert res is not None
+        assert res.canonical == "programme"
+        assert res.ontology_type == "RegioDeal"
+        assert "Deal" in res.type_tags
+
+    def test_technology_via_schema_org_base(self):
+        # general.yaml's Technology declares schema_org_type schema:TechArticle.
+        res = resolve_ontology_type("Technology", [_general()])
+        assert res is not None
+        assert res.canonical == "technology"
+        assert res.ontology_type == "Technology"
 
 
 class TestSchemaOrgPreferred:
@@ -246,7 +283,7 @@ class TestMultipleSchemas:
         # Label lives in one of several applied schemas.
         schemas = [_government(), _deals(), _instruments(), _policy_themes()]
         assert resolve_ontology_type("Wet", schemas).canonical == "legislation"
-        assert resolve_ontology_type("RegioDeal", schemas).canonical == "creative_work"
+        assert resolve_ontology_type("RegioDeal", schemas).canonical == "programme"
         assert (
             resolve_ontology_type("BeleidsThema", schemas).canonical == "topic"
         )
@@ -277,6 +314,10 @@ class TestLanguageAgnostic:
         "Grant",
         "Thing",
         "Deal",
+        # L.3 tech bases for the ``technology`` canonical.
+        "TechArticle",
+        "Technology",
+        "SoftwareApplication",
     }
 
     def test_map_keys_are_schema_org_english_only(self):

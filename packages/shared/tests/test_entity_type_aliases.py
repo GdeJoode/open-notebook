@@ -5,11 +5,12 @@ These cover the L.2 acceptance criteria over the *residual* resolver in
 ontology bridge returns ``None``), plus the language-surface-isolation guard
 that confines every Dutch literal in Track L to this one module.
 
-Note: ``resolve_residual_type`` is intentionally NOT enum-guarded — it may emit
-``technology`` / ``programme`` (the real L.3 targets, option (a)). The
-persistence boundary applies the ``_ALLOWED_ENTITY_TYPES`` guard, re-pinning a
-not-yet-valid value to ``other`` while keeping the preserved label. The enum
-re-pin is exercised in ``apps/app-main/tests/test_entity_persistence_service.py``.
+Note: ``resolve_residual_type`` is intentionally NOT enum-guarded — it emits
+``technology`` / ``programme`` (the real targets, option (a)). As of L.3 those
+are valid members of the persistence ``_ALLOWED_ENTITY_TYPES`` enum, so the
+boundary now passes them through and the labels land on the real canonical (no
+longer re-pinned to ``other``). The enum behaviour is exercised in
+``apps/app-main/tests/test_entity_persistence_service.py``.
 """
 
 from pathlib import Path
@@ -64,11 +65,13 @@ class TestDutchAliases:
 
 
 class TestTechnologyProgrammeOptionA:
-    """AC2 — technology/programme aliases EXIST as the real targets (option a).
+    """AC2 — technology/programme aliases ARE the real targets (option a).
 
-    They activate fully once L.3 adds them to ``_ALLOWED_ENTITY_TYPES``; until
-    then the persistence enum-guard re-pins them to ``other``. At THIS layer the
-    alias map already points at the real target and the rich label is preserved.
+    As of L.3 ``technology`` / ``programme`` are members of
+    ``_ALLOWED_ENTITY_TYPES``, so the persistence enum-guard now passes them
+    through and they land on the real canonical (previously re-pinned to
+    ``other``). At THIS residual layer the alias map points at the real target
+    and the rich label is preserved — exactly as it always has.
     """
 
     @pytest.mark.parametrize(
@@ -84,8 +87,8 @@ class TestTechnologyProgrammeOptionA:
     )
     def test_technology_programme_alias_exists(self, label, expected):
         res = resolve_residual_type(label)
-        # The alias EXISTS and points at the real canonical target (option a),
-        # even though the persistence enum-guard re-pins it pre-L.3.
+        # The alias points at the real canonical target (option a); as of L.3 the
+        # persistence enum-guard passes these through unchanged.
         assert res.entity_type == expected
         assert res.mapped is True
         # AC2: the rich label is preserved regardless of the enum-guard.
@@ -193,9 +196,9 @@ class TestOtherBucketRecovery:
     """AC6 — measure recovery of the live ``other``-bucket labels.
 
     Over the labels the analysis found stuck in ``other``, the L.2 alias path
-    recovers them to a non-``other`` canonical (modulo technology/programme,
-    which are pending L.3's enum and so re-pin at the persistence boundary — but
-    the alias itself already resolves them here).
+    recovers them to a non-``other`` canonical. As of L.3, technology/programme
+    are valid enum members, so even the deal/programme labels land on a real
+    canonical at the persistence boundary (no residual re-pin).
     """
 
     # The live ``other``-bucket labels enumerated in the plan (AC6).
@@ -225,8 +228,9 @@ class TestOtherBucketRecovery:
     def test_recovery_rate_recorded(self):
         # Record the measured recovery for the PR / status report. All 11 of the
         # enumerated live-other labels are mapped by the alias path; 3 of them
-        # (RegioDeal/Programma/Project -> programme) re-pin to ``other`` at the
-        # persistence enum-guard until L.3, the other 8 land on a real canonical.
+        # (RegioDeal/Programma/Project) point at ``programme`` — as of L.3 a valid
+        # enum member, so they now land on the real canonical at the persistence
+        # boundary instead of re-pinning to ``other``.
         results = {
             label: resolve_residual_type(label).entity_type
             for label in self.LIVE_OTHER_LABELS
@@ -235,11 +239,11 @@ class TestOtherBucketRecovery:
             1 for label in self.LIVE_OTHER_LABELS if resolve_residual_type(label).mapped
         )
         assert mapped_count == len(self.LIVE_OTHER_LABELS)  # 11/11 recovered
-        # The 3 pending-L.3 labels point at ``programme`` (re-pinned later).
-        pending_l3 = [
+        # The 3 deal/programme labels target ``programme`` (now a valid enum).
+        programme_labels = [
             label for label, t in results.items() if t in {"programme", "technology"}
         ]
-        assert set(pending_l3) == {"RegioDeal", "Programma", "Project"}
+        assert set(programme_labels) == {"RegioDeal", "Programma", "Project"}
 
 
 class TestNonTypeLabelsSet:
