@@ -491,18 +491,23 @@ class TestResolveEntityType:
         assert res.entity_type == "topic"
         assert res.primary_type == "BeleidsThema"
 
-    def test_unknown_label_falls_through_to_alias_path(self):
-        # Not in the applied ontology -> None from bridge -> alias/enum path.
+    def test_unknown_label_falls_through_to_residual_fallback(self):
+        # Not in the applied ontology -> None from bridge -> L.2 residual. L.2
+        # changed the historical silent ``other``: a genuine-unknown label now
+        # coarses to a default BUT preserves the rich label (anti-flattening).
         res = _resolve_entity_type("Quux", [_gov_schema()])
-        assert res.entity_type == "other"
-        assert res.primary_type is None
-        assert res.type_tags == []
+        assert res.entity_type == "concept"
+        assert res.primary_type == "Quux"
+        assert res.type_tags == ["Quux"]
 
     def test_no_schemas_uses_alias_path(self):
-        # Graceful degradation (AC7): no schemas -> alias/enum path, no crash.
+        # Graceful degradation (AC7): no schemas -> L.2 residual alias path, no
+        # crash. L.2: an alias hit now PRESERVES the raw label in primary_type
+        # (was empty under L.1-only); the coarse projection is still the enum
+        # value.
         res = _resolve_entity_type("ORG", None)
         assert res.entity_type == "organization"
-        assert res.primary_type is None
+        assert res.primary_type == "ORG"
 
     def test_canonical_always_in_allowed_enum(self):
         # B.8 contract: every bridged canonical is a valid enum member.
@@ -551,8 +556,10 @@ class TestPersistStampsRichType:
         assert ent.properties["raw_entity_type"] == "Gemeente"
 
     @pytest.mark.asyncio
-    async def test_no_schemas_leaves_rich_type_empty(self):
-        # Without schemas the alias/enum path runs; rich-type slots stay empty.
+    async def test_no_schemas_alias_path_preserves_raw_label(self):
+        # Without schemas the L.2 residual path runs. An alias hit (ORG ->
+        # organization) now preserves the raw label in primary_type / type_tags
+        # (the L.2 anti-flattening change; L.1-only left these empty).
         svc, mock_upsert = _make_service_with_mock_repo()
 
         with patch(
@@ -570,13 +577,15 @@ class TestPersistStampsRichType:
 
         ent = mock_upsert.call_args.args[0]
         assert ent.entity_type == "organization"
-        assert ent.primary_type is None
-        assert ent.type_tags == []
+        assert ent.primary_type == "ORG"
+        assert ent.type_tags == ["ORG"]
 
     @pytest.mark.asyncio
     async def test_bridge_failure_degrades_not_crashes(self):
         # AC7: an unknown label with schemas present still persists (falls to
-        # alias path), never raising.
+        # the L.2 residual fallback), never raising. L.2: the rich label is
+        # preserved (coarse default ``concept``, primary_type retained) — no
+        # longer the silent ``other`` of L.1.
         svc, mock_upsert = _make_service_with_mock_repo()
 
         with patch(
@@ -595,4 +604,5 @@ class TestPersistStampsRichType:
 
         assert result["entities_upserted"] == 1
         ent = mock_upsert.call_args.args[0]
-        assert ent.entity_type == "other"
+        assert ent.entity_type == "concept"
+        assert ent.primary_type == "Quux"
