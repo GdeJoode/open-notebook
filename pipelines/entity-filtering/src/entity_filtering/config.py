@@ -44,6 +44,15 @@ class FuzzyDedupConfig:
         phonetic_algorithm: Phonetic code -- "soundex", "metaphone", or "none".
         phonetic_weight: Blend weight for phonetic similarity (0-1).
         max_candidates_per_entity: Upper bound on comparisons per entity.
+        auto_merge_threshold: K.5 review-band split — pairs scoring at or above
+            this are auto-merge candidates. Tuned conservatively HIGH (0.93) so
+            only near-identical surface forms (typos/OCR noise) auto-merge; the
+            uncertain band below it is queued for human review, never silently
+            merged. ``None`` means "use ``similarity_threshold``" (back-compat).
+        review_threshold: K.5 review-band floor — pairs scoring in
+            ``[review_threshold, auto_merge_threshold)`` are REVIEW candidates
+            (queued, never auto-applied); pairs below it are rejected. ``None``
+            falls back to ``similarity_threshold``.
     """
 
     enabled: bool = False
@@ -52,6 +61,13 @@ class FuzzyDedupConfig:
     phonetic_algorithm: str = "none"
     phonetic_weight: float = 0.2
     max_candidates_per_entity: int = 10
+    # K.5 review-band thresholds (consumed by candidate_dedup_service). Tuned
+    # over the must_not_merge corpus: 0.93/0.86 keeps the fuzzy near-miss pairs
+    # (``Regio Deal Groningen`` ↔ ``Regio Deal Drenthe`` ≈ 0.83) below the review
+    # floor while catching the OCR-typo class (``Koninkrijksrelaties`` ↔
+    # ``Koninkrijksreiaties`` ≈ 0.94) as an auto-merge.
+    auto_merge_threshold: Optional[float] = 0.93
+    review_threshold: Optional[float] = 0.86
 
 
 @dataclass
@@ -65,6 +81,11 @@ class EmbeddingDedupConfig:
         embedding_model: Model identifier for the embedding provider.
             ``None`` means use the pipeline default.
         use_faiss: Use FAISS for approximate nearest-neighbour search.
+        auto_merge_threshold: K.5 review-band split for embedding similarity —
+            pairs at/above this auto-merge. Default 0.95 (embeddings are noisier
+            than exact string matches, so the auto bar is higher than fuzzy's).
+        review_threshold: K.5 review-band floor for embedding similarity — pairs
+            in ``[review_threshold, auto_merge_threshold)`` are review candidates.
     """
 
     enabled: bool = False
@@ -72,6 +93,9 @@ class EmbeddingDedupConfig:
     k_candidates: int = 5
     embedding_model: Optional[str] = None
     use_faiss: bool = True
+    # K.5 review-band thresholds (consumed by candidate_dedup_service).
+    auto_merge_threshold: Optional[float] = 0.95
+    review_threshold: Optional[float] = 0.90
 
 
 @dataclass
