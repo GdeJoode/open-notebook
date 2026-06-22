@@ -238,3 +238,6 @@ K.3 re-normalizes them, groups collisions, merges duplicates — reversibly.
 - The plan's "strip ministerie van first" framing is stale (K.1 rev4 dropped content-prefix stripping); K.3 inherits whatever `normalize_entity_name` does — it just groups by its output, so it stays correct as the normalizer evolves.
 - Pre-existing `shared.config` package/module name collision (`MIN_APPLICABLE_CONFIDENCE` import) breaks the *full* `create_app()` import chain via `ontology_extraction`; unrelated to K.3 — router/service import cleanly in isolation and per-package tests pass. Flagged, not fixed (out of scope).
 - No apply was run against the live DB (user-gated). Tests use the testcontainer only.
+
+| K.3 | retroactive canonicalization — dry-run plan + reviewable merge | — | `track/k3-retroactive-merge` | 2026-06-22 | adversarial-reviewer APPROVED (attempt 2; blockers fixed: shared.config app-startup [K.2 hotfix→main] + relation-provenance loss on repoint). Dry-run-default, ID-based repoint, soft+reversible merge, idempotent. 34 tests green. |
+| hotfix | shared.config package shadowed config.py → create_app broke (K.2 regression) | — | `fix/shared-config-collision` | 2026-06-22 | merged to main 9478235. K.2's gate missed it (tests imported the submodule, not the app chain). |
