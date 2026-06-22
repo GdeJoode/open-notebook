@@ -14,6 +14,15 @@ Two questions every matching change (K.1, K.2, K.4, K.5) must answer:
    the candidate normalizer. The acceptance gate for every matching phase is
    that this stays **zero**.
 
+   The false-merge gate is measured at the **NAME level**, ignoring
+   ``entity_type``. Relations resolve their endpoints by name alone
+   (``WHERE canonical_name = $name`` — no type filter), so two different-typed
+   real entities that normalize to the same string corrupt the graph even
+   though the ``(canonical_name, entity_type)`` dedup key keeps their entity
+   rows distinct. A ``(name, type)``-level check would miss exactly that case.
+   :func:`measure_fragmentation` still keys on ``(name, type)`` because the
+   fragmentation count it reports mirrors the persistence dedup key.
+
 The harness is intentionally DB-free and deterministic: it operates on plain
 dicts (``{"canonical_name", "entity_type"}``) so it can run over a frozen
 fixture without re-extraction, and it takes the normalizer as a callable so the
@@ -153,19 +162,53 @@ def count_false_merges(
     must_not_merge_pairs: Iterable[Mapping[str, object] | Sequence[object]],
     normalizer: Normalizer,
 ) -> int:
-    """Count adversarial pairs that wrongly collapse to the same key.
+    """Count adversarial pairs that wrongly collapse to the same NAME.
 
-    A pair is a false merge when both sides normalize to the *same*
-    ``(normalized_name, entity_type)`` key. The acceptance gate for every
-    matching phase is that this returns ``0`` over the ``must_not_merge``
-    corpus.
+    A pair is a false merge when both sides normalize to the *same string*,
+    **ignoring ``entity_type``**. This is the criterion relations actually
+    depend on: endpoints resolve by name alone (``WHERE canonical_name =
+    $name``), so a name-only collision between two different-typed real
+    entities corrupts the graph even though their ``(name, type)`` dedup keys
+    differ. The acceptance gate for every matching phase is that this returns
+    ``0`` over the ``must_not_merge`` corpus.
+
+    For a ``(name, type)``-level measurement (used in fragmentation reporting,
+    not the false-merge gate), see :func:`count_false_merges_with_type`.
 
     Args:
         must_not_merge_pairs: Iterable of pair records (see :func:`_pair_keys`).
         normalizer: The normalizer under test.
 
     Returns:
-        The number of pairs that collapsed (0 means no over-merges).
+        The number of pairs whose names collapsed (0 means no over-merges).
+    """
+    false_merges = 0
+    for pair in must_not_merge_pairs:
+        (name_a, _ta), (name_b, _tb) = _pair_keys(pair, normalizer)
+        if name_a == name_b:
+            false_merges += 1
+    return false_merges
+
+
+def count_false_merges_with_type(
+    must_not_merge_pairs: Iterable[Mapping[str, object] | Sequence[object]],
+    normalizer: Normalizer,
+) -> int:
+    """Count adversarial pairs that collapse to the same ``(name, type)`` key.
+
+    The weaker, type-aware companion to :func:`count_false_merges`. Two
+    different-typed entities sharing a normalized name are NOT counted here,
+    because the persistence dedup key keeps their entity rows distinct. This is
+    useful for fragmentation/diagnostic reporting, but it is **not** the
+    false-merge gate — relations ignore type, so the name-only count is the one
+    that protects the graph.
+
+    Args:
+        must_not_merge_pairs: Iterable of pair records (see :func:`_pair_keys`).
+        normalizer: The normalizer under test.
+
+    Returns:
+        The number of pairs that collapsed at ``(name, type)`` granularity.
     """
     false_merges = 0
     for pair in must_not_merge_pairs:

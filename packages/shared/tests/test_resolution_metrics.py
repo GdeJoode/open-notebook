@@ -13,6 +13,7 @@ import pytest
 from shared.utils.name_normalizer import normalize_entity_name
 from shared.utils.resolution_metrics import (
     count_false_merges,
+    count_false_merges_with_type,
     count_unmerged_must_merge,
     measure_fragmentation,
 )
@@ -59,10 +60,12 @@ class TestMeasureFragmentation:
         assert report.distinct_canonical == 2
 
     def test_merged_cluster_members_listed(self):
+        # rev3: ``Minister van BZK`` (person leader) is no longer stripped, so
+        # only the two org forms collapse onto ``bzk``.
         entities = [
             {"canonical_name": "BZK", "entity_type": "organization"},
             {"canonical_name": "Ministerie van BZK", "entity_type": "organization"},
-            {"canonical_name": "Minister van BZK", "entity_type": "organization"},
+            {"canonical_name": "Het Ministerie van BZK", "entity_type": "organization"},
         ]
         report = measure_fragmentation(entities, normalize_entity_name)
         assert report.distinct_canonical == 1
@@ -73,7 +76,7 @@ class TestMeasureFragmentation:
         assert set(cluster.members) == {
             "BZK",
             "Ministerie van BZK",
-            "Minister van BZK",
+            "Het Ministerie van BZK",
         }
 
     def test_entity_type_separates_homographs(self):
@@ -113,8 +116,30 @@ class TestCountFalseMerges:
         pairs = [{"a": "X", "b": "Y", "entity_type": "t"}]
         assert count_false_merges(pairs, normalize_entity_name) == 0
 
-    def test_type_disambiguation(self):
-        """Same name, different type → not a false merge."""
+    def test_name_only_collision_is_a_false_merge(self):
+        """rev3 criterion: a cross-type NAME collision counts as a false merge.
+
+        Relations resolve endpoints by name alone, so two different-typed
+        entities sharing a normalized name corrupt the graph. The name-only
+        gate must catch this even though their ``(name, type)`` keys differ.
+        """
+        pairs = [
+            {
+                "a": {"name": "Groningen", "type": "location"},
+                "b": {"name": "Groningen", "type": "organization"},
+            }
+        ]
+        # Name-only gate: collision IS a false merge.
+        assert count_false_merges(pairs, normalize_entity_name) == 1
+        # Type-aware companion: NOT a false merge (different dedup keys).
+        assert count_false_merges_with_type(pairs, normalize_entity_name) == 0
+
+    def test_type_disambiguation_via_distinct_names(self):
+        """rev3: ``Provincie Groningen`` and ``Groningen`` keep distinct names.
+
+        ``provincie`` is no longer stripped, so the names diverge and the
+        name-only gate passes without leaning on entity_type.
+        """
         pairs = [
             {
                 "a": {"name": "Groningen", "type": "location"},
@@ -153,14 +178,21 @@ class TestAdversarialCorpora:
         assert count_unmerged_must_merge(pairs, normalize_entity_name) == 0
 
     def test_no_false_merges_over_must_not_corpus(self):
-        """The over-merge canary: zero must-NOT pairs ever collapse (AC7)."""
+        """The over-merge canary: zero must-NOT pairs collapse at NAME level.
+
+        rev3 fixes the criterion: the gate is name-only (ignoring entity_type),
+        because relations resolve endpoints by name alone. The corpus includes
+        the cross-type pairs ``Minister van BZK`` ↔ ``Ministerie van BZK`` and
+        ``Gemeente``/``Provincie Groningen`` ↔ ``Groningen`` that rev2's
+        ``(name, type)`` check silently passed.
+        """
         pairs = _load_jsonl("must_not_merge.jsonl")
         assert pairs, "must_not_merge.jsonl is empty"
         assert count_false_merges(pairs, normalize_entity_name) == 0
 
     @pytest.mark.parametrize("pair", _load_jsonl("must_not_merge.jsonl"))
     def test_each_must_not_pair_distinct(self, pair):
-        """Property-style: no single must-NOT pair normalizes equal."""
+        """Property-style: no single must-NOT pair normalizes to the same name."""
         assert count_false_merges([pair], normalize_entity_name) == 0
 
 
@@ -179,9 +211,14 @@ class TestConvenantFragmentationDrop:
         baseline = measure_fragmentation(ents, _v1_baseline)
         candidate = measure_fragmentation(ents, normalize_entity_name)
         drop = baseline.distinct_canonical - candidate.distinct_canonical
-        # Regression-pinned floor. Measured drop at K.1 is 46 over the frozen
-        # 1402-entity dump (1360 -> 1314). Floor set conservatively below that.
-        assert drop >= 40, (
+        # Regression-pinned floor. Measured drop at K.1 rev3 is 19 over the
+        # frozen 1402-entity dump (1360 -> 1341). This is smaller than rev2's
+        # 46 BY DESIGN: rev2's extra merges included WRONG cross-type merges
+        # (person/municipality leaders stripped onto org/location names). rev3
+        # only strips ``ministerie van`` (org -> org tail), so the drop is the
+        # legitimate org-form + article + spelling consolidation. Floor set
+        # conservatively below the measured 19.
+        assert drop >= 15, (
             f"fragmentation drop {drop} below floor "
             f"({baseline.distinct_canonical} -> {candidate.distinct_canonical})"
         )
@@ -201,6 +238,8 @@ class TestConvenantFragmentationDrop:
             if c.canonical_key == "binnenlandse zaken en koninkrijksrelaties"
         ]
         assert bzk, "BZK full-form cluster did not form"
-        # The 'other'-typed cluster collapses ≥5 surface forms (article/role/
-        # spelling variants) into one canonical key.
-        assert max(c.size for c in bzk) >= 5
+        # rev3: the 'other'-typed cluster collapses 4 surface forms — the two
+        # bare ``Binnenlandse Zaken en Koninkrijk(s)relaties`` spelling variants
+        # and the two ``Ministerie van …`` forms (ministerie strip + spelling).
+        # Smaller than rev2 because person-role leaders are no longer folded in.
+        assert max(c.size for c in bzk) >= 4

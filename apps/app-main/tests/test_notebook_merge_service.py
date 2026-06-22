@@ -362,15 +362,16 @@ async def test_multi_source_merges_with_dedup():
 
 @pytest.mark.asyncio
 async def test_same_name_different_type_stays_distinct():
-    """REGRESSION (K.1 rev2): same normalized name, different type → 2 entities.
+    """REGRESSION (K.1 rev2/rev3): minister vs ministry → 2 distinct entities.
 
     ``Minister van BZK`` (person) and ``Ministerie van BZK`` (organization)
-    both normalize to ``bzk`` after K.1's prefix strip. With a name-only
-    bucket key they collapsed into ONE entity — silent cross-type
-    corruption. The (name, type) bucket key keeps them as two distinct
-    accumulators, so two separate entities are written even though they
-    come from the SAME notebook (no conflict is raised — by construction
-    they never share a bucket).
+    must stay two entities. rev2 kept them apart via the ``(name, type)``
+    bucket key (both normalized to ``bzk``). rev3 goes further and stops
+    stripping the person-role leader, so the two now normalize to DIFFERENT
+    strings (``minister van bzk`` vs ``bzk``) — they are trivially distinct at
+    BOTH the name level and the (name, type) level, and their relations route
+    to different endpoints. Two separate entities are written from the SAME
+    notebook and no conflict is raised.
     """
     entities = [
         _entity_row("entity:minister", "Minister van BZK", "person", 0.9),
@@ -419,6 +420,59 @@ async def test_same_name_different_type_stays_distinct():
         "person": {"person"},
         "organization": {"organization"},
     }
+
+
+@pytest.mark.asyncio
+async def test_relation_endpoints_do_not_cross_types():
+    """REGRESSION (K.1 rev3): a relation touching a minister vs ministry routes
+    to the correct, distinct endpoint.
+
+    Because ``Minister van BZK`` (person) and ``Ministerie van BZK`` (org) now
+    normalize to DIFFERENT strings, the relation-endpoint rewrite
+    (``name_to_canon``) resolves each name to its own bucket — the RELATE is
+    issued against the right canonical text and never collapses the person and
+    the org onto one endpoint.
+    """
+    entities = [
+        _entity_row("entity:minister", "Minister van BZK", "person", 0.9),
+        _entity_row("entity:ministerie", "Ministerie van BZK", "organization", 0.8),
+        _entity_row("entity:wet", "Klimaatwet", "other", 0.7),
+    ]
+    # Two relations: the minister signs the law; the ministry drafts it. They
+    # must keep distinct source endpoints.
+    relations = [
+        _relation_row("entity:minister", "entity:wet", "SIGNS"),
+        _relation_row("entity:ministerie", "entity:wet", "DRAFTS"),
+    ]
+    fake = _FakeExecuteQuery(
+        sources_by_notebook={
+            "notebook:src": ["source:s1"],
+            "notebook:target": [],
+        },
+        entities_by_source={"source:s1": entities},
+        relations_by_source={"source:s1": relations},
+    )
+    svc, _ = _make_service_with_fake_db(fake)
+
+    with patch(
+        "app_main.services.notebook_merge_service.execute_query",
+        new=fake,
+    ):
+        report = await svc.merge_notebooks(
+            source_notebook_ids=["notebook:src"],
+            target_notebook_id="notebook:target",
+        )
+
+    assert report.relations_created == 2
+    # Inspect the RELATE calls: each relation's source endpoint text must be
+    # the original (now-distinct) canonical surface form, not a shared 'BZK'.
+    relate_sources = {
+        (params or {}).get("src_name")
+        for sql, params in fake.calls
+        if "RELATE" in sql.strip()
+    }
+    assert "Minister van BZK" in relate_sources
+    assert "Ministerie van BZK" in relate_sources
 
 
 @pytest.mark.asyncio

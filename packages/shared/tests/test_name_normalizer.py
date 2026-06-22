@@ -130,14 +130,34 @@ class TestNLNormalization:
             "Gemeente Drenthe"
         )
 
-    def test_role_and_org_prefixes_strip_to_tail(self):
-        assert normalize_entity_name("Minister van BZK") == "bzk"
-        assert normalize_entity_name("Gemeente Groningen") == "groningen"
-        assert normalize_entity_name("Provincie Drenthe") == "drenthe"
+    def test_org_prefix_strips_to_tail(self):
+        """rev3: only ``ministerie van`` strips (org -> org tail)."""
+        assert normalize_entity_name("Ministerie van BZK") == "bzk"
+        assert normalize_entity_name("Het Ministerie van BZK") == "bzk"
 
-    def test_article_plus_role_prefix(self):
+    def test_cross_type_leaders_not_stripped(self):
+        """rev3 cross-type guard: person/municipality leaders pass through.
+
+        Relations resolve endpoints by name alone, so these must NOT collapse
+        onto another entity's name.
+        """
+        # Person minister stays distinct from the org tail.
+        assert normalize_entity_name("Minister van BZK") == "minister van bzk"
+        assert normalize_entity_name("Minister van BZK") != normalize_entity_name(
+            "Ministerie van BZK"
+        )
+        # Municipality / province org stays distinct from the city/location.
+        assert normalize_entity_name("Gemeente Groningen") == "gemeente groningen"
+        assert normalize_entity_name("Gemeente Groningen") != normalize_entity_name(
+            "Groningen"
+        )
+        assert normalize_entity_name("Provincie Groningen") != normalize_entity_name(
+            "Groningen"
+        )
+
+    def test_article_plus_org_prefix(self):
         assert (
-            normalize_entity_name("De Minister van Binnenlandse Zaken en Koninkrijksrelaties")
+            normalize_entity_name("De Ministerie van Binnenlandse Zaken en Koninkrijksrelaties")
             == "binnenlandse zaken en koninkrijksrelaties"
         )
 

@@ -8,9 +8,12 @@ and K.2's abbreviation-alias layer can be composed in cleanly.
 Two transformations live here:
 
 ``strip_leading_noise``
-    Strips a leading article (``de``/``het``/``een``) and at most one role/org
-    leader phrase (``ministerie van``, ``minister van``, ``gemeente``, …). This
-    collapses ``Ministerie van BZK`` and ``BZK`` onto the same tail ``bzk``.
+    Strips a leading article (``de``/``het``/``een``) and at most one org leader
+    phrase (``ministerie van`` / ``het ministerie van``). This collapses
+    ``Ministerie van BZK`` and ``BZK`` onto the same tail ``bzk``. Person-role
+    leaders (``minister van``) and municipality leaders (``gemeente`` /
+    ``provincie``) are deliberately NOT stripped — see the cross-type collision
+    guard on ``_ROLE_ORG_PREFIXES``.
 
 ``canonicalize_spelling``
     Maps a small **curated** set of documented spelling variants onto one
@@ -23,9 +26,9 @@ distinct real entities is silently-wrong data the user cannot detect, whereas
 fragmentation is merely annoying. So both functions are *tail-preserving*:
 
 - ``strip_leading_noise`` only removes a prefix when a discriminating tail
-  survives. ``Minister van BZK`` → ``bzk`` and ``Minister van Financiën`` →
-  ``financiën`` stay distinct because their tails differ; ``Gemeente`` on its
-  own is returned unchanged rather than stripped to an empty string.
+  survives. ``Ministerie van BZK`` → ``bzk`` and ``Ministerie van Financiën``
+  → ``financiën`` stay distinct because their tails differ; ``Ministerie van``
+  on its own is returned unchanged rather than stripped to an empty string.
 - ``canonicalize_spelling`` only rewrites whole-token variants it knows about;
   everything else passes through untouched.
 
@@ -42,21 +45,31 @@ import re
 # match so we never strip the ``de`` inside ``deal``.
 _LEADING_ARTICLES: tuple[str, ...] = ("de ", "het ", "een ")
 
-# Role/org leader phrases stripped when a discriminating tail remains. Ordered
-# longest-first so ``ministerie van`` wins over a (hypothetical) shorter overlap
-# and so ``staatssecretaris van`` is tried before any prefix it contains. The
-# article-bearing variants (``de minister van``) are redundant with the
-# article strip running first, but are listed so a single pass over a string
-# that was *not* article-stripped (e.g. a direct caller) still works.
+# Org leader phrases stripped when a discriminating tail remains. Ordered
+# longest-first so ``het ministerie van`` wins over the bare ``ministerie van``.
+#
+# CROSS-TYPE COLLISION GUARD (K.1 rev3). Relations resolve their endpoints by
+# name ALONE (``WHERE canonical_name = $name``), with no entity_type filter, so
+# a normalized name that two DIFFERENT-typed real entities share corrupts the
+# graph regardless of the dedup-key type. This list is therefore restricted to
+# prefixes that map an org surface form onto another ORG'S tail and never bridge
+# a type boundary:
+#
+# - ``minister van`` / ``staatssecretaris van`` were REMOVED: ``Minister van
+#   BZK`` is a PERSON, ``Ministerie van BZK`` / ``BZK`` are the ORG. Stripping
+#   both to ``bzk`` collided a person and an org on one name.
+# - ``gemeente`` / ``provincie`` were REMOVED: ``Gemeente Groningen`` (the
+#   municipal ORG) is a different entity from ``Groningen`` (the city /
+#   LOCATION). Stripping the prefix collided the org onto the location's name.
+# - ``ministerie van`` is KEPT: ``Ministerie van BZK`` → ``bzk`` merges with the
+#   org ``BZK`` — same type, no cross-type collision.
+#
+# The corpus over-merge canary (NAME-ONLY) is the empirical judge: any rule that
+# re-introduces a name-only collision over ``must_not_merge.jsonl`` must be
+# removed until the false-merge count is 0.
 _ROLE_ORG_PREFIXES: tuple[str, ...] = (
     "het ministerie van ",
-    "de staatssecretaris van ",
-    "de minister van ",
-    "staatssecretaris van ",
     "ministerie van ",
-    "minister van ",
-    "provincie ",
-    "gemeente ",
 )
 
 # Minimum surviving tail length (in characters) for a prefix strip to be
@@ -75,13 +88,18 @@ _SPELLING_VARIANTS: dict[str, str] = {
 
 
 def strip_leading_noise(name: str) -> str:
-    """Strip a leading article + one role/org leader, preserving the tail.
+    """Strip a leading article + one org leader, preserving the tail.
 
     Removes at most one article (``de``/``het``/``een``) and then at most one
-    role/org leader phrase (longest-match-first), but only when a discriminating
-    tail of at least :data:`_MIN_TAIL_LEN` characters survives. If stripping a
-    role/org prefix would leave an empty or too-short tail, the prefix is *not*
+    org leader phrase (longest-match-first), but only when a discriminating
+    tail of at least :data:`_MIN_TAIL_LEN` characters survives. If stripping an
+    org prefix would leave an empty or too-short tail, the prefix is *not*
     stripped and the (article-stripped) string is returned instead.
+
+    Person-role leaders (``minister van``) and municipality leaders
+    (``gemeente`` / ``provincie``) are intentionally absent from the prefix set
+    so they pass through unstripped — stripping them would collide a person or
+    org onto another entity's name (see ``_ROLE_ORG_PREFIXES``).
 
     Args:
         name: A post-V1 (lowercased, whitespace-collapsed) surface form.
@@ -95,9 +113,9 @@ def strip_leading_noise(name: str) -> str:
         >>> strip_leading_noise("ministerie van bzk")
         'bzk'
         >>> strip_leading_noise("minister van financiën")
-        'financiën'
-        >>> strip_leading_noise("gemeente")
-        'gemeente'
+        'minister van financiën'
+        >>> strip_leading_noise("gemeente groningen")
+        'gemeente groningen'
     """
     if not name:
         return name

@@ -42,61 +42,87 @@ class TestStripLeadingNoiseArticles:
 
 
 class TestStripLeadingNoiseRoleOrgPrefixes:
-    """Role/org leader phrase handling."""
+    """Org leader phrase handling (rev3: only ``ministerie van`` survives)."""
 
     def test_ministerie_van(self):
         assert strip_leading_noise("ministerie van bzk") == "bzk"
 
-    def test_minister_van(self):
-        assert strip_leading_noise("minister van financiën") == "financiën"
+    def test_het_ministerie_van(self):
+        assert strip_leading_noise("het ministerie van bzk") == "bzk"
 
-    def test_staatssecretaris_van(self):
-        assert strip_leading_noise("staatssecretaris van defensie") == "defensie"
-
-    def test_gemeente(self):
-        assert strip_leading_noise("gemeente groningen") == "groningen"
-
-    def test_provincie(self):
-        assert strip_leading_noise("provincie drenthe") == "drenthe"
-
-    def test_article_then_role_prefix(self):
-        """Article strips first, then the role prefix."""
+    def test_article_then_ministerie_prefix(self):
+        """Article strips first, then the ministerie prefix."""
         assert (
-            strip_leading_noise("de minister van binnenlandse zaken")
+            strip_leading_noise("de ministerie van binnenlandse zaken")
             == "binnenlandse zaken"
         )
 
     def test_longest_match_first(self):
-        """``ministerie van`` wins over ``minister van`` on a shared head."""
-        # 'ministerie van x' must strip the full 'ministerie van ', leaving 'x'
-        # would be too short, so guard returns unchanged; use a real tail.
+        """``het ministerie van`` wins over the bare ``ministerie van``."""
         assert strip_leading_noise("ministerie van onderwijs") == "onderwijs"
-        # And 'minister van onderwijs' (person/role) -> same tail 'onderwijs'
-        assert strip_leading_noise("minister van onderwijs") == "onderwijs"
+        assert strip_leading_noise("het ministerie van onderwijs") == "onderwijs"
+
+
+class TestStripLeadingNoiseCrossTypeGuard:
+    """rev3 cross-type collision guard: person/municipality leaders NOT stripped.
+
+    Relations resolve endpoints by name alone, so stripping ``minister van`` or
+    ``gemeente``/``provincie`` would collide a person/org onto another entity's
+    name. These prefixes are deliberately absent from the strip set, so the
+    surface form passes through unchanged.
+    """
+
+    def test_minister_van_not_stripped(self):
+        """``Minister van BZK`` (person) must stay distinct from the org ``bzk``."""
+        assert strip_leading_noise("minister van bzk") == "minister van bzk"
+
+    def test_minister_van_financien_not_stripped(self):
+        assert (
+            strip_leading_noise("minister van financiën")
+            == "minister van financiën"
+        )
+
+    def test_staatssecretaris_van_not_stripped(self):
+        assert (
+            strip_leading_noise("staatssecretaris van defensie")
+            == "staatssecretaris van defensie"
+        )
+
+    def test_gemeente_not_stripped(self):
+        """``Gemeente Groningen`` (org) must stay distinct from ``groningen``."""
+        assert strip_leading_noise("gemeente groningen") == "gemeente groningen"
+
+    def test_provincie_not_stripped(self):
+        assert strip_leading_noise("provincie drenthe") == "provincie drenthe"
+
+    def test_minister_vs_ministerie_distinct(self):
+        """The headline cross-type case: person leader vs org leader diverge."""
+        assert strip_leading_noise("minister van bzk") != strip_leading_noise(
+            "ministerie van bzk"
+        )
 
 
 class TestStripLeadingNoiseGuard:
     """The precision guard: never strip into an empty/too-short tail."""
-
-    def test_bare_gemeente_unchanged(self):
-        assert strip_leading_noise("gemeente") == "gemeente"
-
-    def test_bare_provincie_unchanged(self):
-        assert strip_leading_noise("provincie") == "provincie"
 
     def test_bare_ministerie_van_unchanged(self):
         assert strip_leading_noise("ministerie van") == "ministerie van"
 
     def test_too_short_tail_keeps_original(self):
         """A 1-char tail is below the floor → keep the prefixed form."""
-        assert strip_leading_noise("gemeente a") == "gemeente a"
+        assert strip_leading_noise("ministerie van a") == "ministerie van a"
 
     def test_empty_passthrough(self):
         assert strip_leading_noise("") == ""
 
 
 class TestTailPreservationCanary:
-    """The must-NOT-merge invariant at the function level."""
+    """The must-NOT-merge invariant at the function level (NAME-only, rev3).
+
+    With the municipality/person leaders removed from the strip set, every pair
+    below stays distinct at the NORMALIZED-NAME level — including the cross-type
+    cases that rev2 only kept apart via entity_type.
+    """
 
     @pytest.mark.parametrize(
         "a,b",
@@ -104,23 +130,15 @@ class TestTailPreservationCanary:
             ("minister van bzk", "minister van financiën"),
             ("gemeente groningen", "gemeente drenthe"),
             ("ministerie van onderwijs", "ministerie van onderwijs en arbeid"),
-            ("provincie groningen", "gemeente groningen"),  # same tail, see note
+            # rev3: these now diverge at the name level (no prefix stripped).
+            ("provincie groningen", "groningen"),
+            ("gemeente groningen", "groningen"),
+            ("minister van bzk", "ministerie van bzk"),
         ],
     )
-    def test_distinct_tails_stay_distinct(self, a, b):
-        """Names whose tails differ must not collapse.
-
-        ``provincie groningen``/``gemeente groningen`` DO collapse on the bare
-        name (both -> ``groningen``); the type discriminator in the harness keeps
-        them apart. Here we only assert the non-type cases differ, and document
-        the same-tail case explicitly.
-        """
-        sa, sb = strip_leading_noise(a), strip_leading_noise(b)
-        if (a, b) == ("provincie groningen", "gemeente groningen"):
-            # Same tail by design — distinctness comes from entity_type.
-            assert sa == sb == "groningen"
-        else:
-            assert sa != sb
+    def test_distinct_names_stay_distinct(self, a, b):
+        """Names that must not merge stay distinct at the name level."""
+        assert strip_leading_noise(a) != strip_leading_noise(b)
 
 
 class TestCanonicalizeSpelling:
@@ -159,7 +177,22 @@ class TestRuleTables:
             assert pre.endswith(" ")
 
     def test_prefixes_longest_first_within_overlaps(self):
-        """``ministerie van`` precedes ``minister van`` (longest-overlap-first)."""
+        """``het ministerie van`` precedes the bare ``ministerie van``."""
         idx = {p: i for i, p in enumerate(_ROLE_ORG_PREFIXES)}
-        assert idx["ministerie van "] < idx["minister van "]
-        assert idx["de minister van "] < idx["minister van "]
+        assert idx["het ministerie van "] < idx["ministerie van "]
+
+    def test_cross_type_leaders_absent(self):
+        """rev3: person-role + municipality leaders are NOT in the strip set.
+
+        Stripping any of these would collide a person/org onto another entity's
+        name, which corrupts name-only relation resolution.
+        """
+        forbidden = {
+            "minister van ",
+            "de minister van ",
+            "staatssecretaris van ",
+            "de staatssecretaris van ",
+            "gemeente ",
+            "provincie ",
+        }
+        assert forbidden.isdisjoint(_ROLE_ORG_PREFIXES)
