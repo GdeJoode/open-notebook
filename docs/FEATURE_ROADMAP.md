@@ -1234,6 +1234,7 @@ semantics — must not regress the hash_id/dedup-key contract (migration 50).
 - K.4 TOOI + Crossref vocabulary lookup → external_ids + aliases (Q9 core).
 - K.5 Fuzzy/embedding candidate dedup + merge step; user-overlay (global +
   per-notebook).
+- K.7 Type-safe relation endpoints (Option B) — carry entity type/ID through relations so cross-type homographs never mis-attach; unlocks re-enabling the aggressive K.1 prefixes. Sequenced after K.3.
 - K.6 UI: review/merge duplicates + alias management + per-entity external IDs.
 
 See [`docs/tracks/K-entity-resolution/plan.md`](./tracks/K-entity-resolution/plan.md).
