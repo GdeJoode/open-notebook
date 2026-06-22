@@ -34,6 +34,9 @@ from surrealdb_service.repositories.podcast import (
     PodcastEpisodeRepository,
     SpeakerProfileRepository,
 )
+from surrealdb_service.repositories.reference_entity import (
+    ReferenceEntityRepository,
+)
 from surrealdb_service.repositories.search import SearchRepository
 from surrealdb_service.repositories.settings import ContentSettingsRepository
 from surrealdb_service.repositories.source import (
@@ -54,6 +57,8 @@ __all__ = [
     "RecordRepository",
     # Entity resolution
     "EntityRepository",
+    # Vocabulary reference (Phase K.4)
+    "ReferenceEntityRepository",
     # File tracking
     "TrackedFileRepository",
     "ProjectRepository",
