@@ -381,19 +381,80 @@ All other Track K behaviour is resolved by the roadmap + the B.8c evidence and e
 
 ---
 
-### Phase K.7 — Type-safe relation endpoints (Option B, planned 2026-06-22)
+### Phase K.7 — Type-safe relation endpoints (Option B) — TIGHTENED PLAN (2026-06-22)
 
-**Goal**: make relation endpoints carry the entity TYPE (or resolve to the entity's stable ID) end-to-end, so a relation pointing at "the org named X" can never be re-attached to "the person named X". This removes the structural reason K.1 had to stay conservative (a normalized name is not a unique entity key across types; relations are type-less today — `RELATE ... WHERE canonical_name = $name LIMIT 1`). Once landed, the aggressive K.1 prefixes (`minister van`, `gemeente`, `provincie`) can be re-introduced safely.
+> **Scope finding (de-risks this phase):** relations are ALREADY ID-based graph
+> edges (`migrations/39.surrealql:69`: `DEFINE TABLE relation SCHEMAFULL TYPE
+> RELATION FROM entity TO entity` — a persisted edge holds `in`/`out` = entity
+> record IDs). The ONLY name-ambiguity is at the *resolution* step when persisting
+> an extracted relation: `entity_persistence_service.py:261-263` does
+> `SELECT id FROM entity WHERE canonical_name = $name LIMIT 1` (name-only,
+> arbitrary pick on a cross-type tie). And `persist_filtered_result(entities,
+> relations)` receives BOTH lists, so a `{canonical_name: entity_type}` map is
+> buildable at persist time. **So K.7 is a targeted, additive resolution fix — NOT
+> a core rewrite, NO relation-table schema change for correctness, and NO
+> destructive backfill. The "multi-phase core surgery" framing was pessimistic.**
 
-**Scope / files (to detail when scheduled)**:
-- Data model: `relation` records store `source_type`/`target_type` (or resolved `source_id`/`target_id` record links); a migration adds the fields. Decide IDs vs (name,type) — IDs are stronger but need resolution at persist time.
-- Extraction → persist: pass-2 already types each entity in a batch; thread the endpoint type from the extracted relation's typed endpoints into persistence; the `RELATE` resolves by `(canonical_name, entity_type)` / ID, not name alone (`entity_persistence_service`).
-- Merge layers: `notebook_merge_service` relation rewrite + K.3 retroactive merge resolve endpoints by `(name, type)`/ID (removes the `name_to_canon` name-only hack).
-- Backfill: a migration/dry-run to disambiguate already-persisted name-only relations where possible (best-effort; unresolvable ones flagged).
-- Then: re-enable the conservative-dropped prefixes in `nl_normalization` behind the now-safe relation layer; re-measure fragmentation (expect a further drop).
+**Goal**: resolve relation endpoints by `(canonical_name, entity_type)` at
+persist/merge time so a relation never attaches to the wrong-typed homograph;
+then re-enable the aggressive K.1 prefixes (`minister van`, `gemeente`,
+`provincie`) K.1 dropped, since type now disambiguates at both the entity-dedup
+AND relation layers.
 
-**Acceptance criteria (sketch)**: a relation whose endpoint is a cross-type homograph (`bzk` person vs org) attaches to the type-correct entity (the bug from K.1 attempt-3); persisted relations gain endpoint types; the re-enabled prefixes pass the name-only over-merge canary because the canary is no longer the binding constraint (type disambiguates).
+**Why NO backfill:** existing relations were persisted while K.1 was *conservative*
+(it created no cross-type NAME collisions — the point of K.1 rev4), so each
+existing relation's endpoint name mapped to exactly one entity → resolved
+correctly. K.7 only matters for NEW extractions once the aggressive prefixes are
+on. A read-only audit (count endpoints now mapping to >1 typed entity) is the only
+backward-looking step — no destructive migration.
 
-**Effort**: multi-phase-sized (core extraction→persist→relate path that B.8 stabilized — high regression risk). Sequence AFTER K.3 (retroactive merge already touches relation re-pointing). Reviewer budget ×2.0.
+#### K.7a — type-aware relation endpoint resolution (persist + merge)
+**Modify:**
+- `packages/shared/src/shared/models/extraction.py` — `ExtractedRelation` gains
+  `source_type`/`target_type: Optional[str] = None` (additive, back-compat).
+- extraction→persist seam — populate endpoint types from the same-batch entities
+  (`{canonical_name: entity_type}` from the `entities` arg); None when an endpoint
+  isn't in the batch (cross-batch).
+- `entity_persistence_service.py:261-267` — when the endpoint type is known,
+  `WHERE canonical_name = $name AND entity_type = $type LIMIT 1`; else keep the
+  name-only `LIMIT 1` (zero regression for today's working cases).
+- `notebook_merge_service.py` — the `name_to_canon` relation-rewrite (K.1-attempt-2
+  name-only hack) becomes `(name, type)`-keyed.
+- K.3 `recanonicalization_service` relation repoint is ALREADY ID-based
+  (`repoint_relations(loser_id, winner_id)`) — confirm, no change.
 
-**Risk**: touches the B.8-stabilized core. Mitigate: additive fields (no removal), dry-run backfill, and the K.1 over-merge corpus as the regression gate throughout.
+**ACs (falsifiable):** (1) a batch with a person `X` + an org `X` + a relation to
+each → each edge attaches to the type-correct entity (the K.1-attempt-3 bug fixed);
+(2) cross-batch/unknown-type endpoint → name-only fallback still resolves
+(roundtrip green); (3) **B.8 contract intact** — `hash_id`/`(canonical_name,
+entity_type)` entity dedup UNCHANGED (K.7 changes only relation resolution); run
+the B.8 suites unmodified; (4) `notebook_merge` cross-type homograph routes to the
+type-correct winner (extends `test_relation_endpoints_do_not_cross_types`);
+(5) read-only audit: relations whose endpoint maps to >1 active typed entity
+(~0 under conservative K.1 — logged, not mutated).
+**PR:** `feat(resolution): type-aware relation endpoint resolution (K.7a)`.
+**Effort:** 1.5-2d. Reviewer ×2.0 (B.8 persist path; additive type-filter +
+name-only fallback is the safety net).
+
+#### K.7b — re-enable aggressive prefixes + re-measure (gated ON K.7a)
+**Modify:** `nl_normalization.py` re-introduce `_ROLE_ORG_PREFIXES`
+(minister van / staatssecretaris van / gemeente / provincie / ministerie van);
+`resolution_metrics.py` + corpus — the over-merge criterion RELAXES from
+**name-only** to **(name, type)** (cross-type pairs like `Minister van BZK` person
+vs `Ministerie van BZK` org may now share a normalized name but stay distinct by
+type); re-run K.3 retroactive merge (ID-based) + re-measure fragmentation.
+**ACs:** (1) `normalize("Minister van BZK") == normalize("BZK")` allowed but they
+persist as distinct entities (type differs) AND relations attach type-correctly
+(depends on K.7a); (2) `(name, type)` canary == 0 false-merges; (3) fragmentation
+drops further; (4) the name-only canary is retired with a documented rationale and
+must NOT let a genuinely-distinct SAME-type pair merge.
+**PR:** `feat(resolution): re-enable aggressive normalization behind type-safe relations (K.7b)`.
+**Effort:** 1-1.5d. Reviewer ×2.0.
+
+**Sequence:** K.7a MUST land + verify before K.7b — re-enabling prefixes before the
+relation layer is type-safe is exactly the K.1-attempt-3 corruption. **K.7b gated on K.7a.**
+
+**Total K.7:** ~3-3.5 days, 2 PRs. No schema change, no backfill, no entity-dedup
+change → the B.8 `hash_id` contract is structurally untouched. The risk is the
+single persist-resolution query change, fully covered by the additive fallback +
+the B.8 regression suite + the new homograph test.
