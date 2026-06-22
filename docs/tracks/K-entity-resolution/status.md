@@ -278,3 +278,5 @@ K.3 re-normalizes them, groups collisions, merges duplicates — reversibly.
 
 | K.3 | retroactive canonicalization — dry-run plan + reviewable merge | — | `track/k3-retroactive-merge` | 2026-06-22 | adversarial-reviewer APPROVED (attempt 2; blockers fixed: shared.config app-startup [K.2 hotfix→main] + relation-provenance loss on repoint). Dry-run-default, ID-based repoint, soft+reversible merge, idempotent. 34 tests green. |
 | hotfix | shared.config package shadowed config.py → create_app broke (K.2 regression) | — | `fix/shared-config-collision` | 2026-06-22 | merged to main 9478235. K.2's gate missed it (tests imported the submodule, not the app chain). |
+
+| K.4 | TOOI + Crossref vocabulary reconciliation → external_ids/aliases | — | `track/k4-vocabulary` | 2026-06-22 | adversarial-reviewer APPROVED (attempt 2; 1 major fixed: export projection dropped external_ids/aliases). Provider-pluggable, fail-soft HTTP (cache+rate-limit), single-match precision guard, Crossref title-overlap gate. K-D2 (TOOI bulk URL) flagged non-blocking w/ verified seed. 208+81 tests green. |
