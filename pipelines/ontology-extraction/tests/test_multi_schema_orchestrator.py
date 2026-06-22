@@ -43,10 +43,13 @@ from shared.models.notebook_schema import Pass1Result
 
 from ontology_extraction.multi_schema_orchestrator import (
     MIN_APPLICABLE_CONFIDENCE,
+    SCHEMA_AFFINITY,
+    SCHEMA_AFFINITY_CONFIDENCE,
     SOFT_NUDGE_COVERAGE_HIGH,
     SOFT_NUDGE_COVERAGE_LOW,
     MergedEntity,
     SoftNudgeDecision,
+    _apply_schema_affinity,
     _decide_soft_nudge,
     _dedupe_extensions,
     _merge_results,
@@ -126,6 +129,68 @@ def _base_ontology() -> Ontology:
             ),
             "Organization": EntityTypeDefinition(
                 name="Organization", description="Any group of people."
+            ),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# L.4 affinity fixtures: the keyword-rich gov stack (deals / government) vs the
+# keyword-poor theme schema (policy_themes). These mirror the real ontologies'
+# defining property: gov/deals type NAMES read like Regio-Deal vocabulary and
+# appear in document bodies, while policy_themes type NAMES are abstract and
+# rarely appear verbatim — exactly why policy_themes is crowded out of top-K.
+# ---------------------------------------------------------------------------
+
+
+def _government_ontology() -> Ontology:
+    return Ontology(
+        metadata=OntologyMetadata(name="government", version="1.0"),
+        entity_types={
+            "Gemeente": EntityTypeDefinition(
+                name="Gemeente", description="A municipality."
+            ),
+            "Provincie": EntityTypeDefinition(
+                name="Provincie", description="A province."
+            ),
+            "Ministerie": EntityTypeDefinition(
+                name="Ministerie", description="A ministry."
+            ),
+        },
+    )
+
+
+def _deals_ontology() -> Ontology:
+    return Ontology(
+        metadata=OntologyMetadata(name="deals", version="1.0"),
+        entity_types={
+            "Deal": EntityTypeDefinition(name="Deal", description="A deal."),
+            "RegioDeal": EntityTypeDefinition(
+                name="RegioDeal", description="A regional deal."
+            ),
+        },
+    )
+
+
+def _policy_themes_ontology() -> Ontology:
+    """Theme schema with abstract type names that keyword-match poorly."""
+    return Ontology(
+        metadata=OntologyMetadata(name="policy_themes", version="1.0"),
+        entity_types={
+            "BeleidsThema": EntityTypeDefinition(
+                name="BeleidsThema",
+                description="An overarching policy theme.",
+                parent_type="Concept",
+            ),
+            "BeleidsPijler": EntityTypeDefinition(
+                name="BeleidsPijler",
+                description="A pillar within a programme or deal.",
+                parent_type="Concept",
+            ),
+            "Indicator": EntityTypeDefinition(
+                name="Indicator",
+                description="A measurable indicator.",
+                parent_type="Concept",
             ),
         },
     )
@@ -327,6 +392,166 @@ class TestDetectApplicableSchemas:
             mapper=stub_mapper,
         )
         assert ranked[0][0].metadata.name == "policy"
+
+
+# ---------------------------------------------------------------------------
+# L.4 schema-affinity co-selection tests
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaAffinityCoSelection:
+    """Affinity co-selection: gated, additive, data-driven (L.4).
+
+    A Regio-Deal document body mentions concrete gov/deals vocabulary
+    (``Gemeente``, ``RegioDeal``) so those schemas keyword-fire. The abstract
+    ``policy_themes`` type names (``BeleidsThema`` …) do NOT appear verbatim, so
+    without affinity ``policy_themes`` is crowded out — themes degrade to generic
+    ``concept``/``topic``. The affinity bundle rescues it.
+    """
+
+    _REGIODEAL_TEXT = (
+        "De Gemeente Groningen en de Provincie sluiten een RegioDeal met het "
+        "Ministerie. De Deal investeert in brede welvaart en leefbaarheid."
+    )
+
+    def _all_ontologies(self) -> List[Ontology]:
+        return [
+            _government_ontology(),
+            _deals_ontology(),
+            _policy_themes_ontology(),
+            _scholarly_ontology(),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_before_policy_themes_not_keyword_selected(self):
+        # AC1 (BEFORE): with affinity disabled, policy_themes does NOT make the
+        # cut for a Regio-Deal doc — its type names keyword-match poorly.
+        ranked = await detect_applicable_schemas(
+            document_type=None,
+            document_text=self._REGIODEAL_TEXT,
+            ontologies=self._all_ontologies(),
+            top_k=3,
+            affinity={},
+        )
+        names = [ont.metadata.name for ont, _conf in ranked]
+        assert "policy_themes" not in names
+        # The gov stack DOES fire on this document.
+        assert "deals" in names or "government" in names
+
+    @pytest.mark.asyncio
+    async def test_after_affinity_co_selects_policy_themes(self):
+        # AC1 (AFTER): with the default affinity, policy_themes is co-selected
+        # because deals/government fired.
+        ranked = await detect_applicable_schemas(
+            document_type=None,
+            document_text=self._REGIODEAL_TEXT,
+            ontologies=self._all_ontologies(),
+            top_k=3,
+        )
+        names = [ont.metadata.name for ont, _conf in ranked]
+        assert "policy_themes" in names
+
+    @pytest.mark.asyncio
+    async def test_conservative_keyword_schemas_retained(self):
+        # AC4: co-selection is additive — every keyword-selected schema is
+        # still present after the affinity bundle is appended.
+        baseline = await detect_applicable_schemas(
+            document_type=None,
+            document_text=self._REGIODEAL_TEXT,
+            ontologies=self._all_ontologies(),
+            top_k=3,
+            affinity={},
+        )
+        with_affinity = await detect_applicable_schemas(
+            document_type=None,
+            document_text=self._REGIODEAL_TEXT,
+            ontologies=self._all_ontologies(),
+            top_k=3,
+        )
+        baseline_names = {ont.metadata.name for ont, _conf in baseline}
+        affinity_names = {ont.metadata.name for ont, _conf in with_affinity}
+        # No schema removed; the bundle is strictly additive.
+        assert baseline_names.issubset(affinity_names)
+
+    @pytest.mark.asyncio
+    async def test_gated_non_policy_doc_excludes_policy_themes(self):
+        # AC5: a non-policy document (neither deals nor government fires) does
+        # NOT pull in policy_themes — the bundle is gated on its trigger.
+        text = "The researcher published a paper about graph theory."
+        ranked = await detect_applicable_schemas(
+            document_type=None,
+            document_text=text,
+            ontologies=self._all_ontologies(),
+            top_k=3,
+        )
+        names = [ont.metadata.name for ont, _conf in ranked]
+        assert "policy_themes" not in names
+        assert "deals" not in names
+        assert "government" not in names
+
+    @pytest.mark.asyncio
+    async def test_top_k_does_not_truncate_the_bundle(self):
+        # The bundle is appended AFTER top-K truncation, so even with a tight
+        # top_k=1 (only the single best keyword schema survives), the gated
+        # bundle still rides along.
+        ranked = await detect_applicable_schemas(
+            document_type=None,
+            document_text=self._REGIODEAL_TEXT,
+            ontologies=self._all_ontologies(),
+            top_k=1,
+            affinity={"deals": ["policy_themes"], "government": ["policy_themes"]},
+        )
+        names = [ont.metadata.name for ont, _conf in ranked]
+        # Exactly one keyword schema + the co-selected bundle.
+        assert "policy_themes" in names
+
+    def test_apply_affinity_is_additive_and_ordered(self):
+        # Pure-helper contract: selected list is preserved verbatim at the
+        # front; the bundle is appended at the end with the affinity confidence.
+        gov = _government_ontology()
+        themes = _policy_themes_ontology()
+        selected = [(gov, 0.7)]
+        result = _apply_schema_affinity(
+            selected, [gov, themes], {"government": ["policy_themes"]}
+        )
+        names = [ont.metadata.name for ont, _conf in result]
+        assert names == ["government", "policy_themes"]
+        assert result[-1][1] == SCHEMA_AFFINITY_CONFIDENCE
+        # Original list untouched.
+        assert len(selected) == 1
+
+    def test_apply_affinity_skips_already_selected_bundle(self):
+        # Idempotent: a bundle schema already in the selected set is not
+        # duplicated.
+        gov = _government_ontology()
+        themes = _policy_themes_ontology()
+        selected = [(gov, 0.7), (themes, 0.6)]
+        result = _apply_schema_affinity(
+            selected, [gov, themes], {"government": ["policy_themes"]}
+        )
+        names = [ont.metadata.name for ont, _conf in result]
+        assert names.count("policy_themes") == 1
+
+    def test_apply_affinity_missing_bundle_ontology_is_skipped(self):
+        # The bundle schema isn't in the candidate list → nothing to append,
+        # no crash.
+        gov = _government_ontology()
+        selected = [(gov, 0.7)]
+        result = _apply_schema_affinity(
+            selected, [gov], {"government": ["policy_themes"]}
+        )
+        names = [ont.metadata.name for ont, _conf in result]
+        assert names == ["government"]
+
+    def test_empty_affinity_is_noop(self):
+        gov = _government_ontology()
+        selected = [(gov, 0.7)]
+        assert _apply_schema_affinity(selected, [gov], {}) == selected
+
+    def test_default_affinity_declares_policy_themes_bundle(self):
+        # The affinity is declared as DATA — assert the contract.
+        assert SCHEMA_AFFINITY["deals"] == ["policy_themes"]
+        assert SCHEMA_AFFINITY["government"] == ["policy_themes"]
 
 
 # ---------------------------------------------------------------------------

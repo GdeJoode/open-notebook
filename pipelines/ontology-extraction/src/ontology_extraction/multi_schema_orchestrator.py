@@ -74,6 +74,8 @@ __all__ = [
     "MIN_APPLICABLE_CONFIDENCE",
     "PASS1_TOKEN_BUDGET",
     "PASS2_SAMPLE_CHAR_BUDGET",
+    "SCHEMA_AFFINITY",
+    "SCHEMA_AFFINITY_CONFIDENCE",
     "SOFT_NUDGE_COVERAGE_HIGH",
     "SOFT_NUDGE_COVERAGE_LOW",
     "MergedEntity",
@@ -82,6 +84,35 @@ __all__ = [
     "detect_applicable_schemas",
     "run_multi_schema",
 ]
+
+# ---------------------------------------------------------------------------
+# Schema-affinity co-selection (Track L.4)
+# ---------------------------------------------------------------------------
+# The 44% generic ``concept``/``topic`` bucket is a schema-APPLICATION gap, not
+# a schema-quality gap. ``detect_applicable_schemas`` scores ontologies by
+# keyword-overlap against the document body. The ``policy_themes`` types
+# (``BeleidsThema`` / ``BeleidsPijler`` / ``Indicator`` / ``BredeWelvaart`` /
+# ``Leefbaarheid`` …) are abstract theme NAMES that rarely appear verbatim in a
+# document, so they keyword-match poorly and get crowded out of the top-K — even
+# though Regio-Deal documents are *about* policy themes by construction.
+#
+# ``SCHEMA_AFFINITY`` declares, as DATA, that whenever a "trigger" schema fires
+# (``deals`` or ``government`` — the concrete keyword-rich gov stack), a "bundle"
+# of related-but-keyword-poor schemas should be co-selected. This is:
+#
+#   * GATED      — the bundle is added ONLY when its trigger is among the
+#                  keyword-selected schemas. A non-policy document (neither
+#                  ``deals`` nor ``government`` fires) never gets ``policy_themes``
+#                  (no over-application — risk (a)).
+#   * ADDITIVE   — co-selection NEVER removes a schema that fired today; the
+#                  bundle is appended ON TOP of the keyword-selected set, after
+#                  top-K truncation, so the bundle is never itself truncated.
+#   * DATA-DRIVEN — extend by editing this map, not by touching the selection
+#                  logic. ``{trigger_schema: [bundle_schema, ...]}``.
+SCHEMA_AFFINITY: Dict[str, List[str]] = {
+    "deals": ["policy_themes"],
+    "government": ["policy_themes"],
+}
 
 # Approximate character budget for the text sample we feed Pass-1.
 # 1500 tokens × ~4 chars/token = 6000 chars. Pass-1's own token-budget
@@ -208,6 +239,7 @@ async def detect_applicable_schemas(
     ontologies: List[Ontology],
     top_k: int = 3,
     mapper: Optional[DocumentTypeMapper] = None,
+    affinity: Optional[Dict[str, List[str]]] = None,
 ) -> List[Tuple[Ontology, float]]:
     """Score each ontology by applicability to a source and return the top-K.
 
@@ -227,6 +259,15 @@ async def detect_applicable_schemas(
     The two signals are combined per ontology by ``max(...)`` so an
     ontology that wins either path lands in the shortlist.
 
+    **Schema-affinity co-selection (L.4)**: after keyword scoring and
+    top-K truncation, any affinity *bundle* whose *trigger* schema is in
+    the selected set is appended ON TOP (gated + additive). This rescues
+    keyword-poor theme schemas (``policy_themes``) for documents that are
+    *about* those themes by construction (Regio-Deal docs trigger via
+    ``deals`` / ``government``). The bundle is appended post-truncation so
+    top-K never drops it; co-selection never removes a keyword-selected
+    schema. See :data:`SCHEMA_AFFINITY`.
+
     Args:
         document_type: ``Source.metadata['document_type']`` or
             similar. ``None`` skips the mapper signal entirely.
@@ -235,15 +276,21 @@ async def detect_applicable_schemas(
             runs).
         ontologies: All ontologies the caller wants considered.
         top_k: Maximum number of candidates to return. Defaults to 3
-            per the plan §Phase B.1e.
+            per the plan §Phase B.1e. Applies to the *keyword-selected*
+            set; affinity-bundled schemas are appended after truncation.
         mapper: Optional override for the document-type mapper, used
             in tests so we don't need to monkey-patch the
             ontology_manager module.
+        affinity: Optional override for :data:`SCHEMA_AFFINITY`
+            (``{trigger_schema: [bundle_schema, ...]}``). Tests inject a
+            custom map; production uses the module default. Pass ``{}``
+            to disable co-selection entirely.
 
     Returns:
         A list of ``(ontology, confidence)`` tuples sorted by
         confidence descending, filtered to those scoring at least
-        ``MIN_APPLICABLE_CONFIDENCE``. Empty list when nothing applies.
+        ``MIN_APPLICABLE_CONFIDENCE``, plus any gated affinity-bundle
+        ontologies appended at the end. Empty list when nothing applies.
     """
     mapper_fn = mapper or get_ontology_for_document_type
     preferred_name = mapper_fn(document_type) if document_type else None
@@ -285,7 +332,73 @@ async def detect_applicable_schemas(
             scored.append((ontology, final_score))
 
     scored.sort(key=lambda pair: pair[1], reverse=True)
-    return scored[:top_k]
+    selected = scored[:top_k]
+
+    return _apply_schema_affinity(
+        selected,
+        ontologies,
+        affinity if affinity is not None else SCHEMA_AFFINITY,
+    )
+
+
+# Confidence stamped on an affinity-co-selected schema. Below the
+# keyword/document-type scores so the bundle sorts last and the soft-nudge
+# coverage logic still treats the keyword-selected schemas as primary, but
+# comfortably above ``MIN_APPLICABLE_CONFIDENCE`` so downstream filters keep it.
+SCHEMA_AFFINITY_CONFIDENCE: float = 0.5
+
+
+def _apply_schema_affinity(
+    selected: List[Tuple[Ontology, float]],
+    ontologies: List[Ontology],
+    affinity: Dict[str, List[str]],
+) -> List[Tuple[Ontology, float]]:
+    """Append gated affinity-bundle schemas to the keyword-selected set.
+
+    For each ``(trigger, [bundle...])`` in ``affinity``, when ``trigger`` is
+    among the names already in ``selected``, every ``bundle`` schema that
+    exists in ``ontologies`` and is not already selected is appended with
+    :data:`SCHEMA_AFFINITY_CONFIDENCE`.
+
+    Gated (the bundle only fires when its trigger is selected — non-policy
+    documents never pull in ``policy_themes``), additive (the input
+    ``selected`` list is never reordered or truncated; the bundle is appended
+    after it), and idempotent (a bundle schema already selected is skipped).
+
+    Pure helper — no scoring, no I/O — so the co-selection rule is unit-testable
+    in isolation from the keyword scorer.
+    """
+    if not affinity:
+        return selected
+
+    by_name: Dict[str, Ontology] = {
+        (ont.metadata.name if ont.metadata else ""): ont for ont in ontologies
+    }
+    selected_names = {
+        (ont.metadata.name if ont.metadata else "") for ont, _conf in selected
+    }
+
+    result = list(selected)
+    appended: set[str] = set()
+    for trigger, bundle in affinity.items():
+        if trigger not in selected_names:
+            continue
+        for bundle_name in bundle:
+            if (
+                bundle_name in selected_names
+                or bundle_name in appended
+                or bundle_name not in by_name
+            ):
+                continue
+            result.append((by_name[bundle_name], SCHEMA_AFFINITY_CONFIDENCE))
+            appended.add(bundle_name)
+            logger.info(
+                "schema_affinity co-selected '{bundle}' (triggered by '{trig}')",
+                bundle=bundle_name,
+                trig=trigger,
+            )
+
+    return result
 
 
 def _decide_soft_nudge(best_coverage: float) -> SoftNudgeDecision:
