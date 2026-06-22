@@ -8,6 +8,39 @@ Append-only ledger. One row per phase attempt.
 | L.1 | Ontology→canonical bridge + preserve rich type | — | `track/l1-canonical-bridge` | 2026-06-22 | implemented — ready for review |
 | L.2 | Curated EN+NL residual alias map + non-silent unknown-label fallback | — | `track/l2-nl-aliases` | 2026-06-22 | implemented — ready for review |
 | L.3 | Add `programme` + `technology` canonical types (NO migration — 50 already relaxed live enum) | — | `track/l3-enum-types` | 2026-06-22 | implemented — ready for review |
+| L.4 | Schema application — make `policy_themes` fire (affinity co-selection + per-notebook default) | — | `track/l4-schema-application` | 2026-06-23 | implemented — ready for review |
+
+## Phase L.4 — implemented (2026-06-23)
+
+**Scope:** schema-APPLICATION gap (the 44% generic concept/topic), NOT schema quality. Two mechanisms make `policy_themes` (and the gov/deals stack) actually fire for Regio-Deal docs; the L.1 bridge then maps `BeleidsThema`/`BeleidsPijler`/… to `topic` + rich `primary_type`.
+
+**Affinity co-selection** (`pipelines/ontology-extraction/src/ontology_extraction/multi_schema_orchestrator.py`):
+- `SCHEMA_AFFINITY = {"deals": ["policy_themes"], "government": ["policy_themes"]}` — declared as **DATA** (extend by editing the map, not the logic).
+- `detect_applicable_schemas` gains an `affinity` param (defaults to `SCHEMA_AFFINITY`; `{}` disables; tests inject custom). New pure helper `_apply_schema_affinity` runs **after** keyword scoring + top-K truncation.
+- **Gated** — a bundle is co-selected ONLY when its trigger schema is in the selected set. A non-policy doc (neither deals nor government fires) NEVER gets `policy_themes` (AC5).
+- **Additive/conservative** — the keyword-selected list is preserved verbatim at the front; the bundle is appended at `SCHEMA_AFFINITY_CONFIDENCE=0.5`. No keyword-selected schema is ever removed (AC4). Appended post-truncation so top-K (even `top_k=1`) never drops the bundle.
+
+**Per-notebook default** (`apps/app-main/src/app_main/services/entity_extraction_service.py`):
+- New pure helper `_apply_notebook_schema_default(applicable_schemas, candidate_ontologies, notebook_schema)`. When a notebook has `base_ontology` set, forces base + its affinity bundle + accepted-extension schemas at `config_conf=0.85` regardless of keyword score — **config beats auto-detection** (AC3). Additive (auto-detected schemas retained); a misconfigured/absent base is skipped, never crashes.
+- Wired into `_run_multi_schema` right after `detect_applicable_schemas`, gated on `notebook_schema is not None and notebook_schema.base_ontology`. Today the row is empty for the corpus → no behaviour change until seeded.
+- **Set mechanism**: `scripts/l4_seed_notebook_schema.py` (reuses `NotebookSchemaRepository.upsert`). No `base_ontology` setter endpoint exists in `schemas.py` (it has review/extension/type-edit POSTs only); a full settings UI is OUT OF SCOPE per the plan — the documented seed is the V1 path.
+
+**ACs verified:**
+- AC1 (before/after): over the REAL ontologies, `policy_themes` is NOT keyword-selected for a Regio-Deal doc but IS co-selected once `deals` fires (`test_schema_application_regiodeal.py::test_before/after`). Note: the real gov/deals score ~0.10 via keyword overlap (diluted by 31/53 type-counts) and reach selection via the document-type signal in production; the integration test injects a `deals` mapper to exercise the affinity mechanism faithfully.
+- AC2: `BeleidsThema`→`entity_type=="topic"`, `primary_type=="BeleidsThema"`; `BeleidsPijler` likewise (via L.1 bridge over `Concept`).
+- AC3: per-notebook default forces `deals`+`policy_themes` over an empty auto-detected set; additive over a non-empty one; misconfigured base skipped.
+- AC4 (conservative): the 49 existing orchestrator detection/merge tests stay green; `baseline_names ⊆ affinity_names` asserted.
+- AC5 (gated): non-policy doc → no `policy_themes`.
+- AC6 (measurement, feeds L.6): the Regio-Deal corpus' generic `concept`+`topic` themes (`BeleidsThema`/`BeleidsPijler`/`Indicator`/`BredeWelvaart`/`Leefbaarheid`/…) now resolve to `topic` with rich `primary_type` once `policy_themes` is applied. The headline analysis attributes the 44% generic bucket to this missing schema; applying it shifts those theme entities out of bare `concept`/`topic` into rich-typed `topic`. Exact live drop is an L.5/L.6 re-measurement step (no live re-ingest in L.4).
+
+**Tests / validation (all green):**
+- `pipelines/ontology-extraction/tests/test_multi_schema_orchestrator.py` — 60 (11 new affinity tests + 49 existing stay green).
+- `apps/app-main/tests/test_schema_application_regiodeal.py` — 9 (new).
+- `apps/app-main/tests/test_entity_extraction_service.py` — 23 (regression, green).
+- `apps/app-main/tests/test_entity_persistence_service.py` — 34 (L.1/L.3 regression, green).
+- `from app_main.api.app import create_app` → OK. Ruff clean on changed files (the 2 pre-existing `F821 ExtractionResult` forward-ref warnings are untouched and unrelated).
+
+**Decisions honoured:** L-D2 = **both** (affinity bundle for auto-detection + per-notebook default override). The plan's test path `packages/ontology-extraction/tests/...` does not exist; the real package is `pipelines/ontology-extraction/` — used the actual path.
 
 ## Phase L.3 — implemented (2026-06-22)
 
