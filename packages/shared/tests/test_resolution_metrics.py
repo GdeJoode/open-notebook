@@ -49,34 +49,37 @@ def _v1_baseline(name: str) -> str:
 
 class TestMeasureFragmentation:
     def test_counts_distinct_canonical(self):
+        # rev4: no content prefix is stripped, so ``BZK`` (-> bzk) and
+        # ``Ministerie van BZK`` (-> ministerie van bzk) stay DISTINCT. Only the
+        # two ``De Regio Deal`` / ``Regio Deal`` forms collapse (article strip).
         entities = [
-            {"canonical_name": "BZK", "entity_type": "organization"},
-            {"canonical_name": "Ministerie van BZK", "entity_type": "organization"},
+            {"canonical_name": "De Regio Deal", "entity_type": "other"},
             {"canonical_name": "Regio Deal", "entity_type": "other"},
+            {"canonical_name": "Ministerie van BZK", "entity_type": "organization"},
         ]
         report = measure_fragmentation(entities, normalize_entity_name)
-        # BZK + Ministerie van BZK collapse to one; Regio Deal is separate.
         assert report.total_entities == 3
+        # Regio Deal pair collapses to one; Ministerie van BZK is separate.
         assert report.distinct_canonical == 2
 
     def test_merged_cluster_members_listed(self):
-        # rev3: ``Minister van BZK`` (person leader) is no longer stripped, so
-        # only the two org forms collapse onto ``bzk``.
+        # rev4: only the article-variant forms collapse; ``Ministerie van …``
+        # content is no longer stripped, so the BZK org forms do NOT merge.
         entities = [
-            {"canonical_name": "BZK", "entity_type": "organization"},
-            {"canonical_name": "Ministerie van BZK", "entity_type": "organization"},
-            {"canonical_name": "Het Ministerie van BZK", "entity_type": "organization"},
+            {"canonical_name": "De Regio Deal", "entity_type": "other"},
+            {"canonical_name": "Regio Deal", "entity_type": "other"},
+            {"canonical_name": "Een Regio Deal", "entity_type": "other"},
         ]
         report = measure_fragmentation(entities, normalize_entity_name)
         assert report.distinct_canonical == 1
         assert len(report.merged_clusters) == 1
         cluster = report.merged_clusters[0]
-        assert cluster.canonical_key == "bzk"
+        assert cluster.canonical_key == "regio deal"
         assert cluster.size == 3
         assert set(cluster.members) == {
-            "BZK",
-            "Ministerie van BZK",
-            "Het Ministerie van BZK",
+            "De Regio Deal",
+            "Regio Deal",
+            "Een Regio Deal",
         }
 
     def test_entity_type_separates_homographs(self):
@@ -91,12 +94,12 @@ class TestMeasureFragmentation:
 
     def test_histogram(self):
         entities = [
-            {"canonical_name": "BZK", "entity_type": "organization"},
-            {"canonical_name": "Ministerie van BZK", "entity_type": "organization"},
+            {"canonical_name": "De Regio Deal", "entity_type": "other"},
+            {"canonical_name": "Regio Deal", "entity_type": "other"},
             {"canonical_name": "Unique One", "entity_type": "other"},
         ]
         report = measure_fragmentation(entities, normalize_entity_name)
-        # one cluster of size 2, one singleton.
+        # one cluster of size 2 (article variants), one singleton.
         assert report.cluster_size_histogram == {1: 1, 2: 1}
 
     def test_empty_input(self):
@@ -151,19 +154,21 @@ class TestCountFalseMerges:
 
 class TestCountUnmergedMustMerge:
     def test_pair_that_should_merge(self):
+        # rev4: the article-variant pair must merge (``de`` stripped).
         pairs = [
             {
-                "a": {"name": "Ministerie van BZK", "type": "organization"},
-                "b": {"name": "BZK", "type": "organization"},
+                "a": {"name": "De Regio Deal", "type": "other"},
+                "b": {"name": "Regio Deal", "type": "other"},
             }
         ]
         assert count_unmerged_must_merge(pairs, normalize_entity_name) == 0
 
     def test_v1_baseline_leaves_them_unmerged(self):
+        # The V1 baseline does not strip the article, so the pair stays split.
         pairs = [
             {
-                "a": {"name": "Ministerie van BZK", "type": "organization"},
-                "b": {"name": "BZK", "type": "organization"},
+                "a": {"name": "De Regio Deal", "type": "other"},
+                "b": {"name": "Regio Deal", "type": "other"},
             }
         ]
         assert count_unmerged_must_merge(pairs, _v1_baseline) == 1
@@ -211,14 +216,15 @@ class TestConvenantFragmentationDrop:
         baseline = measure_fragmentation(ents, _v1_baseline)
         candidate = measure_fragmentation(ents, normalize_entity_name)
         drop = baseline.distinct_canonical - candidate.distinct_canonical
-        # Regression-pinned floor. Measured drop at K.1 rev3 is 19 over the
-        # frozen 1402-entity dump (1360 -> 1341). This is smaller than rev2's
-        # 46 BY DESIGN: rev2's extra merges included WRONG cross-type merges
-        # (person/municipality leaders stripped onto org/location names). rev3
-        # only strips ``ministerie van`` (org -> org tail), so the drop is the
-        # legitimate org-form + article + spelling consolidation. Floor set
-        # conservatively below the measured 19.
-        assert drop >= 15, (
+        # Regression-pinned floor. Measured drop at K.1 rev4 is 14 over the
+        # frozen 1402-entity dump (1360 -> 1346). Smaller than rev3's 19 BY
+        # DESIGN: rev4 strips NO content prefix at all (not even ``ministerie
+        # van``, which collides cross-type: ``Ministerie van Onderwijs`` ->
+        # ``onderwijs`` == the bare concept). The drop is now ONLY the
+        # collision-safe article + curated-spelling consolidation. The bigger
+        # org-form merges move to K.2's type-aware alias table. Floor set
+        # conservatively below the measured 14.
+        assert drop >= 12, (
             f"fragmentation drop {drop} below floor "
             f"({baseline.distinct_canonical} -> {candidate.distinct_canonical})"
         )
@@ -229,7 +235,7 @@ class TestConvenantFragmentationDrop:
         assert count_false_merges(pairs, normalize_entity_name) == 0
 
     def test_bzk_fullform_cluster_collapses(self):
-        """The documented BZK full-form fragmentation collapses to one key."""
+        """The documented BZK full-form spelling fragmentation collapses."""
         ents = self._entities()
         candidate = measure_fragmentation(ents, normalize_entity_name)
         bzk = [
@@ -238,8 +244,8 @@ class TestConvenantFragmentationDrop:
             if c.canonical_key == "binnenlandse zaken en koninkrijksrelaties"
         ]
         assert bzk, "BZK full-form cluster did not form"
-        # rev3: the 'other'-typed cluster collapses 4 surface forms — the two
-        # bare ``Binnenlandse Zaken en Koninkrijk(s)relaties`` spelling variants
-        # and the two ``Ministerie van …`` forms (ministerie strip + spelling).
-        # Smaller than rev2 because person-role leaders are no longer folded in.
-        assert max(c.size for c in bzk) >= 4
+        # rev4: with NO content prefix stripped, the cluster collapses only the
+        # two bare ``Binnenlandse Zaken en Koninkrijk(s)relaties`` spelling
+        # variants (the curated koninkrijk(s)relaties map). The ``Ministerie van
+        # …`` forms no longer fold in — that org-form merge is K.2's job.
+        assert max(c.size for c in bzk) >= 2

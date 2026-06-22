@@ -1,11 +1,12 @@
 """Tests for ``shared.utils.name_normalizer.normalize_entity_name``.
 
-V1 stub coverage. The acceptance criterion in B.1c is:
+The B.1c acceptance criterion is:
 
     normalize_entity_name("  Apple Inc.  ") == "apple inc"
 
-Beyond that, these tests pin the three transformations the stub
-guarantees so the eventual Q9 replacement has a regression net.
+Beyond that, these tests pin the content-normalization transformations and the
+K.1 NL behaviour (leading-article strip + curated spelling canonicalization) so
+later resolution phases have a regression net.
 """
 
 import pytest
@@ -111,11 +112,12 @@ class TestNLNormalization:
             "Regio Deal"
         )
 
-    def test_ac2_ministerie_prefix_to_tail(self):
+    def test_ac2_case_merge_no_content_prefix_stripped(self):
+        """rev4: only case/whitespace merges these; no content prefix stripped."""
         assert normalize_entity_name("Ministerie van BZK") == normalize_entity_name(
             "ministerie van BZK"
         )
-        assert normalize_entity_name("Ministerie van BZK") == "bzk"
+        assert normalize_entity_name("Ministerie van BZK") == "ministerie van bzk"
 
     def test_ac3_spelling_variant_tolerance(self):
         assert normalize_entity_name(
@@ -130,18 +132,32 @@ class TestNLNormalization:
             "Gemeente Drenthe"
         )
 
-    def test_org_prefix_strips_to_tail(self):
-        """rev3: only ``ministerie van`` strips (org -> org tail)."""
-        assert normalize_entity_name("Ministerie van BZK") == "bzk"
-        assert normalize_entity_name("Het Ministerie van BZK") == "bzk"
+    def test_content_prefix_not_stripped(self):
+        """rev4: no content-bearing prefix strips — only the article does.
+
+        ``het`` strips as a leading article; the ``ministerie van`` content
+        survives. The org-form merge to the bare ``bzk`` is K.2's job.
+        """
+        assert normalize_entity_name("Ministerie van BZK") == "ministerie van bzk"
+        assert normalize_entity_name("Het Ministerie van BZK") == "ministerie van bzk"
+
+    def test_ministerie_onderwijs_vs_bare_onderwijs_distinct(self):
+        """rev4 collision: the ministry ORG must NOT collapse onto the concept."""
+        assert normalize_entity_name("Ministerie van Onderwijs") == (
+            "ministerie van onderwijs"
+        )
+        assert normalize_entity_name("Onderwijs") == "onderwijs"
+        assert normalize_entity_name(
+            "Ministerie van Onderwijs"
+        ) != normalize_entity_name("Onderwijs")
 
     def test_cross_type_leaders_not_stripped(self):
-        """rev3 cross-type guard: person/municipality leaders pass through.
+        """rev4 collision-safety: person/municipality leaders pass through.
 
         Relations resolve endpoints by name alone, so these must NOT collapse
         onto another entity's name.
         """
-        # Person minister stays distinct from the org tail.
+        # Person minister stays distinct from the org form.
         assert normalize_entity_name("Minister van BZK") == "minister van bzk"
         assert normalize_entity_name("Minister van BZK") != normalize_entity_name(
             "Ministerie van BZK"
@@ -155,10 +171,13 @@ class TestNLNormalization:
             "Groningen"
         )
 
-    def test_article_plus_org_prefix(self):
+    def test_article_strips_but_content_prefix_stays(self):
+        """The leading article strips; ``ministerie van`` content survives."""
         assert (
-            normalize_entity_name("De Ministerie van Binnenlandse Zaken en Koninkrijksrelaties")
-            == "binnenlandse zaken en koninkrijksrelaties"
+            normalize_entity_name(
+                "De Ministerie van Binnenlandse Zaken en Koninkrijkrelaties"
+            )
+            == "ministerie van binnenlandse zaken en koninkrijksrelaties"
         )
 
     def test_qualifier_stays_distinct(self):
@@ -213,7 +232,7 @@ class TestB8HashContract:
         """Forms that normalize equal produce the same dedup basis."""
         a = normalize_entity_name("Ministerie van BZK")
         b = normalize_entity_name("ministerie van BZK")
-        assert a == b == "bzk"
+        assert a == b == "ministerie van bzk"
 
 
 class TestPublicAPI:

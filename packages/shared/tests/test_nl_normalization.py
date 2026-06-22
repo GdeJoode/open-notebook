@@ -1,21 +1,22 @@
 """Tests for the K.1 NL normalization rules (``shared.utils.nl_normalization``).
 
-These pin the leading-noise strip, the spelling canonicalization, and — most
-importantly — the tail-preservation precision guards. The guards are the spine
-of Track K: over-merging distinct entities is worse than fragmentation.
+These pin the leading-article strip, the spelling canonicalization, and — most
+importantly — the collision-safety guarantee. That guarantee is the spine of
+Track K: over-merging distinct entities is worse than fragmentation, and because
+relations resolve endpoints by name alone, K.1 strips ONLY meaning-free articles
+(no content-bearing prefix that could collapse one entity onto another's name).
 """
 
 import pytest
 from shared.utils.nl_normalization import (
     _LEADING_ARTICLES,
-    _ROLE_ORG_PREFIXES,
     canonicalize_spelling,
     strip_leading_noise,
 )
 
 
 class TestStripLeadingNoiseArticles:
-    """Leading article (de/het/een) handling."""
+    """Leading article (de/het/een) handling — the only strip K.1 performs."""
 
     def test_strips_de(self):
         assert strip_leading_noise("de regio deal") == "regio deal"
@@ -32,8 +33,7 @@ class TestStripLeadingNoiseArticles:
         assert strip_leading_noise("hethond") == "hethond"
 
     def test_at_most_one_article(self):
-        """``de het x`` strips only the first article (then no prefix match)."""
-        # 'het x' is not a role/org prefix, so it survives.
+        """``de het x`` strips only the first article."""
         assert strip_leading_noise("de het x") == "het x"
 
     def test_bare_article_not_collapsed_to_empty(self):
@@ -41,46 +41,34 @@ class TestStripLeadingNoiseArticles:
         assert strip_leading_noise("de") == "de"
 
 
-class TestStripLeadingNoiseRoleOrgPrefixes:
-    """Org leader phrase handling (rev3: only ``ministerie van`` survives)."""
+class TestStripLeadingNoiseNoContentPrefix:
+    """rev4 collision-safety: no content-bearing prefix is ever stripped.
 
-    def test_ministerie_van(self):
-        assert strip_leading_noise("ministerie van bzk") == "bzk"
-
-    def test_het_ministerie_van(self):
-        assert strip_leading_noise("het ministerie van bzk") == "bzk"
-
-    def test_article_then_ministerie_prefix(self):
-        """Article strips first, then the ministerie prefix."""
-        assert (
-            strip_leading_noise("de ministerie van binnenlandse zaken")
-            == "binnenlandse zaken"
-        )
-
-    def test_longest_match_first(self):
-        """``het ministerie van`` wins over the bare ``ministerie van``."""
-        assert strip_leading_noise("ministerie van onderwijs") == "onderwijs"
-        assert strip_leading_noise("het ministerie van onderwijs") == "onderwijs"
-
-
-class TestStripLeadingNoiseCrossTypeGuard:
-    """rev3 cross-type collision guard: person/municipality leaders NOT stripped.
-
-    Relations resolve endpoints by name alone, so stripping ``minister van`` or
-    ``gemeente``/``provincie`` would collide a person/org onto another entity's
-    name. These prefixes are deliberately absent from the strip set, so the
-    surface form passes through unchanged.
+    Stripping ``ministerie van`` / ``gemeente`` / ``minister van`` would
+    collapse an org/role surface form onto a bare concept token another real
+    entity owns (``Ministerie van Onderwijs`` -> ``onderwijs`` == the bare
+    ``onderwijs``). Because relations resolve endpoints by name alone, that
+    corrupts the graph. So these prefixes pass through unchanged; type-aware
+    org-form merging is Track K.2's job.
     """
 
-    def test_minister_van_not_stripped(self):
-        """``Minister van BZK`` (person) must stay distinct from the org ``bzk``."""
-        assert strip_leading_noise("minister van bzk") == "minister van bzk"
-
-    def test_minister_van_financien_not_stripped(self):
+    def test_ministerie_van_not_stripped(self):
         assert (
-            strip_leading_noise("minister van financiën")
-            == "minister van financiën"
+            strip_leading_noise("ministerie van onderwijs")
+            == "ministerie van onderwijs"
         )
+
+    def test_ministerie_van_bzk_not_stripped(self):
+        assert strip_leading_noise("ministerie van bzk") == "ministerie van bzk"
+
+    def test_het_ministerie_van_not_stripped(self):
+        """Only the leading article strips; the ministerie content stays."""
+        assert (
+            strip_leading_noise("het ministerie van bzk") == "ministerie van bzk"
+        )
+
+    def test_minister_van_not_stripped(self):
+        assert strip_leading_noise("minister van bzk") == "minister van bzk"
 
     def test_staatssecretaris_van_not_stripped(self):
         assert (
@@ -89,39 +77,36 @@ class TestStripLeadingNoiseCrossTypeGuard:
         )
 
     def test_gemeente_not_stripped(self):
-        """``Gemeente Groningen`` (org) must stay distinct from ``groningen``."""
         assert strip_leading_noise("gemeente groningen") == "gemeente groningen"
 
     def test_provincie_not_stripped(self):
         assert strip_leading_noise("provincie drenthe") == "provincie drenthe"
 
+
+class TestStripLeadingNoiseCollisionGuard:
+    """The headline rev4 collision: ministerie-org vs the bare concept."""
+
+    def test_ministerie_onderwijs_vs_bare_onderwijs_distinct(self):
+        """``Ministerie van Onderwijs`` must NOT collapse onto ``onderwijs``."""
+        assert strip_leading_noise("ministerie van onderwijs") != strip_leading_noise(
+            "onderwijs"
+        )
+
     def test_minister_vs_ministerie_distinct(self):
-        """The headline cross-type case: person leader vs org leader diverge."""
+        """Person leader vs org leader stay distinct (neither stripped)."""
         assert strip_leading_noise("minister van bzk") != strip_leading_noise(
             "ministerie van bzk"
         )
-
-
-class TestStripLeadingNoiseGuard:
-    """The precision guard: never strip into an empty/too-short tail."""
-
-    def test_bare_ministerie_van_unchanged(self):
-        assert strip_leading_noise("ministerie van") == "ministerie van"
-
-    def test_too_short_tail_keeps_original(self):
-        """A 1-char tail is below the floor → keep the prefixed form."""
-        assert strip_leading_noise("ministerie van a") == "ministerie van a"
 
     def test_empty_passthrough(self):
         assert strip_leading_noise("") == ""
 
 
-class TestTailPreservationCanary:
-    """The must-NOT-merge invariant at the function level (NAME-only, rev3).
+class TestCollisionSafetyCanary:
+    """The must-NOT-merge invariant at the function level (NAME-only, rev4).
 
-    With the municipality/person leaders removed from the strip set, every pair
-    below stays distinct at the NORMALIZED-NAME level — including the cross-type
-    cases that rev2 only kept apart via entity_type.
+    With NO content prefix stripped, every pair below stays distinct at the
+    normalized-name level — including the rev4 collision attempts.
     """
 
     @pytest.mark.parametrize(
@@ -130,14 +115,15 @@ class TestTailPreservationCanary:
             ("minister van bzk", "minister van financiën"),
             ("gemeente groningen", "gemeente drenthe"),
             ("ministerie van onderwijs", "ministerie van onderwijs en arbeid"),
-            # rev3: these now diverge at the name level (no prefix stripped).
             ("provincie groningen", "groningen"),
             ("gemeente groningen", "groningen"),
             ("minister van bzk", "ministerie van bzk"),
+            # rev4 collision attempts: content-prefix strip would merge these.
+            ("ministerie van onderwijs", "onderwijs"),
+            ("ministerie van bzk", "bzk"),
         ],
     )
     def test_distinct_names_stay_distinct(self, a, b):
-        """Names that must not merge stay distinct at the name level."""
         assert strip_leading_noise(a) != strip_leading_noise(b)
 
 
@@ -171,28 +157,10 @@ class TestRuleTables:
             assert art == art.lower()
             assert art.endswith(" ")
 
-    def test_prefixes_lowercased_with_trailing_space(self):
-        for pre in _ROLE_ORG_PREFIXES:
-            assert pre == pre.lower()
-            assert pre.endswith(" ")
+    def test_only_articles_are_in_the_strip_set(self):
+        """rev4: the strip set is exactly the three articles — no content prefix.
 
-    def test_prefixes_longest_first_within_overlaps(self):
-        """``het ministerie van`` precedes the bare ``ministerie van``."""
-        idx = {p: i for i, p in enumerate(_ROLE_ORG_PREFIXES)}
-        assert idx["het ministerie van "] < idx["ministerie van "]
-
-    def test_cross_type_leaders_absent(self):
-        """rev3: person-role + municipality leaders are NOT in the strip set.
-
-        Stripping any of these would collide a person/org onto another entity's
-        name, which corrupts name-only relation resolution.
+        Any content-bearing leader (``ministerie van``, ``gemeente`` …) in the
+        article set would re-introduce a name-only collision risk.
         """
-        forbidden = {
-            "minister van ",
-            "de minister van ",
-            "staatssecretaris van ",
-            "de staatssecretaris van ",
-            "gemeente ",
-            "provincie ",
-        }
-        assert forbidden.isdisjoint(_ROLE_ORG_PREFIXES)
+        assert set(_LEADING_ARTICLES) == {"de ", "het ", "een "}

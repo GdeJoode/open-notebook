@@ -3,32 +3,39 @@
 This module is the NL-aware ruleset that ``name_normalizer.normalize_entity_name``
 composes on top of the V1 content normalizer (lowercase / whitespace / trailing
 punct). It is kept separate so ``name_normalizer.py`` stays a thin orchestrator
-and K.2's abbreviation-alias layer can be composed in cleanly.
+and K.2's curated abbreviation/alias layer can be composed in cleanly.
 
-Two transformations live here:
+Two transformations live here, both deliberately **collision-safe** — neither
+strips a content token that could collide with a bare token elsewhere:
 
 ``strip_leading_noise``
-    Strips a leading article (``de``/``het``/``een``) and at most one org leader
-    phrase (``ministerie van`` / ``het ministerie van``). This collapses
-    ``Ministerie van BZK`` and ``BZK`` onto the same tail ``bzk``. Person-role
-    leaders (``minister van``) and municipality leaders (``gemeente`` /
-    ``provincie``) are deliberately NOT stripped — see the cross-type collision
-    guard on ``_ROLE_ORG_PREFIXES``.
+    Strips ONLY a leading article (``de``/``het``/``een``). Articles carry no
+    discriminating meaning, so removing them can never make two distinct
+    entities share a name. No content-bearing prefix (``ministerie van``,
+    ``gemeente``, ``minister van`` …) is stripped here — every one of them can
+    collapse an org/role surface form onto a bare concept token that another
+    real entity already owns (``Ministerie van Onderwijs`` → ``onderwijs`` ==
+    the bare ``onderwijs`` concept), which corrupts name-only relation
+    resolution. Type-aware org-form / abbreviation merging (``Ministerie van
+    BZK`` ↔ ``BZK``) is therefore deferred to Track K.2's curated alias table.
 
 ``canonicalize_spelling``
     Maps a small **curated** set of documented spelling variants onto one
     canonical form (``koninkrijkrelaties`` → ``koninkrijksrelaties``). It is a
-    dict, not a fuzzy edit-distance matcher — fuzzy matching is K.5's job and
-    carries over-merge risk a closed allow-list does not.
+    dict, not a fuzzy edit-distance matcher — fuzzy matching is a later phase
+    and carries over-merge risk a closed allow-list does not.
 
 The central design constraint is **precision over recall**: over-merging two
 distinct real entities is silently-wrong data the user cannot detect, whereas
-fragmentation is merely annoying. So both functions are *tail-preserving*:
+fragmentation is merely annoying. Because relations resolve their endpoints by
+name ALONE (``WHERE canonical_name = $name``, no entity_type filter), a
+normalized name shared by two different-typed real entities corrupts the graph
+regardless of the dedup key. So both functions only touch material that cannot
+introduce such a collision:
 
-- ``strip_leading_noise`` only removes a prefix when a discriminating tail
-  survives. ``Ministerie van BZK`` → ``bzk`` and ``Ministerie van Financiën``
-  → ``financiën`` stay distinct because their tails differ; ``Ministerie van``
-  on its own is returned unchanged rather than stripped to an empty string.
+- ``strip_leading_noise`` removes an article only when a non-empty remainder
+  survives (``de`` on its own is returned unchanged), and never touches a
+  content token.
 - ``canonicalize_spelling`` only rewrites whole-token variants it knows about;
   everything else passes through untouched.
 
@@ -43,104 +50,71 @@ import re
 # Leading articles, matched after V1 lowercasing. Order is irrelevant (mutually
 # exclusive at the head of a string), but the trailing space is part of the
 # match so we never strip the ``de`` inside ``deal``.
+#
+# Articles are the ONLY prefix stripped here. They are collision-safe by
+# construction: an article carries no discriminating content, so removing it
+# can never make two distinct entities share a name. Content-bearing leaders
+# (``ministerie van``, ``gemeente``, ``minister van`` …) were all REMOVED
+# because each can collapse an org/role surface form onto a bare concept token
+# another real entity owns — e.g. ``Ministerie van Onderwijs`` → ``onderwijs``
+# collides with the bare ``onderwijs`` concept, and since relations resolve by
+# name alone that corrupts the graph. Curated, type-aware org-form merging
+# lives in Track K.2's alias table, not here.
 _LEADING_ARTICLES: tuple[str, ...] = ("de ", "het ", "een ")
-
-# Org leader phrases stripped when a discriminating tail remains. Ordered
-# longest-first so ``het ministerie van`` wins over the bare ``ministerie van``.
-#
-# CROSS-TYPE COLLISION GUARD (K.1 rev3). Relations resolve their endpoints by
-# name ALONE (``WHERE canonical_name = $name``), with no entity_type filter, so
-# a normalized name that two DIFFERENT-typed real entities share corrupts the
-# graph regardless of the dedup-key type. This list is therefore restricted to
-# prefixes that map an org surface form onto another ORG'S tail and never bridge
-# a type boundary:
-#
-# - ``minister van`` / ``staatssecretaris van`` were REMOVED: ``Minister van
-#   BZK`` is a PERSON, ``Ministerie van BZK`` / ``BZK`` are the ORG. Stripping
-#   both to ``bzk`` collided a person and an org on one name.
-# - ``gemeente`` / ``provincie`` were REMOVED: ``Gemeente Groningen`` (the
-#   municipal ORG) is a different entity from ``Groningen`` (the city /
-#   LOCATION). Stripping the prefix collided the org onto the location's name.
-# - ``ministerie van`` is KEPT: ``Ministerie van BZK`` → ``bzk`` merges with the
-#   org ``BZK`` — same type, no cross-type collision.
-#
-# The corpus over-merge canary (NAME-ONLY) is the empirical judge: any rule that
-# re-introduces a name-only collision over ``must_not_merge.jsonl`` must be
-# removed until the false-merge count is 0.
-_ROLE_ORG_PREFIXES: tuple[str, ...] = (
-    "het ministerie van ",
-    "ministerie van ",
-)
-
-# Minimum surviving tail length (in characters) for a prefix strip to be
-# accepted. ``bzk`` (3) must survive; a 1-2 char leftover almost certainly
-# means we stripped the entire meaningful content (e.g. an abbreviation that
-# *is* the org), so we keep the original instead.
-_MIN_TAIL_LEN = 2
 
 # Curated spelling-variant map for the documented variant classes. Keys/values
 # are post-V1 (lowercased) tokens; ``canonicalize_spelling`` matches them on
 # word boundaries so only whole tokens are rewritten, never substrings of a
-# longer compound. Deliberately tiny + auditable; edit-distance is K.5.
+# longer compound. Deliberately tiny + auditable; edit-distance is a later phase.
 _SPELLING_VARIANTS: dict[str, str] = {
     "koninkrijkrelaties": "koninkrijksrelaties",
 }
 
 
 def strip_leading_noise(name: str) -> str:
-    """Strip a leading article + one org leader, preserving the tail.
+    """Strip a leading article (``de``/``het``/``een``), preserving the rest.
 
-    Removes at most one article (``de``/``het``/``een``) and then at most one
-    org leader phrase (longest-match-first), but only when a discriminating
-    tail of at least :data:`_MIN_TAIL_LEN` characters survives. If stripping an
-    org prefix would leave an empty or too-short tail, the prefix is *not*
-    stripped and the (article-stripped) string is returned instead.
+    Removes at most one leading article, but only when a non-empty remainder
+    survives — an article on its own (``de``) is returned unchanged rather than
+    collapsed to an empty string. No content-bearing prefix is stripped:
+    article removal is the only transformation, because it is the only one that
+    cannot make two distinct entities share a normalized name.
 
-    Person-role leaders (``minister van``) and municipality leaders
-    (``gemeente`` / ``provincie``) are intentionally absent from the prefix set
-    so they pass through unstripped — stripping them would collide a person or
-    org onto another entity's name (see ``_ROLE_ORG_PREFIXES``).
+    Org/role leader phrases (``ministerie van``, ``gemeente``, ``minister van``
+    …) are intentionally NOT handled here. Each of them can collapse a surface
+    form onto a bare concept token another real entity owns (``Ministerie van
+    Onderwijs`` → ``onderwijs`` collides with the bare ``onderwijs``), and
+    relations resolve endpoints by name alone, so such a strip corrupts the
+    graph. Type-aware org-form / abbreviation merging is Track K.2's job.
 
     Args:
         name: A post-V1 (lowercased, whitespace-collapsed) surface form.
 
     Returns:
-        The name with leading noise removed where safe, else unchanged.
+        The name with a leading article removed where safe, else unchanged.
 
     Examples:
         >>> strip_leading_noise("de regio deal")
         'regio deal'
-        >>> strip_leading_noise("ministerie van bzk")
-        'bzk'
-        >>> strip_leading_noise("minister van financiën")
-        'minister van financiën'
+        >>> strip_leading_noise("ministerie van onderwijs")
+        'ministerie van onderwijs'
         >>> strip_leading_noise("gemeente groningen")
         'gemeente groningen'
+        >>> strip_leading_noise("de")
+        'de'
     """
     if not name:
         return name
 
-    # 1. Strip at most one leading article.
-    article_stripped = name
     for article in _LEADING_ARTICLES:
-        if article_stripped.startswith(article):
-            candidate = article_stripped[len(article) :].strip()
+        if name.startswith(article):
+            candidate = name[len(article) :].strip()
             # An article on its own ("de") collapsing to "" is never useful.
             if candidate:
-                article_stripped = candidate
-            break
+                return candidate
+            return name
 
-    # 2. Strip at most one role/org leader phrase, longest-match-first, but only
-    #    when a discriminating tail survives (the precision guard).
-    for prefix in _ROLE_ORG_PREFIXES:
-        if article_stripped.startswith(prefix):
-            tail = article_stripped[len(prefix) :].strip()
-            if len(tail) >= _MIN_TAIL_LEN:
-                return tail
-            # Tail too short → stripping would erase the entity. Keep as-is.
-            return article_stripped
-
-    return article_stripped
+    return name
 
 
 def canonicalize_spelling(name: str) -> str:

@@ -10,24 +10,33 @@ Pipeline
 ========
 ``normalize_entity_name`` composes three stages:
 
-1. **V1 content normalization** (B.1c): lowercase, collapse interior
-   whitespace, strip trailing punctuation. Deduplicates cosmetic variants like
+1. **Content normalization** (B.1c): lowercase, collapse interior whitespace,
+   strip trailing punctuation. Deduplicates cosmetic variants like
    ``"Apple Inc."`` vs ``"apple inc"``.
-2. **NL leading-noise strip** (K.1): remove a leading article
-   (``de``/``het``/``een``) and one role/org leader phrase (``ministerie van``,
-   ``minister van``, ``gemeente``, …) when a discriminating tail survives. This
-   collapses ``Ministerie van BZK`` and ``BZK`` onto ``bzk``.
-3. **NL spelling canonicalization** (K.1): map documented spelling variants
-   (``koninkrijkrelaties`` → ``koninkrijksrelaties``) onto one form.
+2. **NL leading-article strip** (K.1): remove a leading article
+   (``de``/``het``/``een``) when a non-empty remainder survives. This collapses
+   ``De Regio Deal`` and ``Regio Deal`` onto one key. Only articles are
+   stripped — no content-bearing prefix (``ministerie van``, ``gemeente``,
+   ``minister van`` …) is touched, because each of those can collide an org/role
+   surface form onto a bare concept token another entity owns.
+3. **NL spelling canonicalization** (K.1): map a small curated set of documented
+   spelling variants (``koninkrijkrelaties`` → ``koninkrijksrelaties``) onto one
+   form.
 
 Precision over recall
 ======================
 Over-merging two distinct real entities is silently-wrong data; fragmentation
-is merely annoying. The NL stages are therefore *tail-preserving*:
-``Minister van BZK`` and ``Minister van Financiën`` stay distinct because their
-tails differ, and ``Gemeente`` on its own is left unchanged rather than stripped
-to nothing. See :mod:`shared.utils.nl_normalization` for the rule details and
-guards.
+is merely annoying. Relations resolve their endpoints by name ALONE
+(``WHERE canonical_name = $name``, no entity_type filter), so a normalized name
+shared by two different-typed real entities corrupts the graph. The NL stages
+are therefore restricted to *collision-safe* edits: stripping a (meaning-free)
+article and rewriting curated spelling variants — neither can fold a content
+token onto another entity's name. ``Ministerie van Onderwijs`` and ``Onderwijs``
+deliberately stay distinct (``ministerie van onderwijs`` ≠ ``onderwijs``).
+
+Curated, type-aware org-form / abbreviation merging (``Ministerie van BZK`` ↔
+``BZK``) is **out of scope here** and lives in Track K.2's alias table. See
+:mod:`shared.utils.nl_normalization` for the rule details.
 
 The B.8 dedup-key contract is unaffected: callers derive
 ``hash_id = md5(f"{normalize_entity_name(name)}|{entity_type}")`` and the upsert
@@ -57,11 +66,12 @@ _TRAILING_PUNCT_RE = re.compile(r"[\s\.,;:!\?]+$")
 def normalize_entity_name(name: str) -> str:
     """Normalize an entity surface form to a canonical comparison key.
 
-    Composes V1 content normalization (lowercase, collapse whitespace, strip
-    trailing punctuation) with the K.1 NL rules (leading article + role/org
-    prefix strip, documented spelling-variant canonicalization). The NL rules
-    are tail-preserving: a prefix is only stripped when a discriminating tail
-    survives, so distinct entities sharing a leader phrase stay distinct.
+    Composes content normalization (lowercase, collapse whitespace, strip
+    trailing punctuation) with the K.1 NL rules (leading-article strip,
+    documented spelling-variant canonicalization). The NL rules are
+    collision-safe: only a meaning-free article is stripped, so distinct
+    entities never end up sharing a name through normalization.
+    ``Ministerie van Onderwijs`` and ``Onderwijs`` stay distinct.
 
     Args:
         name: Raw surface form as emitted by the LLM or upstream extractor.
@@ -79,8 +89,8 @@ def normalize_entity_name(name: str) -> str:
         'foo bar'
         >>> normalize_entity_name("De Regio Deal")
         'regio deal'
-        >>> normalize_entity_name("Ministerie van BZK")
-        'bzk'
+        >>> normalize_entity_name("Ministerie van Onderwijs")
+        'ministerie van onderwijs'
         >>> normalize_entity_name("Binnenlandse Zaken en Koninkrijkrelaties")
         'binnenlandse zaken en koninkrijksrelaties'
         >>> normalize_entity_name("")
