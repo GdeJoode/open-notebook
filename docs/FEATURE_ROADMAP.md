@@ -1253,6 +1253,39 @@ See [`docs/tracks/K-entity-resolution/plan.md`](./tracks/K-entity-resolution/pla
 
 ---
 
+## Track L — Entity typing fidelity (NEW)
+
+> **Status**: 📋 PLANNED (2026-06-22). The KG holds 27% `other` + 44% generic
+> concept/topic because persistence FLATTENS the rich Dutch ontology types
+> (`Gemeente`/`Ministerie`/`RegioDeal`…) the LLM correctly extracts onto a 20-type
+> generic enum with no bridge + an English-only alias map, leaving
+> `type_tags`/`primary_type` empty. See `claudedocs/entity-typing-analysis.md`.
+
+**Vision**: the rich ontology type the LLM extracts survives to the KG. Bridge
+ontology types → the canonical enum via the EXISTING `parent_type` schema.org
+hierarchy (a fixed ~20-entry schema.org→canonical map — language-agnostic),
+preserving the original type in `primary_type`/`type_tags`. Apply `policy_themes`
+so themes stop degrading to generic concept/topic.
+
+**Language**: the core bridge is **language-agnostic by construction** (typing
+flows through ontology-declared types; add a language = add an ontology). The only
+language-specific surface is a curated **EN+NL** residual alias map (user: EN+NL =
+98% of needs; no LLM/embedding fallback for the 2%).
+
+**Phases**: L.1 ontology→canonical bridge + preserve rich type · L.2 EN+NL residual
+aliases + non-silent fallback · L.3 add `programme`/`technology` + enum-relax
+migration · L.4 make `policy_themes` fire (notebook-schema default) · L.5
+retroactive re-typing (dry-run+reversible, the destructive one — changes
+`entity_type` → `hash_id`, routed through the K.3 merge) · L.6 typing-fidelity
+metric + per-schema orphan audit.
+
+**Risk**: L.5 re-typing changes `entity_type` → the B.8 `hash_id` — collision-
+detection + K.3 merge. **Expected**: `other` 27%→<5%, `primary_type` 0%→>90%.
+**Depends on**: B.8 (persistence) + K (better types make the K.7 (name,type) guard
++ K.8 role modeling work). See [`docs/tracks/L-entity-typing/plan.md`](./tracks/L-entity-typing/plan.md).
+
+---
+
 ## Bijlagen
 
 - `docs/REFACTOR_PLAN.md` — voltooide refactor (Phase 0-7)
