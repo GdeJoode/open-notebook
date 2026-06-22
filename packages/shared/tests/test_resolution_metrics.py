@@ -244,8 +244,75 @@ class TestConvenantFragmentationDrop:
             if c.canonical_key == "binnenlandse zaken en koninkrijksrelaties"
         ]
         assert bzk, "BZK full-form cluster did not form"
-        # rev4: with NO content prefix stripped, the cluster collapses only the
-        # two bare ``Binnenlandse Zaken en Koninkrijk(s)relaties`` spelling
-        # variants (the curated koninkrijk(s)relaties map). The ``Ministerie van
-        # …`` forms no longer fold in — that org-form merge is K.2's job.
+        # K.2: the org-form merge now folds the abbreviation + prefixed forms +
+        # both spelling variants into one canonical (≥2 members; measured 6).
         assert max(c.size for c in bzk) >= 2
+
+
+def _k1_only_normalizer(name: str) -> str:
+    """The K.1 normalizer (article-strip + spelling) WITHOUT K.2 alias expansion.
+
+    Reconstructed by composing the K.1 stages directly so the K.2 fragmentation
+    test can assert a *further* drop vs K.1 on the same fixture.
+    """
+    from shared.utils.nl_normalization import (
+        canonicalize_spelling,
+        strip_leading_noise,
+    )
+
+    if not name:
+        return ""
+    name = name.lower()
+    name = _WS_RE.sub(" ", name)
+    name = _TP_RE.sub("", name)
+    name = name.strip()
+    name = strip_leading_noise(name)
+    name = canonicalize_spelling(name)
+    return name
+
+
+class TestK2FragmentationDrop:
+    """K.2 AC5/AC6: a further fragmentation drop vs K.1, false-merges still 0."""
+
+    def _entities(self):
+        return _load_jsonl("convenant_entities.jsonl")
+
+    def test_k2_drops_further_than_k1(self):
+        ents = self._entities()
+        k1 = measure_fragmentation(ents, _k1_only_normalizer)
+        k2 = measure_fragmentation(ents, normalize_entity_name)
+        further = k1.distinct_canonical - k2.distinct_canonical
+        # Measured at K.2: K.1 1346 -> K.2 1337 (a further drop of 9 over the
+        # frozen 1402-entity dump) from the BZK + VRO org-form merges. Floor set
+        # conservatively below the measured 9.
+        assert further >= 7, (
+            f"K.2 further drop {further} below floor "
+            f"({k1.distinct_canonical} -> {k2.distinct_canonical})"
+        )
+
+    def test_bzk_cluster_is_single_canonical(self):
+        ents = self._entities()
+        report = measure_fragmentation(ents, normalize_entity_name)
+        bzk = [
+            c
+            for c in report.merged_clusters
+            if c.canonical_key == "binnenlandse zaken en koninkrijksrelaties"
+        ]
+        assert bzk, "BZK cluster did not form under K.2"
+        # The abbreviation, prefixed forms and spelling variants all collapse.
+        assert max(c.size for c in bzk) >= 3
+
+    def test_vro_cluster_is_single_canonical(self):
+        ents = self._entities()
+        report = measure_fragmentation(ents, normalize_entity_name)
+        vro = [
+            c
+            for c in report.merged_clusters
+            if c.canonical_key == "volkshuisvesting en ruimtelijke ordening"
+        ]
+        assert vro, "VRO cluster did not form under K.2"
+        assert max(c.size for c in vro) >= 2
+
+    def test_no_false_merges_under_k2(self):
+        pairs = _load_jsonl("must_not_merge.jsonl")
+        assert count_false_merges(pairs, normalize_entity_name) == 0

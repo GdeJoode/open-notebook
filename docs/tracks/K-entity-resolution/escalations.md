@@ -20,3 +20,10 @@ Blind content-prefix stripping (even `ministerie van`) collides cross-type in th
 - **K.1 (rev4) narrowed**: strip only collision-safe leading articles (`de`/`het`/`een`) + curated spelling tolerance + the harness/corpora. NO blind content-prefix stripping (drop `ministerie van` too).
 - **K.2 absorbs org-form merging**: the curated, type-aware alias/equivalence table (BZK ↔ Ministerie van BZK ↔ Binnenlandse Zaken…) merges ONLY explicitly-listed equivalences — never blind stripping, so it can't accidentally collide. This is where the org merges land, safely.
 - **K.7 REMAINS PLANNED** (not dropped): type-safe relation endpoints — later enables re-introducing aggressive normalization. User explicitly wants it kept.
+
+## K.2 — note (not a blocker): one stale K.1 must_not_merge line removed (2026-06-22)
+**Status**: DECIDED in-task per spec — recorded for the reviewer, no user action needed.
+
+K.1 rev4's `must_not_merge.jsonl` contained `Ministerie van BZK` (organization) ↔ `BZK` (person) as a must-NOT pair (it forbade the org-form merge K.1 had deferred). K.2's entire deliverable is to merge that org-form (`Ministerie van BZK` ↔ `BZK` ↔ `Binnenlandse Zaken en Koninkrijksrelaties`), and the spec explicitly lists those pairs in `must_merge`. The two assertions are mutually exclusive, so the stale K.1 line was removed.
+
+**Residual risk (accepted)**: a *person* literally surnamed "BZK" would now normalize onto the ministry org canonical (a name-only cross-type collision). This is judged acceptable because (a) the org-form merge is the explicit, spec-directed K.2 deliverable; (b) the realistic person form is the *role* phrase `Minister van BZK`, which is NOT keyed and stays distinct (kept in must_not_merge, plus the new `Minister van VRO` ↔ `Ministerie van VRO` person/org pair); (c) a bare-abbreviation person surname colliding with a ministry is not observed in the live Convenant corpus. K.7 (type-safe relation endpoints) is the structural fix that would let even this case disambiguate by type.

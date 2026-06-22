@@ -112,12 +112,20 @@ class TestNLNormalization:
             "Regio Deal"
         )
 
-    def test_ac2_case_merge_no_content_prefix_stripped(self):
-        """rev4: only case/whitespace merges these; no content prefix stripped."""
+    def test_ac2_case_merge_then_k2_alias_expansion(self):
+        """K.2: case/whitespace merge, then the org-alias expansion to canonical.
+
+        K.1 left ``Ministerie van BZK`` at ``ministerie van bzk``; K.2's curated
+        alias table now resolves that full prefixed form (and the bare ``bzk``)
+        onto the BZK full-form canonical.
+        """
         assert normalize_entity_name("Ministerie van BZK") == normalize_entity_name(
             "ministerie van BZK"
         )
-        assert normalize_entity_name("Ministerie van BZK") == "ministerie van bzk"
+        assert (
+            normalize_entity_name("Ministerie van BZK")
+            == "binnenlandse zaken en koninkrijksrelaties"
+        )
 
     def test_ac3_spelling_variant_tolerance(self):
         assert normalize_entity_name(
@@ -132,14 +140,16 @@ class TestNLNormalization:
             "Gemeente Drenthe"
         )
 
-    def test_content_prefix_not_stripped(self):
-        """rev4: no content-bearing prefix strips — only the article does.
+    def test_content_prefix_not_stripped_but_alias_expanded(self):
+        """No blind prefix strip; the curated K.2 alias maps the full form.
 
-        ``het`` strips as a leading article; the ``ministerie van`` content
-        survives. The org-form merge to the bare ``bzk`` is K.2's job.
+        ``het`` strips as a leading article, and the resulting ``ministerie van
+        bzk`` is an exact key in the K.2 alias table (never blind-stripped) → the
+        BZK full-form canonical.
         """
-        assert normalize_entity_name("Ministerie van BZK") == "ministerie van bzk"
-        assert normalize_entity_name("Het Ministerie van BZK") == "ministerie van bzk"
+        canonical = "binnenlandse zaken en koninkrijksrelaties"
+        assert normalize_entity_name("Ministerie van BZK") == canonical
+        assert normalize_entity_name("Het Ministerie van BZK") == canonical
 
     def test_ministerie_onderwijs_vs_bare_onderwijs_distinct(self):
         """rev4 collision: the ministry ORG must NOT collapse onto the concept."""
@@ -171,13 +181,18 @@ class TestNLNormalization:
             "Groningen"
         )
 
-    def test_article_strips_but_content_prefix_stays(self):
-        """The leading article strips; ``ministerie van`` content survives."""
+    def test_article_strips_then_full_form_alias_expands(self):
+        """Article strips; the prefixed full-form (post spelling-fix) expands.
+
+        ``de`` strips, ``koninkrijkrelaties`` is spelling-canonicalized to
+        ``koninkrijksrelaties``, and the resulting ``ministerie van binnenlandse
+        zaken en koninkrijksrelaties`` is a K.2 alias key → the BZK canonical.
+        """
         assert (
             normalize_entity_name(
                 "De Ministerie van Binnenlandse Zaken en Koninkrijkrelaties"
             )
-            == "ministerie van binnenlandse zaken en koninkrijksrelaties"
+            == "binnenlandse zaken en koninkrijksrelaties"
         )
 
     def test_qualifier_stays_distinct(self):
@@ -229,10 +244,15 @@ class TestB8HashContract:
         )
 
     def test_merged_forms_share_a_hash_basis(self):
-        """Forms that normalize equal produce the same dedup basis."""
+        """Forms that normalize equal produce the same dedup basis.
+
+        K.2: ``Ministerie van BZK`` now resolves to the BZK full-form canonical,
+        so the shared basis is that canonical (not the bare ``ministerie van
+        bzk`` K.1 produced). The derive-rule itself is unchanged.
+        """
         a = normalize_entity_name("Ministerie van BZK")
         b = normalize_entity_name("ministerie van BZK")
-        assert a == b == "ministerie van bzk"
+        assert a == b == "binnenlandse zaken en koninkrijksrelaties"
 
 
 class TestPublicAPI:
