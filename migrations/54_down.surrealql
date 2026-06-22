@@ -1,0 +1,9 @@
+-- Migration 54 down: remove the K.3 first-class `aliases` field on entity.
+--
+-- Only the `aliases` field is owned by migration 54 — `status`, `merged_into`,
+-- and `idx_entity_status` predate it (migration 39), so the down-migration does
+-- NOT drop them (dropping them would regress migration 39's schema). Removing
+-- `aliases` is a clean reverse of the single field 54 introduced. Idempotent:
+-- IF EXISTS makes re-run a no-op.
+
+REMOVE FIELD IF EXISTS aliases ON entity;

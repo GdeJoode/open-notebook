@@ -163,6 +163,7 @@ def create_app() -> FastAPI:
         context,
         embedding,
         embedding_rebuild,
+        entity_resolution,
         episode_profiles,
         exports,
         health,
@@ -242,6 +243,9 @@ def create_app() -> FastAPI:
     application.include_router(vault.router, prefix="/api", tags=["vault"])
     application.include_router(
         resolution_log.router, prefix="/api", tags=["resolution-log"]
+    )
+    application.include_router(
+        entity_resolution.router, prefix="/api", tags=["entity-resolution"]
     )
     application.include_router(zotero.router, prefix="/api", tags=["zotero"])
     application.include_router(

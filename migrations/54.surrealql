@@ -1,0 +1,35 @@
+-- Migration 54: first-class `aliases` array on entity (Phase K.3)
+--
+-- Track K.3's retroactive canonicalization collapses fragmented entities
+-- (`BZK` / `ministerie van BZK` / `Binnenlandse Zaken...`) into one canonical
+-- winner. On merge, each loser's surface form is recorded both as an
+-- `entity_alias` edge (migration 39 — authoritative, per-alias provenance) AND
+-- denormalized onto the winner's `aliases` array for cheap read/display and
+-- exporter use (decision K-D1: keep both, the table is authoritative, the array
+-- is derived). K.4/K.6 read this array.
+--
+-- `status` ('active' | 'merged' | 'archived') and `merged_into` already exist
+-- on `entity` from migration 39 (lines 38-39), as does the status index
+-- (`idx_entity_status`, migration 39 line 46) — so K.3 only needs to add the
+-- `aliases` field here. The DEFINE statements below are written defensively with
+-- IF NOT EXISTS so re-applying on a DB that already carries them is a no-op.
+--
+-- B.8 caution: the `entity` table carries pre-Track-B schema drift (migration 50
+-- relaxed `name`/`hash_id`/`entity_type`). This migration is ADDITIVE only —
+-- `IF NOT EXISTS`, never OVERWRITE — and does NOT touch `canonical_name`,
+-- `hash_id`, or `entity_type`, so the B.8 dedup-key / upsert contract is intact.
+--
+-- Additive + idempotent: the new field has a safe default (`[]`) so pre-existing
+-- rows read back unchanged, and IF NOT EXISTS makes re-run a no-op. The B.0
+-- testcontainers roundtrip harness validates this by replaying the migration.
+
+DEFINE FIELD IF NOT EXISTS aliases ON entity FLEXIBLE TYPE array DEFAULT [];
+
+-- `status` + `merged_into` are defined in migration 39 (the entity table is
+-- SCHEMAFULL). Re-declare defensively with IF NOT EXISTS so a database that
+-- somehow lost them (drift) regains them WITHOUT overwriting the migration-39
+-- definitions on a normal DB. Same for the status index used to filter
+-- active/merged entities efficiently during retroactive merge.
+DEFINE FIELD IF NOT EXISTS status ON entity TYPE string DEFAULT 'active';
+DEFINE FIELD IF NOT EXISTS merged_into ON entity TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_entity_status ON entity FIELDS status;
