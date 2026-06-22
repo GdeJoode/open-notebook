@@ -77,6 +77,121 @@ class TestPersistFilteredResult:
         assert mock_query.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_relation_endpoint_type_from_batch_entities(self):
+        """K.7a: when both endpoints are in the batch's entities, the RELATE
+        SELECT is type-filtered (the entity_type from the batch) so a
+        cross-type homograph resolves to the type-correct entity."""
+        svc, _mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_query:
+            await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[
+                    {"text": "BZK", "label": "ORG", "confidence": 0.9, "properties": {}},
+                    {"text": "Klimaatwet", "label": "law", "confidence": 0.8, "properties": {}},
+                ],
+                relations=[
+                    {
+                        "source_entity": "BZK",
+                        "target_entity": "Klimaatwet",
+                        "relation_type": "SIGNS",
+                        "confidence": 0.7,
+                        "properties": {},
+                    },
+                ],
+            )
+
+        # The relation RELATE is the call carrying src_name.
+        relate_call = next(
+            c for c in mock_query.call_args_list
+            if (c.args[1] if len(c.args) > 1 else {}).get("src_name") == "BZK"
+        )
+        sql, params = relate_call.args[0], relate_call.args[1]
+        # Type filter present for BOTH endpoints (both came from the batch).
+        assert "entity_type = $src_type" in sql
+        assert "entity_type = $tgt_type" in sql
+        # Normalized types: ORG → organization, law → legislation.
+        assert params["src_type"] == "organization"
+        assert params["tgt_type"] == "legislation"
+
+    @pytest.mark.asyncio
+    async def test_relation_prefers_relation_carried_type(self):
+        """K.7a: a type the relation already carries (source_type/target_type)
+        wins over the same-batch entity map."""
+        svc, _mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_query:
+            await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[],
+                relations=[
+                    {
+                        "source_entity": "BZK",
+                        "target_entity": "Klimaatwet",
+                        "relation_type": "SIGNS",
+                        "source_type": "organization",
+                        "target_type": "legislation",
+                        "confidence": 0.7,
+                        "properties": {},
+                    },
+                ],
+            )
+
+        relate_call = next(
+            c for c in mock_query.call_args_list
+            if (c.args[1] if len(c.args) > 1 else {}).get("src_name") == "BZK"
+        )
+        params = relate_call.args[1]
+        assert params["src_type"] == "organization"
+        assert params["tgt_type"] == "legislation"
+
+    @pytest.mark.asyncio
+    async def test_relation_unknown_endpoint_falls_back_to_name_only(self):
+        """K.7a regression guard: a cross-batch endpoint (not in this batch's
+        entities, no carried type) resolves by NAME ONLY — the original
+        ``LIMIT 1`` behaviour, zero regression for today's working cases."""
+        svc, _mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_query:
+            result = await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[],  # no entities in batch → no type map
+                relations=[
+                    {
+                        "source_entity": "BZK",
+                        "target_entity": "EZK",
+                        "relation_type": "RELATED",
+                        "confidence": 0.7,
+                        "properties": {},
+                    },
+                ],
+            )
+
+        assert result["relations_created"] == 1
+        relate_call = next(
+            c for c in mock_query.call_args_list
+            if (c.args[1] if len(c.args) > 1 else {}).get("src_name") == "BZK"
+        )
+        sql, params = relate_call.args[0], relate_call.args[1]
+        # No type filter on either endpoint — pure name-only resolution.
+        assert "entity_type = $src_type" not in sql
+        assert "entity_type = $tgt_type" not in sql
+        assert params["src_type"] is None
+        assert params["tgt_type"] is None
+
+    @pytest.mark.asyncio
     async def test_skips_empty_entity_text(self):
         svc, mock_upsert = _make_service_with_mock_repo()
 

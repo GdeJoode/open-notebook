@@ -183,6 +183,24 @@ class EntityPersistenceService:
                 for member in group:
                     merge_lookup[member] = group
 
+        # K.7a: map each entity's persisted canonical_name → its normalized
+        # entity_type so the relation step can resolve an endpoint by
+        # (canonical_name, entity_type) when both endpoints are in this batch.
+        # The key is the SAME value used as ``canonical_name`` at upsert (the
+        # raw ``text``), and the value is the SAME normalized type the upsert
+        # writes (``_normalize_entity_type``) — so the type-filtered RELATE
+        # lookup matches the row this batch persisted. A relation whose
+        # endpoint name is NOT in this batch (cross-batch) stays unmapped and
+        # falls back to name-only resolution (zero regression).
+        type_by_name: Dict[str, str] = {}
+        for entity in entities:
+            etext = entity.get("text", "")
+            if not etext.strip():
+                continue
+            type_by_name[etext] = _normalize_entity_type(
+                entity.get("label", "concept")
+            )
+
         # 1. Upsert entities
         for entity in entities:
             text = entity.get("text", "")
@@ -251,17 +269,42 @@ class EntityPersistenceService:
             if not src_text or not tgt_text:
                 continue
 
+            # K.7a: resolve each endpoint's type. Prefer a type the relation
+            # already carries from extraction (``source_type``/``target_type``);
+            # otherwise fall back to the same-batch entity map. A type that is
+            # not in the canonical enum is normalized so the type-filtered
+            # lookup matches the persisted row; an unknown / unmapped endpoint
+            # stays None and resolves by name only (back-compat fallback).
+            src_type = rel.get("source_type") or type_by_name.get(src_text)
+            tgt_type = rel.get("target_type") or type_by_name.get(tgt_text)
+            src_type = _normalize_entity_type(src_type) if src_type else None
+            tgt_type = _normalize_entity_type(tgt_type) if tgt_type else None
+
             try:
                 # Field-name alignment to migration 39's SCHEMAFULL `relation`
                 # table: lookups use `canonical_name`, and the edge carries
                 # `source_documents` (array), not the legacy `source_id` scalar.
+                #
+                # K.7a: when an endpoint's type is known, additionally filter the
+                # SELECT by ``entity_type`` so a cross-type homograph (a person
+                # AND an org both named "BZK") resolves to the type-correct
+                # entity. When the type is None, the filter degrades to the
+                # original name-only ``LIMIT 1`` — zero regression for today's
+                # working (unambiguous) cases. The ``IF array::len(...) > 0``
+                # guard and the RELATE SET fields are unchanged.
+                src_clause = "canonical_name = $src_name"
+                if src_type is not None:
+                    src_clause += " AND entity_type = $src_type"
+                tgt_clause = "canonical_name = $tgt_name"
+                if tgt_type is not None:
+                    tgt_clause += " AND entity_type = $tgt_type"
                 await execute_query(
-                    """
+                    f"""
                     LET $src = (SELECT id FROM entity
-                        WHERE canonical_name = $src_name LIMIT 1);
+                        WHERE {src_clause} LIMIT 1);
                     LET $tgt = (SELECT id FROM entity
-                        WHERE canonical_name = $tgt_name LIMIT 1);
-                    IF array::len($src) > 0 AND array::len($tgt) > 0 THEN {
+                        WHERE {tgt_clause} LIMIT 1);
+                    IF array::len($src) > 0 AND array::len($tgt) > 0 THEN {{
                         LET $sid = $src[0].id;
                         LET $tid = $tgt[0].id;
                         RELATE $sid->relation->$tid SET
@@ -269,11 +312,13 @@ class EntityPersistenceService:
                             confidence = $confidence,
                             source_documents = [$source_id],
                             properties = $properties;
-                    } END
+                    }} END
                     """,
                     {
                         "src_name": src_text,
                         "tgt_name": tgt_text,
+                        "src_type": src_type,
+                        "tgt_type": tgt_type,
                         "rel_type": rel_type,
                         "confidence": confidence,
                         "source_id": source_id,
