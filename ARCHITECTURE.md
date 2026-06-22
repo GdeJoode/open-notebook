@@ -247,7 +247,87 @@ filesystem paths. The Obsidian vault-path branch carries
 the raw vault path NEVER lands in `metrics`. Recursive-walk
 assertions in the test suite confirm this for all three services.
 
-## 8. Further reading
+## 8. Cloud/local model routing (Track J)
+
+The three LLM pipeline stages — **entity extraction**, **summarization**,
+**chat** — route through a privacy-aware ordered provider chain with
+per-document failover and a local last-resort fallback. The service lives in
+`apps/app-main/src/app_main/services/model_routing/`.
+
+### The three-stage routing path
+
+```
+                       resolve_privacy_mode(source.private, notebook.privacy_mode, global)
+                                            │  (document > notebook > global, sticky-private)
+                                            ▼
+        LLMTask {ENTITY_EXTRACTION │ SUMMARIZATION │ CHAT}  +  PrivacyMode {CLOUD │ PRIVATE}
+                                            │
+                                            ▼
+                         RouteResolver.resolve(task, mode)  →  ResolvedRoute
+                          (model_route row, else hard-coded default chain;
+                           drops keyless providers; CLOUD appends local tail;
+                           PRIVATE = local-only)
+                                            │
+                          ┌─────────────────┴──────────────────┐
+            extraction / summarization                       chat
+                          │                                    │
+        FailoverExecutor.execute_with_failover         provision_langchain_model
+        (circuit-breaker skip, rate-limit + backoff,   (construction-time failover
+         is_failover_eligible whitelist, advance        only — J-D4; no mid-stream
+         on transient error → next candidate →          re-issue)
+         local last resort)                                    │
+                          │                                    │
+                          └──────────────► record_routing_event ◄──────────────┘
+                                     (routing.served telemetry: served_provider,
+                                      was_failover, fallback_from, task, source, notebook)
+```
+
+- **Resolver** (`route_resolver.py`): generalizes B.8's `resolve_default_model_id`
+  from one model id to an ordered `ResolvedRoute`. `LLMTask` has **exactly three
+  members** — there is deliberately no `EMBEDDING`/`PARSING` (see the invariant
+  below). `resolve_default_model_id` is preserved as a thin shim over
+  `ordered_candidates[0]` so the B.8 contract stays intact.
+- **Failover executor** (`failover_executor.py`) + **circuit breaker**
+  (`circuit_breaker.py`) + **rate limiter** (`rate_limiter.py`): execute a route
+  with per-document failover. A transient provider error (whitelisted by
+  `error_mapping.is_failover_eligible` — 429/5xx/timeout/connect/401/403) trips
+  the breaker and advances to the next candidate; a non-eligible error
+  (programming bug, 400) propagates rather than masking it. The cloud rate
+  limiter (conservative default, `RateLimitTimeout`-on-saturation → failover to
+  the throttle-exempt local without a breaker penalty) is the fair-use guard.
+  Breaker/limiter state is **in-process** (single-worker V1, J-D3).
+- **Privacy resolver** (`privacy_resolver.py`): document `private` → notebook
+  `privacy_mode` → global `default_privacy_mode` (default `cloud`), most-specific
+  wins, with a single early-return **sticky** rule so a `private` document can
+  never resolve to CLOUD.
+- **Telemetry** (`telemetry.py`): one `routing.served` `metrics` row per routed
+  stage carrying the served provider/model + failover trail. The
+  `GET /api/model-routes/health` + `GET /api/model-routes/summary` endpoints read
+  it back for the UI's per-provider health chips and the per-notebook
+  cloud-vs-local routing summary.
+
+### Invariant — embeddings + parsing stay LOCAL and FIXED (§1.2)
+
+> **Blocking, not a preference.** Embeddings are pinned to 768-dim
+> `nomic-embed-text` (Track I.G HNSW index). Routing an embedding through the
+> cloud chain would change the vector space (OpenAI `text-embedding-3` is
+> 1536/3072-dim) and silently corrupt vector search.
+
+`get_embedding_service` resolves embeddings via `DefaultModels` and imports
+**nothing** from `model_routing`. Parsing (docling/MinerU) is GPU-service-bound,
+never an LLM routing call. The enforcement is mechanical: `LLMTask` has no
+embedding/parsing member, and `test_embedding_local_guardrail.py` is the
+falsifiable canary (asserts the embedding-service source contains no
+`model_routing` import and that `resolve_route("embedding")` raises).
+
+### Operator surface
+
+`docs/tracks/J-model-routing/OPERATOR_GUIDE.md` documents the provider env keys
+(`NVIDIA_API_KEY`), the layered privacy model, the provider-chain config UI, the
+fair-use caution (local for high-volume extraction, cloud for summarization), and
+how to enable/disable providers.
+
+## 9. Further reading
 
 - `docs/SUMMARIZATION_APPROACHES.md` — design + status of all 11 summarization strategies
 - `docs/KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md` — KG architecture and roadmap
@@ -258,4 +338,5 @@ assertions in the test suite confirm this for all three services.
 - `docs/tracks/A-mineru/RETRO.md` — Track A retrospective (parser-engine routing)
 - `docs/tracks/B-kg-quality/RETRO.md` — Track B retrospective (multi-schema KG)
 - `docs/tracks/D-output-richness/RETRO.md` — Track D retrospective (export surfaces)
+- `docs/tracks/J-model-routing/OPERATOR_GUIDE.md` — cloud/local routing: env keys, privacy model, fair-use, enable/disable
 - `docs/troubleshooting/exports.md` — failure-mode diagnostics for the three export formats
