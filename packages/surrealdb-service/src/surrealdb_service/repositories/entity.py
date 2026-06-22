@@ -1684,3 +1684,96 @@ class EntityRepository:
                     f"row id={row.get('id')!r}: {e}"
                 )
         return relations
+
+    async def audit_ambiguous_relation_endpoints(self) -> Dict[str, Any]:
+        """READ-ONLY audit (K.7a): count relation endpoints that are ambiguous.
+
+        An endpoint is *ambiguous* when its entity's ``canonical_name`` maps to
+        more than one ACTIVE typed entity (a cross-type homograph). Under the
+        conservative K.1 normalizer no such collisions exist, so this is
+        expected to report ~0 — proving no existing relation was mis-attached
+        before K.7a. It becomes the canary once the aggressive K.7b prefixes
+        land: a non-zero count there means an endpoint genuinely needs the
+        type-aware resolution K.7a provides.
+
+        This NEVER mutates: it only SELECTs and aggregates in Python, then logs
+        a summary. Returns the audit result for callers/tests.
+
+        Returns:
+            ``{"ambiguous_names": [...], "ambiguous_name_count": N,
+            "affected_relation_count": M}`` where ``ambiguous_names`` lists the
+            canonical names that resolve to >1 active typed entity, and
+            ``affected_relation_count`` is the number of active relation edges
+            whose ``in`` or ``out`` endpoint carries such a name.
+        """
+        # 1. Active canonical_names that map to >1 distinct entity_type.
+        try:
+            active = await execute_query(
+                "SELECT canonical_name, entity_type FROM entity "
+                "WHERE status = 'active';",
+                None,
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"audit_ambiguous_relation_endpoints: entity scan failed: {e}")
+            return {
+                "ambiguous_names": [],
+                "ambiguous_name_count": 0,
+                "affected_relation_count": 0,
+            }
+
+        types_by_name: Dict[str, set] = {}
+        for row in active or []:
+            name = row.get("canonical_name")
+            etype = row.get("entity_type")
+            if not name:
+                continue
+            types_by_name.setdefault(name, set()).add(etype)
+        ambiguous_names = sorted(
+            name for name, types in types_by_name.items() if len(types) > 1
+        )
+
+        # 2. Count active relation edges whose endpoint carries an ambiguous
+        #    name. Resolve endpoint names via the edge's in/out ids.
+        affected = 0
+        if ambiguous_names:
+            try:
+                edges = await execute_query(
+                    "SELECT in.canonical_name AS src_name, "
+                    "out.canonical_name AS tgt_name FROM relation "
+                    "WHERE status = 'active';",
+                    None,
+                    self.config,
+                )
+            except Exception as e:
+                logger.error(
+                    f"audit_ambiguous_relation_endpoints: relation scan failed: {e}"
+                )
+                edges = []
+            ambiguous_set = set(ambiguous_names)
+            for edge in edges or []:
+                if (
+                    edge.get("src_name") in ambiguous_set
+                    or edge.get("tgt_name") in ambiguous_set
+                ):
+                    affected += 1
+
+        result = {
+            "ambiguous_names": ambiguous_names,
+            "ambiguous_name_count": len(ambiguous_names),
+            "affected_relation_count": affected,
+        }
+        if ambiguous_names:
+            logger.warning(
+                "audit_ambiguous_relation_endpoints: {n} canonical name(s) map "
+                "to >1 active typed entity, affecting {m} relation edge(s): {names}",
+                n=len(ambiguous_names),
+                m=affected,
+                names=ambiguous_names[:20],
+            )
+        else:
+            logger.info(
+                "audit_ambiguous_relation_endpoints: 0 ambiguous endpoints "
+                "(no cross-type homograph under the current normalizer)"
+            )
+        return result
