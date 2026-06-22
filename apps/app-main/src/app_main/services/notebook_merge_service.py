@@ -248,11 +248,19 @@ class NotebookMergeService:
         # and an org with the same surface name ARE different entities.
         accumulators: Dict[tuple[str, str], _MergedEntityAccumulator] = {}
         insertion_order: List[tuple[str, str]] = []
-        # normalized name → canonical text of its best (highest-confidence)
-        # bucket. Relations carry no type, so endpoint rewrites resolve a
-        # normalized name to its dominant typed bucket's canonical form.
-        name_to_canon: Dict[str, str] = {}
-        name_to_canon_conf: Dict[str, float] = {}
+        # (normalized name, entity_type) → canonical text of its best
+        # (highest-confidence) bucket. K.7a: keying by (name, type) — matching
+        # the bucket key — lets a relation endpoint resolve to its
+        # TYPE-CORRECT merged bucket when the endpoint type is known. Under a
+        # future aggressive normalizer a person-X and an org-X CAN share a
+        # normalized name; a name-only map would route both onto the
+        # highest-confidence-of-any-type winner, mis-attaching the edge.
+        # A name-only view is kept (``name_to_canon_any``) as the fallback for
+        # an endpoint whose type is unknown (cross-batch / no type on the row).
+        name_to_canon: Dict[tuple[str, str], str] = {}
+        name_to_canon_conf: Dict[tuple[str, str], float] = {}
+        name_to_canon_any: Dict[str, str] = {}
+        name_to_canon_any_conf: Dict[str, float] = {}
 
         for nb_id in source_notebook_ids:
             for row in per_notebook_entities[nb_id]:
@@ -300,11 +308,15 @@ class NotebookMergeService:
                     )
 
                 # Track the highest-confidence canonical text per
-                # normalized name so relation endpoints (which carry no
-                # type) rewrite onto the dominant typed bucket.
-                if conf >= name_to_canon_conf.get(norm_name, -1.0):
-                    name_to_canon_conf[norm_name] = conf
-                    name_to_canon[norm_name] = accumulators[key].best_text
+                # (normalized name, type) so a relation endpoint with a known
+                # type rewrites onto its TYPE-CORRECT merged bucket, and per
+                # normalized name (any type) as the type-unknown fallback.
+                if conf >= name_to_canon_conf.get(key, -1.0):
+                    name_to_canon_conf[key] = conf
+                    name_to_canon[key] = accumulators[key].best_text
+                if conf >= name_to_canon_any_conf.get(norm_name, -1.0):
+                    name_to_canon_any_conf[norm_name] = conf
+                    name_to_canon_any[norm_name] = accumulators[key].best_text
 
         # ----------------------------------------------------------------
         # Phase 3: type-collision conflict detection (per AC #3 + Q-B-5).
@@ -428,6 +440,8 @@ class NotebookMergeService:
                 src_text = row.get("source_text") or ""
                 tgt_text = row.get("target_text") or ""
                 rel_type = row.get("relation_type") or ""
+                src_type = row.get("source_type") or ""
+                tgt_type = row.get("target_type") or ""
                 src_norm = normalize_entity_name(src_text)
                 tgt_norm = normalize_entity_name(tgt_text)
                 if not src_norm or not tgt_norm or not rel_type:
@@ -436,12 +450,22 @@ class NotebookMergeService:
                 if src_norm in skipped_names or tgt_norm in skipped_names:
                     continue
                 key = (src_norm, tgt_norm, rel_type)
-                # Re-link endpoint text to the canonical merged form so
-                # the downstream RELATE query can SELECT the entity row.
-                # ``name_to_canon`` resolves a normalized name to its
-                # highest-confidence typed bucket's canonical text.
-                canon_src = name_to_canon.get(src_norm, src_text)
-                canon_tgt = name_to_canon.get(tgt_norm, tgt_text)
+                # Re-link endpoint text to the canonical merged form so the
+                # downstream RELATE query can SELECT the entity row. K.7a:
+                # resolve by (normalized name, endpoint type) onto the
+                # type-correct bucket when the relation row carries the
+                # endpoint's type; fall back to the name-only winner when the
+                # type is unknown, then to the raw text. This keeps a
+                # cross-type homograph endpoint pointed at its own type's
+                # winner instead of the highest-confidence-of-any-type one.
+                canon_src = name_to_canon.get(
+                    (src_norm, src_type),
+                    name_to_canon_any.get(src_norm, src_text),
+                )
+                canon_tgt = name_to_canon.get(
+                    (tgt_norm, tgt_type),
+                    name_to_canon_any.get(tgt_norm, tgt_text),
+                )
                 candidate = {
                     "source_text": canon_src,
                     "target_text": canon_tgt,
@@ -618,12 +642,16 @@ class NotebookMergeService:
         if not rows:
             return []
 
-        # Resolve endpoint canonical_name in batches. We need the
-        # canonical text to feed the merge's normalization step.
+        # Resolve endpoint canonical_name + entity_type in batches. We need the
+        # canonical text to feed the merge's normalization step, and the type
+        # (K.7a) to resolve a cross-type homograph endpoint onto its
+        # type-correct merged bucket rather than the highest-confidence
+        # bucket of any type.
         endpoint_ids = list({r["source_id"] for r in rows} | {r["target_id"] for r in rows})
         try:
             endpoint_rows = await execute_query(
-                "SELECT id, canonical_name FROM entity WHERE id INSIDE $ids",
+                "SELECT id, canonical_name, entity_type FROM entity "
+                "WHERE id INSIDE $ids",
                 {"ids": endpoint_ids},
             )
         except Exception as e:
@@ -634,12 +662,17 @@ class NotebookMergeService:
         text_by_id: Dict[str, str] = {
             str(r["id"]): r.get("canonical_name", "") for r in (endpoint_rows or [])
         }
+        type_by_id: Dict[str, str] = {
+            str(r["id"]): r.get("entity_type", "") for r in (endpoint_rows or [])
+        }
         out: List[Dict[str, Any]] = []
         for r in rows:
             out.append(
                 {
                     "source_text": text_by_id.get(str(r["source_id"]), ""),
                     "target_text": text_by_id.get(str(r["target_id"]), ""),
+                    "source_type": type_by_id.get(str(r["source_id"]), ""),
+                    "target_type": type_by_id.get(str(r["target_id"]), ""),
                     "relation_type": r.get("relation_type", ""),
                     "confidence": r.get("confidence", 0.0),
                     "properties": r.get("properties", {}),

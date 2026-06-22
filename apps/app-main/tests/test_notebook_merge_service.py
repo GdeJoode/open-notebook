@@ -32,6 +32,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app_main.services.notebook_merge_service import NotebookMergeService
+from shared.utils.name_normalizer import normalize_entity_name
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +114,7 @@ class _FakeExecuteQuery:
                 out.extend(self.relations_by_source.get(sid, []))
             return out
 
-        # 4. resolve endpoint canonical_name
+        # 4. resolve endpoint canonical_name (+ entity_type for K.7a)
         if "FROM entity" in s and "id INSIDE" in s:
             wanted_ids = (params or {}).get("ids", [])
             rows: List[Dict[str, Any]] = []
@@ -122,7 +123,13 @@ class _FakeExecuteQuery:
                 for e in ents:
                     eid = e.get("id")
                     if eid in wanted_ids and eid not in seen:
-                        rows.append({"id": eid, "canonical_name": e.get("canonical_name", "")})
+                        rows.append(
+                            {
+                                "id": eid,
+                                "canonical_name": e.get("canonical_name", ""),
+                                "entity_type": e.get("entity_type", ""),
+                            }
+                        )
                         seen.add(eid)
             return rows
 
@@ -473,6 +480,72 @@ async def test_relation_endpoints_do_not_cross_types():
     }
     assert "Minister van BZK" in relate_sources
     assert "Ministerie van BZK" in relate_sources
+
+
+@pytest.mark.asyncio
+async def test_relation_endpoints_route_to_type_correct_winner_on_shared_name():
+    """K.7a: when a person-X and an org-X share a NORMALIZED name (the
+    aggressive-normalizer world K.7b unlocks), each incident relation routes
+    to its TYPE-CORRECT merged bucket — not the highest-confidence-of-any-type
+    one.
+
+    Simulated by two entities whose surface forms normalize to the same key
+    (``"BZK"`` and ``"bzk."`` both normalize to the BZK org canonical) but with
+    DISTINCT surface texts and DIFFERENT types, so the chosen ``src_name`` on
+    the RELATE reveals which typed bucket each relation resolved to.
+
+    Falsifiability: under the OLD name-only ``name_to_canon`` both relations
+    would route to the single highest-confidence bucket (the person, conf 0.95)
+    — so the org relation's ``src_name`` would be the PERSON's text. The
+    (name, type) key makes each route to its own type's winner.
+    """
+    # Person bucket: higher confidence (0.95), surface "De BZK".
+    # Org bucket: lower confidence (0.80), surface "BZK".
+    # "De BZK" and "BZK" normalize to the SAME key (article strip → org alias),
+    # so they collide on name but stay distinct by (name, type). Distinct
+    # surface texts let the RELATE's src_name reveal which bucket each routed to.
+    person = _entity_row("entity:person", "De BZK", "person", 0.95)
+    org = _entity_row("entity:org", "BZK", "organization", 0.80)
+    wet = _entity_row("entity:wet", "Klimaatwet", "other", 0.7)
+    entities = [person, org, wet]
+    # Sanity: the two endpoints really do collide on the normalized name.
+    assert normalize_entity_name("De BZK") == normalize_entity_name("BZK")
+
+    # One relation from the person, one from the org — same target.
+    relations = [
+        _relation_row("entity:person", "entity:wet", "LEADS"),
+        _relation_row("entity:org", "entity:wet", "FUNDS"),
+    ]
+    fake = _FakeExecuteQuery(
+        sources_by_notebook={
+            "notebook:src": ["source:s1"],
+            "notebook:target": [],
+        },
+        entities_by_source={"source:s1": entities},
+        relations_by_source={"source:s1": relations},
+    )
+    svc, _ = _make_service_with_fake_db(fake)
+
+    with patch(
+        "app_main.services.notebook_merge_service.execute_query",
+        new=fake,
+    ):
+        await svc.merge_notebooks(
+            source_notebook_ids=["notebook:src"],
+            target_notebook_id="notebook:target",
+        )
+
+    # Map each RELATE's relation_type → the src_name it resolved to.
+    relate_by_type = {
+        (params or {}).get("rel_type"): (params or {}).get("src_name")
+        for sql, params in fake.calls
+        if "RELATE" in sql.strip()
+    }
+    # The person relation routes to the PERSON bucket's text; the org relation
+    # to the ORG bucket's text. Under the old name-only key both would be the
+    # person's text (0.95 > 0.80).
+    assert relate_by_type["LEADS"] == "De BZK"
+    assert relate_by_type["FUNDS"] == "BZK"
 
 
 @pytest.mark.asyncio
