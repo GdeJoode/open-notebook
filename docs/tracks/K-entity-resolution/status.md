@@ -7,6 +7,7 @@ Append-only ledger. One row per phase attempt.
 | — | (planning) | — | — | 2026-06-22 | track-planner producing plan.md |
 | K.1 | NL-aware normalizer + precision guard + measurement harness | (pending) | `track/k1-nl-normalizer` | 2026-06-22 | implemented — all 9 ACs green, ready for review |
 | K.1 rev3 | Option A: no cross-type NAME collisions; name-only false-merge gate | (pending) | `track/k1-nl-normalizer` | 2026-06-22 | implemented — 0 name-only false-merges, ready for review |
+| K.1 rev4 | Articles + spelling only; NO content-prefix strip (ministerie van collides cross-type) | (pending) | `track/k1-nl-normalizer` | 2026-06-22 | implemented — 0 name-only false-merges, −14 fragmentation, ready for review |
 
 ## Phase K.1 — NL-aware normalizer + precision guard + measurement harness — 2026-06-22
 
@@ -92,6 +93,71 @@ roundtrip suites green (296 total across the validation command). B.8 hash_id
 derive-rule unchanged (`TestB8HashContract` green). ruff clean on changed src +
 shared test files (pre-existing import-sort finding in
 `test_notebook_merge_service.py` left untouched — not introduced here).
+
+## Phase K.1 rev4 — articles + spelling only, NO content-prefix strip — 2026-06-22
+
+**Decision** (final, after 4 review cycles): K.1 strips ONLY collision-safe
+leading articles + curated spelling variants. **No blind content-prefix
+stripping at all** — not even `ministerie van`. Attempt 4 found that
+`ministerie van` collides cross-type in the live data: `Ministerie van Onderwijs`
+→ `onderwijs` == the bare `onderwijs` concept, and since relations resolve
+endpoints by name alone (`WHERE canonical_name = $name`) that corrupts the graph.
+The org-form merge (`Ministerie van BZK` ↔ `BZK`) moves to **K.2**'s curated,
+type-aware alias table.
+
+**The fix**
+- `nl_normalization.py`: `_ROLE_ORG_PREFIXES` / `_MIN_TAIL_LEN` and all org-prefix
+  stripping logic **removed**. `strip_leading_noise` now strips ONLY a leading
+  article (`de`/`het`/`een`) when a non-empty remainder survives (article-only
+  string like `de` returned unchanged). `canonicalize_spelling` unchanged
+  (curated `koninkrijk(s)relaties` map). Module docstring rewritten around the
+  collision-safety rationale.
+- `name_normalizer.py`: docstring de-staled — dropped the "V1 stub / Q9 will
+  replace" framing and the `ministerie van → bzk` examples; now describes the
+  actual article + curated-spelling behaviour and states that type-aware
+  org-form / abbreviation merging lives in Track K.2. `normalize_entity_name`
+  signature + pipeline order unchanged (V1 → strip article → canonicalize
+  spelling).
+- Harness (`resolution_metrics.py`) and the name-only `count_false_merges` gate:
+  **unchanged**. `notebook_merge_service.py` `(name, type)` bucket key:
+  **unchanged** (correct, consistent with persistence) — its rev3 regression
+  tests stay green because `Minister van BZK` (→ `minister van bzk`) and
+  `Ministerie van BZK` (→ `ministerie van bzk`) still normalize distinct.
+
+**Final strip behaviour**: leading articles `de` / `het` / `een` only. No
+content-bearing prefix is ever stripped.
+
+**Corpora**
+- `must_merge.jsonl` (6 pairs): article variants (`De Regio Deal` ↔ `Regio Deal`,
+  `Een Regio Deal` ↔ whitespace), case-only (`Ministerie van BZK` ↔
+  `ministerie van BZK`, `Provincie Drenthe` ↔ `provincie drenthe`), spelling
+  (`Koninkrijk(s)relaties`), and `De Gemeente Groningen` ↔ `Gemeente Groningen`
+  (article strip, gemeente kept). **Removed** the org-form pairs
+  (`Ministerie van BZK` ↔ `BZK`, `Ministerie van Binnenlandse Zaken … ` ↔ bare
+  form) — those are K.2's job and (correctly) do NOT merge in K.1.
+- `must_not_merge.jsonl` (13 pairs): all rev3 cross-type pairs kept, **plus**
+  the rev4 collision attempts `Ministerie van Onderwijs` ↔ `Onderwijs` and
+  `Ministerie van BZK` ↔ `BZK`. Gate: **0 name-only false-merges** across the
+  full corpus (now trivially satisfied since no content token is stripped — but
+  asserted, incl. the per-pair parametrized canary).
+
+**Re-measured over the frozen 1402-entity Convenant fixture**
+- Distinct-canonical: **1360 (V1) → 1346 (K.1 rev4)** = **−14**. Smaller than
+  rev3's −19 BY DESIGN — rev4 strips no content prefix, so the drop is purely
+  the collision-safe article + curated-spelling consolidation. The bigger
+  org-form merges land in K.2.
+- BZK full-form cluster (`binnenlandse zaken en koninkrijksrelaties`, type
+  `other`): the two bare `Binnenlandse Zaken en Koninkrijk(s)relaties` spelling
+  variants collapse → 1 key (size 2). `Ministerie van …` forms no longer fold in.
+- **Name-only false-merges over `must_not_merge.jsonl`: 0** (13 pairs).
+  Unmerged over `must_merge.jsonl`: 0 (6 pairs).
+- `Ministerie van Onderwijs` → `ministerie van onderwijs`; `Onderwijs` →
+  `onderwijs` — confirmed DIFFERENT strings.
+
+**Regression**: `packages/shared/tests/` 273 passed; full validation command
+(`packages/shared/tests/` + merge + persistence + roundtrip) **296 passed**. B.8
+hash_id derive-rule unchanged (`TestB8HashContract` green). ruff + mypy clean on
+changed src + shared test files.
 
 ## Basis
 - B.8c assessment: V1 normalizer resolves identical surface forms (107 cross-doc) but fragments variants (BZK 8-way, "minister" 23-way). See `../B-kg-quality/reviews/phase-B.8c-resolution-assessment.md`.
