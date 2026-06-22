@@ -104,7 +104,22 @@ class ExtractedEntity(BaseModel):
 
 
 class ExtractedRelation(BaseModel):
-    """A relation between two entities."""
+    """A relation between two entities.
+
+    Endpoint types (K.7a)
+    =====================
+    ``source_type`` / ``target_type`` carry the *entity type* of each endpoint
+    when it is known at extraction or persist time. They default to ``None`` for
+    back-compat — every existing caller that builds an ``ExtractedRelation``
+    without them is unaffected, and a ``None`` endpoint type falls back to
+    name-only resolution downstream.
+
+    They exist to disambiguate a relation endpoint when two entities share a
+    canonical name across types (e.g. a ``person`` and an ``organization`` both
+    named "BZK"). With the endpoint type known, the persist path can resolve the
+    edge to the *type-correct* entity instead of arbitrarily picking one. See
+    ``EntityPersistenceService.persist_filtered_result``.
+    """
 
     source_entity: str = Field(description="Source entity text")
     target_entity: str = Field(description="Target entity text")
@@ -113,6 +128,20 @@ class ExtractedRelation(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_chunk_id: Optional[str] = Field(
         default=None, description="ID of the chunk this relation was extracted from"
+    )
+    source_type: Optional[str] = Field(
+        default=None,
+        description=(
+            "Entity type of the source endpoint, when known. None → resolve "
+            "the endpoint by name only (back-compat fallback)."
+        ),
+    )
+    target_type: Optional[str] = Field(
+        default=None,
+        description=(
+            "Entity type of the target endpoint, when known. None → resolve "
+            "the endpoint by name only (back-compat fallback)."
+        ),
     )
     extraction_context: Optional[ExtractionContext] = Field(
         default=None,
