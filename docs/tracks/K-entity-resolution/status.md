@@ -9,6 +9,7 @@ Append-only ledger. One row per phase attempt.
 | K.1 rev3 | Option A: no cross-type NAME collisions; name-only false-merge gate | (pending) | `track/k1-nl-normalizer` | 2026-06-22 | implemented — 0 name-only false-merges, ready for review |
 | K.1 rev4 | Articles + spelling only; NO content-prefix strip (ministerie van collides cross-type) | (pending) | `track/k1-nl-normalizer` | 2026-06-22 | implemented — 0 name-only false-merges, −14 fragmentation, ready for review |
 | K.2 | Curated NL gov-org alias table + extensible override config | (pending) | `track/k2-org-aliases` | 2026-06-22 | implemented — all 7 ACs green; full-form keys (no blind strip); 0 name-only false-merges over combined corpus; K.1 1346 → K.2 1337 (BZK 6, VRO 3); ready for review |
+| K.3 | Retroactive canonicalization — dry-run plan + reviewable merge | (pending) | `track/k3-retroactive-merge` | 2026-06-22 | implemented — all 8 ACs green; dry-run-default + idempotency + soft-merge guards; ID-based relation re-pointing; person/org separation verified; 43 tests green (11 unit + 5 roundtrip + B.8 regression + migration-54). Ready for review |
 
 ## Phase K.2 — Government-org abbreviation alias table + extensible alias config — 2026-06-22
 
@@ -199,3 +200,41 @@ changed src + shared test files.
 | K.1 | collision-safe normalizer (articles+spelling) + harness + corpora | — | `track/k1-nl-normalizer` | 2026-06-22 | adversarial-reviewer APPROVED (attempt 5). Name-only 0 false-merges over 13-pair corpus; frag −14; 296 tests green. The gate caught the cross-type collision class (person/org, org/location, org/concept) across 4 prior attempts — would have silently corrupted relations. FU: pinned live-collision allow-list test. |
 
 | K.2 | curated NL gov-org alias table + extensible override config | — | `track/k2-org-aliases` | 2026-06-22 | adversarial-reviewer APPROVED (attempt 2; 1 blocker fixed: Financiën diacritic mismatch). BZK/VRO/Financiën collapse to one canonical each; 0 name-only false-merges (16-pair corpus); 324 tests green. Override config (last-wins, validated) seam for K.5. |
+
+## Phase K.3 — Retroactive canonicalization (dry-run plan + reviewable merge) — 2026-06-22
+
+**Branch**: `track/k3-retroactive-merge` (off main, which has K.1 + K.2).
+Commits `7890298..7647ef9` (4): migration+model → repo primitives → service+router → tests.
+
+**Goal**: dedup the ALREADY-PERSISTED KG. K.1+K.2 sharpened `normalize_entity_name`
+for NEW extractions; existing entities keep their old fragmented `canonical_name`s.
+K.3 re-normalizes them, groups collisions, merges duplicates — reversibly.
+
+**Delivered**
+- `migrations/54.surrealql` (+`_down`) — `DEFINE FIELD IF NOT EXISTS aliases ON entity FLEXIBLE TYPE array DEFAULT [];` (first-class denormalized alias list, K-D1). `status`/`merged_into`/`idx_entity_status` already exist from migration 39, re-declared defensively with `IF NOT EXISTS` (never OVERWRITE). ADDITIVE only — does not touch `canonical_name`/`hash_id`/`entity_type` (B.8 drift caution honoured).
+- `packages/shared/src/shared/models/entity.py` — `aliases: list[str] = Field(default_factory=list)` + `ensure_list` validator coverage.
+- `packages/surrealdb-service/.../repositories/entity.py` — `repoint_relations(loser_id, winner_id)` (ID-based; delete-and-recreate edges with parallel-edge dedup + self-loop drop), `mark_merged(loser_id, winner_id)` (soft `status='merged'` + `merged_into`, never hard delete), `merge_into_winner(winner_id, losers)` (reuses the upsert `_union_preserve_order` merge math), `list_active_entities(source_ids=None)`.
+- `apps/app-main/src/app_main/services/entity_resolution/recanonicalization_service.py` — `plan_merges(notebook_id=None)` (dry-run, zero writes), `apply_merge(cluster)` (one logical op, idempotent), `apply_plan(plan, *, dry_run=True)` (hard dry-run default).
+- `apps/app-main/.../api/routers/entity_resolution.py` — `POST /api/entity-resolution/plan` (dry-run MergePlan), `POST /api/entity-resolution/apply` (explicit reviewed cluster ids only — NO implicit apply-all). Registered in `app.py`.
+
+**Design**
+- **Plan/apply split**: `plan_merges` loads active entities, computes `new_canonical = normalize_entity_name(canonical_name)` each, groups by `(new_canonical, ENTITY_TYPE)`, returns clusters of size ≥2. Pure read — zero writes. `apply_merge` is the destructive half, gated behind the explicit router call and `apply_plan`'s hard `dry_run=True` default.
+- **Winner-selection rule**: highest `confidence` → tie-break most `source_documents` → tie-break oldest `created_at` → final total-order tie-break lowest record id (deterministic).
+- **Reused upsert merge math**: `merge_into_winner` calls the existing `_union_preserve_order` helper (the exact function `upsert_entity` uses) for `source_documents`/`type_tags`/`provenance_chain` union + `confidence` max + `properties` overlay; not reimplemented. Aliases union the loser surface forms.
+- **ID-based relation repointing**: edges are re-pointed loser_id→winner_id by entity ID (delete-and-recreate, since SurrealDB v2 RELATE `in`/`out` are not safely mutable in place), with `(in,out,relation_type)` parallel-edge dedup and winner self-loop drop. Never name-based → no cross-type ambiguity. Post-apply assertion: NO relation references a merged entity's id.
+- **Idempotency**: `apply_merge` operates only on losers still `status='active'`; an already-merged cluster is a no-op (no double-merge, no duplicate aliases — alias repo also dedups on `(entity, alias_text)`).
+- **Dry-run guard**: `apply_plan` default does ZERO writes (unit test asserts a write-spy list == [] and entities stay active).
+- **Soft + reversible**: losers are `status='merged'` + `merged_into=<winner>`, never hard-deleted.
+
+**Tests (43 green)**
+- Unit `apps/app-main/tests/test_recanonicalization_service.py` (11): cluster grouping (BZK 3-way), winner rule (confidence / source-count / oldest-created_at tie-breaks), type-aware must-NOT separation (person/org homograph + full `must_not_merge.jsonl` corpus → 0 false clusters), dry-run zero-writes (plan + apply_plan), apply happy-path + idempotency.
+- Roundtrip `packages/surrealdb-service/tests/test_entity_merge_roundtrip.py` (5, `@requires_docker`): aliases reads back `[]`; plan-no-write; full apply contract (merged status, source/alias union, **2 relations re-pointed, 0 dangling refs to merged entities**, entity_alias rows); idempotent re-apply (no duplicate aliases); person/org homograph never shares a cluster.
+- Migration `test_migrations_roundtrip.py::test_migration_54_aliases_roundtrip_and_idempotent` — `aliases=[]` + `status='active'` default, replay is a no-op, field still writable.
+- **B.8 regression**: `test_entity_persistence_service.py` + `test_entity_repository_roundtrip.py` green unmodified (hash_id/upsert contract intact).
+
+**Validation**: `apps/app-main/tests/test_recanonicalization_service.py` + `test_entity_merge_roundtrip.py` + `test_entity_persistence_service.py` + `test_entity_repository_roundtrip.py` + `test_migrations_roundtrip.py` → **43 passed**. ruff clean on changed src + new test files.
+
+**Notes for reviewer**
+- The plan's "strip ministerie van first" framing is stale (K.1 rev4 dropped content-prefix stripping); K.3 inherits whatever `normalize_entity_name` does — it just groups by its output, so it stays correct as the normalizer evolves.
+- Pre-existing `shared.config` package/module name collision (`MIN_APPLICABLE_CONFIDENCE` import) breaks the *full* `create_app()` import chain via `ontology_extraction`; unrelated to K.3 — router/service import cleanly in isolation and per-package tests pass. Flagged, not fixed (out of scope).
+- No apply was run against the live DB (user-gated). Tests use the testcontainer only.
