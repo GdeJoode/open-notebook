@@ -12,6 +12,53 @@ Append-only ledger. One row per phase attempt.
 | K.3 | Retroactive canonicalization — dry-run plan + reviewable merge | (pending) | `track/k3-retroactive-merge` | 2026-06-22 | implemented — all 8 ACs green; dry-run-default + idempotency + soft-merge guards; ID-based relation re-pointing; person/org separation verified; 43 tests green (11 unit + 5 roundtrip + B.8 regression + migration-54). Ready for review |
 | K.4 | TOOI + Crossref vocabulary lookup → external_ids + aliases | (pending) | `track/k4-vocabulary` | 2026-06-22 | implemented — all 7 ACs green; precision guard (single high-confidence match only); resolve_external_ids signature unchanged + 45 Track D exporter tests green; migration 55 idempotent; TOOI source = K-D2 (verified seed shipped, exact bulk URL/cadence flagged). 63 tests green. Ready for review |
 
+## Phase K-D2 — real TOOI bulk source wired (full gov-org vocabulary) — 2026-06-22
+
+**Branch**: `track/kd2-tooi-source`. Resolves the K-D2 escalation: the full
+Dutch-government organisation vocabulary now loads from a confirmed, live-verified
+machine-readable source (not the seed).
+
+**Source found** (no auth, polite low-volume):
+`identifier.overheid.nl/tooi/set/rwc_overheidsorganisaties` content-negotiates to
+HTML and is not a data endpoint. The data lives in **eight per-type `*_compleet`
+registers** published as versioned RDF/JSON-LD dumps under
+`repository.officiele-overheidspublicaties.nl/waardelijsten/<set>/<version>/json/<set>_<version>.json`.
+Live union (2026-06-22) = **1438 organisations** (605 gemeenten · 383
+samenwerkingsorganisaties · 210 overige · 174 ZBOs · 32 waterschappen · 19
+ministeries · 12 provincies · 3 Caribbean). JSON-LD: org nodes carry
+`ont:organisatiecode`/`afkorting`/`officieleNaam…`; renamed orgs repeat per
+name-version pointing at the canonical entity via `prov:specializationOf`.
+
+**Delivered**
+- `shared/vocabulary/tooi_bulk.py::TOOIBulkFetcher` — fetches + parses all eight
+  registers through the K.4 fail-soft HTTP client (timeout + 1s rate-limit +
+  24h cache), groups nodes by canonical URI, collects every historical
+  name/abbreviation as a resolvable alias, unions + dedupes by organisatiecode.
+- `tooi_provider.refresh()` — source priority **operator-file > remote fetcher >
+  seed**, each fail-soft into the next (unreachable registers → seed, never
+  crash). Idempotent at scale: upsert on `(canonical_name, source_vocabulary)`
+  PLUS a pre-load dedupe by `external_id` (one org never splits into two rows).
+- `POST /api/vocabulary/refresh` attaches the fetcher by default;
+  `TOOI_DISABLE_REMOTE=1` opts out of the network (air-gapped → seed/file);
+  `TOOI_BULK_SOURCE` (operator file) still overrides.
+
+**Tests** (mocked HTTP — no live CI calls): `test_tooi_bulk.py` (7: JSON-LD
+parse, canonical-version selection, alias collection, register union, fail-soft on
+404, cross-register dedupe, URL shape) + 6 new remote-refresh cases in
+`test_tooi_provider.py` (fetcher feeds reference_entity, historical aliases
+resolve, idempotency at scale, empty-remote→seed fallback, file overrides remote,
+same-code dedupe). **Full shared suite: 338 passed.** `create_app()` OK. ruff +
+mypy clean on changed source.
+
+**Live validation**: ran the real `TOOIBulkFetcher` (dev-only) → 1438 orgs, BZK
+resolves, `mnre1058` carries all 8 Justitie surface forms as aliases.
+
+**Still operator-owned**: the refresh *cadence/scheduler* (manual endpoint shipped;
+no cron). Register versions are pinned in `DEFAULT_REGISTERS` (immutable repo
+paths); bump or pass `registers=` for a newer publication.
+
+---
+
 ## Phase K.4 — TOOI + Crossref vocabulary reconciliation → external_ids/aliases — 2026-06-22
 
 **Branch**: `track/k4-vocabulary` (off main, with K.1-K.3). Commits per logical unit (model+migration → providers → repository → reconciler → external_ids body → router/DI → entity-repo helper → lint).
@@ -280,3 +327,4 @@ K.3 re-normalizes them, groups collisions, merges duplicates — reversibly.
 | hotfix | shared.config package shadowed config.py → create_app broke (K.2 regression) | — | `fix/shared-config-collision` | 2026-06-22 | merged to main 9478235. K.2's gate missed it (tests imported the submodule, not the app chain). |
 
 | K.4 | TOOI + Crossref vocabulary reconciliation → external_ids/aliases | — | `track/k4-vocabulary` | 2026-06-22 | adversarial-reviewer APPROVED (attempt 2; 1 major fixed: export projection dropped external_ids/aliases). Provider-pluggable, fail-soft HTTP (cache+rate-limit), single-match precision guard, Crossref title-overlap gate. K-D2 (TOOI bulk URL) flagged non-blocking w/ verified seed. 208+81 tests green. |
+| K-D2 | wire real TOOI bulk source — full gov-org vocabulary | — | `track/kd2-tooi-source` | 2026-06-22 | RESOLVED. Bulk source = eight `*_compleet` JSON-LD registers under `repository.officiele-overheidspublicaties.nl` (the `rwc_overheidsorganisaties` SET url is HTML-only). Live union = **1438 orgs**. `TOOIBulkFetcher` (fail-soft, rate-limited, cached) → `refresh()` priority file>remote>seed, idempotent at scale. Mocked-HTTP tests; 338 shared green; ruff+mypy clean. Ready for review. |

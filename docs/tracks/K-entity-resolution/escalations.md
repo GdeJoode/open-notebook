@@ -29,7 +29,29 @@ K.1 rev4's `must_not_merge.jsonl` contained `Ministerie van BZK` (organization) 
 **Residual risk (accepted)**: a *person* literally surnamed "BZK" would now normalize onto the ministry org canonical (a name-only cross-type collision). This is judged acceptable because (a) the org-form merge is the explicit, spec-directed K.2 deliverable; (b) the realistic person form is the *role* phrase `Minister van BZK`, which is NOT keyed and stays distinct (kept in must_not_merge, plus the new `Minister van VRO` ↔ `Ministerie van VRO` person/org pair); (c) a bare-abbreviation person surname colliding with a ministry is not observed in the live Convenant corpus. K.7 (type-safe relation endpoints) is the structural fix that would let even this case disambiguate by type.
 
 ## K-D2 — TOOI source + refresh cadence (2026-06-22, K.4)
-**Status**: NON-BLOCKING — K.4 shipped against a verified seed + documented bulk-file loader; ONE open question for the user before a production full-vocabulary refresh.
+**Status**: RESOLVED (2026-06-22, K-D2 follow-up) — the bulk source is found, wired, and live-validated. The original "open question" sub-items (1a/1b/1c) are answered below under **RESOLUTION**. Sub-item 2 (refresh *cadence/scheduler*) remains a separate operator choice (the manual endpoint + `last_validated` stamping are shipped; no cron wired).
+
+### RESOLUTION (2026-06-22) — bulk source wired
+**The confirmed machine-readable bulk source** (live-verified, no auth):
+- The SET url `identifier.overheid.nl/tooi/set/rwc_overheidsorganisaties` content-negotiates (any `Accept`) to an HTML landing page — NOT a data endpoint. `rwc_overheidsorganisaties` is also not itself a downloadable register.
+- Instead, `standaarden.overheid.nl/tooi/waardelijsten` splits the orgs into **eight per-type `*_compleet` registers**, each published as a versioned RDF/JSON-LD dump at:
+  `https://repository.officiele-overheidspublicaties.nl/waardelijsten/<set>/<version>/json/<set>_<version>.json`
+  (also `/ttl/`, `/rdf/`, `/xml/`). e.g. `rwc_ministeries_compleet/6/json/rwc_ministeries_compleet_6.json` → HTTP 200, expanded JSON-LD. The latest version per set is discoverable from the work page's expression links.
+- **Format**: expanded JSON-LD. Org nodes carry `ont:organisatiecode` / `ont:afkorting` / `ont:officieleNaamExclSoort` / `ont:officieleNaamInclSoort`. A renamed org repeats per name-version, each pointing at the canonical entity URI via `prov:specializationOf`; non-org metadata nodes (the waardelijst header) carry no organisatiecode.
+- **Live count (2026-06-22)**: the union of the eight registers = **1438 organisations** — 605 gemeenten, 383 samenwerkingsorganisaties, 210 overige overheidsorganisaties, 174 ZBOs, 32 waterschappen, 19 ministeries, 12 provincies, 3 Caribbean public bodies. BZK (`mnre1034`) resolves; the renamed Justitie ministry (`mnre1058`) carries all 8 historical surface forms (Justitie / Veiligheid en Justitie / Justitie en Veiligheid + MinJus/VenJ/JenV …) as aliases.
+
+This answers the original options: **1(a) is the path** — there IS a canonical bulk-download URL (the per-register JSON-LD dumps), so a per-identifier crawl (1b) is unnecessary. The operator file (1c) is kept as a secondary override (`TOOI_BULK_SOURCE`).
+
+**Wired in:**
+- `shared/vocabulary/tooi_bulk.py::TOOIBulkFetcher` fetches + parses all eight registers through the K.4 fail-soft HTTP client (timeout + rate-limit 1s + cache), groups by canonical URI, collects historical names/abbreviations as aliases, unions + dedupes by organisatiecode.
+- `tooi_provider.refresh()` source priority: operator file > remote fetcher > bundled seed (each fails soft into the next; unreachable registers → seed, never crash). Idempotent at scale (upsert on `(canonical_name, source_vocabulary)` + pre-load dedupe by `external_id`).
+- `POST /api/vocabulary/refresh` attaches the fetcher by default; `TOOI_DISABLE_REMOTE=1` opts out of the network (air-gapped → seed/file only).
+- Tests mock HTTP (no live CI calls): `test_tooi_bulk.py` (parse + union + fail-soft + dedupe) and the remote-refresh integration cases in `test_tooi_provider.py`.
+
+**Still operator-owned (sub-item 2):** the refresh *trigger/cadence* — manual `POST /api/vocabulary/refresh` is shipped; a cron / startup-if-stale scheduler is not wired (a deployment choice, not a code blocker). The register *versions* in `DEFAULT_REGISTERS` are pinned (immutable repository paths); bump them, or pass `registers=`, to pick up a newer publication.
+
+---
+**Original K.4 investigation (superseded by the RESOLUTION above):**
 
 **What I determined (live-verified 2026-06-22):**
 - TOOI is reachable as **content-negotiated RDF/Turtle per identifier** at `https://identifier.overheid.nl/tooi/id/<soort>/<organisatiecode>` (e.g. `.../ministerie/mnre1034` = BZK). A `GET` with `Accept: text/turtle` returns clean structured fields: `tooiont:organisatiecode`, `tooiont:afkorting` (abbreviation), `tooiont:officieleNaamExclSoort`, `tooiont:officieleNaamInclSoort`. This is the field shape the provider keys off.
