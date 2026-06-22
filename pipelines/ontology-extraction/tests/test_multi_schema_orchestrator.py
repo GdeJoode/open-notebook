@@ -23,24 +23,6 @@ from typing import Any, Dict, List, Optional
 from unittest.mock import patch
 
 import pytest
-from ontology_manager.schema import (
-    EntityTypeDefinition,
-    Ontology,
-    OntologyMetadata,
-    RelationshipTypeDefinition,
-)
-from shared.config import (
-    MIN_APPLICABLE_CONFIDENCE as SHARED_MIN_APPLICABLE_CONFIDENCE,
-    SOFT_NUDGE_COVERAGE_HIGH as SHARED_SOFT_NUDGE_COVERAGE_HIGH,
-    SOFT_NUDGE_COVERAGE_LOW as SHARED_SOFT_NUDGE_COVERAGE_LOW,
-)
-from shared.models.extraction import (
-    ExtractedEntity,
-    ExtractedRelation,
-    ExtractionResult,
-)
-from shared.models.notebook_schema import Pass1Result
-
 from ontology_extraction.multi_schema_orchestrator import (
     MIN_APPLICABLE_CONFIDENCE,
     SCHEMA_AFFINITY,
@@ -62,7 +44,27 @@ from ontology_extraction.pass2_typed_extraction import (
     _estimate_tokens,
 )
 from ontology_extraction.prompts.pass2 import build_pass2_prompt
-
+from ontology_manager.schema import (
+    EntityTypeDefinition,
+    Ontology,
+    OntologyMetadata,
+    RelationshipTypeDefinition,
+)
+from shared.config import (
+    MIN_APPLICABLE_CONFIDENCE as SHARED_MIN_APPLICABLE_CONFIDENCE,
+)
+from shared.config import (
+    SOFT_NUDGE_COVERAGE_HIGH as SHARED_SOFT_NUDGE_COVERAGE_HIGH,
+)
+from shared.config import (
+    SOFT_NUDGE_COVERAGE_LOW as SHARED_SOFT_NUDGE_COVERAGE_LOW,
+)
+from shared.models.extraction import (
+    ExtractedEntity,
+    ExtractedRelation,
+    ExtractionResult,
+)
+from shared.models.notebook_schema import Pass1Result
 
 # ---------------------------------------------------------------------------
 # Fixtures
