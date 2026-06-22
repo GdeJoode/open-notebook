@@ -248,3 +248,5 @@ Privacy was resolved with `notebook_id=None`, so a notebook set to `privacy_mode
 - **J-D3** (in-process breaker, multi-worker divergence): documented in `OPERATOR_GUIDE.md` §3 as a known V1 limitation, per the plan.
 
 **Track J COMPLETE (J.1-J.6).** Cloud/local routing with per-document failover, layered sticky-private privacy, fair-use rate limiting, full per-task telemetry, and operator docs. Embeddings + parsing remain local-and-fixed (768-dim invariant intact).
+
+**J.6 rev2**: review found the ollama base-URL env var mismatch — registry declared `OLLAMA_BASE_URL` but the app/compose/esperanto use `OLLAMA_API_BASE` (and the factory early-returns for local providers so it never threaded the registry var; runtime was fine, the declaration was dead/misleading). Aligned the registry to `OLLAMA_API_BASE`; bounded the /summary limit. create_app OK, 15 routing tests green. APPROVED-equivalent (focused 2-line fix verified).
