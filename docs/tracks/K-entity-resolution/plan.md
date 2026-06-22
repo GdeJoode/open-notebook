@@ -458,3 +458,45 @@ relation layer is type-safe is exactly the K.1-attempt-3 corruption. **K.7b gate
 change → the B.8 `hash_id` contract is structurally untouched. The risk is the
 single persist-resolution query change, fully covered by the additive fallback +
 the B.8 regression suite + the new homograph test.
+
+---
+
+### Phase K.8 — Office/role & temporal entity resolution (PLANNED — user-requested 2026-06-22)
+
+> **Why this is its own phase, not normalization:** Track K (K.1-K.7) resolves
+> *surface-form variants of the same entity*, type-separated (`person` / `organization`
+> / `role` stay distinct). It deliberately does NOT model the **semantics between**
+> distinct entities, which the `minister van BZK` cases expose:
+> - **`minister van BZK` is a temporally-shared ROLE**, held by different people over
+>   time (Hugo de Jonge, then a successor). A bare role title extracted without a
+>   person name is **temporally ambiguous** — `(canonical_name, entity_type)` dedup
+>   would WRONGLY collapse different-period mentions into one entity. No amount of
+>   name normalization fixes this (the surface form is genuinely identical).
+> - **person ↔ role ↔ organization** (`Hugo de Jonge` *held* `minister van BZK`
+>   *of* `Ministerie van BZK`) is a RELATION with time bounds, not a merge — needs
+>   relation extraction + an office/role ontology, not a name key.
+> - **`, MBZK` / role-annotation parsing** (`Hugo de Jonge, MBZK` → person + role
+>   annotation) is an extraction-parsing concern upstream of dedup.
+
+**Goal**: model offices/roles as first-class temporal entities and link persons to
+them with time-bounded relations, so the KG can answer "who was minister van BZK in
+2021" and never conflate a role across its different holders.
+
+**Scope (to detail when scheduled — track-sized):**
+- **Office/role ontology**: a `role`/`office` entity type distinct from `person` and
+  `organization`; TOOI carries a `functie`/role waardelijst (pair with the K.4 TOOI
+  provider) to give roles canonical IDs.
+- **Temporal qualifiers**: time bounds (`valid_from`/`valid_to`) on `held_office`
+  relations (and optionally on role-holder assertions), so a role's holder is
+  resolved *per period*, not merged across time.
+- **Relation extraction**: extract `person --held_office[t0..t1]--> role --of--> org`
+  from documents; the K.7 type-safe relation layer is the substrate this builds on.
+- **Role-annotation parsing**: split `Name, ROLE` mentions into a person + a
+  role-link at extraction (so `Hugo de Jonge, MBZK` ↔ `Hugo de Jonge` are one person).
+- **Over-merge guard extension**: a bare temporally-ambiguous role title must NOT
+  auto-merge across documents without a disambiguating period/holder — extend the
+  must_not_merge discipline to the temporal axis.
+
+**Depends on**: K.7 (type-safe relations) as the substrate; K.4 TOOI provider
+(extend to the functie vocabulary). **Effort**: track-sized (ontology + temporal +
+extraction). **This is a genuine follow-on track, not a quick phase.**

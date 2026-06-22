@@ -1245,7 +1245,8 @@ semantics — must not regress the hash_id/dedup-key contract (migration 50).
 - K.4 TOOI + Crossref vocabulary lookup → external_ids + aliases (Q9 core).
 - K.5 Fuzzy/embedding candidate dedup + merge step; user-overlay (global +
   per-notebook).
-- K.7 Type-safe relation endpoints (Option B) — carry entity type/ID through relations so cross-type homographs never mis-attach; unlocks re-enabling the aggressive K.1 prefixes. Sequenced after K.3.
+- K.7 Type-safe relation endpoints (Option B) — carry entity type/ID through relations.
+- K.8 Office/role & temporal entity resolution (user-requested 2026-06-22) — model roles as temporal entities + time-bounded held_office relations (the "minister van BZK across different holders/time" gap that normalization cannot solve). Track-sized; depends on K.7 + K.4 TOOI functie vocab. — carry entity type/ID through relations so cross-type homographs never mis-attach; unlocks re-enabling the aggressive K.1 prefixes. Sequenced after K.3.
 - K.6 UI: review/merge duplicates + alias management + per-entity external IDs.
 
 See [`docs/tracks/K-entity-resolution/plan.md`](./tracks/K-entity-resolution/plan.md).
