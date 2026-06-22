@@ -29,7 +29,45 @@ K.1 rev4's `must_not_merge.jsonl` contained `Ministerie van BZK` (organization) 
 **Residual risk (accepted)**: a *person* literally surnamed "BZK" would now normalize onto the ministry org canonical (a name-only cross-type collision). This is judged acceptable because (a) the org-form merge is the explicit, spec-directed K.2 deliverable; (b) the realistic person form is the *role* phrase `Minister van BZK`, which is NOT keyed and stays distinct (kept in must_not_merge, plus the new `Minister van VRO` ↔ `Ministerie van VRO` person/org pair); (c) a bare-abbreviation person surname colliding with a ministry is not observed in the live Convenant corpus. K.7 (type-safe relation endpoints) is the structural fix that would let even this case disambiguate by type.
 
 ## K-D2 — TOOI source + refresh cadence (2026-06-22, K.4)
-**Status**: NON-BLOCKING — K.4 shipped against a verified seed + documented bulk-file loader; ONE open question for the user before a production full-vocabulary refresh.
+**Status**: RESOLVED (2026-06-22, K-D2 **rev2**) — the bulk source is found, wired, live-validated, AND the rev2 review's ingest-identity blocker is fixed (see **REV2** below). The original "open question" sub-items (1a/1b/1c) are answered under **RESOLUTION**. Sub-item 2 (refresh *cadence/scheduler*) remains a separate operator choice (the manual endpoint + `last_validated` stamping are shipped; no cron wired).
+
+### REV2 (2026-06-22) — duplicate-display-name BLOCKER fixed (reference identity = external_id)
+The rev1 framing claimed "one org is never split into two reference rows" (deduping by `external_id` before load). That was true but it **hid the inverse and more dangerous failure**: the persistence/upsert keyed on `canonical_name` (migration 41's `(canonical_name, source_vocabulary)` UNIQUE), which **merged two DISTINCT orgs that share a bare display name into ONE row**. The real 605-gemeente register has two distinct "Bergen" municipalities — `gm0373` (Noord-Holland) and `gm0893` (Limburg), both `canonical_name="Bergen"`. At ingest the UNIQUE-on-name index collapsed them to one row, so `lookup_by_name("Bergen")` returned a single candidate and the reconciler's single-high-confidence-match guard **auto-linked every "Bergen" entity (incl. Bergen-NH ones) to the surviving (wrong, Limburg) URI**. The precision guard was bypassed because the ambiguity was destroyed at INGEST, not at reconcile. Same hazard for any cross-soort bare-name overlap (Groningen gemeente vs provincie, Utrecht, etc.).
+
+**Fix — the persisted reference identity is now the org's STABLE id (external_id / organisatiecode), not its display name:**
+- **Migration 57** (`57.surrealql` + `57_down.surrealql`): re-keys `reference_entity` uniqueness from `(canonical_name, source_vocabulary)` to **`(external_id, source_vocabulary)`** via `DEFINE INDEX OVERWRITE idx_ref_extid_source ... UNIQUE`, and demotes `idx_ref_name_source` to NON-unique (lookup still indexed; `idx_ref_name` from migration 41 also stays). Touches ONLY `reference_entity` — never `entity` (B.8-safe). Idempotent (OVERWRITE); applies cleanly on the B.0 testcontainers harness and is safe over the handful of existing K.4-seed rows.
+- **`reference_entity.py` upsert**: CREATE-vs-UPDATE pre-fetch now keys on `(external_id, source_vocabulary)`. Two distinct orgs sharing a display name persist as TWO rows.
+- **`tooi_provider._dedupe_rows`**: already keyed on `external_id` — now CONSISTENT with the upsert (one code → one row, aliases unioned; two distinct codes sharing a name → two rows). `refresh()` returns the actual persisted (deduped) row count — no longer inflated by a name-collision collapse.
+- **Reconciler unchanged**: `lookup_by_name("Bergen")` now returns 2 distinct-external_id rows → `_distinct_by_uri` counts 2 distinct URIs → multi-candidate guard refuses to auto-link (recorded as ambiguous candidates). Verified end-to-end through the real `TOOIProvider`.
+
+**Regression tests added:**
+- `test_tooi_provider.py::test_refresh_keeps_distinct_same_named_orgs_as_two_rows` — the two Bergens persist as 2 rows; `lookup("Bergen")` surfaces BOTH URIs. (`FakeReferenceRepo` re-keyed to `(external_id, source)` to mirror migration 57.)
+- `test_vocabulary_reconciler.py::test_two_same_named_orgs_via_tooi_provider_do_not_auto_link` — an entity named "Bergen" with 2 same-name reference rows → `reconcile_entity` does NOT auto-link (external_ids stays empty, reason `ambiguous_multiple_candidates`).
+- `test_migrations_roundtrip.py::test_migration_57_distinct_same_named_orgs_coexist` + `::test_migration_57_idempotent_upsert_on_external_id` — live container: both Bergens coexist; upsert idempotent on external_id; migration 57 OVERWRITE re-apply is a no-op.
+
+Fail-soft invariant intact (registry outage → seed, never crash); no live HTTP in tests.
+
+### RESOLUTION (2026-06-22) — bulk source wired
+**The confirmed machine-readable bulk source** (live-verified, no auth):
+- The SET url `identifier.overheid.nl/tooi/set/rwc_overheidsorganisaties` content-negotiates (any `Accept`) to an HTML landing page — NOT a data endpoint. `rwc_overheidsorganisaties` is also not itself a downloadable register.
+- Instead, `standaarden.overheid.nl/tooi/waardelijsten` splits the orgs into **eight per-type `*_compleet` registers**, each published as a versioned RDF/JSON-LD dump at:
+  `https://repository.officiele-overheidspublicaties.nl/waardelijsten/<set>/<version>/json/<set>_<version>.json`
+  (also `/ttl/`, `/rdf/`, `/xml/`). e.g. `rwc_ministeries_compleet/6/json/rwc_ministeries_compleet_6.json` → HTTP 200, expanded JSON-LD. The latest version per set is discoverable from the work page's expression links.
+- **Format**: expanded JSON-LD. Org nodes carry `ont:organisatiecode` / `ont:afkorting` / `ont:officieleNaamExclSoort` / `ont:officieleNaamInclSoort`. A renamed org repeats per name-version, each pointing at the canonical entity URI via `prov:specializationOf`; non-org metadata nodes (the waardelijst header) carry no organisatiecode.
+- **Live count (2026-06-22)**: the union of the eight registers = **1438 organisations** — 605 gemeenten, 383 samenwerkingsorganisaties, 210 overige overheidsorganisaties, 174 ZBOs, 32 waterschappen, 19 ministeries, 12 provincies, 3 Caribbean public bodies. BZK (`mnre1034`) resolves; the renamed Justitie ministry (`mnre1058`) carries all 8 historical surface forms (Justitie / Veiligheid en Justitie / Justitie en Veiligheid + MinJus/VenJ/JenV …) as aliases.
+
+This answers the original options: **1(a) is the path** — there IS a canonical bulk-download URL (the per-register JSON-LD dumps), so a per-identifier crawl (1b) is unnecessary. The operator file (1c) is kept as a secondary override (`TOOI_BULK_SOURCE`).
+
+**Wired in:**
+- `shared/vocabulary/tooi_bulk.py::TOOIBulkFetcher` fetches + parses all eight registers through the K.4 fail-soft HTTP client (timeout + rate-limit 1s + cache), groups by canonical URI, collects historical names/abbreviations as aliases, unions + dedupes by organisatiecode.
+- `tooi_provider.refresh()` source priority: operator file > remote fetcher > bundled seed (each fails soft into the next; unreachable registers → seed, never crash). Idempotent at scale (upsert on `(external_id, source_vocabulary)` + pre-load dedupe by `external_id`).
+- `POST /api/vocabulary/refresh` attaches the fetcher by default; `TOOI_DISABLE_REMOTE=1` opts out of the network (air-gapped → seed/file only).
+- Tests mock HTTP (no live CI calls): `test_tooi_bulk.py` (parse + union + fail-soft + dedupe) and the remote-refresh integration cases in `test_tooi_provider.py`.
+
+**Still operator-owned (sub-item 2):** the refresh *trigger/cadence* — manual `POST /api/vocabulary/refresh` is shipped; a cron / startup-if-stale scheduler is not wired (a deployment choice, not a code blocker). The register *versions* in `DEFAULT_REGISTERS` are pinned (immutable repository paths); bump them, or pass `registers=`, to pick up a newer publication.
+
+---
+**Original K.4 investigation (superseded by the RESOLUTION above):**
 
 **What I determined (live-verified 2026-06-22):**
 - TOOI is reachable as **content-negotiated RDF/Turtle per identifier** at `https://identifier.overheid.nl/tooi/id/<soort>/<organisatiecode>` (e.g. `.../ministerie/mnre1034` = BZK). A `GET` with `Accept: text/turtle` returns clean structured fields: `tooiont:organisatiecode`, `tooiont:afkorting` (abbreviation), `tooiont:officieleNaamExclSoort`, `tooiont:officieleNaamInclSoort`. This is the field shape the provider keys off.

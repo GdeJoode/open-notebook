@@ -557,3 +557,97 @@ async def test_migration_54_aliases_roundtrip_and_idempotent(
         config=live_surrealdb,
     )
     assert sorted(rows2[0]["aliases"]) == ["x", "y"]
+
+
+# --------------------------------------------------------------------------
+# Migration 57 — re-key reference_entity uniqueness on external_id (K-D2 rev2)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_migration_57_distinct_same_named_orgs_coexist(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Migration 57: two DISTINCT codes sharing a canonical_name both persist.
+
+    The blocker the K-D2 review caught: under migration 41's
+    ``(canonical_name, source_vocabulary)`` UNIQUE index, the two "Bergen"
+    gemeenten (gm0373 / gm0893) collapsed into one row at ingest. Migration 57
+    re-keys uniqueness on ``(external_id, source_vocabulary)`` so both survive;
+    a lookup by the shared name returns BOTH (the ambiguity the reconciler needs).
+    """
+    from surrealdb_service.repositories.reference_entity import (
+        ReferenceEntityRepository,
+    )
+
+    repo = ReferenceEntityRepository(config=live_surrealdb)
+    name = _unique("Bergen")
+    src = _unique("tooi").replace("-", "")
+
+    def _row(code: str, soort_suffix: str) -> dict:
+        return {
+            "canonical_name": name,
+            "entity_type": "organization",
+            "source_vocabulary": src,
+            "external_uri": f"https://identifier.overheid.nl/tooi/id/gemeente/{code}",
+            "external_id": code,
+            "aliases": [f"Bergen ({soort_suffix})"],
+            "properties": {"soort": "gemeente"},
+        }
+
+    code_a = _unique("gm").replace("-", "")
+    code_b = _unique("gm").replace("-", "")
+    loaded = await repo.bulk_load([_row(code_a, "NH"), _row(code_b, "L")])
+    assert loaded == 2  # both persisted (count not collapsed)
+
+    rows = await repo.lookup_by_name(name, source=src)
+    assert len(rows) == 2  # distinct orgs coexist under the shared name
+    assert {r["external_id"] for r in rows} == {code_a, code_b}
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_migration_57_idempotent_upsert_on_external_id(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Re-loading the same external_id (different name) UPDATEs the one row.
+
+    The upsert key is now ``external_id``: a second load of the same code with a
+    refreshed display name updates in place (no duplicate), and a re-apply of
+    migration 57's body (OVERWRITE) does not raise.
+    """
+    from surrealdb_service.repositories.reference_entity import (
+        ReferenceEntityRepository,
+    )
+    from surrealdb_service.testing import fixtures as fx
+
+    repo = ReferenceEntityRepository(config=live_surrealdb)
+    src = _unique("tooi").replace("-", "")
+    code = _unique("mnre").replace("-", "")
+
+    base = {
+        "canonical_name": _unique("Original Name"),
+        "entity_type": "organization",
+        "source_vocabulary": src,
+        "external_uri": f"https://identifier.overheid.nl/tooi/id/ministerie/{code}",
+        "external_id": code,
+        "aliases": ["ABC"],
+        "properties": {},
+    }
+    await repo.bulk_load([base])
+    renamed = dict(base, canonical_name=_unique("Renamed"))
+    await repo.bulk_load([renamed])
+
+    rows = await execute_query(
+        "SELECT canonical_name FROM reference_entity "
+        "WHERE external_id = $eid AND source_vocabulary = $src;",
+        {"eid": code, "src": src},
+        config=live_surrealdb,
+    )
+    assert len(rows) == 1  # one row, updated in place (keyed on external_id)
+    assert rows[0]["canonical_name"] == renamed["canonical_name"]
+
+    # Re-applying the forward migration body (OVERWRITE) must not raise.
+    migration_sql = (fx._MIGRATIONS_DIR / "57.surrealql").read_text()
+    await execute_query(migration_sql, config=live_surrealdb)

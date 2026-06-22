@@ -18,6 +18,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from shared.vocabulary.crossref_provider import CrossrefProvider
+from shared.vocabulary.tooi_bulk import TOOIBulkFetcher
 from shared.vocabulary.tooi_provider import TOOIProvider
 from surrealdb_service.repositories.reference_entity import (
     ReferenceEntityRepository,
@@ -33,8 +34,22 @@ def _crossref_contact() -> str:
 
 
 def _tooi_source() -> Optional[str]:
-    """Optional bulk-file path for TOOI (K-D2). None → bundled verified seed."""
+    """Operator bulk-file path for TOOI (K-D2). Set → overrides the remote fetch."""
     return os.environ.get("TOOI_BULK_SOURCE") or None
+
+
+def _tooi_bulk_fetcher() -> Optional[TOOIBulkFetcher]:
+    """The live TOOI registers fetcher — the resolved K-D2 full-vocabulary source.
+
+    Attached by default so ``refresh`` pulls the full government-organisation set
+    from ``repository.officiele-overheidspublicaties.nl`` (fail-soft → seed if the
+    registers are unreachable). An operator file (``TOOI_BULK_SOURCE``) takes
+    priority over it; ``TOOI_DISABLE_REMOTE=1`` opts out of any network entirely
+    (seed/file only — e.g. an air-gapped deploy).
+    """
+    if os.environ.get("TOOI_DISABLE_REMOTE", "").strip() in {"1", "true", "yes"}:
+        return None
+    return TOOIBulkFetcher(contact_email=_crossref_contact())
 
 
 # --- Schemas -----------------------------------------------------------------
@@ -81,7 +96,11 @@ async def refresh_vocabulary(
     results: List[ProviderRefreshOut] = []
 
     if wanted is None or "tooi" in wanted:
-        tooi = TOOIProvider(repo, source=_tooi_source())
+        tooi = TOOIProvider(
+            repo,
+            source=_tooi_source(),
+            bulk_fetcher=_tooi_bulk_fetcher(),
+        )
         loaded = await tooi.refresh()
         results.append(ProviderRefreshOut(name="tooi", loaded=loaded))
 

@@ -1,0 +1,10 @@
+-- Migration 57 down: restore the migration-41 name-keyed uniqueness.
+--
+-- Reverts the stable-id re-key: drop the new external_id UNIQUE index and put
+-- the name-based UNIQUE index back the way migration 41 defined it. Idempotent
+-- via OVERWRITE / IF EXISTS.
+
+REMOVE INDEX IF EXISTS idx_ref_extid_source ON reference_entity;
+
+DEFINE INDEX OVERWRITE idx_ref_name_source ON reference_entity
+    FIELDS canonical_name, source_vocabulary UNIQUE;
