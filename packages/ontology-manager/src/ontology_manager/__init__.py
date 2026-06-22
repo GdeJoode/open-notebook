@@ -21,6 +21,10 @@ from ontology_manager.evolution import (
 )
 from ontology_manager.manager import OntologyManager, get_ontology_manager
 from ontology_manager.prompts import OntologyPromptGenerator
+from ontology_manager.canonical_bridge import (
+    CanonicalResolution,
+    resolve_ontology_type,
+)
 from ontology_manager.registry import OntologyRegistry, get_ontology_registry
 from ontology_manager.schema import (
     Cardinality,
@@ -67,6 +71,9 @@ __all__ = [
     # Registry
     "OntologyRegistry",
     "get_ontology_registry",
+    # Canonical bridge (L.1)
+    "CanonicalResolution",
+    "resolve_ontology_type",
     # Prompts
     "OntologyPromptGenerator",
     # Validator
