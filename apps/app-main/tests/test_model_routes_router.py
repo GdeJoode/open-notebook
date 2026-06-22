@@ -214,6 +214,89 @@ class TestUpdateModelRoute:
         repo.upsert.assert_awaited_once()
 
 
+class TestRoutingSummary:
+    """The per-notebook recent-routing summary (Track J.6 telemetry surface)."""
+
+    def _patch_metrics(self, monkeypatch, rows, captured=None):
+        """Patch the lazily-imported execute_query to return canned metric rows.
+
+        ``captured`` (optional dict) records the params the query was called with
+        so a test can assert the notebook filter was threaded.
+        """
+
+        async def _fake_execute_query(query, params=None):
+            if captured is not None:
+                captured["query"] = query
+                captured["params"] = params
+            return rows
+
+        import surrealdb_service.connection as conn
+
+        monkeypatch.setattr(conn, "execute_query", _fake_execute_query)
+
+    def test_summary_classifies_cloud_vs_local_and_fallback(self, monkeypatch):
+        rows = [
+            {"payload": {"served_provider": "nvidia", "task": "summarization",
+                         "was_failover": False}},
+            {"payload": {"served_provider": "ollama", "task": "entity_extraction",
+                         "was_failover": True, "fallback_from": ["nvidia"]}},
+            {"payload": {"served_provider": "ollama", "task": "chat",
+                         "was_failover": False}},
+        ]
+        self._patch_metrics(monkeypatch, rows)
+        client = _make_app()
+
+        resp = client.get("/api/model-routes/summary")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_events"] == 3
+        assert body["cloud_count"] == 1  # nvidia
+        assert body["local_count"] == 2  # two ollama
+        assert body["fallback_count"] == 1
+        assert body["by_provider"] == {"nvidia": 1, "ollama": 2}
+        assert body["by_task"] == {
+            "summarization": 1,
+            "entity_extraction": 1,
+            "chat": 1,
+        }
+        assert body["notebook_id"] is None
+
+    def test_summary_scoped_to_notebook_threads_filter(self, monkeypatch):
+        captured: dict = {}
+        rows = [
+            {"payload": {"served_provider": "ollama", "task": "chat",
+                         "was_failover": False}},
+        ]
+        self._patch_metrics(monkeypatch, rows, captured=captured)
+        client = _make_app()
+
+        resp = client.get("/api/model-routes/summary?notebook_id=notebook:abc")
+
+        assert resp.status_code == 200
+        assert resp.json()["notebook_id"] == "notebook:abc"
+        # The notebook filter must reach the query params.
+        assert captured["params"]["notebook"] == "notebook:abc"
+        assert "notebook = $notebook" in captured["query"]
+
+    def test_summary_telemetry_failure_returns_zeroed(self, monkeypatch):
+        async def _boom(query, params=None):
+            raise RuntimeError("metrics table gone")
+
+        import surrealdb_service.connection as conn
+
+        monkeypatch.setattr(conn, "execute_query", _boom)
+        client = _make_app()
+
+        resp = client.get("/api/model-routes/summary")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_events"] == 0
+        assert body["cloud_count"] == 0
+        assert body["local_count"] == 0
+
+
 class TestModelRouteHealth:
 
     def test_health_reports_configured_and_circuit_state(self, monkeypatch):

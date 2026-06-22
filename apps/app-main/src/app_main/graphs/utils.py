@@ -44,6 +44,14 @@ async def provision_langchain_model(
     single model and emitting on a second provider would double-emit tokens.
     Runtime/mid-stream chat failover is explicitly out of scope for V1 (J-D4).
 
+    Track J.6 (FU-J4-1): when a candidate constructs we emit one
+    ``routing.served`` telemetry event for the served provider/model, closing the
+    chat telemetry gap J.4 left open. ``was_failover`` is True when an earlier
+    candidate failed to construct and we fell back to a later one; ``fallback_from``
+    names the providers that failed construction. This is construction-time
+    provenance only — a runtime/mid-stream chat error is not a failover here
+    (J-D4) and is therefore not recorded as one.
+
     A large content (> 105k tokens) forces the large-context head model id when
     one is configured (preserving the pre-J behavior), but still resolves
     through the CHAT route so the local fallback + privacy mode still apply.
@@ -86,6 +94,9 @@ async def provision_langchain_model(
 
     manager = _get_model_manager()
     last_error: Exception | None = None
+    # Providers whose construction failed before the served one — the chat
+    # equivalent of the executor's fallback trail (FU-J4-1 telemetry).
+    fallback_from: list[str] = []
 
     # Stream-start failover: build the first candidate that constructs cleanly.
     for candidate in route.ordered_candidates:
@@ -105,9 +116,16 @@ async def provision_langchain_model(
             logger.debug(
                 f"chat route: using {candidate.provider}/{candidate.model_id}"
             )
+            await _record_chat_routing_event(
+                task=task,
+                served_provider=candidate.provider,
+                served_model_id=candidate.model_id,
+                fallback_from=fallback_from,
+            )
             return model.to_langchain()
         except Exception as e:  # noqa: BLE001 — try the next candidate at start
             last_error = e
+            fallback_from.append(candidate.provider)
             logger.warning(
                 f"chat route: {candidate.provider}/{candidate.model_id} failed "
                 f"to construct ({e}); trying next candidate"
@@ -116,3 +134,32 @@ async def provision_langchain_model(
     raise RuntimeError(
         f"All chat route candidates failed to construct for {task}: {last_error}"
     )
+
+
+async def _record_chat_routing_event(
+    *,
+    task,
+    served_provider: str,
+    served_model_id,
+    fallback_from: list[str],
+) -> None:
+    """Emit the chat ``routing.served`` telemetry event (FU-J4-1).
+
+    Mirrors the extraction/summarization callers' provenance write so the J.5
+    health endpoint's recent-fallback counts and the per-notebook routing
+    summary see chat the same way they see the other two stages. Best-effort:
+    ``record_routing_event`` already swallows its own failures, but we guard the
+    call too so a telemetry hiccup can never break chat model construction.
+    """
+    from app_main.services.model_routing.telemetry import record_routing_event
+
+    try:
+        await record_routing_event(
+            task=task,
+            served_provider=served_provider,
+            served_model_id=served_model_id,
+            was_failover=bool(fallback_from),
+            fallback_from=list(fallback_from),
+        )
+    except Exception as e:  # noqa: BLE001 — telemetry never fails the chat path
+        logger.warning(f"chat routing telemetry write failed (ignored): {e}")

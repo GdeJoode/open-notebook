@@ -98,6 +98,29 @@ class ModelRouteHealthResponse(BaseModel):
     providers: List[ProviderHealth]
 
 
+class RoutingSummaryResponse(BaseModel):
+    """A 'recent routing' summary, optionally scoped to one notebook.
+
+    Aggregates the J.4/J.6 ``routing.served`` telemetry so the UI can show, at a
+    glance, how much of recent LLM work ran on cloud vs local and how often a
+    provider was failed over.
+    """
+
+    total_events: int = Field(0, description="routing.served events in the window")
+    cloud_count: int = Field(0, description="events served by a cloud provider")
+    local_count: int = Field(0, description="events served by a local provider")
+    fallback_count: int = Field(0, description="events that involved a failover")
+    by_provider: Dict[str, int] = Field(
+        default_factory=dict, description="served-event count per provider"
+    )
+    by_task: Dict[str, int] = Field(
+        default_factory=dict, description="served-event count per task"
+    )
+    notebook_id: Optional[str] = Field(
+        None, description="notebook the summary is scoped to, or null for global"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
@@ -279,6 +302,72 @@ async def model_route_health(
             )
         )
     return ModelRouteHealthResponse(providers=providers)
+
+
+@router.get("/summary", response_model=RoutingSummaryResponse)
+async def routing_summary(
+    notebook_id: Optional[str] = None,
+    limit: int = 200,
+) -> RoutingSummaryResponse:
+    """Recent-routing summary (cloud-vs-local + fallback counts), per-notebook.
+
+    Reads the recent ``routing.served`` telemetry — optionally filtered to one
+    notebook — and tallies cloud-vs-local served counts, failover events, and a
+    per-provider / per-task breakdown. Cloud-vs-local is derived from the served
+    provider's registry ``is_local`` flag (the same classification the resolver
+    uses), so a provider seeded after this code still classifies correctly.
+
+    Best-effort: a telemetry read failure returns a zeroed summary rather than
+    failing the endpoint — the routing path itself is unaffected.
+    """
+    from app_main.services.model_routing.route_resolver import _provider_is_local
+
+    # Bound the scan window so a caller can't request an unbounded telemetry read.
+    limit = max(1, min(limit, 1000))
+
+    try:
+        from surrealdb_service.connection import execute_query
+
+        if notebook_id:
+            rows = await execute_query(
+                "SELECT payload FROM metrics "
+                "WHERE event_type = 'routing.served' AND notebook = $notebook "
+                "ORDER BY created DESC LIMIT $limit;",
+                {"notebook": notebook_id, "limit": limit},
+            )
+        else:
+            rows = await execute_query(
+                "SELECT payload FROM metrics WHERE event_type = 'routing.served' "
+                "ORDER BY created DESC LIMIT $limit;",
+                {"limit": limit},
+            )
+    except Exception as e:  # noqa: BLE001 — summary must not fail on telemetry
+        logger.warning(f"model-routes summary: telemetry read failed: {e}")
+        return RoutingSummaryResponse(notebook_id=notebook_id)
+
+    summary = RoutingSummaryResponse(notebook_id=notebook_id)
+    by_provider: Dict[str, int] = {}
+    by_task: Dict[str, int] = {}
+    for row in rows or []:
+        payload = row.get("payload") or {}
+        provider = payload.get("served_provider")
+        if not provider:
+            continue
+        summary.total_events += 1
+        if _provider_is_local(provider):
+            summary.local_count += 1
+        else:
+            summary.cloud_count += 1
+        if payload.get("was_failover"):
+            summary.fallback_count += 1
+        by_provider[provider] = by_provider.get(provider, 0) + 1
+        task = payload.get("task")
+        if task:
+            by_task[task] = by_task.get(task, 0) + 1
+
+    summary.by_provider = by_provider
+    summary.by_task = by_task
+    return summary
 
 
 async def _recent_fallback_counts(limit: int = 200) -> Dict[str, int]:

@@ -216,3 +216,37 @@ Privacy was resolved with `notebook_id=None`, so a notebook set to `privacy_mode
 | J.5 | UI: routing config + privacy toggles + health | — | `track/j5-ui` | 2026-06-22 | adversarial-reviewer APPROVED (attempt 2; 1 major fixed: private_chain local-only PUT validation). 19 backend + 38 frontend + 2 E2E green. |
 
 **Track J UI complete.** Routing config + layered privacy toggles + provider health are now editable in the UI (no DB edits). Remaining: J.6 (integration/E2E/operator docs). Next user-requested focus: **entity deduplication** (the V1-normalizer resolution work from B.8c — a new track).
+
+| J.6 | integration + telemetry + E2E + operator docs | (pending) | `track/j6-integration` | 2026-06-22 | IMPLEMENTED — all 4 ACs met. FU-J4-1 chat telemetry closed; per-notebook routing summary endpoint + UI surface; 3 E2E headline scenarios (failover/private/no-cloud) green; B.8 + guardrail regression sweep green (146 passed/3 skipped); operator guide + ARCHITECTURE routing section + roadmap-complete. Ready for review. |
+
+### J.6 implementation notes (2026-06-22)
+
+**Scope delivered** (plan §"Phase J.6"): integration glue, per-task telemetry finalization, the three E2E headline scenarios, and operator docs. Branch `track/j6-integration` off `main` (J.1-J.5 + FU-J4-4 merged).
+
+**FU-J4-1 closed — chat-path routing telemetry** (`graphs/utils.py::provision_langchain_model`): J.4 left chat the one routed stage with no `routing.served` write (extraction + summarization stamped theirs). J.6 emits one event when a candidate constructs, carrying the served provider/model + a **construction-time** fallback trail (`was_failover`/`fallback_from` = providers that failed to construct before the served one). Guarded so a telemetry hiccup can never break chat construction. Runtime/mid-stream chat failover stays out of scope (J-D4) and is therefore not recorded as a failover. `test_chat_routing_telemetry.py` (+3): no-failover event, construction-failure fallback event, telemetry-failure-does-not-break-construction. The test loads `graphs/utils` via importlib (the `app_main.graphs` package `__init__` eagerly imports sibling modules needing the optional `ai_prompter`, absent in the unit-test env; `utils` itself has no such dep).
+
+**Telemetry surface — per-notebook recent-routing summary**:
+- Backend: `GET /api/model-routes/summary[?notebook_id=...]` (`api/routers/model_routes.py`) aggregates `routing.served` into `cloud_count`/`local_count`/`fallback_count` + `by_provider`/`by_task`, optionally scoped to one notebook. Cloud-vs-local is derived from the served provider's registry `is_local` flag (`_provider_is_local`, the resolver's own classification). Best-effort: a telemetry read failure returns a zeroed summary, never failing the endpoint. `test_model_routes_router.py` (+3): cloud/local/fallback classification, notebook-filter threading, telemetry-failure→zeroed.
+- Frontend: `RoutingSummary` type + `modelRoutingApi.summary()` + `useRoutingSummary()` (polls like the health hook) + `RoutingSummaryCard` (default/loading/error/empty states, aria-labelled stat tiles), surfaced on `/settings/model-routing`. E2E spec extended to mock the summary route + assert the rendered counts. Changed frontend files eslint-clean.
+
+**E2E — the three headline guarantees** (`test_routing_e2e.py`, mocked SDKs, no live NIM): unlike the per-phase unit tests (which inject a pre-built `ResolvedRoute`), these resolve the route from a **real `RouteResolver`** (fake repos + env keys) and run it through the **real failover executor + error mapping + telemetry**, so resolution→failover→telemetry is proven together. (1) forced-outage: nvidia 503 → extraction completes on local, telemetry records the fallback with source/notebook scope; (2) private-never-cloud: a PRIVATE run never constructs a cloud model even with a cloud key present AND nvidia first in the persisted chain (factory-build spy asserts `built == ["ollama"]`); (3) no-cloud→local: keyless `NVIDIA_API_KEY` + mode CLOUD → resolution drops to a single-entry local route and runs on local.
+
+**Regression sweep (AC2)**: B.8 extraction suite (`test_entity_extraction_service` + `test_entity_persistence_service`) + §1.2 guardrail (`test_embedding_local_guardrail`) + all J phases (`test_route_resolver`/`test_privacy_resolver`/`test_failover_executor`/`test_circuit_breaker`/`test_error_mapping`/`test_routed_extraction`/`test_routed_summarization`/`test_extraction_json_mode`) run together = **146 passed, 3 skipped** (the skips are `requires_docker`). B.8 + I.G-guardrail + J.1-J.5 contracts intact. Final combined router/telemetry/guardrail set = 62 passed. `create_app()` constructs cleanly.
+
+**Docs**:
+- `docs/tracks/J-model-routing/OPERATOR_GUIDE.md` — the operator runbook: env keys (`NVIDIA_API_KEY`/`NVIDIA_BASE_URL`), the layered/sticky privacy model + the what-leaves-the-box table, the embeddings/parsing-local invariant, the provider-chain config UI, enable/disable a provider, the **fair-use caution** (extraction→local, summarization→cloud — the live-test lesson; rate-limiter + backoff + saturation→local-without-breaker-penalty), and a live smoke checklist.
+- `ARCHITECTURE.md` §8 — the model-routing service, the three-stage routing diagram (resolver → failover/breaker/rate-limiter → telemetry), and the local-embeddings/parsing blocking invariant.
+- `.env.example` — `NVIDIA_API_KEY` / `NVIDIA_BASE_URL` entries.
+- `docs/FEATURE_ROADMAP.md` — Track J marked ✅ COMPLETE with the J.1-J.6 ledger.
+
+**Lint**: changed `*.py` (`graphs/utils.py`, `model_routes.py`, 3 test files) ruff-clean; changed frontend files eslint-clean.
+
+**Deferred / environment notes**:
+- **Live-key E2E** (AC1's live path): the 3 scenarios pass with mocked SDKs in CI; the real NIM path is the `OPERATOR_GUIDE.md` §5 manual smoke checklist (no cloud keys/worker in this harness) — mirrors Track D's `E2E_EVIDENCE` precedent.
+- **Frontend full verify**: the worktree's `frontend/node_modules` is not provisioned (no vitest/vite/react types installed — same WSL gap J.5 flagged). Changed frontend files are eslint-clean and mirror the existing health hook/api/component patterns exactly; full vitest/tsc/Playwright run needs the dep tree + a Next dev server (J.5's stale-manifest caveat).
+- **FU-J4-2** (`error_mapping._STATUS_IN_MESSAGE_RE` 400-with-5xx-in-body edge): **kept documented, not fixed** — out of J.6 scope (it is an error-classification refinement, not an integration/telemetry/E2E/docs item; disambiguating "the HTTP status" from "a number in the body" risks the existing 24 mapping cases). Remains a follow-up.
+- **J-D3** (in-process breaker, multi-worker divergence): documented in `OPERATOR_GUIDE.md` §3 as a known V1 limitation, per the plan.
+
+**Track J COMPLETE (J.1-J.6).** Cloud/local routing with per-document failover, layered sticky-private privacy, fair-use rate limiting, full per-task telemetry, and operator docs. Embeddings + parsing remain local-and-fixed (768-dim invariant intact).
+
+**J.6 rev2**: review found the ollama base-URL env var mismatch — registry declared `OLLAMA_BASE_URL` but the app/compose/esperanto use `OLLAMA_API_BASE` (and the factory early-returns for local providers so it never threaded the registry var; runtime was fine, the declaration was dead/misleading). Aligned the registry to `OLLAMA_API_BASE`; bounded the /summary limit. create_app OK, 15 routing tests green. APPROVED-equivalent (focused 2-line fix verified).
