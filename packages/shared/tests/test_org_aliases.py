@@ -74,7 +74,7 @@ class TestTypeSafety:
         # name (so it cannot collide with a bare single-token concept). The
         # single-word ministries (financien, defensie) are full org names, not
         # ambiguous concept tokens, and are allow-listed here.
-        single_word_orgs = {"financien", "defensie"}
+        single_word_orgs = {"financiën", "defensie"}
         for canonical in set(_GOV_ORG_ALIASES.values()):
             if " " not in canonical:
                 assert canonical in single_word_orgs, (
@@ -119,6 +119,19 @@ class TestOverrideConfig:
         assert normalize("Min AZ") == "algemene zaken"
         # And it converges with the built-in AZ forms.
         assert normalize("Min AZ") == normalize("Ministerie van AZ")
+
+    def test_override_shadows_builtin_last_wins(self, _reload):
+        """K.2 rev2 precedence decision: an override that re-keys a built-in
+        SHADOWS it (last-wins), it is not ignored.
+
+        Alias overrides are operator configuration; the chosen semantics let an
+        operator retarget a built-in mapping without a code release. This pins
+        that decision: re-keying the built-in ``bzk`` replaces its canonical.
+        """
+        normalize = _reload({"BZK": "Some Other Canonical"})
+        assert normalize("BZK") == "some other canonical"
+        # The built-in canonical is no longer what ``bzk`` resolves to.
+        assert normalize("BZK") != "binnenlandse zaken en koninkrijksrelaties"
 
     def test_empty_key_or_value_rejected(self, _reload):
         import shared.config.alias_overrides as overrides
@@ -176,3 +189,32 @@ class TestNormalizeEntityNameIntegration:
 
         assert n("Ministerie van Onderwijs") != n("Onderwijs")
         assert n("Ministerie van OCW") != n("Onderwijs")
+
+    def test_financien_diacritic_forms_collapse(self):
+        """K.2 rev2 BLOCKER fix: the diacritic-bearing Financiën surface forms
+        must reach the same canonical.
+
+        ``normalize_entity_name`` does NOT strip diacritics, so the real surface
+        forms arrive WITH the ``ë``. Before the fix the table was keyed ASCII-only
+        and these never matched, fragmenting the ministry into three canonicals.
+        Both the official diacritic spelling and the plausible ASCII user variant
+        must now resolve to the single ``financiën`` canonical.
+        """
+        from shared.utils.name_normalizer import normalize_entity_name as n
+
+        canonical = "financiën"
+        assert n("Financiën") == canonical
+        assert n("Ministerie van Financiën") == canonical
+        assert n("fin") == canonical
+        # The plausible ASCII user-typed spelling resolves to the SAME canonical.
+        assert n("Financien") == canonical
+        assert n("Ministerie van Financien") == canonical
+        # All five forms collapse to exactly one canonical.
+        forms = {
+            n("Financiën"),
+            n("Ministerie van Financiën"),
+            n("fin"),
+            n("Financien"),
+            n("Ministerie van Financien"),
+        }
+        assert forms == {canonical}

@@ -1,15 +1,26 @@
 """Extensible operator/user alias overrides for the org-alias layer (K.2).
 
-The built-in :data:`shared.utils.org_aliases._GOV_ORG_ALIASES` is the *floor*.
-Operators/users extend it without a code change through this loader, which
-merges three layers (lowest → highest precedence):
+The built-in :data:`shared.utils.org_aliases._GOV_ORG_ALIASES` is the *baseline*.
+Operators/users extend OR override it without a code change through this loader,
+which merges three layers (lowest → highest precedence):
 
-1. **Built-in** — the curated NL-ministry allow-list.
+1. **Built-in** — the curated NL-ministry allow-list (the baseline).
 2. **File** — a JSON object ``{alias: canonical}`` at the path given by
    ``ONB_ALIAS_OVERRIDES_PATH`` (default: ``alias_overrides.json`` in CWD, only
    loaded if present). The file-based default config source.
 3. **DB overlay** — a runtime-injectable dict, the seam for K.5's per-notebook /
    global ``alias_overlay`` table. Empty until K.5 wires it.
+
+Precedence: LAST-WINS, deliberately (K.2 rev2 decision)
+=======================================================
+A higher layer that re-keys a built-in alias **shadows** it — e.g. an override
+``{"bzk": "…"}`` replaces the built-in ``bzk`` canonical rather than being
+ignored. This is intentional: alias overrides are *operator configuration*, and
+the most useful semantics let an operator correct or retarget a built-in mapping
+(or a curation mistake) without waiting for a code release. The built-in is the
+*baseline an operator inherits when they say nothing*, not an immutable floor.
+Adding a brand-new key and overriding an existing one are both supported; the
+:func:`_build_resolved` merge order (built-in → file → db) pins the resolution.
 
 Validation on load (the user-input surface the K.2 plan flags)
 ==============================================================
@@ -99,7 +110,12 @@ def _validated(raw: dict[str, str], *, source: str) -> dict[str, str]:
 
 
 def _build_resolved() -> dict[str, str]:
-    """Merge the three layers into the resolved alias map (later wins)."""
+    """Merge the three layers into the resolved alias map (later wins).
+
+    Last-wins is deliberate (see module docstring): a file/DB override that
+    re-keys a built-in alias shadows it, letting operator config retarget a
+    built-in mapping without a code change.
+    """
     resolved: dict[str, str] = dict(_GOV_ORG_ALIASES)
     resolved.update(_validated(_load_file_overrides(), source="file"))
     resolved.update(_validated(_db_overlay, source="db"))

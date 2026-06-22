@@ -36,8 +36,9 @@ Keys and values are **post-K.1-normalized** (lowercased, whitespace-collapsed,
 article-stripped, spelling-canonicalized), because :func:`expand_org_alias` runs
 *after* those stages in ``normalize_entity_name``. See that module for ordering.
 
-Operator/user-supplied aliases extend this floor at load time via
-:mod:`shared.config.alias_overrides`; this built-in map is the floor.
+Operator/user-supplied aliases extend OR override this baseline at load time via
+:mod:`shared.config.alias_overrides`. Precedence is last-wins (operator config can
+intentionally shadow a built-in mapping); see that module for the rationale.
 """
 
 from __future__ import annotations
@@ -98,10 +99,20 @@ _GOV_ORG_ALIASES: dict[str, str] = {
     "buza": "buitenlandse zaken",
     "ministerie van buza": "buitenlandse zaken",
     "ministerie van buitenlandse zaken": "buitenlandse zaken",
-    # Financiën
-    "fin": "financien",
-    "ministerie van fin": "financien",
-    "ministerie van financien": "financien",
+    # Financiën — the ONLY ministry with a diacritic in its official name. The
+    # normalizer does NOT strip diacritics (a deliberate collision-safety choice:
+    # an ASCII fold would change ALL normalization), so the real surface forms
+    # arrive WITH the ``ë``. The canonical is therefore the diacritic-bearing
+    # ``financiën`` (the official spelling), and we key BOTH spellings — the real
+    # ``financiën`` forms and the plausible ASCII user-typed ``financien`` forms —
+    # so either resolves to the one canonical. The abbreviation ``fin`` likewise
+    # maps to the diacritic canonical, not a stranded ASCII value.
+    "fin": "financiën",
+    "ministerie van fin": "financiën",
+    "financiën": "financiën",
+    "ministerie van financiën": "financiën",
+    "financien": "financiën",
+    "ministerie van financien": "financiën",
     # Defensie
     "def": "defensie",
     "ministerie van def": "defensie",
