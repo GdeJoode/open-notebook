@@ -18,6 +18,8 @@ import uuid
 import pytest
 
 from surrealdb_service.config import SurrealDBConfig
+from surrealdb_service.connection import execute_query
+from surrealdb_service.repositories.entity import EntityRepository
 from surrealdb_service.repositories.reference_entity import (
     ReferenceEntityRepository,
 )
@@ -99,3 +101,35 @@ async def test_last_validated_stamped(live_surrealdb: SurrealDBConfig) -> None:
 
     stamp = await repo.last_validated(src)
     assert stamp is not None
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_update_external_ids_unions_onto_entity(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """K.4 persistence: external_ids/aliases union onto an entity (migration 55)."""
+    name = _u("BZK-entity")
+    rows = await execute_query(
+        "CREATE entity SET canonical_name = $n, name = $n, "
+        "entity_type = 'organization', embedding = [], status = 'active';",
+        {"n": name},
+        config=live_surrealdb,
+    )
+    eid = str(rows[0]["id"])
+
+    repo = EntityRepository(config=live_surrealdb)
+    uri = "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+    ok = await repo.update_external_ids(eid, [uri], ["BZK"])
+    assert ok is True
+
+    ent = await repo.get_entity(eid)
+    assert ent is not None
+    assert ent.external_ids == [uri]
+    assert "BZK" in ent.aliases
+
+    # Idempotent / union: re-applying the same URI does not duplicate it.
+    await repo.update_external_ids(eid, [uri], ["BZK"])
+    ent2 = await repo.get_entity(eid)
+    assert ent2 is not None
+    assert ent2.external_ids == [uri]
