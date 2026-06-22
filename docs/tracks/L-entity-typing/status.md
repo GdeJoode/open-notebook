@@ -7,6 +7,35 @@ Append-only ledger. One row per phase attempt.
 | — | (planning) | — | — | 2026-06-22 | track-planner producing plan.md |
 | L.1 | Ontology→canonical bridge + preserve rich type | — | `track/l1-canonical-bridge` | 2026-06-22 | implemented — ready for review |
 | L.2 | Curated EN+NL residual alias map + non-silent unknown-label fallback | — | `track/l2-nl-aliases` | 2026-06-22 | implemented — ready for review |
+| L.3 | Add `programme` + `technology` canonical types (NO migration — 50 already relaxed live enum) | — | `track/l3-enum-types` | 2026-06-22 | implemented — ready for review |
+
+## Phase L.3 — implemented (2026-06-22)
+
+**Scope (verified):** PURE CODE change — **no migration written**. Migration 50 (B.8) already dropped the `entity_type` ASSERT (`migrations/50.surrealql:29` = `DEFINE FIELD OVERWRITE entity_type ON entity TYPE string;`, no ASSERT). The live DB accepts any `entity_type` string; the enum is enforced ONLY in code (`_ALLOWED_ENTITY_TYPES` + the runtime re-pin guard). The plan's assumed migration 58 would have been a no-op — confirmed NOT added (highest migration stays 57).
+
+**Two canonical types added:**
+- `programme` — coarse projection for the deals stack (`Deal` / `RegioDeal` / `Programma` / `Project` / `GovernmentService`).
+- `technology` — for `Technology` / `Technologie`.
+
+**Changes:**
+- `entity_persistence_service._ALLOWED_ENTITY_TYPES`: `+ {"programme", "technology"}`. This is the only switch needed — the L.2 aliases (`technologie→technology`; `programma`/`regiodeal`/`deal`/`project→programme`) and the L.1 bridge already emit these targets; they were re-pinned to `other` by the runtime guard until this set included them. Now they pass through.
+- `canonical_bridge._CANONICAL_BY_SCHEMA_ORG`: `Deal` / `GovernmentService` → `programme` (were the L.1 interim `creative_work`). Added `TechArticle` / `Technology` / `SoftwareApplication` → `technology` (the `general` ontology's `Technology` type declares `schema_org_type: schema:TechArticle`, so it bridges via the schema_org_type path; `Technology` / `SoftwareApplication` mapped too for any ontology rooting a tech type at those bases). No Dutch literals — all keys English schema.org identifiers (grep-guard green).
+
+**Per-AC verified:**
+- AC1: `programme`/`technology` ∈ `_ALLOWED_ENTITY_TYPES`; `{label:"RegioDeal"}` (deals) → `entity_type=="programme"` (not `other`, not `creative_work`), `primary_type=="RegioDeal"`, `"Deal"` in tags.
+- AC2: `{label:"Technologie"}` (residual alias) → `entity_type=="technology"`, `primary_type=="Technologie"`.
+- AC3: a `programme` (RegioDeal) and a `technology` (Technologie) entity persist through `persist_filtered_result` with that exact `entity_type` — the runtime guard accepts them (no re-pin). Asserted on the upserted `Entity`.
+- AC4: NO migration added — confirmed (`ls migrations` highest = 57). Migration 50 is the source of truth for the relaxed live constraint.
+- AC5 (L-D1): **extend-enum** chosen (plan's recommendation). `entity_type` stays the coarse canonical projection (now incl. `programme`/`technology`); `primary_type`/`type_tags` hold the rich ontology type. NOT ontology-type-as-`entity_type` (which would explode `entity_type` cardinality and change the B.8 `(canonical_name, entity_type)` dedup granularity / `hash_id`). Documented here.
+
+**B.8 contract:** every emitted `entity_type ∈ _ALLOWED_ENTITY_TYPES`; the `hash_id = md5(canonical_name|entity_type)` derive-rule is UNCHANGED (entity.py untouched). New-ingest RegioDeal/Technologie rows now land on `programme`/`technology` instead of `other` — existing rows untouched until L.5.
+
+**Tests (all green):** updated the L.1/L.2 "pending-L.3 / interim" assertions for activation —
+- `test_canonical_bridge.py`: RegioDeal→`programme` (was `creative_work`); added `TestProgrammeAndTechnology` (Deal/RegioDeal→programme, Technology→technology); schema.org allow-list `+ TechArticle/Technology/SoftwareApplication`.
+- `test_entity_type_aliases.py`: docstrings/comments updated (no longer "pending L.3 re-pin"); residual-layer assertions unchanged (always emitted the real targets).
+- `test_entity_persistence_service.py`: `test_regiodeal_includes_deal_parent` now `programme`; added `TestL3ProgrammeTechnologyActivation` (enum membership, no-`other` re-pin, parametrized deal/programme/technology labels) + two persist-path tests (programme/technology entity persists without re-pin).
+- Suite: `apps/app-main/tests/test_entity_persistence_service.py packages/shared/tests/test_entity_type_aliases.py packages/ontology-manager/tests/test_canonical_bridge.py packages/surrealdb-service/tests/test_entity_repository_roundtrip.py` → **99 passed, 0 fail**.
+- `from app_main.api.app import create_app` → OK. Ruff clean on changed files. hash_id rule unchanged.
 
 ## Phase L.2 — implemented (2026-06-22)
 
@@ -77,3 +106,5 @@ Append-only ledger. One row per phase attempt.
 | L.1 | ontology parent_type→canonical bridge + preserve rich type | — | `track/l1-canonical-bridge` | 2026-06-22 | adversarial-reviewer APPROVED (0 blockers/majors). Language-agnostic bridge (schema.org-base map; no Dutch, grep-guarded); primary_type/type_tags preserved; threaded schemas (no cross-source leak); B.8 hash_id contract byte-unchanged; canonical always in enum (+runtime guard). 60 tests. **L.6 note**: YAMLs declare `schema_org:` (URL) not the model `schema_org_type` → preference path latent, parent_type walk carries all; reconcile in L.6 (`canonical:` override). |
 
 | L.2 | curated EN+NL residual alias map + non-silent fallback | — | `track/l2-nl-aliases` | 2026-06-22 | adversarial-reviewer APPROVED (0 blockers/majors). Dutch aliases in one isolated module (grep-guarded); unmapped labels preserve raw in primary_type (not silent other); noise flagged non_type_label; 11/11 other-recovery (3 pending L.3 enum). technology/programme = option-a (alias→real target, guard re-pins until L.3). B.8 intact, 64 tests. |
+
+| L.3 | add programme + technology canonical types | — | `track/l3-enum-types` | 2026-06-22 | adversarial-reviewer APPROVED (0 blockers/majors). programme+technology added to code enum; bridge Deal/GovernmentService→programme + tech bases→technology. **NO migration** — migration 50 already dropped the live entity_type ASSERT (verified migrations 51-57 add none). L-D1 = extend-enum. L.1/L.2 tests activated (RegioDeal→programme, Technologie→technology). 99 tests. |

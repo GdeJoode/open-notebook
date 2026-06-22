@@ -34,10 +34,12 @@ from ontology_manager.schema import EntityTypeDefinition, Ontology
 # surface of the bridge: a label resolves through the ontology's declared
 # parent_type chain terminating on one of these names.
 #
-# L.3 will add ``programme`` / ``technology`` canonical types; until then
-# ``Deal`` / ``GovernmentService`` map to ``creative_work`` as a documented
-# INTERIM (a programme is a kind of creative work for dedup purposes). No
-# Dutch literals — every key is an English schema.org identifier.
+# L.3 added the ``programme`` / ``technology`` canonical types: ``Deal`` /
+# ``GovernmentService`` now bridge to ``programme`` (a deal / government service
+# IS a programme — previously the documented INTERIM ``creative_work``), and the
+# tech schema.org bases (``TechArticle`` / ``Technology`` / ``SoftwareApplication``)
+# bridge to ``technology``. No Dutch literals — every key is an English schema.org
+# identifier.
 _CANONICAL_BY_SCHEMA_ORG: dict[str, str] = {
     "AdministrativeArea": "administrative_area",
     "GovernmentOrganization": "government_organization",
@@ -55,10 +57,16 @@ _CANONICAL_BY_SCHEMA_ORG: dict[str, str] = {
     "Dataset": "dataset",
     "Grant": "grant",
     "Thing": "concept",
-    # INTERIM (L.3 introduces ``programme``): a deal / government service is a
-    # programme; until the canonical type exists it coarses to creative_work.
-    "Deal": "creative_work",
-    "GovernmentService": "creative_work",
+    # L.3: a deal / government service is a programme (was interim creative_work).
+    "Deal": "programme",
+    "GovernmentService": "programme",
+    # L.3: the technology canonical. ``TechArticle`` is the schema.org base the
+    # ``general`` ontology's ``Technology`` type declares (schema_org_type);
+    # ``Technology`` / ``SoftwareApplication`` are mapped too so an ontology that
+    # roots a tech type at either base bridges correctly.
+    "TechArticle": "technology",
+    "Technology": "technology",
+    "SoftwareApplication": "technology",
 }
 
 # Bound on the parent_type walk so an ontology authoring loop (or a very deep

@@ -146,6 +146,7 @@ Six phases. L.1-L.4 = backend typing fidelity; L.5 = retroactive re-typing (the 
 **Goal**: the domain needs canonical slots that don't exist: `programme` (`Deal`/`RegioDeal`/`Programma`/`Project`/`CityDeal`/`Woondeal`) and `technology` (`Technology`/`Technologie`, 59 entities). Add them to `_ALLOWED_ENTITY_TYPES` and **relax the live `entity_type` enum constraint** (the same operation migration 50 performed). Resolve the design choice between extending the enum vs accepting the ontology type directly (Decision L-D1).
 
 **Files to create**:
+- ~~`migrations/58.surrealql`~~ **SUPERSEDED (L.3 review): NO migration needed — migration 50 already dropped the live entity_type ASSERT (field is bare `string`); the enum is code-only. Original text below for history.**
 - `migrations/58.surrealql` + `migrations/58_down.surrealql` — relax the live `entity_type` `ASSERT $value INSIDE [...]` to include `programme`, `technology` (mirror migration 50's pattern exactly; the constraint lives on the live DB, not prior migrations — the migration brings it in line). `_down` restores the prior allow-list (no data loss; rows of the new types would fail the down-assert only if present — document the down caveat).
 - `packages/surrealdb-service/tests/test_migration_58_roundtrip.py` (testcontainers).
 

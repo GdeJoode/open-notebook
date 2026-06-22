@@ -476,8 +476,8 @@ class TestResolveEntityType:
 
     def test_regiodeal_includes_deal_parent(self):
         res = _resolve_entity_type("RegioDeal", [_deals_schema()])
-        # interim canonical until L.3 introduces ``programme``
-        assert res.entity_type == "creative_work"
+        # L.3: Deal/GovernmentService -> programme (was interim creative_work).
+        assert res.entity_type == "programme"
         assert res.primary_type == "RegioDeal"
         assert "Deal" in res.type_tags
 
@@ -520,6 +520,56 @@ class TestResolveEntityType:
         ]:
             res = _resolve_entity_type(label, [schema])
             assert res.entity_type in _ALLOWED_ENTITY_TYPES
+
+
+class TestL3ProgrammeTechnologyActivation:
+    """L.3: programme/technology are valid enum members — no more ``other`` re-pin.
+
+    Pre-L.3 the runtime enum-guard re-pinned ``technology`` / ``programme`` to
+    ``other`` because they were not in ``_ALLOWED_ENTITY_TYPES``. L.3 adds them,
+    so the L.1 bridge (Deal/GovernmentService -> programme) and the L.2 residual
+    alias (technologie -> technology) now land on the real canonical.
+    """
+
+    def test_enum_contains_programme_and_technology(self):
+        # AC1/AC2: the new canonical types are members of the code-side enum.
+        assert "programme" in _ALLOWED_ENTITY_TYPES
+        assert "technology" in _ALLOWED_ENTITY_TYPES
+
+    def test_regiodeal_bridge_lands_on_programme_not_other(self):
+        # AC1: {label: "RegioDeal"} (deals applied) -> programme via the
+        # Deal->GovernmentService chain; NOT other, NOT creative_work.
+        res = _resolve_entity_type("RegioDeal", [_deals_schema()])
+        assert res.entity_type == "programme"
+        assert res.entity_type != "other"
+        assert res.entity_type != "creative_work"
+        assert res.primary_type == "RegioDeal"
+
+    def test_technologie_residual_alias_lands_on_technology(self):
+        # AC2: {label: "Technologie"} with no schema applied -> the L.2 residual
+        # alias maps to ``technology`` and the guard no longer re-pins to other.
+        res = _resolve_entity_type("Technologie", None)
+        assert res.entity_type == "technology"
+        assert res.entity_type != "other"
+        assert res.primary_type == "Technologie"
+
+    @pytest.mark.parametrize(
+        ("label", "schema", "expected"),
+        [
+            ("RegioDeal", "deals", "programme"),
+            ("Programma", None, "programme"),
+            ("Project", None, "programme"),
+            ("Technologie", None, "technology"),
+            ("Technology", None, "technology"),
+        ],
+    )
+    def test_deal_programme_technology_labels_no_longer_other(
+        self, label, schema, expected
+    ):
+        schemas = [_deals_schema()] if schema == "deals" else None
+        res = _resolve_entity_type(label, schemas)
+        assert res.entity_type == expected
+        assert res.entity_type in _ALLOWED_ENTITY_TYPES
 
 
 class TestPersistStampsRichType:
@@ -606,3 +656,61 @@ class TestPersistStampsRichType:
         ent = mock_upsert.call_args.args[0]
         assert ent.entity_type == "concept"
         assert ent.primary_type == "Quux"
+
+    @pytest.mark.asyncio
+    async def test_programme_entity_persists_without_repin(self):
+        # AC3: a RegioDeal (deals applied) persists with entity_type=="programme"
+        # — the runtime guard accepts it; the upserted entity carries the real
+        # canonical, not ``other``.
+        svc, mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[
+                    {
+                        "text": "Regio Deal Groningen",
+                        "label": "RegioDeal",
+                        "confidence": 0.9,
+                        "properties": {},
+                    }
+                ],
+                relations=[],
+                applicable_schemas=[_deals_schema()],
+            )
+
+        ent = mock_upsert.call_args.args[0]
+        assert ent.entity_type == "programme"
+        assert ent.primary_type == "RegioDeal"
+
+    @pytest.mark.asyncio
+    async def test_technology_entity_persists_without_repin(self):
+        # AC3: a Technologie label (residual alias, no schema) persists with
+        # entity_type=="technology" — accepted by the runtime guard.
+        svc, mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[
+                    {
+                        "text": "GPT-4",
+                        "label": "Technologie",
+                        "confidence": 0.9,
+                        "properties": {},
+                    }
+                ],
+                relations=[],
+            )
+
+        ent = mock_upsert.call_args.args[0]
+        assert ent.entity_type == "technology"
+        assert ent.primary_type == "Technologie"
