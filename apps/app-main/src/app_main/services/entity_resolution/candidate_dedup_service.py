@@ -212,26 +212,55 @@ class CandidateDedupService:
     # never auto-merge.
     _MAX_DISCRIMINATOR_TOKEN_LEN = 3
 
+    # A canonical Roman numeral (subtractive form), 1-3999. Matched on a
+    # lowercased token to recognise an ordinal discriminator of ANY width.
+    _ROMAN_RE = re.compile(
+        r"^m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$"
+    )
+
+    @classmethod
+    def _is_roman_numeral(cls, token: str) -> bool:
+        """True only for a VALID Roman numeral form (i, ii, …, viii, xiii, …).
+
+        A naive ``^[ivxlcdm]+$`` check false-positives on real words built from
+        Roman letters (``mix``, ``did``, ``mid``, ``dim``). Anchoring to the
+        canonical subtractive grammar rejects those: ``mix`` (``m`` then ``ix``
+        leaves a trailing ``x``? no — ``mix`` = m,i,x fails the ones/tens
+        ordering), ``did`` / ``dim`` (two ``d``/no valid tens-ones) all fail.
+        The empty string is excluded by ``{1,}`` semantics of the alternation
+        not matching nothing meaningful — guarded explicitly below.
+        """
+        if not token:
+            return False
+        return cls._ROMAN_RE.match(token) is not None
+
     @classmethod
     def _is_discriminator_difference(cls, norm_a: str, norm_b: str) -> bool:
         """True when two normalized names differ only by a short discriminator.
 
-        Detects three realistic discriminator classes that pure edit-distance
+        Detects four realistic discriminator classes that pure edit-distance
         cannot separate from a typo:
 
         * **Numeric** — identical once every digit run is removed, but the digit
           runs differ (``... overheid 2021`` vs ``... overheid 2022``; annual
           versions, ID numbers).
+        * **Roman-numeral ordinal of ANY width** — same token count, exactly one
+          token differs, and BOTH differing tokens are valid Roman numerals
+          (``tranche iii`` vs ``tranche viii``; ``tranche vii`` vs
+          ``tranche viii``). Width-varying numerals (``iii``/``viii``) bypass the
+          short-token and equal-length branches, so they need their own rule.
         * **Short trailing/embedded token** — same token count, exactly one
           token differs, and BOTH differing tokens are short (``... bergen nh``
-          vs ``... bergen nb``; province/region codes, ordinals).
+          vs ``... bergen nb``; province/region codes, short ordinals I/II).
         * **Short trailing suffix on a shared stem** — same token count, exactly
           one equal-length token differs, sharing a long common prefix and
           diverging only in a ≤2-char tail (``... 35000-a`` vs ``... 35000-b``;
           document/version suffixes).
 
         Returns ``False`` for a substitution/transposition inside a word (a
-        typo), which preserves token structure and digit content.
+        typo), which preserves token structure and digit content. The Roman
+        rule fires ONLY when both differing tokens are valid Roman numerals, so
+        a typo or a real-word pair that merely uses Roman letters is unaffected.
         """
         if norm_a == norm_b:
             return False
@@ -252,6 +281,13 @@ class CandidateDedupService:
 
         wa, wb = ta[diff[0]], tb[diff[0]]
         lim = cls._MAX_DISCRIMINATOR_TOKEN_LEN
+        # Roman-numeral ordinal of ANY width: both sides valid numerals (and not
+        # equal, since the tokens differ) -> distinct ordinal -> discriminator.
+        # Covers width-varying pairs (iii/viii, vii/viii) the length branches
+        # below miss. The validity check rejects real words built from Roman
+        # letters (mix/did) so a typo or word pair is NOT demoted here.
+        if cls._is_roman_numeral(wa) and cls._is_roman_numeral(wb):
+            return True
         # Two short whole tokens that differ -> discriminator code (NH/NB).
         if len(wa) <= lim and len(wb) <= lim:
             return True

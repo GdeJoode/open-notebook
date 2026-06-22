@@ -214,6 +214,11 @@ _DISCRIMINATOR_PAIRS = [
     ("Wet open overheid 2021", "Wet open overheid 2022"),  # annual version
     ("Kamerstuk 35000-A", "Kamerstuk 35000-B"),  # trailing -A/-B suffix
     ("Tranche I Regio Deal", "Tranche II Regio Deal"),  # short ordinal token
+    # Width-varying Roman-numeral ordinals (K.5 rev3): iii(3)/viii(4) and
+    # vii(3)/viii(4) are NOT both ≤3 chars nor equal-length, so they bypass the
+    # short-token / equal-length branches and need the Roman-numeral rule.
+    ("Tranche III Regio Deal", "Tranche VIII Regio Deal"),
+    ("Tranche VII Regio Deal", "Tranche VIII Regio Deal"),
 ]
 
 
@@ -252,6 +257,38 @@ async def test_typo_still_auto_merges_through_guard() -> None:
     rows = [
         _entity("entity:a", "Koninkrijksrelaties"),
         _entity("entity:b", "Koninkrijksreiaties"),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert report.auto_merge_count == 1
+    assert report.auto_merge[0].method == "fuzzy"
+
+
+def test_roman_numeral_validity_guard_rejects_real_words() -> None:
+    """The Roman-numeral detector accepts numerals, rejects Roman-letter words.
+
+    A naive ``^[ivxlcdm]+$`` test would mis-classify real words built from
+    Roman letters (``did``, ``dim``, ``mid``, ``civic``). Anchoring to the
+    canonical subtractive grammar rejects those, so the rev3 ordinal demotion
+    fires ONLY on genuine numeral discriminators.
+    """
+    is_roman = CandidateDedupService._is_roman_numeral
+    for good in ("i", "ii", "iii", "iv", "v", "vii", "viii", "xiii", "xx"):
+        assert is_roman(good), good
+    for bad in ("did", "dim", "mid", "civic", "lid", "mill", ""):
+        assert not is_roman(bad), bad
+
+
+@pytest.mark.asyncio
+async def test_roman_letter_real_word_token_still_auto_merges() -> None:
+    """A single differing token that is a real word (not a numeral) still AUTOs.
+
+    ``... beleid`` vs ``... heleid`` (a 1-char OCR typo of a non-numeral word)
+    must NOT be demoted by the rev3 Roman rule: the differing tokens are not
+    valid Roman numerals, so the guard leaves the typo to auto-merge (AC1).
+    """
+    rows = [
+        _entity("entity:a", "Programma Stedelijk Beleid"),
+        _entity("entity:b", "Programma Stedelijk Beieid"),  # OCR l->i typo
     ]
     report = await _service(rows).propose_candidates()
     assert report.auto_merge_count == 1
