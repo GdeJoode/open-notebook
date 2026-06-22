@@ -13,7 +13,6 @@ from __future__ import annotations
 from typing import List
 
 import pytest
-
 from app_main.services.entity_resolution.vocabulary_reconciler import (
     VocabularyReconciler,
 )

@@ -12,7 +12,6 @@ import json
 from typing import Any, Dict, List, Optional
 
 import pytest
-
 from shared.vocabulary.tooi_provider import TOOIProvider
 
 

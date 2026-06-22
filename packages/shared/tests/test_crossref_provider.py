@@ -12,7 +12,6 @@ from typing import Callable
 
 import httpx
 import pytest
-
 from shared.vocabulary.crossref_provider import CrossrefProvider
 from shared.vocabulary.http_client import VocabularyHTTPClient
 
@@ -93,6 +92,56 @@ async def test_low_score_hit_is_dropped():
     provider = _provider_with_handler(handler, min_score=70.0)
     matches = await provider.lookup("Some Title", "paper")
     assert matches == []
+
+
+@pytest.mark.asyncio
+async def test_high_score_but_unrelated_title_is_dropped():
+    """K.4 rev2 title-gate: a strong score on an unrelated title is rejected.
+
+    Crossref relevance is query-length dependent; a short/generic query can
+    score above the floor against a wholly different paper. The title-overlap
+    gate must drop it so the single-candidate auto-link never links the wrong
+    DOI (the recurring Track-K over-link concern).
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _works_response(
+            [
+                {
+                    "DOI": "10.1/unrelated",
+                    "title": ["Quantum Chromodynamics on the Lattice"],
+                    "score": 95.0,
+                }
+            ]
+        )
+
+    provider = _provider_with_handler(handler)
+    matches = await provider.lookup("Graph Neural Networks", "scholarly_article")
+    assert matches == [], (
+        "high-score but lexically-unrelated title should be dropped by the "
+        "title-overlap gate"
+    )
+
+
+@pytest.mark.asyncio
+async def test_partial_title_overlap_survives_gate():
+    """A title sharing most tokens with the query clears the overlap floor."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _works_response(
+            [
+                {
+                    "DOI": "10.1/rel",
+                    "title": ["Graph Neural Networks for Recommendation"],
+                    "score": 92.0,
+                }
+            ]
+        )
+
+    provider = _provider_with_handler(handler)
+    matches = await provider.lookup("Graph Neural Networks", "scholarly_article")
+    assert len(matches) == 1
+    assert matches[0].external_id == "10.1/rel"
 
 
 @pytest.mark.asyncio

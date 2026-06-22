@@ -7,9 +7,10 @@ external identifier(s).
 
 Key invariant (migration 41's UNIQUE index ``idx_ref_name_source`` on
 ``(canonical_name, source_vocabulary)``): ``upsert`` is keyed on that pair so a
-re-run of ``refresh`` never creates duplicate rows (AC6 idempotency). The merge
-is done Python-side (pre-fetch + UPDATE), mirroring ``EntityRepository.upsert_entity``
-because ``object::merge`` is unavailable on the deployed SurrealDB version.
+re-run of ``refresh`` never creates duplicate rows (AC6 idempotency). ``upsert``
+does a Python-side pre-fetch on that key to decide CREATE-vs-UPDATE, then lets
+the server merge the payload via SurrealQL ``UPDATE $id MERGE $data`` (the field
+set is replaced/extended server-side, not reconstructed in Python).
 """
 
 from __future__ import annotations

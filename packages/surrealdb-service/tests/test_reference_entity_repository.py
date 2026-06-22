@@ -16,7 +16,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.entity import EntityRepository

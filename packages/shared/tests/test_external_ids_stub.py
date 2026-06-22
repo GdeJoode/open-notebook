@@ -15,7 +15,6 @@ entity emits its real URIs.
 from __future__ import annotations
 
 import pytest
-
 from shared.models.entity import Entity
 from shared.utils import resolve_external_ids as imported_via_init
 from shared.utils.external_ids import resolve_external_ids
