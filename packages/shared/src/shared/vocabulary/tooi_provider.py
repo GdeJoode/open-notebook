@@ -156,12 +156,23 @@ class TOOIProvider:
         Source priority (each fails soft into the next): an explicit/operator
         ``source`` file > the attached remote bulk fetcher > the bundled seed.
 
-        Idempotent: each record upserts on the ``(canonical_name,
-        source_vocabulary)`` key (migration 41's UNIQUE index), so a second
-        refresh over the same data creates no duplicates and only refreshes
-        ``last_validated``. A code that appears under two surface forms is
-        deduped (by ``external_id``) before load so one org is never split into
-        two reference rows.
+        Idempotent: each record upserts on the ``(external_id,
+        source_vocabulary)`` key (migration 57's UNIQUE index — the org's stable
+        code, NOT its display name), so a second refresh over the same data
+        creates no duplicates and only refreshes ``last_validated``.
+
+        The pre-load ``_dedupe_rows`` keys on the SAME ``external_id`` as the
+        upsert, so the two stay consistent: a code that appears under two surface
+        forms collapses to ONE row (aliases unioned), but two DISTINCT codes that
+        happen to share a display name — e.g. the two "Bergen" gemeenten (gm0373
+        / gm0893) — persist as TWO rows. Keying on the display name (the old
+        migration-41 key) silently merged those distinct orgs, which let the
+        reconciler auto-link "Bergen" to the wrong URI; the external_id key keeps
+        the ambiguity so the reconciler refuses to link.
+
+        Returns the number of rows actually persisted (``bulk_load`` counts
+        successful upserts of the DEDUPED row set, so the count reflects the rows
+        in ``reference_entity`` — it is not inflated by the pre-dedupe duplicates).
         """
         records = await self._resolve_records(source or self._source)
         rows = self._dedupe_rows(self._to_reference_row(r) for r in records)
@@ -186,7 +197,13 @@ class TOOIProvider:
 
     @staticmethod
     def _dedupe_rows(rows: Any) -> List[Dict[str, Any]]:
-        """Collapse rows sharing an ``external_id`` (keep first, union aliases)."""
+        """Collapse rows sharing an ``external_id`` (keep first, union aliases).
+
+        Keys on ``external_id`` — the SAME key the repository upsert uses
+        (migration 57). Two rows for ONE org code collapse; two DISTINCT codes
+        that share a display name (the two "Bergen" gemeenten) do NOT — they stay
+        as two rows so the reconciler sees the ambiguity.
+        """
         by_id: Dict[str, Dict[str, Any]] = {}
         order: List[str] = []
         for row in rows:

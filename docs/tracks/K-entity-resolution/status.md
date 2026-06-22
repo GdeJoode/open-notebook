@@ -37,8 +37,11 @@ name-version pointing at the canonical entity via `prov:specializationOf`.
   name/abbreviation as a resolvable alias, unions + dedupes by organisatiecode.
 - `tooi_provider.refresh()` — source priority **operator-file > remote fetcher >
   seed**, each fail-soft into the next (unreachable registers → seed, never
-  crash). Idempotent at scale: upsert on `(canonical_name, source_vocabulary)`
-  PLUS a pre-load dedupe by `external_id` (one org never splits into two rows).
+  crash). Idempotent at scale: upsert on `(external_id, source_vocabulary)`
+  (migration 57 — the org's STABLE code, NOT its display name) PLUS a pre-load
+  dedupe on the SAME `external_id` key. One org never splits into two rows AND
+  two distinct orgs sharing a display name (the two "Bergen" gemeenten) never
+  merge into one — the rev2 fix that keeps the reconciler's ambiguity guard live.
 - `POST /api/vocabulary/refresh` attaches the fetcher by default;
   `TOOI_DISABLE_REMOTE=1` opts out of the network (air-gapped → seed/file);
   `TOOI_BULK_SOURCE` (operator file) still overrides.
@@ -68,7 +71,7 @@ paths); bump or pass `registers=` for a newer publication.
 - `migrations/55.surrealql` (+`_down`) — `DEFINE FIELD IF NOT EXISTS external_ids ON entity FLEXIBLE TYPE array DEFAULT [];` + defensive `idx_ref_name`. ADDITIVE/`IF NOT EXISTS` only — does not touch `canonical_name`/`hash_id`/`entity_type` (B.8 drift caution). `reference_entity` already carried all provider fields from migration 41, so no field additions there.
 - `packages/shared/src/shared/models/entity.py` — `external_ids: list[str] = Field(default_factory=list)` + `ensure_list` validator coverage.
 - `packages/shared/src/shared/vocabulary/{__init__,provider,http_client,tooi_provider,crossref_provider}.py` — `VocabularyProvider` protocol + `VocabMatch`; a disciplined HTTP client (timeout + rate-limit + per-authority cache + fail-soft); TOOI provider (verified-live ministry seed → `reference_entity`, documented bulk-file ingest, name/alias lookup); Crossref provider (polite-pool DOI resolution, scholarly-types only).
-- `packages/surrealdb-service/.../repositories/reference_entity.py` — `ReferenceEntityRepository` (`upsert` idempotent on the migration-41 `(canonical_name, source_vocabulary)` UNIQUE key, `bulk_load`, `lookup_by_name`, `lookup_by_alias`, `count`, `last_validated`). Registered in repos `__init__`.
+- `packages/surrealdb-service/.../repositories/reference_entity.py` — `ReferenceEntityRepository` (`upsert` idempotent on the migration-57 `(external_id, source_vocabulary)` UNIQUE key — the stable code, re-keyed from the original migration-41 name key so distinct same-named orgs no longer collapse; `bulk_load`, `lookup_by_name`, `lookup_by_alias`, `count`, `last_validated`). Registered in repos `__init__`.
 - `apps/app-main/.../services/entity_resolution/vocabulary_reconciler.py` — `reconcile_entity(entity) -> ReconcileResult`; **PRECISION GUARD: auto-links external_ids/aliases ONLY on a single high-confidence candidate**; ≥2 distinct-URI candidates → recorded, NO write. Same-URI agreement collapses to one (still links). Fail-soft per provider.
 - `packages/surrealdb-service/.../repositories/entity.py` — `update_external_ids(id, ext, aliases)` union helper (the reconciler's persistence seam; never touches the B.8 key).
 - `packages/shared/src/shared/utils/external_ids.py` — body implemented: returns `entity.external_ids` (reconciled) as a deduped defensive copy. **Signature/return type UNCHANGED** (`Entity -> List[str]`); empty-input still `[]`.
@@ -328,7 +331,7 @@ K.3 re-normalizes them, groups collisions, merges duplicates — reversibly.
 | hotfix | shared.config package shadowed config.py → create_app broke (K.2 regression) | — | `fix/shared-config-collision` | 2026-06-22 | merged to main 9478235. K.2's gate missed it (tests imported the submodule, not the app chain). |
 
 | K.4 | TOOI + Crossref vocabulary reconciliation → external_ids/aliases | — | `track/k4-vocabulary` | 2026-06-22 | adversarial-reviewer APPROVED (attempt 2; 1 major fixed: export projection dropped external_ids/aliases). Provider-pluggable, fail-soft HTTP (cache+rate-limit), single-match precision guard, Crossref title-overlap gate. K-D2 (TOOI bulk URL) flagged non-blocking w/ verified seed. 208+81 tests green. |
-| K-D2 | wire real TOOI bulk source — full gov-org vocabulary | — | `track/kd2-tooi-source` | 2026-06-22 | Bulk source = eight `*_compleet` JSON-LD registers under `repository.officiele-overheidspublicaties.nl` (live union 1438 orgs); `TOOIBulkFetcher` fail-soft/rate-limited/cached. Review found a BLOCKER (duplicate same-named orgs collapsed at ingest) — fix in progress. |
+| K-D2 | wire real TOOI bulk source — full gov-org vocabulary | — | `track/kd2-tooi-source` | 2026-06-22 | Bulk source = eight `*_compleet` JSON-LD registers under `repository.officiele-overheidspublicaties.nl` (live union 1438 orgs); `TOOIBulkFetcher` fail-soft/rate-limited/cached. **rev2 RESOLVED**: the review's BLOCKER — distinct same-named orgs (the two "Bergen" gemeenten gm0373/gm0893) merged into ONE reference row at ingest → reconciler auto-linked every "Bergen" to the wrong URI — is fixed. Migration 57 re-keys `reference_entity` uniqueness on `(external_id, source_vocabulary)` (stable code, not display name); upsert + `_dedupe_rows` aligned; two Bergens now persist as 2 rows → reconciler refuses to auto-link (ambiguous). 2 new regression tests + 2 migration-57 roundtrips; 122 tests green; `create_app` imports; lint clean. |
 
 
 ## Phase K.5 — Fuzzy/embedding candidate dedup + review queue + alias overlay — 2026-06-22

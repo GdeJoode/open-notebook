@@ -1,0 +1,34 @@
+-- Migration 57: re-key reference_entity uniqueness on the org's STABLE id
+--               (external_id) instead of its display name (K-D2 rev2).
+--
+-- Migration 41 made `(canonical_name, source_vocabulary)` the UNIQUE key. That
+-- conflates DISTINCT organisations that happen to share a bare display name —
+-- the real Dutch register has TWO "Bergen" gemeenten (gm0373 Noord-Holland,
+-- gm0893 Limburg), both `canonical_name = "Bergen"`. Under the name-keyed
+-- index only ONE survived ingest; `lookup_by_name("Bergen")` then returned a
+-- single candidate and the K.4 reconciler's single-high-confidence-match guard
+-- AUTO-LINKED every "Bergen" entity to the surviving (wrong) URI. The ambiguity
+-- that should have BLOCKED the link was destroyed at INGEST.
+--
+-- The fix: the persisted reference identity is the org's stable code/URI
+-- (`external_id` = the TOOI organisatiecode), not the display name. Two distinct
+-- orgs sharing a name now persist as TWO rows; `lookup_by_name` returns both;
+-- the reconciler sees 2 candidates and correctly refuses to auto-link (ambiguous).
+--
+-- B.8 caution: this migration touches ONLY the `reference_entity` index set — it
+-- never references the `entity` table or its dedup-key/upsert contract.
+--
+-- Idempotent: `OVERWRITE` replaces the index definition unconditionally, so a
+-- re-run is a no-op. The existing reference_entity rows are the K.4 seed (a
+-- handful of ministries, all distinct codes), so re-defining the index is safe.
+
+-- Stable-identity uniqueness: one row per (org code, vocabulary).
+DEFINE INDEX OVERWRITE idx_ref_extid_source ON reference_entity
+    FIELDS external_id, source_vocabulary UNIQUE;
+
+-- The old name-based UNIQUE index is now WRONG (it collapsed distinct same-named
+-- orgs). Re-define it NON-unique so `lookup_by_name` still has an index but two
+-- "Bergen" rows can coexist. (`idx_ref_name`, the pre-existing non-unique name
+-- index from migration 41, stays as-is and also serves the lookup.)
+DEFINE INDEX OVERWRITE idx_ref_name_source ON reference_entity
+    FIELDS canonical_name, source_vocabulary;

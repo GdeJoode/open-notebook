@@ -5,12 +5,20 @@ vocabularies (TOOI, Crossref, ...). The K.4 providers populate it; the
 vocabulary reconciler queries it to link a persisted ``entity`` to its stable
 external identifier(s).
 
-Key invariant (migration 41's UNIQUE index ``idx_ref_name_source`` on
-``(canonical_name, source_vocabulary)``): ``upsert`` is keyed on that pair so a
-re-run of ``refresh`` never creates duplicate rows (AC6 idempotency). ``upsert``
-does a Python-side pre-fetch on that key to decide CREATE-vs-UPDATE, then lets
-the server merge the payload via SurrealQL ``UPDATE $id MERGE $data`` (the field
-set is replaced/extended server-side, not reconstructed in Python).
+Key invariant (migration 57's UNIQUE index ``idx_ref_extid_source`` on
+``(external_id, source_vocabulary)``): ``upsert`` is keyed on the org's STABLE
+identity (its external code/URI), NOT its display name. This matters because the
+real registers contain DISTINCT organisations that share a bare display name —
+e.g. two "Bergen" gemeenten (gm0373 Noord-Holland, gm0893 Limburg). Keying on
+``canonical_name`` (the old migration-41 key) collapsed them into one row at
+ingest, which destroyed the ambiguity the reconciler relies on and let it
+auto-link every "Bergen" to the wrong URI. Keying on ``external_id`` keeps the
+two as TWO rows, so ``lookup_by_name`` returns both and the reconciler refuses
+to auto-link (ambiguous, no silent wrong-link).
+
+``upsert`` does a Python-side pre-fetch on that key to decide CREATE-vs-UPDATE,
+then lets the server merge the payload via SurrealQL ``UPDATE $id MERGE $data``
+(the field set is replaced/extended server-side, not reconstructed in Python).
 """
 
 from __future__ import annotations
@@ -33,24 +41,28 @@ class ReferenceEntityRepository:
         self.config = config
 
     # ------------------------------------------------------------------
-    # Upsert (idempotent on (canonical_name, source_vocabulary))
+    # Upsert (idempotent on (external_id, source_vocabulary))
     # ------------------------------------------------------------------
 
     async def upsert(self, record: Dict[str, Any]) -> str:
         """Create or refresh one reference entry, returning its record id.
 
-        Lookup is by ``(canonical_name, source_vocabulary)``. On a hit the row is
-        UPDATEd (external_uri / external_id / aliases / properties refreshed,
-        ``last_validated`` re-stamped); otherwise a new row is CREATEd. Idempotent:
-        repeated upserts of the same logical record do not multiply rows.
+        Lookup is by ``(external_id, source_vocabulary)`` — the org's STABLE
+        identity (migration 57). On a hit the row is UPDATEd (canonical_name /
+        external_uri / aliases / properties refreshed, ``last_validated``
+        re-stamped); otherwise a new row is CREATEd. Idempotent: repeated upserts
+        of the same logical record do not multiply rows. Two DISTINCT orgs that
+        share a display name (e.g. the two "Bergen" gemeenten) have distinct
+        ``external_id``s and so persist as TWO rows — they are NOT collapsed.
         """
         canonical_name = record["canonical_name"]
         source = record["source_vocabulary"]
+        external_id = record.get("external_id")
 
         existing = await execute_query(
             "SELECT id FROM reference_entity "
-            "WHERE canonical_name = $cn AND source_vocabulary = $src LIMIT 1",
-            {"cn": canonical_name, "src": source},
+            "WHERE external_id = $eid AND source_vocabulary = $src LIMIT 1",
+            {"eid": external_id, "src": source},
             self.config,
         )
 
@@ -95,7 +107,8 @@ class ReferenceEntityRepository:
                 loaded += 1
             except Exception as exc:  # one bad row must not abort the batch
                 logger.error(
-                    "reference_entity bulk_load skipped {cn!r}: {e}",
+                    "reference_entity bulk_load skipped {eid!r} ({cn!r}): {e}",
+                    eid=record.get("external_id"),
                     cn=record.get("canonical_name"),
                     e=exc,
                 )
