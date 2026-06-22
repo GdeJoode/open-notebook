@@ -10,6 +10,43 @@ Append-only ledger. One row per phase attempt.
 | K.1 rev4 | Articles + spelling only; NO content-prefix strip (ministerie van collides cross-type) | (pending) | `track/k1-nl-normalizer` | 2026-06-22 | implemented — 0 name-only false-merges, −14 fragmentation, ready for review |
 | K.2 | Curated NL gov-org alias table + extensible override config | (pending) | `track/k2-org-aliases` | 2026-06-22 | implemented — all 7 ACs green; full-form keys (no blind strip); 0 name-only false-merges over combined corpus; K.1 1346 → K.2 1337 (BZK 6, VRO 3); ready for review |
 | K.3 | Retroactive canonicalization — dry-run plan + reviewable merge | (pending) | `track/k3-retroactive-merge` | 2026-06-22 | implemented — all 8 ACs green; dry-run-default + idempotency + soft-merge guards; ID-based relation re-pointing; person/org separation verified; 43 tests green (11 unit + 5 roundtrip + B.8 regression + migration-54). Ready for review |
+| K.4 | TOOI + Crossref vocabulary lookup → external_ids + aliases | (pending) | `track/k4-vocabulary` | 2026-06-22 | implemented — all 7 ACs green; precision guard (single high-confidence match only); resolve_external_ids signature unchanged + 45 Track D exporter tests green; migration 55 idempotent; TOOI source = K-D2 (verified seed shipped, exact bulk URL/cadence flagged). 63 tests green. Ready for review |
+
+## Phase K.4 — TOOI + Crossref vocabulary reconciliation → external_ids/aliases — 2026-06-22
+
+**Branch**: `track/k4-vocabulary` (off main, with K.1-K.3). Commits per logical unit (model+migration → providers → repository → reconciler → external_ids body → router/DI → entity-repo helper → lint).
+
+**Delivered**
+- `migrations/55.surrealql` (+`_down`) — `DEFINE FIELD IF NOT EXISTS external_ids ON entity FLEXIBLE TYPE array DEFAULT [];` + defensive `idx_ref_name`. ADDITIVE/`IF NOT EXISTS` only — does not touch `canonical_name`/`hash_id`/`entity_type` (B.8 drift caution). `reference_entity` already carried all provider fields from migration 41, so no field additions there.
+- `packages/shared/src/shared/models/entity.py` — `external_ids: list[str] = Field(default_factory=list)` + `ensure_list` validator coverage.
+- `packages/shared/src/shared/vocabulary/{__init__,provider,http_client,tooi_provider,crossref_provider}.py` — `VocabularyProvider` protocol + `VocabMatch`; a disciplined HTTP client (timeout + rate-limit + per-authority cache + fail-soft); TOOI provider (verified-live ministry seed → `reference_entity`, documented bulk-file ingest, name/alias lookup); Crossref provider (polite-pool DOI resolution, scholarly-types only).
+- `packages/surrealdb-service/.../repositories/reference_entity.py` — `ReferenceEntityRepository` (`upsert` idempotent on the migration-41 `(canonical_name, source_vocabulary)` UNIQUE key, `bulk_load`, `lookup_by_name`, `lookup_by_alias`, `count`, `last_validated`). Registered in repos `__init__`.
+- `apps/app-main/.../services/entity_resolution/vocabulary_reconciler.py` — `reconcile_entity(entity) -> ReconcileResult`; **PRECISION GUARD: auto-links external_ids/aliases ONLY on a single high-confidence candidate**; ≥2 distinct-URI candidates → recorded, NO write. Same-URI agreement collapses to one (still links). Fail-soft per provider.
+- `packages/surrealdb-service/.../repositories/entity.py` — `update_external_ids(id, ext, aliases)` union helper (the reconciler's persistence seam; never touches the B.8 key).
+- `packages/shared/src/shared/utils/external_ids.py` — body implemented: returns `entity.external_ids` (reconciled) as a deduped defensive copy. **Signature/return type UNCHANGED** (`Entity -> List[str]`); empty-input still `[]`.
+- `apps/app-main/.../api/routers/vocabulary.py` — `POST /api/vocabulary/refresh` (idempotent TOOI sync; Crossref reported on-demand), `GET /api/vocabulary/status` (per-provider row count + `last_validated`). Registered in `app.py`; DI factory `get_reference_entity_repo`.
+
+**Network discipline (the NIM/fair-use lesson)**: every external call goes through `VocabularyHTTPClient` — bounded timeout, min-interval rate limit, per-authority TTL cache, and fail-soft (any transport/HTTP/parse error → `None` → caller treats as no-match, NEVER raises). Crossref uses the polite pool (`User-Agent` with a `mailto:` contact). ONE gentle live Crossref sanity call confirmed the response shape (`message.items[].DOI/score/title`); ALL TESTS MOCK HTTP via `httpx.MockTransport` — no live network in CI.
+
+**TOOI source decision (K-D2)**: NON-BLOCKING. TOOI verified reachable as content-negotiated RDF/Turtle per identifier (`identifier.overheid.nl/tooi/id/ministerie/<code>`, e.g. `mnre1034` = BZK) with `afkorting`/`officieleNaam*` fields. The exact full-vocabulary **bulk-download URL** was not discoverable without docs, so the provider ships (a) a documented `tooi_organisations.json` bulk-file loader (`TOOI_BULK_SOURCE` env) and (b) a verified seed of real ministry records as the default so AC1-2 pass offline. Open question (exact bulk URL/format + refresh cadence/trigger) flagged in `escalations.md` (K-D2).
+
+**Precision-guard behaviour (AC3)**: two equally-confident matches (e.g. a `Groningen` province vs municipality reference) → `linked=False`, `external_ids` stays `[]`, both kept on `result.candidates`, `reason="ambiguous_multiple_candidates"`. A single match clearing the threshold links; below-threshold does not. This is the K-style over-merge backstop applied to vocabulary linking (over-linking into the wrong entry is silent bad data).
+
+**Tests (63 green)**
+- `packages/shared/tests/test_tooi_provider.py` (9): seed load, refresh idempotency (no dup rows, AC6), canonical + alias lookup with non-null URI (AC1-2), miss/empty/fail-soft, bulk-file ingest, missing-file→seed fallback.
+- `packages/shared/tests/test_crossref_provider.py` (8): DOI resolution (AC4), non-scholarly skips network, low-score drop, two-strong-hits surface both, transport/5xx fail-soft, refresh no-op, cache.
+- `apps/app-main/tests/test_vocabulary_reconciler.py` (7): single-match auto-link (AC2), two-candidate NO link (AC3, precision), same-URI collapse links, below-threshold, no-match, failing-provider ignored, repo persistence.
+- `packages/surrealdb-service/tests/test_reference_entity_repository.py` (5, `@requires_docker`): bulk_load + name/alias lookup roundtrip (AC1), refresh idempotency (AC6), `last_validated` stamp, `update_external_ids` union + idempotency.
+- `packages/shared/tests/test_external_ids_stub.py` (12, upgraded): reconciled entity emits URIs; empty-canonical/un-reconciled → `[]` (AC5 contract preserved); result-is-a-copy; signature pinned.
+- Migration `test_migrations_roundtrip.py` (12 green) — 55 + 55_down idempotent.
+- **B.8 regression**: `test_entity_persistence_service.py` + `test_entity_repository_roundtrip.py` + `test_entity_merge_roundtrip.py` green unmodified (hash_id/upsert contract intact). **Track D regression**: 45 exporter tests (`test_obsidian_export_service.py` + `test_export_preview.py` + `test_exports_router.py`) green — `resolve_external_ids` contract preserved.
+
+**Validation**: the plan's command suite + migration roundtrip + `from app_main.api.app import create_app` (app imports, both `/api/vocabulary/*` routes registered) → all green. ruff clean on changed src.
+
+**Notes for reviewer**
+- `httpx` added to `packages/shared` deps (providers live in shared; previously app-main-only). `respx` added to shared's dev extra but tests use `httpx.MockTransport` (no respx runtime dep on the test path).
+- The reconciler is a standalone service (no auto-call at persist time — the plan's optional persist-time hook is left default-off / out of scope for K.4; batch reconcile is a K.5/maintenance step). `entity_persistence_service.py` was NOT modified.
+- No live TOOI bulk refresh or live reconcile was run against a real DB — testcontainers only; the live smoke is a K-D2 follow-up once the bulk source is confirmed.
 
 ## Phase K.2 — Government-org abbreviation alias table + extensible alias config — 2026-06-22
 
