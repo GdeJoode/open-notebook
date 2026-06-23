@@ -44,6 +44,7 @@ these markers via its own ``is_failover_eligible``.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Awaitable, Callable, Generic, List, Optional, TypeVar
@@ -99,6 +100,13 @@ def default_is_failover_eligible(exc: Exception) -> bool:
     return isinstance(exc, FailoverEligibleError)
 
 
+# ``429`` as an HTTP status code: a status-prefixed form (``status 429``,
+# ``http 429``, ``code: 429``) OR a standalone ``429`` token not embedded in a
+# longer number. The ``(?<!\d)429(?!\d)`` word-boundary on digits is what stops
+# the old false-positive on bodies like "4290 tokens" / "14290".
+_HTTP_429_RE = re.compile(r"(?<!\d)429(?!\d)")
+
+
 def default_is_rate_limit(exc: Exception) -> bool:
     """Default 429 classifier used to drive backoff-retry on the same provider
     before failing over.
@@ -112,18 +120,23 @@ def default_is_rate_limit(exc: Exception) -> bool:
     if isinstance(exc, RateLimitError):
         return True
     msg = str(exc).lower()
-    return any(
+    phrase_hit = any(
         marker in msg
         for marker in (
             "resource_exhausted",
             "rate limit",
             "ratelimit",
-            " 429",
             "error code: 429",
             "exceeded your current quota",
             "quota exceeded",
         )
     )
+    # Match a bare ``429`` only as an HTTP status code, never as part of a
+    # longer number (the old ``" 429"`` substring false-matched bodies like
+    # "4290 tokens"). ``429`` as a standalone token, or after the usual status
+    # prefixes, is a rate limit; ``4290``/``14290`` is not.
+    status_hit = bool(_HTTP_429_RE.search(msg))
+    return phrase_hit or status_hit
 
 
 # ---------------------------------------------------------------------------

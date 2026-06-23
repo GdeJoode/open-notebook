@@ -34,6 +34,7 @@ from app_main.services.model_routing.failover_executor import (
     ProviderTimeoutError,
     ProviderUnavailableError,
     RateLimitError,
+    default_is_rate_limit,
 )
 from app_main.services.model_routing.rate_limiter import ProviderRateLimiter
 from app_main.services.model_routing.route_resolver import (
@@ -450,3 +451,37 @@ async def test_injectable_eligibility_predicate():
     route = _route(_cloud("nvidia-nim"), _cloud("openai"))
     result = await ex.execute_with_failover(route, call)
     assert result.served_provider == "openai"
+
+
+# default_is_rate_limit classifier — 429-as-status, not 429-in-a-number --------
+
+
+class TestDefaultIsRateLimit:
+    """The default 429 classifier must match 429 as an HTTP STATUS, never as a
+    substring of a longer number (the old bare ``" 429"`` marker false-matched
+    bodies like '4290 tokens')."""
+
+    def test_typed_rate_limit_error(self):
+        assert default_is_rate_limit(RateLimitError("nope")) is True
+
+    def test_phrase_markers(self):
+        assert default_is_rate_limit(RuntimeError("RESOURCE_EXHAUSTED")) is True
+        assert default_is_rate_limit(RuntimeError("rate limit reached")) is True
+        assert default_is_rate_limit(RuntimeError("exceeded your current quota"))
+        assert default_is_rate_limit(RuntimeError("Quota exceeded for model"))
+
+    def test_status_429_variants_match(self):
+        assert default_is_rate_limit(RuntimeError("HTTP 429: Too Many Requests"))
+        assert default_is_rate_limit(RuntimeError("status 429"))
+        assert default_is_rate_limit(RuntimeError("error code: 429"))
+        assert default_is_rate_limit(RuntimeError("got 429 from provider"))
+
+    def test_429_inside_longer_number_is_not_a_rate_limit(self):
+        # The regression: a non-rate-limit error whose body merely CONTAINS the
+        # digits 429 in a larger token must NOT be misclassified.
+        assert default_is_rate_limit(RuntimeError("prompt is 4290 tokens")) is False
+        assert default_is_rate_limit(RuntimeError("token id 14290 invalid")) is False
+        assert default_is_rate_limit(ValueError("model dim 4296 mismatch")) is False
+
+    def test_unrelated_error_is_not_a_rate_limit(self):
+        assert default_is_rate_limit(ValueError("bad json")) is False

@@ -41,7 +41,6 @@ if TYPE_CHECKING:
 
 from app_main.services.entity_persistence_service import EntityPersistenceService
 
-
 # Explicit per-notebook override bundle (Track L.4). When an operator configures
 # a ``base_ontology`` for a notebook, that is a declaration that the notebook is
 # *about* a domain — so the related theme schema is bundled in alongside the
@@ -517,8 +516,8 @@ class EntityExtractionService:
         state is incomplete.
         """
         from app_main.services.extraction_chunking import (
-            input_budget_tokens,
             pack_chunks_for_model,
+            pass2_token_cap,
         )
 
         # Reset per-run so a prior run's budget never leaks into a packing
@@ -560,10 +559,14 @@ class EntityExtractionService:
             context_window=head_model.context_window,
             max_output_tokens=head_model.max_output_tokens,
         )
-        # Thread the same context-derived input budget into Pass-2 so a packed
-        # window (legitimately > the legacy fixed 2400 cap on a big model) is
-        # not rejected by the per-prompt token guard.
-        self._pass2_token_budget = input_budget_tokens(
+        # Thread the Pass-2 per-prompt cap so it matches what Pass-2 MEASURES
+        # (ontology block + chunk_text together), not the packing budget. The
+        # packer already reserves the prompt overhead inside ``input_budget``;
+        # threading that same budget would double-subtract the overhead and
+        # falsely abort a window packed up to ``input_budget`` (the ontology
+        # gets re-added on top). The cap that fits Pass-2's whole-prompt guard
+        # is the full input space minus reserved output (M rev2).
+        self._pass2_token_budget = pass2_token_cap(
             context_window=head_model.context_window,
             max_output_tokens=head_model.max_output_tokens,
         )

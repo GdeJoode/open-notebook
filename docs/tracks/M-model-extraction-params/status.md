@@ -68,9 +68,16 @@ A 128K/256K model reads the whole document in **one** call (28 → 1, a 28× dro
      context window (a per-call-failover from a bigger primary is observable).
 - **The num_ctx / context_window decision (both):** the local model row's
   `context_window` is seeded to a **conservative 8192** (the SAFE effective window, NOT
-  llama's 128K theoretical max) because Ollama's effective context is the binding
-  constraint — that bounds the pack — AND `num_ctx` is passed so the runtime honors it.
-  Seeding the row low is the primary control; `num_ctx` makes the runtime match it.
+  llama's 128K theoretical max). `num_ctx = candidate.model.context_window` is passed so
+  the runtime allocates that window instead of Ollama's tiny ~2-4K default.
+  - **Scope of the interim — what it does and does NOT do:** the pack is sized for the
+    route-HEAD (cloud) candidate, NOT for the local fallback. On a per-call failover to
+    llama, `llm_call.py:172-188` sets `num_ctx` + logs a WARNING when the prompt exceeds
+    the local window, but does **NOT re-split** the already-packed window. Ollama then
+    **truncates** an oversized prompt (silent loss). So the interim **bounds the runtime
+    `num_ctx` allocation and makes the overflow observable (WARNING), but does NOT
+    re-split the fallback prompt.** The full per-document re-chunk on fallback is an
+    accepted deferral — **M.4(a)**.
 
 ### M.2 per-provider caps
 

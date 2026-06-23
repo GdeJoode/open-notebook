@@ -83,6 +83,34 @@ def input_budget_tokens(
     return max(_MIN_INPUT_BUDGET_TOKENS, int(raw))
 
 
+def pass2_token_cap(
+    *,
+    context_window: Optional[int],
+    max_output_tokens: Optional[int],
+) -> int:
+    """Per-prompt token cap to thread into Pass-2's whole-prompt guard.
+
+    Pass-2's guard measures ``ontology_block + chunk_text`` TOGETHER, whereas
+    :func:`input_budget_tokens` (used for PACKING) already subtracts the
+    prompt-overhead the ontology block occupies. Threading the packing budget
+    into the Pass-2 guard would therefore double-count that overhead and falsely
+    abort a window packed right up to ``input_budget`` (the ontology gets re-added
+    on top of a budget that already removed it).
+
+    The cap that matches what Pass-2 actually MEASURES is the full input space
+    minus reserved output — ``context_window - max_output_tokens``. The packer
+    guarantees ``chunk_text <= input_budget = (ctx - max_output - overhead) * 0.85``
+    and the ontology block ~= the reserved ``overhead``, so
+    ``ontology + chunk_text <= overhead + input_budget < ctx - max_output`` fits.
+    A window whose prompt genuinely exceeds ``ctx - max_output`` still raises, so
+    the real overflow guard is preserved. Floored at
+    :data:`_MIN_INPUT_BUDGET_TOKENS` for the same pathological-config reason.
+    """
+    ctx = context_window or DEFAULT_CONTEXT_WINDOW
+    out = max_output_tokens or 0
+    return max(_MIN_INPUT_BUDGET_TOKENS, ctx - out)
+
+
 @dataclass
 class PackedWindow:
     """One model-context-sized window of concatenated ingestion chunks.

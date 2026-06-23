@@ -5,6 +5,7 @@ from app_main.services.extraction_chunking.context_packer import (
     estimate_tokens,
     input_budget_tokens,
     pack_chunks_for_model,
+    pass2_token_cap,
 )
 
 
@@ -59,6 +60,39 @@ class TestInputBudget:
             context_window=1000, max_output_tokens=2000, prompt_overhead_tokens=5000
         )
         assert budget >= 256
+
+
+class TestPass2TokenCap:
+    """The Pass-2 cap (M rev2) must NOT re-subtract the packer's overhead.
+
+    Pass-2's guard measures ``ontology + chunk_text`` together, so the cap
+    threaded into it is the full input space minus reserved output —
+    ``context_window - max_output_tokens`` — not the already-overhead-subtracted
+    ``input_budget``. The cap must therefore sit ABOVE ``input_budget`` by at
+    least the reserved overhead so a window packed to ``input_budget`` plus an
+    ontology block (~overhead) still fits.
+    """
+
+    def test_cap_is_context_minus_output(self):
+        assert pass2_token_cap(context_window=128_000, max_output_tokens=4096) == (
+            128_000 - 4096
+        )
+
+    def test_cap_exceeds_packing_budget_by_at_least_overhead(self):
+        cap = pass2_token_cap(context_window=128_000, max_output_tokens=4096)
+        pack = input_budget_tokens(context_window=128_000, max_output_tokens=4096)
+        # The cap must leave room for the ontology block the packer reserved as
+        # overhead — otherwise threading it would double-subtract that overhead.
+        assert cap > pack
+        assert cap - pack >= 2000  # >= DEFAULT_PROMPT_OVERHEAD_TOKENS
+
+    def test_null_context_degrades_to_default(self):
+        cap = pass2_token_cap(context_window=None, max_output_tokens=None)
+        assert cap == DEFAULT_CONTEXT_WINDOW
+
+    def test_pathological_config_floors(self):
+        cap = pass2_token_cap(context_window=100, max_output_tokens=500)
+        assert cap >= 256
 
 
 class TestPackCountDropsForBigContext:

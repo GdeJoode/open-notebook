@@ -29,6 +29,7 @@ from app_main.services.extraction_chunking.context_packer import (
     estimate_tokens,
     input_budget_tokens,
     pack_chunks_for_model,
+    pass2_token_cap,
 )
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
     "estimate_tokens",
     "input_budget_tokens",
     "pack_chunks_for_model",
+    "pass2_token_cap",
 ]
