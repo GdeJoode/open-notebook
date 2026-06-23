@@ -68,49 +68,68 @@ async def main(source_id: str) -> None:
         if t.strip():
             type_by_name[t] = _resolve_entity_type(e.get("label", "concept")).entity_type
 
-    outcomes = Counter()
+    from app_main.services.entity_persistence_service import (
+        EntityPersistenceService,
+    )
+
+    svc = EntityPersistenceService()
+
+    def _endpoint_type(name: str, carried: str | None) -> str | None:
+        # The O.1 fixed logic: bridge-resolved batch type wins; else the
+        # relation-carried type bridge-resolved; else None.
+        t = type_by_name.get(name)
+        if t is None and carried:
+            t = _resolve_entity_type(carried).entity_type
+        return t
+
+    old_outcomes = Counter()
+    new_outcomes = Counter()
     skip_detail = Counter()
+    name_miss_names = set()
     for rel in relations:
         src = rel.get("source_entity", "")
         tgt = rel.get("target_entity", "")
         if not src or not tgt:
-            outcomes["empty_endpoint"] += 1
+            old_outcomes["empty_endpoint"] += 1
+            new_outcomes["empty_endpoint"] += 1
             continue
 
-        # CURRENT persist logic: rel-carried type wins, else batch map, then
-        # alias-normalize.
-        src_t = rel.get("source_type") or type_by_name.get(src)
-        tgt_t = rel.get("target_type") or type_by_name.get(tgt)
-        src_t = _normalize_entity_type(src_t) if src_t else None
-        tgt_t = _normalize_entity_type(tgt_t) if tgt_t else None
+        # OLD logic: rel-carried type wins, else batch map, then alias-normalize.
+        old_s = rel.get("source_type") or type_by_name.get(src)
+        old_t = rel.get("target_type") or type_by_name.get(tgt)
+        old_s = _normalize_entity_type(old_s) if old_s else None
+        old_t = _normalize_entity_type(old_t) if old_t else None
+        if await _name_type_hit(src, old_s) and await _name_type_hit(tgt, old_t):
+            old_outcomes["resolved"] += 1
+        else:
+            old_outcomes["skipped"] += 1
 
-        src_typed = await _name_type_hit(src, src_t)
-        tgt_typed = await _name_type_hit(tgt, tgt_t)
-        if src_typed and tgt_typed:
-            outcomes["resolved_typed"] += 1
-            continue
-
-        outcomes["skipped"] += 1
-        # Diagnose WHY each missing side missed.
-        for side, name, etype, typed_hit in (
-            ("src", src, src_t, src_typed),
-            ("tgt", tgt, tgt_t, tgt_typed),
-        ):
-            if typed_hit:
-                continue
-            name_only = await _name_type_hit(name, None)
-            bridge_t = _resolve_entity_type(name).entity_type if False else None  # noqa
-            if name_only:
-                skip_detail[f"{side}: TYPE-only miss (name exists, type={etype})"] += 1
-            else:
-                skip_detail[f"{side}: NAME miss (no entity named, type={etype})"] += 1
+        # NEW (fixed) logic: bridge-typed endpoints + name-only fallback via the
+        # real service helper.
+        ns = _endpoint_type(src, rel.get("source_type"))
+        nt = _endpoint_type(tgt, rel.get("target_type"))
+        sid = await svc._resolve_endpoint_id(src, ns)
+        tid = await svc._resolve_endpoint_id(tgt, nt)
+        if sid is not None and tid is not None:
+            new_outcomes["resolved"] += 1
+        else:
+            new_outcomes["skipped"] += 1
+            for side, name, eid in (("src", src, sid), ("tgt", tgt, tid)):
+                if eid is None:
+                    skip_detail[f"{side}: NAME miss (no entity named)"] += 1
+                    name_miss_names.add(name)
 
     print(f"=== O.1 diagnosis for {source_id} ===")
     print(f"entities stored: {len(entities)}  relations stored: {len(relations)}")
-    print("outcomes:", dict(outcomes))
-    print("skip detail (per missing endpoint):")
+    print("OLD (alias-typed, no fallback):", dict(old_outcomes))
+    print("NEW (bridge-typed + name-only fallback):", dict(new_outcomes))
+    print("NEW skip detail (per missing endpoint):")
     for k, v in skip_detail.most_common():
         print(f"  {v:4d}  {k}")
+    if name_miss_names:
+        print("sample names with no persisted entity (extraction-consistency, out of O.1 scope):")
+        for n in list(name_miss_names)[:8]:
+            print(f"    {n!r}")
 
 
 if __name__ == "__main__":
