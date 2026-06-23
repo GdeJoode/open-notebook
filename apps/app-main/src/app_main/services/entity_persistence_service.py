@@ -487,44 +487,49 @@ class EntityPersistenceService:
             rel_attempted += 1
 
             # K.7a + O.1: resolve each endpoint's type so the typed lookup
-            # matches the row the ENTITY upsert actually wrote. The upsert types
-            # an entity through ``_resolve_entity_type`` (the L.1 ontology
-            # bridge, incl. parent_type walk); ``type_by_name`` already holds
-            # that exact bridge-resolved value keyed by the entity text. So
-            # prefer ``type_by_name`` (the persisted truth) over the relation's
-            # own ``source_type``/``target_type``, which carries the raw LLM
-            # label and — resolved only through the alias map — diverges from the
-            # bridge (e.g. ``Indicator`` → relation-side ``other`` vs entity-side
-            # ``topic``). When the endpoint is cross-batch (not in ``type_by_name``)
-            # we fall back to the relation-carried type but resolve THAT through
-            # the SAME bridge (``_resolve_entity_type``), not ``_normalize_entity_type``,
-            # so it lands on the same canonical the entity would have. An endpoint
-            # with no type signal at all stays None → name-only resolution.
-            src_type = type_by_name.get(src_text)
-            if src_type is None and rel.get("source_type"):
-                src_type = _resolve_entity_type(rel["source_type"]).entity_type
-            tgt_type = type_by_name.get(tgt_text)
-            if tgt_type is None and rel.get("target_type"):
-                tgt_type = _resolve_entity_type(rel["target_type"]).entity_type
+            # matches the row the ENTITY upsert actually wrote, AND so a
+            # per-edge homograph disambiguator still wins.
+            #
+            # The entity upsert types every row through ``_resolve_entity_type``
+            # (the L.1 ontology bridge incl. parent_type walk). So BOTH type
+            # sources here must go through that SAME bridge — the O.1 fix. The
+            # old code resolved the relation-carried type with the alias-only
+            # ``_normalize_entity_type``, which for a bridge-only label diverges
+            # (``Indicator`` → relation-side ``other`` vs entity-side ``topic``)
+            # and the (name,type) lookup missed.
+            #
+            # Precedence: a relation-CARRIED ``source_type``/``target_type`` wins
+            # because it is the per-edge disambiguator for an in-batch homograph
+            # (a ``person`` BZK and an ``organization`` BZK in the same batch —
+            # ``type_by_name`` can only hold one type per name, so it cannot tell
+            # the two edges apart; the carried type can). When the relation
+            # carries no type, fall back to the bridge-resolved batch map
+            # (``type_by_name``). Neither present → None → name-only resolution.
+            src_carried = rel.get("source_type")
+            src_type = (
+                _resolve_entity_type(src_carried).entity_type
+                if src_carried
+                else type_by_name.get(src_text)
+            )
+            tgt_carried = rel.get("target_type")
+            tgt_type = (
+                _resolve_entity_type(tgt_carried).entity_type
+                if tgt_carried
+                else type_by_name.get(tgt_text)
+            )
 
             try:
-                # Field-name alignment to migration 39's SCHEMAFULL `relation`
-                # table: lookups use `canonical_name`, and the edge carries
-                # `source_documents` (array), not the legacy `source_id` scalar.
-                #
-                # K.7a: when an endpoint's type is known, additionally filter the
-                # SELECT by ``entity_type`` so a cross-type homograph (a person
-                # AND an org both named "BZK") resolves to the type-correct
-                # entity. When the type is None, the filter degrades to the
-                # original name-only ``LIMIT 1`` — zero regression for today's
-                # working (unambiguous) cases. The ``IF array::len(...) > 0``
-                # guard and the RELATE SET fields are unchanged.
+                # K.7a + O.1: resolve each endpoint to a persisted entity id —
+                # typed lookup first (homograph-correct), name-only fallback on a
+                # typed miss (so a too-strict type filter never drops an edge).
+                # See ``_resolve_endpoint_id``.
                 src_id = await self._resolve_endpoint_id(src_text, src_type)
                 tgt_id = await self._resolve_endpoint_id(tgt_text, tgt_type)
                 if src_id is None or tgt_id is None:
-                    # O.1 diagnosis: a missing endpoint is the silent-skip the
-                    # 3-relation symptom comes from. Record WHY (which side, the
-                    # offending name/type) so a live run pinpoints type-vs-name.
+                    # A missing endpoint is the silent-skip the 3-relation
+                    # symptom came from. Record WHY (which side, the offending
+                    # name/type) so a live run pinpoints a genuine name miss (the
+                    # only residual cause after the O.1 type fix + fallback).
                     rel_skipped += 1
                     if len(skip_samples) < 20:
                         reason = []
@@ -534,17 +539,24 @@ class EntityPersistenceService:
                             reason.append(f"tgt miss ({tgt_text!r},{tgt_type!r})")
                         skip_samples.append("; ".join(reason))
                     continue
+                # Field-name alignment to migration 39's SCHEMAFULL ``relation``
+                # table: the edge carries ``source_documents`` (array), not the
+                # legacy ``source_id`` scalar. ``type::thing`` coerces the string
+                # id from the endpoint SELECT back into a record link — RELATE
+                # rejects a bare string for in/out.
                 await execute_query(
                     """
-                    RELATE $sid->relation->$tid SET
+                    LET $s = type::thing($sid);
+                    LET $t = type::thing($tid);
+                    RELATE $s->relation->$t SET
                         relation_type = $rel_type,
                         confidence = $confidence,
                         source_documents = [$source_id],
                         properties = $properties;
                     """,
                     {
-                        "sid": src_id,
-                        "tid": tgt_id,
+                        "sid": str(src_id),
+                        "tid": str(tgt_id),
                         "rel_type": rel_type,
                         "confidence": confidence,
                         "source_id": source_id,
@@ -557,24 +569,28 @@ class EntityPersistenceService:
                     f"Failed to create relation {src_text} -> {tgt_text}: {e}"
                 )
 
-        # O.1 diagnosis: structured summary of relation persistence per source.
+        # O.1: concise per-source relation-persist summary. A non-zero skip
+        # count is worth surfacing (after the type fix + name-only fallback, the
+        # only residual cause is a genuine name miss — an endpoint surface form
+        # the extraction never persisted as an entity), with a small sample of
+        # offending (name, type) pairs for debugging. The clean case logs at
+        # DEBUG to avoid noise.
         if rel_skipped:
-            logger.warning(
-                "O.1 relation persist for source {}: attempted={} created={} "
-                "skipped={} (sample reasons: {})",
+            logger.info(
+                "Relation persist for source {}: created={}/{} "
+                "({} skipped — endpoint not found; sample: {})",
                 source_id,
-                rel_attempted,
                 relations_created,
+                rel_attempted,
                 rel_skipped,
-                skip_samples,
+                skip_samples[:5],
             )
         else:
-            logger.info(
-                "O.1 relation persist for source {}: attempted={} created={} "
-                "skipped=0",
+            logger.debug(
+                "Relation persist for source {}: created={}/{}",
                 source_id,
-                rel_attempted,
                 relations_created,
+                rel_attempted,
             )
 
         # 3. Store match candidates in resolution_log (stap 2C)
