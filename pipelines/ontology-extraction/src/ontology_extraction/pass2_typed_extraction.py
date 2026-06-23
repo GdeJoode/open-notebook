@@ -82,9 +82,15 @@ from ontology_extraction.prompts.pass2 import (
 )
 
 # Coarse token estimator: ``len(text) // 4`` matches Q-B-2's
-# heuristic. Same envelope as Pass-1: a 20% safety margin against the
-# 3000-token plan cap → enforce ≤ 2400 estimated tokens.
-TOKEN_BUDGET_TARGET = 2400
+# heuristic. This is the LEGACY DEFAULT budget, used only on the
+# fallback path where no ``token_budget`` is threaded into ``run_pass2``
+# (CLI / dev). Production threads ``pass2_token_cap`` (a large,
+# context-derived ceiling), so this constant never gates the proven
+# recipe. Raised from 2400 → 2800 in N.1 to reserve room for the
+# exhaustive-extraction prompt overhead (~+290 tokens), so a realistic
+# single-chunk default-path call still fits without falsely tripping
+# the guard. Headroom remains against the 3000-token plan cap.
+TOKEN_BUDGET_TARGET = 2800
 
 # How many characters of a malformed LLM response to include in the
 # WARNING log. Long enough to diagnose, short enough not to swamp the
@@ -389,10 +395,10 @@ async def run_pass2(
             to the lazy default (CLI / dev only; logs a canary).
         model: Model identifier passed to the LLM caller.
         token_budget: Per-prompt token ceiling. ``None`` keeps the legacy
-            fixed :data:`TOKEN_BUDGET_TARGET` (2400) so existing callers are
+            fixed :data:`TOKEN_BUDGET_TARGET` (2800) so existing callers are
             unchanged. Track M threads the ACTIVE model's context-derived
             input budget here so a context-packed window (which can legitimately
-            run far past 2400 tokens on a big-context model) is not falsely
+            run far past 2800 tokens on a big-context model) is not falsely
             rejected — while a window that genuinely overflows the model still
             raises loudly.
 
@@ -403,8 +409,8 @@ async def run_pass2(
         elements but do not interrupt the run.
 
     Raises:
-        Pass2TokenBudgetExceeded: Prompt exceeds the 2400-token cap
-            for some chunk.
+        Pass2TokenBudgetExceeded: Prompt exceeds the legacy default
+            2800-token cap (or the threaded ``token_budget``) for some chunk.
         Pass2ParseError: LLM caller itself failed (transport).
     """
     extensions = accepted_extensions or []

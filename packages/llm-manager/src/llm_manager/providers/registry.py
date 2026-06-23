@@ -102,6 +102,22 @@ PROVIDER_CONFIGS: Dict[str, ProviderConfig] = {
         supports_vision=True,
         supports_tools=True,
     ),
+    "ollama-cloud": ProviderConfig(
+        name="ollama-cloud",
+        display_name="Ollama Cloud",
+        env_var_prefix="OLLAMA_CLOUD_",
+        api_key_env_var="OLLAMA_CLOUD_API_KEY",
+        # Ollama Cloud exposes an OpenAI-compatible REST surface at ollama.com/v1.
+        # esperanto has no native ollama-cloud provider, so ModelFactory routes it
+        # through esperanto's ``openai-compatible`` LanguageModel with the base_url
+        # below + OLLAMA_CLOUD_API_KEY as the bearer token (mirrors the NVIDIA NIM
+        # pattern). Distinct from the local ``ollama`` provider above.
+        base_url_env_var="OLLAMA_CLOUD_BASE_URL",
+        default_base_url="https://ollama.com/v1",
+        is_local=False,
+        supports_tools=True,
+        supports_embedding=False,
+    ),
     "llamacpp": ProviderConfig(
         name="llamacpp",
         display_name="LlamaCpp (Local)",

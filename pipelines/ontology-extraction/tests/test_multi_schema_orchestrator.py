@@ -964,9 +964,11 @@ class TestTokenBudgetGuard:
             assert _estimate_tokens(prompt) <= 3000
 
     def test_internal_budget_target_holds(self):
-        # The B.1d-internal cap is 2400 (20% margin against 3000).
-        # If this assertion drifts, B.1e's perf guarantee drifts too.
-        assert TOKEN_BUDGET_TARGET == 2400
+        # The B.1d-internal legacy default cap. Raised 2400 → 2800 in N.1
+        # to reserve room for the exhaustive-extraction prompt overhead
+        # (~+290 tokens). If this assertion drifts, B.1e's perf guarantee
+        # drifts too.
+        assert TOKEN_BUDGET_TARGET == 2800
 
 
 # ---------------------------------------------------------------------------

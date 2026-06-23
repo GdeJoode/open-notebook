@@ -258,6 +258,29 @@ def build_pass2_prompt(
             f"according to the **{schema_name}** schema."
         ),
         "",
+        "## CRITICAL — Exhaustive extraction (complete recall, not a shortlist)",
+        (
+            "Extract EVERY entity the text mentions — every organization, person, place, "
+            "government body, policy, programme, deal, theme, indicator, law, instrument, "
+            "budget/amount, date, and named concept. Do NOT select only the most important "
+            "ones and do NOT summarize. Work through the text systematically, sentence by "
+            "sentence, and emit every distinct entity you encounter. A document of this kind "
+            "yields many dozens of entities — if you return only a handful you have MISSED "
+            "most of them, which is a failure."
+        ),
+        (
+            "- Do NOT deduplicate, merge, or filter: list every distinct entity even when "
+            "similar ones already appear. Downstream processing handles dedup and filtering "
+            "— your job is COMPLETE RECALL, never a curated shortlist. Never silently drop "
+            "an entity because it seems minor or is hard to classify."
+        ),
+        (
+            "- Map AGGRESSIVELY to the schema: give each entity the MOST SPECIFIC defined "
+            "type (e.g. Gemeente, Ministerie, RegioDeal, BeleidsThema, Indicator) rather "
+            "than a generic one. ONLY if an entity genuinely fits no defined type, set its "
+            "type to \"other\" — never drop it and never force it into a wrong type."
+        ),
+        "",
         "## Entity Types",
         "",
     ]

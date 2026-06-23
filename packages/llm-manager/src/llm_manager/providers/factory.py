@@ -39,8 +39,9 @@ def _resolve_provider_endpoint(
 
     # Providers esperanto supports natively keep their name; only those without
     # a native esperanto LLM provider but a known OpenAI-compatible endpoint are
-    # remapped. NVIDIA NIM is the J.4 case.
-    _OPENAI_COMPATIBLE = {"nvidia"}
+    # remapped. NVIDIA NIM is the J.4 case; Ollama Cloud (ollama.com/v1) is the
+    # same shape (OpenAI-compatible bearer endpoint, no native esperanto provider).
+    _OPENAI_COMPATIBLE = {"nvidia", "ollama-cloud"}
     if provider.lower() not in _OPENAI_COMPATIBLE:
         return provider, config
 

@@ -418,8 +418,10 @@ class TestTokenBudget:
         assert _estimate_tokens("a" * 4) == 1
         assert _estimate_tokens("a" * 100) == 25
 
-    def test_budget_target_is_2400(self):
-        assert TOKEN_BUDGET_TARGET == 2400
+    def test_budget_target_is_2800(self):
+        # Legacy default budget. Raised 2400 → 2800 in N.1 to reserve
+        # room for the exhaustive-extraction prompt overhead (~+290 tokens).
+        assert TOKEN_BUDGET_TARGET == 2800
 
     async def test_budget_guard_fires_pre_llm(self):
         """Oversized chunk raises ``Pass2TokenBudgetExceeded`` before LLM."""
