@@ -224,6 +224,140 @@ async def test_cross_batch_endpoint_falls_back_to_name_only(
 
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
+async def test_bridge_only_type_endpoint_resolves_and_creates_edge(
+    live_surrealdb: SurrealDBConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """O.1: a relation whose endpoint type is a BRIDGE-only canonical (a label
+    that resolves to its canonical only via the L.1 ontology bridge, NOT the
+    alias map) must resolve + create the edge.
+
+    Pre-O.1 the relation side typed the endpoint with ``_normalize_entity_type``
+    (alias-only). For a bridge-only label that lands on ``other`` while the
+    ENTITY persisted with the bridge canonical (e.g. ``topic``), so the
+    ``(name, type)`` lookup missed and the edge was silently dropped. Here the
+    source endpoint is a ``BeleidsThema`` (bridges to ``topic`` via its
+    ``Concept`` parent); the carried ``source_type`` is the bare label that only
+    the bridge resolves. The edge must still be created, anchored at the
+    bridge-typed entity.
+    """
+    from ontology_manager.schema import (
+        EntityTypeDefinition,
+        Ontology,
+        OntologyMetadata,
+    )
+
+    themes = Ontology(
+        metadata=OntologyMetadata(name="policy_themes", version="1.0"),
+        entity_types={
+            "BeleidsThema": EntityTypeDefinition(
+                name="BeleidsThema", parent_type="Concept"
+            )
+        },
+    )
+    thema = _u("Klimaatadaptatie")
+    wet = _u("Omgevingswet")
+    svc = _bind_service_to_config(monkeypatch, live_surrealdb)
+
+    result = await svc.persist_filtered_result(
+        source_id="source:o1-bridge",
+        entities=[
+            {"text": thema, "label": "BeleidsThema", "confidence": 0.9, "properties": {}},
+            {"text": wet, "label": "Wet", "confidence": 0.9, "properties": {}},
+        ],
+        relations=[
+            # carried types are the raw ontology labels — only the bridge maps
+            # ``BeleidsThema`` -> topic; the alias-only path would give ``other``.
+            {"source_entity": thema, "target_entity": wet, "relation_type": "REGULATED_BY",
+             "source_type": "BeleidsThema", "target_type": "Wet",
+             "confidence": 0.8, "properties": {}},
+        ],
+        applicable_schemas=[themes],
+    )
+    assert result["relations_created"] == 1
+
+    # The source entity persisted with the BRIDGE canonical, ``topic``.
+    rows = await execute_query(
+        "SELECT VALUE entity_type FROM entity WHERE canonical_name = $n LIMIT 1;",
+        {"n": thema}, config=live_surrealdb,
+    )
+    assert rows and rows[0] == "topic", "BeleidsThema must bridge to topic"
+
+    thema_id = (await execute_query(
+        "SELECT VALUE id FROM entity WHERE canonical_name = $n AND entity_type='topic' LIMIT 1;",
+        {"n": thema}, config=live_surrealdb,
+    ))[0]
+    wet_id = (await execute_query(
+        "SELECT VALUE id FROM entity WHERE canonical_name = $n LIMIT 1;",
+        {"n": wet}, config=live_surrealdb,
+    ))[0]
+    edge = await _edge_endpoints(
+        live_surrealdb, str(thema_id), str(wet_id), "REGULATED_BY"
+    )
+    assert edge is not None, (
+        "bridge-only-typed endpoint must resolve and create the edge"
+    )
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_typed_miss_falls_back_to_name_only_and_creates_edge(
+    live_surrealdb: SurrealDBConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """O.1: when the typed lookup misses (the relation's type disagrees with the
+    only persisted row's type) the endpoint resolves by NAME ONLY so the edge is
+    NOT dropped.
+
+    Seed a single ``organization`` entity, then persist a relation that carries
+    a DISAGREEING ``source_type`` (``person``). The typed lookup
+    ``(name, person)`` misses; the name-only fallback resolves the lone row and
+    the edge is created — a relation must never be silently dropped just because
+    the type filter was too strict.
+    """
+    name = _u("SoloOrg")
+    tgt = _u("SoloTarget")
+    await execute_query(
+        "CREATE entity SET canonical_name=$n, name=$n, entity_type='organization', "
+        "embedding=[], confidence=0.9, source_documents=[], status='active';",
+        {"n": name}, config=live_surrealdb,
+    )
+    await execute_query(
+        "CREATE entity SET canonical_name=$n, name=$n, entity_type='legislation', "
+        "embedding=[], confidence=0.9, source_documents=[], status='active';",
+        {"n": tgt}, config=live_surrealdb,
+    )
+    svc = _bind_service_to_config(monkeypatch, live_surrealdb)
+
+    result = await svc.persist_filtered_result(
+        source_id="source:o1-fallback",
+        entities=[],  # endpoints are pre-seeded, not in the batch
+        relations=[
+            {"source_entity": name, "target_entity": tgt, "relation_type": "DRAFTS",
+             # carried source_type disagrees with the only persisted row (org)
+             "source_type": "person", "confidence": 0.8, "properties": {}},
+        ],
+    )
+    assert result["relations_created"] == 1, (
+        "typed miss must fall back to name-only, not drop the edge"
+    )
+
+    src_id = (await execute_query(
+        "SELECT VALUE id FROM entity WHERE canonical_name=$n LIMIT 1;",
+        {"n": name}, config=live_surrealdb,
+    ))[0]
+    tgt_id = (await execute_query(
+        "SELECT VALUE id FROM entity WHERE canonical_name=$n LIMIT 1;",
+        {"n": tgt}, config=live_surrealdb,
+    ))[0]
+    edge = await _edge_endpoints(
+        live_surrealdb, str(src_id), str(tgt_id), "DRAFTS"
+    )
+    assert edge is not None, "name-only fallback must create the edge"
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
 async def test_audit_flags_ambiguous_endpoint_and_is_read_only(
     live_surrealdb: SurrealDBConfig,
 ) -> None:

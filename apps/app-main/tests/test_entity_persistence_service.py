@@ -52,10 +52,13 @@ class TestPersistFilteredResult:
     async def test_creates_relations(self):
         svc, _mock_upsert = _make_service_with_mock_repo()
 
+        # O.1: the relation path now resolves each endpoint id via
+        # ``_resolve_endpoint_id`` (a SELECT) then RELATEs. A non-empty SELECT
+        # return means both endpoints resolve so the edge is created.
         with patch(
             "app_main.services.entity_persistence_service.execute_query",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=["entity:fake"],
         ) as mock_query:
             result = await svc.persist_filtered_result(
                 source_id="source:1",
@@ -72,20 +75,25 @@ class TestPersistFilteredResult:
             )
 
         assert result["relations_created"] == 1
-        # Relation path still hits execute_query (one RELATE statement)
-        assert mock_query.call_count == 1
+        # Two endpoint lookups (src + tgt) + one RELATE.
+        assert mock_query.call_count == 3
 
     @pytest.mark.asyncio
     async def test_relation_endpoint_type_from_batch_entities(self):
-        """K.7a: when both endpoints are in the batch's entities, the RELATE
-        SELECT is type-filtered (the entity_type from the batch) so a
-        cross-type homograph resolves to the type-correct entity."""
+        """K.7a: when both endpoints are in the batch's entities, each endpoint
+        lookup is type-filtered (the bridge-resolved entity_type from the batch)
+        so a cross-type homograph resolves to the type-correct entity.
+
+        O.1: the lookup is now a per-endpoint SELECT (``_resolve_endpoint_id``).
+        We assert the FIRST (typed) SELECT for each endpoint carries the right
+        ``etype``.
+        """
         svc, _mock_upsert = _make_service_with_mock_repo()
 
         with patch(
             "app_main.services.entity_persistence_service.execute_query",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=["entity:fake"],  # both typed lookups hit
         ) as mock_query:
             await svc.persist_filtered_result(
                 source_id="source:1",
@@ -104,39 +112,94 @@ class TestPersistFilteredResult:
                 ],
             )
 
-        # The relation RELATE is the call carrying src_name.
-        relate_call = next(
-            c for c in mock_query.call_args_list
-            if (c.args[1] if len(c.args) > 1 else {}).get("src_name") == "BZK"
-        )
-        sql, params = relate_call.args[0], relate_call.args[1]
-        # Type filter present for BOTH endpoints (both came from the batch).
-        assert "entity_type = $src_type" in sql
-        assert "entity_type = $tgt_type" in sql
-        # Normalized types: ORG → organization, law → legislation.
-        assert params["src_type"] == "organization"
-        assert params["tgt_type"] == "legislation"
+        # The typed endpoint SELECTs carry name + etype. ORG → organization,
+        # law → legislation (via the bridge/alias path).
+        typed_lookups = [
+            c.args[1] for c in mock_query.call_args_list
+            if "etype" in (c.args[1] if len(c.args) > 1 else {})
+        ]
+        by_name = {p["name"]: p["etype"] for p in typed_lookups}
+        assert by_name.get("BZK") == "organization"
+        assert by_name.get("Klimaatwet") == "legislation"
 
     @pytest.mark.asyncio
-    async def test_relation_prefers_relation_carried_type(self):
-        """K.7a: a type the relation already carries (source_type/target_type)
-        wins over the same-batch entity map."""
+    async def test_relation_bridge_only_type_endpoint_resolves(self):
+        """O.1: an endpoint whose entity type is a BRIDGE-only canonical (e.g.
+        a label that bridges to ``topic``) must be typed via the bridge so the
+        (name, type) lookup matches the persisted row.
+
+        Pre-fix the relation side used ``_normalize_entity_type`` (alias-only),
+        which for a bridge-only label resolves to ``other`` and diverged from
+        the entity's bridge type → the typed lookup missed and the edge was
+        skipped. Here the carried ``source_type`` bridges to ``topic``.
+        """
         svc, _mock_upsert = _make_service_with_mock_repo()
 
         with patch(
             "app_main.services.entity_persistence_service.execute_query",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=["entity:fake"],
         ) as mock_query:
             await svc.persist_filtered_result(
                 source_id="source:1",
                 entities=[],
                 relations=[
                     {
+                        "source_entity": "Indicator X",
+                        "target_entity": "Klimaatwet",
+                        "relation_type": "MEASURES",
+                        # raw ontology label that the alias map coarses to a NL
+                        # theme → bridge-resolved canonical ``topic``.
+                        "source_type": "BeleidsThema",
+                        "target_type": "legislation",
+                        "confidence": 0.7,
+                        "properties": {},
+                    },
+                ],
+                applicable_schemas=[_policy_themes_schema()],
+            )
+
+        typed_lookups = [
+            c.args[1] for c in mock_query.call_args_list
+            if "etype" in (c.args[1] if len(c.args) > 1 else {})
+        ]
+        by_name = {p["name"]: p["etype"] for p in typed_lookups}
+        # The endpoint type is the BRIDGE canonical, not the alias-only ``other``.
+        assert by_name.get("Indicator X") == "topic"
+        assert by_name.get("Klimaatwet") == "legislation"
+
+    @pytest.mark.asyncio
+    async def test_relation_carried_type_wins_for_homograph_disambiguation(self):
+        """K.7a: a relation-CARRIED source_type wins over the same-batch entity
+        map, because it is the per-edge disambiguator for an in-batch homograph.
+
+        ``type_by_name`` can only hold ONE type per name, so when a batch has a
+        ``person`` BZK AND an ``organization`` BZK, only the carried type can
+        tell the two edges apart. O.1: the carried type is now bridge-resolved
+        (same as the entity), so the typed lookup still matches the persisted
+        row.
+        """
+        svc, _mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=["entity:fake"],
+        ) as mock_query:
+            await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[
+                    # batch map for BZK resolves to organization (last write wins)
+                    {"text": "BZK", "label": "person", "confidence": 0.9, "properties": {}},
+                    {"text": "BZK", "label": "ORG", "confidence": 0.9, "properties": {}},
+                ],
+                relations=[
+                    {
                         "source_entity": "BZK",
                         "target_entity": "Klimaatwet",
-                        "relation_type": "SIGNS",
-                        "source_type": "organization",
+                        "relation_type": "LEADS",
+                        # carried type disambiguates THIS edge to the person BZK
+                        "source_type": "person",
                         "target_type": "legislation",
                         "confidence": 0.7,
                         "properties": {},
@@ -144,13 +207,63 @@ class TestPersistFilteredResult:
                 ],
             )
 
-        relate_call = next(
-            c for c in mock_query.call_args_list
-            if (c.args[1] if len(c.args) > 1 else {}).get("src_name") == "BZK"
+        typed_lookups = [
+            c.args[1] for c in mock_query.call_args_list
+            if "etype" in (c.args[1] if len(c.args) > 1 else {})
+        ]
+        by_name = {p["name"]: p["etype"] for p in typed_lookups}
+        # Carried type wins: person, NOT the batch map's organization.
+        assert by_name.get("BZK") == "person"
+
+    @pytest.mark.asyncio
+    async def test_relation_name_only_fallback_when_typed_miss(self):
+        """O.1: when the typed lookup misses (entity exists under a different
+        type) the endpoint resolves by NAME ONLY so the edge is not dropped.
+
+        The mock returns [] for the typed SELECT (carrying ``etype``) and a fake
+        id for the name-only SELECT — proving the fallback fires and the RELATE
+        runs."""
+        svc, _mock_upsert = _make_service_with_mock_repo()
+
+        async def fake_query(query, params=None, config=None):
+            params = params or {}
+            if "etype" in params:
+                return []  # typed lookup misses
+            if "name" in params:
+                return ["entity:fallback"]  # name-only hit
+            return []  # RELATE
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            side_effect=fake_query,
+        ) as mock_query:
+            result = await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[
+                    {"text": "BZK", "label": "ORG", "confidence": 0.9, "properties": {}},
+                    {"text": "EZK", "label": "ORG", "confidence": 0.9, "properties": {}},
+                ],
+                relations=[
+                    {
+                        "source_entity": "BZK",
+                        "target_entity": "EZK",
+                        "relation_type": "RELATED",
+                        "confidence": 0.7,
+                        "properties": {},
+                    },
+                ],
+            )
+
+        assert result["relations_created"] == 1
+        # Both a typed and a name-only SELECT ran per endpoint, then a RELATE.
+        had_typed = any(
+            "etype" in (c.args[1] or {}) for c in mock_query.call_args_list
         )
-        params = relate_call.args[1]
-        assert params["src_type"] == "organization"
-        assert params["tgt_type"] == "legislation"
+        had_name_only = any(
+            (c.args[1] or {}).get("name") and "etype" not in (c.args[1] or {})
+            for c in mock_query.call_args_list
+        )
+        assert had_typed and had_name_only
 
     @pytest.mark.asyncio
     async def test_relation_unknown_endpoint_falls_back_to_name_only(self):
@@ -162,7 +275,7 @@ class TestPersistFilteredResult:
         with patch(
             "app_main.services.entity_persistence_service.execute_query",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=["entity:fake"],
         ) as mock_query:
             result = await svc.persist_filtered_result(
                 source_id="source:1",
@@ -179,16 +292,12 @@ class TestPersistFilteredResult:
             )
 
         assert result["relations_created"] == 1
-        relate_call = next(
-            c for c in mock_query.call_args_list
-            if (c.args[1] if len(c.args) > 1 else {}).get("src_name") == "BZK"
+        # No type known for either endpoint → no typed SELECT ran (only
+        # name-only lookups + the RELATE).
+        assert not any(
+            "etype" in (c.args[1] if len(c.args) > 1 else {})
+            for c in mock_query.call_args_list
         )
-        sql, params = relate_call.args[0], relate_call.args[1]
-        # No type filter on either endpoint — pure name-only resolution.
-        assert "entity_type = $src_type" not in sql
-        assert "entity_type = $tgt_type" not in sql
-        assert params["src_type"] is None
-        assert params["tgt_type"] is None
 
     @pytest.mark.asyncio
     async def test_skips_empty_entity_text(self):

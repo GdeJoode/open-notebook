@@ -25,15 +25,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from surrealdb_service.connection import execute_query  # noqa: E402
-
-# Mirror the relation-side type resolution used in persist (alias-only path),
-# plus the bridge-aware type_by_name the persist builds from this source's
-# entities. We import the real helpers to stay faithful.
-from app_main.services.entity_persistence_service import (  # noqa: E402
+# Mirror the relation-side type resolution used in persist. Imports follow the
+# load_dotenv() above so SURREAL_* are set before the surrealdb pool config is
+# read — hence the noqa: E402.
+from app_main.services.entity_persistence_service import (  # noqa: E402, I001
     _normalize_entity_type,
     _resolve_entity_type,
 )
+from surrealdb_service.connection import execute_query  # noqa: E402
 
 
 async def _name_type_hit(name: str, etype: str | None) -> bool:
