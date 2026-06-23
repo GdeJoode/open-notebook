@@ -24,20 +24,24 @@ Ollama fallback's effective context.
 
 from app_main.services.extraction_chunking.context_packer import (
     DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_MAX_WINDOW_TOKENS,
     DEFAULT_PROMPT_OVERHEAD_TOKENS,
     PackedWindow,
     estimate_tokens,
     input_budget_tokens,
     pack_chunks_for_model,
     pass2_token_cap,
+    resolve_max_window_tokens,
 )
 
 __all__ = [
     "DEFAULT_CONTEXT_WINDOW",
+    "DEFAULT_MAX_WINDOW_TOKENS",
     "DEFAULT_PROMPT_OVERHEAD_TOKENS",
     "PackedWindow",
     "estimate_tokens",
     "input_budget_tokens",
     "pack_chunks_for_model",
     "pass2_token_cap",
+    "resolve_max_window_tokens",
 ]
