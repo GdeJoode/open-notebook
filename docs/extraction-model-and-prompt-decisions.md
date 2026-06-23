@@ -120,11 +120,27 @@ Track M context-packing held constant where noted.
 
 ---
 
-## 6. Open / deferred items
+## 6. Relations — RESOLVED (Track O.1 + migration 58)
 
-- **Relations persistence**: the new pipeline extracts relations well (264) — verify they
-  persist cleanly (the KG had a long-standing 3-relation floor; the K.7a type-safe
-  endpoint resolution + this run should be re-checked end-to-end).
+The KG had a long-standing **3-relation floor** despite extraction producing hundreds.
+Two root causes, both fixed:
+1. **Endpoint typing mismatch**: the relation step typed endpoints via the alias-only
+   `_normalize_entity_type`, while entities are typed via the L.1 bridge — so the
+   `(name, type)` RELATE lookup missed for bridge-only types (`Indicator`→topic vs
+   other). Fixed: relation endpoints now bridge-resolve (carried `source_type`/`target_type`
+   wins, else the bridge-resolved `type_by_name` map), with a **name-only fallback** on a
+   typed miss (K.7a cross-type homograph safety preserved). Plus a RELATE record-link bug
+   (`SELECT VALUE id` → string; coerced back with `type::thing`).
+2. **Live schema drift**: the live `relation` table was a pre-migration-39 **NORMAL**
+   table, so migration 39's `TYPE RELATION` never took effect and every `RELATE` failed
+   ("not a relation, expected a NORMAL"). **Migration 58** drops the malformed legacy table
+   (3 null-endpoint rows) and re-asserts the edge `TYPE RELATION` table.
+
+**Verified**: 3 → **261 relations** on one doc, with meaningful Dutch domain predicates
+(`IS_PIJLER_VAN`, `LEIDT_TOT`, `VERSTERKT`, `VERMINDERT`, `BIJDRAGT_AAN`). The KG now has a
+real graph.
+
+## 7. Open / deferred items
 - **Track M.4(a)**: full per-document failover re-chunking (the interim guard bounds
   `num_ctx` + logs but does not re-split a head-sized prompt for a smaller-context
   fallback — Ollama truncates it).
