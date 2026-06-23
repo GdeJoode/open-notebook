@@ -421,6 +421,42 @@ async def test_no_embedding_falls_back_to_fuzzy_only() -> None:
     assert report.auto_merge[0].method == "fuzzy"
 
 
+# --- P.1: embedding band gated on vectors -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_p1_embedding_band_fires_only_when_vectors_present() -> None:
+    """P.1 regression: the SAME pair the fuzzy resolver rejects on names is
+    proposed by the embedding band ONCE vectors exist — and NOT before.
+
+    This is the whole point of P.1: pre-fix every entity had ``embedding=[]``, so
+    the embedding band never fired and dissimilar-but-equivalent names (different
+    surface forms, near-identical meaning) were never proposed. After the forward
+    fix + backfill populate vectors, the band fires and dedup finds candidates it
+    could not see before.
+    """
+    # Names too dissimilar for fuzzy to propose (no shared stem).
+    name_a, name_b = "Stichting Alfa", "Beta Foundation"
+
+    # 1) Empty embeddings (the broken corpus): fuzzy rejects -> zero proposals.
+    empty = [
+        _entity("entity:a", name_a, embedding=[]),
+        _entity("entity:b", name_b, embedding=[]),
+    ]
+    report_empty = await _service(empty).propose_candidates()
+    assert report_empty.auto_merge_count == 0
+    assert report_empty.review_count == 0
+
+    # 2) Populated embeddings (post-backfill): the embedding band fires.
+    embedded = [
+        _entity("entity:a", name_a, embedding=[1.0, 0.0, 0.0]),
+        _entity("entity:b", name_b, embedding=[0.999, 0.0447, 0.0]),
+    ]
+    report_embedded = await _service(embedded).propose_candidates()
+    assert report_embedded.auto_merge_count == 1
+    assert report_embedded.auto_merge[0].method == "embedding"
+
+
 # --- to_merge_cluster reuse ---------------------------------------------------
 
 
