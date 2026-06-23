@@ -28,6 +28,7 @@ provider names to caps lives in the registry config, not in NIM/esperanto code
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections import deque
 from typing import Awaitable, Callable, Deque, Dict, TypeVar
@@ -45,6 +46,66 @@ DEFAULT_CLOUD_RPM = 20
 DEFAULT_LOCAL_RPM = 100_000
 
 _WINDOW_SECONDS = 60.0
+
+# Track M.2: per-provider request-rate caps (requests / 60s). These pace each
+# CLOUD provider under its real quota; the per-MODEL context window is a
+# separate axis (handled by the context packer), so caps live on the provider.
+#
+#   google ~ 6   — Gemini free tier is ~10/min; stay conservatively under it so
+#                  the sliding window itself respects the cap rather than
+#                  relying on 429 backoff after the fact.
+#   nvidia ~ 30  — NIM fair-use ceiling is ~40/min; leave headroom.
+#   ollama unlimited — local GPU has no fair-use concern (uses DEFAULT_LOCAL_RPM
+#                  via the high-cap path; no entry needed, listed for clarity).
+DEFAULT_PER_PROVIDER_RPM: Dict[str, int] = {
+    "google": 6,
+    "nvidia": 30,
+}
+
+# Env var per provider that overrides its cap at construction (Decision M-D2:
+# DI/env config map, no registry schema change, ops-tunable).
+_RPM_ENV_VARS: Dict[str, str] = {
+    "google": "GOOGLE_RPM",
+    "nvidia": "NVIDIA_RPM",
+    "ollama": "OLLAMA_RPM",
+}
+
+
+def resolve_per_provider_rpm(
+    base: Dict[str, int] | None = None,
+    *,
+    environ: Dict[str, str] | None = None,
+) -> Dict[str, int]:
+    """Resolve the per-provider RPM cap map, applying env overrides (M.2).
+
+    Starts from :data:`DEFAULT_PER_PROVIDER_RPM` (or ``base``) and overlays any
+    ``GOOGLE_RPM`` / ``NVIDIA_RPM`` / ``OLLAMA_RPM`` env var that parses as a
+    positive int. An unset or unparseable var leaves the default in place. This
+    keeps the cap source in the DI/env layer (no registry/DB schema change) and
+    lets an operator tune a provider's quota without a code change.
+    """
+    env = environ if environ is not None else os.environ
+    resolved = dict(base if base is not None else DEFAULT_PER_PROVIDER_RPM)
+    for provider, var in _RPM_ENV_VARS.items():
+        raw = env.get(var)
+        if raw is None:
+            continue
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"resolve_per_provider_rpm: {var}={raw!r} is not an int; "
+                f"keeping default for {provider}."
+            )
+            continue
+        if value <= 0:
+            logger.warning(
+                f"resolve_per_provider_rpm: {var}={value} must be > 0; "
+                f"keeping default for {provider}."
+            )
+            continue
+        resolved[provider] = value
+    return resolved
 
 
 class RateLimitTimeout(Exception):

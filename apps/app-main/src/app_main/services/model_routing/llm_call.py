@@ -89,6 +89,29 @@ def _extract_text(response: Any) -> str:
 # gracefully — no capability gate needed.
 _STRUCTURED_JSON = {"type": "json_object"}
 
+# Conservative fraction of an esperanto chars→token estimate; mirrors the
+# context packer's ceil(chars/4). Used only by the M.4 oversized-prompt guard.
+_CHARS_PER_TOKEN = 4
+
+
+def _ollama_num_ctx_for(candidate: ModelCandidate) -> Optional[int]:
+    """Track M.4 guard: the ``num_ctx`` to request from a local Ollama runtime.
+
+    Ollama defaults ``num_ctx`` to ~2-4K regardless of the model's theoretical
+    max, so a prompt packed for a big primary that fails over to local llama
+    would be silently truncated by the runtime, not the model. Passing the
+    candidate's (deliberately conservative — see ``seed_chain_models``)
+    ``context_window`` as ``num_ctx`` makes the runtime allocate the window the
+    packer sized against. Returns ``None`` for non-Ollama candidates or when the
+    model row carries no context_window (esperanto/runtime default applies).
+    """
+    if (candidate.provider or "").lower() != "ollama":
+        return None
+    model = candidate.model
+    if model is None or model.context_window is None:
+        return None
+    return int(model.context_window)
+
 
 async def call_candidate(
     candidate: ModelCandidate,
@@ -134,6 +157,35 @@ async def call_candidate(
         # ``AIFactory.create_language(config=...)`` and also keys the model cache,
         # so a json-mode build never collides with a prose build of the same id.
         kwargs.setdefault("structured", _STRUCTURED_JSON)
+
+    # M.4 oversized-chunk GUARD. A prompt packed for a big primary that fails
+    # over to a small-context candidate (local llama) would overflow. Two
+    # defences:
+    #   1. For local Ollama, request num_ctx = the candidate's (conservative)
+    #      context_window so the runtime allocates the window the packer sized
+    #      against (Ollama's ~2-4K default would otherwise truncate silently).
+    #   2. Log a WARNING when the estimated prompt tokens exceed the candidate's
+    #      context_window so an overflow on failover is observable rather than a
+    #      silent quality drop. (The packer re-splits for the HEAD; this catches
+    #      the per-call-failover case where a head-sized pack reaches a smaller
+    #      fallback — the interim V1 guard, Decision M-D3 (b).)
+    num_ctx = _ollama_num_ctx_for(candidate)
+    if num_ctx is not None:
+        kwargs.setdefault("num_ctx", num_ctx)
+    cand_ctx = model_record.context_window
+    if cand_ctx is not None:
+        est_prompt_tokens = (len(system) + len(user)) // _CHARS_PER_TOKEN
+        if est_prompt_tokens > cand_ctx:
+            logger.warning(
+                "M.4 guard: prompt ~{est} tokens exceeds {prov}/{name} "
+                "context_window {ctx}; the pack was sized for a larger primary "
+                "and reached a smaller fallback. num_ctx={num_ctx} requested.",
+                est=est_prompt_tokens,
+                prov=candidate.provider,
+                name=candidate.model_id,
+                ctx=cand_ctx,
+                num_ctx=num_ctx,
+            )
 
     instance = mm.get_model_from_config(model_record, **kwargs)
     if not isinstance(instance, LanguageModel):

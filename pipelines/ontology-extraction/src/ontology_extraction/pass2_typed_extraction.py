@@ -359,6 +359,7 @@ async def run_pass2(
     accepted_extensions: Optional[List[Dict[str, Any]]] = None,
     llm_caller: Optional[LLMCaller] = None,
     model: str = "default",
+    token_budget: Optional[int] = None,
 ) -> ExtractionResult:
     """Run Pass-2 typed extraction across a batch of chunks.
 
@@ -387,6 +388,13 @@ async def run_pass2(
         llm_caller: Injected sync or async caller. ``None`` falls back
             to the lazy default (CLI / dev only; logs a canary).
         model: Model identifier passed to the LLM caller.
+        token_budget: Per-prompt token ceiling. ``None`` keeps the legacy
+            fixed :data:`TOKEN_BUDGET_TARGET` (2400) so existing callers are
+            unchanged. Track M threads the ACTIVE model's context-derived
+            input budget here so a context-packed window (which can legitimately
+            run far past 2400 tokens on a big-context model) is not falsely
+            rejected — while a window that genuinely overflows the model still
+            raises loudly.
 
     Returns:
         A combined ``ExtractionResult``. Per AC #3 every entity and
@@ -401,6 +409,7 @@ async def run_pass2(
     """
     extensions = accepted_extensions or []
     caller = llm_caller if llm_caller is not None else _default_llm_caller()
+    budget = token_budget if token_budget is not None else TOKEN_BUDGET_TARGET
 
     # Empty chunks list short-circuits — no LLM calls, no errors,
     # empty result. AC #6.
@@ -444,7 +453,7 @@ async def run_pass2(
 
         user_prompt = build_pass2_prompt(ontology, chunk_text, extensions)
         estimated = _estimate_tokens(user_prompt)
-        if estimated > TOKEN_BUDGET_TARGET:
+        if estimated > budget:
             # Per Q-B-6 telemetry policy, log before raising so the
             # ledger captures the breach even if a higher-level
             # handler swallows the exception.
@@ -454,9 +463,9 @@ async def run_pass2(
                 "chunk or compress the ontology.",
                 chunk_id=chunk_id,
                 est=estimated,
-                budget=TOKEN_BUDGET_TARGET,
+                budget=budget,
             )
-            raise Pass2TokenBudgetExceeded(estimated, TOKEN_BUDGET_TARGET)
+            raise Pass2TokenBudgetExceeded(estimated, budget)
 
         logger.info(
             "pass2_chunk_start chunk_id={chunk_id} estimated_tokens={est}",

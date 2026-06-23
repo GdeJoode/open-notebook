@@ -103,6 +103,7 @@ class ExtractionWorkflow:
             Dict[str, List[Dict[str, Any]]]
         ] = None,
         llm_caller: Optional[Any] = None,
+        pass2_token_budget: Optional[int] = None,
     ) -> ExtractionResult:
         """
         Extract entities and relations from a list of text chunks.
@@ -164,6 +165,10 @@ class ExtractionWorkflow:
                 # through to Pass-1 + Pass-2. ``None`` retains the
                 # orchestrator's lazy-default behaviour (logs a canary).
                 llm_caller=llm_caller,
+                # Track M: the context-derived Pass-2 token budget for the
+                # active model. ``None`` keeps the legacy fixed 2400 cap so a
+                # packed window on a big-context model is not falsely rejected.
+                pass2_token_budget=pass2_token_budget,
             )
             return merged
 

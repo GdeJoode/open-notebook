@@ -484,6 +484,7 @@ async def run_multi_schema(
     pass1_repo: Optional[Any] = None,
     accepted_extensions_by_schema: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     model: str = "default",
+    pass2_token_budget: Optional[int] = None,
 ) -> Tuple[ExtractionResult, SoftNudgeDecision]:
     """Run the full multi-schema Pass-1 + Pass-2 + merge pipeline.
 
@@ -673,6 +674,7 @@ async def run_multi_schema(
                 accepted_extensions=accepted_for_schema,
                 llm_caller=llm_caller,
                 model=model,
+                token_budget=pass2_token_budget,
             )
         except Exception as e:
             logger.exception(

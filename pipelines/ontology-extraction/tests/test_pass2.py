@@ -463,6 +463,40 @@ class TestTokenBudget:
         )
         assert called is True
 
+    async def test_context_budget_admits_big_window(self):
+        """Track M: a context-derived ``token_budget`` admits a packed window
+        that the legacy fixed 2400 cap would reject (no false-positive guard
+        for a big-context model)."""
+        # ~5000-token window: rejected by the default 2400, admitted by a
+        # 200K context budget.
+        big_window = "word " * 4000  # ~20K chars -> ~5000 tokens
+        called = False
+
+        def fake_llm(sys_p: str, user_p: str, model: str) -> str:
+            nonlocal called
+            called = True
+            return _valid_chunk_response()
+
+        # Default budget rejects it.
+        with pytest.raises(Pass2TokenBudgetExceeded):
+            await run_pass2(
+                [_make_chunk(big_window, "big")],
+                _small_ontology(),
+                accepted_extensions=[],
+                llm_caller=fake_llm,
+            )
+        assert called is False
+
+        # A context-derived budget admits it.
+        await run_pass2(
+            [_make_chunk(big_window, "big")],
+            _small_ontology(),
+            accepted_extensions=[],
+            llm_caller=fake_llm,
+            token_budget=200_000,
+        )
+        assert called is True
+
 
 class TestStressTokenBudget:
     """A 100-type ontology + a 1500-token chunk + 3 extensions fits."""
