@@ -107,8 +107,11 @@ async def test_near_ceiling_packed_window_does_not_abort_under_threaded_cap():
     # Enough ingestion text that the packer fills the first window right up to
     # the input budget (a near-ceiling window, the reproduced abort case).
     chunks = _ingestion_chunks(pack_budget * 4 * 2)
+    # No cap: this seam is about a window packed to the FULL input_budget (the
+    # near-ceiling abort case). The M.3 default cap would otherwise shrink the
+    # window well below the budget and the seam would not be exercised.
     packed = pack_chunks_for_model(
-        chunks, context_window=CTX, max_output_tokens=MAX_OUT
+        chunks, context_window=CTX, max_output_tokens=MAX_OUT, max_window_tokens=None
     )
     window = packed[0]
 
@@ -150,8 +153,9 @@ async def test_old_double_subtraction_would_have_aborted():
     not a no-op."""
     pack_budget = input_budget_tokens(context_window=CTX, max_output_tokens=MAX_OUT)
     chunks = _ingestion_chunks(pack_budget * 4 * 2)
+    # No cap: reproduce the full-context near-ceiling window (see above).
     packed = pack_chunks_for_model(
-        chunks, context_window=CTX, max_output_tokens=MAX_OUT
+        chunks, context_window=CTX, max_output_tokens=MAX_OUT, max_window_tokens=None
     )
     window = packed[0]
     ontology = _realistic_ontology()

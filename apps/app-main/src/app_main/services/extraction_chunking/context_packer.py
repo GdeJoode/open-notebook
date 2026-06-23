@@ -18,13 +18,28 @@ Token sizing is deliberately conservative — a ``chars / 4`` heuristic rounded
 up, times a 0.85 safety margin — because under-packing only costs a few extra
 calls while over-packing risks a context overflow that silently truncates
 extraction output. No tokenizer dependency is introduced.
+
+M.3 adds a tunable max-window-size CAP on top of the context-derived budget.
+Packing a whole document into ONE full-context window was measured to COLLAPSE
+extraction recall (the model summarizes a handful of themes — ~8 entities —
+instead of exhaustively enumerating ~307) and is no faster (a single
+100K-token call is slow). The packing budget therefore becomes
+``min(input_budget_tokens(...), max_window_tokens)``, where ``max_window_tokens``
+is resolved from the ``EXTRACTION_MAX_WINDOW_TOKENS`` env var (default 6000) via
+:func:`resolve_max_window_tokens`. A moderate window preserves recall while
+still cutting the per-2000-char-chunk call count. A cap of 0 (or an
+unset-but-large value) disables the cap, restoring full-context packing. The
+Pass-2 guard budget (:func:`pass2_token_cap`) is UNCHANGED — it stays based on
+the full context, and a capped small window passes it trivially.
 """
 
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from enum import Enum
+from typing import Any, Dict, List, Optional, Union
 
 from loguru import logger
 
@@ -49,6 +64,36 @@ _MIN_INPUT_BUDGET_TOKENS = 256
 
 # Separator inserted between concatenated chunk texts in a packed window.
 _CHUNK_JOIN = "\n\n"
+
+# Env var that tunes the PACKING window-size cap (M.3). Set an int; the packer
+# fills each window to ``min(input_budget, EXTRACTION_MAX_WINDOW_TOKENS)`` so a
+# big-context model produces several MODERATE windows instead of one full-context
+# window. Sweepable without a rebuild (DI/env config, no registry/DB change),
+# mirroring the M.2 ``resolve_per_provider_rpm`` pattern.
+_MAX_WINDOW_TOKENS_ENV_VAR = "EXTRACTION_MAX_WINDOW_TOKENS"
+
+# Default window-size cap. Measured live: packing a whole document into one
+# full-context window collapses extraction recall (the model summarizes the key
+# themes — ~8 entities — instead of exhaustively enumerating ~307) AND is no
+# faster (one 100K-token call is slow). A moderate ~6K window preserves
+# exhaustive recall while still cutting the per-2000-char-chunk call count by
+# packing several chunks per call. This is the recall-preserving default.
+DEFAULT_MAX_WINDOW_TOKENS = 6000
+
+# Sentinel: any resolved cap >= this is treated as "no cap" (fall back to the
+# full ``input_budget`` — the pre-M.3 full-context packing behaviour). A value
+# at or above a large model's context window can never bind, so naming it makes
+# the back-compat escape hatch explicit rather than relying on a magic int.
+_NO_CAP_THRESHOLD = 1_000_000_000
+
+# Sentinel distinguishing "caller passed no max_window_tokens" (resolve from
+# env) from "caller explicitly passed None" (no cap). A plain ``None`` default
+# could not tell those apart. A single-member Enum is a mypy-friendly sentinel.
+class _Unresolved(Enum):
+    token = 0
+
+
+_UNRESOLVED = _Unresolved.token
 
 
 def estimate_tokens(text: str) -> int:
@@ -81,6 +126,51 @@ def input_budget_tokens(
     out = max_output_tokens or 0
     raw = (ctx - out - prompt_overhead_tokens) * safety_margin
     return max(_MIN_INPUT_BUDGET_TOKENS, int(raw))
+
+
+def resolve_max_window_tokens(
+    *,
+    environ: Dict[str, str] | None = None,
+) -> Optional[int]:
+    """Resolve the PACKING window-size cap from the env (M.3).
+
+    Reads :data:`_MAX_WINDOW_TOKENS_ENV_VAR` (``EXTRACTION_MAX_WINDOW_TOKENS``)
+    as an int and returns the cap to apply to the per-window packing budget.
+    Mirrors the M.2 ``resolve_per_provider_rpm`` env-resolver pattern so the cap
+    is sweepable without a rebuild (DI/env config, no registry/DB change).
+
+    Semantics:
+
+    * **Unset / unparseable** → :data:`DEFAULT_MAX_WINDOW_TOKENS` (6000), the
+      recall-preserving default.
+    * **0 or negative** → ``None`` ("no cap": packing falls back to the full
+      ``input_budget`` — the pre-M.3 full-context behaviour). 0 is the explicit
+      opt-out.
+    * **>= :data:`_NO_CAP_THRESHOLD`** → ``None`` ("no cap"): an
+      unset-but-deliberately-large value also disables the cap.
+    * Any other positive int → that value (the cap, in tokens).
+
+    A returned ``None`` means "do not cap"; an int means "cap the window to this
+    many input tokens (intersected with ``input_budget`` at packing time)".
+    """
+    env = environ if environ is not None else os.environ
+    raw = env.get(_MAX_WINDOW_TOKENS_ENV_VAR)
+    if raw is None:
+        return DEFAULT_MAX_WINDOW_TOKENS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"resolve_max_window_tokens: {_MAX_WINDOW_TOKENS_ENV_VAR}={raw!r} "
+            f"is not an int; using default {DEFAULT_MAX_WINDOW_TOKENS}."
+        )
+        return DEFAULT_MAX_WINDOW_TOKENS
+    if value <= 0:
+        # Explicit opt-out: 0/negative disables the cap (full-context packing).
+        return None
+    if value >= _NO_CAP_THRESHOLD:
+        return None
+    return value
 
 
 def pass2_token_cap(
@@ -185,15 +275,28 @@ def pack_chunks_for_model(
     max_output_tokens: Optional[int],
     prompt_overhead_tokens: int = DEFAULT_PROMPT_OVERHEAD_TOKENS,
     safety_margin: float = DEFAULT_SAFETY_MARGIN,
+    max_window_tokens: Union[int, None, _Unresolved] = _UNRESOLVED,
 ) -> List[Dict[str, Any]]:
     """Re-pack persisted ingestion chunks into model-context-sized windows.
 
     Greedily concatenates ``chunks`` (in order) into windows, starting a new
     window whenever appending the next chunk would push the running token
-    estimate over the model's input budget
-    (:func:`input_budget_tokens`). A single chunk that alone exceeds the budget
-    is re-split (the M.4 oversized guard) so no emitted window ever exceeds the
-    budget — the falsifiable no-overflow invariant.
+    estimate over the PACKING budget. That budget is::
+
+        effective_budget = min(input_budget_tokens(...), max_window_tokens)
+
+    where ``max_window_tokens`` is the M.3 tunable window-size CAP. When the
+    caller leaves it unresolved (the default) it is read from the env via
+    :func:`resolve_max_window_tokens` (default 6000); a ``None`` cap means
+    "no cap" and the budget reduces to ``input_budget`` (pre-M.3 full-context
+    packing). Capping to a moderate window produces MORE, smaller windows — the
+    measured sweet spot that preserves exhaustive extraction recall (packing a
+    whole doc into one full-context window collapses recall) without reverting
+    to one-LLM-call-per-2000-char-chunk.
+
+    A single chunk that alone exceeds the effective budget is re-split (the M.4
+    oversized guard) so no emitted window ever exceeds it — the falsifiable
+    no-overflow invariant, preserved under a cap.
 
     Order is preserved; each window carries its constituent chunk-id list and
     the structural metadata of its first chunk. Empty/whitespace chunks are
@@ -203,12 +306,26 @@ def pack_chunks_for_model(
     interchangeable with the un-packed input, so callers swap the list in front
     of ``workflow.extract`` / ``run_multi_schema`` with no other change.
     """
-    budget = input_budget_tokens(
+    input_budget = input_budget_tokens(
         context_window=context_window,
         max_output_tokens=max_output_tokens,
         prompt_overhead_tokens=prompt_overhead_tokens,
         safety_margin=safety_margin,
     )
+
+    # M.3 cap: an unresolved sentinel reads the env-tunable default; an explicit
+    # value (including ``None`` = no cap) is honoured as passed. The cap only
+    # ever SHRINKS the packing window — ``min`` with ``input_budget`` keeps the
+    # no-overflow invariant and floors at one chunk per window.
+    cap: Optional[int]
+    if isinstance(max_window_tokens, _Unresolved):
+        cap = resolve_max_window_tokens()
+    else:
+        cap = max_window_tokens
+    if cap is None:
+        budget = input_budget
+    else:
+        budget = max(_MIN_INPUT_BUDGET_TOKENS, min(input_budget, cap))
 
     windows: List[PackedWindow] = []
     current: Optional[PackedWindow] = None
@@ -269,10 +386,13 @@ def pack_chunks_for_model(
     packed = [w.to_chunk_dict() for w in windows]
     logger.info(
         "context_packer: packed {n_in} ingestion chunks into {n_out} windows "
-        "(budget={budget} tok, ctx={ctx}, max_out={out})",
+        "(budget={budget} tok = min(input_budget={ib}, cap={cap}), "
+        "ctx={ctx}, max_out={out})",
         n_in=len(chunks),
         n_out=len(packed),
         budget=budget,
+        ib=input_budget,
+        cap=cap,
         ctx=context_window,
         out=max_output_tokens,
     )
