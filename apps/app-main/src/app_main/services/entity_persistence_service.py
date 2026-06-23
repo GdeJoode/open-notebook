@@ -221,6 +221,32 @@ class EntityPersistenceService:
         """
         self._entity_repo = entity_repository or EntityRepository()
 
+    async def _resolve_endpoint_id(
+        self, name: str, entity_type: Optional[str]
+    ) -> Optional[Any]:
+        """Resolve a relation endpoint to a persisted entity ``id``.
+
+        O.1: returns the record id of the entity whose ``canonical_name``
+        matches ``name`` (and ``entity_type`` when known), else ``None``. Split
+        out from the inline RELATE so a miss can be detected + logged per
+        endpoint (the diagnostic) instead of vanishing inside the old
+        ``IF array::len(...) > 0`` guard.
+
+        For this instrumented pass the lookup is type-strict when a type is
+        known (K.7a) — exactly the current behaviour — so the diagnostic
+        measures the REAL skip cause. The name-only fallback is layered in the
+        fix step.
+        """
+        clause = "canonical_name = $name"
+        params: Dict[str, Any] = {"name": name}
+        if entity_type is not None:
+            clause += " AND entity_type = $etype"
+            params["etype"] = entity_type
+        rows = await execute_query(
+            f"SELECT VALUE id FROM entity WHERE {clause} LIMIT 1;", params
+        )
+        return rows[0] if rows else None
+
     async def persist_match_candidates(
         self,
         source_id: str,
@@ -423,6 +449,12 @@ class EntityPersistenceService:
                 logger.error(f"Failed to upsert entity '{text}': {e}")
 
         # 2. Create relations
+        # O.1 diagnostic: tally per-source relation outcomes so a live run shows
+        # whether skips are type-driven, name-driven, or both. Downgraded to a
+        # single structured summary log at the end of the loop.
+        rel_attempted = 0
+        rel_skipped = 0
+        skip_samples: List[str] = []
         for rel in relations:
             src_text = rel.get("source_entity", "")
             tgt_text = rel.get("target_entity", "")
@@ -432,6 +464,7 @@ class EntityPersistenceService:
 
             if not src_text or not tgt_text:
                 continue
+            rel_attempted += 1
 
             # K.7a: resolve each endpoint's type. Prefer a type the relation
             # already carries from extraction (``source_type``/``target_type``);
@@ -456,33 +489,32 @@ class EntityPersistenceService:
                 # original name-only ``LIMIT 1`` — zero regression for today's
                 # working (unambiguous) cases. The ``IF array::len(...) > 0``
                 # guard and the RELATE SET fields are unchanged.
-                src_clause = "canonical_name = $src_name"
-                if src_type is not None:
-                    src_clause += " AND entity_type = $src_type"
-                tgt_clause = "canonical_name = $tgt_name"
-                if tgt_type is not None:
-                    tgt_clause += " AND entity_type = $tgt_type"
+                src_id = await self._resolve_endpoint_id(src_text, src_type)
+                tgt_id = await self._resolve_endpoint_id(tgt_text, tgt_type)
+                if src_id is None or tgt_id is None:
+                    # O.1 diagnosis: a missing endpoint is the silent-skip the
+                    # 3-relation symptom comes from. Record WHY (which side, the
+                    # offending name/type) so a live run pinpoints type-vs-name.
+                    rel_skipped += 1
+                    if len(skip_samples) < 20:
+                        reason = []
+                        if src_id is None:
+                            reason.append(f"src miss ({src_text!r},{src_type!r})")
+                        if tgt_id is None:
+                            reason.append(f"tgt miss ({tgt_text!r},{tgt_type!r})")
+                        skip_samples.append("; ".join(reason))
+                    continue
                 await execute_query(
-                    f"""
-                    LET $src = (SELECT id FROM entity
-                        WHERE {src_clause} LIMIT 1);
-                    LET $tgt = (SELECT id FROM entity
-                        WHERE {tgt_clause} LIMIT 1);
-                    IF array::len($src) > 0 AND array::len($tgt) > 0 THEN {{
-                        LET $sid = $src[0].id;
-                        LET $tid = $tgt[0].id;
-                        RELATE $sid->relation->$tid SET
-                            relation_type = $rel_type,
-                            confidence = $confidence,
-                            source_documents = [$source_id],
-                            properties = $properties;
-                    }} END
+                    """
+                    RELATE $sid->relation->$tid SET
+                        relation_type = $rel_type,
+                        confidence = $confidence,
+                        source_documents = [$source_id],
+                        properties = $properties;
                     """,
                     {
-                        "src_name": src_text,
-                        "tgt_name": tgt_text,
-                        "src_type": src_type,
-                        "tgt_type": tgt_type,
+                        "sid": src_id,
+                        "tid": tgt_id,
                         "rel_type": rel_type,
                         "confidence": confidence,
                         "source_id": source_id,
@@ -494,6 +526,26 @@ class EntityPersistenceService:
                 logger.warning(
                     f"Failed to create relation {src_text} -> {tgt_text}: {e}"
                 )
+
+        # O.1 diagnosis: structured summary of relation persistence per source.
+        if rel_skipped:
+            logger.warning(
+                "O.1 relation persist for source {}: attempted={} created={} "
+                "skipped={} (sample reasons: {})",
+                source_id,
+                rel_attempted,
+                relations_created,
+                rel_skipped,
+                skip_samples,
+            )
+        else:
+            logger.info(
+                "O.1 relation persist for source {}: attempted={} created={} "
+                "skipped=0",
+                source_id,
+                rel_attempted,
+                relations_created,
+            )
 
         # 3. Store match candidates in resolution_log (stap 2C)
         candidates_stored = 0
