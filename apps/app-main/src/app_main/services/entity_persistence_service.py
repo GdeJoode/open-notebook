@@ -24,6 +24,9 @@ from shared.utils.entity_type_aliases import (
     ENTITY_TYPE_ALIASES,
     resolve_residual_type,
 )
+from shared.utils.entity_type_aliases import (
+    _normalize as _normalize_alias_key,
+)
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.entity import EntityRepository
 
@@ -116,10 +119,19 @@ def _resolve_entity_type(
        a type in one of them, walk its ``parent_type`` chain to a schema.org
        base and map to the canonical enum. The original ontology label is
        preserved in ``primary_type`` and the parent trail in ``type_tags``.
-    2. **EN+NL residual alias map (L.2)** — a curated alias hit returns the
+    2. **Canonical passthrough (L.2-fix)** — if the normalized raw label is
+       ITSELF a member of ``_ALLOWED_ENTITY_TYPES`` (e.g. a model that emits the
+       bare canonical name ``Organization`` / ``Person`` / ``Government
+       Organization``), return it directly as the ``entity_type`` with the raw
+       label preserved in ``primary_type``. This restores the old
+       ``_normalize_entity_type`` passthrough that L.2 dropped: without it a bare
+       canonical name misses the alias map and silently falls to the ``concept``
+       default (the regression). Runs BEFORE the alias map so a canonical name is
+       never re-routed by a colliding alias.
+    3. **EN+NL residual alias map (L.2)** — a curated alias hit returns the
        canonical target (enum-guarded) and preserves the raw label in
        ``primary_type``.
-    3. **Non-silent unknown-label fallback (L.2)** — an unmapped label coarses to
+    4. **Non-silent unknown-label fallback (L.2)** — an unmapped label coarses to
        a sensible default BUT ALWAYS preserves the raw label in ``primary_type``
        / ``type_tags`` (the anti-flattening guarantee). Extraction noise
        (``ABBREVIATION`` / ``Amount``) is flagged ``is_noise`` but still
@@ -156,7 +168,27 @@ def _resolve_entity_type(
                 type_tags=list(resolution.type_tags),
             )
 
-    # (2)+(3) L.2 residual: curated EN+NL alias hit, else non-silent fallback.
+    # (2) Canonical passthrough (L.2-fix): the model emitted a label that IS
+    # already a valid canonical enum member ("Organization", "Person",
+    # "Government Organization"). The L.1 bridge missed (it only matches ontology
+    # types), and the L.2 alias map below would miss too (canonicals aren't
+    # aliases), dumping it into the ``concept`` default — the regression. Restore
+    # the old ``_normalize_entity_type`` passthrough: normalize with the SAME
+    # rule the alias map uses (lower + space/dash -> underscore) so multi-word
+    # canonicals resolve ("Government Organization" -> government_organization),
+    # then return it directly while preserving the raw label in primary_type
+    # (anti-flattening). Runs before the alias map so a canonical name is never
+    # accidentally re-routed by a colliding alias.
+    raw_str = str(raw_label or "").strip()
+    norm = _normalize_alias_key(raw_label)
+    if norm in _ALLOWED_ENTITY_TYPES:
+        return ResolvedType(
+            entity_type=norm,
+            primary_type=raw_str or None,
+            type_tags=[raw_str] if raw_str else [],
+        )
+
+    # (3)+(4) L.2 residual: curated EN+NL alias hit, else non-silent fallback.
     # As of L.3 the residual's ``technology`` / ``programme`` targets are valid
     # enum members and pass the guard; any other not-yet-in-enum value re-pins to
     # "other" while the residual's preserved label (primary_type / type_tags) is
