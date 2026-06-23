@@ -101,8 +101,29 @@ def default_is_failover_eligible(exc: Exception) -> bool:
 
 def default_is_rate_limit(exc: Exception) -> bool:
     """Default 429 classifier used to drive backoff-retry on the same provider
-    before failing over."""
-    return isinstance(exc, RateLimitError)
+    before failing over.
+
+    Recognizes the typed :class:`RateLimitError` AND provider SDKs (e.g.
+    esperanto for Gemini) that wrap a 429 / ``RESOURCE_EXHAUSTED`` as a plain
+    ``RuntimeError`` carrying the quota message in its text. Without this, a
+    Gemini free-tier per-minute trip is misread as a hard failure and the chain
+    fails over to local immediately instead of pacing + backoff-retrying on the
+    same provider (Track M interim — Track M formalizes per-provider handling)."""
+    if isinstance(exc, RateLimitError):
+        return True
+    msg = str(exc).lower()
+    return any(
+        marker in msg
+        for marker in (
+            "resource_exhausted",
+            "rate limit",
+            "ratelimit",
+            " 429",
+            "error code: 429",
+            "exceeded your current quota",
+            "quota exceeded",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -164,9 +164,25 @@ def get_rate_limiter_registry():
     local providers are effectively unthrottled. Cached so the sliding windows
     are shared across all routed calls in this worker.
     """
-    from app_main.services.model_routing.rate_limiter import ProviderRateLimiter
+    from app_main.services.model_routing.rate_limiter import (
+        ProviderRateLimiter,
+        resolve_per_provider_rpm,
+    )
 
-    return ProviderRateLimiter()
+    # Track M.2: per-PROVIDER request-rate caps (the per-MODEL context window is
+    # a separate axis handled by the context packer). Caps pace each cloud
+    # provider under its quota so batch extraction does not burst into 429 /
+    # RESOURCE_EXHAUSTED — the limiter blocks/waits for a slot, and combined with
+    # ``default_is_rate_limit`` a transient 429 backoff-retries on the SAME
+    # provider before failing over (pace, not instant-skip; Decision M-D1).
+    #
+    #   google ~ 6/min   (Gemini free tier ~10; stay conservatively under it)
+    #   nvidia ~ 30/min  (NIM fair-use ~40; headroom under the ceiling)
+    #   ollama  unlimited (local GPU has no fair-use concern)
+    #
+    # Env-overridable (Decision M-D2: DI/env map, no registry schema change):
+    # GOOGLE_RPM / NVIDIA_RPM / OLLAMA_RPM.
+    return ProviderRateLimiter(per_provider_rpm=resolve_per_provider_rpm())
 
 
 def get_failover_executor():
