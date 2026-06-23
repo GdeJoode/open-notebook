@@ -1,0 +1,12 @@
+-- ============================================================================
+-- Migration 58 DOWN: drop the re-asserted `relation` RELATION table.
+--
+-- There is no faithful inverse — migration 58 exists precisely because the
+-- legacy NORMAL `relation` table was malformed and valueless. Down simply
+-- removes the table; the next `up` (39 or 58) recreates the correct
+-- TYPE RELATION table. Any relations created after 58 are graph edges that a
+-- down-migration would discard by design (mirrors how migration 39's edge data
+-- is not preserved across a table redefinition).
+-- ============================================================================
+
+REMOVE TABLE IF EXISTS relation;
