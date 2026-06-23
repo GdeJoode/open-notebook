@@ -572,6 +572,121 @@ class TestL3ProgrammeTechnologyActivation:
         assert res.entity_type in _ALLOWED_ENTITY_TYPES
 
 
+class TestCanonicalPassthrough:
+    """L.2-fix: a label that is ALREADY a valid canonical enum member passes
+    through as that type instead of falling to the ``concept`` default.
+
+    Regression: L.2's ``resolve_residual_type`` only checks the alias map then
+    falls to ``concept``; it never checked whether the label is itself a
+    canonical enum member. A model (llama3.1:8b) that emitted bare English
+    canonical names (``Organization`` / ``Person`` / ``Event`` ...) dumped them
+    all into ``concept``. The fix restores the old ``_normalize_entity_type``
+    canonical-passthrough in ``_resolve_entity_type``.
+    """
+
+    def test_organization_passes_through_not_concept(self):
+        # The proven regression case: was ``concept`` live, must be organization.
+        res = _resolve_entity_type("Organization")
+        assert res.entity_type == "organization"
+        assert res.entity_type != "concept"
+        assert res.primary_type == "Organization"
+        assert res.type_tags == ["Organization"]
+
+    @pytest.mark.parametrize(
+        ("label", "expected"),
+        [
+            ("Person", "person"),
+            ("Event", "event"),
+            ("Product", "product"),
+            ("Location", "location"),
+            ("Topic", "topic"),
+            ("Concept", "concept"),
+        ],
+    )
+    def test_bare_canonical_names_pass_through(self, label, expected):
+        res = _resolve_entity_type(label)
+        assert res.entity_type == expected
+        # raw label preserved (anti-flattening guarantee)
+        assert res.primary_type == label
+        assert res.type_tags == [label]
+
+    @pytest.mark.parametrize(
+        "label",
+        ["Government Organization", "government_organization", "Government-Organization"],
+    )
+    def test_multiword_canonical_passes_through(self, label):
+        # Multi-word / underscore / dash canonical must normalize consistently.
+        res = _resolve_entity_type(label)
+        assert res.entity_type == "government_organization"
+        assert res.primary_type == label
+
+    def test_creative_work_multiword_canonical(self):
+        res = _resolve_entity_type("Creative Work")
+        assert res.entity_type == "creative_work"
+        assert res.primary_type == "Creative Work"
+
+    def test_genuine_unknown_still_falls_back_to_concept(self):
+        # The L.2 non-silent fallback is unchanged: a genuine-unknown label still
+        # coarses to ``concept`` with the raw label preserved.
+        res = _resolve_entity_type("Frobnicator")
+        assert res.entity_type == "concept"
+        assert res.primary_type == "Frobnicator"
+        assert res.type_tags == ["Frobnicator"]
+
+    def test_dutch_alias_still_resolves(self):
+        # No regression to the L.2 alias map: a Dutch alias still maps.
+        res = _resolve_entity_type("Persoon")
+        assert res.entity_type == "person"
+        assert res.primary_type == "Persoon"
+
+    def test_l1_bridge_still_wins_over_passthrough(self):
+        # The bridge runs first: an ontology type resolves via L.1, not the
+        # passthrough (Gemeente is not a bare canonical anyway, but assert the
+        # ordering holds for a bridged label).
+        res = _resolve_entity_type("Gemeente", [_gov_schema()])
+        assert res.entity_type == "administrative_area"
+        assert res.primary_type == "Gemeente"
+
+    def test_passthrough_results_in_allowed_enum(self):
+        # B.8 contract: every passthrough result is a valid enum member.
+        for label in [
+            "Organization", "Person", "Event", "Product", "Location",
+            "Topic", "Concept", "Government Organization", "Creative Work",
+        ]:
+            res = _resolve_entity_type(label)
+            assert res.entity_type in _ALLOWED_ENTITY_TYPES
+
+    @pytest.mark.asyncio
+    async def test_persist_path_stamps_canonical_passthrough(self):
+        # End-to-end at the persist boundary: a bare ``Organization`` label
+        # persists as entity_type organization (not concept) with the raw label
+        # preserved.
+        svc, mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[
+                    {
+                        "text": "Ministerie van BZK",
+                        "label": "Organization",
+                        "confidence": 0.9,
+                        "properties": {},
+                    }
+                ],
+                relations=[],
+            )
+
+        ent = mock_upsert.call_args.args[0]
+        assert ent.entity_type == "organization"
+        assert ent.entity_type != "concept"
+        assert ent.primary_type == "Organization"
+
+
 class TestPersistStampsRichType:
     """The persist path stamps primary_type/type_tags + keeps raw_entity_type."""
 
