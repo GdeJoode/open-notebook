@@ -272,3 +272,73 @@ async def test_list_entities_survives_order_by_name_with_fulltext_index(
     assert set(fgot) == set(names), (
         f"type-filtered list_entities dropped rows. Missing: {set(names) - set(fgot)}"
     )
+
+
+# --- P.1: entity-embedding backfill primitives --------------------------------
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_backfill_lists_missing_and_updates_embedding(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """P.1 backfill roundtrip: list entities with an empty embedding, update one,
+    confirm it drops out of the missing set and the vector round-trips.
+
+    Covers the idempotency contract: a row that already has a vector is excluded
+    from ``list_active_entities_missing_embedding`` so a re-run only ever touches
+    the not-yet-done remainder.
+    """
+    repo = EntityRepository(config=live_surrealdb)
+    missing_name = _unique("p1-missing")
+    has_vec_name = _unique("p1-hasvec")
+    vector = [0.01 * i for i in range(8)]
+
+    # One active entity with embedding=[] (the backfill target) and one that
+    # already carries a vector (must be skipped — idempotency).
+    await execute_query(
+        "CREATE entity SET canonical_name = $n, name = $n, hash_id = $n, "
+        "entity_type = 'concept', confidence = 0.9, status = 'active', "
+        "embedding = [];",
+        {"n": missing_name},
+        config=live_surrealdb,
+    )
+    await execute_query(
+        "CREATE entity SET canonical_name = $n, name = $n, hash_id = $n, "
+        "entity_type = 'concept', confidence = 0.9, status = 'active', "
+        "embedding = $emb;",
+        {"n": has_vec_name, "emb": [0.5, 0.5]},
+        config=live_surrealdb,
+    )
+
+    rows = await repo.list_active_entities_missing_embedding()
+    by_name = {r["canonical_name"]: r for r in rows}
+    assert missing_name in by_name, "empty-embedding entity not listed for backfill"
+    assert has_vec_name not in by_name, "entity WITH a vector must be skipped"
+
+    target_id = str(by_name[missing_name]["id"])
+    ok = await repo.update_entity_embedding(target_id, vector)
+    assert ok is True
+
+    # Vector round-trips verbatim.
+    fetched = await repo.get_entity_with_embedding(target_id)
+    assert fetched is not None
+    assert [pytest.approx(v) for v in fetched["embedding"]] == [
+        pytest.approx(v) for v in vector
+    ]
+
+    # And the entity no longer appears in the missing set (re-run is a no-op
+    # for it — idempotency).
+    rows_after = await repo.list_active_entities_missing_embedding()
+    assert missing_name not in {r["canonical_name"] for r in rows_after}
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_update_entity_embedding_rejects_empty_vector(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """An empty vector is rejected (it would be a no-op leaving the row 'missing')."""
+    repo = EntityRepository(config=live_surrealdb)
+    assert await repo.update_entity_embedding("entity:whatever", []) is False
+    assert await repo.update_entity_embedding("", [0.1]) is False

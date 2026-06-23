@@ -701,6 +701,101 @@ class EntityRepository:
             logger.error(f"list_active_entities_with_embeddings failed: {e}")
             return []
 
+    async def list_active_entities_missing_embedding(
+        self, limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Load ``status='active'`` entities whose ``embedding`` is empty/missing.
+
+        Powers the P.1 backfill: the corpus persisted before the forward fix
+        stored ``embedding=[]`` for every entity, which disables K.5's semantic
+        dedup band. This returns the minimal projection the backfill needs to
+        embed and update each one — ``id`` (to update) + ``canonical_name`` (the
+        text to embed; identical to the ``text`` the forward path embeds, since
+        the persist boundary sets ``canonical_name = text``).
+
+        The filter matches both the legacy empty-array form (``embedding = []``)
+        and any row where the field is NONE/unset, so the backfill is robust to
+        schema drift. Rows that ALREADY carry a vector are excluded — that is
+        what makes a re-run idempotent (it only ever touches the not-yet-done
+        remainder).
+
+        Args:
+            limit: Optional cap on the number of rows returned (for batched /
+                resumable runs). ``None`` returns the full remainder.
+
+        Returns:
+            A list of ``{"id", "canonical_name"}`` dicts. Empty on failure or
+            when every active entity already has a vector.
+        """
+        # ``array::len(embedding ?? []) == 0`` is true for both [] and NONE; the
+        # null-coalesce guards the unset case without a separate IS NONE branch.
+        where = (
+            "status = 'active' "
+            "AND array::len(embedding ?? []) == 0"
+        )
+        # SurrealDB v2 requires the ORDER BY idiom to appear in the projection,
+        # so ``created_at`` is selected even though the backfill only reads
+        # ``id`` / ``canonical_name``. Ordering by creation gives a stable,
+        # resumable cursor across batched runs.
+        query = (
+            f"SELECT id, canonical_name, created_at FROM entity WHERE {where} "
+            "ORDER BY created_at"
+        )
+        if limit is not None:
+            query += " LIMIT $limit"
+        try:
+            return await execute_query(
+                query,
+                {"limit": limit} if limit is not None else {},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(
+                f"list_active_entities_missing_embedding failed: {e}"
+            )
+            return []
+
+    async def update_entity_embedding(
+        self, entity_id: str, embedding: List[float]
+    ) -> bool:
+        """Set the ``embedding`` vector on a single entity (P.1 backfill).
+
+        Writes ONLY the embedding (+ ``updated_at``); never touches
+        ``canonical_name`` / ``entity_type`` / ``hash_id`` (the B.8 dedup-key
+        contract) or any provenance field. Idempotent at the row level — calling
+        it again with the same vector is a cheap no-op UPDATE.
+
+        Args:
+            entity_id: Record id of the entity to annotate (e.g. ``entity:abc``).
+            embedding: The vector to store (the configured model's output —
+                the I.G 768-dim pin; not validated/re-shaped here).
+
+        Returns:
+            ``True`` when the update ran, ``False`` on a bad id / transport error
+            or an empty vector (an empty write would be a no-op that leaves the
+            row still "missing", so it is rejected as a caller error).
+        """
+        if not entity_id or not embedding:
+            return False
+        try:
+            rid = ensure_record_id(entity_id)
+        except Exception as e:
+            logger.error(f"update_entity_embedding: invalid id '{entity_id}': {e}")
+            return False
+        try:
+            await execute_query(
+                "UPDATE type::thing($id) SET "
+                "embedding = $embedding, updated_at = time::now();",
+                {"id": rid, "embedding": list(embedding)},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(
+                f"update_entity_embedding failed for '{entity_id}': {e}"
+            )
+            return False
+        return True
+
     async def merge_into_winner(
         self, winner_id: str, losers: List[Dict[str, Any]]
     ) -> bool:
