@@ -13,10 +13,22 @@ services:
       - ./surreal_data:/mydata
     environment:
       - SURREAL_EXPERIMENTAL_GRAPHQL=true
+      # Cap the RocksDB block cache. Surreal defaults to 50% of host RAM
+      # (~6.25 GB on this 13 GB box), which — together with the app + docling +
+      # mineru + local embeddings — caused WSL2 memory pressure that SIGTERM'd
+      # surreal under sustained extraction load (clean exit 0, restart:always
+      # bounced it → RestartCount climbed, killing long corpus runs). 2 GB is
+      # ample read cache for this workload and frees ~4 GB for the rest, so
+      # large batch runs (80+ docs) no longer evict surreal.
+      - SURREAL_ROCKSDB_BLOCK_CACHE_SIZE=2147483648
     command: start --log info --user root --pass root rocksdb:/mydata/mydatabase.db
     pull_policy: always
     user: root
     restart: always
+    # Safety net: a generous hard limit so surreal can't balloon past the
+    # block-cache + working set and starve the other services. Block cache (2 GB)
+    # + overhead sits well under 4 GB, so this should never OOM-kill in practice.
+    mem_limit: 4g
   docling:
     build:
       context: .
