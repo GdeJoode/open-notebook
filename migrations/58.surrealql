@@ -1,0 +1,40 @@
+-- ============================================================================
+-- Migration 58: re-assert the `relation` table as TYPE RELATION (Track O.1).
+--
+-- Schema-drift remediation (same class as migration 50 for `entity`): on the
+-- drifted live DB the `relation` table is a pre-migration-39 NORMAL table
+-- (legacy subject/object/predicate shape, a few malformed null-endpoint rows).
+-- Because the table already existed as NORMAL, migration 39's
+-- `DEFINE TABLE relation ... TYPE RELATION` never took effect, so every
+-- `RELATE $a->relation->$b` fails on the live DB with
+--   "Found record ... which is not a relation, but expected a NORMAL"
+-- and the KG can never store relations.
+--
+-- This drops the legacy NORMAL `relation` table (its rows carry null in/out and
+-- have no value) and redefines the graph-edge RELATION table EXACTLY as
+-- migration 39 intended. Fresh databases that already have the correct
+-- TYPE RELATION table are unaffected (REMOVE + identical DEFINE is idempotent
+-- in outcome).
+-- ============================================================================
+
+REMOVE TABLE IF EXISTS relation;
+
+DEFINE TABLE relation SCHEMAFULL TYPE RELATION FROM entity TO entity;
+
+DEFINE FIELD relation_type ON relation TYPE string;
+DEFINE FIELD properties ON relation FLEXIBLE TYPE object DEFAULT {};
+
+-- Provenance
+DEFINE FIELD source_documents ON relation FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD extracted_at ON relation TYPE datetime DEFAULT time::now();
+DEFINE FIELD extraction_method ON relation TYPE string DEFAULT "llm";
+DEFINE FIELD confidence ON relation TYPE float DEFAULT 1.0;
+DEFINE FIELD provenance_chain ON relation FLEXIBLE TYPE array DEFAULT [];
+
+-- Status
+DEFINE FIELD status ON relation TYPE string DEFAULT "active";
+DEFINE FIELD created_at ON relation TYPE datetime DEFAULT time::now();
+
+-- Indexes
+DEFINE INDEX idx_relation_type ON relation FIELDS relation_type;
+DEFINE INDEX idx_relation_status ON relation FIELDS status;
