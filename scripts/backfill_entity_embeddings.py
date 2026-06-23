@@ -41,7 +41,6 @@ import argparse
 import asyncio
 
 from loguru import logger
-
 from surrealdb_service.repositories.entity import EntityRepository
 
 
