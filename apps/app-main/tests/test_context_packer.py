@@ -87,6 +87,38 @@ class TestPackCountDropsForBigContext:
         assert len(packed) < 28
 
 
+class TestCallCountDropMeasurement:
+    """The headline Track M improvement: a big-context model's effective
+    LLM-call count drops from the live ~28 (one per 2000-char chunk) to a
+    handful, while a small fallback re-packs without overflow."""
+
+    def test_28_chunk_doc_drops_from_28_calls_to_few_for_128k(self):
+        chunks = _chunks(28)  # the live case: 28 persisted 2000-char chunks
+        old_call_count = len(chunks)  # pre-M: one LLM call per chunk
+        packed = pack_chunks_for_model(
+            chunks, context_window=128_000, max_output_tokens=4096
+        )
+        new_call_count = len(packed)
+        assert old_call_count == 28
+        assert new_call_count <= 3
+        # The whole point: a >5x reduction in LLM calls for a big-context model.
+        assert new_call_count < old_call_count / 5
+
+    def test_same_doc_small_fallback_repacks_without_overflow(self):
+        chunks = _chunks(28)
+        fb_budget = input_budget_tokens(context_window=8192, max_output_tokens=512)
+        primary = pack_chunks_for_model(
+            chunks, context_window=128_000, max_output_tokens=4096
+        )
+        fallback = pack_chunks_for_model(
+            chunks, context_window=8192, max_output_tokens=512
+        )
+        # Re-pack happened (more, smaller windows than the primary) and none
+        # overflow the 8K fallback budget.
+        assert len(fallback) > len(primary)
+        assert _max_window_tokens(fallback) <= fb_budget
+
+
 class TestManyBoundedWindowsForSmallContext:
     def test_small_context_many_windows_none_overflow(self):
         chunks = _chunks(40)
