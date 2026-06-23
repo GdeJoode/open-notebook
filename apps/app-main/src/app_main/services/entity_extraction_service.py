@@ -424,6 +424,10 @@ class EntityExtractionService:
         # actually answered (J-Q7) — read at provenance-stamp time so the KG
         # records the SERVED model, not just the resolved head.
         self._last_routed_caller: Any = None
+        # Track M: context-derived Pass-2 token budget for this run's head
+        # model, set by ``_pack_chunks_for_route_head``. ``None`` keeps Pass-2's
+        # legacy fixed 2400-token cap (the graceful-degrade default).
+        self._pass2_token_budget: Optional[int] = None
 
     async def _resolve_privacy_mode(
         self, source_id: str, notebook_id: Optional[str]
@@ -496,6 +500,83 @@ class EntityExtractionService:
         )
         self._last_routed_caller = caller
         return caller
+
+    async def _pack_chunks_for_route_head(
+        self, chunk_dicts: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Re-pack ingestion chunks for the HEAD candidate's context window (M.3).
+
+        Resolves this run's extraction route, reads the head candidate's
+        ``model.context_window`` / ``max_output_tokens``, and packs the
+        per-ingestion-chunk dicts into model-sized windows so a big-context
+        model issues a few large LLM calls instead of one-per-2000-char-chunk.
+
+        Degrades gracefully: any resolution failure, a missing head model row,
+        or a null ``context_window`` falls back to the un-packed chunks (the
+        pre-M behaviour) — extraction must never crash because routing/seed
+        state is incomplete.
+        """
+        from app_main.services.extraction_chunking import (
+            input_budget_tokens,
+            pack_chunks_for_model,
+        )
+
+        # Reset per-run so a prior run's budget never leaks into a packing
+        # fallback (degrade path leaves the legacy fixed Pass-2 cap in force).
+        self._pass2_token_budget = None
+
+        if not chunk_dicts:
+            return chunk_dicts
+
+        head_model = None
+        try:
+            from app_main.dependencies import get_route_resolver
+            from app_main.services.model_routing.route_resolver import LLMTask
+
+            resolver = get_route_resolver()
+            route = await resolver.resolve(
+                LLMTask.ENTITY_EXTRACTION, self._privacy_mode
+            )
+            if route.ordered_candidates:
+                head_model = route.ordered_candidates[0].model
+        except Exception as e:  # noqa: BLE001 — never block extraction on routing
+            logger.warning(
+                f"context-pack: route resolution failed ({e}); "
+                "using un-packed ingestion chunks."
+            )
+            return chunk_dicts
+
+        if head_model is None or head_model.context_window is None:
+            logger.info(
+                "context-pack: head model has no context_window "
+                "(model={m}); using un-packed ingestion chunks.",
+                m=getattr(head_model, "model_id", None)
+                or getattr(head_model, "name", None),
+            )
+            return chunk_dicts
+
+        packed = pack_chunks_for_model(
+            chunk_dicts,
+            context_window=head_model.context_window,
+            max_output_tokens=head_model.max_output_tokens,
+        )
+        # Thread the same context-derived input budget into Pass-2 so a packed
+        # window (legitimately > the legacy fixed 2400 cap on a big model) is
+        # not rejected by the per-prompt token guard.
+        self._pass2_token_budget = input_budget_tokens(
+            context_window=head_model.context_window,
+            max_output_tokens=head_model.max_output_tokens,
+        )
+        logger.info(
+            "context-pack: {n_in} ingestion chunks -> {n_out} model-sized "
+            "windows for head {prov}/{name} (ctx={ctx})",
+            n_in=len(chunk_dicts),
+            n_out=len(packed),
+            prov=head_model.provider,
+            name=head_model.name,
+            ctx=head_model.context_window,
+        )
+        return packed
 
     async def _served_extraction_model(self, config) -> Optional[str]:
         """The model id to stamp as extraction provenance (J-Q7).
@@ -841,6 +922,7 @@ class EntityExtractionService:
             pass1_repo=pass1_repo,
             accepted_extensions_by_schema=accepted_by_schema or None,
             llm_caller=llm_caller,
+            pass2_token_budget=self._pass2_token_budget,
         )
 
     async def run_extraction(
@@ -951,6 +1033,13 @@ class EntityExtractionService:
         if config_overrides:
             config_kwargs.update(config_overrides)
         config = ExtractionConfig(**config_kwargs)
+
+        # 3b. Track M: re-pack the fixed-size ingestion chunks into windows
+        # sized to the active extraction model's context_window, so a
+        # big-context model issues a few large LLM calls instead of one per
+        # 2000-char chunk. Degrades to the un-packed chunks when the head model
+        # has no context_window (graceful — see helper).
+        chunk_dicts = await self._pack_chunks_for_route_head(chunk_dicts)
 
         # 4. Run extraction — branch on multi-schema vs single-schema.
         use_multi_schema = (

@@ -1349,6 +1349,7 @@ class TestRunMultiSchema:
             accepted_extensions=None,
             llm_caller=None,
             model: str = "default",
+            token_budget=None,
         ) -> ExtractionResult:
             seen_for[ontology.metadata.name] = accepted_extensions or []
             return ExtractionResult()
@@ -1427,6 +1428,7 @@ class TestRunMultiSchema:
             accepted_extensions=None,
             llm_caller=None,
             model: str = "default",
+            token_budget=None,
         ) -> ExtractionResult:
             if ontology.metadata.name == "scholarly":
                 raise RuntimeError("pass2 boom")
