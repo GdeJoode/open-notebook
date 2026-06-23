@@ -335,9 +335,18 @@ class OntologyPromptGenerator:
             "",
             "## Extraction Guidelines",
             "",
-            "1. **Entities**: Extract all instances of the defined entity types",
-            "   - **PRIORITY**: Use domain-specific types (e.g., Gemeente, Ministerie, RegioDeal) over generic types (e.g., Organization, Place)",
-            "   - Use `entity_type` field with values EXACTLY matching the defined types",
+            "### CRITICAL — Exhaustive extraction (complete recall, not a shortlist)",
+            "Extract EVERY entity the text mentions — do NOT select only the most important "
+            "ones and do NOT summarize. Go through the text systematically and emit every "
+            "distinct entity; a document of this kind yields many dozens. Returning only a "
+            "handful means you MISSED most of them. Do NOT deduplicate, merge, or filter — "
+            "downstream handles that; your job is COMPLETE RECALL. Never silently drop an "
+            "entity because it seems minor or is hard to classify.",
+            "",
+            "1. **Entities**: Extract every entity exhaustively, then type each one",
+            "   - **Map aggressively to the schema**: use the MOST SPECIFIC defined type (e.g., Gemeente, Ministerie, RegioDeal, BeleidsThema) over generic ones (Organization, Place)",
+            "   - **Fallback**: if an entity genuinely fits NO defined type, set `entity_type` to \"other\" — never drop it, never force a wrong type",
+            "   - Use `entity_type` field with values EXACTLY matching the defined types (or \"other\")",
             "   - Normalize names (proper capitalization, no extra whitespace)",
             "   - Extract properties listed for each entity type",
             "   - Assign confidence scores (0.0-1.0)",
