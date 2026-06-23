@@ -407,7 +407,21 @@ class EntityPersistenceService:
             if not text.strip():
                 continue
 
-            # Build entity properties for storage (exclude embedding to save space)
+            # P.1: the entity's semantic embedding is computed during extraction
+            # (``_embed_entities`` over ``entity.text``) and arrives here in the
+            # properties bag. Lift it onto the first-class ``Entity.embedding``
+            # field (stored by ``upsert_entity`` as ``embedding = $embedding``)
+            # so K.5's embedding dedup band has a vector to compare — historically
+            # this was dropped (stored ``embedding=[]``), which silently disabled
+            # semantic dedup at the source. Default ``[]`` when an entity carries
+            # no vector (graceful — the dedup band degrades to fuzzy-only). The
+            # dimension is whatever the configured embedding model emits (the I.G
+            # 768-dim pin), never re-shaped here.
+            embedding_vec = properties.get("embedding") or []
+
+            # Build entity properties for storage. The embedding is excluded from
+            # the properties bag (it now lives on the first-class field above —
+            # don't double-store the ~3KB vector).
             stored_props = {
                 k: v for k, v in properties.items()
                 if k != "embedding" and v is not None
@@ -440,7 +454,7 @@ class EntityPersistenceService:
             try:
                 # Route through EntityRepository.upsert_entity so the write
                 # uses the canonical schema field names (canonical_name,
-                # source_documents, embedding=[]) declared in migration 39+44.
+                # source_documents, embedding) declared in migration 39+44.
                 # See Phase B.1a notes at top of this module for context.
                 #
                 # B.8a: thread the real extraction_method (was silently
@@ -456,7 +470,10 @@ class EntityPersistenceService:
                     confidence=confidence,
                     source_documents=[source_id],
                     properties=stored_props,
-                    embedding=[],
+                    # P.1: the computed embedding (lifted from properties above),
+                    # or [] when the entity has no vector. Enables K.5 semantic
+                    # dedup; see the embedding_vec comment above.
+                    embedding=embedding_vec,
                     extraction_method=extraction_method,
                 )
                 await self._entity_repo.upsert_entity(entity_model)

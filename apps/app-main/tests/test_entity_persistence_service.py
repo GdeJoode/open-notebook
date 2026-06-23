@@ -366,7 +366,8 @@ class TestPersistFilteredResult:
 
     @pytest.mark.asyncio
     async def test_excludes_embedding_from_stored_properties(self):
-        """Embedding in input ``properties`` is stripped before persisting."""
+        """P.1: the embedding is lifted OUT of ``properties`` onto the first-class
+        ``Entity.embedding`` field (not dropped, not double-stored)."""
         svc, mock_upsert = _make_service_with_mock_repo()
 
         with patch(
@@ -388,10 +389,61 @@ class TestPersistFilteredResult:
             )
 
         called_entity = mock_upsert.call_args.args[0]
+        # Not double-stored in the properties bag (saves the ~3KB vector there).
         assert "embedding" not in called_entity.properties
         assert called_entity.properties["custom_key"] == "value"
-        # And the Entity.embedding field is an explicit empty list (the SCHEMAFULL
-        # `entity.embedding` column has no DB default — see migration 39 line 30).
+
+    @pytest.mark.asyncio
+    async def test_embedding_persisted_on_first_class_field(self):
+        """P.1 forward fix: the computed embedding reaches ``Entity.embedding``
+        (not the historical ``[]``) so K.5's semantic dedup band has a vector.
+        """
+        svc, mock_upsert = _make_service_with_mock_repo()
+
+        vector = [0.1, 0.2, 0.3]
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[
+                    {
+                        "text": "BZK",
+                        "label": "ORG",
+                        "confidence": 0.9,
+                        "properties": {"embedding": vector},
+                    },
+                ],
+                relations=[],
+            )
+
+        called_entity = mock_upsert.call_args.args[0]
+        assert called_entity.embedding == vector
+        assert "embedding" not in called_entity.properties
+
+    @pytest.mark.asyncio
+    async def test_missing_embedding_defaults_to_empty_list(self):
+        """P.1: an entity without a vector persists ``embedding=[]`` gracefully —
+        the dedup band degrades to fuzzy-only for it (no crash, no fabrication).
+        """
+        svc, mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await svc.persist_filtered_result(
+                source_id="source:1",
+                entities=[
+                    {"text": "BZK", "label": "ORG", "confidence": 0.9, "properties": {}},
+                ],
+                relations=[],
+            )
+
+        called_entity = mock_upsert.call_args.args[0]
         assert called_entity.embedding == []
 
     @pytest.mark.asyncio
