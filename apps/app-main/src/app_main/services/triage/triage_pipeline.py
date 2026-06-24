@@ -316,6 +316,12 @@ class TriagePipeline:
                 f"'{getattr(cand, 'name_b', '')}' "
                 f"({getattr(cand, 'method', '?')} {getattr(cand, 'score', 0):.2f})"
             )
+            # Pass degree/doc_count=0 (we only know an entity is in a fuzzy-match
+            # pair, not its degree) with merge_reason=True so this NEVER clobbers
+            # a prior status-flag row's real signals/reason for the same entity:
+            # the queue preserves a non-zero degree/doc_count under the
+            # zero-as-unknown rule and APPENDS the match-conflict reason rather
+            # than replacing the status-flag reason (Q.4 review minor).
             await self._queue.upsert(
                 target,
                 name=str(row.get("canonical_name") or ""),
@@ -324,5 +330,6 @@ class TriagePipeline:
                 doc_count=0,
                 reason=reason,
                 batch_id=batch_id,
+                merge_reason=True,
             )
             report.match_conflicts += 1

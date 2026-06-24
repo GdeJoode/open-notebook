@@ -28,6 +28,30 @@ from surrealdb_service.connection import ensure_record_id, execute_query
 # router writes one of the others. Kept here so the service and router agree.
 DECISION_OPEN = "open"
 
+# Reason separator. Multiple surfacing paths (a status flag + a match conflict)
+# can flag the same entity; their reasons are joined with this so one queue row
+# shows both.
+_REASON_SEP = "; "
+
+
+def _merge_reason(existing: str, incoming: str) -> str:
+    """Append ``incoming`` to ``existing`` unless it is already present.
+
+    Idempotent: re-running a batch re-appends nothing (an already-present clause
+    is detected on the ``"; "``-split parts), so the merged reason stays stable.
+    An empty existing reason just becomes the incoming one.
+    """
+    incoming = (incoming or "").strip()
+    if not incoming:
+        return existing
+    if not existing:
+        return incoming
+    parts = [p.strip() for p in existing.split(_REASON_SEP) if p.strip()]
+    if incoming in parts:
+        return existing
+    parts.append(incoming)
+    return _REASON_SEP.join(parts)
+
 
 @dataclass(frozen=True)
 class QueueItem:
@@ -93,6 +117,7 @@ class TriageQueueRepository:
         doc_count: int,
         reason: str,
         batch_id: str,
+        merge_reason: bool = False,
     ) -> str:
         """Append a queue row for ``entity_id`` OR refresh its existing open row.
 
@@ -101,45 +126,90 @@ class TriageQueueRepository:
         it never creates a duplicate. A new entity (or one whose prior row was
         already decided) gets a fresh CREATE.
 
+        **Signal preservation (Q.4 review minor):** a caller that does not carry
+        real signals — the match-conflict surfacing passes
+        ``structural_degree=0, doc_count=0`` because it only knows an entity is
+        in a fuzzy-match pair, not its degree — must NOT clobber the real
+        degree/doc-count a prior status-flag row already recorded for the same
+        entity. So on UPDATE, ``structural_degree`` / ``doc_count`` are only
+        overwritten when the incoming value is non-zero (or no row exists yet);
+        a zero incoming value preserves whatever the row already holds. This
+        keeps the queue row's displayed signals honest regardless of which
+        surfacing path touched the entity last, and stays idempotent (the same
+        zero-signal call is a no-op on the signals).
+
         Args:
             entity_id: Record ID of the entity to queue.
             name: Canonical name (read-model display).
             type: ``primary_type`` (read-model display).
-            structural_degree: Effective structural degree (Q.2 signal).
-            doc_count: Distinct-document count (Q.2 signal).
+            structural_degree: Effective structural degree (Q.2 signal). A zero
+                here is treated as "unknown" on UPDATE and never overwrites a
+                prior non-zero value.
+            doc_count: Distinct-document count (Q.2 signal). Same zero-as-unknown
+                rule as ``structural_degree``.
             reason: The queue-flag reason (Q.3 status decision).
             batch_id: The triage batch that raised/refreshed this row.
+            merge_reason: When True and an OPEN row already exists with a
+                different reason, the incoming reason is APPENDED (``; ``-joined)
+                rather than replacing the existing one — so a match-conflict
+                reason and a status-flag reason coexist on one row. Idempotent:
+                an already-present reason is not re-appended. Defaults to False
+                (replace, the status-flag surfacing's behaviour).
 
         Returns:
             The queue row's record id.
         """
         rid = ensure_record_id(entity_id)
         existing = await execute_query(
-            "SELECT id FROM triage_queue "
+            "SELECT id, structural_degree, doc_count, reason FROM triage_queue "
             "WHERE entity = $entity AND decision = $open LIMIT 1;",
             {"entity": rid, "open": DECISION_OPEN},
             self.config,
         )
-        params: Dict[str, Any] = {
-            "entity": rid,
-            "name": name,
-            "type": type,
-            "degree": int(structural_degree),
-            "doc_count": int(doc_count),
-            "reason": reason,
-            "batch_id": batch_id,
-        }
         if existing:
-            queue_id = ensure_record_id(str(existing[0]["id"]))
+            prior = existing[0]
+            # Zero-as-unknown: never clobber a recorded non-zero signal with a
+            # signal-less (degree=0/doc_count=0) call (the match-conflict path).
+            degree = (
+                int(structural_degree)
+                if int(structural_degree) != 0
+                else int(prior.get("structural_degree") or 0)
+            )
+            doc_cnt = (
+                int(doc_count)
+                if int(doc_count) != 0
+                else int(prior.get("doc_count") or 0)
+            )
+            merged_reason = _merge_reason(
+                str(prior.get("reason") or ""), reason
+            ) if merge_reason else reason
+            queue_id = ensure_record_id(str(prior["id"]))
             rows = await execute_query(
                 "UPDATE $id SET "
                 "name = $name, type = $type, structural_degree = $degree, "
                 "doc_count = $doc_count, reason = $reason, batch_id = $batch_id, "
                 "updated_at = time::now() RETURN AFTER;",
-                {"id": queue_id, **params},
+                {
+                    "id": queue_id,
+                    "name": name,
+                    "type": type,
+                    "degree": degree,
+                    "doc_count": doc_cnt,
+                    "reason": merged_reason,
+                    "batch_id": batch_id,
+                },
                 self.config,
             )
         else:
+            params: Dict[str, Any] = {
+                "entity": rid,
+                "name": name,
+                "type": type,
+                "degree": int(structural_degree),
+                "doc_count": int(doc_count),
+                "reason": reason,
+                "batch_id": batch_id,
+            }
             rows = await execute_query(
                 "CREATE triage_queue SET "
                 "entity = $entity, name = $name, type = $type, "
