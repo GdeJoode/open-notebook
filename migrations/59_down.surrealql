@@ -1,0 +1,13 @@
+-- Migration 59 down: remove ONLY the Q.3-added objects.
+--
+-- Q.3 owns exactly two things: the `manual_override` field on `entity` and the
+-- whole `status_change_log` table (its fields and indexes go with the table).
+-- `entity.status` and `idx_entity_status` PREDATE this migration (migration 39),
+-- so — following the migration-54 precedent — the down-migration does NOT touch
+-- them; dropping them would regress migration 39's schema. `REMOVE TABLE`
+-- cascades the table's own fields/indexes. Idempotent: `IF EXISTS` makes re-run
+-- a no-op.
+
+REMOVE FIELD IF EXISTS manual_override ON entity;
+
+REMOVE TABLE IF EXISTS status_change_log;
