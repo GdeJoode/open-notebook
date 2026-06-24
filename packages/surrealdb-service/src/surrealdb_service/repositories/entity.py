@@ -419,6 +419,59 @@ class EntityRepository:
             raise
         return bool(rows)
 
+    async def set_manual_override(
+        self,
+        entity_id: str,
+        *,
+        status: Optional[str] = None,
+        manual_override: bool = True,
+    ) -> bool:
+        """Pin an entity by hand (Q.4 operator decision): set status + override.
+
+        This is the ONLY writer of ``manual_override = true`` — the operator's
+        decision path (the triage-queue decision endpoint), NEVER automation. It
+        is UNconditional (no ``respect_override`` guard): an operator can always
+        re-pin. When ``status`` is given it is written in the same statement so
+        the pin and the chosen status land atomically; pass ``status=None`` to
+        flip the override flag alone.
+
+        Args:
+            entity_id: Record ID of the entity to pin.
+            status: The status to pin (e.g. ``"active"``); ``None`` leaves the
+                current status untouched.
+            manual_override: The override value to write (default ``True``;
+                pass ``False`` to release a pin back to automation).
+
+        Returns:
+            True if the entity was updated; False on a bad/missing id.
+        """
+        if not entity_id:
+            return False
+        try:
+            rid = ensure_record_id(entity_id)
+        except Exception as e:
+            logger.error(f"set_manual_override: bad id {entity_id!r}: {e}")
+            return False
+
+        sets = ["manual_override = $override", "updated_at = time::now()"]
+        params: Dict[str, Any] = {"id": rid, "override": bool(manual_override)}
+        if status is not None:
+            sets.insert(0, "status = $status")
+            params["status"] = status
+        try:
+            rows = await execute_query(
+                f"UPDATE entity SET {', '.join(sets)} WHERE id = $id RETURN AFTER;",
+                params,
+                self.config,
+            )
+        except Exception as e:
+            logger.exception(
+                f"set_manual_override failed for {entity_id} "
+                f"(status={status}, override={manual_override}): {e}"
+            )
+            raise
+        return bool(rows)
+
     # ------------------------------------------------------------------
     # Track K Phase K.3 — retroactive merge primitives
     # ------------------------------------------------------------------

@@ -404,6 +404,12 @@ class EntityExtractionService:
         self._notebook_schema_repo = notebook_schema_repo
         self._pass1_repo = pass1_repo
         self._persistence = EntityPersistenceService()
+        # Q.4: the after-extraction triage pipeline (match + merge + signals +
+        # status + queue + backbone). Constructed lazily on first persist so a
+        # service instance that never extracts pays no triage import cost, and so
+        # tests can inject a fake via ``self._triage`` before running. ``None``
+        # until first use; ``_run_triage`` builds it from the DI factory.
+        self._triage: Any = None
         # Run-scoped routing context (Track J.4), set at the top of
         # ``run_extraction`` and consumed by the LLM-caller builders so the
         # whole run shares one resolved privacy mode + source/notebook ids for
@@ -580,6 +586,51 @@ class EntityExtractionService:
             ctx=head_model.context_window,
         )
         return packed
+
+    async def _run_triage(
+        self, source_id: str, persist_result: Any
+    ) -> None:
+        """Fire the Q.4 after-extraction triage pipeline. Non-blocking.
+
+        This is the R1 hook: it runs RIGHT AFTER a ``persist_filtered_result`` and
+        is wrapped in its OWN log-and-continue guard (mirroring the filtering-
+        failure isolation at the main-path persist site). A triage failure MUST
+        NOT fail the extraction — the entities are already persisted; triage only
+        re-derives status / fills the review queue. So any exception here is logged
+        and swallowed and the extraction reports success.
+
+        ``persist_result`` is the dict returned by ``persist_filtered_result``; its
+        ``persisted_entity_ids`` are the batch the pipeline re-triages. A stable
+        ``batch_id`` (source + persist signature) ties the run's status-log + queue
+        rows together; re-running the same source produces the same logical batch,
+        and the pipeline's idempotency keeps the re-run a no-op.
+        """
+        try:
+            entity_ids = (
+                persist_result.get("persisted_entity_ids")
+                if isinstance(persist_result, dict)
+                else None
+            )
+            if not entity_ids:
+                return
+            if self._triage is None:
+                # Local import keeps the triage graph out of the module import
+                # path for non-extracting callers (and avoids a circular import
+                # via dependencies -> services -> this module).
+                from app_main.dependencies import get_triage_pipeline
+
+                self._triage = get_triage_pipeline()
+            batch_id = f"triage:{source_id}:{len(entity_ids)}"
+            await self._triage.run(
+                source_id=source_id,
+                persisted_entity_ids=list(entity_ids),
+                batch_id=batch_id,
+            )
+        except Exception as e:
+            # Non-blocking: triage never fails extraction (mirrors the filtering
+            # isolation). The persisted KG is intact; only triage's status/queue
+            # side-effects are skipped for this run.
+            logger.error(f"Triage failed for source {source_id} (non-blocking): {e}")
 
     async def _served_extraction_model(self, config) -> Optional[str]:
         """The model id to stamp as extraction provenance (J-Q7).
@@ -1152,7 +1203,7 @@ class EntityExtractionService:
             # + resolved model) is threaded so the KG records what produced
             # each entity.
             if filtered is not None:
-                await self._persistence.persist_filtered_result(
+                persist_result = await self._persistence.persist_filtered_result(
                     source_id=source_id,
                     entities=[e.model_dump() for e in filtered.entities],
                     relations=all_relations,
@@ -1171,6 +1222,10 @@ class EntityExtractionService:
                     # rich type. No re-detection here.
                     applicable_schemas=self._applicable_schemas,
                 )
+
+                # Q.4 R1 hook (main path): fire triage AFTER the persist, OUTSIDE
+                # the filtering try/except, with its own log-and-continue guard.
+                await self._run_triage(source_id, persist_result)
 
         # 7. Persist raw extraction results
         await self._save_result(source_id, result)
@@ -1359,7 +1414,7 @@ class EntityExtractionService:
         # B.8a: preserve the ORIGINAL extraction's provenance on re-filter —
         # don't rewrite every entity's method to the default "llm". The stored
         # extraction_result.metadata carries the extractor_type.
-        await self._persistence.persist_filtered_result(
+        persist_result = await self._persistence.persist_filtered_result(
             source_id=source_id,
             entities=[e.model_dump() for e in filtered.entities],
             relations=all_relations,
@@ -1372,6 +1427,10 @@ class EntityExtractionService:
             # prior run's schemas onto a different source's re-filter.
             applicable_schemas=None,
         )
+
+        # Q.4 R1 hook (re-filter path): triage fires here too (operator-confirmed,
+        # R1) so a re-filter re-derives status with the same non-blocking guard.
+        await self._run_triage(source_id, persist_result)
 
         stats = {
             "source_id": source_id,

@@ -202,6 +202,7 @@ def create_app() -> FastAPI:
         structure_graph,
         summaries,
         transformations,
+        triage,
         vault,
         vocabulary,
         zotero,
@@ -261,6 +262,7 @@ def create_app() -> FastAPI:
     application.include_router(
         entity_resolution.router, prefix="/api", tags=["entity-resolution"]
     )
+    application.include_router(triage.router, prefix="/api", tags=["triage"])
     application.include_router(
         vocabulary.router, prefix="/api", tags=["vocabulary"]
     )
