@@ -102,6 +102,34 @@ class DecisionResponse(BaseModel):
     decision: str
 
 
+class EntityPinIn(BaseModel):
+    """An operator pin from the KG detail panel (Q.5 manual_override toggle).
+
+    ``manual_override`` toggles the pin: ``true`` pins the entity (optionally
+    setting ``status``); ``false`` releases it back to automation. Unlike the
+    queue decision, this is keyed on the ENTITY id directly so the operator can
+    pin any entity from the detail panel, not only queued ones.
+    """
+
+    manual_override: bool = Field(
+        ..., description="Pin (true) or release (false) the entity."
+    )
+    status: Optional[str] = Field(
+        default=None,
+        description=(
+            "Status to pin alongside the override ('active'/'reference'); "
+            "omit to leave the current status untouched."
+        ),
+    )
+
+
+class EntityPinResponse(BaseModel):
+    entity: str
+    status: Optional[str]
+    manual_override: bool
+    closed_queue_rows: int
+
+
 class WeakEdgeOut(BaseModel):
     other: str
     relation_type: str
@@ -182,6 +210,54 @@ async def decide(
         status=body.status,
         manual_override=True,
         decision=decision_label,
+    )
+
+
+@router.post("/entities/{entity_id:path}/override", response_model=EntityPinResponse)
+async def set_entity_override(
+    entity_id: str,
+    body: EntityPinIn,
+    queue: TriageQueueRepository = Depends(get_triage_queue_repo),
+    entity_repo: EntityRepository = Depends(get_entity_repo),
+) -> EntityPinResponse:
+    """Pin/release an entity from the KG detail panel (Q.5 override toggle).
+
+    Reuses the same override-wins contract as the queue decision but is keyed on
+    the entity id so the operator can toggle ``manual_override`` on ANY entity,
+    not only queued ones. Pinning (``manual_override=true``) also closes any OPEN
+    queue row for the entity so automation no longer refreshes it; releasing
+    (``manual_override=false``) leaves the queue untouched (a later pipeline run
+    may re-derive and re-queue it).
+    """
+    if body.status is not None and body.status not in (
+        STATUS_ACTIVE,
+        STATUS_REFERENCE,
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=f"status must be '{STATUS_ACTIVE}' or '{STATUS_REFERENCE}'",
+        )
+
+    wrote = await entity_repo.set_manual_override(
+        entity_id, status=body.status, manual_override=body.manual_override
+    )
+    if not wrote:
+        raise HTTPException(status_code=404, detail="entity not found")
+
+    # Close the entity's open queue row(s) on a pin so the queue reflects the
+    # operator's decision; a release leaves them open.
+    closed = 0
+    if body.manual_override:
+        for item in await queue.list_open():
+            if item.entity == entity_id:
+                await queue.set_decision(item.id, body.status or "pinned")
+                closed += 1
+
+    return EntityPinResponse(
+        entity=entity_id,
+        status=body.status,
+        manual_override=body.manual_override,
+        closed_queue_rows=closed,
     )
 
 

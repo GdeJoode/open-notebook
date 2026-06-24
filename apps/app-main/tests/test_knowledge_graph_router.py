@@ -62,7 +62,7 @@ class TestListEntities:
 
         assert resp.status_code == 200
         svc.list_entities.assert_called_once_with(
-            limit=50, offset=0, entity_type="Person"
+            limit=50, offset=0, entity_type="Person", status=None
         )
 
     def test_list_with_pagination(self):
@@ -75,7 +75,24 @@ class TestListEntities:
 
         assert resp.status_code == 200
         svc.list_entities.assert_called_once_with(
-            limit=10, offset=20, entity_type=None
+            limit=10, offset=20, entity_type=None, status=None
+        )
+
+    def test_list_with_status_filter(self):
+        """Q.5: the status query param threads through to the service."""
+        svc = AsyncMock(spec=KnowledgeGraphService)
+        svc.list_entities.return_value = []
+        svc.count_entities.return_value = 0
+        client = _make_app(svc)
+
+        resp = client.get("/api/knowledge-graph/entities?status=reference")
+
+        assert resp.status_code == 200
+        svc.list_entities.assert_called_once_with(
+            limit=50, offset=0, entity_type=None, status="reference"
+        )
+        svc.count_entities.assert_called_once_with(
+            entity_type=None, status="reference"
         )
 
 

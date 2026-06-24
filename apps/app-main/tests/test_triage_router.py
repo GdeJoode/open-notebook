@@ -137,3 +137,73 @@ def test_backbone_warnings_empty_without_ids():
     resp = client.get("/api/triage/backbone-warnings")
     assert resp.status_code == 200
     assert resp.json() == {"count": 0, "warnings": []}
+
+
+def test_entity_override_pins_and_closes_open_queue_rows():
+    """Q.5 detail-panel toggle: pinning an entity sets override + closes its rows."""
+    queue = AsyncMock()
+    queue.list_open = AsyncMock(
+        return_value=[_queue_item(id="triage_queue:9", entity="entity:a")]
+    )
+    queue.set_decision = AsyncMock(
+        return_value=_queue_item(id="triage_queue:9", decision="active")
+    )
+    repo = AsyncMock()
+    repo.set_manual_override = AsyncMock(return_value=True)
+    client = _make_app(queue=queue, entity_repo=repo)
+
+    resp = client.post(
+        "/api/triage/entities/entity:a/override",
+        json={"manual_override": True, "status": "active"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["entity"] == "entity:a"
+    assert data["manual_override"] is True
+    assert data["status"] == "active"
+    assert data["closed_queue_rows"] == 1
+    _, kwargs = repo.set_manual_override.call_args
+    assert kwargs["status"] == "active"
+    assert kwargs["manual_override"] is True
+    queue.set_decision.assert_awaited_once()
+
+
+def test_entity_override_release_does_not_touch_queue():
+    """Releasing a pin (manual_override=false) leaves the queue alone."""
+    queue = AsyncMock()
+    repo = AsyncMock()
+    repo.set_manual_override = AsyncMock(return_value=True)
+    client = _make_app(queue=queue, entity_repo=repo)
+
+    resp = client.post(
+        "/api/triage/entities/entity:a/override",
+        json={"manual_override": False},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["closed_queue_rows"] == 0
+    queue.set_decision.assert_not_called()
+    _, kwargs = repo.set_manual_override.call_args
+    assert kwargs["manual_override"] is False
+
+
+def test_entity_override_rejects_bad_status():
+    repo = AsyncMock()
+    client = _make_app(entity_repo=repo)
+
+    resp = client.post(
+        "/api/triage/entities/entity:a/override",
+        json={"manual_override": True, "status": "archived"},
+    )
+    assert resp.status_code == 422
+
+
+def test_entity_override_missing_entity_is_404():
+    repo = AsyncMock()
+    repo.set_manual_override = AsyncMock(return_value=False)
+    client = _make_app(entity_repo=repo)
+
+    resp = client.post(
+        "/api/triage/entities/entity:nope/override",
+        json={"manual_override": True},
+    )
+    assert resp.status_code == 404

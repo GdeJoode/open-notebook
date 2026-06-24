@@ -6,6 +6,7 @@ export function useEntities(filters?: {
   limit?: number
   offset?: number
   entity_type?: string
+  status?: string
 }) {
   return useQuery({
     queryKey: QUERY_KEYS.entities(filters),
