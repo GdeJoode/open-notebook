@@ -71,10 +71,15 @@ async def get_entity_types(
 @router.get("/graph", response_model=Dict[str, Any])
 async def get_graph(
     entity_type: Optional[str] = None,
-    limit: int = Query(5000, ge=1, le=50000),
+    limit: int = Query(500, ge=1, le=50000),
     svc: KnowledgeGraphService = Depends(get_knowledge_graph_service),
 ):
-    """Get graph data (nodes + edges) for visualization."""
+    """Get graph data (nodes + edges) for visualization.
+
+    ``limit`` is a soft cap on the node count, not a hard slice of the
+    entity table: the endpoint is edge-first and active-only, so every
+    returned edge is guaranteed to have both endpoints in ``nodes``.
+    """
     return await svc.get_graph_data(entity_type=entity_type, limit=limit)
 
 

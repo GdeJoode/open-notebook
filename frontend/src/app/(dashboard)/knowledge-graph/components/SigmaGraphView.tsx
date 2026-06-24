@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useMemo } from 'react'
 import Graph from 'graphology'
+import forceAtlas2 from 'graphology-layout-forceatlas2'
 import Sigma from 'sigma'
 import { useGraphData } from '@/lib/hooks/use-knowledge-graph'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
@@ -92,12 +93,28 @@ export default function SigmaGraphView({
       }
     }
 
+    // Force-directed layout so connected nodes cluster into a readable graph
+    // instead of the random scatter. ForceAtlas2 derives its forces from the
+    // edges added above (the random x/y are only the starting seed).
+    if (graph.order > 1) {
+      forceAtlas2.assign(graph, {
+        iterations: graph.order > 400 ? 100 : 250,
+        settings: {
+          ...forceAtlas2.inferSettings(graph),
+          barnesHutOptimize: true,
+          gravity: 1,
+          scalingRatio: 10,
+          slowDown: 2,
+        },
+      })
+    }
+
     // Create Sigma instance
     const sigma = new Sigma(graph, containerRef.current, {
       labelRenderedSizeThreshold: 8,
       defaultEdgeColor: '#94a3b8',
       defaultEdgeType: 'line',
-      labelColor: { color: '#e2e8f0' },
+      labelColor: { color: '#1e293b' },
       labelSize: 12,
       labelFont: 'system-ui, sans-serif',
     })

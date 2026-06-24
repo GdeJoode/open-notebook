@@ -1327,46 +1327,139 @@ class EntityRepository:
     async def get_all_entities_and_relations(
         self,
         entity_type: Optional[str] = None,
-        limit: int = 5000,
+        limit: int = 500,
     ) -> Dict[str, Any]:
         """Get raw nodes and edges for graph visualization.
 
+        Edge-first + active-only selection. The previous implementation
+        selected an arbitrary ``LIMIT`` slice of *all* entities (archived
+        and merged included) and then asked for relations whose *both*
+        endpoints happened to fall inside that arbitrary slice. With a
+        large KG (~1.2k entities / ~0.9k relations) the odds of both
+        endpoints landing in the same arbitrary 500 are ~0, so the
+        endpoint returned **0 edges**.
+
+        This rewrite picks the *active* relation core first and derives
+        the node set from the relation endpoints, which guarantees every
+        returned edge has both endpoints present:
+
+        1. Fetch active relations (``status='active'``) among entities
+           that are part of the live KG (``status IN ['active',
+           'reference']`` — archived / merged are excluded). When
+           ``entity_type`` is given, both endpoints must match the type.
+        2. The node set is the union of the relation endpoints, padded
+           with the highest-``weight`` active/reference entities (so an
+           edge-less but important node still shows, and so the graph is
+           non-empty for a KG with no relations yet).
+
         Args:
-            entity_type: Optional type filter.
-            limit: Max nodes.
+            entity_type: Optional type filter (applied to nodes *and*
+                both endpoints of every edge).
+            limit: Soft cap on the number of nodes returned. Edge
+                endpoints are always kept (so the visible edges render);
+                the remainder of the budget is filled with the
+                highest-weight active entities.
 
         Returns:
-            Dict with ``nodes`` and ``edges`` lists.
+            Dict with ``nodes`` and ``edges`` lists. ``nodes`` carry
+            ``id``/``name``/``entity_type``/``weight``; ``edges`` carry
+            ``source``/``target``/``relation_type``.
         """
         try:
+            relation_limit = max(limit, 500)
             if entity_type:
-                nodes = await execute_query(
-                    "SELECT id, name, entity_type, weight "
-                    "FROM entity WHERE entity_type = $entity_type LIMIT $limit",
-                    {"entity_type": entity_type, "limit": limit},
+                edges = await execute_query(
+                    "SELECT id, in AS source, out AS target, relation_type "
+                    "FROM relation "
+                    "WHERE status = 'active' "
+                    "AND in.status IN ['active', 'reference'] "
+                    "AND out.status IN ['active', 'reference'] "
+                    "AND in.entity_type = $entity_type "
+                    "AND out.entity_type = $entity_type "
+                    "LIMIT $relation_limit",
+                    {"entity_type": entity_type, "relation_limit": relation_limit},
                     self.config,
                 )
             else:
-                nodes = await execute_query(
-                    "SELECT id, name, entity_type, weight "
-                    "FROM entity LIMIT $limit",
-                    {"limit": limit},
+                edges = await execute_query(
+                    "SELECT id, in AS source, out AS target, relation_type "
+                    "FROM relation "
+                    "WHERE status = 'active' "
+                    "AND in.status IN ['active', 'reference'] "
+                    "AND out.status IN ['active', 'reference'] "
+                    "LIMIT $relation_limit",
+                    {"relation_limit": relation_limit},
                     self.config,
                 )
+            edges = edges or []
 
-            if not nodes:
-                return {"nodes": [], "edges": []}
+            # Endpoint ids must always be in the node set so their edges
+            # render. SurrealDB returns record ids as RecordID objects;
+            # normalise to strings for de-duplication and the INSIDE probe.
+            endpoint_ids: List[str] = []
+            seen_endpoints = set()
+            for edge in edges:
+                for key in ("source", "target"):
+                    raw = edge.get(key)
+                    if raw is None:
+                        continue
+                    sid = str(raw)
+                    if sid not in seen_endpoints:
+                        seen_endpoints.add(sid)
+                        endpoint_ids.append(sid)
 
-            # Get all edges connecting the retrieved nodes
-            node_ids = [n["id"] for n in nodes]
-            edges = await execute_query(
-                "SELECT id, in AS source, out AS target, relation_type "
-                "FROM relation WHERE in INSIDE $ids AND out INSIDE $ids",
-                {"ids": node_ids},
-                self.config,
-            )
+            # Fill the remaining node budget with the most important
+            # (highest weight) active/reference entities so edge-less hubs
+            # and KGs with no relations still render something.
+            pad = max(limit - len(endpoint_ids), 0)
+            pad_nodes: List[Dict[str, Any]] = []
+            if pad > 0:
+                if entity_type:
+                    pad_nodes = await execute_query(
+                        "SELECT id, name, entity_type, weight "
+                        "FROM entity "
+                        "WHERE status IN ['active', 'reference'] "
+                        "AND entity_type = $entity_type "
+                        "ORDER BY weight DESC LIMIT $pad",
+                        {"entity_type": entity_type, "pad": pad},
+                        self.config,
+                    )
+                else:
+                    pad_nodes = await execute_query(
+                        "SELECT id, name, entity_type, weight "
+                        "FROM entity "
+                        "WHERE status IN ['active', 'reference'] "
+                        "ORDER BY weight DESC LIMIT $pad",
+                        {"pad": pad},
+                        self.config,
+                    )
+                pad_nodes = pad_nodes or []
 
-            return {"nodes": nodes or [], "edges": edges or []}
+            # Hydrate the endpoint ids into full node rows. Endpoints came
+            # from active relations whose endpoints were already filtered
+            # to active/reference, so they are guaranteed live entities.
+            endpoint_nodes: List[Dict[str, Any]] = []
+            if endpoint_ids:
+                endpoint_nodes = await execute_query(
+                    "SELECT id, name, entity_type, weight "
+                    "FROM entity WHERE id INSIDE $ids "
+                    "ORDER BY weight DESC",
+                    {"ids": endpoint_ids},
+                    self.config,
+                )
+                endpoint_nodes = endpoint_nodes or []
+
+            # Merge node sets, endpoints first, de-duplicated by id.
+            nodes: List[Dict[str, Any]] = []
+            seen_nodes = set()
+            for node in [*endpoint_nodes, *pad_nodes]:
+                nid = str(node.get("id"))
+                if nid in seen_nodes:
+                    continue
+                seen_nodes.add(nid)
+                nodes.append(node)
+
+            return {"nodes": nodes, "edges": edges}
         except Exception as e:
             logger.error(f"Failed to get graph data: {e}")
             return {"nodes": [], "edges": []}
