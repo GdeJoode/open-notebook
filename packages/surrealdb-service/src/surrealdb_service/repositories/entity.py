@@ -1641,7 +1641,7 @@ class EntityRepository:
             "AND (in INSIDE $ids OR out INSIDE $ids) "
             "AND ("
             "  relation_type INSIDE $structural "
-            "  OR (relation_type NOT INSIDE $structural "
+            "  OR (relation_type NOT IN $structural "
             "      AND array::len(source_documents ?? []) >= $min_docs)"
             ")"
         )
