@@ -231,16 +231,33 @@ async def get_source(
         )
         insights_count = insights_rows[0] if insights_rows else 0
 
-        # Get extraction result counts
+        # Live entity count: count active entities whose source_documents
+        # links back to this source. This replaces the previously-read
+        # denormalized extraction_result.entity_count, which can be stale
+        # (e.g. when the extraction_result row failed to persist).
+        # NOTE: ``source_documents`` stores STRINGIFIED record ids (see
+        # EntityRepository.upsert_entity / entity_persistence_service: the field
+        # is written as ``[source_id]`` with ``source_id`` a plain string). The
+        # CONTAINS comparison therefore matches in string space — coercing to a
+        # RecordID here would silently never match (the original bug).
+        entity_count_rows = await execute_query(
+            "SELECT VALUE count() FROM entity "
+            "WHERE source_documents CONTAINS $source_id "
+            "AND status = 'active' GROUP ALL",
+            {"source_id": str(source.id or source_id)},
+        )
+        entity_count = entity_count_rows[0] if entity_count_rows else 0
+
+        # relation_count remains read from extraction_result: relations do not
+        # carry the source on the edge, so a live source-scoped count is not
+        # straightforward here.
         extraction_rows = await execute_query(
-            "SELECT entity_count, relation_count FROM extraction_result "
+            "SELECT relation_count FROM extraction_result "
             "WHERE source_id = $source_id LIMIT 1",
             {"source_id": str(source.id or source_id)},
         )
-        entity_count = 0
         relation_count = 0
         if extraction_rows:
-            entity_count = extraction_rows[0].get("entity_count", 0) or 0
             relation_count = extraction_rows[0].get("relation_count", 0) or 0
 
         return SourceResponse(

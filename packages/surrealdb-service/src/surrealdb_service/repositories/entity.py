@@ -1128,12 +1128,15 @@ class EntityRepository:
         offset: int = 0,
         entity_type: Optional[str] = None,
         status: Optional[str] = None,
+        source_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """List entities with pagination and optional type/status filters.
+        """List entities with pagination and optional type/status/source filters.
 
         The projection surfaces the triage fields the Q.5 KG table renders:
         ``status`` and ``manual_override`` (operator-pin state) plus
-        ``source_documents`` so the caller can derive a cross-document count.
+        ``source_documents`` so the caller can derive a cross-document count. It
+        also carries ``canonical_name`` and ``primary_type`` so a source-scoped
+        view can show the resolved name/type alongside the raw ``entity_type``.
         Effective structural degree is NOT computed here (it needs the relation
         table + the triage predicate config) — the service layer joins it on.
 
@@ -1144,6 +1147,11 @@ class EntityRepository:
             status: Optional triage-status filter (``"active"`` / ``"reference"``
                 / ``"archived"``). Backed by ``idx_entity_status`` (migration 39),
                 so the filtered scan is cheap. ``None`` returns all statuses.
+            source_id: Optional source-scoped filter. When set, only entities
+                whose ``source_documents`` array contains this source id are
+                returned. ``source_documents`` stores STRINGIFIED record ids
+                (see :meth:`upsert_entity`), so the value is compared in string
+                space. ``None`` returns entities from every source (unchanged).
 
         Returns:
             A list of entity dictionaries.
@@ -1155,8 +1163,9 @@ class EntityRepository:
         # found." Forcing a no-index scan + in-memory sort avoids that planner
         # path. Entity tables are small enough that the full scan is acceptable.
         projection = (
-            "SELECT id, name, entity_type, weight, confidence, "
-            "status, manual_override, source_documents FROM entity WITH NOINDEX"
+            "SELECT id, name, canonical_name, entity_type, primary_type, "
+            "weight, confidence, status, manual_override, source_documents "
+            "FROM entity WITH NOINDEX"
         )
         clauses: List[str] = []
         params: Dict[str, Any] = {"limit": limit, "offset": offset}
@@ -1166,6 +1175,9 @@ class EntityRepository:
         if status:
             clauses.append("status = $status")
             params["status"] = status
+        if source_id:
+            clauses.append("source_documents CONTAINS $source_id")
+            params["source_id"] = str(source_id)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         try:
             return await execute_query(
@@ -1182,14 +1194,18 @@ class EntityRepository:
         self,
         entity_type: Optional[str] = None,
         status: Optional[str] = None,
+        source_id: Optional[str] = None,
     ) -> int:
-        """Count entities with optional type/status filters.
+        """Count entities with optional type/status/source filters.
 
         Args:
             entity_type: Optional entity type filter.
             status: Optional triage-status filter (mirrors
                 :meth:`list_entities`) so the paginated total matches the
                 filtered page.
+            source_id: Optional source-scoped filter (mirrors
+                :meth:`list_entities`). Compared in string space against the
+                stringified ids in ``source_documents``.
 
         Returns:
             Total count of matching entities.
@@ -1202,6 +1218,9 @@ class EntityRepository:
         if status:
             clauses.append("status = $status")
             params["status"] = status
+        if source_id:
+            clauses.append("source_documents CONTAINS $source_id")
+            params["source_id"] = str(source_id)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         try:
             result = await execute_query(

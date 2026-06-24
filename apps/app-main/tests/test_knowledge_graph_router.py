@@ -62,7 +62,8 @@ class TestListEntities:
 
         assert resp.status_code == 200
         svc.list_entities.assert_called_once_with(
-            limit=50, offset=0, entity_type="Person", status=None
+            limit=50, offset=0, entity_type="Person", status=None,
+            source_id=None,
         )
 
     def test_list_with_pagination(self):
@@ -75,7 +76,8 @@ class TestListEntities:
 
         assert resp.status_code == 200
         svc.list_entities.assert_called_once_with(
-            limit=10, offset=20, entity_type=None, status=None
+            limit=10, offset=20, entity_type=None, status=None,
+            source_id=None,
         )
 
     def test_list_with_status_filter(self):
@@ -89,11 +91,45 @@ class TestListEntities:
 
         assert resp.status_code == 200
         svc.list_entities.assert_called_once_with(
-            limit=50, offset=0, entity_type=None, status="reference"
+            limit=50, offset=0, entity_type=None, status="reference",
+            source_id=None,
         )
         svc.count_entities.assert_called_once_with(
-            entity_type=None, status="reference"
+            entity_type=None, status="reference", source_id=None
         )
+
+    def test_list_with_source_filter(self):
+        """The source_id query param scopes the listing to one source."""
+        svc = AsyncMock(spec=KnowledgeGraphService)
+        svc.list_entities.return_value = [_ENTITY]
+        svc.count_entities.return_value = 1
+        client = _make_app(svc)
+
+        resp = client.get(
+            "/api/knowledge-graph/entities?source_id=source:abc"
+        )
+
+        assert resp.status_code == 200
+        svc.list_entities.assert_called_once_with(
+            limit=50, offset=0, entity_type=None, status=None,
+            source_id="source:abc",
+        )
+        svc.count_entities.assert_called_once_with(
+            entity_type=None, status=None, source_id="source:abc"
+        )
+
+    def test_list_source_filter_defaults_none(self):
+        """Omitting source_id leaves the existing behavior unchanged."""
+        svc = AsyncMock(spec=KnowledgeGraphService)
+        svc.list_entities.return_value = []
+        svc.count_entities.return_value = 0
+        client = _make_app(svc)
+
+        resp = client.get("/api/knowledge-graph/entities")
+
+        assert resp.status_code == 200
+        _, kwargs = svc.list_entities.call_args
+        assert kwargs["source_id"] is None
 
 
 class TestGetEntity:

@@ -7,10 +7,28 @@ export function useEntities(filters?: {
   offset?: number
   entity_type?: string
   status?: string
+  source_id?: string
 }) {
   return useQuery({
     queryKey: QUERY_KEYS.entities(filters),
     queryFn: () => knowledgeGraphApi.listEntities(filters),
+  })
+}
+
+/**
+ * Source-scoped entity listing for the source-detail Entities tab. Thin wrapper
+ * over {@link useEntities} that pins `source_id` and disables the query until a
+ * source id is known. Reuses the same query key/cache as the KG entity list.
+ */
+export function useSourceEntities(
+  sourceId: string | undefined,
+  filters?: { limit?: number; offset?: number },
+) {
+  return useQuery({
+    queryKey: QUERY_KEYS.entities({ ...filters, source_id: sourceId }),
+    queryFn: () =>
+      knowledgeGraphApi.listEntities({ ...filters, source_id: sourceId }),
+    enabled: !!sourceId,
   })
 }
 

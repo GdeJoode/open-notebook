@@ -19,18 +19,32 @@ async def list_entities(
         None,
         description="Triage-status filter: 'active' | 'reference' | 'archived'.",
     ),
+    source_id: Optional[str] = Query(
+        None,
+        description=(
+            "Source-scoped filter: only entities whose source_documents "
+            "contains this source record id (e.g. 'source:abc')."
+        ),
+    ),
     svc: KnowledgeGraphService = Depends(get_knowledge_graph_service),
 ):
-    """List entities with pagination and optional type/status filters.
+    """List entities with pagination and optional type/status/source filters.
 
     The optional ``status`` filter (Q.5) is backed by ``idx_entity_status`` so a
     status-filtered page stays cheap; rows carry ``structural_degree`` /
-    ``doc_count`` for the KG table.
+    ``doc_count`` for the KG table. The optional ``source_id`` filter scopes the
+    listing to a single source for the source-detail Entities tab.
     """
     items = await svc.list_entities(
-        limit=limit, offset=offset, entity_type=entity_type, status=status
+        limit=limit,
+        offset=offset,
+        entity_type=entity_type,
+        status=status,
+        source_id=source_id,
     )
-    total = await svc.count_entities(entity_type=entity_type, status=status)
+    total = await svc.count_entities(
+        entity_type=entity_type, status=status, source_id=source_id
+    )
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 

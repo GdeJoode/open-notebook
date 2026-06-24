@@ -23,8 +23,9 @@ class KnowledgeGraphService:
         offset: int = 0,
         entity_type: Optional[str] = None,
         status: Optional[str] = None,
+        source_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """List entities with pagination + optional type/status filters.
+        """List entities with pagination + optional type/status/source filters.
 
         Joins the Q.2 triage signals onto each page row so the KG table can show
         per-entity ``structural_degree`` and ``doc_count`` (Q.5 AC2):
@@ -39,7 +40,11 @@ class KnowledgeGraphService:
         the listing.
         """
         rows = await self.entity_repo.list_entities(
-            limit=limit, offset=offset, entity_type=entity_type, status=status
+            limit=limit,
+            offset=offset,
+            entity_type=entity_type,
+            status=status,
+            source_id=source_id,
         )
         return await self._attach_signals(rows)
 
@@ -47,10 +52,11 @@ class KnowledgeGraphService:
         self,
         entity_type: Optional[str] = None,
         status: Optional[str] = None,
+        source_id: Optional[str] = None,
     ) -> int:
-        """Count entities with optional type/status filters."""
+        """Count entities with optional type/status/source filters."""
         return await self.entity_repo.count_entities(
-            entity_type=entity_type, status=status
+            entity_type=entity_type, status=status, source_id=source_id
         )
 
     async def _attach_signals(
