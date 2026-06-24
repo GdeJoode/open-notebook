@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "_doc": "Post-extraction triage configuration (Track Q, Part A). One-time, version-controlled, decoupled from the pipeline logic. Edit this file to change tiering — the pipeline reads it, never re-asks.",
+
+  "kg_goal": {
+    "primary": "theme-navigation",
+    "secondary": "actor-navigation",
+    "note": "Themes (BeleidsThema/BeleidsPijler) are the primary navigation lens. Actors are deliberately LIMITED (initially) to ministries, regions, and programmes — incl. RegioDeal and named programmes like NOVEX as programme-level actors. Indicators/metrics and loose amounts are detail (reference), NOT core."
+  },
+
+  "entity_tiers": {
+    "_keyed_on": "primary_type",
+    "_default_for_unmapped_type": "unsure_review",
+
+    "active": [
+      "BeleidsThema", "BeleidsPijler",
+      "Ministerie",
+      "Gemeente", "Provincie", "Regio", "FunctioneleRegio", "Wijk", "administrative_area",
+      "Programma", "RegioDeal", "Deal", "CityDeal", "Woondeal"
+    ],
+
+    "reference": [
+      "Budget", "Budget/Amount", "Amount",
+      "Place", "Plaats", "Location",
+      "Indicator",
+      "other", "Other", "Service", "ABBREVIATION"
+    ],
+
+    "unsure_review": [
+      "Person", "Persoon",
+      "Organisatie", "Organization",
+      "Samenwerkingsverband",
+      "Overheid", "Overheidsorgaan", "GovernmentBody",
+      "Uitvoeringsorganisatie",
+      "Law", "Wet", "Legislation",
+      "Instrument"
+    ]
+  },
+
+  "relation_predicates": {
+    "_default_for_unmapped_predicate": "weak",
+    "structural": ["IS_PIJLER_VAN", "LEIDT_TOT", "BIJDRAGT_AAN", "FINANCIERT", "VERSTERKT", "VERMINDERT"],
+    "weak": ["RELATED"],
+    "note": "Structural predicates form the KG backbone and count toward connectivity (degree). VERSTERKT/VERMINDERT are meaningful thematic edges → structural (operator-confirmed). RELATED is the weak/generic edge → flagged by the backbone-check, does NOT count toward structural connectivity. Unmapped predicates default to weak (don't assume an unknown predicate is backbone)."
+  },
+
+  "status_rules": {
+    "_note": "How tier x degree maps to status in the per-run pipeline (B4/B5). Degree = count of STRUCTURAL relations (weak/RELATED edges excluded). The pipeline may also report total degree separately, but the active/reference decision uses structural degree.",
+    "core_active_min_degree": 1,
+    "reference_isolated_max_degree": 0,
+    "well_connected_threshold": 3,
+    "rules": [
+      "active-tier type AND degree >= 1            -> active",
+      "active-tier type AND degree == 0            -> active, BUT review-queue: 'isolated core actor / possible extraction gap'",
+      "reference-tier type (any degree)            -> reference",
+      "reference-tier type AND degree >= 3         -> reference, BUT review-queue: 'candidate active'",
+      "unsure_review-tier type                      -> reference by default, ALWAYS review-queue: 'unsure — operator decides'",
+      "manual_override == true                      -> keep operator status, automation NEVER overwrites"
+    ]
+  }
+}
