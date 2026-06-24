@@ -160,3 +160,54 @@ Run with `PYTHONPATH=<wt>/apps/app-main/src:<wt>/packages/shared/src:<wt>/packag
 
 ### Out of scope (deferred to Q.4 per plan)
 The review queue itself is Q.4 — Q.3 only RETURNS the `queue_flags` in the decision (it does not write a queue table). The after-extraction hook and orchestration are Q.4.
+
+---
+
+## Phase Q.4 — Pipeline orchestration (after-extraction hook) — ready for review
+
+**Branch**: `track/q4-orchestration` (off `main`)
+**Commits**: `40556ae` batch triage/relation helpers + persist returns batch ids → `13fe665` orchestrator + queue + backbone + migration 60 + unit tests → `57f6048` router + DI + hook at both persist sites → `2612d58` integration + router tests.
+
+### Orchestration flow (B1→B6)
+`TriagePipeline.run(source_id, persisted_entity_ids, batch_id)` — pure orchestration over FROZEN reuse services:
+- **B1 match** — `CandidateDedupService.propose_candidates` (K.5); review-band proposals touching the batch are surfaced as match-conflict queue rows (never auto-merged).
+- **B2 merge** — done by the caller's `persist_filtered_result` (B.8/O.1/Q.2a) BEFORE the hook; `RecanonicalizationService` (K.3) injected for collision merges.
+- **B3 signals** — `TriageSignalsService.compute_report` (Q.2).
+- **B4 status** — `StatusAssignmentService.assign`/`apply` (Q.3), manual_override-wins.
+- **B5 queue** — `TriageQueueRepository.upsert` (dedup-by-entity).
+- **B6 backbone** — `BackboneCheckService.warnings_for` (weak-edge warnings for affected degree≥3 nodes).
+
+### Affected-set / snapshot choice (R4) — choice (b), proven idempotent
+The hook fires AFTER the merge, so the orchestrator cannot observe the pre-merge degree/doc-count. Of the plan's two options it takes **(b): re-triage the batch entities + their active relation neighbours**, with an EMPTY pre-batch snapshot so Q.2 marks the whole superset "new". This is safe because every downstream WRITE is idempotent under re-derivation:
+- status — `apply()` writes + logs ONLY on an actual change (pure function of tier×degree×override; unchanged re-run = no-op, no DB write, no log row).
+- provenance — counted by Q.2a's per-edge `source_documents` UNION at persist time; triage only READS degree/doc-count, never double-counts.
+- queue — `upsert` dedups by entity (one OPEN row per entity, UPDATEd not appended).
+
+The AC3 "unchanged nodes untouched" guarantee is met at the WRITE layer (log/queue stability), which the run-twice integration test asserts. Cost of (b) over (a): unchanged-but-touched nodes are re-EVALUATED (DB reads) but produce zero spurious writes.
+
+**Run-twice proof** (`test_run_twice_is_idempotent`): same batch twice → identical statuses, `status_change_log` row count UNCHANGED, `r2.statuses_changed == 0`, open-queue count UNCHANGED.
+
+### Queue dedup mechanism
+`triage_queue` table (migration 60): at most ONE OPEN row per entity. `upsert` SELECTs an existing open row for the entity and UPDATEs it (signals/reason/batch refresh) else CREATEs; only OPEN rows dedup, so a decided row never re-opens. Dedup verified against the live container (`test_triage_queue.py`).
+
+### Migration 60 (triage_queue)
+`migrations/60.surrealql` + `60_down.surrealql` — `DEFINE TABLE IF NOT EXISTS triage_queue SCHEMAFULL`; fields `entity record<entity>`, `name`, `type`, `structural_degree`, `doc_count`, `reason`, `decision DEFAULT 'open'`, `batch_id`, `created_at`/`updated_at DEFAULT time::now()`; indexes on `entity` + `decision` + `batch_id`. Additive + idempotent (`IF [NOT] EXISTS`), follows migration 54/59 precedent. Down removes ONLY the `triage_queue` table (cascades its fields/indexes). Migration 59 already merged → this is **60** (the plan's "new 60 if Q.3 already merged" branch).
+
+### Hook placement (R1 — both persist sites, guarded, non-blocking)
+`entity_extraction_service._run_triage(source_id, persist_result)` fires after `persist_filtered_result` on BOTH paths — main (~:1155) and re-filter (~:1362) — OUTSIDE the filtering try/except, with its own log-and-continue guard (mirrors the filtering-failure isolation at ~:1141). Pipeline lazily constructed via `dependencies.get_triage_pipeline()` on first persist. `persist_filtered_result` now RETURNS `persisted_entity_ids` (additive) so the hook re-triages exactly the batch. A triage failure logs an error and extraction still reports success (asserted by `test_step_failure_is_non_blocking` + the `_run_triage` guard).
+
+### Operator decision endpoint (override-wins)
+`POST /api/triage/queue/{id}/decision` → `EntityRepository.set_manual_override(status, manual_override=True)` (the ONLY writer of `manual_override = true`, unconditional). A subsequent pipeline run leaves the pinned status untouched (DB-layer guard in `set_status`). Router tests + integration confirm.
+
+### Named-programme limitation (R5, documented + asserted)
+NOVEX/Regio-Deals reach `active` ONLY when typed `Programma`/`Deal`/`RegioDeal` (config active tier). Typed `Organisatie` the SAME programme falls to unsure_review → `reference` + queue. Asserted by `test_named_programme_typing_limitation`. Queue-catch is the accepted v1 behaviour; an alias rule is deferred.
+
+### Files
+- Create: `services/triage/triage_pipeline.py`, `triage_queue.py`, `backbone_check.py`; `api/routers/triage.py`; `migrations/60.surrealql` + `60_down.surrealql`.
+- Modify: `entity_extraction_service.py` (hook + `_run_triage`), `entity_persistence_service.py` (returns `persisted_entity_ids`), `EntityRepository` (`triage_rows_for_entities`, `relations_for_entities`, `set_manual_override`), `dependencies.py` (`get_triage_pipeline`/`get_triage_queue_repo`/`get_status_change_log_repo`), `api/app.py` (router register).
+
+### Tests (all green)
+`uv run --no-sync --with docker --with testcontainers pytest <Q.4 suite> + test_triage_signals_service.py + test_status_assignment_service.py` → **56 passed** (unit + testcontainer integration; Q.2/Q.3 regression clean). `create_app()` → OK. `ruff check` on all changed files → clean (the 2 pre-existing `ExtractionResult` F821 forward-refs in entity_extraction_service.py are untouched by this diff).
+
+### Env note (workspace .venv)
+Restored env was missing `testcontainers`/`docker` (member dev-group deps). Canonical invocation: `uv run --no-sync --with docker --with testcontainers pytest …` (matches the Q.3 note). `--no-sync` prevents the workspace-member desync; `--with` injects the testcontainer deps transiently.
