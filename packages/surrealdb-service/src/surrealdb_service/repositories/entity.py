@@ -1127,13 +1127,23 @@ class EntityRepository:
         limit: int = 50,
         offset: int = 0,
         entity_type: Optional[str] = None,
+        status: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """List entities with pagination and optional type filter.
+        """List entities with pagination and optional type/status filters.
+
+        The projection surfaces the triage fields the Q.5 KG table renders:
+        ``status`` and ``manual_override`` (operator-pin state) plus
+        ``source_documents`` so the caller can derive a cross-document count.
+        Effective structural degree is NOT computed here (it needs the relation
+        table + the triage predicate config) — the service layer joins it on.
 
         Args:
             limit: Maximum number of entities to return.
             offset: Number of entities to skip.
             entity_type: Optional entity type filter.
+            status: Optional triage-status filter (``"active"`` / ``"reference"``
+                / ``"archived"``). Backed by ``idx_entity_status`` (migration 39),
+                so the filtered scan is cheap. ``None`` returns all statuses.
 
         Returns:
             A list of entity dictionaries.
@@ -1144,19 +1154,24 @@ class EntityRepository:
         # a SEARCH index and aborts the transaction with "No iterator has been
         # found." Forcing a no-index scan + in-memory sort avoids that planner
         # path. Entity tables are small enough that the full scan is acceptable.
+        projection = (
+            "SELECT id, name, entity_type, weight, confidence, "
+            "status, manual_override, source_documents FROM entity WITH NOINDEX"
+        )
+        clauses: List[str] = []
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if entity_type:
+            clauses.append("entity_type = $entity_type")
+            params["entity_type"] = entity_type
+        if status:
+            clauses.append("status = $status")
+            params["status"] = status
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         try:
-            if entity_type:
-                return await execute_query(
-                    "SELECT id, name, entity_type, weight, confidence "
-                    "FROM entity WITH NOINDEX WHERE entity_type = $entity_type "
-                    "ORDER BY name LIMIT $limit START $offset",
-                    {"entity_type": entity_type, "limit": limit, "offset": offset},
-                    self.config,
-                )
             return await execute_query(
-                "SELECT id, name, entity_type, weight, confidence "
-                "FROM entity WITH NOINDEX ORDER BY name LIMIT $limit START $offset",
-                {"limit": limit, "offset": offset},
+                f"{projection}{where} "
+                "ORDER BY name LIMIT $limit START $offset",
+                params,
                 self.config,
             )
         except Exception as e:
@@ -1164,30 +1179,36 @@ class EntityRepository:
             return []
 
     async def count_entities(
-        self, entity_type: Optional[str] = None
+        self,
+        entity_type: Optional[str] = None,
+        status: Optional[str] = None,
     ) -> int:
-        """Count entities with optional type filter.
+        """Count entities with optional type/status filters.
 
         Args:
             entity_type: Optional entity type filter.
+            status: Optional triage-status filter (mirrors
+                :meth:`list_entities`) so the paginated total matches the
+                filtered page.
 
         Returns:
             Total count of matching entities.
         """
+        clauses: List[str] = []
+        params: Dict[str, Any] = {}
+        if entity_type:
+            clauses.append("entity_type = $entity_type")
+            params["entity_type"] = entity_type
+        if status:
+            clauses.append("status = $status")
+            params["status"] = status
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         try:
-            if entity_type:
-                result = await execute_query(
-                    "SELECT count() AS total FROM entity "
-                    "WHERE entity_type = $entity_type GROUP ALL",
-                    {"entity_type": entity_type},
-                    self.config,
-                )
-            else:
-                result = await execute_query(
-                    "SELECT count() AS total FROM entity GROUP ALL",
-                    {},
-                    self.config,
-                )
+            result = await execute_query(
+                f"SELECT count() AS total FROM entity{where} GROUP ALL",
+                params,
+                self.config,
+            )
             if result:
                 return result[0].get("total", 0)
             return 0

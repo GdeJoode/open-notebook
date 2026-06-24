@@ -18,6 +18,10 @@ def entity_repo():
     repo.get_all_entities_and_relations = AsyncMock(
         return_value={"nodes": [], "edges": []}
     )
+    # Q.5 signals join: the service annotates list/detail rows with effective
+    # degree via this batched relation helper. Default to "no edges" so the
+    # join contributes degree 0 unless a test overrides it.
+    repo.effective_degree_for_entities = AsyncMock(return_value={})
     return repo
 
 
@@ -33,9 +37,41 @@ class TestListEntities:
         result = await svc.list_entities(limit=10, offset=5, entity_type="Person")
 
         entity_repo.list_entities.assert_called_once_with(
-            limit=10, offset=5, entity_type="Person"
+            limit=10, offset=5, entity_type="Person", status=None
         )
         assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_threads_status_filter(self, entity_repo):
+        """Q.5: the optional status filter reaches the repository."""
+        svc = KnowledgeGraphService(entity_repo=entity_repo)
+
+        await svc.list_entities(limit=10, offset=0, status="reference")
+
+        entity_repo.list_entities.assert_called_once_with(
+            limit=10, offset=0, entity_type=None, status="reference"
+        )
+
+    @pytest.mark.asyncio
+    async def test_attaches_degree_and_doc_count(self, entity_repo):
+        """Q.5 AC2: page rows carry structural_degree + doc_count."""
+        entity_repo.list_entities.return_value = [
+            {
+                "id": "entity:1",
+                "name": "Test",
+                "entity_type": "Person",
+                "weight": 1,
+                "source_documents": ["source:a", "source:b", "source:a"],
+            }
+        ]
+        entity_repo.effective_degree_for_entities.return_value = {"entity:1": 4}
+        svc = KnowledgeGraphService(entity_repo=entity_repo)
+
+        result = await svc.list_entities(limit=10, offset=0)
+
+        assert result[0]["structural_degree"] == 4
+        # Distinct docs: source:a + source:b == 2 (the duplicate collapses).
+        assert result[0]["doc_count"] == 2
 
 
 class TestCountEntities:
@@ -48,6 +84,21 @@ class TestCountEntities:
         result = await svc.count_entities(entity_type="Person")
 
         assert result == 42
+        entity_repo.count_entities.assert_called_once_with(
+            entity_type="Person", status=None
+        )
+
+    @pytest.mark.asyncio
+    async def test_count_threads_status(self, entity_repo):
+        entity_repo.count_entities.return_value = 7
+        svc = KnowledgeGraphService(entity_repo=entity_repo)
+
+        result = await svc.count_entities(status="reference")
+
+        assert result == 7
+        entity_repo.count_entities.assert_called_once_with(
+            entity_type=None, status="reference"
+        )
 
 
 class TestGetEntity:

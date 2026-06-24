@@ -274,6 +274,55 @@ async def test_list_entities_survives_order_by_name_with_fulltext_index(
     )
 
 
+@pytest.mark.requires_docker
+async def test_list_entities_status_filter(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Q.5: the optional ``status`` filter restricts the page to that status.
+
+    Seeds an ``active`` and a ``reference`` entity and asserts each status filter
+    returns only its own rows, that ``count_entities`` agrees with the filtered
+    page, and that the projection surfaces ``status`` for the KG table.
+    """
+    cfg = live_surrealdb
+    repo = EntityRepository(config=cfg)
+    prefix = _unique("statusfilter")
+
+    active_name = f"{prefix}-active"
+    reference_name = f"{prefix}-reference"
+    await execute_query(
+        "CREATE entity SET canonical_name=$n, name=$n, hash_id=$n, "
+        "entity_type='concept', confidence=0.9, embedding=[], status='active';",
+        {"n": active_name},
+        config=cfg,
+    )
+    await execute_query(
+        "CREATE entity SET canonical_name=$n, name=$n, hash_id=$n, "
+        "entity_type='concept', confidence=0.9, embedding=[], status='reference';",
+        {"n": reference_name},
+        config=cfg,
+    )
+
+    ref_rows = await repo.list_entities(limit=500, offset=0, status="reference")
+    ref_names = {
+        r["name"] for r in ref_rows if str(r.get("name", "")).startswith(prefix)
+    }
+    assert ref_names == {reference_name}
+    assert all(r["status"] == "reference" for r in ref_rows)
+
+    active_rows = await repo.list_entities(limit=500, offset=0, status="active")
+    active_names = {
+        r["name"] for r in active_rows if str(r.get("name", "")).startswith(prefix)
+    }
+    assert active_names == {active_name}
+
+    # Count agrees with the filtered page (scoped to this test's prefix is not
+    # possible via count, so assert the reference count is >= 1 and that an
+    # unmatched status returns 0 for a freshly-unique status value).
+    assert await repo.count_entities(status="reference") >= 1
+    assert await repo.count_entities(status=f"nonexistent-{prefix}") == 0
+
+
 # --- P.1: entity-embedding backfill primitives --------------------------------
 
 

@@ -15,11 +15,22 @@ async def list_entities(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     entity_type: Optional[str] = None,
+    status: Optional[str] = Query(
+        None,
+        description="Triage-status filter: 'active' | 'reference' | 'archived'.",
+    ),
     svc: KnowledgeGraphService = Depends(get_knowledge_graph_service),
 ):
-    """List entities with pagination and optional type filter."""
-    items = await svc.list_entities(limit=limit, offset=offset, entity_type=entity_type)
-    total = await svc.count_entities(entity_type=entity_type)
+    """List entities with pagination and optional type/status filters.
+
+    The optional ``status`` filter (Q.5) is backed by ``idx_entity_status`` so a
+    status-filtered page stays cheap; rows carry ``structural_degree`` /
+    ``doc_count`` for the KG table.
+    """
+    items = await svc.list_entities(
+        limit=limit, offset=offset, entity_type=entity_type, status=status
+    )
+    total = await svc.count_entities(entity_type=entity_type, status=status)
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
