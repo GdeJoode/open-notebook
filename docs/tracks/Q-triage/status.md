@@ -7,7 +7,7 @@
 |-------|-------|--------------|--------|----|-------|
 | Q.1 | Config loader & validator | NET-NEW (small) | merged ✅ | `track/q-config-impl` | loader reads `config/triage_config.json`; lookup maps wrapped in MappingProxyType (immutable cache); APPROVED rev1 (immutability blocker fixed + test) |
 | Q.2a | Relation merge (edge-dedup + cross-doc provenance + dup backfill) | NET-NEW | merged ✅ | `track/q-relation-merge` | persist UPSERTs per `(in,out,relation_type)` (union `source_documents`, max conf, no-clobber properties); backfill (dry-run + idempotent); O.1 roundtrip green; APPROVED. Live DB shows 0 dup groups (216 active edges) — the 70-dup figure predates O.1/re-extraction; backfill verified via seeded-dup test |
-| Q.2 | Signals (effective degree w/ weak-edge promotion, recurrence, affected set) | NET-NEW + partial reuse | not-started | — | RELATED counts when recurring ≥ weak_promotion_min_docs; depends on Q.2a |
+| Q.2 | Signals (effective degree w/ weak-edge promotion, recurrence, affected set) | NET-NEW + partial reuse | ready-for-review 🔍 | `track/q2-signals` | `TriageSignalsService` + batched `effective_degree_for_entities`; promotion flip asserted (1-2→3+); affected set = new+changed-degree+changed-docs vs pre-batch snapshot; ONE batched DB call (asserted); 6 unit pass, 1 docker-integration skips cleanly (no docker SDK in env) |
 | Q.3 | Status assignment + migration 59 + change-log | NET-NEW logic, reuse status/properties | not-started | — | adds `reference` status, `manual_override`, status_change_log |
 | Q.4 | Pipeline orchestration (after-extraction hook) | ORCHESTRATION (reuse B1/B2) | not-started | — | hook at entity_extraction_service.py:1155 & :1362 |
 | Q.5 | UI surface | REUSE-HEAVY | not-started | — | extends KG view + resolution-hub patterns |
@@ -84,3 +84,34 @@ Backfill `--dry-run` against the running `open_notebook` DB (port 8000): **216 a
 
 ### Frozen constraints respected
 O.1 type-safe endpoint resolution, migration 39/58 relation schema (no schema change — `source_documents` already exists), B.8 hash_id, K.7a typed endpoints — all untouched. Only the create-vs-union decision after endpoints resolve changed.
+
+---
+
+## Phase Q.2 — implementation summary (ready for review)
+
+**Branch**: `track/q2-signals` (off `main`, which carries Q.1 + Q.2a)
+**Commits**: `71a82c4` (repo batched degree helper), `c90aff5` (signals service + tests)
+
+### What changed
+- `packages/surrealdb-service/.../repositories/entity.py` — ADD read-only `effective_degree_for_entities(ids, structural_predicates, weak_predicates, weak_promotion_min_docs) -> dict[id,int]`. ONE round-trip for the whole batch (NOT one query per node). Additive, no schema change.
+  - **Promotion in SQL**: an edge counts when `relation_type INSIDE $structural` **OR** (`relation_type NOT INSIDE $structural AND array::len(source_documents ?? []) >= $min_docs`). Treating "weak" as "not structural" means an unmapped predicate (config-default weak) promotes exactly like `RELATED`. The single-doc RELATED is excluded by the `>= $min_docs` guard; a multi-doc RELATED passes it.
+  - **Scan scope**: `WHERE status = 'active' AND (in INSIDE $ids OR out INSIDE $ids)` — pulls every counting edge touching the batch in one SELECT; the per-id tally is summed in Python (each counting edge adds 1 to **each** of its endpoints in the batch → AC5 both-endpoints; a self-loop adds 1 via set semantics).
+- `apps/app-main/src/app_main/services/triage/signals_service.py` (new) — `TriageSignalsService`:
+  - `effective_degree(id)` (single, delegates to the batched helper), `degree_bucket(d)` → `"0"|"1-2"|"3+"` keyed on `well_connected_threshold` (3), `doc_count(entity)` distinct `source_documents`.
+  - `compute_report(batch_entities, pre_batch_snapshot) -> SignalsReport` — one batched degree call; per-id `EntitySignals(effective_degree, bucket, doc_count, is_new, degree_changed, doc_count_changed)`.
+  - `compute_affected_set(...)` — new + changed-effective-degree + changed-doc-count. **Snapshot contract documented**: the caller MUST capture `pre_batch_snapshot` (`{id: {"degree", "doc_count"}}`) BEFORE the merge; capturing it after would make every node look unchanged and break idempotency (plan R4).
+  - Predicate lists + threshold sourced from the Q.1 config (`cfg.predicate_strength` / `cfg.weak_promotion_min_docs` / `cfg.well_connected_threshold`); nothing hardcoded.
+
+### Tests (`apps/app-main/tests/test_triage_signals_service.py`)
+`uv run --project apps/app-main pytest apps/app-main/tests/test_triage_signals_service.py -q` → **6 passed, 1 skipped**.
+- **Promotion flip asserted directly** (AC1): 2 `BIJDRAGT_AAN` + 1 single-doc `RELATED` → degree 2, bucket `1-2`; same edge reaches `source_documents >= 2` → degree 3, bucket `3+`.
+- doc-count distinct + idempotent (AC2); affected set = new + changed-degree + changed-docs, unchanged excluded, promotion-threshold-crossing marks both endpoints (AC3); **ONE batched call asserted** via a call-count on the fake repo (AC4); structural + promoted-weak edge counts for both endpoints (AC5).
+- Integration `test_integration_promotion_flip_and_batched_query` exercises the REAL SurrealQL promotion filter against a live container; **skips cleanly** here because the `docker` Python SDK is not installed in the app-main test venv (same graceful-skip as the Q.2a roundtrip suite). The unit `FakeEntityRepository` mirrors the exact SQL promotion arithmetic.
+
+### Quality gates
+- `ruff check` on all changed files → clean. `mypy signals_service.py` → clean.
+- `uv run --project apps/app-main pytest apps/app-main/tests/test_triage_config.py -q` → 17 passed (no Q.1 regression).
+- `uv run python -c "from app_main.api.app import create_app"` → OK.
+
+### Environment note (honest)
+This worktree's `.venv` resolves `app_main` only under `uv run --project apps/app-main` (the root `open-notebook` project does not depend on `app-main`). The `docker` SDK is absent, so `requires_docker` tests skip — no new dependency was introduced (out of scope for this phase). The real-SQL promotion path is covered by the integration test wherever Docker + the SDK are present.
