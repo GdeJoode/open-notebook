@@ -113,12 +113,17 @@ class KnowledgeGraphService:
     async def get_graph_data(
         self,
         entity_type: Optional[str] = None,
-        limit: int = 5000,
+        limit: int = 500,
     ) -> Dict[str, Any]:
         """Get graph data (nodes + edges) for visualization.
 
         Returns raw nodes and edges suitable for client-side rendering.
         Layout computation is handled by the frontend graph library.
+
+        ``limit`` is a soft cap on the *node* count. The repository is
+        edge-first: it selects the active relation core, derives nodes
+        from the relation endpoints (so edges always render), then pads
+        the node budget with the highest-weight active entities.
         """
         raw = await self.entity_repo.get_all_entities_and_relations(
             entity_type=entity_type, limit=limit
