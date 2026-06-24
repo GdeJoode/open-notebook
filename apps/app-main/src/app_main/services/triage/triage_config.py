@@ -19,7 +19,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Literal
+from types import MappingProxyType
+from typing import Dict, Literal, Mapping
 
 from loguru import logger
 
@@ -64,13 +65,16 @@ class TriageConfig:
 
     Lookups are backed by pre-built reverse maps (type/predicate -> tier/
     strength) so ``tier_for`` / ``predicate_strength`` are O(1) and never
-    mutate the underlying file. Instances are frozen to make accidental
-    mutation a hard error and to keep them safe to cache and share.
+    mutate the underlying file. Instances are frozen AND the lookup maps are
+    wrapped in ``MappingProxyType`` (read-only views), so neither attribute
+    rebinding nor mutating a tier/predicate map can corrupt the shared cached
+    instance — a stray write raises ``TypeError`` instead of silently
+    re-tiering every downstream run.
     """
 
     version: int
-    _tier_by_type: Dict[str, Tier] = field(repr=False)
-    _strength_by_predicate: Dict[str, PredicateStrength] = field(repr=False)
+    _tier_by_type: Mapping[str, Tier] = field(repr=False)
+    _strength_by_predicate: Mapping[str, PredicateStrength] = field(repr=False)
     weak_promotion_min_docs: int
     core_active_min_degree: int
     reference_isolated_max_degree: int
@@ -213,8 +217,8 @@ def _parse(raw: Dict[str, object]) -> TriageConfig:
 
     return TriageConfig(
         version=version,
-        _tier_by_type=tier_by_type,
-        _strength_by_predicate=strength_by_predicate,
+        _tier_by_type=MappingProxyType(tier_by_type),
+        _strength_by_predicate=MappingProxyType(strength_by_predicate),
         weak_promotion_min_docs=weak_promotion_min_docs,
         core_active_min_degree=_require_int(
             status_rules, "core_active_min_degree", "status_rules"

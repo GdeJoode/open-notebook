@@ -184,6 +184,32 @@ def test_config_is_immutable():
         config.version = 2  # type: ignore[misc]
 
 
+def test_lookup_maps_are_read_only_and_cache_not_poisoned():
+    """Mutating the lookup maps must fail and must not corrupt the shared cache.
+
+    ``frozen=True`` only blocks attribute rebinding; the tier/predicate maps are
+    wrapped in ``MappingProxyType`` so a stray write raises ``TypeError`` instead
+    of silently re-tiering every subsequent (cached) run.
+    """
+
+    config = load_triage_config()
+
+    # Unmapped types/predicates fall to the defaults before any tampering.
+    assert config.tier_for("Person") == "unsure_review"
+    assert config.predicate_strength("RELATED") == "weak"
+
+    with pytest.raises(TypeError):
+        config._tier_by_type["Person"] = "active"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        config._strength_by_predicate["RELATED"] = "structural"  # type: ignore[index]
+
+    # The cached instance returned to every caller is uncorrupted.
+    refetched = load_triage_config()
+    assert refetched is config
+    assert refetched.tier_for("Person") == "unsure_review"
+    assert refetched.predicate_strength("RELATED") == "weak"
+
+
 def test_reload_bypasses_cache(tmp_path):
     payload = _valid_config()
     path = _write(tmp_path, payload)
