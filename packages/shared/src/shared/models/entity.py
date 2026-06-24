@@ -100,9 +100,18 @@ class Entity(ObjectModel):
     community_id: Optional[int] = None
 
     # Status (migration 39)
-    status: str = Field(default="active", description="active | merged | archived")
+    status: str = Field(default="active", description="active | reference | merged | archived")
     merged_into: Optional[str] = Field(
         default=None, description="Record ID of canonical merge target if status=merged"
+    )
+
+    # Operator status pin (migration 59 — Phase Q.3). When True the operator has
+    # set the status by hand and the triage automation must NEVER overwrite it.
+    # Defaults False (automation-owned) so pre-59 rows and fresh entities read
+    # back as automation-managed.
+    manual_override: bool = Field(
+        default=False,
+        description="When True, status is operator-pinned and triage automation never overwrites it",
     )
 
     # First-class denormalized alias list (migration 54 — Phase K.3).

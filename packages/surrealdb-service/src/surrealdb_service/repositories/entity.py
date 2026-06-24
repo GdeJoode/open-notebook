@@ -224,6 +224,13 @@ class EntityRepository:
                 if entity.primary_type is not None
                 else existing.get("primary_type"),
                 "provenance_chain": merged_provenance,
+                # manual_override (migration 59) is OPERATOR state, never
+                # extraction state: re-upserting an entity from a new document
+                # must NOT clear an operator's pin. Carry the existing value
+                # through verbatim (the triage decision is the only writer of
+                # this flag, via ``set_status``). NULL-coalesce so a pre-59 row
+                # lacking the column reads as False.
+                "manual_override": bool(existing.get("manual_override") or False),
             }
             try:
                 await execute_query(
@@ -235,6 +242,7 @@ class EntityRepository:
                         type_tags = $type_tags,
                         primary_type = $primary_type,
                         provenance_chain = $provenance_chain,
+                        manual_override = $manual_override,
                         updated_at = time::now();
                     """,
                     update_payload,
@@ -270,6 +278,11 @@ class EntityRepository:
             "properties": dict(entity.properties),
             "embedding": list(entity.embedding),
             "status": entity.status,
+            # manual_override (migration 59) — operator-pinned status guard. A
+            # fresh entity is automation-owned unless explicitly set; the model
+            # defaults to False so this is safe for entities built before the
+            # field existed.
+            "manual_override": bool(getattr(entity, "manual_override", False)),
             "type_tags": list(entity.type_tags),
             "primary_type": entity.primary_type,
         }
@@ -290,6 +303,7 @@ class EntityRepository:
                     properties = $properties,
                     embedding = $embedding,
                     status = $status,
+                    manual_override = $manual_override,
                     type_tags = $type_tags,
                     primary_type = $primary_type;
                 """,
@@ -340,6 +354,70 @@ class EntityRepository:
             return None
         # ``execute_query`` already converts RecordIDs to strings.
         return Entity(**rows[0])
+
+    # ------------------------------------------------------------------
+    # Track Q Phase Q.3 — triage status assignment
+    # ------------------------------------------------------------------
+
+    async def set_status(
+        self,
+        entity_id: str,
+        status: str,
+        *,
+        respect_override: bool = True,
+    ) -> bool:
+        """Set an entity's ``status``, honouring the operator override pin.
+
+        This is the single DB-side writer of the triage-derived ``status``. The
+        ``manual_override`` guard (migration 59) is the load-bearing contract of
+        Track Q: when an operator has pinned the status by hand, the triage
+        automation MUST NEVER overwrite it. With ``respect_override=True`` (the
+        default, used by all automation) the UPDATE is conditioned on
+        ``manual_override = false`` in a single round-trip — so the no-op is
+        race-free, not a read-then-write check the operator could slip between.
+
+        The operator-decision path (Q.4's queue decision) calls this with
+        ``respect_override=False`` to set both the status and, separately, the
+        override flag — automation never takes that branch.
+
+        Args:
+            entity_id: Record ID of the entity (e.g. ``"entity:abc"``).
+            status: The new status value (e.g. ``"active"`` / ``"reference"``).
+                ``entity.status`` is a free string (migration 39, no ASSERT),
+                so ``"reference"`` is accepted without a schema change.
+            respect_override: When True, the write is a no-op if the entity is
+                operator-pinned (``manual_override = true``).
+
+        Returns:
+            True if the status was written; False if it was suppressed because
+            the entity is operator-pinned (or the id was invalid / not found).
+        """
+        if not entity_id:
+            return False
+        try:
+            rid = ensure_record_id(entity_id)
+        except Exception as e:
+            logger.error(f"set_status: bad id {entity_id!r}: {e}")
+            return False
+
+        # Condition the UPDATE on the override flag in the query itself so the
+        # check and the write are one atomic statement. ``UPDATE`` returns the
+        # affected rows, so an empty result means the WHERE excluded the row
+        # (operator-pinned) — that is the suppressed-write signal.
+        where = "id = $id"
+        if respect_override:
+            where += " AND (manual_override = false OR manual_override = NONE)"
+        try:
+            rows = await execute_query(
+                f"UPDATE entity SET status = $status, updated_at = time::now() "
+                f"WHERE {where} RETURN AFTER;",
+                {"id": rid, "status": status},
+                self.config,
+            )
+        except Exception as e:
+            logger.exception(f"set_status failed for {entity_id} -> {status}: {e}")
+            raise
+        return bool(rows)
 
     # ------------------------------------------------------------------
     # Track K Phase K.3 — retroactive merge primitives
