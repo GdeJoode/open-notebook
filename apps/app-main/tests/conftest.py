@@ -10,7 +10,6 @@ from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from shared.models import (
     ChatMessage,
     ChatSession,
@@ -28,6 +27,11 @@ from shared.models import (
 from shared.models.podcast import EpisodeProfile, PodcastEpisode, SpeakerProfile
 from shared.models.transformation import DefaultPrompts
 
+# Re-export the testcontainers-backed SurrealDB fixture so app-main integration
+# tests (e.g. test_relation_merge.py) can request ``live_surrealdb`` by name,
+# mirroring packages/surrealdb-service/tests/conftest.py. Auto-skips when Docker
+# is unreachable (see surrealdb_service.testing.fixtures).
+from surrealdb_service.testing import live_surrealdb  # noqa: F401
 
 _DISABLE_METRICS_KEY = "OPEN_NOTEBOOK_DISABLE_METRICS"
 

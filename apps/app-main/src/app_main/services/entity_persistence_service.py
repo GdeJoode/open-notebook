@@ -264,6 +264,105 @@ class EntityPersistenceService:
         )
         return rows[0] if rows else None
 
+    async def _upsert_relation(
+        self,
+        *,
+        src_id: Any,
+        tgt_id: Any,
+        relation_type: str,
+        confidence: float,
+        source_id: str,
+        properties: Dict[str, Any],
+    ) -> bool:
+        """Q.2a: write one edge per ``(in, out, relation_type)``, cross-doc-aware.
+
+        Looks up an existing ACTIVE edge between the two resolved endpoints with
+        the same ``relation_type``. If one exists it is UPDATED in place —
+        ``source_id`` is unioned into ``source_documents`` (so a recurring edge
+        accumulates its cross-document provenance, the input Q.2's weak-edge
+        promotion needs), ``confidence`` keeps the running max, and ``properties``
+        merges new signal keys over the stored ones without clobbering keys the
+        new edge does not carry. If no edge exists, a fresh one is ``RELATE``-d
+        with ``source_documents = [$source_id]`` — the pre-Q.2a behaviour.
+
+        Idempotent: re-persisting the same ``(edge, source_id)`` is a no-op
+        union (``array::union`` dedups → ``source_documents`` length unchanged,
+        no duplicate row).
+
+        The endpoints arrive ALREADY resolved by the O.1 type-safe
+        ``_resolve_endpoint_id`` path; this method only decides create-vs-union,
+        so O.1 relation persistence is unaffected.
+
+        ``properties`` is merged in Python rather than in SurrealQL because
+        ``object::extend`` / ``object::merge`` are unavailable on SurrealDB v2.x
+        (see ``EntityRepository.upsert_entity``); the ``source_documents`` union
+        runs in SurrealQL where ``array::union`` works.
+
+        Returns ``True`` when a NEW edge was created, ``False`` when an existing
+        edge was merged into — the caller uses this to keep created/merged
+        counts in the persist summary.
+        """
+        existing = await execute_query(
+            "SELECT id, source_documents, confidence, properties FROM relation "
+            "WHERE in = type::thing($sid) AND out = type::thing($tid) "
+            "AND relation_type = $rel_type AND status = 'active' LIMIT 1;",
+            {
+                "sid": str(src_id),
+                "tid": str(tgt_id),
+                "rel_type": relation_type,
+            },
+        )
+
+        if existing:
+            edge = existing[0]
+            # properties: existing as base, new keys overlay (new wins, existing
+            # retained) — mirrors EntityRepository.upsert_entity's dict overlay.
+            merged_properties: Dict[str, Any] = dict(edge.get("properties") or {})
+            merged_properties.update(properties or {})
+            existing_confidence = edge.get("confidence")
+            new_confidence = (
+                confidence
+                if existing_confidence is None
+                else max(existing_confidence, confidence)
+            )
+            await execute_query(
+                "UPDATE type::thing($eid) SET "
+                "source_documents = array::union(source_documents, [$source_id]), "
+                "confidence = $confidence, "
+                "properties = $properties;",
+                {
+                    "eid": str(edge["id"]),
+                    "source_id": source_id,
+                    "confidence": new_confidence,
+                    "properties": merged_properties,
+                },
+            )
+            return False
+
+        # No existing edge → create one (the pre-Q.2a behaviour). ``type::thing``
+        # coerces the string endpoint ids back into record links — RELATE rejects
+        # a bare string for in/out.
+        await execute_query(
+            """
+            LET $s = type::thing($sid);
+            LET $t = type::thing($tid);
+            RELATE $s->relation->$t SET
+                relation_type = $rel_type,
+                confidence = $confidence,
+                source_documents = [$source_id],
+                properties = $properties;
+            """,
+            {
+                "sid": str(src_id),
+                "tid": str(tgt_id),
+                "rel_type": relation_type,
+                "confidence": confidence,
+                "source_id": source_id,
+                "properties": properties,
+            },
+        )
+        return True
+
     async def persist_match_candidates(
         self,
         source_id: str,
@@ -360,6 +459,11 @@ class EntityPersistenceService:
         entities_upserted = 0
         entities_failed = 0
         relations_created = 0
+        # Q.2a: edges merged into an existing (in, out, relation_type) row
+        # (a recurring edge from another doc) vs freshly created. Tracked
+        # separately so the persist summary log stays meaningful — a high
+        # merge count is the cross-doc recurrence the promotion model needs.
+        relations_merged = 0
 
         # Build merge group lookup: entity text → group members
         merge_lookup: Dict[str, List[str]] = {}
@@ -556,31 +660,41 @@ class EntityPersistenceService:
                             reason.append(f"tgt miss ({tgt_text!r},{tgt_type!r})")
                         skip_samples.append("; ".join(reason))
                     continue
-                # Field-name alignment to migration 39's SCHEMAFULL ``relation``
-                # table: the edge carries ``source_documents`` (array), not the
-                # legacy ``source_id`` scalar. ``type::thing`` coerces the string
-                # id from the endpoint SELECT back into a record link — RELATE
-                # rejects a bare string for in/out.
-                await execute_query(
-                    """
-                    LET $s = type::thing($sid);
-                    LET $t = type::thing($tid);
-                    RELATE $s->relation->$t SET
-                        relation_type = $rel_type,
-                        confidence = $confidence,
-                        source_documents = [$source_id],
-                        properties = $properties;
-                    """,
-                    {
-                        "sid": str(src_id),
-                        "tid": str(tgt_id),
-                        "rel_type": rel_type,
-                        "confidence": confidence,
-                        "source_id": source_id,
-                        "properties": properties,
-                    },
+                # Q.2a: idempotent, cross-doc-aware edge write. The old code
+                # ran an UNCONDITIONAL ``RELATE`` here, so the SAME edge
+                # reappearing in another document created a DUPLICATE row (70
+                # live dups confirmed) and per-edge cross-doc recurrence was
+                # never accumulated. Instead UPSERT on ``(in, out,
+                # relation_type)``:
+                #
+                #   * existing active edge → UPDATE it, unioning ``source_id``
+                #     into ``source_documents`` (so a recurring RELATED edge's
+                #     doc-count grows and can promote — Q.2), keeping the MAX
+                #     confidence and merging ``properties`` (new signal keys win,
+                #     existing keys retained — no clobber).
+                #   * no existing edge → ``RELATE`` a fresh edge with
+                #     ``source_documents = [$source_id]`` (the old behaviour).
+                #
+                # Re-persisting the same (edge, source_id) is a no-op union
+                # (``array::union`` dedups → length unchanged), securing the
+                # operator's promotion model: an edge's cross-doc count is the
+                # cumulative UNION across documents, never a stack of dups.
+                #
+                # This is strictly the "create vs union" decision AFTER the O.1
+                # type-safe endpoints resolve — the endpoint resolution above is
+                # untouched, so O.1 relation persistence does not regress.
+                created_new = await self._upsert_relation(
+                    src_id=src_id,
+                    tgt_id=tgt_id,
+                    relation_type=rel_type,
+                    confidence=confidence,
+                    source_id=source_id,
+                    properties=properties,
                 )
-                relations_created += 1
+                if created_new:
+                    relations_created += 1
+                else:
+                    relations_merged += 1
             except Exception as e:
                 logger.warning(
                     f"Failed to create relation {src_text} -> {tgt_text}: {e}"
@@ -594,19 +708,21 @@ class EntityPersistenceService:
         # DEBUG to avoid noise.
         if rel_skipped:
             logger.info(
-                "Relation persist for source {}: created={}/{} "
+                "Relation persist for source {}: created={} merged={} of {} "
                 "({} skipped — endpoint not found; sample: {})",
                 source_id,
                 relations_created,
+                relations_merged,
                 rel_attempted,
                 rel_skipped,
                 skip_samples[:5],
             )
         else:
             logger.debug(
-                "Relation persist for source {}: created={}/{}",
+                "Relation persist for source {}: created={} merged={} of {}",
                 source_id,
                 relations_created,
+                relations_merged,
                 rel_attempted,
             )
 
@@ -638,7 +754,8 @@ class EntityPersistenceService:
 
         logger.info(
             f"Persisted to KG: {entities_upserted} entities, "
-            f"{relations_created} relations, "
+            f"{relations_created} relations created, "
+            f"{relations_merged} relations merged (cross-doc), "
             f"{candidates_stored} match candidates for source {source_id}"
         )
 
@@ -646,5 +763,6 @@ class EntityPersistenceService:
             "entities_upserted": entities_upserted,
             "entities_failed": entities_failed,
             "relations_created": relations_created,
+            "relations_merged": relations_merged,
             "candidates_stored": candidates_stored,
         }

@@ -52,13 +52,18 @@ class TestPersistFilteredResult:
     async def test_creates_relations(self):
         svc, _mock_upsert = _make_service_with_mock_repo()
 
-        # O.1: the relation path now resolves each endpoint id via
-        # ``_resolve_endpoint_id`` (a SELECT) then RELATEs. A non-empty SELECT
-        # return means both endpoints resolve so the edge is created.
+        # O.1: each endpoint id resolves via ``_resolve_endpoint_id`` (a SELECT).
+        # Q.2a: the write is now an UPSERT — an edge-existence SELECT against
+        # ``relation`` precedes the RELATE; an empty result means no existing
+        # edge → a fresh edge is created (the create path, ``created`` counter).
+        async def fake_query(query, params=None, config=None):
+            if "FROM relation" in query:
+                return []  # no existing edge → create
+            return ["entity:fake"]  # endpoint id resolution
+
         with patch(
             "app_main.services.entity_persistence_service.execute_query",
-            new_callable=AsyncMock,
-            return_value=["entity:fake"],
+            side_effect=fake_query,
         ) as mock_query:
             result = await svc.persist_filtered_result(
                 source_id="source:1",
@@ -75,8 +80,61 @@ class TestPersistFilteredResult:
             )
 
         assert result["relations_created"] == 1
-        # Two endpoint lookups (src + tgt) + one RELATE.
-        assert mock_query.call_count == 3
+        assert result["relations_merged"] == 0
+        # Two endpoint lookups (src + tgt) + one edge-existence SELECT + RELATE.
+        assert mock_query.call_count == 4
+
+    @pytest.mark.asyncio
+    async def test_merges_into_existing_edge(self):
+        """Q.2a: an existing (in, out, relation_type) edge is UPDATEd (unioned),
+        not duplicated — the write path takes the merge branch and the result
+        reports ``relations_merged`` instead of ``relations_created``."""
+        svc, _mock_upsert = _make_service_with_mock_repo()
+
+        async def fake_query(query, params=None, config=None):
+            if "FROM relation" in query:
+                # An existing edge with one prior source_document.
+                return [
+                    {
+                        "id": "relation:existing",
+                        "source_documents": ["source:prior"],
+                        "confidence": 0.3,
+                        "properties": {"sig_a": 1},
+                    }
+                ]
+            return ["entity:fake"]  # endpoint id resolution
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            side_effect=fake_query,
+        ) as mock_query:
+            result = await svc.persist_filtered_result(
+                source_id="source:new",
+                entities=[],
+                relations=[
+                    {
+                        "source_entity": "BZK",
+                        "target_entity": "EZK",
+                        "relation_type": "RELATED",
+                        "confidence": 0.7,
+                        "properties": {"sig_b": 2},
+                    },
+                ],
+            )
+
+        assert result["relations_created"] == 0
+        assert result["relations_merged"] == 1
+        # The write is an UPDATE on the existing edge, not a RELATE.
+        update_calls = [
+            c for c in mock_query.call_args_list
+            if "UPDATE" in c.args[0]
+        ]
+        assert len(update_calls) == 1
+        update_params = update_calls[0].args[1]
+        # Max confidence kept; properties merged without clobber.
+        assert update_params["confidence"] == 0.7
+        assert update_params["properties"] == {"sig_a": 1, "sig_b": 2}
+        assert not any("RELATE" in c.args[0] for c in mock_query.call_args_list)
 
     @pytest.mark.asyncio
     async def test_relation_endpoint_type_from_batch_entities(self):
@@ -90,10 +148,14 @@ class TestPersistFilteredResult:
         """
         svc, _mock_upsert = _make_service_with_mock_repo()
 
+        async def fake_query(query, params=None, config=None):
+            if "FROM relation" in query:
+                return []  # Q.2a: no existing edge → create
+            return ["entity:fake"]  # both typed lookups hit
+
         with patch(
             "app_main.services.entity_persistence_service.execute_query",
-            new_callable=AsyncMock,
-            return_value=["entity:fake"],  # both typed lookups hit
+            side_effect=fake_query,
         ) as mock_query:
             await svc.persist_filtered_result(
                 source_id="source:1",
@@ -135,10 +197,14 @@ class TestPersistFilteredResult:
         """
         svc, _mock_upsert = _make_service_with_mock_repo()
 
+        async def fake_query(query, params=None, config=None):
+            if "FROM relation" in query:
+                return []  # Q.2a: no existing edge → create
+            return ["entity:fake"]
+
         with patch(
             "app_main.services.entity_persistence_service.execute_query",
-            new_callable=AsyncMock,
-            return_value=["entity:fake"],
+            side_effect=fake_query,
         ) as mock_query:
             await svc.persist_filtered_result(
                 source_id="source:1",
@@ -181,10 +247,14 @@ class TestPersistFilteredResult:
         """
         svc, _mock_upsert = _make_service_with_mock_repo()
 
+        async def fake_query(query, params=None, config=None):
+            if "FROM relation" in query:
+                return []  # Q.2a: no existing edge → create
+            return ["entity:fake"]
+
         with patch(
             "app_main.services.entity_persistence_service.execute_query",
-            new_callable=AsyncMock,
-            return_value=["entity:fake"],
+            side_effect=fake_query,
         ) as mock_query:
             await svc.persist_filtered_result(
                 source_id="source:1",
@@ -272,10 +342,14 @@ class TestPersistFilteredResult:
         ``LIMIT 1`` behaviour, zero regression for today's working cases."""
         svc, _mock_upsert = _make_service_with_mock_repo()
 
+        async def fake_query(query, params=None, config=None):
+            if "FROM relation" in query:
+                return []  # no existing edge → create (Q.2a upsert)
+            return ["entity:fake"]  # name-only endpoint resolution
+
         with patch(
             "app_main.services.entity_persistence_service.execute_query",
-            new_callable=AsyncMock,
-            return_value=["entity:fake"],
+            side_effect=fake_query,
         ) as mock_query:
             result = await svc.persist_filtered_result(
                 source_id="source:1",
@@ -293,7 +367,7 @@ class TestPersistFilteredResult:
 
         assert result["relations_created"] == 1
         # No type known for either endpoint → no typed SELECT ran (only
-        # name-only lookups + the RELATE).
+        # name-only lookups + the edge-existence SELECT + the RELATE).
         assert not any(
             "etype" in (c.args[1] if len(c.args) > 1 else {})
             for c in mock_query.call_args_list
