@@ -7,8 +7,8 @@
 |-------|-------|--------------|--------|----|-------|
 | Q.1 | Config loader & validator | NET-NEW (small) | merged ✅ | `track/q-config-impl` | loader reads `config/triage_config.json`; lookup maps wrapped in MappingProxyType (immutable cache); APPROVED rev1 (immutability blocker fixed + test) |
 | Q.2a | Relation merge (edge-dedup + cross-doc provenance + dup backfill) | NET-NEW | merged ✅ | `track/q-relation-merge` | persist UPSERTs per `(in,out,relation_type)` (union `source_documents`, max conf, no-clobber properties); backfill (dry-run + idempotent); O.1 roundtrip green; APPROVED. Live DB shows 0 dup groups (216 active edges) — the 70-dup figure predates O.1/re-extraction; backfill verified via seeded-dup test |
-| Q.2 | Signals (effective degree w/ weak-edge promotion, recurrence, affected set) | NET-NEW + partial reuse | ready-for-review 🔍 | `track/q2-signals` | `TriageSignalsService` + batched `effective_degree_for_entities`; promotion flip asserted (1-2→3+); affected set = new+changed-degree+changed-docs vs pre-batch snapshot; ONE batched DB call (asserted); 6 unit pass, 1 docker-integration skips cleanly (no docker SDK in env) |
-| Q.3 | Status assignment + migration 59 + change-log | NET-NEW logic, reuse status/properties | not-started | — | adds `reference` status, `manual_override`, status_change_log |
+| Q.2 | Signals (effective degree w/ weak-edge promotion, recurrence, affected set) | NET-NEW + partial reuse | merged ✅ | `track/q2-signals` | `TriageSignalsService` + batched `effective_degree_for_entities`; promotion flip asserted (1-2→3+); affected set = new+changed-degree+changed-docs vs pre-batch snapshot; ONE batched DB call; APPROVED |
+| Q.3 | Status assignment + migration 59 + change-log | NET-NEW logic, reuse status/properties | merged ✅ | `track/q3-status` | migration 59 (manual_override bool COLUMN + status_change_log TABLE); StatusAssignmentService (tier×degree×override truth table, manual_override ALWAYS wins, 4-path defense); set_status override-conditioned no-op; 49 tests green; APPROVED |
 | Q.4 | Pipeline orchestration (after-extraction hook) | ORCHESTRATION (reuse B1/B2) | not-started | — | hook at entity_extraction_service.py:1155 & :1362 |
 | Q.5 | UI surface | REUSE-HEAVY | not-started | — | extends KG view + resolution-hub patterns |
 
@@ -115,3 +115,48 @@ O.1 type-safe endpoint resolution, migration 39/58 relation schema (no schema ch
 
 ### Environment note (honest)
 This worktree's `.venv` resolves `app_main` only under `uv run --project apps/app-main` (the root `open-notebook` project does not depend on `app-main`). The `docker` SDK is absent, so `requires_docker` tests skip — no new dependency was introduced (out of scope for this phase). The real-SQL promotion path is covered by the integration test wherever Docker + the SDK are present.
+## Phase Q.3 — implementation summary (ready for review)
+
+**Branch**: `track/q3-status` (off `main` — Q.1 config-loader + Q.2a relation-merge merged)
+**Commits**: `5d01902` (migration 59 + repo set_status), `1556b0b` (service + log repo), `2d62391` (tests)
+
+### Operator decisions implemented
+- **manual_override = dedicated bool COLUMN** (migration 59), not a `properties` key (R2).
+- **status-change log = SurrealDB TABLE** `status_change_log` (R3), not an append-only file.
+
+### What changed
+- `migrations/59.surrealql` / `59_down.surrealql` — `DEFINE FIELD IF NOT EXISTS manual_override ON entity TYPE bool DEFAULT false` + `DEFINE TABLE IF NOT EXISTS status_change_log SCHEMAFULL` (fields `entity record<entity>`, `old_status`, `new_status`, `reason`, `batch_id`, `changed_at datetime DEFAULT time::now()`; indexes on `entity` and `batch_id`). Additive + idempotent (`IF [NOT] EXISTS`), mirrors migration 54. Down removes ONLY the two Q.3 objects; does NOT touch the migration-39 `status` field or `idx_entity_status`.
+- `packages/shared/src/shared/models/entity.py` — `manual_override: bool = False`; `status` doc note adds `reference`.
+- `packages/surrealdb-service/src/surrealdb_service/repositories/entity.py` — persist `manual_override` on create; carry it through verbatim on re-upsert (extraction never clears an operator pin); new `set_status(entity_id, status, *, respect_override=True)` whose UPDATE is conditioned on `manual_override = false OR NONE` in one atomic statement (race-free no-op when pinned).
+- `apps/app-main/src/app_main/services/triage/status_assignment_service.py` (new) — pure `assign(entity, tier, effective_degree) -> StatusDecision`; side-effecting `apply(decision, batch_id)` writes + logs ONLY on an actual change of a non-pinned entity.
+- `apps/app-main/src/app_main/services/triage/status_change_log.py` (new) — thin `append` / `list_for_entity` / `list_for_batch` over the migration-59 table.
+
+### Status-assignment truth table (config: core_active_min=1, well_connected=3)
+| tier | effective_degree | status | queue_flags |
+|------|------------------|--------|-------------|
+| active | ≥ 1 | `active` | — |
+| active | 0 | `active` | `isolated core actor / possible extraction gap` |
+| reference | 0–2 | `reference` | — |
+| reference | ≥ 3 | `reference` | `candidate active` |
+| unsure_review | any | `reference` | `unsure — operator decides` |
+| (any, `manual_override == true`) | any | operator's status (unchanged) | — (no write, no log) |
+
+### How manual_override-wins is enforced (defence in depth)
+1. **Decision layer**: `assign()` short-circuits when `manual_override` is set — returns the operator's status, no flags, `changes_status == False`.
+2. **Apply layer**: `apply()` is gated on `changes_status` — a pinned (or unchanged) decision writes nothing and logs nothing.
+3. **DB layer**: `set_status(respect_override=True)` conditions the UPDATE on `manual_override = false OR NONE` in a single statement, so even a stale decision computed before a pin can't overwrite it (returns False → `apply` does NOT log a change that did not happen).
+4. **Re-upsert**: extraction's entity upsert preserves the existing `manual_override` verbatim, so a re-extraction never clears a pin.
+
+### Tests (all green)
+`uv run pytest apps/app-main/tests/test_status_assignment_service.py apps/app-main/tests/test_migration_59.py -q` → **24 passed (unit)** + **6 passed (testcontainer)**.
+- Unit: full tier×degree truth table, manual_override-wins (pure), apply() write+log on real change / suppressed on unchanged / suppressed under override / suppressed when DB-layer override race wins, re-run idempotency (log written once), dict-row support.
+- Integration (migration 59): manual_override defaults false; `entity.status` accepts `reference` (no ASSERT rejection); down→forward roundtrip preserves migration-39 status field + index, drops only Q.3 objects, idempotent both ways (restore in `finally`); status_change_log CRUD via the repo (changed_at populated by schema default); set_status override no-op + operator force-path.
+
+### Regressions checked (green)
+`test_migrations_roundtrip.py` + `test_entity_repository_roundtrip.py` (21 passed), `test_relation_merge.py` + `test_entity_persistence_service.py` (61 passed), `test_entity_model.py` (12 passed). `from app_main.api.app import create_app` → OK. `ruff check` on all changed files → clean.
+
+### Env note (worktree)
+Run with `PYTHONPATH=<wt>/apps/app-main/src:<wt>/packages/shared/src:<wt>/packages/surrealdb-service/src` and `uv run --no-sync --with docker --with testcontainers` — the shared `.venv` had `app_main` editable-linked to a different worktree, so the worktree src is prepended explicitly and `docker`/`testcontainers` injected for the requires_docker suites.
+
+### Out of scope (deferred to Q.4 per plan)
+The review queue itself is Q.4 — Q.3 only RETURNS the `queue_flags` in the decision (it does not write a queue table). The after-extraction hook and orchestration are Q.4.

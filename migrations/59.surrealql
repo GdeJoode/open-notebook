@@ -1,0 +1,43 @@
+-- Migration 59: triage status assignment — `manual_override` field + `status_change_log` table (Track Q.3)
+--
+-- Track Q's triage layer re-derives every affected entity's `status`
+-- (`active` | `reference`) deterministically from the config `status_rules`
+-- after each extraction. Two new schema objects make that safe and auditable:
+--
+-- 1. `manual_override` on `entity` — a dedicated bool COLUMN (operator decision
+--    R2: column over a `properties` key). When true, the operator has pinned the
+--    status by hand and AUTOMATION MUST NEVER OVERWRITE IT. A column is chosen
+--    because it is queryable/indexable for the UI status filter and is immune to
+--    the `properties` union-merge overwrite semantics in `EntityRepository`
+--    (entity.py merges `properties` on upsert, which could silently clobber a
+--    properties-key override). Default false so every pre-existing row reads back
+--    as "automation-owned" without a data backfill.
+--
+-- 2. `status_change_log` — a queryable, restart-safe SurrealDB TABLE (operator
+--    decision R3: table over an append-only file) recording every automation
+--    status change with old/new/reason/batch provenance. One row per ACTUAL
+--    change; an unchanged re-run writes nothing (idempotency lives in the
+--    service, not the schema).
+--
+-- migration 39 already defines `entity.status` as a FREE `string` (DEFAULT
+-- 'active', NO enum ASSERT), so introducing the new `"reference"` value needs NO
+-- constraint change here. `idx_entity_status` (migration 39) already indexes it.
+--
+-- Additive + idempotent, following migration 54's precedent: every statement is
+-- `IF NOT EXISTS`, never `OVERWRITE`, so re-applying on a DB that already carries
+-- these objects is a no-op and nothing predating Q.3 (status, its index) is
+-- touched. The B.0 testcontainers roundtrip harness validates the replay.
+
+DEFINE FIELD IF NOT EXISTS manual_override ON entity TYPE bool DEFAULT false;
+
+DEFINE TABLE IF NOT EXISTS status_change_log SCHEMAFULL;
+
+DEFINE FIELD IF NOT EXISTS entity ON status_change_log TYPE record<entity>;
+DEFINE FIELD IF NOT EXISTS old_status ON status_change_log TYPE string;
+DEFINE FIELD IF NOT EXISTS new_status ON status_change_log TYPE string;
+DEFINE FIELD IF NOT EXISTS reason ON status_change_log TYPE string;
+DEFINE FIELD IF NOT EXISTS batch_id ON status_change_log TYPE string;
+DEFINE FIELD IF NOT EXISTS changed_at ON status_change_log TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX IF NOT EXISTS idx_status_change_log_entity ON status_change_log FIELDS entity;
+DEFINE INDEX IF NOT EXISTS idx_status_change_log_batch ON status_change_log FIELDS batch_id;
