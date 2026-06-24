@@ -1,0 +1,38 @@
+-- ============================================================================
+-- Migration 61: backfill NONE strict-typed entity fields (Track Q follow-up).
+--
+-- Migration 59 added `manual_override ON entity TYPE bool DEFAULT false`, but a
+-- SurrealDB column DEFAULT applies only to NEWLY created records — rows that
+-- predate the migration keep NONE. The strict `TYPE bool` then rejects them on
+-- the first UPDATE (e.g. the triage status write):
+--   "Found NONE for field manual_override, with record entity:..., expected a bool"
+--
+-- The same drift exists on other strict-typed entity fields that were added to
+-- the schema after rows already existed (avg_confidence, weight, the datetimes,
+-- the counters, and the FLEXIBLE arrays — FLEXIBLE still disallows NONE). Because
+-- a SCHEMAFULL UPDATE re-validates the WHOLE record, a single NONE field blocks
+-- any write to that row, so they must all be repaired together.
+--
+-- This UPDATE coalesces each strict field to its value-or-default. It is
+-- idempotent: on a clean DB every `field ?? default` is a no-op; on a drifted DB
+-- it sets only the NONE fields. No schema change.
+-- ============================================================================
+
+UPDATE entity SET
+    manual_override   = manual_override   ?? false,
+    avg_confidence    = avg_confidence    ?? 0.0,
+    weight            = weight            ?? 0.0,
+    mention_count     = mention_count     ?? 0,
+    max_raptor_level  = max_raptor_level  ?? 0,
+    reconnect_attempts = reconnect_attempts ?? 0,
+    status            = status            ?? "active",
+    created           = created           ?? time::now(),
+    created_at        = created_at        ?? time::now(),
+    updated           = updated           ?? time::now(),
+    updated_at        = updated_at        ?? time::now(),
+    extracted_at      = extracted_at      ?? time::now(),
+    provenance_chain  = provenance_chain  ?? [],
+    source_documents  = source_documents  ?? [],
+    type_tags         = type_tags         ?? [],
+    aliases           = aliases           ?? [],
+    embedding         = embedding         ?? [];

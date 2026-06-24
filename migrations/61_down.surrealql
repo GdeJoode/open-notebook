@@ -1,0 +1,8 @@
+-- ============================================================================
+-- Migration 61 DOWN: no-op.
+--
+-- Migration 61 is a data backfill (NONE -> sensible default) on existing rows.
+-- There is no faithful inverse — re-setting the fields to NONE would re-break
+-- the strict-typed schema (and the original NONEs were drift, not intent). Down
+-- intentionally does nothing; the data stays valid.
+-- ============================================================================
