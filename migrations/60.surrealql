@@ -1,0 +1,40 @@
+-- Migration 60: triage review queue table (Track Q.4)
+--
+-- The after-extraction triage pipeline (Q.4) re-derives every affected entity's
+-- status, and surfaces the edge cases an operator should look at — isolated core
+-- actors, well-connected reference candidates, every unsure_review-tier entity,
+-- and match conflicts — into a non-blocking REVIEW QUEUE. Operator decision R3
+-- chose a queryable, restart-safe SurrealDB TABLE (over an append-only file),
+-- mirroring the migration-59 status_change_log choice. Migration 59 (Q.3) is
+-- already merged, so the queue is its own follow-on migration 60 (the plan's
+-- "new 60 if Q.3 already merged" branch).
+--
+-- The queue is a READ-MODEL with a stable per-entity dedup key: each entity gets
+-- at most ONE OPEN row. Re-running the same batch UPDATES that row (degree /
+-- doc_count / reason refresh) rather than appending a duplicate — idempotency
+-- (Q.4 AC2) lives in the service write path, but the entity index makes the
+-- dedup lookup cheap. ``decision`` defaults to 'open'; an operator's decision
+-- (via POST /api/triage/queue/{id}/decision) moves it off 'open' and pins the
+-- entity's status (manual_override), after which automation never re-queues it.
+--
+-- Additive + idempotent, following the migration 54 / 59 precedent: every
+-- statement is ``IF NOT EXISTS`` (never ``OVERWRITE``), so re-applying on a DB
+-- that already carries the table is a no-op. The B.0 testcontainers roundtrip
+-- harness validates the replay.
+
+DEFINE TABLE IF NOT EXISTS triage_queue SCHEMAFULL;
+
+DEFINE FIELD IF NOT EXISTS entity ON triage_queue TYPE record<entity>;
+DEFINE FIELD IF NOT EXISTS name ON triage_queue TYPE string;
+DEFINE FIELD IF NOT EXISTS type ON triage_queue TYPE string DEFAULT '';
+DEFINE FIELD IF NOT EXISTS structural_degree ON triage_queue TYPE int DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS doc_count ON triage_queue TYPE int DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS reason ON triage_queue TYPE string;
+DEFINE FIELD IF NOT EXISTS decision ON triage_queue TYPE string DEFAULT 'open';
+DEFINE FIELD IF NOT EXISTS batch_id ON triage_queue TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at ON triage_queue TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_at ON triage_queue TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX IF NOT EXISTS idx_triage_queue_entity ON triage_queue FIELDS entity;
+DEFINE INDEX IF NOT EXISTS idx_triage_queue_decision ON triage_queue FIELDS decision;
+DEFINE INDEX IF NOT EXISTS idx_triage_queue_batch ON triage_queue FIELDS batch_id;
