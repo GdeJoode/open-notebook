@@ -233,6 +233,61 @@ def get_reference_entity_repo() -> ReferenceEntityRepository:
     return ReferenceEntityRepository()
 
 
+# --- Track Q.4: triage pipeline + queue ------------------------------------
+
+
+def get_triage_queue_repo():
+    """Provider for the Q.4 triage review-queue repository."""
+    from app_main.services.triage.triage_queue import TriageQueueRepository
+
+    return TriageQueueRepository()
+
+
+def get_status_change_log_repo():
+    """Provider for the Q.3 status-change audit log repository."""
+    from app_main.services.triage.status_change_log import (
+        StatusChangeLogRepository,
+    )
+
+    return StatusChangeLogRepository()
+
+
+def get_triage_pipeline():
+    """Construct the Q.4 :class:`TriagePipeline` with its FROZEN collaborators.
+
+    Wires the reuse-first orchestrator: K.5 candidate dedup (B1 match conflicts),
+    K.3 recanonicalization (B2 collision merges), the Q.2 signals service, the Q.3
+    status-assignment service, the Q.4 queue repo, and the Q.4 backbone check —
+    all sharing ONE ``EntityRepository`` so the batch loaders hit the same config.
+    Imports are local so a process that never extracts (e.g. a CLI tool) does not
+    pay the triage import cost.
+    """
+    from app_main.services.entity_resolution import (
+        CandidateDedupService,
+        RecanonicalizationService,
+    )
+    from app_main.services.triage.backbone_check import BackboneCheckService
+    from app_main.services.triage.signals_service import TriageSignalsService
+    from app_main.services.triage.status_assignment_service import (
+        StatusAssignmentService,
+    )
+    from app_main.services.triage.triage_config import load_triage_config
+    from app_main.services.triage.triage_pipeline import TriagePipeline
+
+    config = load_triage_config()
+    entity_repo = EntityRepository()
+    return TriagePipeline(
+        entity_repository=entity_repo,
+        signals_service=TriageSignalsService(entity_repo, config=config),
+        status_service=StatusAssignmentService(config, entity_repo),
+        queue_repository=get_triage_queue_repo(),
+        backbone_service=BackboneCheckService(entity_repo, config=config),
+        candidate_service=CandidateDedupService(entity_repo=entity_repo),
+        recanonicalization_service=RecanonicalizationService(),
+        config=config,
+    )
+
+
 def get_summary_repo() -> SummaryRepository:
     return SummaryRepository()
 

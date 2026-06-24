@@ -1,0 +1,9 @@
+-- Migration 60 down: remove ONLY the Q.4-added object.
+--
+-- Q.4 owns exactly one schema object: the whole ``triage_queue`` table (its
+-- fields and indexes cascade with the table on REMOVE). Nothing predating this
+-- migration is touched — the status / status_change_log objects belong to
+-- migrations 39 / 59 and are left intact (the migration-54 / 59 precedent).
+-- Idempotent: ``IF EXISTS`` makes a re-run a no-op.
+
+REMOVE TABLE IF EXISTS triage_queue;
