@@ -323,6 +323,52 @@ async def test_list_entities_status_filter(
     assert await repo.count_entities(status=f"nonexistent-{prefix}") == 0
 
 
+@pytest.mark.requires_docker
+async def test_list_entities_source_filter(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """The optional ``source_id`` filter scopes the page to one source.
+
+    ``source_documents`` stores stringified record ids, so the CONTAINS match
+    is string-vs-string. Seeds two entities sharing a source and one that does
+    not, then asserts the filter returns exactly the two and that
+    ``count_entities`` agrees. Also surfaces ``canonical_name`` / ``primary_type``
+    in the projection (used by the source Entities tab).
+    """
+    cfg = live_surrealdb
+    repo = EntityRepository(config=cfg)
+    prefix = _unique("srcfilter")
+    src = f"source:{prefix}"
+    other_src = f"source:{prefix}-other"
+
+    in_a = f"{prefix}-in-a"
+    in_b = f"{prefix}-in-b"
+    out_c = f"{prefix}-out-c"
+    for nm, docs in (
+        (in_a, [src]),
+        (in_b, [src, other_src]),
+        (out_c, [other_src]),
+    ):
+        await execute_query(
+            "CREATE entity SET canonical_name=$n, name=$n, hash_id=$n, "
+            "entity_type='concept', primary_type='Concept', confidence=0.9, "
+            "embedding=[], status='active', source_documents=$docs;",
+            {"n": nm, "docs": docs},
+            config=cfg,
+        )
+
+    rows = await repo.list_entities(limit=500, offset=0, source_id=src)
+    names = {
+        r["name"] for r in rows if str(r.get("name", "")).startswith(prefix)
+    }
+    assert names == {in_a, in_b}
+    # projection carries the resolved name + rich type for the tab.
+    assert all("canonical_name" in r and "primary_type" in r for r in rows)
+
+    assert await repo.count_entities(source_id=src) == 2
+    assert await repo.count_entities(source_id=f"source:nonexistent-{prefix}") == 0
+
+
 # --- P.1: entity-embedding backfill primitives --------------------------------
 
 

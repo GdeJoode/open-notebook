@@ -37,7 +37,8 @@ class TestListEntities:
         result = await svc.list_entities(limit=10, offset=5, entity_type="Person")
 
         entity_repo.list_entities.assert_called_once_with(
-            limit=10, offset=5, entity_type="Person", status=None
+            limit=10, offset=5, entity_type="Person", status=None,
+            source_id=None,
         )
         assert len(result) == 1
 
@@ -49,7 +50,20 @@ class TestListEntities:
         await svc.list_entities(limit=10, offset=0, status="reference")
 
         entity_repo.list_entities.assert_called_once_with(
-            limit=10, offset=0, entity_type=None, status="reference"
+            limit=10, offset=0, entity_type=None, status="reference",
+            source_id=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_threads_source_filter(self, entity_repo):
+        """The optional source_id filter reaches the repository."""
+        svc = KnowledgeGraphService(entity_repo=entity_repo)
+
+        await svc.list_entities(limit=10, offset=0, source_id="source:abc")
+
+        entity_repo.list_entities.assert_called_once_with(
+            limit=10, offset=0, entity_type=None, status=None,
+            source_id="source:abc",
         )
 
     @pytest.mark.asyncio
@@ -85,7 +99,7 @@ class TestCountEntities:
 
         assert result == 42
         entity_repo.count_entities.assert_called_once_with(
-            entity_type="Person", status=None
+            entity_type="Person", status=None, source_id=None
         )
 
     @pytest.mark.asyncio
@@ -97,7 +111,19 @@ class TestCountEntities:
 
         assert result == 7
         entity_repo.count_entities.assert_called_once_with(
-            entity_type=None, status="reference"
+            entity_type=None, status="reference", source_id=None
+        )
+
+    @pytest.mark.asyncio
+    async def test_count_threads_source(self, entity_repo):
+        entity_repo.count_entities.return_value = 3
+        svc = KnowledgeGraphService(entity_repo=entity_repo)
+
+        result = await svc.count_entities(source_id="source:abc")
+
+        assert result == 3
+        entity_repo.count_entities.assert_called_once_with(
+            entity_type=None, status=None, source_id="source:abc"
         )
 
 
