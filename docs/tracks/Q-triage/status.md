@@ -211,3 +211,52 @@ NOVEX/Regio-Deals reach `active` ONLY when typed `Programma`/`Deal`/`RegioDeal` 
 
 ### Env note (workspace .venv)
 Restored env was missing `testcontainers`/`docker` (member dev-group deps). Canonical invocation: `uv run --no-sync --with docker --with testcontainers pytest …` (matches the Q.3 note). `--no-sync` prevents the workspace-member desync; `--with` injects the testcontainer deps transiently.
+
+---
+
+## Phase Q.5 — UI surface (triage) — READY FOR REVIEW
+
+Branch: `track/q5-ui` (off `main`, worked in the main tree). Commits:
+- `14c72b8` fix(triage): match-conflict upsert preserves status-flag signals (Q.5) — the folded Q.4 review minor.
+- `78b18bd` feat(triage): thread optional status filter onto entity listing (Q.5) — additive backend seam.
+- `b25cae7` feat(triage): entity-keyed override endpoint + triage API client (Q.5).
+- `e49c59e` feat(triage): KG status filter, override toggle, triage-queue view (Q.5) — the UI.
+
+### Q.4 review minor folded (match-conflict clobber)
+`_surface_match_conflicts` upserted a queue row with `structural_degree=0, doc_count=0` and would CLOBBER a prior status-flag row's real signals + reason for the same entity. Fix in `triage_queue.py`:
+- `upsert` treats an incoming zero degree/doc_count as "unknown" on UPDATE (never overwrites a prior non-zero signal).
+- New `merge_reason` flag (`_merge_reason` pure helper, idempotent) APPENDS the incoming reason instead of replacing it; `_surface_match_conflicts` passes `merge_reason=True`.
+Idempotency preserved (re-run appends nothing). Tested: `test_match_conflict_does_not_clobber_status_flag_signals` (testcontainer) + `test_merge_reason_appends_and_is_idempotent` (pure).
+
+### Backend status filter (additive)
+- `EntityRepository.list_entities` / `count_entities` accept optional `status` (backed by `idx_entity_status`); the list projection now surfaces `status`, `manual_override`, `source_documents`.
+- `KnowledgeGraphService.list_entities` / `get_entity` join the Q.2 signals (`structural_degree`, `doc_count`) in ONE batched relation query; degrades gracefully on failure.
+- `routers/knowledge_graph.py` exposes `?status=` on GET /entities.
+- New additive `POST /api/triage/entities/{id}/override` pins/unpins ANY entity (detail-panel toggle) via the existing `set_manual_override` (override-wins) and closes the entity's open queue row on a pin. The Q.1–Q.4 services are otherwise unchanged (FROZEN respected).
+
+### Frontend
+- `lib/api/triage.ts` (mirrors `entity-resolution.ts`): queue, decide, setEntityOverride, backboneWarnings.
+- `lib/utils/triage.ts` (pure, unit-tested): statusDisplay, buildDecision, groupByReason, primaryReason, isOpen, totalWeakEdges, isBackboneRisk.
+- `lib/hooks/use-triage.ts`: queue/backbone queries + decide/override mutations (invalidate triage + knowledge-graph caches).
+- `components/knowledge-graph/StatusBadge.tsx`, `StatusFilter.tsx`, `BackboneWarnings.tsx`.
+- `knowledge-graph/triage/page.tsx`: review queue grouped by reason with promote/keep/override decision controls; loading/error/empty states reuse the resolution-hub structure.
+- `knowledge-graph/page.tsx`: StatusFilter in the filter row; Status/Degree/Docs columns; triage-queue link; detail-panel triage block (status badge + degree/docs + `manual_override` Switch → override API).
+- `knowledge-graph.ts`/`use-knowledge-graph.ts`: optional `status` list param + status/manual_override/structural_degree/doc_count on the Entity type.
+
+### AC status (plan Q.5)
+1. KG table renders default/loading/error/empty + filters by status — DONE (table states + StatusFilter → `?status=` request; E2E asserts the filter re-query).
+2. Each row/detail shows structural-degree + cross-doc-count — DONE (Degree/Docs columns + detail block; service joins them).
+3. Detail panel shows status + manual_override toggle; toggling calls the API + sticks across re-run — DONE (Switch → `POST /override`, override-wins enforced server-side by `set_manual_override` + the `set_status` guard; router tests assert the contract).
+4. Triage-queue view lists rows (id/name/type/degree/docs/reason) + decision control; deciding closes the row — DONE (grouped queue + promote/keep/override; E2E asserts decide-closes).
+5. Backbone warnings render for degree>=3 weak-edge entities — DONE (`BackboneWarnings` component + `useBackboneWarnings`; unit-tested summary/risk logic).
+6. Keyboard-accessible + reuses resolution-hub patterns — DONE (aria-labels on the filter/toggle/decision buttons; queue page mirrors the resolution-hub loading/error/empty + dismissed-set structure).
+
+### Tests
+- Frontend: `npm test` → **77 passed (10 files)** incl. 13 new pure-helper tests (`__tests__/triage-utils.test.ts`). `npx tsc --noEmit` → clean (e2e included). `npm run lint` → no new warnings in Q.5 files (pre-existing warnings elsewhere untouched).
+- Frontend E2E: `e2e/track-q/triage.spec.ts` — 4 route-mocked scenarios (status filter → `?status=reference`, detail override toggle → `POST /override` with `manual_override=true`, queue decide-closes, empty + error states). Discovered by Playwright; the project has no `webServer` config so these run against a running dev server (manual / CI), matching the track-k convention.
+- Backend: `uv run --no-sync pytest test_triage_queue.py test_triage_router.py test_knowledge_graph_service.py test_knowledge_graph_router.py` → **38 passed** (clobber fix + override endpoint + status-filter service/router). `test_entity_repository_roundtrip.py::test_list_entities_status_filter` → passed (live-DB status filter). `test_triage_pipeline.py` → no regression. `create_app()` → OK.
+
+### Manual smoke checklist (not yet executed against the live corpus)
+- [ ] KG table → set status filter to `reference` → table narrows; URL/query carries `status=reference`.
+- [ ] Open a degree>=3 entity → detail shows degree/docs + status badge; flip override → toast "Pinned"; re-run extraction → status preserved.
+- [ ] Triage queue → grouped reasons render; Promote a row → toast + row leaves; entity status flips to active.
