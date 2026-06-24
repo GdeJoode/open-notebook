@@ -1484,6 +1484,114 @@ class EntityRepository:
             return False
         return True
 
+    # ------------------------------------------------------------------
+    # Track Q Phase Q.2 — effective structural degree (signals)
+    # ------------------------------------------------------------------
+
+    async def effective_degree_for_entities(
+        self,
+        ids: List[str],
+        structural_predicates: List[str],
+        weak_predicates: List[str],
+        weak_promotion_min_docs: int,
+    ) -> Dict[str, int]:
+        """Batch-count each entity's EFFECTIVE structural degree (Q.2).
+
+        Effective degree = number of *active* relation edges incident on the
+        entity (either direction) that either:
+
+        * carry a **structural** predicate (count from a single document), OR
+        * carry a **weak** predicate (``RELATED``) that has PROMOTED — i.e. its
+          cumulative ``source_documents`` (unioned per edge by Q.2a) has reached
+          ``weak_promotion_min_docs`` distinct documents.
+
+        A single-doc weak edge does NOT count; a multi-doc weak edge DOES. The
+        promotion threshold is applied **in the query** via
+        ``array::len(source_documents) >= $min_docs`` so a stray single-doc
+        ``RELATED`` can never inflate the degree client-side.
+
+        One round-trip for the whole ``ids`` batch (NOT one query per node):
+        a single SELECT pulls every counting edge incident on any id in the
+        batch, then the per-id tally is summed in Python. An edge is counted
+        once for EACH of its endpoints that is in ``ids`` (Q.2 AC5: a structural
+        or promoted-weak edge counts toward both endpoints' degree); a self-loop
+        on a single batched id therefore contributes 1 to that id's degree.
+
+        The predicate lists and threshold are passed in by the caller (read from
+        the Q.1 triage config) — this repo helper never hardcodes them.
+
+        Edges whose predicate is neither explicitly structural nor explicitly
+        weak default to **weak** (matching the Q.1 config's
+        ``_default_for_unmapped_predicate``): the SQL counts an edge when it is
+        structural OR (NOT structural AND promoted), so an unmapped predicate
+        recurring across enough documents promotes exactly like ``RELATED``.
+        ``weak_predicates`` is accepted for interface symmetry / future
+        weak-only signals but is not needed to gate promotion (NOT-structural is
+        the weak set).
+
+        Args:
+            ids: Entity record-id strings to score.
+            structural_predicates: Predicates whose edges count unconditionally.
+            weak_predicates: Explicit weak predicates (informational; promotion
+                is gated by NOT-structural, see above).
+            weak_promotion_min_docs: Distinct-doc count a weak edge needs to
+                promote (``>=`` is the promotion test).
+
+        Returns:
+            ``{id: effective_degree}`` for every id in ``ids`` (ids with no
+            counting edge map to ``0``). Empty dict on failure or empty input.
+        """
+        if not ids:
+            return {}
+
+        # ``ids`` are DB record ids (no user input); coerce to record links so
+        # the ``INSIDE`` / endpoint comparisons run in record space, and keep a
+        # string set for the Python-side tally (endpoints round-trip as strings).
+        id_set = {str(i) for i in ids}
+        record_ids = [ensure_record_id(i) for i in ids]
+
+        # SQL-side promotion filter: an edge counts when it is structural OR
+        # (NOT structural AND its source_documents has reached the promotion
+        # threshold). Treating "weak" as "not structural" means an unmapped
+        # predicate (config-default weak) promotes too. ``in INSIDE $ids OR out
+        # INSIDE $ids`` restricts the scan to edges touching the batch in one
+        # round-trip. ``source_documents ?? []`` guards the (theoretical) NONE
+        # case so ``array::len`` never errors.
+        query = (
+            "SELECT in, out, relation_type FROM relation "
+            "WHERE status = 'active' "
+            "AND (in INSIDE $ids OR out INSIDE $ids) "
+            "AND ("
+            "  relation_type INSIDE $structural "
+            "  OR (relation_type NOT INSIDE $structural "
+            "      AND array::len(source_documents ?? []) >= $min_docs)"
+            ")"
+        )
+        try:
+            rows = await execute_query(
+                query,
+                {
+                    "ids": record_ids,
+                    "structural": list(structural_predicates),
+                    "min_docs": weak_promotion_min_docs,
+                },
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"effective_degree_for_entities failed: {e}")
+            return {}
+
+        degree: Dict[str, int] = {i: 0 for i in id_set}
+        for row in rows or []:
+            src = str(row.get("in"))
+            tgt = str(row.get("out"))
+            # Count once per batched endpoint. A self-loop (src == tgt, both in
+            # the batch) is the same id twice → contributes 1 (set semantics).
+            for endpoint in {src, tgt}:
+                if endpoint in degree:
+                    degree[endpoint] += 1
+        return degree
+
     async def get_entity_with_embedding(
         self, entity_id: str
     ) -> Optional[Dict[str, Any]]:
