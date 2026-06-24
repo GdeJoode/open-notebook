@@ -240,13 +240,22 @@ async def get_source(
         # is written as ``[source_id]`` with ``source_id`` a plain string). The
         # CONTAINS comparison therefore matches in string space — coercing to a
         # RecordID here would silently never match (the original bug).
+        # Current entities = active + reference (exclude the archived/merged
+        # history left by earlier re-extraction runs).
         entity_count_rows = await execute_query(
             "SELECT VALUE count() FROM entity "
             "WHERE source_documents CONTAINS $source_id "
-            "AND status = 'active' GROUP ALL",
+            "AND (status = 'active' OR status = 'reference') GROUP ALL",
             {"source_id": str(source.id or source_id)},
         )
-        entity_count = entity_count_rows[0] if entity_count_rows else 0
+        # ``SELECT VALUE count() ... GROUP ALL`` returns a bare int on some
+        # SurrealDB builds and a ``{"count": N}`` row on others — unwrap both.
+        entity_count = 0
+        if entity_count_rows:
+            _first = entity_count_rows[0]
+            entity_count = (
+                _first.get("count", 0) if isinstance(_first, dict) else (_first or 0)
+            )
 
         # relation_count remains read from extraction_result: relations do not
         # carry the source on the edge, so a live source-scoped count is not

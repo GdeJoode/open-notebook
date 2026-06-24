@@ -1178,6 +1178,10 @@ class EntityRepository:
         if source_id:
             clauses.append("source_documents CONTAINS $source_id")
             params["source_id"] = str(source_id)
+            # Source-scoped views show CURRENT entities; hide the archived/merged
+            # history of earlier re-extractions unless a status is asked for.
+            if not status:
+                clauses.append("(status = 'active' OR status = 'reference')")
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         try:
             return await execute_query(
@@ -1221,6 +1225,10 @@ class EntityRepository:
         if source_id:
             clauses.append("source_documents CONTAINS $source_id")
             params["source_id"] = str(source_id)
+            # Source-scoped views show CURRENT entities; hide the archived/merged
+            # history of earlier re-extractions unless a status is asked for.
+            if not status:
+                clauses.append("(status = 'active' OR status = 'reference')")
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         try:
             result = await execute_query(
