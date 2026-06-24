@@ -1670,6 +1670,76 @@ class EntityRepository:
                     degree[endpoint] += 1
         return degree
 
+    async def triage_rows_for_entities(
+        self, ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Batch-load the triage-relevant projection for ``ids`` (Q.4).
+
+        The triage pipeline needs, per batch entity: ``id`` (the affected key),
+        ``primary_type`` (tier lookup), ``canonical_name`` / ``entity_type`` (the
+        queue read-model), ``status`` + ``manual_override`` (status-assignment
+        guard), and ``source_documents`` (doc-count signal). This pulls all of
+        them in ONE round-trip rather than ``get_entity`` per id, so the hook
+        stays a constant number of DB calls regardless of batch size.
+
+        Args:
+            ids: Entity record-id strings.
+
+        Returns:
+            One row dict per matched id (RecordIDs already stringified by
+            ``execute_query``). Ids with no row are simply absent. Empty list on
+            empty input or failure (the caller logs-and-continues — triage is
+            non-blocking).
+        """
+        if not ids:
+            return []
+        record_ids = [ensure_record_id(i) for i in ids]
+        try:
+            return await execute_query(
+                "SELECT id, canonical_name, entity_type, primary_type, "
+                "status, manual_override, source_documents "
+                "FROM entity WHERE id INSIDE $ids",
+                {"ids": record_ids},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"triage_rows_for_entities failed: {e}")
+            return []
+
+    async def relations_for_entities(
+        self, ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Batch-load active relation edges incident on ``ids`` (Q.4 backbone).
+
+        The backbone check (B6) needs, per affected well-connected node, every
+        edge touching it with its ``relation_type`` and per-edge
+        ``source_documents`` so it can flag those resting on a WEAK predicate.
+        One round-trip pulls all edges incident on the batch (either endpoint);
+        the caller partitions by node and applies the config predicate-strength
+        at read-time (NO schema change — predicate strength is config, not DB).
+
+        Args:
+            ids: Entity record-id strings (the affected, degree>=threshold set).
+
+        Returns:
+            Edge rows with ``in`` / ``out`` (stringified endpoints),
+            ``relation_type`` and ``source_documents``. Empty on empty/failure.
+        """
+        if not ids:
+            return []
+        record_ids = [ensure_record_id(i) for i in ids]
+        try:
+            return await execute_query(
+                "SELECT in, out, relation_type, source_documents "
+                "FROM relation WHERE status = 'active' "
+                "AND (in INSIDE $ids OR out INSIDE $ids)",
+                {"ids": record_ids},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"relations_for_entities failed: {e}")
+            return []
+
     async def get_entity_with_embedding(
         self, entity_id: str
     ) -> Optional[Dict[str, Any]]:

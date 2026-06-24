@@ -459,6 +459,11 @@ class EntityPersistenceService:
         entities_upserted = 0
         entities_failed = 0
         relations_created = 0
+        # Q.4: record-ids of every entity this batch upserted, in upsert order.
+        # Returned alongside the counts so the after-extraction triage hook can
+        # re-triage exactly the batch's entities (its affected set) without a
+        # second name->id resolution pass. Additive: existing callers ignore it.
+        persisted_entity_ids: List[str] = []
         # Q.2a: edges merged into an existing (in, out, relation_type) row
         # (a recurring edge from another doc) vs freshly created. Tracked
         # separately so the persist summary log stays meaningful — a high
@@ -580,8 +585,10 @@ class EntityPersistenceService:
                     embedding=embedding_vec,
                     extraction_method=extraction_method,
                 )
-                await self._entity_repo.upsert_entity(entity_model)
+                upserted_id = await self._entity_repo.upsert_entity(entity_model)
                 entities_upserted += 1
+                if upserted_id:
+                    persisted_entity_ids.append(str(upserted_id))
             except Exception as e:
                 # B.8a: do NOT silently swallow. Count the failure and log at
                 # ERROR; a fully-failed batch raises below so the caller can't
@@ -765,4 +772,7 @@ class EntityPersistenceService:
             "relations_created": relations_created,
             "relations_merged": relations_merged,
             "candidates_stored": candidates_stored,
+            # Q.4: the batch's persisted entity record-ids (dedup-preserving
+            # order). The triage hook consumes these as its affected batch.
+            "persisted_entity_ids": persisted_entity_ids,
         }
