@@ -47,6 +47,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
+markers = [
+    "requires_docker: Tests that need a Docker daemon (testcontainers-backed). Skipped automatically when Docker is unreachable.",
+]
 
 [tool.uv.sources]
 shared = { workspace = true }
