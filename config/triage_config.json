@@ -41,11 +41,12 @@
     "_default_for_unmapped_predicate": "weak",
     "structural": ["IS_PIJLER_VAN", "LEIDT_TOT", "BIJDRAGT_AAN", "FINANCIERT", "VERSTERKT", "VERMINDERT"],
     "weak": ["RELATED"],
-    "note": "Structural predicates form the KG backbone and count toward connectivity (degree). VERSTERKT/VERMINDERT are meaningful thematic edges → structural (operator-confirmed). RELATED is the weak/generic edge → flagged by the backbone-check, does NOT count toward structural connectivity. Unmapped predicates default to weak (don't assume an unknown predicate is backbone)."
+    "weak_promotion_min_docs": 2,
+    "note": "Predicate tier sets an edge's BASE strength. Structural edges count toward connectivity from a single document. Weak edges (RELATED — often machine-inferred co-occurrence) count as WEAK from one document (backbone-check flags them), BUT the SAME weak edge recurring across >= weak_promotion_min_docs documents PROMOTES and counts toward connectivity — so entities that become increasingly connected by recurring cross-document RELATED links earn 'active'. SECURED BY: relation-merge (B2) must dedup edges (same src+tgt+predicate) and union relation.source_documents cumulatively; the per-edge cross-doc count then drives promotion. Without that merge, recurrence scatters across duplicate edges and cannot promote."
   },
 
   "status_rules": {
-    "_note": "How tier x degree maps to status in the per-run pipeline (B4/B5). Degree = count of STRUCTURAL relations (weak/RELATED edges excluded). The pipeline may also report total degree separately, but the active/reference decision uses structural degree.",
+    "_note": "tier x effective-degree -> status. Effective degree = count of STRUCTURAL edges + count of PROMOTED weak edges (a weak/RELATED edge whose cross-doc count >= weak_promotion_min_docs). A single-doc RELATED edge does NOT count and is backbone-flagged; a multi-doc RELATED edge DOES count. Status is re-derived EVERY run, so as documents accumulate, recurring cross-doc links promote reference->active idempotently — that is the promotion guarantee.",
     "core_active_min_degree": 1,
     "reference_isolated_max_degree": 0,
     "well_connected_threshold": 3,
