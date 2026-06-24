@@ -11,6 +11,23 @@ export interface Entity {
    * treat `undefined` as "unknown" and skip the confidence bar.
    */
   confidence?: number
+  /**
+   * Triage status (Q.5): `active` (in the active KG), `reference` (kept but
+   * outside it), or `archived`. Optional for rows predating Track Q.
+   */
+  status?: string
+  /**
+   * Operator-pinned flag (Q.5). When true, automation never re-derives the
+   * status — the operator's decision sticks (override-wins).
+   */
+  manual_override?: boolean
+  /**
+   * Effective structural degree (Q.2): structural edges + promoted weak edges.
+   * Joined onto list rows by the service; absent on legacy / un-triaged rows.
+   */
+  structural_degree?: number
+  /** Distinct cross-document count from `source_documents` (Q.2). */
+  doc_count?: number
 }
 
 export interface EntityDetail extends Entity {
@@ -76,6 +93,8 @@ export const knowledgeGraphApi = {
     limit?: number
     offset?: number
     entity_type?: string
+    /** Optional triage-status filter (Q.5): 'active' | 'reference' | 'archived'. */
+    status?: string
   }) => {
     const response = await apiClient.get<PaginatedEntities>('/knowledge-graph/entities', { params })
     return response.data

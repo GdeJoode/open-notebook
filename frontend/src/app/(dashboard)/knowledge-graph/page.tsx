@@ -20,12 +20,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Share2, Search, X, ChevronLeft, ChevronRight, GitMerge } from 'lucide-react'
+import { Share2, Search, X, ChevronLeft, ChevronRight, GitMerge, ClipboardList } from 'lucide-react'
 import type { Entity, EntityDetail } from '@/lib/api/knowledge-graph'
+import type { TriageStatus } from '@/lib/api/triage'
 import { ResolutionLogTab } from './components/ResolutionLogTab'
 import { ConfidenceBar } from '@/components/knowledge-graph/ConfidenceBar'
 import { ConfidenceFilter } from '@/components/knowledge-graph/ConfidenceFilter'
+import { StatusFilter } from '@/components/knowledge-graph/StatusFilter'
+import { StatusBadge } from '@/components/knowledge-graph/StatusBadge'
 import { ExternalIdBadges } from '@/components/resolution/ExternalIdBadges'
+import { Switch } from '@/components/ui/switch'
+import { useSetEntityOverride } from '@/lib/hooks/use-triage'
 
 const SigmaGraphView = dynamic(
   () => import('./components/SigmaGraphView'),
@@ -34,10 +39,12 @@ const SigmaGraphView = dynamic(
 
 export default function KnowledgeGraphPage() {
   const [entityTypeFilter, setEntityTypeFilter] = useState<string | undefined>(undefined)
+  const [statusFilter, setStatusFilter] = useState<TriageStatus | undefined>(undefined)
   const [searchQuery, setSearchQuery] = useState('')
   const [page, setPage] = useState(0)
   const [selectedEntity, setSelectedEntity] = useState<EntityDetail | null>(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
+  const setOverride = useSetEntityOverride()
   // Confidence filter threshold. Driven by `<ConfidenceFilter>` which
   // persists the value to localStorage and pushes the restored value
   // back here on mount.
@@ -49,6 +56,7 @@ export default function KnowledgeGraphPage() {
     limit: pageSize,
     offset: page * pageSize,
     entity_type: entityTypeFilter,
+    status: statusFilter,
   })
   const { data: searchResults } = useSearchEntities(searchQuery)
 
@@ -84,12 +92,20 @@ export default function KnowledgeGraphPage() {
           <div className="p-6 pb-0">
             <div className="flex items-center justify-between mb-4">
               <h1 className="text-2xl font-bold">Knowledge Graph</h1>
-              <Link href="/knowledge-graph/resolution">
-                <Button variant="outline" size="sm" className="gap-1.5">
-                  <GitMerge className="h-3.5 w-3.5" />
-                  Review duplicates
-                </Button>
-              </Link>
+              <div className="flex items-center gap-2">
+                <Link href="/knowledge-graph/triage">
+                  <Button variant="outline" size="sm" className="gap-1.5">
+                    <ClipboardList className="h-3.5 w-3.5" />
+                    Triage queue
+                  </Button>
+                </Link>
+                <Link href="/knowledge-graph/resolution">
+                  <Button variant="outline" size="sm" className="gap-1.5">
+                    <GitMerge className="h-3.5 w-3.5" />
+                    Review duplicates
+                  </Button>
+                </Link>
+              </div>
             </div>
 
             <div className="flex items-center gap-3 mb-4">
@@ -133,6 +149,14 @@ export default function KnowledgeGraphPage() {
                 </SelectContent>
               </Select>
 
+              <StatusFilter
+                value={statusFilter}
+                onChange={(v) => {
+                  setStatusFilter(v)
+                  setPage(0)
+                }}
+              />
+
               <ConfidenceFilter onChange={setConfidenceThreshold} />
             </div>
           </div>
@@ -167,7 +191,9 @@ export default function KnowledgeGraphPage() {
                           <tr className="border-b bg-muted/50">
                             <th className="text-left p-3 font-medium">Name</th>
                             <th className="text-left p-3 font-medium">Type</th>
-                            <th className="text-left p-3 font-medium">Weight</th>
+                            <th className="text-left p-3 font-medium">Status</th>
+                            <th className="text-left p-3 font-medium">Degree</th>
+                            <th className="text-left p-3 font-medium">Docs</th>
                             <th className="text-left p-3 font-medium">Confidence</th>
                           </tr>
                         </thead>
@@ -184,8 +210,25 @@ export default function KnowledgeGraphPage() {
                               <td className="p-3">
                                 <Badge variant="secondary">{entity.entity_type}</Badge>
                               </td>
-                              <td className="p-3 text-muted-foreground">
-                                {entity.weight}
+                              <td className="p-3">
+                                {entity.status ? (
+                                  <StatusBadge
+                                    status={entity.status}
+                                    manualOverride={entity.manual_override}
+                                  />
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">—</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-muted-foreground tabular-nums">
+                                {typeof entity.structural_degree === 'number'
+                                  ? entity.structural_degree
+                                  : '—'}
+                              </td>
+                              <td className="p-3 text-muted-foreground tabular-nums">
+                                {typeof entity.doc_count === 'number'
+                                  ? entity.doc_count
+                                  : '—'}
                               </td>
                               <td className="p-3">
                                 {typeof entity.confidence === 'number' ? (
@@ -261,6 +304,75 @@ export default function KnowledgeGraphPage() {
               <Badge variant="secondary" className="mb-4">
                 {selectedEntity.entity_type}
               </Badge>
+
+              {/* Triage: status + degree/doc-count + manual_override toggle (Q.5) */}
+              {(() => {
+                const detail = selectedEntity as Record<string, unknown>
+                const status = detail.status as string | undefined
+                const manualOverride = Boolean(detail.manual_override)
+                const degree = detail.structural_degree as number | undefined
+                const docCount = detail.doc_count as number | undefined
+                if (!status && degree === undefined && docCount === undefined) {
+                  return null
+                }
+                return (
+                  <div className="mb-4 rounded-md border p-3 space-y-3" data-testid="triage-panel">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        {status && (
+                          <StatusBadge status={status} manualOverride={manualOverride} />
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-3 text-xs text-muted-foreground">
+                        {typeof degree === 'number' && (
+                          <span>Degree: {degree}</span>
+                        )}
+                        {typeof docCount === 'number' && (
+                          <span>Docs: {docCount}</span>
+                        )}
+                      </div>
+                    </div>
+                    <label className="flex items-center justify-between gap-3 text-sm">
+                      <span id={`override-label-${selectedEntity.id}`}>
+                        Pin status (manual override)
+                      </span>
+                      <Switch
+                        checked={manualOverride}
+                        disabled={setOverride.isPending}
+                        aria-labelledby={`override-label-${selectedEntity.id}`}
+                        data-testid="override-toggle"
+                        onCheckedChange={(checked) => {
+                          setOverride.mutate(
+                            {
+                              entityId: selectedEntity.id,
+                              body: checked
+                                ? {
+                                    manual_override: true,
+                                    status:
+                                      status === 'active' ? 'active' : 'reference',
+                                  }
+                                : { manual_override: false },
+                            },
+                            {
+                              onSuccess: () => {
+                                // Optimistically reflect the toggle in the open panel.
+                                setSelectedEntity((prev) =>
+                                  prev
+                                    ? ({
+                                        ...prev,
+                                        manual_override: checked,
+                                      } as EntityDetail)
+                                    : prev,
+                                )
+                              },
+                            },
+                          )
+                        }}
+                      />
+                    </label>
+                  </div>
+                )
+              })()}
 
               {/* External IDs (TOOI/DOI) from K.4 vocabulary reconciliation */}
               {(() => {
