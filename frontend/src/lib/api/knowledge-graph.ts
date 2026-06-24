@@ -3,7 +3,18 @@ import apiClient from './client'
 export interface Entity {
   id: string
   name: string
+  /**
+   * Resolved canonical name. Carried by the list projection so a source-scoped
+   * view can show the canonical form distinctly from the raw surface `name`.
+   * Optional: legacy rows / projections may omit it.
+   */
+  canonical_name?: string
   entity_type: string
+  /**
+   * Rich ontology type (L.1). Preferred over the raw `entity_type` label for
+   * display when present. Optional on rows predating the typing work.
+   */
+  primary_type?: string
   weight: number
   /**
    * Per-entity extraction confidence in the [0, 1] range. Optional because
@@ -95,6 +106,12 @@ export const knowledgeGraphApi = {
     entity_type?: string
     /** Optional triage-status filter (Q.5): 'active' | 'reference' | 'archived'. */
     status?: string
+    /**
+     * Optional source-scoped filter: only entities whose `source_documents`
+     * contains this source record id (e.g. 'source:abc'). Backs the
+     * source-detail Entities tab.
+     */
+    source_id?: string
   }) => {
     const response = await apiClient.get<PaginatedEntities>('/knowledge-graph/entities', { params })
     return response.data
