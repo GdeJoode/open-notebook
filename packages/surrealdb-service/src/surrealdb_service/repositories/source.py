@@ -307,6 +307,60 @@ class SourceRepository(BaseRepository[Source]):
             raise
 
 
+    async def get_embedding_vectors(self, source_id: str) -> List[List[float]]:
+        """Return the source's per-chunk embedding vectors (non-empty only).
+
+        Reads the ``embedding`` column of every ``source_embedding`` row for
+        this source, ordered by ``order``. Rows with an empty/NONE vector are
+        skipped so the caller (the R.0 mean-pool) never averages in a zero
+        vector. Returns ``[]`` when the source has no embedded chunks yet.
+        """
+        try:
+            # No ORDER BY: ``SELECT VALUE embedding`` projects a bare vector, so
+            # ``order`` is not in scope to sort on — and mean-pooling is
+            # order-invariant anyway.
+            result = await execute_query(
+                "SELECT VALUE embedding FROM source_embedding WHERE source=$id",
+                {"id": ensure_record_id(source_id)},
+                self.config,
+            )
+            return [
+                [float(x) for x in vec]
+                for vec in (result or [])
+                if vec
+            ]
+        except Exception as e:
+            logger.error(
+                f"Failed to read embedding vectors for source {source_id}: {e}"
+            )
+            return []
+
+    async def set_aggregate_embedding(
+        self, source_id: str, embedding: Optional[List[float]]
+    ) -> bool:
+        """Persist the source-level aggregate ``embedding`` (R.0).
+
+        ``embedding`` is the mean-pool of the source's chunk vectors, or
+        ``None`` to clear it (a source with no chunk vectors). The field is
+        ``option<array<float>>`` (migration 63), so ``None`` writes NONE.
+        Returns True on success.
+        """
+        try:
+            await execute_query(
+                "UPDATE $id SET embedding = $embedding",
+                {
+                    "id": ensure_record_id(source_id),
+                    "embedding": embedding,
+                },
+                self.config,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to set aggregate embedding for source {source_id}: {e}"
+            )
+            return False
+
     async def list_with_metadata(
         self,
         notebook_id: Optional[str] = None,
