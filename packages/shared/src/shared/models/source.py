@@ -120,6 +120,19 @@ class Source(ObjectModel):
         None, description="Link to processing job/command"
     )
 
+    # Source-level aggregate embedding (Track R.0). One vector per source,
+    # produced by mean-pooling the source's per-chunk vectors from the
+    # ``source_embedding`` table — NOT a fresh LLM call. Enables source<->source
+    # cosine kNN in R.1. Declared on the SCHEMAFULL ``source`` table by
+    # ``migrations/63.surrealql`` as ``option<array<float>>``; ``None`` means
+    # "not yet computed / no chunk vectors" (distinct from an empty list). Legacy
+    # rows read back as None. Dimension matches the configured embedding model
+    # (mxbai-embed-large, 1024-dim) — never schema-pinned.
+    embedding: Optional[List[float]] = Field(
+        None,
+        description="Source-level aggregate vector (mean-pool of chunk embeddings)",
+    )
+
     # Per-source extraction provenance bag (Phase A.1c, Q-A-3).
     # Keys currently written by the auto-fallback path:
     #   parser_engine_used              "docling" | "mineru" | "whisperx"

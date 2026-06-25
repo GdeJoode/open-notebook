@@ -1,0 +1,31 @@
+-- ============================================================================
+-- Migration 63: source-level aggregate embedding field (Track R.0).
+--
+-- R.1 ranks "related sources" by source<->source cosine similarity. That needs
+-- ONE vector per source, but today the only embeddings we store are per-chunk
+-- rows in the separate `source_embedding` table (migration 1). R.0 adds a
+-- source-level aggregate vector, populated by mean-pooling that source's chunk
+-- vectors (no extra LLM calls — the chunk vectors already exist once the
+-- forward-fix / backfill has run).
+--
+-- The `source` table is SCHEMAFULL (migration 1), so writes to an undeclared
+-- field are rejected — the aggregate column MUST be declared here or the
+-- populate path fails. It is `option<array<float>>` (not a bare `array<float>`
+-- with a DEFAULT) deliberately:
+--   * NONE is the honest "not yet computed / no chunk vectors" state, distinct
+--     from an empty `[]`. A source with zero chunk vectors yields NONE, which
+--     R.1 reads as "skip — no aggregate to compare".
+--   * `option<...>` accepts NONE, so legacy rows (written before this migration)
+--     read back as NONE and the Pydantic default (`embedding=None` on Source)
+--     deserialises cleanly without a backfill UPDATE.
+--
+-- The dimension is NOT pinned in the schema (SurrealDB `array<float>` is
+-- length-agnostic). The live pin is the configured embedding model
+-- (`mxbai-embed-large`, 1024-dim, resolved via ModelManager) — never hardcoded;
+-- the populate function derives the length from the chunk vectors it pools.
+--
+-- Additive + idempotent: IF NOT EXISTS makes this safe to re-run. Mirrors the
+-- migration 43 / 52 conventions for additive SCHEMAFULL source fields.
+-- ============================================================================
+
+DEFINE FIELD IF NOT EXISTS embedding ON TABLE source TYPE option<array<float>>;

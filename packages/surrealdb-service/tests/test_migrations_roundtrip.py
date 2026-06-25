@@ -651,3 +651,100 @@ async def test_migration_57_idempotent_upsert_on_external_id(
     # Re-applying the forward migration body (OVERWRITE) must not raise.
     migration_sql = (fx._MIGRATIONS_DIR / "57.surrealql").read_text()
     await execute_query(migration_sql, config=live_surrealdb)
+
+
+# --------------------------------------------------------------------------
+# Migration 63 — source-level aggregate embedding (Track R.0)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_migration_63_source_embedding_field(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """``source.embedding`` is option<array<float>>: NONE by default, settable.
+
+    Migration 63 declares the source-level aggregate vector. A source created
+    without it reads back NONE (the honest "not yet computed" state), and one
+    written with a float array persists it — the source<->source cosine input
+    for R.1. The dimension is not schema-pinned (any length accepted).
+    """
+    # Default path: omit ``embedding`` -> NONE.
+    default_title = _unique("src-embed-default")
+    await execute_query(
+        "CREATE source SET title = $title, full_text = 'x';",
+        {"title": default_title},
+        config=live_surrealdb,
+    )
+    rows = await execute_query(
+        "SELECT title, embedding FROM source WHERE title = $title;",
+        {"title": default_title},
+        config=live_surrealdb,
+    )
+    assert len(rows) == 1
+    assert rows[0].get("embedding") is None
+
+    # Set path: a float vector persists with its dimension intact.
+    vec_title = _unique("src-embed-set")
+    await execute_query(
+        "CREATE source SET title = $title, full_text = 'x';",
+        {"title": vec_title},
+        config=live_surrealdb,
+    )
+    vector = [float(i) / 10.0 for i in range(1024)]
+    await execute_query(
+        "UPDATE source SET embedding = $embedding WHERE title = $title;",
+        {"title": vec_title, "embedding": vector},
+        config=live_surrealdb,
+    )
+    rows = await execute_query(
+        "SELECT embedding FROM source WHERE title = $title;",
+        {"title": vec_title},
+        config=live_surrealdb,
+    )
+    assert len(rows) == 1
+    assert rows[0]["embedding"] is not None
+    assert len(rows[0]["embedding"]) == 1024
+    assert rows[0]["embedding"][0] == pytest.approx(0.0)
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_migration_63_idempotent(live_surrealdb: SurrealDBConfig) -> None:
+    """Re-applying migration 63 is a no-op (IF NOT EXISTS) and leaves it usable."""
+    from surrealdb_service.testing import fixtures as fx
+
+    migration_sql = (fx._MIGRATIONS_DIR / "63.surrealql").read_text()
+    await execute_query(migration_sql, config=live_surrealdb)
+
+    title = _unique("src-embed-replay")
+    await execute_query(
+        "CREATE source SET title = $title, full_text = 'x';",
+        {"title": title},
+        config=live_surrealdb,
+    )
+    await execute_query(
+        "UPDATE source SET embedding = $embedding WHERE title = $title;",
+        {"title": title, "embedding": [0.1, 0.2, 0.3]},
+        config=live_surrealdb,
+    )
+    rows = await execute_query(
+        "SELECT embedding FROM source WHERE title = $title;",
+        {"title": title},
+        config=live_surrealdb,
+    )
+    assert rows[0]["embedding"] == pytest.approx([0.1, 0.2, 0.3])
+
+    # Clearing to NONE is allowed (option<...>) — the "no chunk vectors" path.
+    await execute_query(
+        "UPDATE source SET embedding = NONE WHERE title = $title;",
+        {"title": title},
+        config=live_surrealdb,
+    )
+    rows = await execute_query(
+        "SELECT embedding FROM source WHERE title = $title;",
+        {"title": title},
+        config=live_surrealdb,
+    )
+    assert rows[0].get("embedding") is None

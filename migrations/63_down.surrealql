@@ -1,0 +1,9 @@
+-- Migration 63 down: drop the source-level aggregate embedding field (R.0).
+--
+-- REMOVE FIELD drops the SCHEMAFULL field definition on `source`. The aggregate
+-- vector is purely derived data (mean-pool of the source's chunk vectors in the
+-- `source_embedding` table) — no authoritative content is lost; a forward
+-- re-apply + re-run of the populate function fully reconstructs it. Mirrors the
+-- migration 43 / 52 down convention.
+
+REMOVE FIELD IF EXISTS embedding ON TABLE source;

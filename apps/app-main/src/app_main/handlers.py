@@ -89,7 +89,23 @@ class ExportObsidianPayload(BaseModel):
 
 @registry.register(JobType.DOCUMENT_PARSE)
 async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract content from a source (extraction only, no embed/transform)."""
+    """Extract content from a source, then auto-enqueue vector embedding.
+
+    Track R.0 forward-fix: ``SourceProcessor.process_source`` deliberately only
+    extracts + persists chunks; before R.0 nothing wired the (fully working)
+    embedding step into ingest, so every freshly ingested source had chunks but
+    NO ``source_embedding`` rows until someone hit ``POST /sources/{id}/run-embed``
+    by hand. We close that gap HERE, at the job boundary, by enqueuing the
+    existing ``embed_source`` job once chunks exist — async + idempotent,
+    mirroring exactly how ``run-embed`` and the orchestrator already enqueue.
+
+    Seam choice (see commit message): the handler — not ``SourceProcessor`` — is
+    the right place because (a) it keeps the domain orchestrator free of a
+    job-queue dependency, (b) every ingest path (async + sync upload, reprocess)
+    funnels through this single ``DOCUMENT_PARSE`` handler, and (c) ``embed_source``
+    is already idempotent (it deletes existing embeddings first), so a re-run of
+    the parse job re-enqueues a safe re-embed.
+    """
     validated = DocumentParsePayload(**payload)
     start_time = time.time()
 
@@ -106,6 +122,31 @@ async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
             processing_overrides=validated.processing_overrides,
         )
 
+        # R.0 forward-fix: chain embedding off a successful extraction that
+        # produced chunks. Best-effort enqueue — a queue hiccup must not fail
+        # the (already-persisted) extraction; the operator can still run
+        # ``run-embed`` or the backfill script. No chunks => nothing to embed.
+        embed_command_id: Optional[str] = None
+        if result.get("chunk_count", 0) > 0:
+            try:
+                from app_main.services.command_service import CommandService
+
+                embed_command_id = await CommandService.submit_command_job(
+                    "open_notebook",
+                    "embed_source",
+                    {"source_id": result["source_id"]},
+                )
+                logger.info(
+                    f"Auto-enqueued embed_source job {embed_command_id} for "
+                    f"source {result['source_id']}"
+                )
+            except Exception as embed_err:  # noqa: BLE001 — never fail ingest
+                logger.error(
+                    f"Failed to auto-enqueue embedding for source "
+                    f"{result['source_id']} (extraction succeeded; run-embed "
+                    f"or the backfill script can recover): {embed_err}"
+                )
+
         processing_time = time.time() - start_time
         logger.info(
             f"Successfully extracted source {validated.source_id} in {processing_time:.2f}s"
@@ -115,6 +156,7 @@ async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
             "success": True,
             "source_id": result["source_id"],
             "chunk_count": result["chunk_count"],
+            "embed_command_id": embed_command_id,
             "processing_time": processing_time,
         }
 
