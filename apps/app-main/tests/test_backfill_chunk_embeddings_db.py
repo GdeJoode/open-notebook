@@ -58,6 +58,136 @@ async def _make_source_with_chunks(
     return sid
 
 
+async def _add_chunk(
+    cfg: SurrealDBConfig,
+    source_id: str,
+    text,
+    order: int,
+    element_type: str = "paragraph",
+) -> None:
+    """Create a single chunk (``text`` may be ``""``/whitespace/NONE)."""
+    if text is None:
+        await execute_query(
+            "CREATE chunk SET source = $src, text = NONE, order = $order, "
+            "physical_page = 0, element_type = $et, positions = [], metadata = {};",
+            {"src": ensure_record_id(source_id), "order": order, "et": element_type},
+            config=cfg,
+        )
+    else:
+        await execute_query(
+            "CREATE chunk SET source = $src, text = $text, order = $order, "
+            "physical_page = 0, element_type = $et, positions = [], metadata = {};",
+            {
+                "src": ensure_record_id(source_id),
+                "text": text,
+                "order": order,
+                "et": element_type,
+            },
+            config=cfg,
+        )
+
+
+class _FakeModel:
+    """Local-only fake embedding model (deterministic 8-dim vector per text)."""
+
+    async def aembed(self, texts):
+        return [[float(len(t) % 7)] * 8 for t in texts]
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_empty_chunks_skipped_and_not_eternally_flagged(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """R.0d AC1+AC2: empty/whitespace chunks are skipped AND don't re-flag.
+
+    Builds the live failure shape: 3 normal chunks + 1 empty-text chunk
+    (``element_type='table'``, the staging case) + 1 whitespace-only chunk.
+
+    * AC1 — ``embed_source`` writes vectors for the 3 normal chunks and NO
+      ``source_embedding`` row for the 2 empties; it does not raise (old code
+      raised ``Text cannot be empty``).
+    * AC2 — the eternal-incomplete guard: detection does NOT flag the source
+      even though ``chunk_count (5) > source_embedding_count (3)``, because the
+      difference is exactly the skipped empties.
+    """
+    import surrealdb_service.connection as conn
+    from embeddings.service import EmbeddingService
+
+    orig = conn._pool
+    conn._pool = conn.ConnectionPool(config=live_surrealdb)
+    try:
+        repo = SourceRepository(config=live_surrealdb)
+        created = await execute_query(
+            "CREATE source SET title = $t, full_text = 'body';",
+            {"t": _uid("r0d-mixed")},
+            config=live_surrealdb,
+        )
+        sid = str(created[0]["id"])
+        await _add_chunk(live_surrealdb, sid, "normal chunk zero", 0)
+        await _add_chunk(live_surrealdb, sid, "normal chunk one", 1)
+        await _add_chunk(live_surrealdb, sid, "", 2, element_type="table")
+        await _add_chunk(live_surrealdb, sid, "   \n\t ", 3)
+        await _add_chunk(live_surrealdb, sid, "normal chunk two", 4)
+
+        # Pre-embed: source is flagged (3 non-empty chunks, 0 embeddings).
+        assert sid in await backfill.list_sources_missing_chunk_embeddings()
+        assert await backfill.count_missing_chunks([sid]) == 3
+
+        svc = EmbeddingService(source_repo=repo, embedding_model=_FakeModel())
+        result = await svc.embed_source(sid)  # must not raise
+
+        # AC1: exactly 3 rows (empties skipped), all 8-dim.
+        assert result.embeddings_created == 3
+        assert await repo.get_embedding_count(sid) == 3
+        vectors = await repo.get_embedding_vectors(sid)
+        assert all(len(v) == 8 for v in vectors)
+
+        # AC2: NOT flagged despite chunk_count(5) > embedding_count(3).
+        assert sid not in await backfill.list_sources_missing_chunk_embeddings()
+        assert await backfill.count_missing_chunks([sid]) == 0
+    finally:
+        conn._pool = orig
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_partial_nonempty_source_still_flagged_with_empties(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """R.0d AC3: a genuinely partial source is STILL flagged (no R.0c regress).
+
+    3 non-empty chunks + 1 empty chunk, only 1 non-empty embedded -> 2 non-empty
+    chunks still lack vectors, so the source must remain flagged; the empty
+    chunk does not inflate the count.
+    """
+    import surrealdb_service.connection as conn
+
+    orig = conn._pool
+    conn._pool = conn.ConnectionPool(config=live_surrealdb)
+    try:
+        repo = SourceRepository(config=live_surrealdb)
+        created = await execute_query(
+            "CREATE source SET title = $t, full_text = 'body';",
+            {"t": _uid("r0d-partial")},
+            config=live_surrealdb,
+        )
+        sid = str(created[0]["id"])
+        await _add_chunk(live_surrealdb, sid, "alpha", 0)
+        await _add_chunk(live_surrealdb, sid, "beta", 1)
+        await _add_chunk(live_surrealdb, sid, "", 2, element_type="table")
+        await _add_chunk(live_surrealdb, sid, "gamma", 3)
+
+        # Only 1 of 3 non-empty chunks embedded.
+        await repo.add_embedding(sid, "alpha", 0, [0.1] * 8)
+
+        assert sid in await backfill.list_sources_missing_chunk_embeddings()
+        # 3 non-empty - 1 embedded = 2 (the empty chunk is not counted).
+        assert await backfill.count_missing_chunks([sid]) == 2
+    finally:
+        conn._pool = orig
+
+
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
 async def test_discovery_query_finds_unembedded_sources(

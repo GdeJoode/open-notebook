@@ -166,3 +166,51 @@ async def test_populate_source_embedding_empty_writes_none() -> None:
     # NONE is written (graceful empty), not skipped.
     assert "source:a" in repo.aggregate_writes
     assert repo.aggregate_writes["source:a"] is None
+
+
+class _TextChunk:
+    """Minimal stand-in for a ``Chunk`` with a ``text`` attribute."""
+
+    def __init__(self, text) -> None:
+        self.text = text
+
+
+def test_is_empty_chunk_covers_none_empty_whitespace() -> None:
+    """R.0d: the empties the embedder skips must be detectable here too."""
+    assert backfill._is_empty_chunk(_TextChunk(None)) is True
+    assert backfill._is_empty_chunk(_TextChunk("")) is True
+    assert backfill._is_empty_chunk(_TextChunk("  \n\t")) is True
+    assert backfill._is_empty_chunk(_TextChunk("real")) is False
+    # Raw strings (fallback path / fakes) work too.
+    assert backfill._is_empty_chunk("") is True
+    assert backfill._is_empty_chunk("real") is False
+
+
+@pytest.mark.asyncio
+async def test_count_missing_chunks_excludes_empty() -> None:
+    """R.0d: ``count_missing_chunks`` counts only non-empty unembedded chunks.
+
+    A source with 3 non-empty + 2 empty chunks and 0 embeddings has 3 missing
+    (the 2 empties never need a vector), not 5.
+    """
+    store = {
+        "source:a": {
+            "chunks": [
+                _TextChunk("one"),
+                _TextChunk(""),
+                _TextChunk("two"),
+                _TextChunk("   "),
+                _TextChunk("three"),
+            ],
+            "vectors": [],
+        }
+    }
+    repo = FakeRepo(store)
+    with patch.object(backfill, "SourceRepository", return_value=repo):
+        missing = await backfill.count_missing_chunks(["source:a"])
+    assert missing == 3
+
+    # Embed the 3 non-empty chunks -> nothing missing despite 2 empty chunks.
+    store["source:a"]["vectors"] = [[1.0]] * 3
+    with patch.object(backfill, "SourceRepository", return_value=repo):
+        assert await backfill.count_missing_chunks(["source:a"]) == 0

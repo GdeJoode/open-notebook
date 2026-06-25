@@ -110,23 +110,58 @@ class EmbeddingService:
         )
         return result
 
+    @staticmethod
+    def _is_empty_text(text: Optional[str]) -> bool:
+        """True when ``text`` carries no embeddable content.
+
+        Covers the three forms a no-text chunk takes in the corpus: ``None``,
+        the empty string, and whitespace-only. Table/image chunks routinely
+        have no extracted text (e.g. ``element_type='table'`` with empty
+        ``text``); the embedding model rejects empty input with ``Text cannot
+        be empty``, so such chunks must be skipped rather than embedded.
+        """
+        return text is None or not text.strip()
+
     async def _embed_chunks(
         self,
         source_id: str,
         chunks: List[Chunk],
     ) -> List[SourceEmbedding]:
-        """Generate embeddings for structural chunks with chunk linkage."""
+        """Generate embeddings for structural chunks with chunk linkage.
+
+        Empty/whitespace-only chunks (typically table/image chunks with no
+        extracted text) are skipped: no model call, no ``source_embedding``
+        row, no crash. A skipped chunk does not fail its batch-mates — only the
+        non-empty chunks of a batch are sent to the model, and output alignment
+        is preserved by zipping the vectors back onto exactly those chunks.
+        """
         embeddings: List[SourceEmbedding] = []
         batch_size = self.config.batch_size
 
         for batch_start in range(0, len(chunks), batch_size):
             batch = chunks[batch_start:batch_start + batch_size]
-            texts = [c.text for c in batch]
 
+            # Keep (original-order, chunk) only for non-empty chunks so the
+            # stored ``order`` still reflects the chunk's position, and one
+            # empty chunk never blanks out or misaligns its batch-mates.
+            embeddable = [
+                (batch_start + i, chunk)
+                for i, chunk in enumerate(batch)
+                if not self._is_empty_text(chunk.text)
+            ]
+            skipped = len(batch) - len(embeddable)
+            if skipped:
+                logger.info(
+                    f"Skipping {skipped} empty/whitespace chunk(s) for source "
+                    f"{source_id} (no text to embed)"
+                )
+            if not embeddable:
+                continue
+
+            texts = [chunk.text for _, chunk in embeddable]
             vectors = await self._embed_with_retry(texts)
 
-            for i, (chunk, vector) in enumerate(zip(batch, vectors)):
-                order = batch_start + i
+            for (order, chunk), vector in zip(embeddable, vectors):
                 chunk_id = chunk.id if hasattr(chunk, "id") and chunk.id else None
                 embedding = await self.source_repo.add_embedding(
                     source_id=source_id,
@@ -144,17 +179,36 @@ class EmbeddingService:
         source_id: str,
         text_chunks: List[str],
     ) -> List[SourceEmbedding]:
-        """Generate embeddings for plain text chunks (fallback path)."""
+        """Generate embeddings for plain text chunks (fallback path).
+
+        Mirrors ``_embed_chunks``: empty/whitespace-only chunks are skipped
+        (no model call, no row, no crash) while their batch-mates still embed,
+        with output alignment preserved.
+        """
         embeddings: List[SourceEmbedding] = []
         batch_size = self.config.batch_size
 
         for batch_start in range(0, len(text_chunks), batch_size):
             batch = text_chunks[batch_start:batch_start + batch_size]
 
-            vectors = await self._embed_with_retry(batch)
+            embeddable = [
+                (batch_start + i, text)
+                for i, text in enumerate(batch)
+                if not self._is_empty_text(text)
+            ]
+            skipped = len(batch) - len(embeddable)
+            if skipped:
+                logger.info(
+                    f"Skipping {skipped} empty/whitespace text chunk(s) for "
+                    f"source {source_id} (no text to embed)"
+                )
+            if not embeddable:
+                continue
 
-            for i, (text, vector) in enumerate(zip(batch, vectors)):
-                order = batch_start + i
+            texts = [text for _, text in embeddable]
+            vectors = await self._embed_with_retry(texts)
+
+            for (order, text), vector in zip(embeddable, vectors):
                 embedding = await self.source_repo.add_embedding(
                     source_id=source_id,
                     content=text,

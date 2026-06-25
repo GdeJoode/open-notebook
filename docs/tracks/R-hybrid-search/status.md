@@ -205,3 +205,69 @@ model-derived (1024), local, no hardcoding.
 
 NOT run: real backfill against staging (human-gated). Expectation once gated run
 fires: dry-run reports all 6 partial sources / the 1058 missing chunks.
+
+## R.0d — skip empty/whitespace chunks when embedding (live backfill fix)
+
+Branch: `track/r0d-empty-chunk-skip` (off `main` after R.0c).
+Commits: `7e19c57` (embeddings service skip), `7a4b4bd` (detection exclude + tests).
+
+### Bug (measured live on staging)
+The full chunk backfill embedded 5 of 6 sources to dim 1024 but source
+`dndibxmjveoxk7tfqfsl` FAILED with `Embedding failed after 3 attempts: Text
+cannot be empty`. Root cause: that source has exactly 1 chunk with empty `text`
+— a `table`-type chunk (`chunk:ik1k140l5lbwol7vt1`, element_type=`table`, order
+280, no extracted text). The model rejects empty input, aborting the whole
+source. (1 such chunk of 1448 corpus-wide today, but table/image chunks with no
+text are a recurring class.)
+
+### Root cause
+Two coupled gaps: (1) `_embed_chunks` / `_embed_text_chunks` passed every
+chunk's text to the model, including `""`; the model raised `Text cannot be
+empty` and `_embed_with_retry` re-raised after retries, killing the source.
+(2) the R.0c detection counted ALL chunks, so even if the empty chunk were
+skipped, `chunk_count > embedding_count` would flag the source forever and
+re-embed it every run (eternal-incomplete).
+
+### Fix (two-sided)
+1. **Embed side** (`pipelines/embeddings/src/embeddings/service.py`): new guard
+   `_is_empty_text` (None / empty / `str.strip()` whitespace). Both embed paths
+   build an `embeddable` list of `(original_order, chunk)` for non-empty chunks
+   only, embed just those, and zip vectors back — empties get no model call and
+   no `source_embedding` row; batch-mates still embed; original `order`
+   preserved.
+2. **Detection side** (`scripts/backfill_chunk_embeddings.py`):
+   `list_sources_missing_chunk_embeddings` counts only
+   `text != NONE AND string::trim(text) != ""` chunks;
+   `count_missing_chunks` filters empties in Python via `_is_empty_chunk`
+   (shared None/empty/whitespace logic, works for `Chunk` objects and raw
+   strings). A source whose every non-empty chunk is embedded reads COMPLETE.
+
+Dim stays model-derived (1024), local, no hardcoding.
+
+### Evidence (per acceptance criterion)
+1. **Empty/whitespace skipped, source succeeds (fails-old/passes-new)** —
+   `test_service.py::TestEmbedSourceEmptyChunkSkip::test_empty_and_whitespace_chunks_skipped_mixed_batch`:
+   normal + empty(table) + whitespace + normal, strict model rejecting empties;
+   asserts 2 rows, model only sees the 2 normals, orders [0,3]. FAILS against
+   reverted service (`Text cannot be empty`), PASSES with fix (verified by
+   `git stash` of the service file -> 4 fail; restored -> pass).
+2. **Not eternally flagged** (DB, `@requires_docker`) —
+   `test_backfill_chunk_embeddings_db.py::test_empty_chunks_skipped_and_not_eternally_flagged`:
+   5 chunks (3 normal + empty table + whitespace), `embed_source` writes 3 rows
+   and does not raise; detection does NOT flag despite chunk_count(5) >
+   embedding_count(3). FAILS against reverted detection query (source stays
+   flagged), PASSES with fix (verified by `git stash` of the script -> fail;
+   restored -> pass).
+3. **Genuinely partial still flagged (no R.0c regression)** (DB) —
+   `test_partial_nonempty_source_still_flagged_with_empties`: 3 non-empty + 1
+   empty, 1 embedded -> flagged, `count_missing_chunks == 2`.
+4. **count_missing_chunks counts only non-empty unembedded** —
+   DB-free `test_count_missing_chunks_excludes_empty` (3 of 5, then 0) + the AC3
+   DB assertion above.
+5. **No regressions / dry-run writes nothing / Track J green** —
+   embeddings suite **40 passed**; backfill DB-free+DB **15 passed**; Track J
+   `test_embedding_local_guardrail.py` **6 passed**. Dry-run path unchanged.
+
+NOT run: real backfill against staging (human-gated). Expectation once gated:
+source `dndibxmjveoxk7tfqfsl` embeds its non-empty chunks to dim 1024, skips the
+1 empty table chunk, and does NOT reappear in the missing set.
