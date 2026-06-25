@@ -160,3 +160,48 @@ whenever over-long input occurs.
 ### Remaining
 Human-gated full backfill: `python scripts/backfill_chunk_embeddings.py`
 (12 sources left), then `--source-embeddings` for aggregates.
+
+## R.0c — Partial-source detection in chunk backfill (2026-06-25)
+
+Branch `track/r0c-partial-detection` (off `main` w/ R.0 + R.0b merged).
+Commits: `cc7c2c3` (fix), `d8cca05` (tests).
+
+### Bug (measured live on staging)
+`backfill_chunk_embeddings.py --dry-run` reported **0 sources / 0 chunks** while
+staging had only **390 of 1448 chunks embedded** — all 6 sources PARTIALLY
+embedded (70/284, 80/209, 80/135, 10/260, 100/281, 50/279). Backfill silently
+did nothing; the "resumable/idempotent" claim was false for partial sources.
+
+### Root cause
+`list_sources_missing_chunk_embeddings()` selected sources with
+`count(source_embedding) = 0`. A partial source has `count >= 1`, so the
+`AND ... = 0` clause excluded it — any source with ≥1 embedding was treated as
+done. Partial states arise because `_embed_chunks` commits per-batch; the R.0b
+context-length failure left sources embedded part-way.
+
+### Fix
+Detect on counts-differ: `count(chunk) > count(source_embedding)` (fully OR
+partially unembedded). `embed_source` deletes+rebuilds a source's embeddings, so
+source-level "counts differ" is sufficient — no per-chunk granularity needed.
+`count_missing_chunks` now reports only the unembedded chunks of a partial source
+(`chunk_count - embedding_count`), not its whole chunk set. Dim stays
+model-derived (1024), local, no hardcoding.
+
+### Evidence (per acceptance criterion)
+1. **Partial flagged (fails-old/passes-new)** —
+   `test_discovery_query_flags_partially_embedded_source`: seeds 3-chunk source
+   with 1 embedding, asserts it is flagged. FAILS against reverted `= 0` query
+   (`assert partial in missing` -> AssertionError), PASSES against the fix.
+   The updated `test_discovery_query_finds_unembedded_sources` also fails-old.
+2. **Fully embedded NOT flagged** — same test, `full` (3/3) absent from missing.
+3. **Zero embeddings still flagged** — same test, `zero` (0/3) present (no
+   regression).
+4. **embed_source completes partial** —
+   `test_embed_source_completes_partial_then_clean`: stale 1-of-3 row, run
+   embed_source (local fake model), assert count==3 and re-detection returns 0.
+5. **Existing R.0 tests green / dry-run writes nothing** — full suite
+   `test_backfill_chunk_embeddings.py` + `_db.py` = **11 passed**. Dry-run path
+   unchanged (`get_embedding_count` left clamped, no model resolved on dry-run).
+
+NOT run: real backfill against staging (human-gated). Expectation once gated run
+fires: dry-run reports all 6 partial sources / the 1058 missing chunks.

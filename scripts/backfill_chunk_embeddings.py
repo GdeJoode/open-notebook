@@ -8,12 +8,14 @@ have nothing to search. This script backfills the gap.
 
 Two modes (run chunk embeddings first, then aggregates):
 
-* **default (chunk embeddings)** — iterate sources that have chunks but no
-  ``source_embedding`` rows and call ``EmbeddingService.embed_source`` (which
-  reads the chunks, batches, and writes ``source_embedding``). ``embed_source``
-  is itself idempotent (it deletes existing embeddings first), and we only ever
-  select sources that are still missing vectors, so the script is idempotent +
-  resumable at the source granularity.
+* **default (chunk embeddings)** — iterate sources whose ``source_embedding``
+  count is below their ``chunk`` count (fully *or partially* unembedded) and
+  call ``EmbeddingService.embed_source`` (which reads the chunks, batches, and
+  writes ``source_embedding``). ``embed_source`` is itself idempotent (it deletes
+  existing embeddings first and rebuilds them), and we only ever select sources
+  whose counts still differ, so the script is idempotent + resumable at the
+  source granularity — including completing sources left partial by a crashed
+  earlier run.
 
 * ``--source-embeddings`` — populate the source-level aggregate ``source.embedding``
   (migration 63) by mean-pooling each source's chunk vectors. No model calls.
@@ -22,7 +24,8 @@ Two modes (run chunk embeddings first, then aggregates):
 
 Properties (mirrors ``scripts/backfill_entity_embeddings.py``, the Track-P pattern):
 
-* **Idempotent** — chunk mode selects only sources still missing vectors;
+* **Idempotent** — chunk mode selects only sources whose embedding count is
+  below their chunk count (still missing vectors, fully or partially);
   aggregate mode recomputes from the current chunk vectors (a stable function of
   the data). Re-running is safe.
 * **Resumable** — each source is embedded + committed before moving on; a crash
@@ -60,30 +63,45 @@ from surrealdb_service.repositories.source import SourceRepository
 
 
 async def list_sources_missing_chunk_embeddings() -> List[str]:
-    """Return source ids that HAVE chunks but NO ``source_embedding`` rows.
+    """Return source ids whose ``source_embedding`` count != ``chunk`` count.
 
-    A source qualifies for the chunk backfill only when it has at least one
-    ``chunk`` and zero ``source_embedding`` rows — i.e. extracted-but-unembedded.
-    Sources with no chunks (nothing to embed) and sources already embedded are
-    both excluded, which is what makes the default mode idempotent.
+    A source qualifies for the chunk backfill whenever it has more chunks than
+    ``source_embedding`` rows — i.e. some chunks still have no vector. This
+    deliberately covers *partially* embedded sources, not just zero-embedding
+    ones: a run that died mid-way (e.g. the R.0b context-length failure) leaves a
+    source with some embeddings but not all, and the earlier ``= 0`` test wrongly
+    treated any ``>= 1`` embeddings as "done", silently leaving the rest
+    unembedded. ``embed_source`` deletes a source's existing embeddings and
+    rebuilds them from scratch, so source-level "counts differ" detection is
+    sufficient — no per-chunk granularity is needed.
+
+    Sources with no chunks (nothing to embed) and sources already fully embedded
+    (``chunk`` count == ``source_embedding`` count) are both excluded, which is
+    what makes the default mode idempotent.
     """
     rows = await execute_query(
         """
         SELECT VALUE id FROM source WHERE
-            count(SELECT id FROM chunk WHERE source = $parent.id) > 0
-            AND count(SELECT id FROM source_embedding WHERE source = $parent.id) = 0;
+            count(SELECT id FROM chunk WHERE source = $parent.id) >
+            count(SELECT id FROM source_embedding WHERE source = $parent.id);
         """
     )
     return [str(r) for r in (rows or [])]
 
 
 async def count_missing_chunks(source_ids: List[str]) -> int:
-    """Total chunk rows across ``source_ids`` (the would-be embedding count)."""
+    """Count chunks still lacking a vector across ``source_ids``.
+
+    Per source this is ``chunk_count - source_embedding_count`` clamped at 0, so
+    a partially-embedded source contributes only its *un*embedded chunks (not its
+    whole chunk set). For a zero-embedding source this equals its chunk count.
+    """
     total = 0
     repo = SourceRepository()
     for sid in source_ids:
         chunks = await repo.get_chunks(sid)
-        total += len(chunks)
+        embedded = await repo.get_embedding_count(sid)
+        total += max(0, len(chunks) - embedded)
     return total
 
 
