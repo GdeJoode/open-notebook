@@ -1,12 +1,16 @@
 -- ============================================================================
--- Migration 58 DOWN: drop the re-asserted `relation` RELATION table.
+-- Migration 58 DOWN: no-op (made non-destructive in O.2a).
 --
--- There is no faithful inverse — migration 58 exists precisely because the
--- legacy NORMAL `relation` table was malformed and valueless. Down simply
--- removes the table; the next `up` (39 or 58) recreates the correct
--- TYPE RELATION table. Any relations created after 58 are graph edges that a
--- down-migration would discard by design (mirrors how migration 39's edge data
--- is not preserved across a table redefinition).
+-- Migration 58 is now a self-healing schema/data repair: it deletes only
+-- null-endpoint junk rows and re-asserts the canonical `relation` TYPE RELATION
+-- definition (migration 39) with OVERWRITE. There is no faithful inverse —
+--   * the deleted rows were malformed legacy junk (null in/out), not real data
+--     worth restoring; and
+--   * the previous down (`REMOVE TABLE IF EXISTS relation`) was itself
+--     DESTRUCTIVE: rolling back would wipe every real edge created since the
+--     table was healthy, which defeats the whole point of the non-destructive
+--     rewrite.
+-- Down intentionally does nothing; mirrors the migration 61 / 62 down
+-- convention. The canonical relation definition lives in migration 39 and is
+-- re-asserted by 39 / 58 / 62 on any forward run.
 -- ============================================================================
-
-REMOVE TABLE IF EXISTS relation;
