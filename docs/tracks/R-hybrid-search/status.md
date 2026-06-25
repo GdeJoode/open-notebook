@@ -96,3 +96,67 @@ All 6 live sources should show `chunk_vecs > 0`, `has_aggregate = true`,
 The orchestrator can call `populate_all_source_embeddings()` /
 `populate_source_embedding(source_id)` from
 `scripts/backfill_chunk_embeddings.py` directly for the aggregate step.
+
+---
+
+## R.0b — chunk-embedding context-length guard (2026-06-25)
+
+**Branch**: `track/r0b-embed-context-fix` (off `main`)
+**Commits**: `08d1751` fix, `ba62b7d` tests
+**Status**: Ready for review. Full 6/14-source backfill is the human-gated step.
+
+### Bug
+Live R.0 backfill failed on every source: `Ollama API error: the input length
+exceeds the context length` → `embedded_sources=0 failed=N`. `mxbai-embed-large`
+has a ~512-token context; chunk passages exceed it and the embedding service
+applied no length guard.
+
+### Root cause (confirmed live)
+The esperanto Ollama provider embeds **one text per HTTP call** against the
+legacy `/api/embeddings` endpoint, so this is per-text over-length, not a
+batch-total. That legacy endpoint **ignores `truncate` and `options.num_ctx`** —
+verified directly: `truncate=true`, `truncate=false`, and `num_ctx=8192` all
+return the same 500 on a 9000-char input. Only the newer `/api/embed` endpoint
+honours `truncate` (default true → 1024-dim returns), but esperanto does not use
+it. So threading `truncate=true` through the wrapper would NOT have fixed it.
+`num_ctx` does not raise mxbai's 512-token pin either; only truncation works.
+
+### Fix (client-side, model-aware truncation)
+`pipelines/embeddings/src/embeddings/{config.py,service.py}`:
+- `max_input_chars=2048` (≈512 tok × 4 chars/tok, Latin) cap applied before
+  every embed call; tail-truncate (keep head), log each cut.
+- `truncate_on_context_error=True`: on a residual context-length rejection
+  (dense/CJK text the char cap misses — char count is not a token proxy: CJK
+  fails ~600 chars, dense Latin survives ~2500), recover **per-text by halving**
+  until accepted. A single over-long text never fails its batch-mates and **no
+  chunk is dropped**. Dimension stays model-derived (1024), never hardcoded;
+  embeddings stay LOCAL (no `model_routing` import).
+
+### Evidence (per acceptance criterion)
+1. **Real-Ollama over-long embed** — `test_service_ollama_context.py` (runs
+   against local mxbai, not a fake): a ~9000-char text fails raw (`context
+   length`), then embeds to **dim 1024** through the guarded service; dense CJK
+   recovers via adaptive shrink to 1024. PASS.
+2. **R.0 unit/container tests unaffected** — `pipelines/embeddings` 36 passed;
+   `apps/app-main` backfill + autoembed 12 passed.
+3. **Truncation observable, no silent drops** — `logger.warning` on every char
+   cap + every adaptive shrink; batch order/shape preserved; unit tests assert
+   no chunk dropped.
+4. **Track J guardrail green** — `test_embedding_local_guardrail.py` 6 passed;
+   no cloud routing; dim not hardcoded.
+5. **Live smoke** — `--dry-run` reports 14 sources / 1960 chunks; `--limit 1`
+   ran twice, embedded 2 sources (140 chunks each), **dim=1024, failed=0**,
+   remaining 14→13→12 (idempotent + resumable). Stored vectors confirmed dim
+   1024 in staging.
+
+### Note on current staging data
+Staging has been re-ingested since the bug report (now 14 sources / smaller
+chunks, max chunk **1519 chars**). The 200 longest current chunks embed raw
+without the guard, so the per-chunk failure does **not** reproduce on today's
+data — but the original ~2000-char chunks did exceed mxbai's context (reproduced
+directly with 9000-char + CJK input). The guard is correct defence-in-depth for
+whenever over-long input occurs.
+
+### Remaining
+Human-gated full backfill: `python scripts/backfill_chunk_embeddings.py`
+(12 sources left), then `--source-embeddings` for aggregates.
