@@ -267,3 +267,112 @@ class TestRetryBehavior:
 
         with pytest.raises(RuntimeError, match="Embedding failed after"):
             await service.embed_source("source:fail")
+
+
+class TestContextLengthGuard:
+    """R.0b: chunk texts longer than the model context must still embed.
+
+    The local mxbai-embed-large model (~512-token context) rejects over-long
+    input via Ollama's legacy endpoint, which ignores ``truncate``. These tests
+    cover the client-side char cap + adaptive shrink with a fake model (the
+    real-Ollama proof lives in ``test_service_ollama_context.py``).
+    """
+
+    @pytest.mark.asyncio
+    async def test_char_cap_truncates_before_embed(self):
+        """Texts over ``max_input_chars`` reach the model already truncated."""
+        repo = _make_source_repo()
+        repo.get_chunks.return_value = [
+            _make_chunk("X" * 5000, 0, "chunk:long"),
+        ]
+        model = _make_embedding_model()
+        service = EmbeddingService(
+            repo, model, EmbeddingConfig(max_input_chars=2048)
+        )
+
+        result = await service.embed_source("source:long")
+
+        assert result.embeddings_created == 1
+        sent = model.aembed.call_args.args[0]
+        assert len(sent[0]) == 2048  # head kept, tail dropped
+
+    @pytest.mark.asyncio
+    async def test_no_chunk_dropped_under_cap(self):
+        """Short chunks pass through untouched alongside a capped one."""
+        repo = _make_source_repo()
+        repo.get_chunks.return_value = [
+            _make_chunk("short", 0, "chunk:a"),
+            _make_chunk("Y" * 4000, 1, "chunk:b"),
+        ]
+        model = _make_embedding_model()
+        service = EmbeddingService(
+            repo, model, EmbeddingConfig(max_input_chars=2048, batch_size=10)
+        )
+
+        result = await service.embed_source("source:mixed")
+
+        assert result.embeddings_created == 2
+        sent = model.aembed.call_args.args[0]
+        assert sent[0] == "short"
+        assert len(sent[1]) == 2048
+
+    @pytest.mark.asyncio
+    async def test_adaptive_shrink_on_context_error(self):
+        """A batch context-length error recovers per-text by halving length.
+
+        Simulates a dense text the char cap did not catch: the model rejects
+        the batch with the Ollama message, then accepts each text once it is
+        short enough. Every chunk still gets a vector.
+        """
+        repo = _make_source_repo()
+        repo.get_chunks.return_value = [
+            _make_chunk("dense" * 600, 0, "chunk:dense"),  # 3000 chars
+        ]
+        model = AsyncMock()
+
+        async def fake_aembed(texts):
+            # Reject anything longer than 1000 chars with Ollama's message.
+            if any(len(t) > 1000 for t in texts):
+                raise RuntimeError(
+                    "Ollama API error: the input length exceeds the context length"
+                )
+            return [[0.1, 0.2, 0.3] for _ in texts]
+
+        model.aembed = AsyncMock(side_effect=fake_aembed)
+        service = EmbeddingService(
+            repo, model,
+            # cap above the text length so the cap does NOT catch it; the
+            # shrink path must do the work.
+            EmbeddingConfig(max_input_chars=10000, retry_attempts=1, retry_delay=0.01),
+        )
+
+        result = await service.embed_source("source:dense")
+
+        assert result.embeddings_created == 1  # not dropped
+        stored = repo.add_embedding.call_args.kwargs["embedding"]
+        assert len(stored) == 3
+
+    @pytest.mark.asyncio
+    async def test_non_length_error_still_retries_and_raises(self):
+        """A non-length error is not treated as a truncation case."""
+        repo = _make_source_repo()
+        repo.get_chunks.return_value = [_make_chunk("Content.", 0, "chunk:1")]
+        model = AsyncMock()
+        model.aembed = AsyncMock(side_effect=RuntimeError("connection refused"))
+        service = EmbeddingService(
+            repo, model,
+            EmbeddingConfig(retry_attempts=1, retry_delay=0.01),
+        )
+
+        with pytest.raises(RuntimeError, match="Embedding failed after"):
+            await service.embed_source("source:conn")
+        # Retried (not short-circuited as a length error): 1 + retry_attempts
+        assert model.aembed.call_count == 2
+
+    def test_cap_disabled_when_zero(self):
+        """``max_input_chars=0`` disables the char cap (passthrough)."""
+        repo = _make_source_repo()
+        model = _make_embedding_model()
+        service = EmbeddingService(repo, model, EmbeddingConfig(max_input_chars=0))
+        long = ["Z" * 9000]
+        assert service._cap_texts(long) == long
