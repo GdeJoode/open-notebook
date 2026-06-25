@@ -65,9 +65,14 @@ async def test_discovery_query_finds_unembedded_sources(
 ) -> None:
     """``list_sources_missing_chunk_embeddings`` returns chunked-but-unembedded.
 
-    A source with chunks + no ``source_embedding`` rows appears; once it has an
-    embedding row it disappears (idempotency at the discovery layer); a source
-    with no chunks never appears.
+    A source with chunks + no ``source_embedding`` rows appears; once *every*
+    chunk has an embedding it disappears (idempotency at the discovery layer); a
+    source with no chunks never appears.
+
+    R.0c: dropping out requires the embedding count to REACH the chunk count.
+    Adding a single embedding to a 3-chunk source no longer removes it (it is
+    partially embedded — the old ``= 0`` detection wrongly dropped it here,
+    silently leaving 2 chunks unembedded).
     """
     import surrealdb_service.connection as conn
 
@@ -90,15 +95,113 @@ async def test_discovery_query_finds_unembedded_sources(
         assert with_chunks in missing
         assert no_chunks not in missing  # no chunks -> nothing to embed
 
-        # Add an embedding row -> source drops out of the missing set.
+        # One embedding on a 3-chunk source = PARTIAL -> still flagged (R.0c).
         await repo.add_embedding(
             source_id=with_chunks,
             content="chunk 0",
             order=0,
             embedding=[0.1, 0.2, 0.3, 0.4],
         )
+        partial_missing = await backfill.list_sources_missing_chunk_embeddings()
+        assert with_chunks in partial_missing
+
+        # Embed the remaining 2 chunks -> counts match -> drops out (idempotent).
+        for order in (1, 2):
+            await repo.add_embedding(
+                source_id=with_chunks,
+                content=f"chunk {order}",
+                order=order,
+                embedding=[0.1, 0.2, 0.3, 0.4],
+            )
         missing_after = await backfill.list_sources_missing_chunk_embeddings()
         assert with_chunks not in missing_after
+    finally:
+        conn._pool = orig
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_discovery_query_flags_partially_embedded_source(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """R.0c: a PARTIALLY-embedded source must be flagged as needing embedding.
+
+    The original ``= 0`` detection (any ``>= 1`` embeddings -> "done") would NOT
+    flag a source with 1-of-3 chunks embedded, silently leaving 2 chunks without
+    a vector — exactly the live staging bug. This proves the four states:
+
+    * partial (1 of 3 embedded)   -> flagged   (AC1; fails old, passes new)
+    * fully embedded (3 of 3)     -> NOT flagged (AC2)
+    * zero embeddings (0 of 3)    -> flagged   (AC3; no regression)
+    * count_missing_chunks counts only UNembedded chunks (partial = 2, not 3)
+    """
+    import surrealdb_service.connection as conn
+
+    orig = conn._pool
+    conn._pool = conn.ConnectionPool(config=live_surrealdb)
+    try:
+        repo = SourceRepository(config=live_surrealdb)
+
+        # Partial: 3 chunks, 1 embedding row.
+        partial = await _make_source_with_chunks(live_surrealdb, 3)
+        await repo.add_embedding(partial, "c0", 0, [0.1, 0.2, 0.3, 0.4])
+
+        # Full: 3 chunks, 3 embedding rows.
+        full = await _make_source_with_chunks(live_surrealdb, 3)
+        for order in range(3):
+            await repo.add_embedding(full, f"c{order}", order, [0.1, 0.2, 0.3, 0.4])
+
+        # Zero: 3 chunks, 0 embedding rows.
+        zero = await _make_source_with_chunks(live_surrealdb, 3)
+
+        missing = await backfill.list_sources_missing_chunk_embeddings()
+        assert partial in missing  # AC1 — the bug fix
+        assert full not in missing  # AC2 — no redundant re-embed
+        assert zero in missing  # AC3 — no regression
+
+        # count_missing_chunks reports only the unembedded chunks of a partial
+        # source (3 chunks - 1 embedded = 2), not the whole chunk set.
+        only_partial = await backfill.count_missing_chunks([partial])
+        assert only_partial == 2
+    finally:
+        conn._pool = orig
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_embed_source_completes_partial_then_clean(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """R.0c AC4: after ``embed_source`` runs on a partial source, re-detection = 0.
+
+    ``embed_source`` deletes the partial embeddings and rebuilds all chunks, so a
+    previously-partial source drops out of the missing set entirely (idempotent /
+    complete). Uses a local-only fake model — no Ollama.
+    """
+    import surrealdb_service.connection as conn
+    from embeddings.service import EmbeddingService
+
+    class _FakeModel:
+        async def aembed(self, texts):
+            return [[float(len(t) % 7)] * 8 for t in texts]
+
+    orig = conn._pool
+    conn._pool = conn.ConnectionPool(config=live_surrealdb)
+    try:
+        repo = SourceRepository(config=live_surrealdb)
+        partial = await _make_source_with_chunks(live_surrealdb, 3)
+        # Seed a stale partial embedding row (1 of 3).
+        await repo.add_embedding(partial, "c0", 0, [9.0] * 8)
+        assert await repo.get_embedding_count(partial) == 1
+        assert partial in await backfill.list_sources_missing_chunk_embeddings()
+
+        svc = EmbeddingService(source_repo=repo, embedding_model=_FakeModel())
+        await svc.embed_source(partial)
+
+        # All 3 chunks now embedded (the stale row was deleted + rebuilt).
+        assert await repo.get_embedding_count(partial) == 3
+        assert partial not in await backfill.list_sources_missing_chunk_embeddings()
+        assert await backfill.count_missing_chunks([partial]) == 0
     finally:
         conn._pool = orig
 

@@ -42,6 +42,9 @@ class FakeRepo:
     async def get_chunks(self, source_id: str) -> List[Any]:
         return list(self._store.get(source_id, {}).get("chunks", []))
 
+    async def get_embedding_count(self, source_id: str) -> int:
+        return len(self._store.get(source_id, {}).get("vectors", []))
+
     async def get_embedding_vectors(self, source_id: str) -> List[List[float]]:
         return list(self._store.get(source_id, {}).get("vectors", []))
 
