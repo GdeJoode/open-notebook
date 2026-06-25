@@ -13,6 +13,8 @@ class TestEmbeddingConfig:
         assert config.retry_delay == 1.0
         assert config.fallback_chunk_size == 1000
         assert config.fallback_chunk_overlap == 200
+        assert config.max_input_chars == 2048
+        assert config.truncate_on_context_error is True
 
     def test_custom_values(self):
         config = EmbeddingConfig(
