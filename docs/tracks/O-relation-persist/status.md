@@ -95,6 +95,18 @@ live staging DB the drifted table has 3 null-endpoint legacy rows — 58/62 dele
 those and convert the kind, then the O.1 persist replay lands the edges. No real
 edge data is at risk on any environment.
 
+### O.2b — DONE (2026-06-25): live apply was a NO-OP; premise had already resolved
+By the time O.2b ran, the O.1 blocker no longer existed on staging: the destructive
+migration 58 had already remediated the NORMAL→RELATION drift during O.1 (only 3 junk
+rows to lose), and re-extraction/Q.2a repopulated the graph. Live pre-snapshot:
+`relation` already `TYPE RELATION`, **1,466 edges**, 4,870 entities, version 61.
+- Applied migration 62 to staging via the merged strict runner:
+  **edges 1,466 → 1,466 (PRESERVED)**, entities 4,870 → 4,870 (unchanged), table still
+  `TYPE RELATION`, version **61 → 62**. The AC4 safety invariant proven on a live populated graph.
+- O.2a merged to `main` (`54d39c7`).
+
+**Track O CLOSED.** Code (O.1) + self-healing safety migration (O.2a) merged; staging healthy at v62.
+
 ---
 
 ## O.1 — relation persistence: type + name endpoint resolution (2026-06-23)

@@ -1,5 +1,22 @@
 # Track P — status
 
+## P.2 — COMPLETE (2026-06-25): live backfill executed + verified
+User authorized live writes (with checkpoint). Ran `scripts/backfill_entity_embeddings.py`
+against staging:
+- Dry-run: **135 active entities** missing a vector (the script scopes to active entities — the
+  set K.5 dedup compares; the archived tail is excluded).
+- Backfill: **135 backfilled, 0 failed**, observed embedding **dimension = 1024** via
+  `ollama/mxbai-embed-large:latest` (**local**, never cloud — the real pin is 1024-dim, not the
+  stale "768" in docs).
+- Idempotency: re-run dry-run → **0 missing**.
+- Verification: `test_backfill_entity_embeddings.py` 4/4, `test_candidate_dedup_service.py` 21/21
+  (K.5 embedding band fires when vectors present).
+
+**Track P CLOSED.** Forward fix (P.1) merged; live corpus backfilled; K.5 semantic dedup now has
+vectors for every active entity.
+
+---
+
 ## P.1 — store entity embeddings so K.5 semantic dedup works (2026-06-23)
 **State**: forward fix + backfill + tests COMPLETE. Ready for review. Live
 backfill run against the corpus is the remaining operator step (run the script —

@@ -1,8 +1,13 @@
 # Track O — escalations
 
 ## O.1 — live `relation` table is pre-migration-39 NORMAL; RELATE cannot land (2026-06-23)
-**Status**: ESCALATED to user — requires a live-DB remediation that touches the
-shared `relation` table, which the task contract froze.
+**Status**: ✅ RESOLVED (2026-06-25). User authorized live writes with a checkpoint.
+Resolution: Option A, implemented as the **non-destructive** self-healing migration 62
+(O.2a, `54d39c7`) — supersedes the destructive migration 58. By the time it was applied,
+staging had already self-healed (migration 58 during O.1 converted the NORMAL table; the
+3 junk rows were the only loss; re-extraction repopulated 1,466 edges). Migration 62
+applied to staging as a verified no-op (1,466 edges preserved, v61→62). See `status.md` → O.2b.
+The original "ESCALATED" detail below is retained for the audit trail.
 
 ### What the O.1 code fix does (DONE, verified)
 The type-mismatch + name-mismatch root cause in
