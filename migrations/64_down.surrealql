@@ -1,0 +1,9 @@
+-- ============================================================================
+-- Migration 64 DOWN: no-op.
+--
+-- Migration 64 is a data backfill (NONE -> sensible default) on existing
+-- `source` rows. There is no faithful inverse — re-setting `private` to NONE
+-- would re-break the strict `TYPE bool` schema (and the original NONEs were
+-- drift, not intent). Mirrors 61_down. Down intentionally does nothing; the
+-- data stays valid.
+-- ============================================================================
