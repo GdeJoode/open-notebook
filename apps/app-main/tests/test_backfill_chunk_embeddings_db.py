@@ -13,6 +13,8 @@ import importlib.util
 import uuid
 from pathlib import Path
 
+from unittest.mock import patch
+
 import pytest
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
@@ -136,6 +138,67 @@ async def test_repo_vectors_and_aggregate_roundtrip(
     empty_src = await repo.get(empty_sid)
     assert empty_src is not None
     assert empty_src.embedding is None
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_backfill_chunks_real_run_creates_embeddings_and_idempotent(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """End-to-end: ``_backfill_chunks`` writes ``source_embedding`` rows.
+
+    Drives the real ``EmbeddingService.embed_source`` (with a fake, local-only
+    embedding MODEL so no Ollama is needed) against a container. Proves the AC:
+    dry-run reports the missing set without writing; a real run populates
+    ``source_embedding`` for the target sources; a re-run dry-run sees 0 missing
+    (idempotent); the observed dimension is the model-derived value (here 8).
+    """
+    import surrealdb_service.connection as conn
+    from embeddings.service import EmbeddingService
+
+    class _FakeModel:
+        """Local-only fake: deterministic 8-dim vector per text (stands in for
+        the configured 1024-dim mxbai-embed-large; dimension is model-derived,
+        not hardcoded in the script)."""
+
+        async def aembed(self, texts):
+            return [[float(len(t) % 7)] * 8 for t in texts]
+
+    orig = conn._pool
+    conn._pool = conn.ConnectionPool(config=live_surrealdb)
+    try:
+        repo = SourceRepository(config=live_surrealdb)
+        sid = await _make_source_with_chunks(live_surrealdb, 3)
+
+        # Dry-run: reports 1 source / 3 chunks missing, writes nothing.
+        dry = await backfill._backfill_chunks(limit=None, dry_run=True)
+        assert sid in await backfill.list_sources_missing_chunk_embeddings()
+        assert dry["chunks_missing"] >= 3
+        assert await repo.get_embedding_count(sid) == 0
+
+        # Real run via a patched embedding service (real EmbeddingService +
+        # real repo writes, fake local model).
+        svc = EmbeddingService(source_repo=repo, embedding_model=_FakeModel())
+
+        async def _fake_factory():
+            return svc
+
+        with patch(
+            "app_main.dependencies.get_embedding_service", new=_fake_factory
+        ):
+            summary = await backfill._backfill_chunks(limit=None, dry_run=False)
+        assert summary["embedded_sources"] >= 1
+
+        # source_embedding rows now exist for the source's chunks.
+        assert await repo.get_embedding_count(sid) == 3
+        vectors = await repo.get_embedding_vectors(sid)
+        assert len(vectors) == 3
+        assert all(len(v) == 8 for v in vectors)  # model-derived dim
+
+        # Idempotent: the source is no longer in the missing set on re-run.
+        assert sid not in await backfill.list_sources_missing_chunk_embeddings()
+    finally:
+        conn._pool = orig
 
 
 @pytest.mark.requires_docker
