@@ -122,3 +122,7 @@ section, roadmap entry (Track R), status/RETRO; final audit.
 - `purview-lessons.md` — Microsoft Purview labeling/linking lessons. Two concrete adoptions: treat
   embeddings as a **light-classifier feature basis** (→ R.6 + Track L) and surface **provenance/lineage
   as linking explanation** (→ R.5). Confirms triage (Q) + dry-run/checkpoint = "simulation mode + review".
+- `design-thematic-classification.md` — the **classifier-cascade** design: embeddings → cheap labeler
+  (zero-shot/kNN/clustering, growing to a trained classifier) → confidence gate → LLM refiner only on the
+  hard margin. Multi-label, semantic (not literal). Maps to R.4 (cluster labeling), R.6 + Track L (replace
+  noisy per-doc LLM pass with the labeler), R.5 (why-matched), Q (review queue). Carries 5 open decisions.
