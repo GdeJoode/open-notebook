@@ -108,10 +108,17 @@ section, roadmap entry (Track R), status/RETRO; final audit.
 
 ---
 
-## Open questions for the user (before execution)
-1. **KG weight default** — should the shipped default ranker be KG-heavy, or balanced-with-a-KG-preset? (You said KG should play a *large* role — confirm "large by default" vs "tunable, high preset available".)
-2. **Cluster-summary scope** — per-notebook only, or also global/cross-notebook?
-3. **Embedding model** — stay on the local 768-dim pin for chunk/source/cluster embeddings, or is a higher-dim cloud embedding (via Track J routing) on the table for retrieval quality?
-4. **Sequencing vs O/P** — run Track R after O+P close, or interleave (R.2/R.6 are KG-only and need no live writes)?
-5. **Orphan chunks (gates R.0 backfill)** — 9,053 of 10,501 staging chunks are orphaned from deleted sources. Were those 40 source deletions intentional (a reset) → GC the orphans; or accidental → attempt re-association? Need your call before any GC.
-6. **768→1024 reconciliation** — the "768-dim I.G pin" is referenced across `route_resolver.py`, `model_routing/`, `entity.py`, `jsonl_export_service.py`, `backfill_entity_embeddings.py`, and guardrail tests, but live reality is **1024** (mxbai-embed-large). Confirm whether 768 was ever a real constraint or always a doc error — R.0 reconciles the touched references; a full sweep may warrant its own small task.
+## Decisions (locked 2026-06-25)
+1. **KG weight** → **KG-prominent by default** (KG ≥ dense ≥ cluster in the R.3 ranker; still config-tunable).
+2. **Cluster-summary scope** → **per-notebook + global** (R.4 builds both a per-notebook layer and a cross-notebook global layer).
+3. **Embedding model** → **local 1024-dim** (`mxbai-embed-large`, Ollama). Track J's local-embeddings privacy guardrail stays intact; no cloud embeddings.
+4. **Sequencing** → start R now (O+P closed). R.2/R.6 are KG-only (no live writes) and may run parallel to R.0/R.1.
+5. **Orphan chunks** → **investigated → GC**. Finding: chunk text is in the `text` field (`content` is empty on all chunks). 9,053 of 10,501 chunks are orphaned (source rows deleted). Sample orphan `created 2025-12-12` with text matching the live corpus theme (regional/cohesion/governance); live chunks `updated 2026-06-20`. Conclusion: orphans are a Dec-2025 ingest superseded by a June-2026 re-ingest under new source IDs — unreachable dead data. GC'd in R.0.
+6. **768→1024** → confirmed the "768-dim pin" is a doc/comment error; live reality is 1024. R.0 reconciles touched refs; a repo-wide 768 sweep is a noted follow-up (not a separate gating task).
+
+**Implementer note**: chunk content = `chunk.text`; embeddings are stored in the separate `source_embedding` table (1 row/chunk), not on the chunk row. R.0 embeds `chunk.text` → `source_embedding`.
+
+## Inputs / references
+- `purview-lessons.md` — Microsoft Purview labeling/linking lessons. Two concrete adoptions: treat
+  embeddings as a **light-classifier feature basis** (→ R.6 + Track L) and surface **provenance/lineage
+  as linking explanation** (→ R.5). Confirms triage (Q) + dry-run/checkpoint = "simulation mode + review".

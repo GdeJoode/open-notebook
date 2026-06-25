@@ -1,5 +1,17 @@
 # Track R — status
 
+## Phase R.0 — Embedding foundation — MERGED + APPROVED; live backfill BLOCKED (→ R.0b)
+- O.2a-style adversarial review: **APPROVED attempt 1** (0 blockers/majors, 3 minors). Merged to `main` (`119ecd3`).
+- **Live backfill BLOCKED**: running the chunk backfill against staging failed on all 6 sources —
+  `Ollama API error: the input length exceeds the context length`. `mxbai-embed-large` has a ~512-token
+  context; chunk texts exceed it and the embedding service does no truncation. The container test missed it
+  (fake model, no context limit). → **R.0b** (embedding context-length fix, branch `track/r0b-embed-context-fix`)
+  must land + be reviewed before the live backfill can complete.
+- Decisions locked + Purview lessons added (`purview-lessons.md`). Orphan chunks GC'd (10,501→1,448).
+- Review minors (follow-up): `embed_source` embeds `is_content=False` noise chunks (→ R.6); dead `embed:True` flag.
+
+---
+
 ## Phase R.0 — Embedding foundation (forward-fix + backfill) — Ready for review
 
 **Branch**: `track/r0-embedding-foundation` (off `main`)
