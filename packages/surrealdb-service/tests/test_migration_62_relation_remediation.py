@@ -19,6 +19,16 @@ SurrealDB 2.6.5 container:
 * AC5 — idempotent: applying 62 twice yields the same end state, no error
   (``test_migration_62_idempotent``).
 
+Plus two end-to-end runner tests added in O.2a review attempt 2:
+
+* ``test_runner_sequence_58_then_62_preserves_edges`` — proves the headline
+  phase invariant against the ACTUAL runner driving migrations 58 AND 62 in
+  order on a populated table (the destructive original 58 made this false). N
+  real edges seeded at a simulated v57 must all survive the 58->62 sequence.
+* ``test_runner_surfaces_failing_second_statement`` — proves the runner no
+  longer silently marks a migration applied when a NON-FIRST statement fails at
+  runtime (the swallow risk in the old ``execute_query``-based runner).
+
 Because the session fixture already applies migration 62, each test rebuilds
 the specific starting state it needs in an isolated namespace/table-state and
 replays migration 62's SQL body (the same idempotency pattern used by the
@@ -48,6 +58,18 @@ def _migration_62_sql() -> str:
     from surrealdb_service.testing import fixtures as fx
 
     return (fx._MIGRATIONS_DIR / "62.surrealql").read_text()
+
+
+def _load_up_migration(version: int):
+    """Load one ``<version>.surrealql`` as an ``AsyncMigration`` (cleaned body).
+
+    Uses the same ``AsyncMigration.from_file`` the real runner uses, so the test
+    exercises the exact SQL the runner would execute (comments stripped, etc.).
+    """
+    from surrealdb_service.migrations import AsyncMigration
+    from surrealdb_service.testing import fixtures as fx
+
+    return AsyncMigration.from_file(fx._MIGRATIONS_DIR / f"{version}.surrealql")
 
 
 async def _relation_table_def(config: SurrealDBConfig) -> str:
@@ -335,3 +357,187 @@ async def test_migration_62_idempotent(
     )
     info = await _relation_table_def(live_surrealdb)
     assert "TYPE RELATION" in info
+
+
+# ---------------------------------------------------------------------------
+# Blocker 1/2 — runner SEQUENCE across 58 AND 62 must not wipe a populated table.
+#
+# The per-test isolation above proves "62 alone is non-destructive". This test
+# proves the END-TO-END phase invariant: an environment at a simulated pre-58
+# version, holding N real edges, survives the ACTUAL runner driving 58 then 62.
+# Against the original destructive migration 58 (`REMOVE TABLE IF EXISTS`) this
+# would report 0 surviving edges; against the non-destructive 58 it must report
+# exactly N.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_runner_sequence_58_then_62_preserves_edges(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Drive the real runner over migrations 58 AND 62 on a populated table.
+
+    Simulates an environment stuck at version 57 (healthy RELATION table with N
+    real edges) and runs the actual ``AsyncMigrationRunner`` with the on-disk 58
+    and 62 bodies. Asserts exactly N edges survive with in/out intact — the
+    headline phase guarantee that the destructive original 58 violated.
+    """
+    from surrealdb_service.migrations import (
+        AsyncMigrationRunner,
+        _get_latest_version,
+    )
+
+    # Start from a guaranteed-healthy RELATION table, cleared so N is exact.
+    await execute_query(_migration_62_sql(), config=live_surrealdb)
+    await execute_query("DELETE relation;", config=live_surrealdb)
+
+    n = 7
+    for i in range(n):
+        a_id, b_id = await _make_two_entities(live_surrealdb)
+        await execute_query(
+            f"RELATE {a_id}->relation->{b_id} SET relation_type = 'S{i}', confidence = 0.5;",
+            config=live_surrealdb,
+        )
+    pre = await execute_query(
+        "SELECT count() AS c FROM relation GROUP ALL;", config=live_surrealdb
+    )
+    assert (pre[0]["c"] if pre else 0) == n, "setup: expected N seeded edges"
+    pre_edges = await execute_query(
+        "SELECT in, out, relation_type FROM relation;", config=live_surrealdb
+    )
+    pre_pairs = {(e["in"], e["out"], e["relation_type"]) for e in pre_edges}
+
+    # Simulate "stuck at version 57": rewind the tracked version so the runner
+    # treats 58 and 62 as pending. We snapshot the real applied versions and
+    # restore them in a finally block so other session tests are unaffected.
+    real_versions = await execute_query(
+        "SELECT version FROM _sbl_migrations;", config=live_surrealdb
+    )
+    real_set = {r["version"] for r in real_versions}
+    try:
+        await execute_query(
+            "DELETE _sbl_migrations WHERE version > 57;", config=live_surrealdb
+        )
+        # Version 57 is already present from the real migration history, so
+        # deleting everything above it leaves the latest at 57 — no CREATE
+        # needed (and a CREATE would collide on the existing record).
+        await execute_query(
+            "UPSERT _sbl_migrations:57 SET version = 57, applied_at = time::now();",
+            config=live_surrealdb,
+        )
+        assert await _get_latest_version(live_surrealdb) == 57
+
+        # Drive the ACTUAL runner over just 58 and 62 (loaded from disk).
+        runner = AsyncMigrationRunner(
+            up={58: _load_up_migration(58), 62: _load_up_migration(62)},
+            down={},
+            config=live_surrealdb,
+        )
+        await runner.run_all()
+
+        # Both versions now recorded as applied.
+        latest = await _get_latest_version(live_surrealdb)
+        assert latest == 62, f"runner did not advance to 62 (got {latest})"
+    finally:
+        # Restore the real _sbl_migrations state for the rest of the session.
+        await execute_query(
+            "DELETE _sbl_migrations WHERE version > 57;", config=live_surrealdb
+        )
+        for v in sorted(real_set):
+            if v > 57:
+                await execute_query(
+                    f"CREATE _sbl_migrations:{v} SET version = {v}, "
+                    f"applied_at = time::now();",
+                    config=live_surrealdb,
+                )
+
+    # THE INVARIANT: exactly N edges survived the 58->62 sequence, in/out intact.
+    post = await execute_query(
+        "SELECT count() AS c FROM relation GROUP ALL;", config=live_surrealdb
+    )
+    post_count = post[0]["c"] if post else 0
+    assert post_count == n, (
+        f"BLOCKER FAIL (edge loss across runner sequence): seeded {n} edges at "
+        f"v57, ran the 58->62 runner, only {post_count} survived. A destructive "
+        f"migration 58 (REMOVE TABLE) wipes the populated table before 62 can "
+        f"protect it."
+    )
+    post_edges = await execute_query(
+        "SELECT in, out, relation_type FROM relation;", config=live_surrealdb
+    )
+    post_pairs = {(e["in"], e["out"], e["relation_type"]) for e in post_edges}
+    assert pre_pairs == post_pairs, (
+        f"edge in/out/type changed across 58->62 sequence.\n"
+        f"before: {sorted(pre_pairs)}\nafter:  {sorted(post_pairs)}"
+    )
+
+    # Table is RELATION and still accepts RELATE.
+    info = await _relation_table_def(live_surrealdb)
+    assert "TYPE RELATION" in info
+    a_id, b_id = await _make_two_entities(live_surrealdb)
+    await execute_query(
+        f"RELATE {a_id}->relation->{b_id} SET relation_type = 'AFTER';",
+        config=live_surrealdb,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Major 3 — the runner must surface a failed NON-FIRST statement (no silent
+# "applied"). Previously execute_query swallowed later-statement errors; the
+# runner now routes bodies through the per-statement-checked transaction seam.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_runner_surfaces_failing_second_statement(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """A migration whose 2nd statement errors at runtime must NOT be marked applied.
+
+    Uses a synthetic migration body: a harmless first statement followed by a
+    statement that violates a strict type at runtime (valid syntax, runtime
+    ERR). Pre-fix, ``connection.query`` returned only statement 1 and the runner
+    bumped the version on a silent failure. Post-fix, the per-statement seam
+    raises and the version is NOT bumped.
+    """
+    from surrealdb_service.migrations import (
+        AsyncMigration,
+        AsyncMigrationRunner,
+        _get_latest_version,
+    )
+
+    # A throwaway strict table whose 2nd statement violates the type.
+    tbl = _unique("o2a_guard").replace("-", "_")
+    body = (
+        f"DEFINE TABLE {tbl} SCHEMAFULL; "
+        f"DEFINE FIELD n ON {tbl} TYPE int; "
+        # Runtime type violation — string into an int field. Valid syntax, ERR
+        # only at execution, in a NON-FIRST statement.
+        f"CREATE {tbl}:bad SET n = 'not an int';"
+    )
+
+    # Pin a high synthetic version so it is "pending" relative to the session DB.
+    synthetic_version = 99001
+    runner = AsyncMigrationRunner(
+        up={synthetic_version: AsyncMigration(synthetic_version, body)},
+        down={},
+        config=live_surrealdb,
+    )
+
+    before = await _get_latest_version(live_surrealdb)
+    with pytest.raises(RuntimeError):
+        await runner.run_all()
+
+    # Version must NOT have advanced to the failing migration.
+    after = await _get_latest_version(live_surrealdb)
+    assert after == before, (
+        f"MAJOR FAIL: runner bumped version on a silently-failing 2nd statement "
+        f"({before} -> {after}). The failing statement was swallowed."
+    )
+    recorded = await execute_query(
+        f"SELECT version FROM _sbl_migrations WHERE version = {synthetic_version};",
+        config=live_surrealdb,
+    )
+    assert not recorded, "failing migration was wrongly recorded as applied"

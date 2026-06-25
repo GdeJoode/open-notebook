@@ -1,9 +1,43 @@
 # Track O — status
 
 ## O.2a — non-destructive relation-table remediation migration (2026-06-25)
-**State**: COMPLETE + container-proven. Ready for review. Live apply is O.2b (gated).
+**State**: COMPLETE + container-proven (review attempt 2 applied). Ready for
+re-review. Live apply is O.2b (gated).
 
 **Branch**: `track/o2-relation-remediation` (off `main`).
+
+### Review attempt 2 — blockers/major addressed
+- **Blocker 1 (58 destroys edges before 62 runs)**: rewrote `migrations/58.surrealql`
+  from `REMOVE TABLE IF EXISTS relation` to the SAME non-destructive
+  DELETE-junk + `DEFINE TABLE OVERWRITE` approach 62 uses. Reconciled
+  `58_down.surrealql` to a documented no-op (its old down was itself a
+  destructive `REMOVE TABLE`). Rationale for editing an applied migration:
+  envs at version >= 58 have it recorded in `_sbl_migrations` and will NOT
+  re-run it (version gate), so the edit cannot change their state — for them 62
+  re-asserts the correct definition anyway; only envs still at <= 57 execute 58,
+  and those are exactly the population we must protect. Documented in the 58
+  header.
+- **Blocker 2 (AC4 test didn't exercise the failing path)**: added
+  `test_runner_sequence_58_then_62_preserves_edges` — seeds N=7 real edges at a
+  simulated v57 healthy state and drives the ACTUAL `AsyncMigrationRunner` over
+  the on-disk 58 AND 62 bodies. **Verified it FAILS against the original
+  destructive 58 (7 seeded -> 0 survived) and PASSES against the non-destructive
+  58 (7 -> 7, in/out intact).**
+- **Major 3 (runner swallows non-first-statement errors)**: the runner now
+  applies migration bodies through `execute_transaction` (per-statement status
+  inspection via `_check_transaction_response`) instead of `execute_query`
+  (which returns only statement 1 and swallows later errors). A failed
+  non-first statement now raises and the version is NOT bumped. Added
+  `test_runner_surfaces_failing_second_statement`. Side effect: this surfaced a
+  latent always-failing statement in `migrations/7.surrealql`
+  (`remove table speaker_profile` on a fresh DB) that was silently swallowed
+  before — fixed to `remove table if exists`. Full 62-migration chain applies
+  clean under strict checking; only that one historical migration had a latent
+  silent failure. Updated the 4 affected runner unit tests in `test_migrations.py`
+  to patch `execute_transaction`.
+- **Minor 4**: AC2 plan text says "INFO FOR TABLE ... TYPE RELATION" but on
+  2.6.5 the kind is only in `INFO FOR DB` (see finding below); the test reads
+  `INFO FOR DB`. Noted so the plan text can be reconciled separately.
 
 ### What shipped
 - `migrations/62.surrealql` — self-healing remediation:
@@ -33,26 +67,33 @@ this version.
 ### Per-criterion evidence (all PASS)
 - AC1 discovered+applied: `test_migration_62_discovered_and_applied`.
 - AC2/AC3 drift→convert→RELATE lands: `test_drifted_relation_converted`.
-- AC4 safety invariant (N edges preserved): `test_healthy_edges_preserved`.
+- AC4 safety invariant (N edges preserved, 62 alone): `test_healthy_edges_preserved`.
+- AC4 end-to-end (N edges preserved across 58->62 runner sequence):
+  `test_runner_sequence_58_then_62_preserves_edges`.
 - AC5 idempotent: `test_migration_62_idempotent`.
 - AC6 down present + sane: `migrations/62_down.surrealql`.
-- AC7 no regressions: roundtrip 14/14, entity-persistence + relation-merge 61/61.
+- Runner no-silent-swallow: `test_runner_surfaces_failing_second_statement`.
+- AC7 no regressions: roundtrip 14/14, migration unit 17/17, entity-persistence +
+  relation-merge 61/61.
 
-### Tests
-- `packages/surrealdb-service/tests/test_migration_62_relation_remediation.py` — 4 passed.
+### Tests (attempt 2)
+- `packages/surrealdb-service/tests/test_migration_62_relation_remediation.py` — 6 passed.
 - `packages/surrealdb-service/tests/test_migrations_roundtrip.py` — 14 passed.
-- both files together (ordering safety) — 18 passed.
+- both files together (ordering safety) — 20 passed.
+- `packages/surrealdb-service/tests/test_migrations.py` (runner units) — 17 passed.
 - `apps/app-main/tests/test_entity_persistence_service.py` + `test_relation_merge.py` — 61 passed.
 
 ### Commits
 - `783a03a feat(migrations): non-destructive relation-table remediation (migration 62)`
 - `5f812d1 test(migrations): container proof for migration 62 relation remediation`
+- attempt-2 commits appended (58 non-destructive, runner strict seam, 7 fix,
+  sequence + swallow tests) — see branch log.
 
 ### Note for O.2b
-Migration 58 (`REMOVE TABLE IF EXISTS relation`) is destructive on healthy DBs;
-62 supersedes it as the safe path. On the live staging DB the drifted table has
-3 null-endpoint legacy rows — 62 deletes those and converts the kind, then the
-O.1 persist replay lands the edges.
+Both migration 58 (now non-destructive) and 62 are safe on healthy DBs. On the
+live staging DB the drifted table has 3 null-endpoint legacy rows — 58/62 delete
+those and convert the kind, then the O.1 persist replay lands the edges. No real
+edge data is at risk on any environment.
 
 ---
 
