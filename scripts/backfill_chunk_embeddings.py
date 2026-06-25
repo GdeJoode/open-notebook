@@ -78,30 +78,60 @@ async def list_sources_missing_chunk_embeddings() -> List[str]:
     Sources with no chunks (nothing to embed) and sources already fully embedded
     (``chunk`` count == ``source_embedding`` count) are both excluded, which is
     what makes the default mode idempotent.
+
+    R.0d: only NON-empty chunks are counted (``text`` not ``NONE`` and
+    ``string::trim(text) != ""``). Table/image chunks frequently have no
+    extracted text; the embedder skips them (no ``source_embedding`` row), so
+    counting them here would leave the source eternally flagged
+    (``chunk_count > embedding_count`` forever) and re-embedded on every run.
+    Counting only embeddable chunks makes a source where every non-empty chunk
+    is embedded read as COMPLETE.
     """
     rows = await execute_query(
         """
         SELECT VALUE id FROM source WHERE
-            count(SELECT id FROM chunk WHERE source = $parent.id) >
+            count(SELECT id FROM chunk WHERE source = $parent.id
+                AND text != NONE AND string::trim(text) != "") >
             count(SELECT id FROM source_embedding WHERE source = $parent.id);
         """
     )
     return [str(r) for r in (rows or [])]
 
 
-async def count_missing_chunks(source_ids: List[str]) -> int:
-    """Count chunks still lacking a vector across ``source_ids``.
+def _chunk_text(chunk: Any) -> Optional[str]:
+    """Best-effort extract a chunk's text (``Chunk`` model or raw string)."""
+    if isinstance(chunk, str):
+        return chunk
+    return getattr(chunk, "text", None)
 
-    Per source this is ``chunk_count - source_embedding_count`` clamped at 0, so
-    a partially-embedded source contributes only its *un*embedded chunks (not its
-    whole chunk set). For a zero-embedding source this equals its chunk count.
+
+def _is_empty_chunk(chunk: Any) -> bool:
+    """True when a chunk carries no embeddable text (None/empty/whitespace).
+
+    Mirrors ``EmbeddingService._is_empty_text``: these chunks are skipped by the
+    embedder, so they must not be counted as "missing a vector" or the source is
+    flagged forever (R.0d).
+    """
+    text = _chunk_text(chunk)
+    return text is None or not text.strip()
+
+
+async def count_missing_chunks(source_ids: List[str]) -> int:
+    """Count NON-empty chunks still lacking a vector across ``source_ids``.
+
+    Per source this is ``non_empty_chunk_count - source_embedding_count`` clamped
+    at 0, so a partially-embedded source contributes only its *un*embedded
+    non-empty chunks. Empty/whitespace chunks (e.g. table/image chunks with no
+    extracted text) are excluded because the embedder skips them — counting them
+    would over-report missing work and never reach zero (R.0d).
     """
     total = 0
     repo = SourceRepository()
     for sid in source_ids:
         chunks = await repo.get_chunks(sid)
+        non_empty = sum(1 for c in chunks if not _is_empty_chunk(c))
         embedded = await repo.get_embedding_count(sid)
-        total += max(0, len(chunks) - embedded)
+        total += max(0, non_empty - embedded)
     return total
 
 
