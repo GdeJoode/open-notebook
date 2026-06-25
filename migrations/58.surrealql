@@ -1,40 +1,61 @@
 -- ============================================================================
--- Migration 58: re-assert the `relation` table as TYPE RELATION (Track O.1).
+-- Migration 58: re-assert the `relation` table as TYPE RELATION (Track O.1,
+-- made NON-DESTRUCTIVE in O.2a).
 --
--- Schema-drift remediation (same class as migration 50 for `entity`): on the
--- drifted live DB the `relation` table is a pre-migration-39 NORMAL table
--- (legacy subject/object/predicate shape, a few malformed null-endpoint rows).
--- Because the table already existed as NORMAL, migration 39's
--- `DEFINE TABLE relation ... TYPE RELATION` never took effect, so every
--- `RELATE $a->relation->$b` fails on the live DB with
+-- Schema-drift remediation: on a drifted DB the `relation` table is a
+-- pre-migration-39 NORMAL table (legacy subject/object/predicate shape, a few
+-- malformed null-endpoint rows). Because the table already existed as NORMAL,
+-- migration 39's `DEFINE TABLE relation ... TYPE RELATION` never took effect, so
+-- every `RELATE $a->relation->$b` fails with
 --   "Found record ... which is not a relation, but expected a NORMAL"
 -- and the KG can never store relations.
 --
--- This drops the legacy NORMAL `relation` table (its rows carry null in/out and
--- have no value) and redefines the graph-edge RELATION table EXACTLY as
--- migration 39 intended. Fresh databases that already have the correct
--- TYPE RELATION table are unaffected (REMOVE + identical DEFINE is idempotent
--- in outcome).
+-- HISTORY / why this file was edited. The original migration 58 used
+-- `REMOVE TABLE IF EXISTS relation` before redefining. That converts the kind
+-- but is DESTRUCTIVE: on an already-healthy environment that holds real graph
+-- edges (e.g. a dev who built KG edges between migration 39 and 58) it silently
+-- wipes them all. The runner applies migrations in ascending version order, so
+-- this destructive 58 runs BEFORE the non-destructive 62 on any environment
+-- currently at version <= 57 — 62 cannot protect edges 58 already deleted.
+--
+-- This file is now rewritten to the SAME non-destructive approach migration 62
+-- uses (DELETE only null-endpoint junk, then DEFINE TABLE OVERWRITE). Rationale
+-- for editing an already-applied migration:
+--   * Environments already at version >= 58 have 58 recorded in
+--     `_sbl_migrations` and will NOT re-run it (the runner's version gate), so
+--     this edit cannot change their state — for them, 62 re-asserts the correct
+--     definition anyway.
+--   * Only environments still at version <= 57 will execute 58, and those are
+--     exactly the ones we must protect from edge loss.
+-- So the edit is both safe (no replay on advanced envs) and correct (protects
+-- the at-risk population). 62 remains the canonical idempotent remediation and
+-- supersedes this file going forward.
 -- ============================================================================
 
-REMOVE TABLE IF EXISTS relation;
+-- 1. Drop ONLY null-endpoint junk rows (the drifted legacy records). Real graph
+--    edges always have non-null in/out, so this never touches them.
+DELETE relation WHERE in = NONE OR out = NONE;
 
-DEFINE TABLE relation SCHEMAFULL TYPE RELATION FROM entity TO entity;
+-- 2. Re-assert the canonical edge definition with OVERWRITE. On SurrealDB
+--    >= 2.1.4 OVERWRITE converts a drifted NORMAL table to RELATION and
+--    PRESERVES existing edge records on an already-healthy RELATION table
+--    (it rewrites the table definition, not the records).
+DEFINE TABLE OVERWRITE relation SCHEMAFULL TYPE RELATION FROM entity TO entity;
 
-DEFINE FIELD relation_type ON relation TYPE string;
-DEFINE FIELD properties ON relation FLEXIBLE TYPE object DEFAULT {};
+DEFINE FIELD OVERWRITE relation_type ON relation TYPE string;
+DEFINE FIELD OVERWRITE properties ON relation FLEXIBLE TYPE object DEFAULT {};
 
 -- Provenance
-DEFINE FIELD source_documents ON relation FLEXIBLE TYPE array DEFAULT [];
-DEFINE FIELD extracted_at ON relation TYPE datetime DEFAULT time::now();
-DEFINE FIELD extraction_method ON relation TYPE string DEFAULT "llm";
-DEFINE FIELD confidence ON relation TYPE float DEFAULT 1.0;
-DEFINE FIELD provenance_chain ON relation FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD OVERWRITE source_documents ON relation FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD OVERWRITE extracted_at ON relation TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE extraction_method ON relation TYPE string DEFAULT "llm";
+DEFINE FIELD OVERWRITE confidence ON relation TYPE float DEFAULT 1.0;
+DEFINE FIELD OVERWRITE provenance_chain ON relation FLEXIBLE TYPE array DEFAULT [];
 
 -- Status
-DEFINE FIELD status ON relation TYPE string DEFAULT "active";
-DEFINE FIELD created_at ON relation TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE status ON relation TYPE string DEFAULT "active";
+DEFINE FIELD OVERWRITE created_at ON relation TYPE datetime DEFAULT time::now();
 
 -- Indexes
-DEFINE INDEX idx_relation_type ON relation FIELDS relation_type;
-DEFINE INDEX idx_relation_status ON relation FIELDS status;
+DEFINE INDEX OVERWRITE idx_relation_type ON relation FIELDS relation_type;
+DEFINE INDEX OVERWRITE idx_relation_status ON relation FIELDS status;

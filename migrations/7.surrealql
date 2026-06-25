@@ -12,7 +12,10 @@ DEFINE FIELD IF NOT EXISTS created ON TABLE episode_profile TYPE datetime DEFAUL
 DEFINE FIELD IF NOT EXISTS updated ON TABLE episode_profile TYPE datetime DEFAULT time::now();
 
 -- Create Speaker Profile table
-remove table speaker_profile;
+-- IF EXISTS so a fresh DB (no speaker_profile yet) does not error. The plain
+-- ``remove table`` was always failing here and was only invisible because the
+-- migration runner used to swallow non-first-statement errors (fixed in O.2a).
+remove table if exists speaker_profile;
 DEFINE TABLE IF NOT EXISTS speaker_profile SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS name ON TABLE speaker_profile TYPE string;
 DEFINE FIELD IF NOT EXISTS description ON TABLE speaker_profile TYPE option<string>;

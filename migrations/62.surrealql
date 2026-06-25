@@ -1,0 +1,75 @@
+-- ============================================================================
+-- Migration 62: NON-DESTRUCTIVE self-healing remediation of the `relation`
+-- table (Track O.2a).
+--
+-- Background. Migration 39 declared `relation` as
+--   DEFINE TABLE relation SCHEMAFULL TYPE RELATION FROM entity TO entity
+-- but on environments where a pre-39 NORMAL `relation` table already existed,
+-- the plain (non-OVERWRITE) DEFINE silently did NOT convert it (SurrealDB
+-- advisory GHSA-27vq-hv74-7cqp: OVERWRITE of a relation table was a no-op
+-- before 2.1.4; a plain DEFINE on an existing table is likewise ignored). The
+-- table stayed NORMAL, so every `RELATE $a->relation->$b` is rejected with
+-- "Found record ... which is not a relation, but expected a NORMAL" and the KG
+-- can never persist edges.
+--
+-- Migration 58 attempted a fix with `REMOVE TABLE IF EXISTS relation` +
+-- redefine. That converts the kind, but `REMOVE TABLE` is DESTRUCTIVE: on an
+-- already-healthy environment that holds real graph edges it wipes them all.
+-- Fresh CI containers have no edges at migration time so the loss was
+-- invisible there, but any environment that had already stored edges would
+-- lose them.
+--
+-- Migration 62 is the non-destructive remediation. It must satisfy two
+-- invariants simultaneously:
+--   * DRIFTED env: a NORMAL `relation` (legacy subject/object shape, a handful
+--     of null-endpoint junk rows) becomes TYPE RELATION and accepts RELATE.
+--   * HEALTHY env: a TYPE RELATION `relation` holding N real edges keeps
+--     exactly N edges, each in/out intact. No edge loss.
+--
+-- Strategy (verified empirically by
+-- packages/surrealdb-service/tests/test_migration_62_relation_remediation.py
+-- against SurrealDB 2.6.5):
+--   1. DELETE only the null-endpoint junk rows. Real edges always have
+--      non-null in/out, so this is a no-op on a healthy table and clears the
+--      legacy junk that would otherwise block the RELATION redefine.
+--   2. DEFINE TABLE OVERWRITE ... TYPE RELATION. On 2.6.5 (>= 2.1.4) OVERWRITE
+--      DOES convert a NORMAL table to RELATION, and — confirmed by the
+--      container test — PRESERVES the existing edge records on an
+--      already-RELATION table (in/out untouched). OVERWRITE only rewrites the
+--      table *definition*, not its records, so re-asserting the identical
+--      definition migration 39 intended is a no-op for healthy edges while
+--      flipping the kind for drifted ones.
+--   3. Re-assert the migration-39 fields/indexes with OVERWRITE so the field
+--      shape matches the canonical definition regardless of starting state.
+--
+-- Idempotent: the DELETE matches nothing on a second pass, and every
+-- OVERWRITE re-asserts an identical definition. Forward-only; the down is a
+-- documented no-op (schema/data repair has no faithful inverse).
+-- ============================================================================
+
+-- 1. Drop ONLY null-endpoint junk rows (the drifted legacy records). Real
+--    graph edges always have non-null in/out, so this never touches them.
+DELETE relation WHERE in = NONE OR out = NONE;
+
+-- 2. Re-assert the canonical edge definition with OVERWRITE. Converts a
+--    drifted NORMAL table to RELATION on 2.6.5; identical no-op (edges
+--    preserved) on an already-healthy RELATION table.
+DEFINE TABLE OVERWRITE relation SCHEMAFULL TYPE RELATION FROM entity TO entity;
+
+-- 3. Re-assert the migration-39 fields with OVERWRITE so the field shape is
+--    canonical regardless of the table's prior (possibly legacy) shape.
+DEFINE FIELD OVERWRITE relation_type ON relation TYPE string;
+DEFINE FIELD OVERWRITE properties ON relation FLEXIBLE TYPE object DEFAULT {};
+
+DEFINE FIELD OVERWRITE source_documents ON relation FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD OVERWRITE extracted_at ON relation TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE extraction_method ON relation TYPE string DEFAULT "llm";
+DEFINE FIELD OVERWRITE confidence ON relation TYPE float DEFAULT 1.0;
+DEFINE FIELD OVERWRITE provenance_chain ON relation FLEXIBLE TYPE array DEFAULT [];
+
+DEFINE FIELD OVERWRITE status ON relation TYPE string DEFAULT "active";
+DEFINE FIELD OVERWRITE created_at ON relation TYPE datetime DEFAULT time::now();
+
+-- Indexes (OVERWRITE so a re-apply or a legacy index set converges).
+DEFINE INDEX OVERWRITE idx_relation_type ON relation FIELDS relation_type;
+DEFINE INDEX OVERWRITE idx_relation_status ON relation FIELDS status;

@@ -109,7 +109,7 @@ class TestAsyncMigrationRunner:
                 return_value=2,
             ),
             patch(
-                "surrealdb_service.migrations.execute_query",
+                "surrealdb_service.migrations.execute_transaction",
                 side_effect=mock_execute,
             ),
             patch(
@@ -151,7 +151,7 @@ class TestAsyncMigrationRunner:
                 return_value=0,
             ),
             patch(
-                "surrealdb_service.migrations.execute_query",
+                "surrealdb_service.migrations.execute_transaction",
                 side_effect=mock_execute,
             ),
             patch(
@@ -177,7 +177,7 @@ class TestAsyncMigrationRunner:
                 return_value=0,
             ),
             patch(
-                "surrealdb_service.migrations.execute_query",
+                "surrealdb_service.migrations.execute_transaction",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("syntax error"),
             ),
@@ -201,7 +201,7 @@ class TestAsyncMigrationRunner:
                 return_value=0,
             ),
             patch(
-                "surrealdb_service.migrations.execute_query",
+                "surrealdb_service.migrations.execute_transaction",
                 new_callable=AsyncMock,
                 return_value=[],
             ) as mock_exec,
@@ -212,7 +212,8 @@ class TestAsyncMigrationRunner:
         ):
             await runner.run_one_up()
 
-        # Should only run the first pending migration
+        # Should only run the first pending migration, via the per-statement
+        # checked transaction seam (O.2a — no silent swallow of later statements).
         mock_exec.assert_awaited_once_with("UP 1", config=None)
 
     @pytest.mark.asyncio

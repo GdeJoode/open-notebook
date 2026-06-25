@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from surrealdb_service.connection import execute_query
+from surrealdb_service.connection import execute_query, execute_transaction
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +142,36 @@ class AsyncMigrationRunner:
         self.down = down
         self.config = config
 
+    async def _apply_up(self, version: int) -> None:
+        """Apply one *up* migration body, surfacing per-statement errors.
+
+        Critically, migration bodies are multi-statement. The plain
+        :func:`execute_query` seam runs them through ``connection.query()``,
+        which returns only the FIRST statement's result and does NOT raise when
+        a LATER statement fails at runtime (e.g. a type violation or a failed
+        ``DEFINE TABLE OVERWRITE``). That would let the runner ``_bump_version``
+        a migration that silently did not take effect — exactly the failure mode
+        that left the live ``relation`` table NORMAL while the migration was
+        marked applied.
+
+        Routing through :func:`execute_transaction` uses ``query_raw`` +
+        per-statement status inspection (``_check_transaction_response``), so a
+        failed statement anywhere in the body raises ``RuntimeError`` and the
+        caller never bumps the version on a partial/silent failure. The
+        "already exists" short-circuit is preserved: a redefine on an existing
+        object is treated as already-applied, not a hard error.
+        """
+        try:
+            await execute_transaction(self.up[version].sql, config=self.config)
+        except RuntimeError as exc:
+            if "already exists" in str(exc).lower():
+                logger.warning(
+                    f"Migration {version} skipped (already applied): {exc}"
+                )
+            else:
+                raise
+        await _bump_version(version, self.config)
+
     async def run_all(self) -> None:
         """Run every pending *up* migration in version order.
 
@@ -155,16 +185,7 @@ class AsyncMigrationRunner:
             if version <= current:
                 continue
             logger.info(f"Running migration {version}")
-            try:
-                await execute_query(self.up[version].sql, config=self.config)
-            except RuntimeError as exc:
-                if "already exists" in str(exc).lower():
-                    logger.warning(
-                        f"Migration {version} skipped (already applied): {exc}"
-                    )
-                else:
-                    raise
-            await _bump_version(version, self.config)
+            await self._apply_up(version)
 
     async def run_one_up(self) -> None:
         current = await _get_latest_version(self.config)
@@ -172,16 +193,7 @@ class AsyncMigrationRunner:
         if pending:
             version = pending[0]
             logger.info(f"Running migration {version}")
-            try:
-                await execute_query(self.up[version].sql, config=self.config)
-            except RuntimeError as exc:
-                if "already exists" in str(exc).lower():
-                    logger.warning(
-                        f"Migration {version} skipped (already applied): {exc}"
-                    )
-                else:
-                    raise
-            await _bump_version(version, self.config)
+            await self._apply_up(version)
 
     async def run_one_down(self) -> None:
         current = await _get_latest_version(self.config)
