@@ -110,6 +110,100 @@ class TestEmbedSourceWithChunks:
         assert call_kwargs["chunk_id"] == "chunk:abc123"
 
 
+class TestEmbedSourceEmptyChunkSkip:
+    """R.0d: empty/whitespace chunks must be skipped, not embedded or fatal.
+
+    A ``table``-type chunk with no extracted text (empty ``text``) made the
+    embedder call the model with ``""``, which rejects it with ``Text cannot be
+    empty`` and aborts the whole source. These tests prove the skip is local:
+    the empty/whitespace chunk gets no model call and no ``source_embedding``
+    row, while every normal chunk in the same source/batch still embeds.
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_and_whitespace_chunks_skipped_mixed_batch(self):
+        """Mixed batch: empties skipped, normals embedded, no exception.
+
+        Fail-old/pass-new: the old code sent ``""``/``"   "`` to the model and
+        raised ``Text cannot be empty``; the new code never sends them.
+        """
+        repo = _make_source_repo()
+        repo.get_chunks.return_value = [
+            _make_chunk("First paragraph content.", 0, "chunk:1"),
+            _make_chunk("", 1, "chunk:table"),  # empty (table-type, no text)
+            _make_chunk("   \n\t ", 2, "chunk:ws"),  # whitespace-only
+            _make_chunk("Second paragraph content.", 3, "chunk:2"),
+        ]
+        # Model rejects empty/whitespace input — exactly the live failure mode.
+        model = AsyncMock()
+
+        async def strict_aembed(texts):
+            for t in texts:
+                if t is None or not t.strip():
+                    raise RuntimeError("Text cannot be empty")
+            return [[0.1, 0.2, 0.3] for _ in texts]
+
+        model.aembed = AsyncMock(side_effect=strict_aembed)
+        service = EmbeddingService(repo, model, EmbeddingConfig(batch_size=10))
+
+        result = await service.embed_source("source:mixed_empty")
+
+        # Only the 2 non-empty chunks embed; empties produce no rows, no crash.
+        assert result.embeddings_created == 2
+        assert repo.add_embedding.call_count == 2
+        # The model never saw an empty/whitespace string.
+        sent = model.aembed.call_args.args[0]
+        assert sent == ["First paragraph content.", "Second paragraph content."]
+        # Stored embeddings keep their original chunk order (0 and 3).
+        orders = sorted(
+            c.kwargs["order"] for c in repo.add_embedding.call_args_list
+        )
+        assert orders == [0, 3]
+
+    def test_is_empty_text_covers_none_empty_whitespace(self):
+        """The emptiness guard covers all three no-text forms.
+
+        ``Chunk.text`` is typed ``str`` so a ``Chunk`` object never holds
+        ``None``, but a NULL DB column (or the fallback string path) can yield
+        ``None``; the guard must treat it as empty so the embedder skips it.
+        """
+        assert EmbeddingService._is_empty_text(None) is True
+        assert EmbeddingService._is_empty_text("") is True
+        assert EmbeddingService._is_empty_text("   \n\t ") is True
+        assert EmbeddingService._is_empty_text("real") is False
+
+    @pytest.mark.asyncio
+    async def test_all_empty_chunks_no_model_call(self):
+        """A source whose every chunk is empty embeds nothing without calling
+        the model (no ``Text cannot be empty``)."""
+        repo = _make_source_repo()
+        repo.get_chunks.return_value = [
+            _make_chunk("", 0, "chunk:a"),
+            _make_chunk("   ", 1, "chunk:b"),
+        ]
+        model = _make_embedding_model()
+        service = EmbeddingService(repo, model)
+
+        result = await service.embed_source("source:all_empty")
+
+        assert result.embeddings_created == 0
+        model.aembed.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fallback_text_chunks_skip_empty(self):
+        """The text-splitting fallback path also skips empty/whitespace chunks."""
+        repo = _make_source_repo()
+        service = EmbeddingService(
+            repo, _make_embedding_model(), EmbeddingConfig(batch_size=10)
+        )
+        embeddings = await service._embed_text_chunks(
+            "source:fb", ["real one", "", "  ", "real two"]
+        )
+        assert len(embeddings) == 2
+        sent = service.embedding_model.aembed.call_args.args[0]
+        assert sent == ["real one", "real two"]
+
+
 class TestEmbedSourceFallback:
     """Test embed_source fallback when no structural chunks exist."""
 
