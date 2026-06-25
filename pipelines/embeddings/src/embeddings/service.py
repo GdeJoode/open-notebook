@@ -165,8 +165,79 @@ class EmbeddingService:
 
         return embeddings
 
+    @staticmethod
+    def _is_context_length_error(error: Exception) -> bool:
+        """True when ``error`` is Ollama's over-long-input rejection.
+
+        The legacy ``/api/embeddings`` endpoint (used by the esperanto Ollama
+        provider) returns HTTP 500 ``"input length exceeds the context
+        length"`` and ignores the ``truncate`` option, so we detect it from
+        the message and recover by shrinking the text client-side.
+        """
+        return "input length exceeds the context length" in str(error).lower()
+
+    def _cap_texts(self, texts: List[str]) -> List[str]:
+        """Tail-truncate each text to the configured char cap, logging cuts.
+
+        Truncating the tail (keeping the head) is acceptable for retrieval
+        embeddings — the leading content dominates the chunk's topical signal.
+        This is the cheap first line of defence; it catches the common
+        Latin-script case in a single embed call with no extra round-trips.
+        """
+        cap = self.config.max_input_chars
+        if cap is None or cap <= 0:
+            return texts
+        capped: List[str] = []
+        for text in texts:
+            if len(text) > cap:
+                logger.warning(
+                    f"Truncating over-long embedding input: {len(text)} -> "
+                    f"{cap} chars (model context guard, tail dropped)"
+                )
+                capped.append(text[:cap])
+            else:
+                capped.append(text)
+        return capped
+
+    async def _embed_one_with_shrink(self, text: str) -> List[float]:
+        """Embed a single text, halving its length until it fits the context.
+
+        Char counts are not a reliable proxy for tokens (dense scripts such as
+        CJK pack far more tokens per char), so the static cap can still miss.
+        When the model rejects a text for length, we halve and retry until it
+        is accepted. This guarantees a vector for every chunk regardless of
+        script/density without dropping it. Halving converges quickly (a 9k
+        char text is accepted within a few iterations).
+        """
+        candidate = text
+        while True:
+            try:
+                vectors = await self.embedding_model.aembed([candidate])
+                if len(candidate) < len(text):
+                    logger.warning(
+                        f"Embedded after adaptive shrink: {len(text)} -> "
+                        f"{len(candidate)} chars (context-length recovery)"
+                    )
+                return vectors[0]
+            except Exception as e:  # noqa: BLE001 — only shrink for length errs
+                if not (
+                    self.config.truncate_on_context_error
+                    and self._is_context_length_error(e)
+                    and len(candidate) > 1
+                ):
+                    raise
+                candidate = candidate[: max(1, len(candidate) // 2)]
+
     async def _embed_with_retry(self, texts: List[str]) -> List[List[float]]:
-        """Embed texts with retry logic and concurrency control."""
+        """Embed texts with length-guard, retry logic, and concurrency control.
+
+        1. Cap each text to ``max_input_chars`` up front (cheap, one call).
+        2. On transient errors, retry the whole batch.
+        3. On a context-length rejection, fall back to per-text adaptive
+           shrinking so a single over-long text never fails its batch-mates
+           and every chunk still gets a vector.
+        """
+        texts = self._cap_texts(texts)
         async with self._semaphore:
             last_error = None
             for attempt in range(self.config.retry_attempts + 1):
@@ -174,6 +245,20 @@ class EmbeddingService:
                     return (await self.embedding_model.aembed(texts))
                 except Exception as e:
                     last_error = e
+                    if (
+                        self.config.truncate_on_context_error
+                        and self._is_context_length_error(e)
+                    ):
+                        # The char cap did not catch this batch (dense tokens).
+                        # Recover per-text so we never drop a chunk; preserves
+                        # input order and batch output shape.
+                        logger.warning(
+                            "Embedding batch hit context-length limit after "
+                            "char cap; recovering per-text via adaptive shrink"
+                        )
+                        return [
+                            await self._embed_one_with_shrink(t) for t in texts
+                        ]
                     if attempt < self.config.retry_attempts:
                         logger.warning(
                             f"Embedding attempt {attempt + 1} failed: {e}, retrying..."
