@@ -18,6 +18,96 @@ alignment test; 2 comment nits in `migrations/64.surrealql`. **Systematic strict
 
 ---
 
+## Phase R.2 — KG retrieval signal — ✅ READY FOR REVIEW (2026-06-26)
+Branch `track/r2-kg-signal` (off `main` @ R.1 merge `4788d5d`). The KG-prominent
+"rank by shared knowledge" signal — a pure scorer + repo loaders + service +
+`GET /sources/{id}/related-kg` (parallel to R.1's dense `/related`).
+
+**Commits**: `ffc7fc8` (pure scorer + 27 unit tests) → `4a19384` (repo/service/
+endpoint + 12 router+container tests) → `2155…` (mypy annotations).
+
+### Weighting chosen (the explicit table)
+Per-entity contribution = `type_salience × inverse_source_frequency`.
+- **type_salience** (`shared/retrieval/kg_source_scorer.py::TYPE_SALIENCE`, over
+  the Track L canonical set): HIGH **1.0** = named/specific (person,
+  organization, government_organization, administrative_area, location,
+  programme, technology, legislation, policy_document, dataset, grant,
+  research_project, scholarly_article); MEDIUM **0.5** = event, product,
+  creative_work, periodical, public_consultation, social_profile; LOW **0.15** =
+  the generic buckets `topic`/`concept` (the 81%-of-active LLM noise); FLOOR
+  **0.05** = `other`. Unknown/drifted types fall back to 0.15 (never crash).
+- **rarity (IDF)** = `log((N+1)/(df+1)) + 1` — smoothed, strictly positive; a
+  `programme` in 2 sources outweighs a gov-org in all 4. Generic buckets are
+  down-weighted, NOT excluded; archived/non-active entities ARE excluded (at the
+  query — `status='active'`).
+
+### 1-hop relation expansion
+**Implemented but gated OFF by default** (`expand_relations=False`; opt-in via the
+scorer arg / `?expand_relations=true`). Bounded to exactly one undirected hop
+(`Q has X, X--rel--Y, B has Y`), credited at most once per candidate entity,
+direct shares always beat relation paths. Gated because the 1-hop path
+multiplies through the duplicate-predicate noise R.6 has not yet trimmed — so
+shared-entity scoring ships as the reliable core. (Covered by 4 unit tests.)
+
+### Per-criterion evidence
+1. **Ranked + per-pair explanation** — `score_related_sources` returns ranked
+   `SourceKGScore(source_id, score, contributions[])`; each contribution names
+   the entity (id/name/type/df/weight/via_relation). Endpoint surfaces it as
+   `explanation`. ✅ (unit + container + staging below).
+2. **Generic down-weight provable** — `test_named_pair_outranks_topic_only_pair`
+   + `test_other_bucket_is_weakest`: two sources sharing only a `topic` rank
+   strictly below two sharing a named org/programme. ✅
+3. **Live staging (read-only, `SURREAL_DATABASE=staging`)** — ran
+   `KGRetrievalService` against the 6 live sources. The 4 Regio-Deal convenanten
+   cluster each other and the academic papers fall away:
+   ```
+   QUERY: Convenant Regio Deal Zuidwest-Friesland
+     #1 score=4.860  Convenant Regio Deal Noord-Holland Noord
+     #2 score=4.144  Convenant Regio Deal Het Hogeland
+     #3 score=3.864  Convenant Regio Deal Midden-Limburg
+        (academic papers: absent)
+   QUERY: Convenant Regio Deal Het Hogeland
+     #1 score=4.144  Zuidwest-Friesland   #2 3.777 Noord-Holland   #3 2.554 Midden-Limburg
+   QUERY: Economics_without_equilibrium (academic)  ->  (no KG-related sources)
+   ```
+   **Shared entities driving the clusters**: the named `programme`/
+   `administrative_area` **"Regio"** (weight 1.223, df=3) and **"Regio Deal"**
+   (weight 1.000, df=4) dominate every pair; generic `topic`s (brede welvaart,
+   energietransitie, …) each add only ~0.18–0.23. One shared named entity ≈ 5
+   shared topics — the down-weight holds on real data. The academic paper
+   correctly shares NO active entities with the convenanten (discriminative
+   negative). ✅
+4. **Pure scorer unit-tested in isolation (no DB)** — 27 tests in
+   `packages/shared/tests/test_kg_source_scorer.py`. ✅
+5. **No hardcoded dim/cloud; read-only on entity/relation** — the scorer is
+   dense-free (no embeddings at all); loaders only SELECT `status='active'`
+   entities/relations. ✅
+
+### Tests
+- `uv run --project packages/shared pytest packages/shared/tests/test_kg_source_scorer.py` → **27 passed**.
+- `uv run --project apps/app-main pytest apps/app-main/tests/test_source_related_kg_router.py apps/app-main/tests/test_source_related_kg_db.py` → **12 passed** (8 router unit, 4 `requires_docker` roundtrip: named-over-topic ordering, archived-excluded, no-overlap-empty).
+- R.1 regression (`test_source_related_router/db`) → **14 passed** (unchanged).
+- surrealdb-service repo suite (non-docker) → **61 passed** (no regression from the new loaders).
+- mypy on the pure scorer → clean; the service's only mypy notes are the
+  pre-existing `import-untyped` for workspace packages without `py.typed`
+  (`shared`, `surrealdb_service.repositories`) — codebase-wide, not new.
+
+### Deliverables / file map
+- Pure scorer: `packages/shared/src/shared/retrieval/kg_source_scorer.py` (+ `__init__.py`).
+- Repo loaders: `EntityRepository.load_active_entity_source_map` / `load_active_relations`; `SourceRepository.get_titles_by_ids`.
+- Service: `apps/app-main/src/app_main/services/kg_retrieval_service.py` (DI: `get_kg_retrieval_service`).
+- Endpoint: `GET /sources/{id}/related-kg` (schemas `RelatedSourceKGResponse` / `KGSharedEntity`).
+
+### Notes for R.3 / R.6
+- The scorer is the seam R.3 fuses with R.1 dense; the service already returns a
+  `score` + `explanation` ready for RRF/weighted-sum (KG-prominent preset).
+- The staging run shows the duplicate-cased noise R.6 owns: `Energietransitie`/
+  `energietransitie`, `Brede welvaart`/`brede welvaart`, and a `programme "Regio"`
+  vs `administrative_area "Regio"` split — R.6 dedup will tighten scores but the
+  ranking already holds without it.
+
+---
+
 ## Phase R.0 — Embedding foundation — MERGED + APPROVED; live backfill BLOCKED (→ R.0b) [superseded by the LIVE COMPLETE entry above]
 - O.2a-style adversarial review: **APPROVED attempt 1** (0 blockers/majors, 3 minors). Merged to `main` (`119ecd3`).
 - **Live backfill BLOCKED**: running the chunk backfill against staging failed on all 6 sources —
