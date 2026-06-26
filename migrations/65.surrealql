@@ -1,0 +1,185 @@
+-- ============================================================================
+-- Migration 65: self-healing forward-guard for strict-field drift (Track S.2).
+--
+-- THE DRIFT CLASS. A SurrealDB SCHEMAFULL table re-validates the WHOLE record on
+-- any UPDATE. When a strict (non-`option<>`) field is added to an existing table
+-- by a later migration with a `DEFAULT`, that default applies only to NEWLY
+-- created rows — rows that predate the migration keep NONE. The strict type then
+-- rejects the row on the first UPDATE ("Found NONE for field X, expected a
+-- <type>"), silently blocking ALL writes to that row. Migrations 61 (`entity`)
+-- and 64 (`source`) each fixed one table reactively after it surfaced live.
+--
+-- This migration consolidates that fix into one idempotent sweep over EVERY
+-- strict, non-`option<>`, no-VALUE field that has a SAFE coalesce default, per
+-- the S.1 inventory (docs/tracks/S-drift-repair/drift-inventory.md). Each
+-- `UPDATE <table> SET f = f ?? <default>` is a no-op on a clean row and repairs
+-- only the NONE fields on a drifted row. No schema change.
+--
+-- OVERLAP WITH 61 / 64 (intentional, idempotent). The `entity` block re-applies
+-- migration 61's coalesce and the `source` block re-applies migration 64's
+-- `private` coalesce. Re-running `f ?? default` on an already-healed row is a
+-- no-op, so the overlap is harmless and keeps the invariant in one place.
+--
+-- FORWARD-GUARD, NOT A LIVE REPAIR. S.1 scanned the live `staging` DB and found
+-- ZERO drifted rows: every strict field on all 31 active tables already reads
+-- non-NONE (entity healed by 61, source by 64, nothing else accrued NONE). So on
+-- current staging this migration repairs 0 rows. It ships as insurance for OTHER
+-- environments we have not scanned (dev/prod, fresh restores) and to consolidate
+-- the invariant; its mechanism is validated against SYNTHETIC drift in the S.2
+-- `@requires_docker` tests.
+--
+-- DELIBERATELY NOT COALESCED. Strict required fields with NO safe default are
+-- excluded — inventing a value would be a guess that corrupts data:
+--   * content/text bodies: `chunk.text`, `source_embedding.content/embedding`,
+--     `doc_node.self_ref`, `preprocessing_result.naive_summary`, ...
+--   * required FKs / identifiers: `*.source`, `*.source_id`, `*.entity`,
+--     `*.name`, `extraction_result.source_id`, `pass1_results.notebook/source`,
+--     `status_change_log.entity`, ...
+--   * type discriminators populated at insert: `entity.entity_type`,
+--     `relation.relation_type`, `claim.claim_type/statement`, `job.job_type`,
+--     `chunk.element_type/order`, `metrics.event_type`, ...
+--   * edge endpoints: `in`/`out` on `relation`/`derived_from`/`next_node`/
+--     `parent_of`/`reference`/`refers_to` — RELATE always sets both; they cannot
+--     be NONE on a real edge and have no meaningful coalesce value.
+-- These are addressed by the S.4 prevention rule (pair every new strict field
+-- with a coalescing UPDATE in the SAME migration), not by guessing here.
+-- ============================================================================
+
+-- entity — mirror migration 61 exactly (idempotent overlap).
+UPDATE entity SET
+    manual_override    = manual_override    ?? false,
+    avg_confidence     = avg_confidence     ?? 0.0,
+    weight             = weight             ?? 0.0,
+    mention_count      = mention_count      ?? 0,
+    max_raptor_level   = max_raptor_level   ?? 0,
+    reconnect_attempts = reconnect_attempts ?? 0,
+    status             = status             ?? "active",
+    created            = created            ?? time::now(),
+    created_at         = created_at         ?? time::now(),
+    updated            = updated            ?? time::now(),
+    updated_at         = updated_at         ?? time::now(),
+    extracted_at       = extracted_at       ?? time::now(),
+    provenance_chain   = provenance_chain   ?? [],
+    source_documents   = source_documents   ?? [],
+    type_tags          = type_tags          ?? [],
+    aliases            = aliases            ?? [],
+    embedding          = embedding          ?? [];
+
+-- source — mirror migration 64 (`private` is the load-bearing strict field).
+UPDATE source SET
+    private = private ?? false;
+
+-- relation — strict-with-default fields (edge in/out + relation_type excluded).
+UPDATE relation SET
+    status            = status            ?? "active",
+    confidence        = confidence        ?? 1.0,
+    extraction_method = extraction_method ?? "llm",
+    properties        = properties        ?? {},
+    provenance_chain  = provenance_chain  ?? [],
+    source_documents  = source_documents  ?? [],
+    created_at        = created_at        ?? time::now(),
+    extracted_at      = extracted_at      ?? time::now();
+
+-- chunk — text/element_type/source/order excluded (no safe default).
+UPDATE chunk SET
+    layer             = layer             ?? 0,
+    is_content        = is_content        ?? true,
+    is_raptor_node    = is_raptor_node    ?? false,
+    parent_chunk_ids  = parent_chunk_ids  ?? [],
+    metadata          = metadata          ?? {},
+    positions         = positions         ?? [];
+
+-- claim — claim_type/statement excluded (no safe default).
+UPDATE claim SET
+    verification_status = verification_status ?? "unverified",
+    created             = created             ?? time::now(),
+    updated             = updated             ?? time::now();
+
+-- dead_letter — job_id/job_type/error_message excluded (no safe default).
+UPDATE dead_letter SET
+    retry_count = retry_count ?? 0,
+    payload     = payload     ?? {},
+    failed_at   = failed_at   ?? time::now();
+
+-- doc_node — element_type/self_ref/sequence/source excluded (no safe default).
+UPDATE doc_node SET
+    created_at = created_at ?? time::now();
+
+-- entity_suggestion — name/entity_type/source_id excluded (no safe default).
+UPDATE entity_suggestion SET
+    aliases           = aliases           ?? [],
+    confidence        = confidence        ?? 0.8,
+    extraction_method = extraction_method ?? "openie",
+    status            = status            ?? "pending",
+    properties        = properties        ?? {},
+    created           = created           ?? time::now(),
+    updated           = updated           ?? time::now();
+
+-- episode_profile — name/model/provider fields excluded (no safe default).
+UPDATE episode_profile SET
+    num_segments = num_segments ?? 5,
+    created      = created      ?? time::now(),
+    updated      = updated      ?? time::now();
+
+-- extraction_result — source_id excluded (no safe default).
+UPDATE extraction_result SET
+    entity_count   = entity_count   ?? 0,
+    relation_count = relation_count ?? 0,
+    entities       = entities       ?? [],
+    relations      = relations      ?? [],
+    metadata       = metadata       ?? {},
+    created        = created        ?? time::now();
+
+-- job — job_type excluded (no safe default).
+UPDATE job SET
+    status      = status      ?? "queued",
+    priority    = priority    ?? "normal",
+    retry_count = retry_count ?? 0,
+    max_retries = max_retries ?? 2,
+    payload     = payload     ?? {};
+
+-- metrics — event_type excluded (no safe default).
+UPDATE metrics SET
+    payload    = payload    ?? {},
+    created_at = created_at ?? time::now();
+
+-- model_route — task excluded (no safe default).
+UPDATE model_route SET
+    private_chain  = private_chain  ?? [],
+    provider_chain = provider_chain ?? [],
+    updated_at     = updated_at     ?? time::now();
+
+-- pass1_results — notebook/source/detected_schema/schema_attempted excluded.
+UPDATE pass1_results SET
+    coverage_pct         = coverage_pct         ?? 0.0,
+    confidence_in_choice = confidence_in_choice ?? 0.0,
+    alternative_schemas  = alternative_schemas  ?? [],
+    proposed_extensions  = proposed_extensions  ?? [],
+    uncovered_concepts   = uncovered_concepts   ?? [],
+    created_at           = created_at           ?? time::now();
+
+-- preprocessing_result — source_id/total_chunks/naive_summary/*chunk_ids excluded.
+UPDATE preprocessing_result SET
+    created = created ?? time::now();
+
+-- triage_queue — entity/name/decision-source fields excluded; `type` defaults "".
+UPDATE triage_queue SET
+    decision          = decision          ?? "open",
+    doc_count         = doc_count         ?? 0,
+    structural_degree = structural_degree ?? 0,
+    type              = type              ?? "",
+    created_at        = created_at        ?? time::now(),
+    updated_at        = updated_at        ?? time::now();
+
+-- transformation — name/title/description/prompt excluded (no safe default).
+UPDATE transformation SET
+    apply_default = apply_default ?? false;
+
+-- status_change_log — entity/old_status/new_status/reason excluded.
+UPDATE status_change_log SET
+    changed_at = changed_at ?? time::now();
+
+-- speaker_profile — name/speakers/tts_* excluded (no safe default).
+UPDATE speaker_profile SET
+    created = created ?? time::now(),
+    updated = updated ?? time::now();

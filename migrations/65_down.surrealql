@@ -1,0 +1,10 @@
+-- ============================================================================
+-- Migration 65 DOWN: no-op.
+--
+-- Migration 65 is a data backfill (NONE -> sensible default) across many
+-- existing tables. There is no faithful inverse — re-setting the coalesced
+-- fields back to NONE would re-introduce the exact strict-field drift this
+-- migration exists to repair (and the original NONEs were drift, not intent).
+-- Mirrors 61_down / 64_down. Down intentionally does nothing; the data stays
+-- valid.
+-- ============================================================================
