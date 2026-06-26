@@ -112,3 +112,82 @@ SurrealDB container.
 Live staging untouched (already at v65; the file change is version-gated and only
 affects future/unscanned envs). `.serena/project.yml` left as-is (pre-existing
 working-tree change, not part of this phase).
+
+---
+
+## Phase S.4 — Prevention rule + lockstep guard + RETRO — READY FOR REVIEW
+
+**Branch**: `track/s4-prevention` (off `main` @ `7950ba4`, S.2/S.2b merged).
+**Commits**: `1b14658` (prevention rule docs), `00b6e25` (lockstep test).
+
+### Delivered
+- **Prevention rule** — new `migrations/README.md`, placed next to the `.surql`
+  files where a migration author actually looks. States the rule crisply ("when
+  you add a strict non-`option<>` field to an EXISTING SCHEMAFULL table, backfill
+  in the SAME migration with `UPDATE <t> SET f = f ?? <d> WHERE f = NONE RETURN
+  NONE`"), the two-line why, a correct example, the do/don't (prefer `option<>`;
+  never blanket-UPDATE a payload-bearing table), and cross-links to migrations
+  61/64/65 and `docs/tracks/S-drift-repair/`. Cross-referenced from
+  `docs/development/contributing.md` Schema Management.
+- **Lockstep static test** — `packages/surrealdb-service/tests/test_migration_65_where_mirrors_set.py`.
+  Pure-file parser (no DB/Docker): for each `UPDATE` block in `65.surrealql`,
+  asserts `set(WHERE '= NONE' disjuncts) == set(SET 'f = f ?? default' fields)`,
+  and pins the expected 19-block count. Enforces the drift-only-WHERE invariant
+  the S.2b reviewer flagged so a future "added a SET field, forgot the WHERE
+  disjunct" regression fails CI. **2 passed**; sanity-checked by removing one
+  disjunct → red (`entity: SET-only=['weight']`) → restored → green.
+- **Memory note** — `strict-field-drift-migrations.md` already carries the blanket-
+  UPDATE-crashes-startup → drift-only-WHERE lesson (added in S.2b); no edit needed.
+
+### Test evidence
+- `uv run --project packages/surrealdb-service pytest packages/surrealdb-service/tests/ -q -k "migration"`
+  → **68 passed, 109 deselected** (incl. the new 2 lockstep tests and the 9
+  `@requires_docker` migration-65 tests against a real container). No regressions.
+
+---
+
+## RETROSPECTIVE — Track S (CLOSED)
+
+**The drift class.** A SurrealDB `SCHEMAFULL` table re-validates the WHOLE record
+on any `UPDATE`. A strict (non-`option<>`) field added to an existing table by a
+later migration with a `DEFAULT` stays `NONE` on pre-existing rows (DEFAULT applies
+only to new rows). The strict type then silently blocks ALL future writes to those
+rows (`Found NONE for field X, expected a <type>`) — not just writes to that field.
+It surfaced one table at a time during live writes: `entity` (mig 61, Track Q),
+`source` (mig 64, R.0e).
+
+**S.1 found ZERO live drift.** The read-only inventory against staging proved that
+every strict, non-`option<>`, no-VALUE field on all 31 active tables already reads
+non-NONE: the reactive 61/64 had already healed the only two historically-drifted
+tables, and nothing else had accrued NONE. So the planned "self-healing repair
+migration" had **0 rows to repair on staging** — it ships purely as a forward-guard
+for unscanned/freshly-restored environments.
+
+**The irony — the forward-guard nearly caused a startup crash.** Migration 65 runs
+at app startup. The first cut was a blanket `UPDATE <t> SET f = f ?? d` per table.
+But a SCHEMAFULL `UPDATE` re-validates AND **REWRITES** every matched row, and the
+blanket form matches ALL rows — so on payload-bearing tables with multi-MB rows
+(`extraction_result` entities/relations, `pass1_results`, `job`/`metrics`/
+`dead_letter` payloads) it rewrote the whole table even when clean and overwhelmed
+the WS connection. Observed live as a startup crash on `extraction_result`. The
+guard meant to prevent the drift class nearly bricked startup itself.
+
+**Resolution — drift-only WHERE.** S.2b put a `WHERE <f> = NONE OR ... RETURN NONE`
+on all 19 `UPDATE` statements, each WHERE mirroring its SET field list exactly. On
+a healthy DB every statement matches 0 rows → zero rewrites anywhere → true no-op +
+startup-safe; only genuinely-drifted rows are touched. The lockstep static test
+(S.4) now pins WHERE==SET so the mirror can't silently drift apart.
+
+**The real fix is the prevention rule, not the migration.** Migration 65 repairs 0
+rows on current staging; its value is consolidation + insurance for unscanned envs.
+The actual recurrence-stopper is the S.4 rule documented in `migrations/README.md`:
+pair every new strict field with a coalescing `UPDATE ... WHERE = NONE` in the SAME
+migration (and prefer `option<>` when NONE is valid; never blanket-rewrite a
+payload-bearing table). That moves the fix from reactive (one table at a time, in
+production) to preventive (at authoring time, in review).
+
+**Phases**: S.1 inventory (zero live drift) · S.2 forward-guard migration 65 ·
+S.2b drift-only-WHERE generalization (startup-safe) · S.3 live verify (staging at
+v65, writable) · S.4 prevention rule + lockstep guard + this retro.
+
+**Status: Track S CLOSED.**
