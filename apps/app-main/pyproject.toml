@@ -49,6 +49,7 @@ testpaths = ["tests"]
 addopts = "--import-mode=importlib"
 markers = [
     "requires_docker: Tests that need a Docker daemon (testcontainers-backed). Skipped automatically when Docker is unreachable.",
+    "requires_staging: Read-only tests against the live staging DB (SURREAL_DATABASE=staging). Skipped unless explicitly pointed at staging and reachable.",
 ]
 
 [tool.uv.sources]

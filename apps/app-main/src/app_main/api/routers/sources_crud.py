@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
+from shared.retrieval import FusionWeights, get_preset
 from surrealdb_service.repositories.source import ChunkRepository
 
 from app_main.api.routers.sources_files import _is_source_file_available
@@ -15,8 +16,10 @@ from app_main.api.schemas import (
     ChunkUpdate,
     CreateSourceInsightRequest,
     KGSharedEntity,
+    RelatedSourceHybridResponse,
     RelatedSourceKGResponse,
     RelatedSourceResponse,
+    SignalProvenanceResponse,
     SourceInsightResponse,
     SourceListResponse,
     SourceResponse,
@@ -27,11 +30,13 @@ from app_main.config import UPLOADS_FOLDER
 from app_main.dependencies import (
     get_chunk_mutator,
     get_chunk_repo,
+    get_hybrid_retrieval_service,
     get_kg_retrieval_service,
     get_notebook_service,
     get_source_service,
     get_transformation_service,
 )
+from app_main.services.hybrid_retrieval_service import HybridRetrievalService
 from app_main.services.kg_retrieval_service import KGRetrievalService
 from app_main.exceptions import InvalidInputError
 from app_main.services.chunking.chunk_mutator import (
@@ -579,6 +584,119 @@ async def get_related_sources_kg(
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching KG-related sources: {str(e)}",
+        )
+
+
+@router.get(
+    "/{source_id}/related-hybrid",
+    response_model=List[RelatedSourceHybridResponse],
+)
+async def get_related_sources_hybrid(
+    source_id: str,
+    k: int = Query(
+        5,
+        ge=1,
+        le=50,
+        description="Number of fused related sources to return (1-50)",
+    ),
+    preset: Optional[str] = Query(
+        None,
+        description=(
+            "Named weight preset: 'kg-heavy' (default, KG-prominent) or "
+            "'balanced'. Ignored when explicit w_kg/w_dense are passed."
+        ),
+    ),
+    w_kg: Optional[float] = Query(
+        None,
+        ge=0.0,
+        description="Explicit KG-signal weight (overrides preset when set).",
+    ),
+    w_dense: Optional[float] = Query(
+        None,
+        ge=0.0,
+        description="Explicit dense-signal weight (overrides preset when set).",
+    ),
+    expand_relations: bool = Query(
+        False,
+        description=(
+            "Forward to the KG signal's opt-in 1-hop relation expansion "
+            "(off by default; runs through not-yet-trimmed R.6 noise)."
+        ),
+    ),
+    hybrid_svc: HybridRetrievalService = Depends(get_hybrid_retrieval_service),
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Return the top-``k`` related sources fused from dense + KG signals (R.3).
+
+    Reciprocal-Rank-Fusion of the dense cosine signal (R.1, ``/related``) and the
+    KG-proximity signal (R.2, ``/related-kg``), **KG-prominent by default**
+    (``kg-heavy`` preset: KG weight 3× dense — the locked Track R steer). Each
+    result carries per-signal provenance (the dense vs KG score, rank, and exact
+    RRF contribution) plus the KG driving-entities lineage (``kg_entities``).
+
+    Weight control (most specific wins):
+      * explicit ``w_kg`` / ``w_dense`` query params, else
+      * a named ``preset`` (``kg-heavy`` | ``balanced``), else
+      * the ``kg-heavy`` default.
+
+    A source present in only ONE signal still ranks (never dropped). A source
+    that exists but has neither signal returns an empty list; a missing source
+    is a 404.
+    """
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        # Explicit weights override the preset. If only one of w_kg/w_dense is
+        # given, the other defaults to the resolved preset's value so a partial
+        # override still composes a KG-prominent ranking.
+        weights = None
+        if w_kg is not None or w_dense is not None:
+            base = get_preset(preset)
+            weights = FusionWeights(
+                dense=w_dense if w_dense is not None else base.dense,
+                kg=w_kg if w_kg is not None else base.kg,
+                rrf_k=base.rrf_k,
+            )
+
+        related = await hybrid_svc.find_related_hybrid(
+            source_id,
+            k,
+            weights=weights,
+            preset=preset,
+            expand_relations=expand_relations,
+        )
+        return [
+            RelatedSourceHybridResponse(
+                id=item["id"],
+                title=item.get("title"),
+                fused_score=item["fused_score"],
+                dense=SignalProvenanceResponse(**item["dense"]),
+                kg=SignalProvenanceResponse(**item["kg"]),
+                kg_entities=[
+                    KGSharedEntity(
+                        entity_id=e["entity_id"],
+                        name=e["name"],
+                        type=e["type"],
+                        document_frequency=e["document_frequency"],
+                        weight=e["weight"],
+                        via_relation=e["via_relation"],
+                    )
+                    for e in item.get("kg_entities", [])
+                ],
+            )
+            for item in related
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error fetching hybrid-related sources for {source_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching hybrid-related sources: {str(e)}",
         )
 
 
