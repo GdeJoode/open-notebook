@@ -543,6 +543,39 @@ class RelatedSourceKGResponse(BaseModel):
     explanation: List[KGSharedEntity] = Field(default_factory=list)
 
 
+class SignalProvenanceResponse(BaseModel):
+    """One signal's contribution to a fused hybrid result (Track R.3).
+
+    The per-signal "why": whether the source was present in this signal, its
+    raw score (cosine for dense; KG weighted-sum for KG), its 1-based rank
+    within the signal, and the signal's exact additive RRF contribution to the
+    fused score. ``score``/``rank`` are ``None`` when the source was absent from
+    the signal (it still ranks on its other signal — never dropped).
+    """
+
+    present: bool
+    score: Optional[float] = None
+    rank: Optional[int] = None
+    contribution: float
+
+
+class RelatedSourceHybridResponse(BaseModel):
+    """One fused related source (``GET /sources/{id}/related-hybrid``, R.3).
+
+    Combines the dense (R.1) and KG (R.2) signals via Reciprocal Rank Fusion,
+    KG-prominent by default. ``fused_score`` is the weighted RRF total;
+    ``dense``/``kg`` carry per-signal provenance (score, rank, contribution);
+    ``kg_entities`` is the R.2 driving-entities lineage (the "why matched").
+    """
+
+    id: str
+    title: Optional[str] = None
+    fused_score: float
+    dense: SignalProvenanceResponse
+    kg: SignalProvenanceResponse
+    kg_entities: List[KGSharedEntity] = Field(default_factory=list)
+
+
 # Context API schemas
 class ContextConfig(BaseModel):
     sources: Dict[str, str] = Field(

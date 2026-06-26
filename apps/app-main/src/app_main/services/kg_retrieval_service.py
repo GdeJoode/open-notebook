@@ -79,12 +79,29 @@ class KGRetrievalService:
             )
         return records
 
+    async def _true_source_count(self) -> Optional[int]:
+        """Fetch the real corpus source count for the IDF denominator.
+
+        Returns the total number of ``source`` rows (``source_repo.count()``),
+        not the sources-with-active-entities subset the scorer would otherwise
+        infer from the entity bags. ``None`` on any error / zero count so the
+        pure scorer falls back to its observed-sources default rather than
+        dividing by a bad count (the IDF must never crash a ranking).
+        """
+        try:
+            total = await self.source_repo.count()
+            return total if total and total > 0 else None
+        except Exception as e:  # never let counting break a ranking
+            logger.warning("KG IDF source-count failed, using fallback: {}", e)
+            return None
+
     async def find_related_by_kg(
         self,
         source_id: str,
         k: int,
         *,
         expand_relations: bool = False,
+        n_sources: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Return the top-``k`` sources related to ``source_id`` by KG proximity.
 
@@ -101,6 +118,12 @@ class KGRetrievalService:
                 the 1-hop path runs through the not-yet-trimmed duplicate
                 predicate noise (R.6), so shared-entity scoring is the reliable
                 default and relation proximity is gated behind this flag.
+            n_sources: True corpus source count for the IDF rarity denominator.
+                When ``None`` it is fetched from ``source_repo.count()`` so the
+                IDF uses the REAL number of sources (incl. sources with no
+                active entities), not just the sources-with-entities count the
+                scorer would otherwise infer (the R.2 review carry-in — R.2
+                under-counted at sources-with-active-entities=4 vs the real 6).
 
         Returns:
             A list of ``{"id", "title", "score", "explanation"}`` dicts, ranked
@@ -113,6 +136,9 @@ class KGRetrievalService:
             return []
         entities = self._to_entity_records(entity_rows)
 
+        if n_sources is None:
+            n_sources = await self._true_source_count()
+
         relations: Optional[List[RelationRecord]] = None
         if expand_relations:
             relation_rows = await self.entity_repo.load_active_relations()
@@ -121,6 +147,7 @@ class KGRetrievalService:
         scored = score_related_sources(
             source_id,
             entities,
+            n_sources=n_sources,
             relations=relations,
             expand_relations=expand_relations,
             limit=k,
