@@ -235,6 +235,72 @@ async def test_transformation_drift_fails_pre_passes_post(
     assert rows[0]["title"] == "t2"
 
 
+@pytest.mark.requires_docker
+async def test_extraction_result_drift_repaired_clean_untouched(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """`extraction_result` drift is repaired post-65; a clean row is left as-is.
+
+    `extraction_result` is the table that crashed startup live: its rows carry the
+    full multi-MB extraction payload, so its UPDATE block ships with a drift-only
+    WHERE. This test pins BOTH halves of that guard:
+
+    * the WHERE still REPAIRS a genuinely-drifted row (`entity_count` NONE blocks
+      writes pre-65, lands post-65), and
+    * the WHERE is a NO-OP on a clean row — it must not match (0 rewrites), which
+      is exactly what keeps startup safe on a healthy DB with large rows.
+    """
+    # --- clean row: distinct source_id (UNIQUE index) at a non-default value. ---
+    clean_src = _u("clean-src")
+    clean = await execute_query(
+        "CREATE extraction_result SET source_id = $s, entity_count = 7, "
+        "relation_count = 3, entities = [], relations = [], metadata = {} "
+        "RETURN VALUE id;",
+        {"s": clean_src},
+        config=live_surrealdb,
+    )
+    clean_rid = str(clean[0])
+
+    # --- drifted row: entity_count forged to NONE (the migration-64 technique). ---
+    rid = await _forge_none_strict_field(
+        live_surrealdb,
+        table="extraction_result",
+        field="entity_count",
+        field_type="int",
+        field_default="0",
+        # source_id is the only no-default strict field; must be unique.
+        create_extra=f"source_id = '{_u('drift-src')}', ",
+    )
+    await _assert_field_is_none(live_surrealdb, rid, "entity_count")
+
+    # Pre-65: any UPDATE re-validates the whole record and trips on NONE int.
+    with pytest.raises(Exception):  # noqa: B017
+        await execute_query(
+            f"UPDATE {rid} SET relation_count = 1;", config=live_surrealdb
+        )
+
+    await execute_query(_migration_65_sql(), config=live_surrealdb)
+
+    # Post-65: the drifted row is repaired and the same UPDATE now lands.
+    await execute_query(
+        f"UPDATE {rid} SET relation_count = 1;", config=live_surrealdb
+    )
+    rows = await execute_query(
+        f"SELECT entity_count, relation_count FROM {rid};", config=live_surrealdb
+    )
+    assert rows[0]["entity_count"] == 0
+    assert rows[0]["relation_count"] == 1
+
+    # Clean row: the WHERE did NOT match it, so its values are exactly as set
+    # (coalesce defaults would be 0/0 — both staying at 7/3 proves no rewrite).
+    clean_rows = await execute_query(
+        f"SELECT entity_count, relation_count FROM {clean_rid};",
+        config=live_surrealdb,
+    )
+    assert clean_rows[0]["entity_count"] == 7
+    assert clean_rows[0]["relation_count"] == 3
+
+
 # ---------------------------------------------------------------------------
 # AC2 — idempotent (double-apply no-op; clean row unchanged).
 # ---------------------------------------------------------------------------
@@ -253,7 +319,13 @@ async def test_migration_65_idempotent_double_apply(
 async def test_migration_65_clean_row_unchanged(
     live_surrealdb: SurrealDBConfig,
 ) -> None:
-    """A row already at non-default values is untouched by the coalesce."""
+    """A clean `entity` row is untouched: its drift-only WHERE matches 0 rows.
+
+    This also locks in the generalized WHERE on a representative multi-field block:
+    `entity` has no NONE coalesced field, so its WHERE must not match — a future
+    "forgot the WHERE" regression (blanket rewrite) would still preserve these
+    values, but the dedicated extraction_result test pins the rewrite-cost no-op.
+    """
     name = _u("Clean")
     created = await execute_query(
         "CREATE entity SET canonical_name = $n, name = $n, entity_type = 'org', "
