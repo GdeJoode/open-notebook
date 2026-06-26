@@ -66,6 +66,19 @@ class SourceService:
         """Get embedding count for a source."""
         return await self.source_repo.get_embedding_count(source_id)
 
+    async def find_related(
+        self, source_id: str, k: int
+    ) -> List[Dict[str, Any]]:
+        """Return the top-``k`` sources most similar to ``source_id`` (R.1).
+
+        Dense-only nearest-source retrieval: ranks other sources by cosine
+        similarity of their aggregate ``source.embedding`` vectors. Excludes the
+        query source and any source lacking an aggregate embedding. Returns
+        ``[]`` when the query source has no aggregate (caller treats source
+        existence separately). KG / cluster signals arrive in R.2/R.3.
+        """
+        return await self.source_repo.find_related_by_embedding(source_id, k)
+
     async def delete_embeddings(self, source_id: str) -> int:
         """Delete all embeddings for a source."""
         return await self.source_repo.delete_embeddings(source_id)

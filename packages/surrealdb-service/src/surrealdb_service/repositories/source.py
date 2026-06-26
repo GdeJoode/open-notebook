@@ -361,6 +361,73 @@ class SourceRepository(BaseRepository[Source]):
             )
             return False
 
+    async def find_related_by_embedding(
+        self, source_id: str, k: int
+    ) -> List[Dict[str, Any]]:
+        """Return the top-``k`` other sources by cosine similarity (R.1).
+
+        Ranks every *other* source that has a populated aggregate
+        ``source.embedding`` against this source's aggregate vector using
+        SurrealDB's native ``vector::similarity::cosine`` — the same operator
+        ``fn::vector_search`` uses for chunk search. Ranking server-side keeps
+        all 1024-dim vectors in the DB (no bulk pull into Python) and reuses
+        the proven cosine path.
+
+        Behaviour:
+          * The query source's own row is excluded (``id != $id``).
+          * Sources whose ``embedding`` is NONE (not yet computed / no chunk
+            vectors) are excluded — they can never be a result and never crash
+            the cosine call.
+          * If the *query* source itself has no aggregate embedding, returns
+            ``[]`` (nothing to compare). The caller distinguishes this from
+            "source not found" via a prior existence check.
+          * Ordering is ``score DESC`` with a stable ``id ASC`` tie-break, so
+            equal-similarity sources come back in a deterministic order.
+          * ``k`` bounds the LIMIT; requesting more than exist returns all.
+
+        The embedding dimension is never hardcoded — cosine reads whatever
+        length the stored vectors are (the configured model's dim, 1024 today).
+
+        Returns a list of ``{"id", "title", "score"}`` dicts (ids stringified
+        by ``execute_query``), or ``[]`` on error / no aggregate.
+        """
+        try:
+            rid = ensure_record_id(source_id)
+            query_vec = await execute_query(
+                "SELECT VALUE embedding FROM $id",
+                {"id": rid},
+                self.config,
+            )
+            # ``SELECT VALUE embedding`` yields [vector] for a present field,
+            # [None] when the field is NONE, and [] when the source is absent.
+            if not query_vec or not query_vec[0]:
+                return []
+
+            rows = await execute_query(
+                "SELECT id, title, "
+                "vector::similarity::cosine(embedding, $q) AS score "
+                "FROM source "
+                "WHERE embedding != NONE AND id != $id "
+                "ORDER BY score DESC, id ASC "
+                "LIMIT $k",
+                {"q": query_vec[0], "id": rid, "k": int(k)},
+                self.config,
+            )
+            return [
+                {
+                    "id": str(r["id"]),
+                    "title": r.get("title"),
+                    "score": float(r["score"]),
+                }
+                for r in (rows or [])
+                if r.get("score") is not None
+            ]
+        except Exception as e:
+            logger.error(
+                f"Failed to find related sources for {source_id}: {e}"
+            )
+            return []
+
     async def list_with_metadata(
         self,
         notebook_id: Optional[str] = None,
