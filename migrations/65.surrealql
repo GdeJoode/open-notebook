@@ -63,11 +63,11 @@ UPDATE entity SET
     source_documents   = source_documents   ?? [],
     type_tags          = type_tags          ?? [],
     aliases            = aliases            ?? [],
-    embedding          = embedding          ?? [];
+    embedding          = embedding          ?? [] RETURN NONE;
 
 -- source — mirror migration 64 (`private` is the load-bearing strict field).
 UPDATE source SET
-    private = private ?? false;
+    private = private ?? false RETURN NONE;
 
 -- relation — strict-with-default fields (edge in/out + relation_type excluded).
 UPDATE relation SET
@@ -78,7 +78,7 @@ UPDATE relation SET
     provenance_chain  = provenance_chain  ?? [],
     source_documents  = source_documents  ?? [],
     created_at        = created_at        ?? time::now(),
-    extracted_at      = extracted_at      ?? time::now();
+    extracted_at      = extracted_at      ?? time::now() RETURN NONE;
 
 -- chunk — text/element_type/source/order excluded (no safe default).
 UPDATE chunk SET
@@ -87,23 +87,23 @@ UPDATE chunk SET
     is_raptor_node    = is_raptor_node    ?? false,
     parent_chunk_ids  = parent_chunk_ids  ?? [],
     metadata          = metadata          ?? {},
-    positions         = positions         ?? [];
+    positions         = positions         ?? [] RETURN NONE;
 
 -- claim — claim_type/statement excluded (no safe default).
 UPDATE claim SET
     verification_status = verification_status ?? "unverified",
     created             = created             ?? time::now(),
-    updated             = updated             ?? time::now();
+    updated             = updated             ?? time::now() RETURN NONE;
 
 -- dead_letter — job_id/job_type/error_message excluded (no safe default).
 UPDATE dead_letter SET
     retry_count = retry_count ?? 0,
     payload     = payload     ?? {},
-    failed_at   = failed_at   ?? time::now();
+    failed_at   = failed_at   ?? time::now() RETURN NONE;
 
 -- doc_node — element_type/self_ref/sequence/source excluded (no safe default).
 UPDATE doc_node SET
-    created_at = created_at ?? time::now();
+    created_at = created_at ?? time::now() RETURN NONE;
 
 -- entity_suggestion — name/entity_type/source_id excluded (no safe default).
 UPDATE entity_suggestion SET
@@ -113,22 +113,30 @@ UPDATE entity_suggestion SET
     status            = status            ?? "pending",
     properties        = properties        ?? {},
     created           = created           ?? time::now(),
-    updated           = updated           ?? time::now();
+    updated           = updated           ?? time::now() RETURN NONE;
 
 -- episode_profile — name/model/provider fields excluded (no safe default).
 UPDATE episode_profile SET
     num_segments = num_segments ?? 5,
     created      = created      ?? time::now(),
-    updated      = updated      ?? time::now();
+    updated      = updated      ?? time::now() RETURN NONE;
 
--- extraction_result — source_id excluded (no safe default).
+-- extraction_result — source_id excluded (no safe default). Rows carry the FULL
+-- extraction payload (entities/relations arrays, potentially multi-MB each). A
+-- blanket UPDATE re-validates + REWRITES every row, which overwhelms the WS
+-- connection (KeyError / keepalive timeout) even with RETURN NONE. Guard with a
+-- drift-only WHERE so clean rows are never rewritten: 0 matches on a healthy DB =
+-- true no-op, and only genuinely-drifted rows pay the rewrite cost.
 UPDATE extraction_result SET
     entity_count   = entity_count   ?? 0,
     relation_count = relation_count ?? 0,
     entities       = entities       ?? [],
     relations      = relations      ?? [],
     metadata       = metadata       ?? {},
-    created        = created        ?? time::now();
+    created        = created        ?? time::now()
+    WHERE entity_count = NONE OR relation_count = NONE OR entities = NONE
+       OR relations = NONE OR metadata = NONE OR created = NONE
+    RETURN NONE;
 
 -- job — job_type excluded (no safe default).
 UPDATE job SET
@@ -136,18 +144,18 @@ UPDATE job SET
     priority    = priority    ?? "normal",
     retry_count = retry_count ?? 0,
     max_retries = max_retries ?? 2,
-    payload     = payload     ?? {};
+    payload     = payload     ?? {} RETURN NONE;
 
 -- metrics — event_type excluded (no safe default).
 UPDATE metrics SET
     payload    = payload    ?? {},
-    created_at = created_at ?? time::now();
+    created_at = created_at ?? time::now() RETURN NONE;
 
 -- model_route — task excluded (no safe default).
 UPDATE model_route SET
     private_chain  = private_chain  ?? [],
     provider_chain = provider_chain ?? [],
-    updated_at     = updated_at     ?? time::now();
+    updated_at     = updated_at     ?? time::now() RETURN NONE;
 
 -- pass1_results — notebook/source/detected_schema/schema_attempted excluded.
 UPDATE pass1_results SET
@@ -156,11 +164,11 @@ UPDATE pass1_results SET
     alternative_schemas  = alternative_schemas  ?? [],
     proposed_extensions  = proposed_extensions  ?? [],
     uncovered_concepts   = uncovered_concepts   ?? [],
-    created_at           = created_at           ?? time::now();
+    created_at           = created_at           ?? time::now() RETURN NONE;
 
 -- preprocessing_result — source_id/total_chunks/naive_summary/*chunk_ids excluded.
 UPDATE preprocessing_result SET
-    created = created ?? time::now();
+    created = created ?? time::now() RETURN NONE;
 
 -- triage_queue — entity/name/decision-source fields excluded; `type` defaults "".
 UPDATE triage_queue SET
@@ -169,17 +177,17 @@ UPDATE triage_queue SET
     structural_degree = structural_degree ?? 0,
     type              = type              ?? "",
     created_at        = created_at        ?? time::now(),
-    updated_at        = updated_at        ?? time::now();
+    updated_at        = updated_at        ?? time::now() RETURN NONE;
 
 -- transformation — name/title/description/prompt excluded (no safe default).
 UPDATE transformation SET
-    apply_default = apply_default ?? false;
+    apply_default = apply_default ?? false RETURN NONE;
 
 -- status_change_log — entity/old_status/new_status/reason excluded.
 UPDATE status_change_log SET
-    changed_at = changed_at ?? time::now();
+    changed_at = changed_at ?? time::now() RETURN NONE;
 
 -- speaker_profile — name/speakers/tts_* excluded (no safe default).
 UPDATE speaker_profile SET
     created = created ?? time::now(),
-    updated = updated ?? time::now();
+    updated = updated ?? time::now() RETURN NONE;
