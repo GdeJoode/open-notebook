@@ -271,3 +271,69 @@ Dim stays model-derived (1024), local, no hardcoding.
 NOT run: real backfill against staging (human-gated). Expectation once gated:
 source `dndibxmjveoxk7tfqfsl` embeds its non-empty chunks to dim 1024, skips the
 1 empty table chunk, and does NOT reappear in the missing set.
+
+## R.0e — backfill NONE strict `source` fields (schema-drift fix) (2026-06-26)
+
+Branch `track/r0e-source-field-backfill` (off `main`). Ready for review.
+
+### Blocker
+The R.0 source-aggregate write (`set_aggregate_embedding`, an
+`UPDATE source:x SET embedding=...`) failed for every staging source with
+`Found NONE for field 'private', with record 'source:...', but expected a bool`.
+Legacy rows predate migration 52's `private TYPE bool DEFAULT false`, so they
+carry `private = NONE`. A SCHEMAFULL UPDATE re-validates the WHOLE record, so
+that one NONE blocks ANY write to the row — the aggregate embedding AND the
+app's own source updates. Identical drift class migration 61 fixed for `entity`.
+
+### Drifted-field analysis (empirical, full 1->63 schema)
+Booted a fresh container, ran `INFO FOR TABLE source` + a per-field
+NONE-rejection probe (UNSET each field, attempt a write). Result:
+
+| field | type | rejects NONE? |
+|-------|------|---------------|
+| `private` | `bool DEFAULT false` | **YES — the only one** |
+| `topics` | `option<array<string>>` | no (NONE valid; coalesced to `[]` for hygiene) |
+| `embedding` | `option<array<float>>` | no — NONE intended (mig 63); NOT touched |
+| `asset`, `command`, `full_text`, `metadata`, `title`, `zotero_*` | `option<...>` | no |
+| `created`, `updated` | computed `VALUE` clause | no (never NONE) |
+
+So `private` is the sole strict, non-`option<>`, no-VALUE field — the load-bearing
+fix. Task statement's claim that `topics` would block next is incorrect for the
+migrated schema (it's `option<array<string>>`); coalesced anyway as data hygiene.
+
+### Migration 64 body
+```surrealql
+UPDATE source SET
+    private = private ?? false,
+    topics  = topics  ?? [];
+```
+Idempotent (no-op on clean rows), no schema change. `64_down.surrealql` = documented
+no-op (mirror 61_down; data backfill has no faithful inverse).
+
+### Evidence (per acceptance criterion, all `@requires_docker`, all green)
+1. **Defaults restored** — `test_migration_64_backfills_drifted_strict_fields`:
+   forged legacy row (`private=NONE`, `topics=NONE`) reads back `private=false`,
+   `topics=[]` after 64.
+2. **UPDATE fails pre-64 / passes post-64 (load-bearing)** —
+   `test_migration_64_unblocks_aggregate_embedding_update`: the
+   `UPDATE source:x SET embedding=[...]` raises "Found NONE for field private"
+   pre-64 (`pytest.raises` + asserts "private" in message), succeeds on the SAME
+   row post-64.
+3. **Idempotent** — `test_migration_64_idempotent`: applying 64 twice doesn't
+   raise; a clean row with `private=true` / `topics=['ai','db']` is unchanged
+   (`?? default` no-ops on real values) and stays writable.
+4. **Clean 1->64 chain on fresh container** — existing `test_migrations_applied`
+   derives the expected version set from disk; 64 is applied + recorded.
+5. **64_down present + sane** — comment-only no-op (0 non-comment lines, same
+   shape as 61_down).
+
+Full migrations roundtrip suite: **19 passed** (no regressions).
+
+Drift reproduced faithfully via `REMOVE FIELD -> UNSET -> re-DEFINE` (recreates
+the pre-mig-52 history; a bare DEFINE doesn't backfill existing rows). A plain
+`UPDATE ... UNSET private` is itself rejected by the strict revalidation, so it
+cannot reach the legacy state — hence the remove/redefine dance.
+
+NOT run: the live aggregate / live migration against staging (human-gated).
+Systematic staging strict-field drift: `entity` fixed by mig 61, `source` by
+mig 64; likely other tables carry the same drift.

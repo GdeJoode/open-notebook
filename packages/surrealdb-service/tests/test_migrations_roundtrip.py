@@ -748,3 +748,184 @@ async def test_migration_63_idempotent(live_surrealdb: SurrealDBConfig) -> None:
         config=live_surrealdb,
     )
     assert rows[0].get("embedding") is None
+
+
+# --------------------------------------------------------------------------
+# Migration 64 — backfill NONE strict-typed source fields (Track R.0e)
+# --------------------------------------------------------------------------
+#
+# Legacy staging rows predate migration 52 (`private TYPE bool DEFAULT false`),
+# so they carry `private = NONE`. A SCHEMAFULL UPDATE re-validates the whole
+# record, so that one NONE blocks ANY write to the row — including the R.0
+# source-aggregate embedding UPDATE. Migration 64 coalesces the drifted strict
+# fields (`private`, plus `topics` for data hygiene) back to their defaults,
+# exactly like migration 61 did for `entity`.
+
+
+async def _force_legacy_source_drift(
+    config: SurrealDBConfig, title: str
+) -> str:
+    """Reproduce a pre-migration-52 row: `private` set to NONE on a SCHEMAFULL row.
+
+    A normal CREATE applies the `DEFAULT false`, and a plain `UPDATE ... UNSET
+    private` is itself rejected by the strict revalidation — so neither path
+    reaches the legacy state. The real staging rows reached `private = NONE`
+    because they were created BEFORE migration 52 declared the field. We recreate
+    exactly that history: drop the field definition, UNSET to NONE (now allowed),
+    then re-apply migration 52's DEFINE (which, like SurrealDB DEFAULTs, does NOT
+    rewrite existing rows). The result is a SCHEMAFULL `source` row carrying
+    `private = NONE` — the precise drift migration 64 repairs. Returns the id.
+    """
+    created = await execute_query(
+        "CREATE source SET title = $t, full_text = 'x';",
+        {"t": title},
+        config=config,
+    )
+    rid = created[0]["id"] if isinstance(created, list) else created["id"]
+    rid = str(rid)
+
+    # Temporarily remove the strict definition so NONE becomes assignable...
+    await execute_query("REMOVE FIELD private ON source;", config=config)
+    await execute_query("REMOVE FIELD topics ON source;", config=config)
+    await execute_query(f"UPDATE {rid} UNSET private, topics;", config=config)
+    # ...then restore the exact migration-1 / migration-52 definitions. A bare
+    # DEFINE FIELD does not backfill existing rows, so {rid} keeps private=NONE.
+    await execute_query(
+        "DEFINE FIELD private ON TABLE source TYPE bool DEFAULT false;",
+        config=config,
+    )
+    await execute_query(
+        "DEFINE FIELD topics ON TABLE source TYPE option<array<string>>;",
+        config=config,
+    )
+
+    rows = await execute_query(
+        f"SELECT private, topics FROM {rid};",
+        config=config,
+    )
+    assert rows[0].get("private") is None, "setup: private should be NONE pre-64"
+    assert rows[0].get("topics") is None, "setup: topics should be NONE pre-64"
+    return rid
+
+
+async def _apply_migration_64(config: SurrealDBConfig) -> None:
+    from surrealdb_service.testing import fixtures as fx
+
+    migration_sql = (fx._MIGRATIONS_DIR / "64.surrealql").read_text()
+    await execute_query(migration_sql, config=config)
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_migration_64_backfills_drifted_strict_fields(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Criterion 1: NONE strict fields hold their defaults after migration 64.
+
+    A legacy source with `private = NONE` (and `topics = NONE`) reads back
+    `private = false` / `topics = []` once the backfill runs.
+    """
+    title = _unique("src-64-backfill")
+    rid = await _force_legacy_source_drift(live_surrealdb, title)
+
+    await _apply_migration_64(live_surrealdb)
+
+    rows = await execute_query(
+        f"SELECT private, topics FROM {rid};",
+        config=live_surrealdb,
+    )
+    assert rows[0]["private"] is False
+    assert rows[0]["topics"] == []
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_migration_64_unblocks_aggregate_embedding_update(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Criterion 2 (load-bearing): the embedding UPDATE fails pre-64, passes post-64.
+
+    Reproduces the exact staging blocker: a source whose `private` is NONE
+    rejects the R.0 aggregate-embedding write with "Found NONE for field
+    private". Migration 64 coalesces `private` to false, after which the same
+    UPDATE succeeds.
+    """
+    title = _unique("src-64-embed-unblock")
+    rid = await _force_legacy_source_drift(live_surrealdb, title)
+
+    vector = [float(i) / 10.0 for i in range(8)]
+
+    # --- PRE-64: the aggregate-embedding UPDATE is rejected ---------------
+    with pytest.raises(Exception) as excinfo:  # noqa: B017 — schema error
+        await execute_query(
+            f"UPDATE {rid} SET embedding = $embedding;",
+            {"embedding": vector},
+            config=live_surrealdb,
+        )
+    # The error names the drifted strict field that blocks the whole-record
+    # revalidation — the precise staging symptom.
+    assert "private" in str(excinfo.value)
+
+    # --- migration 64 repairs the drift ----------------------------------
+    await _apply_migration_64(live_surrealdb)
+
+    # --- POST-64: the SAME UPDATE now succeeds ---------------------------
+    await execute_query(
+        f"UPDATE {rid} SET embedding = $embedding;",
+        {"embedding": vector},
+        config=live_surrealdb,
+    )
+    rows = await execute_query(
+        f"SELECT private, embedding FROM {rid};",
+        config=live_surrealdb,
+    )
+    assert rows[0]["private"] is False
+    assert rows[0]["embedding"] is not None
+    assert len(rows[0]["embedding"]) == 8
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_migration_64_idempotent(live_surrealdb: SurrealDBConfig) -> None:
+    """Criterion 3: applying 64 twice is a no-op; a clean row is unchanged.
+
+    Re-running the backfill against an already-repaired DB must not raise, and a
+    source that was never drifted (CREATE applied the DEFAULT) keeps its values.
+    """
+    # A clean row — DEFAULT already applied private=false; topics omitted (NONE,
+    # which is valid for option<array<string>>).
+    clean_title = _unique("src-64-clean")
+    await execute_query(
+        "CREATE source SET title = $t, full_text = 'x', private = true, "
+        "topics = ['ai', 'db'];",
+        {"t": clean_title},
+        config=live_surrealdb,
+    )
+
+    # First application.
+    await _apply_migration_64(live_surrealdb)
+    # Second application — must not raise.
+    await _apply_migration_64(live_surrealdb)
+
+    rows = await execute_query(
+        "SELECT private, topics FROM source WHERE title = $t;",
+        {"t": clean_title},
+        config=live_surrealdb,
+    )
+    # `?? default` is a no-op on a non-NONE value: private stays true, topics
+    # keeps its real list — the backfill never clobbers real data.
+    assert rows[0]["private"] is True
+    assert sorted(rows[0]["topics"]) == ["ai", "db"]
+
+    # And the row is still writable after the double-apply.
+    await execute_query(
+        "UPDATE source SET embedding = [0.1, 0.2] WHERE title = $t;",
+        {"t": clean_title},
+        config=live_surrealdb,
+    )
+    rows = await execute_query(
+        "SELECT embedding FROM source WHERE title = $t;",
+        {"t": clean_title},
+        config=live_surrealdb,
+    )
+    assert rows[0]["embedding"] == pytest.approx([0.1, 0.2])

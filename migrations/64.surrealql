@@ -1,0 +1,36 @@
+-- ============================================================================
+-- Migration 64: backfill NONE strict-typed `source` fields (Track R.0e).
+--
+-- Same drift class migration 61 fixed for `entity`, now on `source`. Track J's
+-- migration 52 added `private ON source TYPE bool DEFAULT false`, but a
+-- SurrealDB column DEFAULT applies only to NEWLY created records — rows that
+-- predate the migration keep NONE. The strict `TYPE bool` then rejects them on
+-- the first UPDATE. Because a SCHEMAFULL UPDATE re-validates the WHOLE record,
+-- that one NONE blocks ANY write to the row, including the source-level
+-- aggregate embedding write (R.0) and the app's own source updates:
+--   "Found NONE for field `private`, with record `source:...`, but expected a bool"
+--
+-- SCOPE — verified empirically against the full 1->63 schema (INFO FOR TABLE
+-- source + a per-field NONE-rejection probe on a fresh container): `private` is
+-- the ONLY strict, non-`option<>`, no-VALUE field on `source`. Every other
+-- field is either `option<...>` (asset, command, embedding, full_text,
+-- metadata, title, topics, zotero_*), which accepts NONE legitimately, or has a
+-- computed `VALUE` clause (created, updated), which can never be NONE. So
+-- `private` is the only field that can block a write — but we also normalize
+-- `topics` here because the legacy staging rows carry `topics = NONE` and `[]`
+-- is the honest "no topics" value the read path expects. `topics` is
+-- `option<array<string>>`, so this is data hygiene (NONE -> []), not a
+-- writability fix; `private` is the load-bearing one.
+--
+-- Explicitly NOT touched: `embedding` is `option<array<float>>` where NONE is
+-- intended ("aggregate not yet computed", migration 63) — coalescing it to []
+-- would corrupt that signal.
+--
+-- This UPDATE coalesces each field to value-or-default. It is idempotent: on a
+-- clean row every `field ?? default` is a no-op; on a drifted row it sets only
+-- the NONE fields. No schema change.
+-- ============================================================================
+
+UPDATE source SET
+    private = private ?? false,
+    topics  = topics  ?? [];
