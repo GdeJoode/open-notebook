@@ -18,6 +18,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from shared.retrieval.kg_signal_normalizer import (
+    canonicalize_relations,
+    normalize_entities_for_signal,
+    remap_relations_to_concepts,
+)
 from shared.retrieval.kg_source_scorer import (
     EntityRecord,
     RelationRecord,
@@ -34,9 +39,28 @@ class KGRetrievalService:
         self,
         entity_repo: EntityRepository,
         source_repo: SourceRepository,
+        *,
+        normalize_signal: bool = True,
+        drop_singletons: bool = True,
     ):
+        """
+        Args:
+            entity_repo: Active entity/relation loaders.
+            source_repo: Source count + title hydration.
+            normalize_signal: Apply the R.6 search-facing normalization
+                (case/type concept unification + predicate canonicalization)
+                before scoring. ON by default; set False to fall back to the raw
+                R.2 signal (the projection is additive + reversible — it never
+                touches the canonical entity/relation rows either way).
+            drop_singletons: When normalizing, drop concepts that appear in only
+                one source (df == 1) — they cannot link two sources, so they
+                contribute nothing to cross-source ranking. Only consulted when
+                ``normalize_signal`` is True.
+        """
         self.entity_repo = entity_repo
         self.source_repo = source_repo
+        self.normalize_signal = normalize_signal
+        self.drop_singletons = drop_singletons
 
     @staticmethod
     def _to_entity_records(
@@ -134,7 +158,25 @@ class KGRetrievalService:
         entity_rows = await self.entity_repo.load_active_entity_source_map()
         if not entity_rows:
             return []
-        entities = self._to_entity_records(entity_rows)
+        raw_entities = self._to_entity_records(entity_rows)
+        entities = raw_entities
+
+        # R.6 search-facing normalization (additive, reversible — canonical
+        # entity rows are untouched): unify case/type-duplicate concepts so they
+        # count as shared, and drop df==1 singletons that can't link sources.
+        if self.normalize_signal:
+            entities, stats = normalize_entities_for_signal(
+                raw_entities, drop_singletons=self.drop_singletons
+            )
+            logger.debug(
+                "R.6 entity normalization: {raw} rows -> {concepts} concepts "
+                "({merged} merged, {dropped} singletons dropped, {emit} emitted)",
+                raw=stats.input_entities,
+                concepts=stats.grouped_concepts,
+                merged=stats.merged_groups,
+                dropped=stats.singletons_dropped,
+                emit=stats.emitted_concepts,
+            )
 
         if n_sources is None:
             n_sources = await self._true_source_count()
@@ -143,6 +185,18 @@ class KGRetrievalService:
         if expand_relations:
             relation_rows = await self.entity_repo.load_active_relations()
             relations = self._to_relation_records(relation_rows)
+            # Predicate canonicalization (EN/NL + typo dedup) before the 1-hop
+            # expansion walks the edges — keeps duplicate-predicate noise from
+            # multiplying through the path. In-memory only.
+            if self.normalize_signal:
+                # Re-key endpoints onto concept ids so adjacency matches the
+                # normalized entity projection (and canonicalize predicates in
+                # the same pass); self-loops from collapsed pairs are dropped.
+                relations = remap_relations_to_concepts(
+                    relations, raw_entities, canonicalize_predicates=True
+                )
+            else:
+                relations = canonicalize_relations(relations)
 
         scored = score_related_sources(
             source_id,

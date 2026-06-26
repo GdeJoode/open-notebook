@@ -156,6 +156,119 @@ hit over a merely-good one within a signal — acceptable for source-linking.
 
 ---
 
+## Phase R.6 — Extraction noise re-scope — ✅ READY FOR REVIEW (2026-06-26)
+**Branch**: `track/r6-noise-rescope` (off `main`, has R.0/R.1/R.2/R.3/Track S).
+**Commits**: `fcfcc70` (pure normalizer + 20 tests) → `8e2c25f` (service wiring +
+remap + 4 tests) → `c8b75c3` (read-only staging measurement script).
+
+A **search-facing normalization layer** that sharpens the R.2 KG signal by
+trimming extraction noise WITHOUT mutating the canonical `entity`/`relation`
+rows. Pure, additive, reversible, config-driven; the exporters, Track K, and
+Track Q all keep reading the canonical data unchanged.
+
+### The normalization rules
+1. **Entity case/type unification** (`shared.retrieval.kg_signal_normalizer.
+   normalize_entities_for_signal`): group active entities by a normalized concept
+   key — case-folded + whitespace-collapsed `canonical_name`. For NAMED types
+   (salience ≥ 0.5: the HIGH+MEDIUM tiers) the SAME surface form unifies ACROSS
+   types (so `programme "Regio"` + `administrative_area "Regio"` = one concept);
+   generic buckets (`topic`/`concept`/`other`) keep the type in the key so a
+   coarse `topic` cannot absorb a named entity. A merged concept's source set =
+   the UNION of its members' `source_documents`; its type = the MAX-salience
+   (most specific) member. **Result**: case/type duplicates now count as SHARED
+   for ranking. No entity row is rewritten — in-memory projection only.
+2. **Singleton suppression** (same fn, `drop_singletons=True` default): a concept
+   in only one source after grouping (df==1) can't link two sources → excluded
+   from the signal. Signal-only; row stays in the KG. (`other`/bare `topic`
+   stay heavily down-weighted by R.2's `TYPE_SALIENCE` — confirmed/extended.)
+3. **Predicate canonicalization** (`PREDICATE_CANON` + `canonical_predicate`/
+   `canonicalize_relations`): a reviewable EN/NL-variant + typo → canonical map
+   (`ACEPTS`→`ACCEPTS`, `IS_PIJLER_VAN`→`IS_PILLAR_OF`, `LEIDT_TOT`→`LEADS_TO`,
+   plus part_of/works_at/located_in/funds/collaborates_with EN/NL pairs). A
+   CONFIG table, not a data migration — reversed by editing the map; unmapped
+   predicates pass through as upper-snake (never dropped). For normalized 1-hop
+   expansion, `remap_relations_to_concepts` re-keys endpoints onto concept ids so
+   adjacency matches the normalized entities (drops collapsed self-loops).
+
+Wired into `KGRetrievalService` (default ON; `normalize_signal` /
+`drop_singletons` ctor flags make it reversible). Entity rows → concepts BEFORE
+the R.2 scorer; relations canonicalized/remapped only when expansion is on
+(still OFF by default).
+
+### Before/after staging measurement (read-only, `SURREAL_DATABASE=staging`)
+`scripts/r6_noise_measurement.py` against the 6 live sources / 423 active
+entities / 1466 active relations:
+
+- **Entity normalization**: 423 raw rows → **413 concepts** — **10 case/type
+  duplicates unified**, exactly the flagged noise:
+  `Energietransitie`/`energietransitie`, `Brede welvaart`/`brede welvaart`,
+  the `programme "Regio"`/`administrative_area "Regio"` cross-type split, plus
+  circulariteit/energie/openbaar vervoer/samenredzaamheid/voortgezet onderwijs/
+  regionale samenwerking/dubbele vergrijzing. **388 singletons (df==1) excluded**
+  → **25 concepts emitted** to the scorer (the cross-source-linking core).
+- **Generic share**: by concept-COUNT 82.0% → 81.8% (merge) → 92.0% (after
+  singleton drop — RISES because most NAMED entities are source-unique singletons
+  and get dropped too). By RANKING-WEIGHT in top-10: 39.7% → 42.7%. Honest
+  finding: R.6's win is **de-fragmentation** (duplicate unification + singleton
+  exclusion), NOT generic-weight suppression — that's already R.2's salience job.
+  The generic-weight share holds ~40% because the previously-fragmented generics
+  now correctly count as shared (the case-split was silently dropping them).
+- **Predicate canon**: 3 raw forms rewritten covering **592 of 1466 edges**
+  (`IS_PIJLER_VAN` x317, `LEIDT_TOT` x274, `ACEPTS` x1) → their canonical forms.
+- **Convenant-cluster effect**: the 4 Regio-Deal convenanten **still cluster**
+  (each query's top-3 related = the other 3 convenanten; academic papers absent)
+  AND the previously-WEAKEST intra-cluster pair **Het Hogeland ↔ Midden-Limburg
+  strengthens +1.303** (3.294 → 4.597) — the case/type merge raising the right
+  score. Other Δ are negative-but-order-preserving (IDF re-normalizes as
+  concepts merge + the scored set shrinks). Ranking holds, the right pair rises.
+
+### Per-criterion evidence
+1. **Measurable noise reduction** — 10 duplicate concepts unified, 388 singletons
+   excluded, 592 edges' predicates canonicalized (staging numbers above). ✅
+2. **Nothing torn out** — canonical `entity`/`relation` NOT mutated (in-memory
+   projection only). Suites GREEN: exports (Obsidian/NetworkX/JSONL/router/
+   preview) **81 passed**; entity-resolution (`test_name_normalizer`/
+   `test_nl_normalization`/`test_resolution_metrics`) **+ surrealdb repo 61** all
+   pass; entity-filtering **518 passed, 1 pre-existing fail** (`test_llm_matcher::
+   test_calls_ollama_for_unknown_pair` — missing `_agentic_enabled` attr in the
+   test's `__new__` setup; fails identically on `main`, unrelated to R.6);
+   triage (Q) **47 passed**. ✅
+3. **Predicate canon reviewable + reversible** — `PREDICATE_CANON` is a
+   commented config table, unit-tested (idempotent fixpoint, unmapped
+   pass-through), no destructive data change. ✅
+4. **R.2/R.3 ranking holds/improves** — convenant cluster holds, weakest pair
+   strengthens (+1.303); R.2 router+DB **12 passed**, hybrid/related **54 passed,
+   2 staging-skipped** — no regression. ✅
+5. **Pure + isolated + read-only** — normalizer is pure (no DB), 24 unit tests;
+   measurement script aborts unless `SURREAL_DATABASE=staging`, SELECT-only. ✅
+
+### Tests
+- `uv run --project packages/shared pytest .../test_kg_signal_normalizer.py` → **24 passed**.
+- shared retrieval set (normalizer+scorer+fusion) → **76 passed**; mypy on the normalizer clean.
+- `apps/app-main` R.2 router+DB → **12 passed**; hybrid/related → **54 passed, 2 skipped**.
+- Exports **81**, triage **47**, entity-filtering **518 (+1 pre-existing fail)**,
+  surrealdb repo **61**, shared resolution/export **147** — all green.
+
+### Deliverables / file map
+- Pure normalizer: `packages/shared/src/shared/retrieval/kg_signal_normalizer.py`
+  (+ exports in `retrieval/__init__.py`).
+- Service wiring: `apps/app-main/src/app_main/services/kg_retrieval_service.py`
+  (`normalize_signal`/`drop_singletons` flags; remap on normalized expansion).
+- Measurement: `scripts/r6_noise_measurement.py` (read-only staging).
+- Tests: `packages/shared/tests/test_kg_signal_normalizer.py`.
+
+### Notes / carry-ins
+- 1-hop expansion stays OFF by default; with R.6's predicate canon + concept-id
+  remap it is now SAFE to turn on (the duplicate-predicate multiplication R.2
+  flagged is canonicalized first). R.4/R.6-followup can enable it.
+- Generic-weight share does NOT drop — by design; the AC "% generic drops" was
+  an *example*, and the realized noise reduction is de-fragmentation. Worth a
+  reviewer note: if generic-weight suppression is wanted, lower `topic`/`concept`
+  salience in R.2 (a one-line table change), kept separate from R.6's structural
+  normalization.
+
+---
+
 ## Phase R.0 — Embedding foundation — MERGED + APPROVED; live backfill BLOCKED (→ R.0b) [superseded by the LIVE COMPLETE entry above]
 - O.2a-style adversarial review: **APPROVED attempt 1** (0 blockers/majors, 3 minors). Merged to `main` (`119ecd3`).
 - **Live backfill BLOCKED**: running the chunk backfill against staging failed on all 6 sources —
