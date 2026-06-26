@@ -403,11 +403,19 @@ class SourceRepository(BaseRepository[Source]):
             if not query_vec or not query_vec[0]:
                 return []
 
+            # ``array::len(embedding) = array::len($q)`` guards the cosine
+            # call: SurrealDB errors if the two vectors differ in length. In
+            # production every source shares one embedding model (one dim), so
+            # this is a no-op there — but it keeps the query robust to legacy /
+            # mixed-dim rows instead of letting one bad vector fail the whole
+            # ranking. The dim is still never hardcoded: it is derived from the
+            # query vector itself.
             rows = await execute_query(
                 "SELECT id, title, "
                 "vector::similarity::cosine(embedding, $q) AS score "
                 "FROM source "
                 "WHERE embedding != NONE AND id != $id "
+                "AND array::len(embedding) = array::len($q) "
                 "ORDER BY score DESC, id ASC "
                 "LIMIT $k",
                 {"q": query_vec[0], "id": rid, "k": int(k)},
