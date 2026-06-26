@@ -52,3 +52,63 @@ a coalescing UPDATE in the SAME migration).
 
 ### Not touched
 Live staging untouched (S.3 is the gated live-apply checkpoint).
+
+---
+
+## Phase S.2b — drift-only WHERE generalization (live-debug fix, attempt 2) — READY FOR REVIEW
+
+**Branch**: `track/s2b-drift-where-generalize` (off `main`).
+**Commits**: `e0d85df` (migration), `154863d` (test).
+
+### Why (adversarial review REVISIONS_NEEDED)
+Migration 65 runs at app STARTUP. A SurrealDB SCHEMAFULL `UPDATE` re-validates
+AND REWRITES every matched row. The original blanket `UPDATE <table> SET f = f ??
+d` matched ALL rows on ~19 tables, so on payload-bearing tables (multi-MB rows)
+it rewrote every row and overwhelmed the WS connection — observed live as a
+startup crash on `extraction_result` (entities/relations multi-MB payloads).
+Attempt 1 patched only `extraction_result` with a drift-only WHERE; the reviewer
+correctly flagged this under-generalizes (`pass1_results`, `job`, `metrics`,
+`dead_letter` payloads could crash the same way on an unscanned env, and the
+migration ships explicitly as insurance for unscanned envs).
+
+### Delivered
+- `migrations/65.surrealql` — drift-only WHERE on ALL 19 UPDATE statements. Each
+  statement's WHERE mirrors its SET field list exactly: one `<f> = NONE` disjunct
+  per coalesced field, OR-joined, `RETURN NONE` retained. On a healthy DB every
+  statement matches 0 rows → zero row rewrites anywhere → true no-op + startup-
+  safe; only genuinely-drifted rows are touched. SET lists UNCHANGED (S.1/S.2
+  validated). Excluded no-safe-default fields untouched. One-line header comment
+  added: "Each UPDATE's WHERE mirrors its SET — drift-only ... Keep WHERE and SET
+  field lists in lockstep."
+- WHERE==SET verified programmatically for all 19 blocks — **zero mismatches**
+  (entity 17, source 1, relation 8, chunk 6, claim 3, dead_letter 3, doc_node 1,
+  entity_suggestion 7, episode_profile 3, extraction_result 6, job 5, metrics 2,
+  model_route 3, pass1_results 6, preprocessing_result 1, triage_queue 6,
+  transformation 1, status_change_log 1, speaker_profile 2).
+- New test `test_extraction_result_drift_repaired_clean_untouched`: forges
+  `extraction_result.entity_count = NONE`, asserts UPDATE fails pre-65 / lands
+  post-65 (drift repaired), AND asserts a clean row (entity_count=7) is untouched
+  — pins the WHERE no-op that keeps startup safe on large rows.
+- Sharpened `test_migration_65_clean_row_unchanged` docstring to frame entity as
+  the generalized-WHERE no-op on a multi-field block.
+
+### Test evidence (per acceptance criterion)
+- **AC1 (WHERE mirrors SET ×19)** — programmatic check above: all 19 match, no
+  reconciliation needed.
+- **AC2 (existing drift tests still pass)** — `test_{entity,source,transformation}_drift_fails_pre_passes_post`
+  all PASS: a drifted row matches its WHERE → repaired.
+- **AC3 (new extraction_result test)** — `test_extraction_result_drift_repaired_clean_untouched`
+  PASS: fail-pre / pass-post + clean-row-untouched.
+- **AC4 (idempotent, full 1→65 chain on fresh container)** — session fixture's
+  strict transactional runner builds a fresh container and applies 1→65 clean;
+  `test_migration_65_discovered_and_applied` + `test_migration_65_idempotent_double_apply`
+  PASS.
+- **AC5 (down no-op)** — `test_migration_65_down_is_noop` PASS.
+
+Run: `9 passed in 7.07s` (full S.2 suite incl. new test) against a real
+SurrealDB container.
+
+### Not touched
+Live staging untouched (already at v65; the file change is version-gated and only
+affects future/unscanned envs). `.serena/project.yml` left as-is (pre-existing
+working-tree change, not part of this phase).
