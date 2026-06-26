@@ -1,6 +1,24 @@
 # Track R — status
 
-## Phase R.0 — Embedding foundation — MERGED + APPROVED; live backfill BLOCKED (→ R.0b)
+## Phase R.0 — ✅ LIVE COMPLETE (2026-06-26)
+The embedding foundation is fully live on `staging`. All 6 sources: non-empty chunks ==
+`source_embedding` count (284/209/135/260/280/279), source-level aggregate vector set, **dim 1024**, local.
+Required FIVE fixes, each adversarially reviewed + merged — the original R.0 was green on tests but the
+REAL run exposed data/infra realities the synthetic container tests didn't:
+- **R.0** (`119ecd3`) — auto-embed on ingest + migration 63 (`source.embedding`) + mean-pool aggregate + backfill.
+- **R.0b** (`4f42537`) — chunk-embedding context-length guard (mxbai ~512 tok; esperanto uses Ollama legacy `/api/embeddings` which ignores truncate → client-side cap + per-text halving).
+- **R.0c** (`c69d16f`) — backfill detects PARTIALLY-embedded sources (`chunk_count > embedding_count`, was `= 0`).
+- **R.0d** (`835d7e6`) — skip empty/whitespace chunks (table/image chunks) on embed AND exclude them from completeness detection (coupled).
+- **R.0e** (`977634a`) — migration 64: coalesce drifted strict `source.private` (NONE→false) so source rows are writable (the aggregate UPDATE was blocked).
+
+Live ops run: orphan GC (10,501→1,448 chunks), migrations 63+64 applied to staging (v62→64), full chunk
+backfill (1447 non-empty chunks, dim 1024), source aggregates (6/6). Follow-ups (→ R.6 / later): `embed_source`
+embeds `is_content=False` noise chunks; `embed_note`/`embed_insight` whole-doc head-truncation; distinct-vector
+alignment test; 2 comment nits in `migrations/64.surrealql`. **Systematic strict-field drift → Track S.**
+
+---
+
+## Phase R.0 — Embedding foundation — MERGED + APPROVED; live backfill BLOCKED (→ R.0b) [superseded by the LIVE COMPLETE entry above]
 - O.2a-style adversarial review: **APPROVED attempt 1** (0 blockers/majors, 3 minors). Merged to `main` (`119ecd3`).
 - **Live backfill BLOCKED**: running the chunk backfill against staging failed on all 6 sources —
   `Ollama API error: the input length exceeds the context length`. `mxbai-embed-large` has a ~512-token
