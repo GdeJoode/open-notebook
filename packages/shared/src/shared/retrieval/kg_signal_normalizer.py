@@ -297,6 +297,55 @@ def normalize_entities_for_signal(
     return projected, stats
 
 
+def concept_id(canonical_name: str, entity_type: str) -> str:
+    """Return the synthetic concept id an entity normalizes to.
+
+    The same id :func:`normalize_entities_for_signal` assigns the grouped
+    concept (``concept::<name-key>|<type-slot>``). Lets callers remap relation
+    endpoints (raw entity ids) onto concept ids so 1-hop expansion runs in the
+    SAME id space as the normalized entity projection.
+    """
+    name_key, type_slot = _concept_key(canonical_name, entity_type)
+    return f"concept::{name_key}|{type_slot}"
+
+
+def remap_relations_to_concepts(
+    relations: Iterable[RelationRecord],
+    entities: Sequence[EntityRecord],
+    *,
+    canonicalize_predicates: bool = True,
+) -> List[RelationRecord]:
+    """Re-key relation endpoints onto concept ids (for normalized expansion).
+
+    When the entity signal is normalized, entities carry synthetic
+    ``concept::...`` ids, but relation endpoints still reference the original
+    entity row ids — so 1-hop expansion would find no adjacency. This maps each
+    endpoint to its concept id (via the raw ``entities`` it knows the
+    name/type for), optionally canonicalizes the predicate, and drops self-loops
+    that collapse when two endpoints normalize to the same concept. Endpoints
+    with no known entity (e.g. dangling) are passed through unchanged so nothing
+    silently vanishes.
+    """
+    id_to_concept: Dict[str, str] = {
+        ent.entity_id: concept_id(ent.canonical_name, ent.entity_type)
+        for ent in entities
+    }
+    out: List[RelationRecord] = []
+    for rel in relations or ():
+        in_c = id_to_concept.get(rel.in_id, rel.in_id)
+        out_c = id_to_concept.get(rel.out_id, rel.out_id)
+        if in_c == out_c:
+            # Both endpoints collapsed to one concept — no longer an edge.
+            continue
+        pred = (
+            canonical_predicate(rel.relation_type)
+            if canonicalize_predicates
+            else rel.relation_type
+        )
+        out.append(RelationRecord(in_id=in_c, out_id=out_c, relation_type=pred))
+    return out
+
+
 def canonical_predicate(relation_type: Optional[str]) -> str:
     """Map a raw predicate to its canonical form via :data:`PREDICATE_CANON`.
 

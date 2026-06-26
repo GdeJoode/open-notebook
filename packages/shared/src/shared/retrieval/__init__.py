@@ -23,7 +23,9 @@ from shared.retrieval.kg_signal_normalizer import (
     NormalizationStats,
     canonical_predicate,
     canonicalize_relations,
+    concept_id,
     normalize_entities_for_signal,
+    remap_relations_to_concepts,
 )
 from shared.retrieval.kg_source_scorer import (
     TYPE_SALIENCE,
@@ -49,7 +51,9 @@ __all__ = [
     "NormalizationStats",
     "canonical_predicate",
     "canonicalize_relations",
+    "concept_id",
     "normalize_entities_for_signal",
+    "remap_relations_to_concepts",
     # Hybrid fusion (R.3)
     "BALANCED",
     "DEFAULT_PRESET",

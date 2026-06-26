@@ -18,7 +18,9 @@ from shared.retrieval.kg_signal_normalizer import (
     PREDICATE_CANON,
     canonical_predicate,
     canonicalize_relations,
+    concept_id,
     normalize_entities_for_signal,
+    remap_relations_to_concepts,
 )
 from shared.retrieval.kg_source_scorer import (
     EntityRecord,
@@ -245,3 +247,65 @@ class TestPredicateCanon:
         assert out[0].relation_type == "ACCEPTS"
         assert out[0].in_id == "entity:a" and out[0].out_id == "entity:b"
         assert out[1].relation_type == "IS_PILLAR_OF"
+
+
+# ---------------------------------------------------------------------------
+# Relation remap to concept ids (normalized 1-hop expansion)
+# ---------------------------------------------------------------------------
+class TestRemapRelations:
+    def test_endpoints_remap_to_concept_ids(self):
+        ents = [
+            _ent("entity:1", "Regio", "programme", ["s:a"]),
+            _ent("entity:2", "Regio Deal", "organization", ["s:b"]),
+        ]
+        rels = [RelationRecord("entity:1", "entity:2", "LEIDT_TOT")]
+        out = remap_relations_to_concepts(rels, ents)
+        assert len(out) == 1
+        assert out[0].in_id == concept_id("Regio", "programme")
+        assert out[0].out_id == concept_id("Regio Deal", "organization")
+        assert out[0].relation_type == "LEADS_TO"
+
+    def test_collapsed_self_loop_dropped(self):
+        """An edge between two rows that normalize to the SAME concept (case
+        split) collapses to a self-loop and is dropped."""
+        ents = [
+            _ent("entity:1", "Energietransitie", "topic", ["s:a"]),
+            _ent("entity:2", "energietransitie", "topic", ["s:b"]),
+        ]
+        rels = [RelationRecord("entity:1", "entity:2", "PART_OF")]
+        out = remap_relations_to_concepts(rels, ents)
+        assert out == []
+
+    def test_unknown_endpoint_passes_through(self):
+        ents = [_ent("entity:1", "Regio", "programme", ["s:a"])]
+        rels = [RelationRecord("entity:1", "entity:dangling", "FUNDS")]
+        out = remap_relations_to_concepts(rels, ents)
+        assert len(out) == 1
+        assert out[0].in_id == concept_id("Regio", "programme")
+        assert out[0].out_id == "entity:dangling"
+
+    def test_expansion_in_concept_space_links_via_relation(self):
+        """Q owns concept X, X--rel--Y (concept), B owns Y -> B is related when
+        expansion runs in the remapped concept id space."""
+        # Three sources; query Q=s:q owns "Alpha" (programme), B=s:b owns "Beta"
+        # (programme); both df==2 so they survive singleton drop only if shared,
+        # so give each a 2nd source to keep them.
+        ents = [
+            _ent("entity:1", "Alpha", "programme", ["s:q", "s:x"]),
+            _ent("entity:2", "Beta", "programme", ["s:b", "s:x"]),
+        ]
+        projected, _ = normalize_entities_for_signal(ents)
+        rels = [RelationRecord("entity:1", "entity:2", "LEIDT_TOT")]
+        remapped = remap_relations_to_concepts(rels, ents)
+        scored = score_related_sources(
+            "s:q",
+            projected,
+            n_sources=3,
+            relations=remapped,
+            expand_relations=True,
+        )
+        ids = [s.source_id for s in scored]
+        # s:b reached via the Alpha--LEADS_TO-->Beta 1-hop path.
+        assert "s:b" in ids
+        beta = next(s for s in scored if s.source_id == "s:b")
+        assert any(c.via_relation for c in beta.contributions)
