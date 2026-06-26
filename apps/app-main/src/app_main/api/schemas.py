@@ -512,6 +512,37 @@ class RelatedSourceResponse(BaseModel):
     score: float
 
 
+class KGSharedEntity(BaseModel):
+    """One shared entity driving a KG-related-source score (Track R.2).
+
+    The per-pair "why matched" lineage: ``weight`` is this entity's contribution
+    (``type_salience × rarity``), ``document_frequency`` how many sources it
+    appears in, ``via_relation`` whether it was reached by a 1-hop relation path
+    (vs directly shared).
+    """
+
+    entity_id: str
+    name: str
+    type: str
+    document_frequency: int
+    weight: float
+    via_relation: bool = False
+
+
+class RelatedSourceKGResponse(BaseModel):
+    """One related source ranked by KG proximity (``/sources/{id}/related-kg``).
+
+    Parallel to :class:`RelatedSourceResponse` (R.1 dense) but the ``score`` is
+    the KG-proximity score (sum of shared-entity weights), and ``explanation``
+    carries the shared entities that drove it.
+    """
+
+    id: str
+    title: Optional[str] = None
+    score: float
+    explanation: List[KGSharedEntity] = Field(default_factory=list)
+
+
 # Context API schemas
 class ContextConfig(BaseModel):
     sources: Dict[str, str] = Field(

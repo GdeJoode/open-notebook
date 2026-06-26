@@ -47,6 +47,7 @@ from app_main.services.entity_extraction_service import EntityExtractionService
 from app_main.services.graph.doc_graph_builder import DocGraphBuilder
 from app_main.services.insight_service import InsightService
 from app_main.services.jsonl_export_service import JsonlExportService
+from app_main.services.kg_retrieval_service import KGRetrievalService
 from app_main.services.knowledge_graph_service import KnowledgeGraphService
 from app_main.services.model_service import ModelService
 from app_main.services.networkx_export_service import NetworkxExportService
@@ -343,6 +344,13 @@ def get_source_service() -> SourceService:
         chunk_repo=get_chunk_repo(),
         insight_repo=get_insight_repo(),
         embedding_repo=get_embedding_repo(),
+    )
+
+
+def get_kg_retrieval_service() -> KGRetrievalService:
+    return KGRetrievalService(
+        entity_repo=get_entity_repo(),
+        source_repo=get_source_repo(),
     )
 
 

@@ -14,6 +14,8 @@ from app_main.api.schemas import (
     ChunkSplitRequest,
     ChunkUpdate,
     CreateSourceInsightRequest,
+    KGSharedEntity,
+    RelatedSourceKGResponse,
     RelatedSourceResponse,
     SourceInsightResponse,
     SourceListResponse,
@@ -25,10 +27,12 @@ from app_main.config import UPLOADS_FOLDER
 from app_main.dependencies import (
     get_chunk_mutator,
     get_chunk_repo,
+    get_kg_retrieval_service,
     get_notebook_service,
     get_source_service,
     get_transformation_service,
 )
+from app_main.services.kg_retrieval_service import KGRetrievalService
 from app_main.exceptions import InvalidInputError
 from app_main.services.chunking.chunk_mutator import (
     ChunkMutationError,
@@ -503,6 +507,78 @@ async def get_related_sources(
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching related sources: {str(e)}",
+        )
+
+
+@router.get(
+    "/{source_id}/related-kg",
+    response_model=List[RelatedSourceKGResponse],
+)
+async def get_related_sources_kg(
+    source_id: str,
+    k: int = Query(
+        5,
+        ge=1,
+        le=50,
+        description="Number of KG-related sources to return (1-50)",
+    ),
+    expand_relations: bool = Query(
+        False,
+        description=(
+            "Opt-in 1-hop relation expansion. Off by default — the 1-hop path "
+            "runs through not-yet-trimmed duplicate-predicate noise (R.6)."
+        ),
+    ),
+    kg_svc: KGRetrievalService = Depends(get_kg_retrieval_service),
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Return the top-``k`` sources related to this one by KG proximity (R.2).
+
+    The KG signal of the hybrid retriever — ranks other sources by SHARED
+    KNOWLEDGE (shared active canonical entities weighted by type salience ×
+    rarity), NOT dense text similarity (that is the parallel ``/related``
+    endpoint). Each result carries the shared entities that drove its score
+    (``explanation``) — the "why matched" lineage.
+
+    A source that exists but shares no active entities with any other source
+    returns an empty list rather than 404. A genuinely missing source is a 404.
+    """
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        related = await kg_svc.find_related_by_kg(
+            source_id, k, expand_relations=expand_relations
+        )
+        return [
+            RelatedSourceKGResponse(
+                id=item["id"],
+                title=item.get("title"),
+                score=item["score"],
+                explanation=[
+                    KGSharedEntity(
+                        entity_id=e["entity_id"],
+                        name=e["name"],
+                        type=e["type"],
+                        document_frequency=e["document_frequency"],
+                        weight=e["weight"],
+                        via_relation=e["via_relation"],
+                    )
+                    for e in item.get("explanation", [])
+                ],
+            )
+            for item in related
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error fetching KG-related sources for {source_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching KG-related sources: {str(e)}",
         )
 
 

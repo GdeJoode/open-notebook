@@ -2322,3 +2322,65 @@ class EntityRepository:
                 "(no cross-type homograph under the current normalizer)"
             )
         return result
+
+    # ------------------------------------------------------------------
+    # Track R Phase R.2 — KG-proximity retrieval signal
+    # ------------------------------------------------------------------
+
+    async def load_active_entity_source_map(self) -> List[Dict[str, Any]]:
+        """Load the active entity → source mapping for KG-proximity scoring (R.2).
+
+        Projects, for every ``status='active'`` canonical entity, the minimal
+        fields the pure :func:`shared.retrieval.score_related_sources` scorer
+        needs: ``id``, ``canonical_name``, ``entity_type`` (drives type
+        salience) and ``source_documents`` (the provenance bag that yields both
+        the source membership and the per-entity document frequency / IDF
+        rarity). The scorer derives ``df`` itself from these bags, so NO grouping
+        is done here — one flat scan, not the N+1 a per-source loop would incur.
+
+        Archived / merged / reference entities are excluded at the query
+        (``status='active'``), so the generic-bucket down-weight in the scorer
+        is the only remaining filter on noise (``topic``/``other`` are kept but
+        weighted low; they are not torn out — R.6 owns the projection trim).
+
+        ``source_documents`` stores STRINGIFIED record ids (see
+        :meth:`upsert_entity`); they are returned as-is so the scorer compares
+        them in the same string space the rest of the codebase uses.
+
+        Returns:
+            A list of ``{"id", "canonical_name", "entity_type",
+            "source_documents"}`` dicts. Empty on failure / no active entities.
+        """
+        try:
+            return await execute_query(
+                "SELECT id, canonical_name, entity_type, source_documents "
+                "FROM entity WHERE status = 'active'",
+                {},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"load_active_entity_source_map failed: {e}")
+            return []
+
+    async def load_active_relations(self) -> List[Dict[str, Any]]:
+        """Load all active relation edges for the R.2 1-hop expansion (optional).
+
+        Only used when KG retrieval runs with relation expansion enabled (gated
+        off by default in the service — the 1-hop path multiplies through the
+        duplicate-predicate noise R.6 has not yet trimmed). Projects the edge
+        endpoints + predicate so the pure scorer can build entity adjacency.
+
+        Returns:
+            A list of ``{"in", "out", "relation_type"}`` dicts (endpoints
+            stringified by ``execute_query``). Empty on failure / no relations.
+        """
+        try:
+            return await execute_query(
+                "SELECT in, out, relation_type FROM relation "
+                "WHERE status = 'active'",
+                {},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"load_active_relations failed: {e}")
+            return []
