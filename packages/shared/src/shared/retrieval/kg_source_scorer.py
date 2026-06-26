@@ -295,7 +295,7 @@ def score_related_sources(
     # and lets us find the query source's own entities in one sweep.
     entity_by_id: Dict[str, EntityRecord] = {}
     entity_sources: Dict[str, Tuple[str, ...]] = {}
-    observed_sources = set()
+    observed_sources: set = set()
     for ent in entities:
         srcs = _dedup_sources(ent.source_documents)
         if not srcs:
@@ -358,7 +358,7 @@ def score_related_sources(
         # Adjacency over entity ids (undirected — a relation links the two
         # endpoints regardless of direction for the purpose of "these two
         # entities are connected").
-        neighbours: Dict[str, set] = {}
+        neighbours: Dict[str, set[str]] = {}
         for rel in relations:
             a, b = str(rel.in_id), str(rel.out_id)
             if a == b:
