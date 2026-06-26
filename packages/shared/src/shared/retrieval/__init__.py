@@ -18,6 +18,13 @@ from shared.retrieval.hybrid_fusion import (
     fuse_rankings,
     get_preset,
 )
+from shared.retrieval.kg_signal_normalizer import (
+    PREDICATE_CANON,
+    NormalizationStats,
+    canonical_predicate,
+    canonicalize_relations,
+    normalize_entities_for_signal,
+)
 from shared.retrieval.kg_source_scorer import (
     TYPE_SALIENCE,
     EntityRecord,
@@ -37,6 +44,12 @@ __all__ = [
     "TYPE_SALIENCE",
     "entity_weight",
     "score_related_sources",
+    # Search-facing noise re-scope (R.6)
+    "PREDICATE_CANON",
+    "NormalizationStats",
+    "canonical_predicate",
+    "canonicalize_relations",
+    "normalize_entities_for_signal",
     # Hybrid fusion (R.3)
     "BALANCED",
     "DEFAULT_PRESET",
