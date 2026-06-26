@@ -355,3 +355,78 @@ cannot reach the legacy state — hence the remove/redefine dance.
 NOT run: the live aggregate / live migration against staging (human-gated).
 Systematic staging strict-field drift: `entity` fixed by mig 61, `source` by
 mig 64; likely other tables carry the same drift.
+
+---
+
+## Phase R.1 — Source-level kNN retrieval + `/sources/{id}/related` — COMPLETE
+
+**Branch**: `track/r1-source-knn` (off `main`, post-R.0 + Track S).
+**Commits**: `50fd2bb` (feat: endpoint + repo/service), `43751b9` (test: unit + container).
+
+### What shipped
+- `SourceRepository.find_related_by_embedding(source_id, k)` — server-side cosine
+  kNN over `source.embedding` aggregates.
+- `SourceService.find_related(source_id, k)` — thin pass-through.
+- `RelatedSourceResponse` schema `{id, title, score}`.
+- `GET /sources/{id}/related?k=` on the sources CRUD sub-router (default k=5,
+  clamped [1,50] by FastAPI `Query(ge=1, le=50)`).
+
+### Cosine approach: **SurrealDB-side** (not Python kNN)
+Ranking runs in SurrealDB via `vector::similarity::cosine(embedding, $q)` — the
+same operator `fn::vector_search` uses for chunk search. Chosen because:
+- Keeps all 1024-dim vectors in the DB; no bulk pull into Python.
+- Reuses a proven path; NONE-handling (`WHERE embedding != NONE`) and
+  deterministic ordering (`ORDER BY score DESC, id ASC`) are one query.
+- A same-dim guard (`array::len(embedding) = array::len($q)`) makes it robust to
+  mixed-dim rows (legacy/cross-test) instead of one bad vector failing the whole
+  ranking. Dim is derived from the query vector — never hardcoded.
+A bounded Python kNN was the documented fallback but wasn't needed: SurrealDB
+ranks source-vs-source cleanly.
+
+### Per-criterion evidence
+1. **Top-k cosine-desc, self excluded** — `WHERE id != $id ORDER BY score DESC`;
+   covered by `test_ranks_by_cosine_excluding_self` + router test; verified live.
+2. **Deterministic + bounded k + more-than-available** — `id ASC` tie-break
+   (`test_tie_break_is_deterministic_by_id`); k clamped by FastAPI (422 on 0/51);
+   k>available returns all (`test_k_limits_and_more_than_available`).
+3. **No aggregate -> graceful** — query source with NONE embedding returns `[]`
+   (`test_query_source_without_aggregate_returns_empty`); NONE sources never
+   appear as results (`test_none_embedding_sources_never_appear_as_results`);
+   missing source -> 404 (router test). Documented: exists-but-no-embedding = `[]`,
+   missing = 404.
+4. **Live staging ranking (read-only, ns=open_notebook db=staging)** — 6 sources,
+   all 1024-dim. The 4 Regio-Deal convenanten cluster:
+
+   `/related` for **Convenant Het Hogeland** (k=5):
+   ```
+   0.9922  Convenant Regio Deal Midden-Limburg
+   0.9911  Convenant Regio Deal Zuidwest-Friesland
+   0.9901  Convenant Regio Deal Noord-Holland Noord
+   0.7937  Economics_without_equilibrium(2)
+   0.7912  J of Common Market Studies - 2025 - Ali
+   ```
+   -> the 3 other convenanten (0.99x) rank above the 2 papers (0.79). YES, the
+   convenanten cluster.
+
+   `/related` for **Economics_without_equilibrium** (k=5):
+   ```
+   0.9084  J of Common Market Studies - 2025 - Ali
+   0.8047  Convenant Regio Deal Noord-Holland Noord
+   0.8010  Convenant Regio Deal Midden-Limburg
+   0.7994  Convenant Regio Deal Zuidwest-Friesland
+   0.7937  Convenant Regio Deal Het Hogeland
+   ```
+   -> the other academic paper ranks top (0.908), convenanten below (0.79-0.80).
+5. **No hardcoded dim; local-only; reads `source.embedding`** — confirmed; dim
+   derived from the stored/query vectors.
+
+### Tests
+`uv run --project apps/app-main pytest apps/app-main/tests -k "related or source_knn or source_retrieval"`
+-> **18 passed** (9 router unit, 5 container roundtrip, 4 incidental matches).
+Adjacent regression (autoembed, backfill, health router): **14 passed**.
+mypy on changed files: no new errors (only pre-existing `shared.models` untyped +
+the pre-existing `get_embedding_count` Any-return).
+
+The mandated bare `-k` selector hits the 4 known-broken top-level `tests/`
+import errors (`api`, `open_notebook` modules) — scope to `apps/app-main/tests`
+to run clean, per the task note.

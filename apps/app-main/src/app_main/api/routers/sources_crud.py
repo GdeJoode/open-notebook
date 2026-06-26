@@ -14,6 +14,7 @@ from app_main.api.schemas import (
     ChunkSplitRequest,
     ChunkUpdate,
     CreateSourceInsightRequest,
+    RelatedSourceResponse,
     SourceInsightResponse,
     SourceListResponse,
     SourceResponse,
@@ -450,6 +451,58 @@ async def get_source_status(
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching source status: {str(e)}",
+        )
+
+
+@router.get(
+    "/{source_id}/related",
+    response_model=List[RelatedSourceResponse],
+)
+async def get_related_sources(
+    source_id: str,
+    k: int = Query(
+        5,
+        ge=1,
+        le=50,
+        description="Number of related sources to return (1-50)",
+    ),
+    source_svc: SourceService = Depends(get_source_service),
+):
+    """Return the top-``k`` sources most similar to this one (Track R.1).
+
+    Dense-only nearest-source retrieval: ranks other sources by cosine
+    similarity of their aggregate ``source.embedding`` vectors, excluding the
+    queried source itself. ``k`` is clamped to [1, 50] by FastAPI validation;
+    requesting more than exist returns all available.
+
+    A source that exists but has no aggregate embedding (NONE — not yet
+    embedded, or no chunk vectors to mean-pool) returns an empty list rather
+    than 404. Such sources also never appear as results. A genuinely missing
+    source returns 404.
+    """
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        related = await source_svc.find_related(source_id, k)
+        return [
+            RelatedSourceResponse(
+                id=item["id"],
+                title=item.get("title"),
+                score=item["score"],
+            )
+            for item in related
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error fetching related sources for {source_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching related sources: {str(e)}",
         )
 
 

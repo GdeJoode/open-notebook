@@ -500,6 +500,18 @@ class SourceListResponse(BaseModel):
     processing_info: Optional[Dict[str, Any]] = None
 
 
+class RelatedSourceResponse(BaseModel):
+    """One related source returned by ``GET /sources/{id}/related`` (R.1).
+
+    ``score`` is the cosine similarity (0..1 for the non-negative mxbai vectors)
+    between the queried source's aggregate embedding and this source's.
+    """
+
+    id: str
+    title: Optional[str] = None
+    score: float
+
+
 # Context API schemas
 class ContextConfig(BaseModel):
     sources: Dict[str, str] = Field(
