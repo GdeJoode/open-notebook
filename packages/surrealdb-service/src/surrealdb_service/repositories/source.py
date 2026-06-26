@@ -436,6 +436,38 @@ class SourceRepository(BaseRepository[Source]):
             )
             return []
 
+    async def get_titles_by_ids(
+        self, source_ids: List[str]
+    ) -> Dict[str, Optional[str]]:
+        """Batch-fetch source titles for a list of ids (Track R.2 hydration).
+
+        The KG scorer returns ranked source *ids* only; the service hydrates
+        them to ``{id, title, ...}`` for the API. Doing it in one ``id IN``
+        query (not a per-id loop) keeps the related-KG endpoint a fixed two
+        round-trips regardless of ``k``. Missing ids simply don't appear in the
+        returned map (the caller falls back to ``None``).
+
+        Args:
+            source_ids: Source record-id strings to resolve.
+
+        Returns:
+            A dict mapping stringified source id -> title (may be ``None`` for a
+            source with no title). Empty on empty input / failure.
+        """
+        if not source_ids:
+            return {}
+        try:
+            record_ids = [ensure_record_id(s) for s in source_ids]
+            rows = await execute_query(
+                "SELECT id, title FROM source WHERE id IN $ids",
+                {"ids": record_ids},
+                self.config,
+            )
+            return {str(r["id"]): r.get("title") for r in (rows or [])}
+        except Exception as e:
+            logger.error(f"Failed to batch fetch source titles: {e}")
+            return {}
+
     async def list_with_metadata(
         self,
         notebook_id: Optional[str] = None,
