@@ -279,6 +279,13 @@ DEFINE FIELD IF NOT EXISTS created ON TABLE new_feature TYPE datetime DEFAULT ti
 DEFINE FIELD IF NOT EXISTS updated ON TABLE new_feature TYPE datetime DEFAULT time::now();
 ```
 
+> ⚠️ **Adding a strict field to an EXISTING `SCHEMAFULL` table?** A `DEFAULT` only
+> applies to new rows, so pre-existing rows keep `NONE` and the strict type then blocks
+> ALL future writes to those rows. In the SAME migration, backfill:
+> `UPDATE <table> SET <field> = <field> ?? <default> WHERE <field> = NONE RETURN NONE;`
+> See [`migrations/README.md`](../../migrations/README.md) for the full rule and the
+> reference fixes (migrations 61/64/65).
+
 ## 🧪 Testing Guidelines
 
 ### Test Structure
