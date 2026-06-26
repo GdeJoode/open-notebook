@@ -108,6 +108,54 @@ shared-entity scoring ships as the reliable core. (Covered by 4 unit tests.)
 
 ---
 
+## Phase R.3 — Hybrid ranker / fusion — ✅ READY FOR REVIEW (2026-06-26)
+**Branch**: `track/r3-hybrid-ranker` (off `main`, has R.0/R.1/R.2/Track S).
+**Commits**: `b6a2d94` (pure RRF core), `eadbce8` (service + endpoint + n_sources fix), `d635cbf` (staging test).
+
+### Fusion method: Reciprocal Rank Fusion (RRF) — chosen over normalize-then-sum
+The two signals are on different scales (dense cosine ∈ [0,1]; KG = unbounded
+weighted sum, ~2.5–6.2 on staging). RRF fuses on **rank, not raw score**:
+`fused(doc) = Σ_signal w_signal · 1/(k + rank_signal(doc))` with `k=60` (the
+Cormack et al. 2009 default). Picked over min-max / z-score normalize-then-sum
+because normalization is dominated by the outlier KG magnitudes (one large KG
+score compresses every other source toward 0); RRF discards magnitudes entirely,
+which is exactly right when one signal is bounded and the other is an unbounded
+sum. Trade-off recorded in the module docstring: RRF can't reward a runaway top
+hit over a merely-good one within a signal — acceptable for source-linking.
+
+### Default + presets (KG-prominent, config-tunable)
+- **Default = `kg-heavy`** preset: `dense=1.0, kg=3.0` (KG weight 3× dense) — honours the locked steer.
+- **`balanced`** preset: `dense=1.0, kg=1.0` (still KG-prominent: kg==dense).
+- Endpoint tuning: `?preset=` and explicit `?w_kg=&w_dense=` (override the preset; a partial override fills from the preset). Weights live in `shared.retrieval.hybrid_fusion` (`FusionWeights`, `KG_HEAVY`, `BALANCED`, `PRESETS`).
+
+### Deliverables
+1. Pure fusion `fuse_rankings()` (no I/O) — RRF over `[(src,score)]` dense + `[(src,score,explanation)]` KG → ranked `FusedResult`s with per-signal score/rank/contribution + KG driving entities. `packages/shared/src/shared/retrieval/hybrid_fusion.py`.
+2. `HybridRetrievalService` — calls R.1 dense + R.2 KG (passing true `n_sources`), pulls a wider-than-k pool from each, fuses, truncates. `apps/app-main/src/app_main/services/hybrid_retrieval_service.py`.
+3. `GET /sources/{id}/related-hybrid?k=&preset=&w_kg=&w_dense=&expand_relations=` — parallel to R.1 `/related` and R.2 `/related-kg`. Returns fused ranking + provenance.
+4. Ablation harness in the pure tests: constructed disagreement case (dense order ≠ KG order) where KG-only, dense-only, and fused all differ; removing either signal changes the order ⇒ neither is dead weight.
+5. `n_sources` fix: `KGRetrievalService.find_related_by_kg` now fetches `source_repo.count()` (true 6) for the IDF instead of the inferred entity-bearing subset (4).
+
+### Acceptance evidence
+1. **AC1 fused + provenance** — endpoint returns fused ranking; each result has `dense{score,rank,contribution}`, `kg{score,rank,contribution}`, `kg_entities`. Router + service unit tests.
+2. **AC2 ablation** — `test_hybrid_fusion.py::TestAblation`: fused ≠ dense-only AND ≠ kg-only on a disagreement case; `test_removing_dense_changes_the_order` / `test_removing_kg_changes_the_order` prove each signal moves the ranking.
+3. **AC3 weight reorder** — `TestWeightTuning`: balanced vs kg-heavy provably flip the winner (A↔B); service test `test_weight_change_reorders` confirms end-to-end.
+4. **AC4 one-signal source kept** — `TestMissingSignal` + service `test_one_signal_source_not_dropped`; on staging the 2 sources with no entities (`1k3c…`, `bc6x…`) still rank with `kg rank=None`.
+5. **AC5 live staging (read-only, SURREAL_DATABASE=staging)** — reported fused rankings for 3 query sources; the 4 entity-bearing convenanten cluster at top, both signals agree there. Weight change reorders top-5 on 2 of 3 queries (3rd: both signals already agree). Provenance populated (driving entities incl. "Regio Deal", "Ondermijnende criminaliteit"). `test_source_related_hybrid_staging.py` (gated, skips off staging).
+6. **AC6 true n_sources** — staging IDF denominator = **6** (true source count), not 4 (entity-bearing subset). `test_count_failure_falls_back_to_none`, `test_passes_count_to_scorer`, and the staging `test_staging_uses_true_source_count_in_idf` assert it. No hardcoded dim/cloud.
+
+### Tests
+- `uv run --project packages/shared pytest packages/shared/tests/test_hybrid_fusion.py` → **25 passed** (RRF math, missing-signal, weight tuning, ablation, provenance, presets).
+- `uv run --project apps/app-main pytest apps/app-main/tests -k "hybrid or related or kg_retriev"` → **54 passed, 2 skipped** (staging skipped off-staging).
+- Live staging (env `SURREAL_DATABASE=staging`): `pytest -m requires_staging test_source_related_hybrid_staging.py` → **2 passed** read-only.
+- mypy on new files clean.
+
+### Notes / carry-ins for the reviewer
+- `expand_relations` stays OFF by default (forwarded to R.2's gated 1-hop; runs through R.6 noise). The relation-path discount the carry-in mentions is moot while expansion is off; if R.4/R.6 turn it on, the discount belongs in the R.2 scorer (`via_relation` weight), not the fusion.
+- Pool depth: the service pulls `max(25, min(4·k, 100))` from each signal before fusing so cross-signal disagreement past the top-k cutoff isn't hidden.
+- The `.serena/project.yml` working-tree edit is pre-existing and untouched.
+
+---
+
 ## Phase R.0 — Embedding foundation — MERGED + APPROVED; live backfill BLOCKED (→ R.0b) [superseded by the LIVE COMPLETE entry above]
 - O.2a-style adversarial review: **APPROVED attempt 1** (0 blockers/majors, 3 minors). Merged to `main` (`119ecd3`).
 - **Live backfill BLOCKED**: running the chunk backfill against staging failed on all 6 sources —
