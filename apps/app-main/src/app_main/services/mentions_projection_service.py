@@ -22,6 +22,7 @@ from loguru import logger
 from shared.retrieval.kg_source_scorer import EntityRecord
 from shared.retrieval.mentions_projection import (
     MentionEdge,
+    MentionsProjectionStats,
     project_mentions_edges,
 )
 
@@ -123,6 +124,29 @@ class MentionsProjectionService:
             used for the IDF (so a dry-run can report the exact figure a live
             regenerate would persist).
         """
+        edges, effective_n, _stats = await self._project(
+            drop_singletons=drop_singletons,
+            min_weight=min_weight,
+            named_only=named_only,
+            n_sources=n_sources,
+        )
+        return edges, effective_n
+
+    async def _project(
+        self,
+        *,
+        drop_singletons: bool,
+        min_weight: float,
+        named_only: bool,
+        n_sources: Optional[int] = None,
+    ) -> tuple[List[MentionEdge], int, MentionsProjectionStats]:
+        """Single source of the projection: load active entities once, project.
+
+        Returns ``(edges, n_sources, stats)`` so callers get the edge list AND
+        the projection stats (``input_entities`` = active-entity count,
+        ``emitted_concepts``) from ONE active-entity load — :meth:`regenerate`
+        threads these through rather than re-loading the entities a second time.
+        """
         entity_rows = await self.entity_repo.load_active_entity_source_map()
         records = self._to_entity_records(entity_rows)
         if n_sources is None:
@@ -149,7 +173,7 @@ class MentionsProjectionService:
             mw=stats.min_weight,
             n=effective_n,
         )
-        return edges, effective_n
+        return edges, effective_n, stats
 
     async def regenerate(
         self,
@@ -176,7 +200,7 @@ class MentionsProjectionService:
         Returns:
             A :class:`RegenerateMentionsResult` with the cleared/created counts.
         """
-        edges, n_sources = await self.project_edges(
+        edges, n_sources, stats = await self._project(
             drop_singletons=drop_singletons,
             min_weight=min_weight,
             named_only=named_only,
@@ -209,15 +233,15 @@ class MentionsProjectionService:
             else:
                 failed += 1
 
-        # Recompute concept/active counts for the result without a second DB hit:
-        # they are stable across project_edges, so re-derive from a cheap stats
-        # pass would duplicate work — instead approximate from the edge set.
-        emitted_concepts = len({(e.entity_id) for e in edges})
-        active_entities = len(
-            await self.entity_repo.load_active_entity_source_map()
-        )
+        # Concept/active counts come from the SINGLE projection pass above (no
+        # second active-entity load): ``input_entities`` is the active-entity
+        # count and ``emitted_concepts`` is the post-R.6 concept count BEFORE the
+        # min_weight cut, so it is accurate even when a weight cutoff filters
+        # edges out (the edge-set approximation would have under-counted there).
+        emitted_concepts = stats.emitted_concepts
+        active_entities = stats.input_entities
 
-        effective_min_weight = max(min_weight, 0.3) if named_only else min_weight
+        effective_min_weight = stats.min_weight
         logger.info(
             "mentions regenerated: cleared={cleared} created={created} "
             "failed={failed} (min_weight={mw})",

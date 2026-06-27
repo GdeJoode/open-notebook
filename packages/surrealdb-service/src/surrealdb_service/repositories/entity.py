@@ -2463,7 +2463,13 @@ class EntityRepository:
             document_frequency: The concept's df (distinct-source count).
 
         Returns:
-            True on success, False on a bad id / transport error.
+            True on success; False when an endpoint id is missing or malformed.
+
+        Raises:
+            RuntimeError: On a transport-level / SurrealQL failure of the RELATE
+                (mirrors the other write helpers in this repo). The regenerator
+                wraps this call and counts a raised edge as ``failed`` rather
+                than aborting the whole rebuild.
         """
         if not source_id or not entity_id:
             return False
