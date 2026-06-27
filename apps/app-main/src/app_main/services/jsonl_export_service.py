@@ -122,6 +122,10 @@ from shared.models.entity import Entity, Relation
 from shared.models.export import ExportFilter, ExportReport, JsonlExportRequest
 from shared.services.metrics import record_metric
 
+from app_main.services.document_layer_export import (
+    DocumentLayer,
+    fetch_document_layer,
+)
 from app_main.services.obsidian_export_service import (
     EXCLUDED_ENTITY_STATUSES,
     ObsidianExportService,
@@ -156,19 +160,26 @@ class JsonlExportService:
         self,
         entity_repository: Any,
         relation_repository: Optional[Any] = None,
+        source_repository: Optional[Any] = None,
     ) -> None:
         """Wire repository dependencies.
 
         Args:
             entity_repository: Object with
                 ``list_entities_for_notebook(notebook_id, filter)`` and
-                ``list_relations_for_notebook(notebook_id, filter)``.
+                ``list_relations_for_notebook(notebook_id, filter)``. Also
+                supplies ``load_mentions_edges()`` for the U.5 document layer.
             relation_repository: Reserved for a future split where
                 relations migrate to their own repo. Defaults to the
                 entity repo (both methods live there today).
+            source_repository: ``SourceRepository`` supplying the U.5
+                document-layer seams. ``None`` (pre-U.5 wiring) makes
+                ``include_document_layer`` a no-op — the entity-only streams
+                are unchanged.
         """
         self._entity_repo = entity_repository
         self._relation_repo = relation_repository or entity_repository
+        self._source_repo = source_repository
 
     async def stream_jsonl(
         self,
@@ -212,6 +223,11 @@ class JsonlExportService:
         entities_written = 0
         relations_written = 0
         bytes_written = 0
+        files_written = 2  # entities.jsonl + relations.jsonl (the U1 baseline)
+        # U.5 document-layer counts (stay 0 unless the flag is set).
+        source_nodes_written = 0
+        mentions_written = 0
+        cites_written = 0
 
         try:
             entities, relations = await self._collect(notebook_id, request.filter)
@@ -254,6 +270,32 @@ class JsonlExportService:
                         fh.write(line)
                         relations_written += 1
 
+                # ----------------------------------------------------------
+                # Track U.5 document layer — additive extra files, gated.
+                # With the flag off this block does not run, so the archive
+                # contains exactly entities.jsonl + relations.jsonl (the
+                # pre-U.5 output). When on, three more newline-delimited
+                # files are added: sources.jsonl, mentions.jsonl, cites.jsonl
+                # (cites.jsonl is present-but-empty until Track V feeds
+                # references, so a consumer can rely on the file existing).
+                # ----------------------------------------------------------
+                if (
+                    request.filter.include_document_layer
+                    and self._source_repo is not None
+                ):
+                    layer = await fetch_document_layer(
+                        notebook_id,
+                        surviving_entity_ids=surviving_ids,
+                        entity_repo=self._entity_repo,
+                        source_repo=self._source_repo,
+                    )
+                    (
+                        source_nodes_written,
+                        mentions_written,
+                        cites_written,
+                    ) = self._write_document_layer(archive, layer)
+                    files_written += 3  # sources + mentions + cites
+
             payload = buf.getvalue()
             bytes_written = len(payload)
 
@@ -292,14 +334,23 @@ class JsonlExportService:
         finally:
             duration_ms = int((time.monotonic() - started) * 1000)
             if error_payload is None:
+                doc_metadata: Optional[Dict[str, Any]] = None
+                if request.filter.include_document_layer:
+                    doc_metadata = {
+                        "document_layer": {
+                            "source_nodes": source_nodes_written,
+                            "mentions_edges": mentions_written,
+                            "cites_edges": cites_written,
+                        }
+                    }
                 report = ExportReport(
                     entities_written=entities_written,
                     relations_written=relations_written,
-                    files_written=2,  # entities.jsonl + relations.jsonl
+                    files_written=files_written,
                     bytes_written=bytes_written,
                     duration_ms=duration_ms,
                     filter_applied=request.filter,
-                    metadata=None,
+                    metadata=doc_metadata,
                 )
                 metric_payload: Dict[str, Any] = report.model_dump(mode="json")
             else:
@@ -363,6 +414,59 @@ class JsonlExportService:
         )
 
         return entities, relations
+
+    # ------------------------------------------------------------------
+    # Document layer (Track U.5)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _write_document_layer(
+        archive: zipfile.ZipFile,
+        layer: DocumentLayer,
+    ) -> tuple[int, int, int]:
+        """Write sources.jsonl + mentions.jsonl + cites.jsonl into the archive.
+
+        All three files are written even when empty (notably cites.jsonl on the
+        0-citation corpus) so a downstream loader can rely on the member names
+        existing. Returns ``(source_nodes, mentions_edges, cites_edges)``.
+        """
+        source_nodes = 0
+        with archive.open("sources.jsonl", "w") as fh:
+            for node in layer.source_nodes:
+                row = {"id": node.id, "title": node.title, "kind": "source"}
+                fh.write((json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8"))
+                source_nodes += 1
+
+        mentions = 0
+        with archive.open("mentions.jsonl", "w") as fh:
+            for m in layer.mentions:
+                mrow: Dict[str, Any] = {
+                    "source": m.source_id,
+                    "target": m.entity_id,
+                    "edge_kind": "mentions",
+                    "weight": m.weight,
+                    "concept_name": m.concept_name,
+                    "concept_type": m.concept_type,
+                    "document_frequency": m.document_frequency,
+                }
+                fh.write((json.dumps(mrow, ensure_ascii=False) + "\n").encode("utf-8"))
+                mentions += 1
+
+        cites = 0
+        with archive.open("cites.jsonl", "w") as fh:
+            for c in layer.cites:
+                crow: Dict[str, Any] = {
+                    "source": c.from_source_id,
+                    "target": c.to_source_id,
+                    "edge_kind": "cites",
+                    "confidence": c.confidence,
+                    "reference_text": c.reference_text,
+                    "match_method": c.match_method,
+                }
+                fh.write((json.dumps(crow, ensure_ascii=False) + "\n").encode("utf-8"))
+                cites += 1
+
+        return source_nodes, mentions, cites
 
     # ------------------------------------------------------------------
     # Per-line serialisation

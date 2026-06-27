@@ -109,6 +109,11 @@ from shared.models.entity import Entity, Relation
 from shared.models.export import ExportFilter, ExportReport, NetworkxExportRequest
 from shared.services.metrics import record_metric
 
+from app_main.services.document_layer_export import (
+    DocumentLayer,
+    fetch_document_layer,
+)
+
 
 # ---------------------------------------------------------------------------
 # Repository protocol -- only the two methods we call, so tests can pass
@@ -129,6 +134,10 @@ class _GraphBuildSummary:
     entities_written: int
     relations_written: int
     dropped_relations: int
+    # Track U.5 document layer (0 unless include_document_layer is set).
+    source_nodes_written: int = 0
+    mentions_written: int = 0
+    cites_written: int = 0
 
 
 # Entity statuses that should never reach an exporter regardless of the
@@ -150,6 +159,7 @@ class NetworkxExportService:
         self,
         entity_repository: Any,
         relation_repository: Optional[Any] = None,
+        source_repository: Optional[Any] = None,
     ) -> None:
         """Wire repository dependencies.
 
@@ -158,15 +168,23 @@ class NetworkxExportService:
                 ``list_entities_for_notebook(notebook_id, filter)`` and
                 ``list_relations_for_notebook(notebook_id, filter)``.
                 In production this is ``EntityRepository`` (both methods
-                live on the entity repo per D.0).
+                live on the entity repo per D.0). Also supplies
+                ``load_mentions_edges()`` for the U.5 document layer.
             relation_repository: Reserved for a future split where
                 relations migrate to a dedicated repository. Today both
                 methods live on the entity repo, so callers usually pass
                 ``None`` and the service uses ``entity_repository`` for
                 both lookups.
+            source_repository: ``SourceRepository`` supplying the U.5
+                document-layer seams (``load_notebook_source_ids``,
+                ``load_cites_edges``, ``get_titles_by_ids``). Optional —
+                ``None`` (the pre-U.5 wiring) simply means the document
+                layer is unavailable and ``include_document_layer`` is a
+                no-op, so the entity-only path is unchanged.
         """
         self._entity_repo = entity_repository
         self._relation_repo = relation_repository or entity_repository
+        self._source_repo = source_repository
 
     async def export(
         self,
@@ -196,6 +214,18 @@ class NetworkxExportService:
 
         duration_ms = int((time.monotonic() - started) * 1000)
 
+        # Compose per-format extras only when there is something to report —
+        # keeps the metadata key absent (None) on the common entity-only path.
+        metadata: Dict[str, Any] = {}
+        if summary.dropped_relations:
+            metadata["dropped_relations"] = summary.dropped_relations
+        if request.filter.include_document_layer:
+            metadata["document_layer"] = {
+                "source_nodes": summary.source_nodes_written,
+                "mentions_edges": summary.mentions_written,
+                "cites_edges": summary.cites_written,
+            }
+
         report = ExportReport(
             entities_written=summary.entities_written,
             relations_written=summary.relations_written,
@@ -203,9 +233,7 @@ class NetworkxExportService:
             bytes_written=len(payload),
             duration_ms=duration_ms,
             filter_applied=request.filter,
-            metadata={
-                "dropped_relations": summary.dropped_relations,
-            } if summary.dropped_relations else None,
+            metadata=metadata or None,
         )
 
         # Telemetry -- counts only, no IDs per Q-D-8.
@@ -304,12 +332,109 @@ class NetworkxExportService:
             graph.add_edge(src, dst, **self._edge_attrs(relation))
             relations_written += 1
 
+        # ------------------------------------------------------------------
+        # Track U.5 document layer (additive, gated, backward-compatible).
+        # With the flag off this block does not run at all, so the entity-
+        # only graph above is byte-for-byte the pre-U.5 output.
+        # ------------------------------------------------------------------
+        source_nodes_written = 0
+        mentions_written = 0
+        cites_written = 0
+        if filter_.include_document_layer and self._source_repo is not None:
+            layer = await fetch_document_layer(
+                notebook_id,
+                surviving_entity_ids=node_ids,
+                entity_repo=self._entity_repo,
+                source_repo=self._source_repo,
+            )
+            (
+                source_nodes_written,
+                mentions_written,
+                cites_written,
+            ) = self._add_document_layer(graph, layer, entity_node_ids=node_ids)
+
         return _GraphBuildSummary(
             graph=graph,
             entities_written=len(node_ids),
             relations_written=relations_written,
             dropped_relations=dropped,
+            source_nodes_written=source_nodes_written,
+            mentions_written=mentions_written,
+            cites_written=cites_written,
         )
+
+    @staticmethod
+    def _add_document_layer(
+        graph: nx.DiGraph,
+        layer: DocumentLayer,
+        *,
+        entity_node_ids: set[str],
+    ) -> Tuple[int, int, int]:
+        """Add ``source`` nodes + ``mentions`` / ``cites`` edges to the graph.
+
+        Every node/edge carries a ``node_kind`` / ``edge_kind`` discriminator so
+        a downstream consumer can split the entity layer from the document layer
+        WITHOUT re-deriving it from id prefixes. The pre-existing entity nodes
+        are tagged ``node_kind="entity"`` for symmetry; ``relation`` edges that
+        were added above carry ``edge_kind="relation"`` (set on each node/edge
+        here for the entity layer too, so the discriminator is total).
+
+        Returns ``(source_nodes, mentions_edges, cites_edges)`` actually added.
+        """
+        # Tag the pre-existing entity layer so the discriminator is total —
+        # a consumer can filter on node_kind/edge_kind for either layer.
+        for nid in entity_node_ids:
+            graph.nodes[nid]["node_kind"] = "entity"
+        for _, _, data in graph.edges(data=True):
+            data.setdefault("edge_kind", "relation")
+
+        source_nodes = 0
+        for node in layer.source_nodes:
+            graph.add_node(
+                node.id,
+                node_kind="source",
+                title=node.title,
+                # Mirror the entity node attribute keys so a single-format
+                # consumer sees a consistent attribute set across node kinds
+                # (GraphML/GEXF require the key set to be declarable).
+                canonical_name=node.title,
+                entity_type="Document",
+            )
+            source_nodes += 1
+
+        mentions = 0
+        for m in layer.mentions:
+            # The entity endpoint is guaranteed present (the layer pruned to
+            # surviving_entity_ids); the source endpoint is a node we just
+            # added. Skip defensively if either is somehow absent.
+            if m.entity_id not in graph or m.source_id not in graph:
+                continue
+            graph.add_edge(
+                m.source_id,
+                m.entity_id,
+                edge_kind="mentions",
+                weight=float(m.weight),
+                concept_name=m.concept_name,
+                concept_type=m.concept_type,
+                document_frequency=int(m.document_frequency),
+            )
+            mentions += 1
+
+        cites = 0
+        for c in layer.cites:
+            if c.from_source_id not in graph or c.to_source_id not in graph:
+                continue
+            graph.add_edge(
+                c.from_source_id,
+                c.to_source_id,
+                edge_kind="cites",
+                confidence=float(c.confidence),
+                reference_text=c.reference_text,
+                match_method=c.match_method,
+            )
+            cites += 1
+
+        return source_nodes, mentions, cites
 
     @staticmethod
     def _node_attrs(entity: Entity) -> Dict[str, Any]:

@@ -566,6 +566,9 @@ def get_networkx_export_service() -> NetworkxExportService:
     return NetworkxExportService(
         entity_repository=entity_repo,
         relation_repository=entity_repo,
+        # U.5 document layer: the source repo answers the notebook→source
+        # scoping + cites/title seams. Off unless the filter opts in.
+        source_repository=get_source_repo(),
     )
 
 
@@ -582,6 +585,8 @@ def get_jsonl_export_service() -> JsonlExportService:
     return JsonlExportService(
         entity_repository=entity_repo,
         relation_repository=entity_repo,
+        # U.5 document layer: off unless the filter opts in.
+        source_repository=get_source_repo(),
     )
 
 

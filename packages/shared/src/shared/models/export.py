@@ -105,6 +105,20 @@ class ExportFilter(BaseModel):
             "rows are tombstones, not export material."
         ),
     )
+    include_document_layer: bool = Field(
+        default=False,
+        description=(
+            "Track U.5 document graph. When True, the graph-native exporters "
+            "(NetworkX, JSONL) ADD a document layer on top of the entity "
+            "graph: ``source`` nodes plus ``mentions`` (document->entity) and "
+            "``cites`` (document->document) edges from the materialized U.2/U.3 "
+            "projections, scoped to the notebook's sources. Defaults False so "
+            "the entity-only output is byte-for-byte unchanged -- existing "
+            "entity-graph consumers are never affected. The Obsidian (markdown "
+            "vault) exporter ignores this knob; the document layer does not map "
+            "onto a flat-vault model (see the U.5 architecture note)."
+        ),
+    )
 
 
 class ObsidianExportRequest(BaseModel):

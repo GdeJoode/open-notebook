@@ -594,6 +594,44 @@ class SourceRepository(BaseRepository[Source]):
             logger.error(f"load_source_records failed: {e}")
             return []
 
+    async def load_notebook_source_ids(self, notebook_id: str) -> List[str]:
+        """Resolve a notebook's source ids via the ``reference`` edge (U.5).
+
+        Mirrors the notebook→source traversal
+        :meth:`EntityRepository.list_entities_for_notebook` opens with: the
+        source↔notebook link lives on the ``reference`` RELATE edge (migration 1),
+        so the notebook's sources are ``SELECT VALUE in FROM reference WHERE
+        out = notebook``.
+
+        The document-layer export (U.5) needs this to scope the global
+        ``mentions`` / ``cites`` edge tables — which are notebook-agnostic
+        materialized projections — to the sources that belong to the notebook
+        being exported, so the entity-graph and document-graph layers describe
+        the SAME corpus slice. Read-only; returns stringified ``source:...`` ids.
+
+        Args:
+            notebook_id: Record id of the notebook (e.g. ``"notebook:abc"``).
+
+        Returns:
+            Stringified source ids referenced by the notebook. Empty on empty
+            input, an empty notebook, or query failure.
+        """
+        if not notebook_id:
+            return []
+        try:
+            rows = await execute_query(
+                "SELECT VALUE in FROM reference "
+                "WHERE out = type::thing($notebook_id)",
+                {"notebook_id": notebook_id},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(
+                f"load_notebook_source_ids failed for '{notebook_id}': {e}"
+            )
+            return []
+        return [str(r) for r in (rows or []) if r]
+
     async def count_cites(self) -> int:
         """Count rows in the ``cites`` edge table."""
         try:
