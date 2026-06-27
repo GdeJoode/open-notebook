@@ -183,8 +183,8 @@ matches the actual export byte-for-byte.
 | Endpoint | Service module | Metric event | Notes |
 |---|---|---|---|
 | `POST /api/notebooks/{id}/export-obsidian` | `apps/app-main/src/app_main/services/obsidian_export_service.py` | `export.obsidian` | Two modes: `mode="zip"` streams an in-memory zip (one `.md` per entity + `README.md`); `mode="vault_path"` writes the same files directly to `Settings.vault_path / Settings.vault_entities_folder` via per-file `tempfile + os.replace` (POSIX atomic rename). The vault-path branch is the sole async export surface, dispatched through `JobType.EXPORT_OBSIDIAN` in `apps/app-main/src/app_main/handlers.py` (Q-D-2). |
-| `POST /api/notebooks/{id}/export-jsonl` | `apps/app-main/src/app_main/services/jsonl_export_service.py` | `export.jsonl` | Streaming zip of `entities.jsonl` + `relations.jsonl`. Build-then-stream (Q-D-7): `model_dump(mode="json", exclude={"embedding"})` per row, written into the open ZIP member then yielded in 16KB chunks. Per-line keys are Neo4j-`apoc.load.json`-compatible (`source_entity`/`target_entity` not `in`/`out`). |
-| `POST /api/notebooks/{id}/export-networkx` | `apps/app-main/src/app_main/services/networkx_export_service.py` | `export.networkx` | Builds a `networkx.DiGraph` then serialises to one of 7 formats: **GraphML**, **GEXF**, **GML**, **JSON-tree**, **edge-list**, **adjacency-list**, **pickle**. Attribute flattening contract: `type_tags` → CSV string, `properties` → JSON-encoded string; round-trip tests confirm flatten/unflatten preserves data (Risk 5). |
+| `POST /api/notebooks/{id}/export-jsonl` | `apps/app-main/src/app_main/services/jsonl_export_service.py` | `export.jsonl` | Streaming zip of `entities.jsonl` + `relations.jsonl`. Build-then-stream (Q-D-7): `model_dump(mode="json", exclude={"embedding"})` per row, written into the open ZIP member then yielded in 16KB chunks. Per-line keys are Neo4j-`apoc.load.json`-compatible (`source_entity`/`target_entity` not `in`/`out`). **Track U.5**: with `filter.include_document_layer=True`, adds `sources.jsonl` + `mentions.jsonl` + `cites.jsonl` (the document graph; `cites.jsonl` present-but-empty until Track V). |
+| `POST /api/notebooks/{id}/export-networkx` | `apps/app-main/src/app_main/services/networkx_export_service.py` | `export.networkx` | Builds a `networkx.DiGraph` then serialises to one of 7 formats: **GraphML**, **GEXF**, **GML**, **JSON-tree**, **edge-list**, **adjacency-list**, **pickle**. Attribute flattening contract: `type_tags` → CSV string, `properties` → JSON-encoded string; round-trip tests confirm flatten/unflatten preserves data (Risk 5). **Track U.5**: with `filter.include_document_layer=True`, adds `source` nodes + `mentions`/`cites` edges, tagged `node_kind`/`edge_kind` so the two layers stay separable. See §9. |
 | `GET /api/notebooks/{id}/export-preview?filter=…` | inlined `_export_preview` fn in `apps/app-main/src/app_main/api/routers/exports.py` | (no metric — read-only) | Counts-only surface used by the Obsidian dialog + JSONL popover before the user submits an export. Applies the **same** filter pipeline (see below) so dialog counts and actual export counts cannot drift. |
 
 All routers live in `apps/app-main/src/app_main/api/routers/exports.py`;
@@ -327,7 +327,95 @@ falsifiable canary (asserts the embedding-service source contains no
 fair-use caution (local for high-volume extraction, cloud for summarization), and
 how to enable/disable providers.
 
-## 9. Further reading
+## 9. Document relatedness: computed vs materialized (Tracks R + U)
+
+There are two ways the system knows that two documents are related, and they
+are deliberately kept separate because they answer different questions.
+
+### The computed layer (Track R — search)
+
+R.1/R.2/R.3 compute document relatedness **on the fly**, at query time, and
+store no edges:
+
+- **R.1 content similarity** — cosine over the source aggregate embeddings
+  (`SourceRepository.find_related_by_embedding`). A continuous signal; turning
+  it into an edge would need a threshold, which throws information away.
+- **R.2 shared-entity salience** — `packages/shared/src/shared/retrieval/kg_source_scorer.py`
+  scores "these two documents share entity X" by `salience(X) × rarity(X)` so a
+  rare, on-topic entity counts far more than a generic one shared by everything.
+- **R.3 hybrid fusion** — `packages/shared/src/shared/retrieval/hybrid_fusion.py`
+  blends the two into the ranked "related documents" the UI shows.
+
+This layer is cheap, always current (it reads canonical data directly), and
+needs **no upkeep** — re-extract a document and the next query already reflects
+it. It is the right tool for *search* and *"show me related documents"*.
+
+### The materialized layer (Track U — navigate / draw / export / traverse)
+
+The materialized layer persists real edges so the document graph can be
+*walked, drawn, exported, and run through graph algorithms* — things a
+per-query score cannot do:
+
+- **`mentions` (source → entity)** — `packages/shared/src/shared/retrieval/mentions_projection.py`
+  + `MentionsProjectionService`. A **regenerated projection** of
+  `entity.source_documents`, carrying the SAME R.2 weight and the SAME R.6
+  entity filtering as the search signal, so the drawn/exported graph matches
+  search by construction. Adds **nothing** to search — its entire value is the
+  graph being real.
+- **`cites` (source → source)** — `packages/shared/src/shared/retrieval/cites_matching.py`
+  + `CitesMaterializationService`. The genuinely **new** information: discrete
+  citation facts that live nowhere else. **Persisted once** from confident
+  intra-corpus reference matches (precision-first), fed by Track V.
+
+### When to use which
+
+| Need | Use | Why |
+|---|---|---|
+| "Documents related to this one" (search/UI) | **Computed** (R.1–R.3) | No threshold loss, always current, no upkeep |
+| Draw the document graph (U.4 viz) | **Materialized** `mentions` (+`cites`) | A canvas needs nodes + edges, not a score |
+| Export the graph (U.5 NetworkX/JSONL) | **Materialized** | A file is a static snapshot of edges |
+| Graph traversal / algorithms (centrality, paths) | **Materialized** | Algorithms run on an edge set |
+| Genuinely-new citation facts | **Materialized** `cites` only | Computed layer never had this information |
+
+The guiding rule: **don't double-store what you already cheaply compute.**
+`mentions` is materialized only because viz/export/traversal need a real graph,
+not because it adds a signal (it doesn't). `cites` is materialized because it
+*is* new data with nowhere else to live.
+
+### The sync model
+
+The two materialized tables have **different** maintenance contracts:
+
+- **`mentions` = regenerated projection (stateless).** It is a derived view of
+  `entity.source_documents`; the canonical data is the array + the extraction.
+  `MentionsProjectionService.regenerate()` clears and rebuilds it idempotently
+  on demand (a re-run yields the identical edge set, no duplicates). It must be
+  re-run after a re-extraction or entity merge changes the array, but it carries
+  no state of its own — losing the table loses nothing.
+- **`cites` = persisted once (stateful).** The matched citation edges ARE the
+  data; there is no array to re-project from. Track V parses references and
+  hands `CitesMaterializationService` a `{source_id: [ParsedReference]}` map;
+  the service matches them against in-corpus sources (precision-first) and
+  RELATEs confident matches with their confidence + matched reference text. On
+  the current corpus this is a clean **0-edge no-op** (no parseable intra-corpus
+  citations until Track V feeds references), but the mechanism is built + tested.
+
+Both materialized tables are **notebook-agnostic** global edge tables. The U.5
+exporters scope them to one notebook's source set
+(`SourceRepository.load_notebook_source_ids`, via the `reference` edge) so the
+exported document layer describes the same corpus slice as the entity layer, and
+prune `mentions` to entity nodes that survived the export filter (no dangling
+endpoints). The export document layer is **additive and gated** behind
+`ExportFilter.include_document_layer` (default off), so entity-only exports are
+byte-for-byte unchanged. See `apps/app-main/src/app_main/services/document_layer_export.py`.
+
+> **SurrealDB `RELATE` is not idempotent on its own** — a repeated `(in, out)`
+> writes a *second* row rather than collapsing. Both materializers therefore
+> **clear before they relate** (and `cites` additionally de-dups `(origin,
+> target)` within a run). Idempotency is a property of the regenerator, not of
+> `RELATE`.
+
+## 10. Further reading
 
 - `docs/SUMMARIZATION_APPROACHES.md` — design + status of all 11 summarization strategies
 - `docs/KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md` — KG architecture and roadmap
@@ -338,5 +426,6 @@ how to enable/disable providers.
 - `docs/tracks/A-mineru/RETRO.md` — Track A retrospective (parser-engine routing)
 - `docs/tracks/B-kg-quality/RETRO.md` — Track B retrospective (multi-schema KG)
 - `docs/tracks/D-output-richness/RETRO.md` — Track D retrospective (export surfaces)
+- `docs/tracks/U-document-graph/status.md` — Track U retrospective (document graph: `mentions`/`cites`, computed-vs-materialized)
 - `docs/tracks/J-model-routing/OPERATOR_GUIDE.md` — cloud/local routing: env keys, privacy model, fair-use, enable/disable
 - `docs/troubleshooting/exports.md` — failure-mode diagnostics for the three export formats
