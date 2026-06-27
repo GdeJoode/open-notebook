@@ -316,6 +316,26 @@ export function useSourceChunks(sourceId: string, enabled = true) {
   })
 }
 
+/**
+ * Hybrid related-sources retrieval for a source (Track R.5).
+ *
+ * Returns the fused dense + KG ranking. A source with no aggregate embedding
+ * and no shared entities returns [] from the backend (not an error), which the
+ * consuming component renders as a friendly empty state.
+ */
+export function useRelatedSources(
+  sourceId: string,
+  opts?: { k?: number; preset?: 'kg-heavy' | 'balanced'; enabled?: boolean }
+) {
+  return useQuery({
+    queryKey: QUERY_KEYS.sourceRelated(sourceId),
+    queryFn: () =>
+      sourcesApi.getRelatedHybrid(sourceId, { k: opts?.k, preset: opts?.preset }),
+    enabled: !!sourceId && (opts?.enabled ?? true),
+    staleTime: 60 * 1000,
+  })
+}
+
 export function useUpdateChunk(sourceId: string) {
   const queryClient = useQueryClient()
   return useMutation({

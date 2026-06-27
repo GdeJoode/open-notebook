@@ -23,6 +23,7 @@ export const QUERY_KEYS = {
   source: (id: string) => ['sources', id] as const,
   sourceStatus: (id: string) => ['sources', id, 'status'] as const,
   sourceChunks: (id: string) => ['sources', id, 'chunks'] as const,
+  sourceRelated: (id: string) => ['sources', id, 'related-hybrid'] as const,
   settings: ['settings'] as const,
   sourceChatSessions: (sourceId: string) => ['source-chat', sourceId, 'sessions'] as const,
   sourceChatSession: (sourceId: string, sessionId: string) => ['source-chat', sourceId, 'sessions', sessionId] as const,
