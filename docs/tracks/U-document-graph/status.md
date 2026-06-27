@@ -257,3 +257,27 @@ DEFAULT; the table is empty; the regenerator supplies values explicitly.
   already separates `external` / `ambiguous` / `self_citations_skipped` counts.
 - No router/endpoint was added (out of the infrastructure brief); the service is
   DI-wired (`get_cites_materialization_service`) and ready for U.4/U.5 to consume.
+
+### Review attempt 1 — REVISIONS_NEEDED → fixed (commit `7cd5d72`)
+- **🔴 Blocker (origin mis-attribution).** `_origin_of` reverse-looked-up a
+  match's citing source by value equality; two distinct origins citing the same
+  target with a value-equal `ParsedReference` both resolved to the first origin
+  → the second real citation was silently dropped (precision-over-recall defect).
+  **Fix (option b):** `CitationMatch` now carries `from_source_id` THROUGH the
+  pipeline (set by `match_corpus_references`); the service reads the true origin
+  off each match and the fragile `_origin_of` reverse-lookup is deleted. Robust
+  even if a copy is returned.
+  - Regression: `test_two_origins_cite_same_target_value_equal_reference`
+    (container) asserts BOTH `brakman→ali` AND `policy→ali` persist, `created==2`;
+    `test_two_origins_same_target_value_equal_ref_attributed_distinctly` (pure)
+    asserts each match carries its own origin.
+- **🔵 Minor 1.** `created` now counts DISTINCT persisted `(origin, target)`
+  pairs, and the service skips a duplicate pair within a run — SurrealDB `RELATE`
+  does NOT collapse a repeated `(in, out)` (it writes a second row), so the dedup
+  keeps the edge table one-row-per-pair (true idempotency) and `created` matches
+  it. Regression: `test_same_origin_target_twice_counts_once` (created==1, 1 row).
+- **🔵 Minor 2.** `cites_materialization_service` import alphabetized in
+  `dependencies.py`.
+- **Re-run after fix:** pure matcher **18 passed**, materialization **9 passed**,
+  migration 67 **5 passed**. mypy: pure clean; service only the pre-existing
+  workspace `import-untyped` baseline (no new errors). Staging untouched.
