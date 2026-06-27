@@ -1,0 +1,14 @@
+-- ============================================================================
+-- Migration 66 DOWN: no-op.
+--
+-- Migration 66 is a self-healing schema repair: it re-asserts the canonical
+-- `mentions` TYPE RELATION FROM source TO entity definition (the shape the
+-- ontology always intended; the physical table had drifted to TYPE ANY
+-- SCHEMALESS). There is no faithful inverse —
+--   * reverting `mentions` to TYPE ANY would re-break `RELATE source ->
+--     mentions -> entity` and is exactly the drift 66 exists to fix; and
+--   * `mentions` is a DERIVED projection of `entity.source_documents` (Track
+--     U.2) — the canonical data lives in the entity rows, so the edge table can
+--     be regenerated at will and has no state worth a destructive rollback.
+-- Down intentionally does nothing; mirrors migration 62's down convention.
+-- ============================================================================

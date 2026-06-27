@@ -1,0 +1,75 @@
+-- ============================================================================
+-- Migration 66: define the `mentions` edge table as a proper
+--   TYPE RELATION FROM source TO entity
+-- so the document↔entity bipartite graph (Track U.2) can be RELATEd, traversed,
+-- drawn and exported.
+--
+-- Background. The ontology (schema_core.yaml) defines a `MENTIONS`
+-- relationship (CreativeWork → Person/Org/Place/Event/Thing). On staging the
+-- physical `mentions` table was auto-created as the SurrealDB default
+--   DEFINE TABLE mentions TYPE ANY SCHEMALESS
+-- (verified via INFO FOR DB on 2026-06-27), NOT a relation table — so
+-- `RELATE source -> mentions -> entity` would store an untyped record rather
+-- than a graph edge, and the table holds 0 rows. The sibling edge tables
+-- (`cites`, `discusses`, `authored_by`) are already correct
+-- `TYPE RELATION IN source OUT ...`; `mentions` is the one that drifted.
+--
+-- Strategy (mirrors migration 62's non-destructive remediation of `relation`):
+--   1. DELETE only null-endpoint junk rows (in = NONE OR out = NONE). A real
+--      `mentions` edge always has non-null in/out, so this is a no-op on a
+--      healthy table and only clears the non-edge junk a drifted TYPE ANY table
+--      could hold (which would otherwise block the RELATION redefine). A blanket
+--      `DELETE mentions` would WIPE healthy edges — exactly the destructive
+--      mistake migration 58 made for `relation`; 62 fixed it with this
+--      null-endpoint-only predicate and 66 follows suit.
+--   2. DEFINE TABLE OVERWRITE ... TYPE RELATION FROM source TO entity. On
+--      SurrealDB >= 2.1.4 (staging runs v2) OVERWRITE converts the drifted
+--      TYPE ANY table to a RELATION table; on an already-correct RELATION table
+--      OVERWRITE re-asserts the identical definition and PRESERVES existing edge
+--      records (the empirical fact migration 62 established and its container
+--      test proves), so it is a safe no-op for healthy edges.
+--   3. DEFINE the edge fields with OVERWRITE. `weight` is the U.2 projection
+--      weight (R.2 salience × rarity); the rest mirror the `relation` provenance
+--      shape (migration 39) so the materialized layer is uniform.
+--
+-- Strict-field / S.4 note. Every strict field below carries a DEFAULT, and the
+-- table is EMPTY (0 rows on staging; the regenerator clears+recreates anyway),
+-- so there are NO pre-existing rows to drift — no backfill UPDATE is required
+-- (the drift-only-WHERE coalesce of migration 65 applies to tables that already
+-- hold rows; `mentions` does not). `mentions` rows are only ever written by the
+-- U.2 regenerator via RELATE-with-SET, which supplies `weight`/`concept_*`
+-- explicitly, so the DEFAULTs are a safety floor, never the live value.
+--
+-- Idempotent + forward-only: the DELETE matches nothing on a second pass and
+-- every OVERWRITE re-asserts an identical definition. Down is a documented
+-- no-op (a schema repair has no faithful inverse; reverting to TYPE ANY would
+-- re-break RELATE — the very drift this fixes).
+-- ============================================================================
+
+-- 1. Drop ONLY null-endpoint junk rows (the non-edge records a drifted TYPE ANY
+--    table could hold). Real `mentions` edges always have non-null in/out, so
+--    this never touches them — no-op on the empty staging table AND on any
+--    healthy edge set.
+DELETE mentions WHERE in = NONE OR out = NONE;
+
+-- 2. Re-assert the canonical edge definition. Converts a drifted TYPE ANY table
+--    to RELATION on v2; identical no-op (edges preserved) on an already-correct
+--    RELATION table.
+DEFINE TABLE OVERWRITE mentions SCHEMAFULL TYPE RELATION FROM source TO entity;
+
+-- 3. Edge fields. `weight` is the U.2 projection weight (R.2 salience × rarity);
+--    `concept_name` / `concept_type` / `document_frequency` carry the per-edge
+--    "why" (the shared concept that drove the link, for the viz + export). The
+--    provenance fields mirror migration 39's `relation` shape so the
+--    materialized layer is uniform and the regenerator can be reasoned about
+--    the same way.
+DEFINE FIELD OVERWRITE weight ON mentions TYPE float DEFAULT 0.0;
+DEFINE FIELD OVERWRITE concept_name ON mentions TYPE string DEFAULT "";
+DEFINE FIELD OVERWRITE concept_type ON mentions TYPE string DEFAULT "";
+DEFINE FIELD OVERWRITE document_frequency ON mentions TYPE int DEFAULT 0;
+
+DEFINE FIELD OVERWRITE projection_method ON mentions TYPE string DEFAULT "source_documents";
+DEFINE FIELD OVERWRITE created_at ON mentions TYPE datetime DEFAULT time::now();
+
+-- Indexes (OVERWRITE so a re-apply or a legacy index set converges).
+DEFINE INDEX OVERWRITE idx_mentions_weight ON mentions FIELDS weight;

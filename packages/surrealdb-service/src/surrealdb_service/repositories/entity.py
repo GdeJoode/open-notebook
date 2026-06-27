@@ -2384,3 +2384,165 @@ class EntityRepository:
         except Exception as e:
             logger.error(f"load_active_relations failed: {e}")
             return []
+
+    # ------------------------------------------------------------------
+    # Track U Phase U.2 — `mentions` (source → entity) edge projection
+    # ------------------------------------------------------------------
+    #
+    # `mentions` is a DERIVED, regenerated view of ``entity.source_documents``
+    # (migration 66 defines it ``TYPE RELATION FROM source TO entity``). These
+    # methods are the DB seam the ``MentionsProjectionService`` composes into one
+    # idempotent regenerate; the canonical entity/source rows are NEVER mutated —
+    # only the `mentions` edge table is written. Re-running clears then recreates
+    # so the edge set is byte-identical with no duplicates (the U.2 idempotency
+    # contract).
+
+    async def clear_mentions(self) -> int:
+        """Delete every ``mentions`` edge (the clear half of regeneration).
+
+        Returns the number of edges removed so the regenerator can report the
+        before/after delta. A bare ``DELETE mentions`` is correct here precisely
+        because the table is a regenerated projection — unlike migration 66
+        (a schema repair that must preserve any healthy edges), the regenerator
+        OWNS the edge set and rebuilds it from ``entity.source_documents`` on the
+        next step, so clearing all of it is the intended, reversible operation.
+
+        Returns:
+            The count of edges deleted (0 on an already-empty table / failure).
+        """
+        try:
+            before = await self.count_mentions()
+            await execute_query("DELETE mentions;", {}, self.config)
+            return before
+        except Exception as e:
+            logger.error(f"clear_mentions failed: {e}")
+            return 0
+
+    async def count_mentions(self) -> int:
+        """Count rows in the ``mentions`` edge table."""
+        try:
+            result = await execute_query(
+                "SELECT count() AS total FROM mentions GROUP ALL", {}, self.config
+            )
+            if result:
+                return int(result[0].get("total", 0))
+            return 0
+        except Exception as e:
+            logger.error(f"count_mentions failed: {e}")
+            return 0
+
+    async def relate_mention(
+        self,
+        source_id: str,
+        entity_id: str,
+        *,
+        weight: float,
+        concept_name: str = "",
+        concept_type: str = "",
+        document_frequency: int = 0,
+    ) -> bool:
+        """RELATE one ``source -> mentions -> entity`` edge with its weight.
+
+        Mirrors the RELATE discipline of :meth:`repoint_relations`: the arrow
+        positions need bare record-id literals (SurrealDB issue #4232 — params in
+        the ``in``/``out`` slots are rejected), and the ids are ``source:<alnum>``
+        / ``entity:<alnum>`` record ids straight from the DB (no user input), so
+        interpolating them is safe; all metadata is bound as parameters.
+
+        The edge data fields are the migration-66 shape: ``weight`` (the U.2
+        projection weight) plus the per-edge "why" (``concept_name`` /
+        ``concept_type`` / ``document_frequency``). ``projection_method`` /
+        ``created_at`` take their migration-66 DEFAULTs.
+
+        Args:
+            source_id: The ``source:...`` endpoint (edge ``in``).
+            entity_id: The ``entity:...`` endpoint (edge ``out``).
+            weight: The projected edge weight (R.2 salience × rarity).
+            concept_name: The shared concept's surface name (the "why").
+            concept_type: The concept's unified entity type.
+            document_frequency: The concept's df (distinct-source count).
+
+        Returns:
+            True on success, False on a bad id / transport error.
+        """
+        if not source_id or not entity_id:
+            return False
+        # Validate the ids by parsing them (rejects malformed input) but RELATE
+        # needs the literal string form in the arrow positions.
+        try:
+            src = str(ensure_record_id(source_id))
+            tgt = str(ensure_record_id(entity_id))
+        except Exception as e:
+            logger.error(
+                f"relate_mention: bad id source={source_id!r} "
+                f"entity={entity_id!r}: {e}"
+            )
+            return False
+        try:
+            await execute_query(
+                f"RELATE {src}->mentions->{tgt} SET "
+                "weight = $weight, concept_name = $concept_name, "
+                "concept_type = $concept_type, "
+                "document_frequency = $document_frequency;",
+                {
+                    "weight": float(weight),
+                    "concept_name": concept_name or "",
+                    "concept_type": concept_type or "",
+                    "document_frequency": int(document_frequency),
+                },
+                self.config,
+            )
+            return True
+        except Exception as e:
+            logger.exception(
+                f"relate_mention failed for {source_id}->{entity_id}: {e}"
+            )
+            raise
+
+    async def load_mentions_edges(
+        self,
+        *,
+        min_weight: float = 0.0,
+        source_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Load materialized ``mentions`` edges for viz / traversal / export (U.4).
+
+        Returns the document↔entity edges with their endpoints and weight/why
+        metadata. ``in`` / ``out`` are stringified record ids (``source:...`` /
+        ``entity:...``) by ``execute_query``.
+
+        Args:
+            min_weight: Optional per-edge weight floor (default 0.0 — return all).
+                The full graph is small; the caller (or a UI slider) can raise
+                this to the 0.3 named-only preset for a clean overview.
+            source_id: Optional scope to edges incident on a single source
+                (the source-detail / single-document neighbourhood view).
+
+        Returns:
+            A list of ``{"id", "source", "target", "weight", "concept_name",
+            "concept_type", "document_frequency"}`` dicts. Empty on failure.
+        """
+        clauses: List[str] = []
+        params: Dict[str, Any] = {}
+        if min_weight is not None and min_weight > 0.0:
+            clauses.append("weight >= $min_weight")
+            params["min_weight"] = float(min_weight)
+        if source_id:
+            try:
+                params["src"] = ensure_record_id(source_id)
+                clauses.append("in = $src")
+            except Exception as e:
+                logger.error(f"load_mentions_edges: bad source_id {source_id!r}: {e}")
+                return []
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        try:
+            return await execute_query(
+                "SELECT id, in AS source, out AS target, weight, "
+                "concept_name, concept_type, document_frequency "
+                f"FROM mentions{where} ORDER BY weight DESC",
+                params,
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"load_mentions_edges failed: {e}")
+            return []
