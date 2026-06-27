@@ -1286,6 +1286,38 @@ detection + K.3 merge. **Expected**: `other` 27%→<5%, `primary_type` 0%→>90%
 
 ---
 
+## Track U — Document graph (documents as first-class nodes) (NEW)
+
+> **Status**: ✅ CLOSED (2026-06-28). The KG now contains DOCUMENTS as nodes,
+> connected (a) via the entities they share (`mentions`) and (b) directly
+> (`cites`). Key finding from U.1: the schema ALREADY existed — the ontology
+> defined these edges but they were empty. Track U filled the document-centric
+> layer the design anticipated. See [`docs/tracks/U-document-graph/status.md`](./tracks/U-document-graph/status.md).
+
+**Vision**: documents are first-class graph nodes, not just an array on each
+entity. Two materialized edge layers make the document graph real (traversable /
+drawable / exportable), complementing — not replacing — the Track R computed
+search signal (see `ARCHITECTURE.md` §9, computed-vs-materialized).
+
+**Phases**: U.1 design + measurement (decision gate; confirmed 0 intra-corpus
+citations on this corpus → `cites` built as mechanism, deferred as data) · U.2
+`mentions` (source→entity) regenerated projection of `entity.source_documents`,
+R.2-weighted, R.6-filtered (67 edges on staging) · U.3 `cites` (source→source)
+citation materialization — precision-first matcher + Track V input contract
+(`ParsedReference`), 0 live edges by design until Track V feeds references · U.4
+document graph in the KG visualization (bipartite view, entity-layer toggle,
+a11y fallback) · U.5 richer NetworkX/JSONL exports (gated document layer) +
+computed-vs-materialized architecture note + RETRO.
+
+**Value**: navigation / visualization / export / graph-algorithms + the
+genuinely-new citation facts. It does NOT add search value (R.1–R.3 already
+compute shared-entity + similarity relatedness on the fly). Scales with corpus
+size — the more documents share entities / cite each other, the richer the graph.
+**Depends on**: R (computed layer it complements), B.8 (entity persistence).
+**Feeds / waits on**: Track V (reference extraction) for live `cites` edges.
+
+---
+
 ## Bijlagen
 
 - `docs/REFACTOR_PLAN.md` — voltooide refactor (Phase 0-7)
