@@ -36,6 +36,12 @@ from shared.retrieval.kg_source_scorer import (
     entity_weight,
     score_related_sources,
 )
+from shared.retrieval.mentions_projection import (
+    NAMED_ONLY_MIN_WEIGHT,
+    MentionEdge,
+    MentionsProjectionStats,
+    project_mentions_edges,
+)
 
 __all__ = [
     # KG signal (R.2)
@@ -54,6 +60,11 @@ __all__ = [
     "concept_id",
     "normalize_entities_for_signal",
     "remap_relations_to_concepts",
+    # mentions projection (U.2)
+    "MentionEdge",
+    "MentionsProjectionStats",
+    "NAMED_ONLY_MIN_WEIGHT",
+    "project_mentions_edges",
     # Hybrid fusion (R.3)
     "BALANCED",
     "DEFAULT_PRESET",
