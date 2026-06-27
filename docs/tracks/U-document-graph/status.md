@@ -281,3 +281,141 @@ DEFAULT; the table is empty; the regenerator supplies values explicitly.
 - **Re-run after fix:** pure matcher **18 passed**, materialization **9 passed**,
   migration 67 **5 passed**. mypy: pure clean; service only the pre-existing
   workspace `import-untyped` baseline (no new errors). Staging untouched.
+
+---
+
+## Phase U.5 — Integration: exports + docs + RETRO — READY FOR REVIEW
+
+**Branch**: `track/u5-integration` (off `main` @ `f07d6b4`, has U.1/U.2/U.3/U.4
++ migrations 66/67)
+**Date**: 2026-06-28
+
+### What was built — richer graph-native exports
+
+The document layer (U.2 `mentions` + U.3 `cites`) now flows into the two
+**graph-native** exporters (NetworkX D.3, JSONL D.2), gated behind a new
+`ExportFilter.include_document_layer` flag (**default off** → entity-only output
+byte-for-byte unchanged; existing entity-graph consumers unaffected).
+
+1. **Shared fetcher** —
+   `apps/app-main/src/app_main/services/document_layer_export.py`
+   (`fetch_document_layer`). One place that: resolves the notebook's sources via
+   the `reference` edge, scopes the global `mentions`/`cites` tables to that set,
+   **prunes `mentions` to surviving entity nodes** (no dangling endpoints), keeps
+   `cites` intra-notebook only, and anchors `source` nodes to the edges they
+   participate in (isolated sources are NOT injected — an isolated node carries
+   no graph information in an export, unlike the U.4 viz). Returns a plain
+   dataclass both exporters render.
+2. **NetworkX** — adds `source` nodes + `mentions`/`cites` edges to the
+   `DiGraph`, every node/edge tagged `node_kind`/`edge_kind` so a consumer can
+   split the entity layer from the document layer without re-deriving from id
+   prefixes. Round-trips through all 7 formats (GraphML mixed-attribute verified).
+   Counts surface in `report.metadata["document_layer"]`.
+3. **JSONL** — adds `sources.jsonl` + `mentions.jsonl` + `cites.jsonl` as extra
+   zip members (entities/relations.jsonl unchanged). `cites.jsonl` is written
+   **present-but-empty** so a downstream loader can rely on the member existing
+   (Track V readiness).
+4. **Repo seam** — `SourceRepository.load_notebook_source_ids` (notebook→source
+   via the `reference` edge, mirroring the entity-export traversal). DI updated
+   so both exporters receive the source repo.
+5. **Obsidian: out of scope (justified).** Obsidian is a flat markdown vault,
+   one `.md` per *entity*; the document↔entity bipartite layer + document↔document
+   citations don't map onto that model without inventing a parallel note kind.
+   The exporter ignores `include_document_layer`; the rationale is documented on
+   the flag + in the architecture note. (Revisit if/when an Obsidian "source
+   notes" vault mode is wanted — out of U.5 acceptance.)
+
+### Staging measurement (read-only, `SURREAL_DATABASE=staging`)
+
+The user has since run the gated U.2 regenerate: staging now persists **67
+`mentions` edges** + **0 `cites` edges** over **6 sources**. A document-layer
+export of `notebook:t6639pcftyishmguonmc` (all 6 sources):
+
+| Exporter | source nodes | mentions edges | cites edges |
+|---|---|---|---|
+| NetworkX (pickle) | **4** | **67** | 0 |
+| JSONL | sources.jsonl **4** | mentions.jsonl **67** | cites.jsonl **0** (present, empty) |
+
+**67 mentions edges** match U.2 exactly. **4 source nodes (not 6)** is correct:
+only sources that anchor a kept `mentions` edge become nodes; the 2 papers have
+0 active entities (per U.4, they render isolated) so they anchor no edge and are
+not injected. `report.metadata["document_layer"] = {source_nodes: 4,
+mentions_edges: 67, cites_edges: 0}`.
+
+### Per-criterion evidence
+
+| AC | Evidence |
+|---|---|
+| AC1 NetworkX+JSONL include source nodes + mentions (+cites when present); additive; staging shows 67+source nodes | Staging table above: 67 mentions edges + 4 source nodes in BOTH formats. Unit: `test_networkx_document_layer_adds_source_nodes_and_mentions`, `test_jsonl_document_layer_adds_three_files`, `test_networkx_document_layer_cites_edges_when_present`. |
+| AC2 existing consumers unaffected; entity-only unchanged when off | Staging flag-off probe: 1329 nodes / 996 edges / **no source node** / metadata has no `document_layer` key — identical to pre-U.5. Export regression suites **GREEN** (65 D.1/D.2/D.3 + 16 router + preview, unchanged). Unit: `test_networkx_document_layer_off_by_default`, `test_jsonl_document_layer_off_keeps_two_files` (source repo never consulted). |
+| AC3 architecture note: computed-vs-materialized + sync model | `ARCHITECTURE.md` §9 (new). |
+| AC4 RETRO written; Track U CLOSED | Below. |
+| AC5 triage (Q) + resolution (K) suites green | Q: 47 passed (config/pipeline/queue/router/signals). K-adjacent: cites_matching + mentions_projection + entity/org aliases = 94 passed. |
+
+### Tests
+- **New**: `test_document_layer_export.py` — **12 passed** (fetcher scoping/prune/
+  no-op + NetworkX + JSONL layers). `test_source_notebook_scope.py` — **3 passed**
+  (2 `@requires_docker` + 1 pure).
+- **Regression (GREEN)**: networkx/jsonl/obsidian/exports-router/preview = **93
+  passed** together (entity-only output unchanged).
+- **mypy**: new modules clean (only the pre-existing workspace `import-untyped`
+  baseline on `shared.*`/`networkx`).
+
+---
+
+## Track U — RETROSPECTIVE (CLOSED 2026-06-28)
+
+**The schema already existed.** U.1's headline finding held all the way through:
+the ontology (`schema_core.yaml`) had ALREADY defined `mentions`/`cites`/
+`discusses`/`authored_by`/… — they were just empty (0 rows). Track U did not
+design a document graph; it *populated the one the design already anticipated*.
+This is the cheapest kind of track: the hard modeling decision was made long ago.
+
+**U.1 measurement gated the build honestly.** The decision gate paid off twice.
+It confirmed `mentions` projects 1:1 from `entity.source_documents` (so U.2 is a
+pure, no-LLM projection), and it measured **0 parseable intra-corpus citations**
+on this corpus → U.3 shipped as **mechanism, deferred as data**: the matcher +
+the Track V `ParsedReference` contract are built and tested on synthetic refs,
+producing a clean 0-edge no-op live. We did not fabricate citations to have
+something to show; precision-over-recall was the explicit stance.
+
+**The recurring fresh-container TYPE-ANY drift.** Twice (migrations 66 + 67) a
+sibling edge table that was a healthy `TYPE RELATION` *on staging* came up as the
+default `TYPE ANY SCHEMALESS` on a fresh migration-only container — because the
+table had been defined at runtime by the relation write path, NOT by the
+migration suite. The fix pattern is now established (migration-62 strategy:
+non-destructive `DEFINE TABLE OVERWRITE … TYPE RELATION` + null-endpoint-only
+`DELETE`, healthy edges preserved, proven by a falsification test). Lesson: a
+table being correct on staging says nothing about a fresh deploy; assert the
+relation type in a migration.
+
+**SurrealDB `RELATE` is not idempotent.** A repeated `(in, out)` `RELATE` writes
+a *second* row rather than collapsing — discovered in U.3, confirmed for U.2.
+Both materializers therefore **clear before they relate** (and `cites` de-dups
+`(origin, target)` within a run). Idempotency is a property of the regenerator,
+not of `RELATE`. This is now captured in `ARCHITECTURE.md` §9.
+
+**What the document graph adds — and the honest framing.** It adds NO search
+value (R.1–R.3 already compute shared-entity + similarity relatedness on the fly,
+without the threshold loss an edge would impose). Its value is real and distinct:
+navigation, visualization (U.4), export (U.5), graph algorithms, and — via
+`cites` — genuinely new citation facts that live nowhere else. It **scales with
+corpus size**: the more documents share entities and cite each other, the richer
+and more useful the graph becomes. On a 6-source corpus it is a 4-node skeleton;
+on a 600-source corpus it is the primary navigation surface.
+
+### Status
+
+**Track U — CLOSED.**
+- U.1 (design + measurement) ✅
+- U.2 (`mentions` projection) ✅ — 67 edges live on staging
+- U.3 (`cites` infrastructure) ✅ infra done; **0 live edges by design** (no
+  parseable intra-corpus citations until Track V feeds references)
+- U.4 (document graph viz) ✅
+- U.5 (exports + docs + RETRO) ✅
+
+**Deferred (not Track U):** U.3-cites-*data* and live `cites` edges wait on
+**Track V** (reference extraction), which produces the `{source_id:
+[ParsedReference]}` input `CitesMaterializationService` already consumes. The
+U.5 exporters already emit an (empty) `cites` layer, so they light up
+automatically the moment Track V populates edges — no export change needed.
