@@ -173,3 +173,87 @@ navigable, so the canvas is paired with **non-canvas equivalents**:
 - `cites` layer deferred with U.3 (0 intra-corpus citations per U.1) — the view
   is mentions-only by design. The optional draw-only `related_to` embedding
   layer for the isolated papers was not built (out of U.4 acceptance scope).
+
+---
+
+## Phase U.3 — `cites` extraction (Backend, INFRASTRUCTURE) — READY FOR REVIEW
+
+**Branch**: `track/u3-cites-infra` (off `main` @ `eac6fa2`)
+**Date**: 2026-06-28
+**Nature**: infrastructure — builds the `cites` (source→source) materialization
+mechanism + the Track V input interface. Per U.1 there are **0 intra-corpus
+citations** on this corpus and Track V (which feeds references) is unbuilt, so
+this ships **tested on SYNTHETIC references with 0 live edges**. On staging the
+mechanism runs and produces a clean **0-edge no-op** (verified read-only).
+
+### The Track V boundary — `ParsedReference`
+The single documented contract between Track V (produces) and U.3 (consumes),
+a frozen dataclass in `packages/shared/.../retrieval/cites_matching.py`:
+
+```
+ParsedReference(raw_text: str, title: str = "",
+                authors: tuple[str, ...] = (), year: int | None = None,
+                doi: str | None = None, venue: str | None = None)
+```
+
+`raw_text` is always populated (it is what a created `cites` edge records as the
+human-readable citation). All other fields are best-effort; the matcher uses
+whatever is present. V hands U.3 `{source_id: [ParsedReference]}`.
+
+### Matching precision rules (a wrong match fabricates a citation → worse than a miss)
+- **DOI exact** (normalized: lowercased, `doi:`/URL prefix stripped) → certain
+  match, confidence `1.0`, method `doi`. Two empty DOIs never match.
+- **Title + author** (no-DOI fallback) → requires BOTH `title_sim ≥ 0.85`
+  (normalized Levenshtein) AND author-surname agreement `> 0`, with combined
+  confidence `≥ 0.80` (blend `0.7·title + 0.3·author`), method `title_author`.
+  Title-only or author-only is rejected.
+- **Ambiguity guard** — a fuzzy winner must beat the runner-up by `≥ 0.05`; two
+  viable fuzzy targets → no edge. A DOI winner is blocked only by another DOI hit.
+- **No self-citation** — `from_source_id` excludes the origin source; a final
+  `relate_cites` backstop refuses any `src == tgt` RELATE.
+
+### Migration 67 — needed (the U.1 contingency fired)
+U.1 reported `cites` was already `RELATION source→source` **on staging** — true,
+but it was defined there at runtime by the relation write path, NOT by the
+migration suite. On a **fresh migration-only container** `cites` comes up as the
+default `TYPE ANY SCHEMALESS` (proven by the container test) — the same drift
+class migration 66 fixed for `mentions`. So **migration 67 was required**: it
+asserts `DEFINE TABLE OVERWRITE cites TYPE RELATION FROM source TO source`
+non-destructively (null-endpoint `DELETE` + `OVERWRITE`, healthy edges preserved,
+mirroring 66) AND adds the U.3 fields (`confidence`, `reference_text`,
+`match_method`, `created_at`) the SCHEMAFULL table would otherwise silently drop
+on RELATE-with-SET. S.4 prevention: every added field is strict-typed WITH a
+DEFAULT; the table is empty; the regenerator supplies values explicitly.
+
+### Per-criterion test evidence
+| AC | Evidence |
+|---|---|
+| AC1 confident intra-corpus → edges w/ confidence + ref text | `test_confident_intra_corpus_refs_become_cites_edges` (DOI + title_author edges, both carry confidence + reference_text + match_method). Pure: `test_doi_exact_match_*`, `test_fuzzy_title_author_match_above_threshold`. |
+| AC2 external → no edge; no self-citation | `test_external_and_self_citation_produce_no_edge` (created=0, self_skipped=1, external=1). Pure: `test_no_self_citation`, `test_external_reference_no_match`. |
+| AC3 near-miss rejected (precision over recall) | `test_near_miss_reference_rejected` (right author, different title → created=0). Pure: `test_near_miss_title_below_threshold_no_edge`, `test_title_match_but_wrong_author_is_rejected`, `test_ambiguous_two_viable_targets_no_edge`. |
+| AC4 idempotent regenerator | `test_materialize_is_idempotent` (re-run: identical edge set, cleared==created, no dup pairs). Pure: `test_matching_is_deterministic`. |
+| AC5 cites is `RELATION source→source` | `test_migration_67_discovered_and_cites_is_source_to_source` (asserts `IN source OUT source`); `test_drifted_any_cites_converted`; `test_healthy_cites_edges_preserved`. |
+| AC6 ParsedReference documented; canonical rows untouched | `ParsedReference` docstring + this status; `test_canonical_source_rows_untouched`. |
+| AC7 staging no-op, no crash | Read-only staging probe: 6 sources load, `match_corpus_references({}, sources)` → 0 matches, no writes. `test_empty_input_is_clean_no_op`. |
+
+### Test runs
+- **Pure matcher** (`packages/shared/tests/test_cites_matching.py`): **16 passed**.
+- **Migration 67** (`packages/surrealdb-service/tests/test_migration_67_cites_fields.py`): **5 passed** (`@requires_docker`).
+- **Materialization** (`apps/app-main/tests/test_cites_materialize_db.py`): **7 passed** (`@requires_docker`).
+- **No regression**: `test_mentions_projection.py` + `test_cites_matching.py` → 36 passed.
+- **mypy**: pure module clean; service has only the pre-existing workspace
+  `import-untyped` notes (shared/surrealdb_service lack `py.typed`), identical to
+  the U.2 mentions service baseline — no new type errors.
+
+### Honest framing / follow-ups
+- **0 live edges by design.** The mechanism is correct and tested but draws
+  nothing until Track V feeds real references AND source bibliographic metadata
+  (`authors`/`doi`) is populated. The `source` table is SCHEMAFULL with no
+  top-level `authors`/`doi`; the loader reads them from the FLEXIBLE `metadata` /
+  `type_metadata` / `external_ids` objects (a Zotero/Docling enrichment home),
+  empty on this corpus → the title-only precision guard correctly declines.
+- **External references** are counted + logged, not edged (kept simple per the
+  brief). Track V may later stub them as external nodes — the `CorpusMatchResult`
+  already separates `external` / `ambiguous` / `self_citations_skipped` counts.
+- No router/endpoint was added (out of the infrastructure brief); the service is
+  DI-wired (`get_cites_materialization_service`) and ready for U.4/U.5 to consume.
