@@ -1,0 +1,18 @@
+-- ============================================================================
+-- Migration 67 DOWN: no-op.
+--
+-- Migration 67 asserts the `cites` TYPE RELATION source->source definition
+-- (correct on staging, undefined-as-relation on a fresh container) and ADDS the
+-- Track U.3 materialization fields (`confidence`, `reference_text`,
+-- `match_method`, `created_at`). It is a self-healing schema repair with no
+-- faithful inverse (mirrors migration 66's down):
+--   * reverting `cites` to TYPE ANY would re-break `RELATE source -> cites ->
+--     source` — exactly the state 67 fixes on a fresh DB;
+--   * dropping the U.3 fields would re-break the regenerator's RELATE-with-SET
+--     (a SCHEMAFULL table silently drops undefined fields — the gap 67 fills); and
+--   * `cites` is a DERIVED, regenerated projection (clear + recreate from the
+--     parsed references) — the edge table holds no canonical state worth a
+--     destructive rollback, and on this corpus it is empty (0 intra-corpus
+--     citations until Track V exists).
+-- Down intentionally does nothing; mirrors migration 66's down convention.
+-- ============================================================================

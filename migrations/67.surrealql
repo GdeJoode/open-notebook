@@ -1,0 +1,83 @@
+-- ============================================================================
+-- Migration 67: add the Track U.3 materialization fields to the `cites`
+--   (source → source) edge table.
+--
+-- Background — two different states, one robust migration. On STAGING the
+-- `cites` table was already correctly
+--   DEFINE TABLE cites TYPE RELATION IN source OUT source SCHEMAFULL
+-- (verified via INFO FOR DB / INFO FOR TABLE, 2026-06-27) — defined at runtime by
+-- the relation write path, NOT by the migration suite. On a FRESH migration-only
+-- container, however, `cites` comes up as the SurrealDB default
+--   DEFINE TABLE cites TYPE ANY SCHEMALESS
+-- (the migration suite never defined it). So `cites` is in the SAME class as the
+-- `mentions` drift migration 66 fixed: correct on staging, undefined-as-relation
+-- on a fresh DB. This migration therefore ASSERTS the relation definition (so it
+-- is correct everywhere) AND adds the U.3 materialization fields — mirroring
+-- migration 66's non-destructive OVERWRITE remediation exactly.
+--
+-- The U.3 fields. On a SCHEMAFULL table, RELATE-with-SET of an UNDEFINED field is
+-- silently dropped — so the regenerator's `confidence` / `reference_text` /
+-- `match_method` would vanish unless first DEFINEd. This adds exactly those three
+-- (plus `created_at` for parity with migration 66's `mentions`) so a materialized
+-- cites edge carries its precision provenance: the match confidence, the verbatim
+-- cited reference text, and which precision path (`doi` / `title_author`)
+-- resolved it.
+--
+-- Strategy: DELETE null-endpoint junk + OVERWRITE only (mirrors migration 66).
+--   1. DELETE only null-endpoint junk rows (in = NONE OR out = NONE). A real
+--      `cites` edge always has non-null in/out, so this is a no-op on a healthy
+--      table and only clears the non-edge junk a drifted TYPE ANY table could
+--      hold (which would otherwise block the RELATION redefine). A blanket
+--      `DELETE cites` would WIPE healthy edges — the destructive mistake migration
+--      58 made; 62/66 fixed it with this null-endpoint-only predicate and 67
+--      follows suit.
+--   2. DEFINE TABLE OVERWRITE ... TYPE RELATION FROM source TO source. On
+--      SurrealDB v2 OVERWRITE converts a drifted TYPE ANY table to RELATION; on an
+--      already-correct RELATION table it re-asserts the identical definition and
+--      PRESERVES existing edge records (the migration-62/66 empirical fact). The
+--      `cites` table holds 0 rows on staging (no intra-corpus citations until
+--      Track V — U.1) and the regenerator owns the edge set (clear + recreate),
+--      so there is nothing to back-fill.
+--   3. DEFINE the edge fields with OVERWRITE (additive; the pre-existing ontology
+--      fields are left as-is).
+--
+-- Strict-field / S.4 prevention note (mirrors migration 66). Every field added
+-- here is strict-typed WITH a DEFAULT, so a row written without it does not error
+-- — the regenerator always supplies `confidence` / `reference_text` /
+-- `match_method` explicitly via RELATE-with-SET, and the DEFAULTs are a safety
+-- floor, never the live value. Adding a strict field with no default to a table
+-- that already holds rows is the S.4 hazard; this table is empty AND every field
+-- has a default, so the hazard does not apply. The fix is forward-safe.
+--
+-- Idempotent + forward-only: every OVERWRITE re-asserts an identical definition.
+-- Down is a documented no-op (see 67_down) — dropping the fields would only
+-- re-break the U.3 regenerator's writes (the very gap this fills) and the cites
+-- edge table is a regenerated projection with no canonical state worth a
+-- destructive rollback.
+-- ============================================================================
+
+-- 1. Drop ONLY null-endpoint junk rows (the non-edge records a drifted TYPE ANY
+--    table could hold). Real `cites` edges always have non-null in/out, so this
+--    never touches them — no-op on the empty staging table AND on any healthy
+--    edge set.
+DELETE cites WHERE in = NONE OR out = NONE;
+
+-- 2. Re-assert the canonical edge definition. Converts a drifted TYPE ANY table
+--    to RELATION source->source on v2; identical no-op (edges preserved) on an
+--    already-correct RELATION table.
+DEFINE TABLE OVERWRITE cites SCHEMAFULL TYPE RELATION FROM source TO source;
+
+-- 3. U.3 materialization fields. `confidence` is the matcher's confidence (1.0 for
+-- a DOI-exact hit, else the blended title+author score). `reference_text` is the
+-- verbatim cited reference (the ParsedReference.raw_text) so a reviewer can see
+-- exactly what matched. `match_method` records the precision path that resolved
+-- the edge (`doi` | `title_author`) — the per-edge "why", parallel to
+-- `mentions.concept_name`.
+DEFINE FIELD OVERWRITE confidence ON cites TYPE float DEFAULT 0.0;
+DEFINE FIELD OVERWRITE reference_text ON cites TYPE string DEFAULT "";
+DEFINE FIELD OVERWRITE match_method ON cites TYPE string DEFAULT "";
+DEFINE FIELD OVERWRITE created_at ON cites TYPE datetime DEFAULT time::now();
+
+-- Index on confidence so the viz / triage can threshold edges (mirrors
+-- migration 66's idx_mentions_weight). OVERWRITE so a re-apply converges.
+DEFINE INDEX OVERWRITE idx_cites_confidence ON cites FIELDS confidence;
