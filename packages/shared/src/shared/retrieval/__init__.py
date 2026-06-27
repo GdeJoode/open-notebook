@@ -36,6 +36,19 @@ from shared.retrieval.kg_source_scorer import (
     entity_weight,
     score_related_sources,
 )
+from shared.retrieval.cites_matching import (
+    AMBIGUITY_MARGIN,
+    DOI_CONFIDENCE,
+    MIN_TITLE_AUTHOR_CONFIDENCE,
+    MIN_TITLE_SIMILARITY,
+    CitationMatch,
+    CorpusMatchResult,
+    ParsedReference,
+    SourceRecord,
+    match_corpus_references,
+    match_reference,
+    normalize_doi,
+)
 from shared.retrieval.mentions_projection import (
     NAMED_ONLY_MIN_WEIGHT,
     MentionEdge,
@@ -65,6 +78,18 @@ __all__ = [
     "MentionsProjectionStats",
     "NAMED_ONLY_MIN_WEIGHT",
     "project_mentions_edges",
+    # cites matching (U.3 — the Track V boundary + precision matcher)
+    "ParsedReference",
+    "SourceRecord",
+    "CitationMatch",
+    "CorpusMatchResult",
+    "match_reference",
+    "match_corpus_references",
+    "normalize_doi",
+    "DOI_CONFIDENCE",
+    "MIN_TITLE_SIMILARITY",
+    "MIN_TITLE_AUTHOR_CONFIDENCE",
+    "AMBIGUITY_MARGIN",
     # Hybrid fusion (R.3)
     "BALANCED",
     "DEFAULT_PRESET",
