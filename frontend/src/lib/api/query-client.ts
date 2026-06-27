@@ -39,6 +39,7 @@ export const QUERY_KEYS = {
   entity: (id: string) => ['knowledge-graph', 'entities', id] as const,
   entityTypes: ['knowledge-graph', 'entity-types'] as const,
   graphData: (filters?: Record<string, unknown>) => ['knowledge-graph', 'graph', filters] as const,
+  documentGraph: (filters?: Record<string, unknown>) => ['knowledge-graph', 'document-graph', filters] as const,
   entitySearch: (query: string) => ['knowledge-graph', 'search', query] as const,
   strategies: ['summaries', 'strategies'] as const,
   summaries: (sourceId?: string) => ['summaries', sourceId] as const,

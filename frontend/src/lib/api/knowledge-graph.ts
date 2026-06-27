@@ -99,6 +99,30 @@ export interface GraphData {
   edges: GraphEdge[]
 }
 
+/**
+ * A single document↔entity (`mentions`) edge from the U.2 projection.
+ *
+ * `source` is always a `source:` record id (the document) and `target` an
+ * `entity:` record id (the shared concept). `weight` is the R.2 salience ×
+ * rarity score that drives edge thickness; `concept_name` is the per-edge
+ * "why" surfaced in the viz. Shape mirrors the backend
+ * `GET /knowledge-graph/document-graph` response exactly.
+ */
+export interface DocumentGraphEdge {
+  id: string
+  source: string
+  target: string
+  weight: number
+  concept_name: string
+  concept_type: string
+  document_frequency: number
+}
+
+export interface DocumentGraphResponse {
+  edges: DocumentGraphEdge[]
+  count: number
+}
+
 export const knowledgeGraphApi = {
   listEntities: async (params?: {
     limit?: number
@@ -132,6 +156,24 @@ export const knowledgeGraphApi = {
     limit?: number
   }) => {
     const response = await apiClient.get<GraphData>('/knowledge-graph/graph', { params })
+    return response.data
+  },
+
+  /**
+   * Fetch the materialized document↔entity (`mentions`) edges (Track U.2/U.4).
+   *
+   * `min_weight` lets the UI collapse to the named-only skeleton (0.3 preset);
+   * `source_id` scopes to a single document's neighbourhood. Returns the raw
+   * edge list — the caller joins source titles + derives nodes for rendering.
+   */
+  getDocumentGraph: async (params?: {
+    min_weight?: number
+    source_id?: string
+  }) => {
+    const response = await apiClient.get<DocumentGraphResponse>(
+      '/knowledge-graph/document-graph',
+      { params },
+    )
     return response.data
   },
 
