@@ -42,6 +42,9 @@ from surrealdb_service.repositories.notebook_schema import (
 
 from app_main.services.chat_service import ChatService
 from app_main.services.chunking.chunk_mutator import ChunkMutator
+from app_main.services.cites_materialization_service import (
+    CitesMaterializationService,
+)
 from app_main.services.context_service import ContextService
 from app_main.services.entity_extraction_service import EntityExtractionService
 from app_main.services.graph.doc_graph_builder import DocGraphBuilder
@@ -473,6 +476,12 @@ def get_knowledge_graph_service() -> KnowledgeGraphService:
 def get_mentions_projection_service() -> MentionsProjectionService:
     return MentionsProjectionService(
         entity_repo=get_entity_repo(),
+        source_repo=get_source_repo(),
+    )
+
+
+def get_cites_materialization_service() -> CitesMaterializationService:
+    return CitesMaterializationService(
         source_repo=get_source_repo(),
     )
 
