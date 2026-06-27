@@ -1,5 +1,66 @@
 # Track R — status
 
+## Phase R.5 — Search-function integration + UI — ✅ READY FOR REVIEW (2026-06-27)
+**Branch**: `track/r5-search-ui` (off `main`, has R.0–R.3, R.6, Track O/P/S/T).
+**Commits**: `f72fd8d` (API client + types + hook), `9fba73a` (Related tab + why-matched), `833a110` (E2E + region fix).
+
+### What shipped (frontend only — backend R.1/R.2/R.3 already live)
+A **"Related" tab** on the source detail page (`SourceDetailContent.tsx`, 6th tab)
+rendering `RelatedSources.tsx`, driven by the R.3 hybrid endpoint
+`GET /sources/{id}/related-hybrid?k=8&preset=kg-heavy`.
+
+- **Data layer**: `RelatedSourceHybrid` / `SignalProvenance` / `KGSharedEntity`
+  types in `lib/types/api.ts` (mirror the backend schema); `sourcesApi.getRelatedHybrid(id, {k, preset})`;
+  `useRelatedSources` TanStack Query hook + `sourceRelated` query key.
+- **Component**: ranked `<ul>` of results. Each row = a `next/link` to the
+  related source (title) + a fused-score `Badge` + a **"why matched"** line.
+- **"Why matched" provenance** (derived from per-result provenance, KG-prominent):
+  - KG signal present → `Shares entities: <entity badges>` (names from `kg_entities`,
+    capped at 4 + "+N more"), with a `Network` icon (decorative, `aria-hidden`).
+  - Dense signal present → `…and similar text` (or `Similar text content` standalone),
+    with a `Sparkles` icon. The explanation is **plain text** (screen-reader
+    readable, not colour/icon-only) and is also folded into the link's `aria-label`.
+
+### States
+- **Loading**: a pulse skeleton (`role="status"`, `aria-live="polite"`).
+- **Empty** (no aggregate embedding / no shared entities — backend returns `[]`):
+  a friendly "No related sources yet" message, **not** an error (no crash, no raw dump).
+- **Error**: a destructive `Alert` (`role="alert"`) with the error message.
+
+### a11y
+- Section is a real landmark: `role="region"` + `aria-labelledby` on the Card
+  (added the explicit role — `aria-labelledby` alone does not promote a `div`).
+- Result list uses `<ul>/<li>` semantics with an `aria-label`; titles are native
+  links (keyboard-navigable, `focus:underline`, `focus-within:ring` on the row).
+- Score badge + title link carry `aria-label`s; the "why" is conveyed in text.
+
+### Evidence (per AC)
+- **AC1** (section driven by `/related-hybrid`; title linked + score + provenance):
+  E2E test 1 asserts the linked title (`href=/sources/{id}`), the `0.049` fused
+  score, and a why-line naming `BZK` + `Cohesion Policy` + "similar text".
+- **AC2** (loading/empty/error graceful): E2E test 2 asserts the empty-state copy
+  renders and no in-section `role="alert"` appears; loading/error branches exist
+  in the component (skeleton + destructive Alert).
+- **AC3** (a11y): `role="region"` landmark, list semantics, `aria-label`s, the
+  why-text asserted by text (not colour); no uncaught page errors in either test.
+- **AC4** (E2E covers render + why): `frontend/e2e/track-r/related-sources.spec.ts`
+  — **2 passed** (run against a built server on :8599; route-mocked, no live backend).
+- **AC5** (build/typecheck/lint clean):
+  - `npx tsc --noEmit` → exit 0.
+  - `npm run lint` → exit 0, **0 errors** (pre-existing warnings only; the now-unused
+    `Network`/`Play` imports in `SourceDetailContent.tsx` were pre-existing warnings).
+  - `npm run build` → exit 0.
+  - `npx vitest run` → **87 passed** (no unit regression).
+
+### Notes / follow-ups
+- The Related tab fetches lazily-ish (the hook is enabled on mount; results are
+  cheap and cached 60s). If desired, gate the query on tab activation later.
+- A weight/preset control (kg-heavy vs balanced toggle) is intentionally **not**
+  surfaced in the UI for R.5 — default `kg-heavy` honours the locked steer; a
+  user-facing tuner is a clean follow-up.
+- R.4 cluster-summary signal is not yet a contributor (R.4 not done); the "why"
+  copy is structured to extend with a third signal without a rewrite.
+
 ## Phase R.0 — ✅ LIVE COMPLETE (2026-06-26)
 The embedding foundation is fully live on `staging`. All 6 sources: non-empty chunks ==
 `source_embedding` count (284/209/135/260/280/279), source-level aggregate vector set, **dim 1024**, local.
