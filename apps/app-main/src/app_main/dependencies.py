@@ -47,6 +47,9 @@ from app_main.services.entity_extraction_service import EntityExtractionService
 from app_main.services.graph.doc_graph_builder import DocGraphBuilder
 from app_main.services.hybrid_retrieval_service import HybridRetrievalService
 from app_main.services.insight_service import InsightService
+from app_main.services.cites_materialization_service import (
+    CitesMaterializationService,
+)
 from app_main.services.jsonl_export_service import JsonlExportService
 from app_main.services.kg_retrieval_service import KGRetrievalService
 from app_main.services.knowledge_graph_service import KnowledgeGraphService
@@ -473,6 +476,12 @@ def get_knowledge_graph_service() -> KnowledgeGraphService:
 def get_mentions_projection_service() -> MentionsProjectionService:
     return MentionsProjectionService(
         entity_repo=get_entity_repo(),
+        source_repo=get_source_repo(),
+    )
+
+
+def get_cites_materialization_service() -> CitesMaterializationService:
+    return CitesMaterializationService(
         source_repo=get_source_repo(),
     )
 

@@ -555,6 +555,200 @@ class SourceRepository(BaseRepository[Source]):
             logger.error(f"Failed to batch fetch command statuses: {e}")
             return {}
 
+    # ------------------------------------------------------------------
+    # Track U Phase U.3 — `cites` (source → source) citation edges
+    # ------------------------------------------------------------------
+    #
+    # `cites` is a regenerated projection of the parsed references Track V will
+    # feed (matched to in-corpus sources by the pure precision matcher). Migration
+    # 67 defines it ``TYPE RELATION FROM source TO source`` with the U.3 fields
+    # (`confidence` / `reference_text` / `match_method`). These methods are the DB
+    # seam the ``CitesMaterializationService`` composes into one idempotent
+    # regenerate; the canonical `source` rows are NEVER mutated — only the `cites`
+    # edge table is written. Re-running clears then recreates so the edge set is
+    # byte-identical with no duplicates (the U.3 idempotency contract). On the
+    # current corpus there are 0 intra-corpus citations (U.1), so a regenerate is
+    # a clean 0-edge no-op until Track V supplies references.
+
+    async def load_source_records(self) -> List[Dict[str, Any]]:
+        """Load the bibliographic projection of every source (matcher input).
+
+        Returns ``id`` + ``title`` plus the FLEXIBLE metadata objects where any
+        bibliographic detail lives: ``metadata`` / ``type_metadata`` (a Zotero/
+        Docling enrichment may carry ``authors`` / ``creators`` / ``DOI`` here)
+        and ``external_ids`` (the natural home for a ``doi``). The ``source``
+        table is SCHEMAFULL (migration 1) with NO top-level ``authors`` / ``doi``
+        column — they would be silently dropped — so the caller extracts those
+        from these objects. On the current corpus the objects are empty (sources
+        carry only titles), so matching falls back to the title alone (and the
+        precision guard then correctly declines a title-only match). Read-only.
+        """
+        try:
+            return await execute_query(
+                "SELECT id, title, metadata, type_metadata, external_ids "
+                "FROM source",
+                {},
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"load_source_records failed: {e}")
+            return []
+
+    async def count_cites(self) -> int:
+        """Count rows in the ``cites`` edge table."""
+        try:
+            result = await execute_query(
+                "SELECT count() AS total FROM cites GROUP ALL", {}, self.config
+            )
+            if result:
+                return int(result[0].get("total", 0))
+            return 0
+        except Exception as e:
+            logger.error(f"count_cites failed: {e}")
+            return 0
+
+    async def clear_cites(self) -> int:
+        """Delete every ``cites`` edge (the clear half of regeneration).
+
+        Returns the number of edges removed so the regenerator can report the
+        before/after delta. A bare ``DELETE cites`` is correct here precisely
+        because the table is a regenerated projection the U.3 service OWNS —
+        unlike migration 67 (a schema repair that must preserve any healthy
+        edges), the regenerator rebuilds the edge set from the matched references
+        on the next step, so clearing all of it is the intended, reversible
+        operation. Canonical `source` rows are untouched.
+
+        Returns:
+            The count of edges deleted (0 on an already-empty table / failure).
+        """
+        try:
+            before = await self.count_cites()
+            await execute_query("DELETE cites;", {}, self.config)
+            return before
+        except Exception as e:
+            logger.error(f"clear_cites failed: {e}")
+            return 0
+
+    async def relate_cites(
+        self,
+        citing_source_id: str,
+        cited_source_id: str,
+        *,
+        confidence: float,
+        reference_text: str = "",
+        match_method: str = "",
+    ) -> bool:
+        """RELATE one ``source -> cites -> source`` edge with its U.3 provenance.
+
+        Mirrors the RELATE discipline of :meth:`EntityRepository.relate_mention`:
+        the arrow positions need bare record-id literals (SurrealDB issue #4232 —
+        params in the ``in``/``out`` slots are rejected), and the ids are
+        ``source:<alnum>`` record ids straight from the matcher (no user input),
+        so interpolating them is safe; all metadata is bound as parameters.
+
+        A wrong edge fabricates a citation, so the caller (the matcher) only ever
+        passes a confident, non-self pair; this method does NOT re-check precision
+        — it is the persistence seam, not the decision.
+
+        Args:
+            citing_source_id: The citing ``source:...`` (edge ``in``).
+            cited_source_id: The cited ``source:...`` (edge ``out``).
+            confidence: The matcher confidence (1.0 for a DOI-exact hit).
+            reference_text: The verbatim cited reference (the "why").
+            match_method: The precision path (``doi`` | ``title_author``).
+
+        Returns:
+            True on success; False when an endpoint id is missing/malformed or a
+            source would cite itself (a final defensive self-citation guard —
+            the matcher already excludes it, but never RELATE a self-loop).
+
+        Raises:
+            RuntimeError: On a transport-level / SurrealQL failure of the RELATE
+                (mirrors the other write helpers). The regenerator wraps this and
+                counts a raised edge as ``failed`` rather than aborting.
+        """
+        if not citing_source_id or not cited_source_id:
+            return False
+        try:
+            src = str(ensure_record_id(citing_source_id))
+            tgt = str(ensure_record_id(cited_source_id))
+        except Exception as e:
+            logger.error(
+                f"relate_cites: bad id citing={citing_source_id!r} "
+                f"cited={cited_source_id!r}: {e}"
+            )
+            return False
+        if src == tgt:
+            # Defensive backstop: never RELATE a source to itself, even if a
+            # caller bug got past the matcher's self-citation exclusion.
+            logger.warning(f"relate_cites: refused self-citation on {src}")
+            return False
+        try:
+            await execute_query(
+                f"RELATE {src}->cites->{tgt} SET "
+                "confidence = $confidence, reference_text = $reference_text, "
+                "match_method = $match_method;",
+                {
+                    "confidence": float(confidence),
+                    "reference_text": reference_text or "",
+                    "match_method": match_method or "",
+                },
+                self.config,
+            )
+            return True
+        except Exception as e:
+            logger.exception(
+                f"relate_cites failed for {src}->{tgt}: {e}"
+            )
+            raise
+
+    async def load_cites_edges(
+        self,
+        *,
+        min_confidence: float = 0.0,
+        source_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Load materialized ``cites`` edges for viz / traversal / export (U.4).
+
+        Returns the document↔document citation edges with their endpoints and
+        confidence/why metadata. ``in`` / ``out`` are stringified ``source:...``
+        record ids.
+
+        Args:
+            min_confidence: Optional per-edge confidence floor (default 0.0 —
+                return all).
+            source_id: Optional scope to edges incident on a single source (the
+                citing OR cited side, for a document's citation neighbourhood).
+
+        Returns:
+            A list of ``{"id", "source", "target", "confidence", "reference_text",
+            "match_method"}`` dicts. Empty on failure / the 0-edge no-op corpus.
+        """
+        clauses: List[str] = []
+        params: Dict[str, Any] = {}
+        if min_confidence is not None and min_confidence > 0.0:
+            clauses.append("confidence >= $min_confidence")
+            params["min_confidence"] = float(min_confidence)
+        if source_id:
+            try:
+                params["sid"] = ensure_record_id(source_id)
+                clauses.append("(in = $sid OR out = $sid)")
+            except Exception as e:
+                logger.error(f"load_cites_edges: bad source_id {source_id!r}: {e}")
+                return []
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        try:
+            return await execute_query(
+                "SELECT id, in AS source, out AS target, confidence, "
+                "reference_text, match_method "
+                f"FROM cites{where} ORDER BY confidence DESC",
+                params,
+                self.config,
+            )
+        except Exception as e:
+            logger.error(f"load_cites_edges failed: {e}")
+            return []
+
 
 class ChunkRepository(BaseRepository[Chunk]):
     """Repository for Chunk operations."""
