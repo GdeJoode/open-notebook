@@ -249,6 +249,7 @@ class MentionsProjectionService:
         descending. ``min_weight`` lets the UI slider collapse to the named-only
         skeleton; ``source_id`` scopes to one document's neighbourhood.
         """
-        return await self.entity_repo.load_mentions_edges(
+        edges: List[Dict[str, Any]] = await self.entity_repo.load_mentions_edges(
             min_weight=min_weight, source_id=source_id
         )
+        return edges
