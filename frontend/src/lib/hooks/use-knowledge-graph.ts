@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { knowledgeGraphApi } from '@/lib/api/knowledge-graph'
+import { sourcesApi } from '@/lib/api/sources'
 import { QUERY_KEYS } from '@/lib/api/query-client'
 
 export function useEntities(filters?: {
@@ -54,6 +55,33 @@ export function useGraphData(filters?: {
   return useQuery({
     queryKey: QUERY_KEYS.graphData(filters),
     queryFn: () => knowledgeGraphApi.getGraphData(filters),
+  })
+}
+
+/**
+ * Fetch the document↔entity (`mentions`) projection for the document-graph view
+ * (Track U.4). `minWeight` collapses to the named-only skeleton via the backend
+ * `min_weight` query param (0.3 preset). Returns the raw edge list; the view
+ * derives nodes + joins source titles.
+ */
+export function useDocumentGraph(minWeight = 0) {
+  return useQuery({
+    queryKey: QUERY_KEYS.documentGraph({ min_weight: minWeight }),
+    queryFn: () =>
+      knowledgeGraphApi.getDocumentGraph({ min_weight: minWeight }),
+  })
+}
+
+/**
+ * Fetch every source (across all notebooks) so the document graph can label its
+ * `source:` nodes by title. The document-graph endpoint carries only record
+ * ids, so the title map is joined client-side. Isolated documents (papers with
+ * 0 active entities) are surfaced from this list, not the edge set.
+ */
+export function useAllSources() {
+  return useQuery({
+    queryKey: QUERY_KEYS.sources(undefined),
+    queryFn: () => sourcesApi.list({ limit: 500 }),
   })
 }
 
