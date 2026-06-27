@@ -79,3 +79,87 @@ the user to run as the gated step:
 `{id, source, target, weight, concept_name, concept_type, document_frequency}` —
 ready to render with weight→thickness/opacity and `concept_name` as the per-edge
 "why". The 0.3 `min_weight` slider value is the named-only overview.
+
+---
+
+## Phase U.4 — Document graph in the KG visualization (UI) — READY FOR REVIEW
+
+**Branch**: `track/u4-document-graph-viz` (off `main` @ `f07d6b4`)
+**Commits**: `1339d08` → `35b04df` → `62d272b` → `6dd0d9e`
+**Date**: 2026-06-27
+
+### Component approach — sibling, not a toggle on SigmaGraphView
+A new **`DocumentGraphView`** component renders under a new **"Document Graph"**
+tab on the existing KG page, alongside the entity-only "Graph" tab. It reuses
+the same Sigma + forceAtlas2 + dynamic-import (`ssr:false`) machinery, design
+tokens, and click-to-side-panel wiring, but is a *sibling* rather than a mode on
+`SigmaGraphView`. Rationale: the document graph is **bipartite** (two node kinds,
+distinct sizing/labels), needs a **source-title join** the entity graph never
+does, drives **edge thickness from weight**, and supports an **entity-layer
+collapse** — overloading the entity-only view with all of that would muddy a
+working component. The pure graph-construction logic lives in a separate,
+node-testable module so the React/WebGL layer stays thin.
+
+### What was built
+1. **API + types** — `getDocumentGraph({min_weight, source_id})` typed to the
+   U.2 `{edges, count}` shape (`DocumentGraphEdge`/`DocumentGraphResponse`);
+   `useDocumentGraph(minWeight)` + `useAllSources()` hooks (the latter joins
+   `source:` ids → titles, since the edge payload carries only ids).
+   `frontend/src/lib/api/knowledge-graph.ts`, `.../hooks/use-knowledge-graph.ts`.
+2. **Pure graph builders** —
+   `frontend/src/lib/knowledge-graph/document-graph.ts`:
+   `buildBipartiteGraph` (documents + concepts, one `mentions` link/edge),
+   `buildCollapsedGraph` (entity layer hidden → doc↔doc links, one per shared
+   concept, summed weight + concept list as the "why"), `summarizeGraph` (the
+   a11y summary). Isolated documents are injected from the source list so the
+   two papers (0 active entities) still appear. **11 vitest unit tests.**
+3. **`DocumentGraphView`** —
+   `frontend/src/app/(dashboard)/knowledge-graph/components/DocumentGraphView.tsx`.
+   Documents = indigo nodes prefixed with a ◆ glyph; concepts = amber nodes.
+   Edge thickness ∝ weight; edge label = shared concept(s). Controls: "Show
+   shared concepts" toggle (bipartite↔collapsed), a **min-weight slider**
+   (0–1.4) + a **Named-only preset** button (snaps to 0.3), Reload.
+4. **States** — loading skeleton (`document-graph-loading`), friendly empty
+   (`document-graph-empty`, hints to `POST …/regenerate`), error+retry
+   (`document-graph-error`). Empty/error never crash the canvas.
+
+### WebGL a11y fallback
+Sigma renders to a WebGL canvas that is neither screen-reader nor keyboard
+navigable, so the canvas is paired with **non-canvas equivalents**:
+- an `aria-live` text **summary** ("N documents, M shared concepts, K links")
+  with an isolated-document callout, wired as the `figure`'s `aria-labelledby`;
+- a keyboard-reachable **"Links as a list"** `<details>` enumerating every link
+  with its shared-concept "why" (the same per-edge basis the canvas shows);
+- the document-vs-concept distinction is **glyph + label + size**, not colour
+  alone — the legend names the ◆ glyph and the colour. All controls are native
+  Switch/Slider/Button (focusable, aria-labelled / aria-pressed).
+
+### Per-criterion evidence
+| AC | Evidence |
+|---|---|
+| AC1 docs as nodes via shared entities; layer toggleable; weight visible; isolated shown | Screenshot + E2E: 2 convenanten linked via "Regio Deal"/"brede welvaart", thickness ∝ weight; toggle collapses to a single doc↔doc link; the paper renders isolated (callout), not dropped. |
+| AC2 per-edge basis surfaced | Edge labels + the link-list show "via Regio Deal" / "via Regio Deal, brede welvaart". |
+| AC3 loading/empty/error | Skeleton; empty → regenerate hint; error → retry alert. E2E asserts empty + error don't crash. |
+| AC4 a11y fallback, keyboard controls, not colour-only | aria-live summary + link-list + ◆ glyph/label; native focusable controls. |
+| AC5 E2E + build/typecheck/lint/vitest clean | See below. |
+
+### Gate results
+- **vitest**: 98 passed (12 files), incl. 11 new document-graph unit tests.
+- **typecheck** (`tsc --noEmit`): clean.
+- **lint** (`next lint`): no new errors/warnings in U.4 files (pre-existing
+  warnings elsewhere untouched).
+- **build** (`next build`): success.
+- **E2E** (`e2e/track-u/document-graph.spec.ts`, 4 tests): all pass against a
+  built **standalone** server on :8599, fully route-mocked (no backend/DB).
+
+### Notes / follow-ups
+- The build uses `output: standalone`; the E2E harness must serve via
+  `node .next/standalone/server.js` (after `npm run standalone-prep`), **not**
+  `next start`, or the app renders blank.
+- **Pre-existing, unrelated**: `e2e/track-q/triage.spec.ts:138` fails on a
+  strict-mode selector ("unsure — operator decides" matches a heading *and* a
+  cell) on the `/knowledge-graph/triage` route — untouched by U.4. Not fixed
+  here (out of scope); flagged for the track-q owner.
+- `cites` layer deferred with U.3 (0 intra-corpus citations per U.1) — the view
+  is mentions-only by design. The optional draw-only `related_to` embedding
+  layer for the isolated papers was not built (out of U.4 acceptance scope).
