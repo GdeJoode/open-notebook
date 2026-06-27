@@ -72,6 +72,7 @@ import { NotebookAssociations } from '@/components/source/NotebookAssociations'
 import { PdfChunkViewer } from '@/components/source/PdfChunkViewer'
 import { ParserEngineBadge } from '@/components/source/ParserEngineBadge'
 import { SourceEntitiesTab } from '@/components/source/SourceEntitiesTab'
+import { RelatedSources } from '@/components/source/RelatedSources'
 import { PipelineConfigPanel } from '@/components/sources/pipeline/PipelineConfigPanel'
 import { DEFAULT_PIPELINE_CONFIG, type DoclingPipelineConfig } from '@/lib/api/sources'
 import { useSourceChunks } from '@/lib/hooks/use-sources'
@@ -609,7 +610,7 @@ export function SourceDetailContent({
       {/* Tabs Content */}
       <div className="flex-1 px-2 min-h-0">
         <Tabs defaultValue="content" className="h-full flex flex-col">
-          <TabsList className="grid w-full grid-cols-5 flex-shrink-0">
+          <TabsList className="grid w-full grid-cols-6 flex-shrink-0">
             <TabsTrigger value="content">Content</TabsTrigger>
             <TabsTrigger value="insights">
               Insights {insights.length > 0 && `(${insights.length})`}
@@ -620,6 +621,7 @@ export function SourceDetailContent({
             <TabsTrigger value="entities">
               Entities {(source.entity_count ?? 0) > 0 && `(${source.entity_count})`}
             </TabsTrigger>
+            <TabsTrigger value="related">Related</TabsTrigger>
             <TabsTrigger value="details">Details</TabsTrigger>
           </TabsList>
 
@@ -853,6 +855,10 @@ export function SourceDetailContent({
 
           <TabsContent value="entities" className="flex-1 overflow-y-auto mt-6">
             <SourceEntitiesTab sourceId={sourceId} />
+          </TabsContent>
+
+          <TabsContent value="related" className="flex-1 overflow-y-auto mt-6">
+            <RelatedSources sourceId={sourceId} />
           </TabsContent>
 
           <TabsContent value="details" className="flex-1 overflow-y-auto mt-6">

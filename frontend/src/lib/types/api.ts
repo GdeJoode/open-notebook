@@ -81,6 +81,53 @@ export interface SourceDetailResponse extends SourceListResponse {
   private?: boolean
 }
 
+/**
+ * One shared entity driving a KG-related-source score (Track R.2/R.5).
+ *
+ * The per-pair "why matched" lineage carried by `kg_entities` on a hybrid
+ * result: `weight` is the entity's contribution (type_salience × rarity),
+ * `document_frequency` how many sources it appears in, `via_relation` whether
+ * it was reached via a 1-hop relation path (vs directly shared).
+ */
+export interface KGSharedEntity {
+  entity_id: string
+  name: string
+  type: string
+  document_frequency: number
+  weight: number
+  via_relation: boolean
+}
+
+/**
+ * One signal's contribution to a fused hybrid result (Track R.3/R.5).
+ *
+ * `present` is whether the source appeared in this signal at all; `score` and
+ * `rank` are null when absent (the source still ranks on its other signal —
+ * never dropped). `contribution` is the signal's additive RRF contribution to
+ * the fused score.
+ */
+export interface SignalProvenance {
+  present: boolean
+  score: number | null
+  rank: number | null
+  contribution: number
+}
+
+/**
+ * One fused related source from GET /sources/{id}/related-hybrid (Track R.3).
+ *
+ * `fused_score` is the weighted RRF total; `dense`/`kg` carry per-signal
+ * provenance; `kg_entities` is the driving-entities lineage (the "why matched").
+ */
+export interface RelatedSourceHybrid {
+  id: string
+  title: string | null
+  fused_score: number
+  dense: SignalProvenance
+  kg: SignalProvenance
+  kg_entities: KGSharedEntity[]
+}
+
 /** Response shape for GET /api/health/mineru. */
 export interface MineruHealthResponse {
   healthy: boolean

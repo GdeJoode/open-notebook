@@ -10,6 +10,7 @@ import {
   UpdateSourceRequest,
   ExtractionResultResponse,
   RunEntitiesOptions,
+  RelatedSourceHybrid,
 } from '@/lib/types/api'
 
 export type PrivacyLevel = 'public' | 'internal' | 'confidential'
@@ -366,6 +367,25 @@ export const sourcesApi = {
     const { getApiUrl } = await import('@/lib/config')
     const apiUrl = await getApiUrl()
     return `${apiUrl}/api/sources/${id}/page-preview?page=${page}&dpi=${dpi}`
+  },
+
+  // Hybrid related-sources retrieval (Track R.3/R.5). Fuses the dense
+  // embedding signal and the KG-proximity signal via RRF, KG-prominent by
+  // default. Each result carries per-signal provenance + the KG driving
+  // entities (the "why matched" lineage). Returns [] (not 404) for a source
+  // with no aggregate embedding and no shared entities.
+  getRelatedHybrid: async (
+    id: string,
+    opts?: { k?: number; preset?: 'kg-heavy' | 'balanced' }
+  ): Promise<RelatedSourceHybrid[]> => {
+    const params: Record<string, string | number> = {}
+    if (opts?.k != null) params.k = opts.k
+    if (opts?.preset != null) params.preset = opts.preset
+    const response = await apiClient.get<RelatedSourceHybrid[]>(
+      `/sources/${id}/related-hybrid`,
+      { params }
+    )
+    return response.data
   },
 
   getPageCount: async (id: string) => {
