@@ -33,7 +33,7 @@ export function RelatedSources({ sourceId }: RelatedSourcesProps) {
   })
 
   return (
-    <Card aria-labelledby="related-sources-heading">
+    <Card role="region" aria-labelledby="related-sources-heading">
       <CardHeader>
         <CardTitle
           id="related-sources-heading"
