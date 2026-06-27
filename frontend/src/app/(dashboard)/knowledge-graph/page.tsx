@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Share2, Search, X, ChevronLeft, ChevronRight, GitMerge, ClipboardList } from 'lucide-react'
+import { Share2, Search, X, ChevronLeft, ChevronRight, GitMerge, ClipboardList, FileText } from 'lucide-react'
 import type { Entity, EntityDetail } from '@/lib/api/knowledge-graph'
 import type { TriageStatus } from '@/lib/api/triage'
 import { ResolutionLogTab } from './components/ResolutionLogTab'
@@ -34,6 +34,11 @@ import { useSetEntityOverride } from '@/lib/hooks/use-triage'
 
 const SigmaGraphView = dynamic(
   () => import('./components/SigmaGraphView'),
+  { ssr: false, loading: () => <div className="flex h-96 items-center justify-center"><LoadingSpinner /></div> }
+)
+
+const DocumentGraphView = dynamic(
+  () => import('./components/DocumentGraphView'),
   { ssr: false, loading: () => <div className="flex h-96 items-center justify-center"><LoadingSpinner /></div> }
 )
 
@@ -166,6 +171,10 @@ export default function KnowledgeGraphPage() {
               <TabsList>
                 <TabsTrigger value="table">Table</TabsTrigger>
                 <TabsTrigger value="graph">Graph</TabsTrigger>
+                <TabsTrigger value="documents">
+                  <FileText className="h-3.5 w-3.5 mr-1.5" />
+                  Document Graph
+                </TabsTrigger>
                 <TabsTrigger value="resolution">
                   <GitMerge className="h-3.5 w-3.5 mr-1.5" />
                   Resolution Log
@@ -277,6 +286,10 @@ export default function KnowledgeGraphPage() {
                   entityTypeFilter={entityTypeFilter}
                   onNodeClick={handleEntityClick}
                 />
+              </TabsContent>
+
+              <TabsContent value="documents" className="flex-1 overflow-hidden mt-4">
+                <DocumentGraphView onNodeClick={handleEntityClick} />
               </TabsContent>
 
               <TabsContent value="resolution" className="flex-1 overflow-auto mt-4">
