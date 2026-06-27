@@ -146,19 +146,29 @@ class CitationMatch:
     """The result of matching ONE reference to the corpus.
 
     Attributes:
-        source_id: The matched in-corpus ``source:...`` id (the ``cites`` ``out``).
+        source_id: The matched in-corpus ``source:...`` id — the CITED work, the
+            ``cites`` edge ``out``.
         confidence: Match confidence in [0, 1] — ``DOI_CONFIDENCE`` for a DOI hit,
             else the blended title+author score (≥ ``MIN_TITLE_AUTHOR_CONFIDENCE``).
         method: ``"doi"`` or ``"title_author"`` — which precision path resolved it
             (recorded on the edge so a reviewer knows WHY it matched).
         reference: The :class:`ParsedReference` that produced the match (its
             ``raw_text`` is carried onto the edge as the human-readable citation).
+        from_source_id: The CITING source — the document this reference was
+            extracted from (the ``cites`` edge ``in``). Carried THROUGH from the
+            ``from_source_id`` passed to :func:`match_reference`, so the
+            materialization service reads the origin directly off the match and
+            never reverse-looks it up (which mis-attributed two distinct origins
+            citing the same target with a value-equal reference). ``None`` only
+            when a single-reference match was run without an origin (e.g. a unit
+            test); :func:`match_corpus_references` always sets it.
     """
 
     source_id: str
     confidence: float
     method: str
     reference: ParsedReference
+    from_source_id: Optional[str] = None
 
 
 # --------------------------------------------------------------------------
@@ -384,6 +394,7 @@ def match_reference(
         confidence=round(best_conf, 4),
         method=best_method,
         reference=reference,
+        from_source_id=from_source_id,
     )
 
 

@@ -293,3 +293,43 @@ def test_matching_is_deterministic():
     assert m1 is not None and m2 is not None
     assert m1.source_id == m2.source_id == "source:ali"
     assert m1.confidence == m2.confidence
+
+
+def test_match_reference_carries_origin():
+    """The citing origin is carried THROUGH on the match (the cites edge `in`)."""
+    ref = ParsedReference(
+        raw_text="Ali doi:10.1111/jcms.13501", doi="10.1111/jcms.13501"
+    )
+    match = match_reference(ref, CORPUS, from_source_id="source:brakman")
+    assert match is not None
+    assert match.from_source_id == "source:brakman"  # citing
+    assert match.source_id == "source:ali"  # cited
+
+
+def test_two_origins_same_target_value_equal_ref_attributed_distinctly():
+    """Regression: two origins citing the same target with a VALUE-EQUAL
+    reference each carry their OWN origin (no value-equality mis-attribution).
+
+    ``ParsedReference`` is a frozen dataclass so ``==`` is by value; the two
+    references below are value-equal. Because the origin is carried through the
+    match (not reverse-looked-up by value), each match must report its true
+    citing source — both targets resolve to Ali, but one is from Brakman and one
+    from the policy doc.
+    """
+    identical = dict(
+        raw_text="Ali (2025). doi:10.1111/jcms.13501", doi="10.1111/jcms.13501"
+    )
+    refs = {
+        "source:brakman": [ParsedReference(**identical)],
+        "source:policy": [ParsedReference(**identical)],
+    }
+    # Sanity: the two references are value-equal (the dangerous condition).
+    assert refs["source:brakman"][0] == refs["source:policy"][0]
+
+    result = match_corpus_references(refs, CORPUS)
+    assert len(result.matches) == 2
+    by_origin = {m.from_source_id: m.source_id for m in result.matches}
+    assert by_origin == {
+        "source:brakman": "source:ali",
+        "source:policy": "source:ali",
+    }

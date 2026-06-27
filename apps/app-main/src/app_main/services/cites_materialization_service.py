@@ -46,9 +46,11 @@ class MaterializeCitesResult:
 
     Attributes:
         cleared: Edges removed by the clear step (the prior edge set size).
-        created: ``cites`` edges RELATEd this run (the confident intra-corpus
-            matches).
-        failed: Edges whose RELATE failed (expected 0; non-zero is a partial
+        created: DISTINCT ``cites`` (origin, target) edges persisted this run.
+            Counts unique pairs, not raw RELATE calls — two confident matches for
+            the same (origin, target) idempotently re-land one edge, so they count
+            once (matching the de-duplicated edge table).
+        failed: RELATE calls that failed (expected 0; non-zero is a partial
             write worth surfacing).
         external: References that matched NO in-corpus source (the external
             works — counted/logged, not edged; Track V may stub them later).
@@ -186,19 +188,36 @@ class CitesMaterializationService:
 
         cleared = await self.source_repo.clear_cites()
 
-        created = 0
+        # De-dup (origin, target) pairs WITHIN this run: SurrealDB ``RELATE`` does
+        # NOT collapse a repeated (in, out) — it creates a second edge row with a
+        # fresh id. So if Track V lists the same cited work twice in one
+        # bibliography (a duplicate entry), two matches for the same pair would
+        # otherwise write two identical edges. Skipping an already-persisted pair
+        # keeps the edge table one-row-per-(origin, target) — true idempotency —
+        # and ``created`` (the size of this set) then matches the edge table.
+        # Distinct origins citing the same target stay separate (the KEY is the
+        # PAIR, not just the target). ``failed`` counts every failed RELATE.
+        persisted_pairs: set[tuple[str, str]] = set()
         failed = 0
         for match in match_result.matches:
-            origin = self._origin_of(references_by_source, match.reference)
+            # The citing origin is carried THROUGH the match (set by
+            # match_corpus_references), so distinct origins citing the same target
+            # with a value-equal reference are attributed correctly — no fragile
+            # reverse lookup that a value-equality fallback could mis-resolve.
+            origin = match.from_source_id
             if origin is None:
-                # Defensive: a matched reference must trace back to an origin
-                # source (it came from one). Skip rather than RELATE a dangling
-                # edge with no citing side.
+                # Defensive: a corpus match always carries its origin. A missing
+                # origin means a single-reference match leaked in without one;
+                # skip rather than RELATE a dangling edge with no citing side.
                 logger.warning(
                     "cites: matched reference has no origin source, skipping: {r}",
                     r=match.reference.raw_text[:80],
                 )
                 failed += 1
+                continue
+            if (origin, match.source_id) in persisted_pairs:
+                # Already RELATEd this (origin, target) this run — skip the
+                # duplicate so the edge table stays one-row-per-pair.
                 continue
             try:
                 ok = await self.source_repo.relate_cites(
@@ -217,10 +236,11 @@ class CitesMaterializationService:
                 )
                 ok = False
             if ok:
-                created += 1
+                persisted_pairs.add((origin, match.source_id))
             else:
                 failed += 1
 
+        created = len(persisted_pairs)
         logger.info(
             "cites materialized: cleared={cleared} created={created} "
             "failed={failed} external={ext} ambiguous={amb} self={self_} "
@@ -244,26 +264,6 @@ class CitesMaterializationService:
             total_references=match_result.total_references,
             sources_in_corpus=len(sources),
         )
-
-    @staticmethod
-    def _origin_of(
-        references_by_source: Dict[str, Sequence[ParsedReference]],
-        reference: ParsedReference,
-    ) -> str | None:
-        """Find which source a matched reference was extracted from.
-
-        The matcher returns the matched (cited) source but carries the
-        ``ParsedReference`` through, so the citing (origin) side is recovered by
-        identity lookup in the input map. ``ParsedReference`` is frozen/hashable,
-        so identity is by value — two distinct origins sharing an identical
-        reference would be ambiguous, but a reference belongs to exactly one
-        source's bibliography in practice (and the first match is deterministic).
-        """
-        for origin_id, refs in references_by_source.items():
-            for ref in refs or ():
-                if ref is reference or ref == reference:
-                    return origin_id
-        return None
 
     async def get_citation_edges(
         self,

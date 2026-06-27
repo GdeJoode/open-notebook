@@ -340,3 +340,86 @@ async def test_get_citation_edges_reads_back(
     # A confidence floor above the edge's confidence filters it out.
     above = await svc.get_citation_edges(min_confidence=1.0001)
     assert above == []
+
+
+@pytest.mark.requires_docker
+async def test_two_origins_cite_same_target_value_equal_reference(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Regression: two distinct origins cite the same target with a VALUE-EQUAL
+    reference → BOTH edges are created (no silent drop).
+
+    The dangerous real-world feed: two documents (Brakman + the policy doc) each
+    cite the same foundational work (Ali), and — both bibliographies coming from
+    the same citation manager — the reference strings are byte-identical. The
+    matcher preserves per-origin identity AND carries the origin through each
+    match, so attribution must be exact: both ``brakman -> ali`` and
+    ``policy -> ali`` must persist, and ``created`` must report 2 distinct pairs.
+    A reverse-lookup that fell back to value-equality would mis-attribute both to
+    the first origin and silently drop the second edge.
+    """
+    seed = await _seed_corpus(live_surrealdb)
+    svc = _service(live_surrealdb)
+
+    # The IDENTICAL reference text/DOI, cited by two different origins.
+    identical_doi = "10.1111/jcms.13501"
+    identical_text = "Ali, S. (2025). Cohesion Policy. doi:10.1111/jcms.13501"
+    refs = {
+        seed["brakman"]: [
+            ParsedReference(raw_text=identical_text, doi=identical_doi),
+        ],
+        seed["policy"]: [
+            ParsedReference(raw_text=identical_text, doi=identical_doi),
+        ],
+    }
+    result = await svc.materialize(refs)
+
+    # Two DISTINCT (origin, target) edges, not one.
+    assert result.created == 2, "a real second citation was silently dropped"
+    assert result.failed == 0
+
+    edges = await execute_query(
+        "SELECT in AS src, out AS tgt FROM cites;", config=live_surrealdb
+    )
+    pairs = {(e["src"], e["tgt"]) for e in edges}
+    assert pairs == {
+        (seed["brakman"], seed["ali"]),
+        (seed["policy"], seed["ali"]),
+    }, f"expected both origins -> Ali, got {pairs}"
+    # Two rows, two distinct pairs (no idempotent collapse onto one origin).
+    assert len(edges) == 2
+
+
+@pytest.mark.requires_docker
+async def test_same_origin_target_twice_counts_once(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Minor 1: the SAME (origin, target) emitted twice → one edge, created==1.
+
+    If Track V ever lists the same cited work twice in one bibliography (a
+    duplicate entry), the two matches RELATE the same (in, out) pair, which the
+    `cites` relation table idempotently collapses to one edge. `created` counts
+    DISTINCT persisted pairs, so it reports 1 — not 2 — matching the edge table.
+    """
+    seed = await _seed_corpus(live_surrealdb)
+    svc = _service(live_surrealdb)
+
+    refs = {
+        seed["brakman"]: [
+            ParsedReference(
+                raw_text="Ali doi:10.1111/jcms.13501", doi="10.1111/jcms.13501"
+            ),
+            # A duplicate bibliography entry for the same cited work.
+            ParsedReference(
+                raw_text="Ali (dup) doi:10.1111/jcms.13501",
+                doi="10.1111/jcms.13501",
+            ),
+        ],
+    }
+    result = await svc.materialize(refs)
+
+    assert result.created == 1, "duplicate (origin,target) over-counted"
+    edges = await execute_query(
+        "SELECT count() AS c FROM cites GROUP ALL;", config=live_surrealdb
+    )
+    assert (edges[0]["c"] if edges else 0) == 1
