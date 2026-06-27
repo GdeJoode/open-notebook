@@ -278,7 +278,7 @@ export default function DocumentGraphView({ onNodeClick }: DocumentGraphViewProp
           {summary.isolatedDocuments.length > 0 && (
             <p className="mt-1 text-muted-foreground">
               {summary.isolatedDocuments.length} isolated document
-              {summary.isolatedDocuments.length === 1 ? '' : 's'} share no concept:{' '}
+              {summary.isolatedDocuments.length === 1 ? ' shares' : 's share'} no concept:{' '}
               {summary.isolatedDocuments.map((d) => d.label).join(', ')}.
             </p>
           )}
