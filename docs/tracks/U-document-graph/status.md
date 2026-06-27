@@ -1,9 +1,19 @@
 # Track U — status
 
-## Phase U.2 — `mentions` edge projection (Backend) — READY FOR REVIEW
+## Phase U.2 — `mentions` edge projection (Backend) — APPROVED
 
 **Branch**: `track/u2-mentions` (off `main` @ `006b953`)
 **Date**: 2026-06-27
+**Review**: APPROVED (`reviews/phase-U.2-attempt-1.md`) — 0 blockers, 0 majors.
+The reviewer falsification-tested the migration-66 safety claim (patched in a
+blanket DELETE → confirmed edge loss → the preservation test genuinely catches
+it). Three minor follow-ups were filed and have since been fixed in
+`559722f`: (1) `relate_mention` docstring now states it raises on transport
+error; (2) `regenerate` telemetry (`emitted_concepts`/`active_entities`) now
+comes from the projection stats — accurate under a `min_weight` cutoff;
+(3) `regenerate` loads the active entities once (via `_project`) instead of
+twice. Live regenerate remains correctly gated (staging `mentions` still 0 rows,
+still `TYPE ANY` — migration 66 not yet applied to staging).
 
 ### What was built
 The document↔entity bipartite graph is now real: `mentions` (source→entity)
