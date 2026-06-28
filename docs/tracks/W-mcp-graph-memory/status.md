@@ -270,3 +270,150 @@ incoming `relation` neighbours. SELECT-only; no writes to staging.
 2. `cite`'s dedup is read-then-write (not atomic) — unreachable under the
    single-caller stdio transport, but would need a transaction/unique-edge guard
    if concurrent writers are ever introduced.
+
+---
+
+## Phase W.4 — Integration + docs + RETRO — READY FOR REVIEW (CLOSES Track W)
+
+**Branch**: `track/w4-integration` (off `main`, has W.1 + W.2 + W.3 merged)
+**Commits**:
+- `2974bbd` test(mcp): W.4 e2e — search->related->get_node compose read-only, model-free
+- (this section) docs(arch) §10 shared graph-memory; docs(track-w) operator runbook; docs(roadmap) Track W; docs RETRO + CLOSE
+
+### Deliverables
+1. **`ARCHITECTURE.md` §10 — shared graph memory (MCP graph-tools + reranker).**
+   New section (existing §9 computed-vs-materialized untouched; old §10 Further
+   reading → §11): the `surrealdb-mcp` shared substrate + the 5 graph tools and
+   their repo backings (table); the embedding-source contract; the two
+   deliberately-separate retrieval layers (chunk/note hybrid `search` vs the
+   source-level Track R `/sources/{id}/related-hybrid`, cross-referenced to §9);
+   the isolated default-off reranker service + heuristic fallback.
+2. **Operator runbook** — `docs/tracks/W-mcp-graph-memory/OPERATOR_GUIDE.md`
+   (mirrors the Track J `OPERATOR_GUIDE.md` location): (a) `.mcp.json` /
+   `claude mcp add` shape for `surrealdb-mcp --transport stdio` + the `SURREAL_*`
+   env table (`SURREAL_DATABASE=staging`); (b) the consolidated gated reranker
+   bring-up (build → up → `/health` `model_loaded:true` → Dutch `/rerank` smoke →
+   end-to-end `/search rerank:true` → `stop reranker` to verify the heuristic
+   fallback); (c) safety notes (stdio/no-auth, cite read-then-write).
+3. **Light E2E integration check** —
+   `packages/surrealdb-service/tests/test_mcp_graph_tools_e2e_compose.py`
+   (docker-backed, 2 tests, **green**). Composes the MCP tools MODEL-FREE:
+   `search` (lexical BM25, no embedding) → `related` on the returned source node
+   (mentions edge → entity) → `related` on that entity (relation edge →
+   neighbour) → `get_node` on the neighbour. Every step consumes the previous
+   step's id; read-only (seeds an isolated subgraph, then only SELECTs). The
+   **rerank leg is explicitly NOT run** (gated operator smoke — see the runbook);
+   the second test asserts the search leg takes no embedding (no `_vector_rank`
+   provenance), proving it is genuinely model-free.
+4. **RETRO** — below. **Track W marked CLOSED.**
+5. **`docs/FEATURE_ROADMAP.md`** — Track W entry added (mirrors the Track U
+   "(NEW)"/CLOSED pattern; additive).
+
+### Acceptance criteria — evidence
+1. **ARCHITECTURE §10 accurate, doesn't clobber §9, cross-refs both retrieval
+   layers** — new §10 added; §9 byte-unchanged; `related`/`search` (chunk/note)
+   vs Track R source-level retrieval explicitly distinguished and cross-linked.
+2. **Runbook lets an operator (a) register the MCP server + (b) bring-up/smoke/
+   fallback-test the reranker** — `OPERATOR_GUIDE.md` §1 (registration, env) + §2
+   (gated reranker a–e). Commands consolidated from the W.2/W.3 status notes;
+   app port `5055`, reranker port `8105`, both verified against `docker-compose.yml`.
+3. **E2E composes search→related→get_node read-only, green; rerank leg gated** —
+   `test_mcp_graph_tools_e2e_compose.py` 2 passed; rerank leg deferred to the
+   runbook smoke (no 2 GB model run).
+4. **RETRO written; Track W CLOSED; roadmap updated** — this section + the Track
+   W roadmap entry.
+5. **No regressions** — app-main search+rerank suites: 32 passed
+   (`test_search_router` / `test_search_service` / `test_search_rerank_router` /
+   `test_reranker_http_client`). surrealdb-service W graph suites: 26 passed
+   (`test_search_hybrid_fusion` / `test_graph_load_all_edges` /
+   `test_mcp_graph_tools_roundtrip` / `test_mcp_graph_tools_e2e_compose`).
+   Reranker service: 4 passed. (Pre-existing top-level `tests/` import errors and
+   the 3 known `docling`-missing failures are unrelated and out of scope.)
+
+---
+
+## Track W — RETROSPECTIVE
+
+**What Track W set out to do**: build the *foundation* for shared graph memory —
+Feature 1 (MCP graph-tools as the shared SurrealDB substrate) + Feature 5
+(hybrid search 5a + a local multilingual reranker 5b). Citations / auto-link /
+contradiction were explicitly deferred to later tracks.
+
+### 1. "Most of this already existed" — the recurring finding
+As with Track U (where the schema already defined the edges), the dominant W
+finding was that the machinery was largely present and just **not wired**:
+- The hybrid BM25⊕vector fusion chain existed end-to-end at the repo/service
+  layer (`SearchRepository.hybrid_search` → `RetrievalService` → `SearchService`)
+  — W.1 only had to add the router branch, the request field, and the
+  `text_weight` thread-through. No new fusion logic, no `fn::` functions, no
+  embedding model.
+- The `surrealdb-mcp` server already existed with 5 low-level tools — W.3 added
+  5 graph tools *alongside* them, not a new server.
+- The repo backings for the graph tools mostly existed (`relate_cites`,
+  `NoteRepository.create_with_embedding` + `add_to_notebook`, the specialized
+  edge loaders) — the only genuinely missing piece was a *unified*
+  `load_all_edges`.
+The lesson (again): **survey before building.** The track stayed small because
+each phase confirmed the existing surface first and added the thin missing seam.
+
+### 2. The latent RRF fusion bug — caught by asking for honest findings (W.1)
+The repo-layer fusion read `item.get("score", 0)`, but the FTS functions return
+`relevance` (BM25) and `similarity` (cosine) — **never** `score`. So
+`_combined_score` silently collapsed to 0 and the "ranked" hybrid output
+degenerated to insertion order, *failing the very acceptance criterion W.1
+claimed to satisfy*. It surfaced only because the phase was pushed to produce
+real evidence (the staging probe showed all-`0.0000` scores). The fix replaced
+the broken linear sum with Reciprocal Rank Fusion (scale-independent, k=60,
+matching Track R's validated fusion) — a rank-based fuse, not a magnitude one, so
+the unbounded BM25 signal can't drown the bounded cosine signal. Lesson:
+**"returns fused results" is not the same as "returns *correctly* fused
+results"** — demand the numbers, not the shape.
+
+### 3. Dependency-isolation discipline — the reranker as its own service (W.2)
+The reranker pulls `torch` + `sentence-transformers` (~2 GB model). Rather than
+let that bleed into `app-main`, it lives in its **own container**
+(`services/reranker/`), mirroring `docling`/`whisperx`; app-main reaches it over
+plain HTTP (`RERANKER_SERVICE_URL`) with no ML libs, and a service outage falls
+back to the zero-dep heuristic reranker (never a 500). Verified
+`torch`/`sentence-transformers` are absent from app-main's dependency closure.
+This kept a heavy, optional capability genuinely optional and the core app lean.
+(They *are* importable from the shared uv-workspace `.venv` because sibling
+pipelines pull them — that is the workspace venv, not app-main's own closure, and
+not the reranker container. The distinction matters and is documented.)
+
+### 4. The vacuous "shared-substrate" test — "demonstrated" must mean it (W.3)
+The plan's AC2 was *"two separate sessions see the same nodes — demonstrated."*
+The first attempt read the tool-written node back via `execute_query(...,
+config=cfg)` and called it proof. It wasn't: `get_pool(config)` returns the
+cached singleton pool and **ignores** its `config` arg once the pool exists, so
+the "second session" was reusing the writer's own pool — the test proved
+durability on one connection, not the cross-session property. The fix used
+`db_connection(cfg)`, which builds its own `AsyncSurreal` socket and never
+touches the global pool, and asserted explicitly that the reader connection
+object is `!=` the pooled one. Lesson: **a test that would pass for the wrong
+reason proves nothing** — when an AC says "demonstrate X", verify the test can
+only pass *because* of X.
+
+### Cross-cutting
+The through-line of all four: **honest evidence is the deliverable.** A green
+test, a "fused" result, a "demonstrated" property — each was initially vacuous
+and only became real when forced to show the number / the independent
+connection / the dependency closure. The track's value is as much in catching
+those as in the (thin) new code.
+
+### Status — TRACK W CLOSED
+- **W.1** hybrid `/search` (RRF) — done, merged.
+- **W.2** reranker microservice + `rerank` flag + heuristic fallback — done,
+  merged; **the live ~2 GB model run is operator-gated** (runbook §2).
+- **W.3** 5 MCP graph tools + `load_all_edges` + `relation` fix — done, merged.
+- **W.4** integration check + ARCHITECTURE §10 + operator runbook + roadmap +
+  this RETRO — done.
+
+**Operator / follow-up (outside the closed track):**
+1. Run the gated reranker live-model smoke (runbook §2 a–e).
+2. Gate `cite`/`add_note` write-tool registration to stdio (or add auth) before
+   any `sse`/`streamable-http` exposure (W.3 follow-up 1).
+3. Make `cite` dedup atomic if concurrent MCP writers are ever introduced (W.3
+   follow-up 2).
+
+**Track W is CLOSED.**
