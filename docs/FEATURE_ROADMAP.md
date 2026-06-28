@@ -1318,6 +1318,43 @@ size — the more documents share entities / cite each other, the richer the gra
 
 ---
 
+## Track W — Shared graph memory (MCP graph-tools + hybrid search + reranker) (NEW)
+
+> **Status**: ✅ CLOSED (2026-06-29). The SurrealDB knowledge graph is now a
+> shared memory substrate every Claude Code session reads/writes through MCP
+> graph tools, hybrid (BM25⊕vector) search is reachable via `/search`, and an
+> optional local multilingual reranker can sharpen the top-N. Key finding (as in
+> Track U): most of this ALREADY existed — the hybrid fusion chain, the MCP
+> server, and the repo backings were present but unwired. Track W exposed and
+> tied them together. See [`docs/tracks/W-mcp-graph-memory/status.md`](./tracks/W-mcp-graph-memory/status.md)
+> and `ARCHITECTURE.md` §10.
+
+**Vision**: the graph is a shared substrate, not per-session state — two sessions
+pointed at the same DB see the same nodes/edges, and notes/citations one writes
+are visible to the other. Built the *foundation* (Constella Features 1 + 5);
+citations / auto-link / contradiction are separate later tracks.
+
+**Phases**: W.1 expose hybrid (BM25+vector, RRF) search via `/search`
+`type=hybrid` — the fusion chain already existed at the repo layer; W.1 added the
+router seam + caught a latent fusion bug (scores collapsed to 0 → fixed with
+Reciprocal Rank Fusion) · W.2 local cross-encoder reranker as its OWN container
+(`services/reranker/`, `bge-reranker-v2-m3`), wired into `/search` behind a
+default-off `rerank` flag, with a zero-dep heuristic fallback when the service is
+down — keeps `torch`/`sentence-transformers` out of `app-main`; the ~2 GB model
+run is operator-gated · W.3 five MCP graph tools (`search`/`get_node`/`related`/
+`cite`/`add_note`) on the existing `surrealdb-mcp` server + a unified
+`load_all_edges` (relation+mentions+cites) + the `relates_to`→`relation` fix ·
+W.4 integration check (model-free `search`→`related`→`get_node` compose) +
+`ARCHITECTURE.md` §10 + operator runbook + RETRO.
+
+**Value**: a queryable, writable shared graph memory for agent sessions +
+better retrieval quality (hybrid + optional rerank), built lean by reusing the
+existing surface. **Depends on**: R (the validated hybrid fusion it mirrors), the
+existing `surrealdb-mcp` server + repos. **Feeds**: later Constella features
+(citations / auto-link / contradiction) build on this substrate.
+
+---
+
 ## Bijlagen
 
 - `docs/REFACTOR_PLAN.md` — voltooide refactor (Phase 0-7)
