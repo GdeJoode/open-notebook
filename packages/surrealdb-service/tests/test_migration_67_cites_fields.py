@@ -125,8 +125,14 @@ async def test_cites_u3_fields_defined_and_persisted(
         {"rt": "Ali (2025) Cohesion Policy and Institutional Quality."},
         config=live_surrealdb,
     )
+    # Scope to the edge THIS test created. The container is session-scoped, so
+    # other suites (e.g. the W.3 MCP `cite` roundtrip) legitimately add their
+    # own `cites` edges into the same DB — a global ``len == 1`` would be a
+    # false cross-test coupling, not a real assertion about this RELATE.
     edge = await execute_query(
-        "SELECT in, out, confidence, reference_text, match_method FROM cites;",
+        "SELECT in, out, confidence, reference_text, match_method FROM cites "
+        "WHERE in = type::thing($a) AND out = type::thing($b);",
+        {"a": src_a, "b": src_b},
         config=live_surrealdb,
     )
     assert len(edge) == 1
