@@ -99,9 +99,15 @@ class SearchService:
         include_sources: bool = True,
         include_notes: bool = True,
         minimum_score: float = 0.2,
+        text_weight: float = 0.5,
     ) -> List[Dict[str, Any]]:
         """Perform a hybrid text + vector search."""
         svc = await self._get_retrieval()
         return await svc.hybrid_search(
-            keyword, results, include_sources, include_notes, minimum_score
+            keyword,
+            results,
+            include_sources,
+            include_notes,
+            minimum_score,
+            text_weight,
         )
