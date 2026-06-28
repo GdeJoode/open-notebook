@@ -190,6 +190,28 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: always
+  reranker:
+    build:
+      context: .
+      dockerfile: services/reranker/Dockerfile
+    networks: [web]
+    ports:
+      - "8105:8105"
+    volumes:
+      # Persistent HuggingFace cache so bge-reranker-v2-m3 (~2 GB) is
+      # downloaded once across container restarts.
+      - reranker_models:/data/models
+    environment:
+      # Multilingual cross-encoder — the corpus is Dutch. Override to tune
+      # size/latency (e.g. a smaller variant).
+      - RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+      # CPU by default. To use a GPU, set RERANKER_DEVICE=cuda and add an
+      # nvidia deploy.resources reservation block like docling/whisperx.
+      - RERANKER_DEVICE=
+      - HF_HOME=/data/models
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
   open_notebook:
     build:
       context: .
@@ -208,6 +230,7 @@ services:
       - USE_DOCLING_SERVICE=true
       - MINERU_SERVICE_URL=http://mineru:8104
       - USE_MINERU_SERVICE=true
+      - RERANKER_SERVICE_URL=http://reranker:8105
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # No hard depends_on for mineru — the app must boot when the MinerU
@@ -228,3 +251,4 @@ services:
 
 volumes:
   mineru_models:
+  reranker_models:
