@@ -231,12 +231,20 @@ stale `relates_to` table has 0 rows.
 - `add_note`: writes note + `artifact` notebook link; embedding defaults to `[]`
   (note.embedding is non-optional array<float>).
 
-### Shared-substrate demonstration
+### Shared-substrate demonstration (revised after review attempt 1)
 The MCP tool fns take no config → they write through the GLOBAL connection pool.
-The roundtrip fixture reads each written node/edge back over a SEPARATE connection
-(`config=live_surrealdb`) — same DB, different connection — proving it is shared
-SurrealDB state, not per-session. (`test_cite_writes_and_is_idempotent`,
-`test_add_note_writes_and_links_notebook`.)
+The readback must use a GENUINELY INDEPENDENT connection to prove the
+cross-session property (plan AC2), not merely durability. `execute_query(...,
+config=cfg)` does NOT qualify: `get_pool(config)` returns the cached singleton
+pool and ignores its `config` arg once the pool exists, so it reuses the writer's
+own pool. The fix uses `db_connection(cfg)` (`connection.py:33`), which
+constructs its OWN `AsyncSurreal` socket and never touches `_pool`. Evidence:
+- `test_cite_writes_and_is_idempotent` / `test_add_note_writes_and_links_notebook`
+  read the tool-written edge/note back via `_read_independent` (a
+  `db_connection(cfg)` helper).
+- `test_shared_substrate_across_two_independent_connections` makes it explicit:
+  asserts the reader connection object is `!=` the global pool's pooled
+  connection, then that this independent reader sees the just-written note.
 
 ### Staging `related` probe (read-only, `SURREAL_DATABASE=staging`)
 `related(entity:00d3qmmq06mel8pmlyfz)` [canonical "Regio Deal", programme] →
@@ -246,9 +254,19 @@ incoming `relation` neighbours. SELECT-only; no writes to staging.
 
 ### Tests
 - `test_graph_load_all_edges.py` — 6 unit tests (stubbed execute_query, no docker).
-- `test_mcp_graph_tools_roundtrip.py` — 10 docker-backed tool tests.
-- Full surrealdb-service suite: **212 passed**.
+- `test_mcp_graph_tools_roundtrip.py` — 11 docker-backed tool tests (incl. the
+  explicit two-connection shared-substrate test).
+- Full surrealdb-service suite: **213 passed**.
 
 ### Running the MCP server
 `uv run --project packages/surrealdb-service surrealdb-mcp --transport stdio`
 (no auth — stdio-local only; add auth before any HTTP exposure).
+
+### Follow-ups for W.4 / hardening (NOT in W.3 scope — reviewer minors)
+1. The pre-existing `--transport {sse,streamable-http}` options would expose the
+   new `cite`/`add_note` WRITE tools unauthenticated. Default is `stdio` (safe).
+   Gate write-tool registration to stdio-only (or add auth) before any HTTP
+   transport is used.
+2. `cite`'s dedup is read-then-write (not atomic) — unreachable under the
+   single-caller stdio transport, but would need a transaction/unique-edge guard
+   if concurrent writers are ever introduced.

@@ -5,19 +5,25 @@ Exercises the five new FastMCP tools (`search`, `get_node`, `related`, `cite`,
 client needed) against a real migrated SurrealDB testcontainer. The tool fns
 take NO config arg — they go through the global connection pool — so the
 ``mcp_global_db`` fixture points the global ``_config`` at the container and
-resets the pool. That same indirection is what proves the **shared-substrate**
-property: a node a tool writes via the global pool is read back over a SEPARATE
-connection opened with ``config=live_surrealdb`` — same database, different
-connection, not per-session state.
+resets the pool.
+
+**Shared-substrate property (AC2).** The tool writes through the global pool;
+the readback opens a genuinely INDEPENDENT connection via ``db_connection(cfg)``
+(``_read_independent`` below). That helper constructs its OWN ``AsyncSurreal``
+socket and never touches the global ``_pool`` (unlike ``execute_query``, whose
+``get_pool(config)`` returns the cached singleton and ignores its ``config`` arg
+once the pool exists). So a tool-written node being visible to that second
+connection demonstrates two SEPARATE connections reading the SAME database — the
+cross-session shared substrate — not merely durability on one connection.
 
 Coverage:
 - AC1: every tool returns valid JSON.
 - AC2: ``related`` returns relation + mentions + cites edges, both endpoint
   directions; ``get_entity_graph`` reads ``relation`` (not the stale
-  ``relates_to``).
+  ``relates_to``); a tool-written node/edge is visible over an independent
+  second connection.
 - AC3: ``cite`` / ``add_note`` write, and re-``cite`` of the same pair is an
   idempotent no-op (no duplicate edge); self-citation refused.
-- AC4: a tool-written note/edge is visible to a second connection.
 """
 
 from __future__ import annotations
@@ -31,7 +37,11 @@ import pytest
 import surrealdb_service.config as config_module
 import surrealdb_service.connection as connection_module
 from surrealdb_service.config import SurrealDBConfig
-from surrealdb_service.connection import execute_query
+from surrealdb_service.connection import (
+    db_connection,
+    execute_query,
+    parse_record_ids,
+)
 from surrealdb_service.mcp.server import create_server
 
 pytestmark = pytest.mark.requires_docker
@@ -39,6 +49,23 @@ pytestmark = pytest.mark.requires_docker
 
 def _u(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:10]}"
+
+
+async def _read_independent(
+    cfg: SurrealDBConfig, query: str, params: dict[str, Any]
+) -> List[dict[str, Any]]:
+    """Run a SELECT over a connection INDEPENDENT of the global pool.
+
+    ``db_connection(cfg)`` builds its own ``AsyncSurreal`` socket and signs in /
+    uses the namespace+database itself — it never reads or mutates the global
+    ``_pool``. This is the genuine "second session" the shared-substrate AC
+    needs: the tool wrote through the global pool, this reads through a wholly
+    separate connection to the same database. (``execute_query`` would NOT do —
+    ``get_pool(config)`` hands back the cached singleton and ignores ``config``
+    once the pool exists, so it would reuse the writer's own pool.)
+    """
+    async with db_connection(cfg) as conn:
+        return parse_record_ids(await conn.query(query, params))
 
 
 def _tool(server, name: str):
@@ -268,13 +295,14 @@ async def test_cite_writes_and_is_idempotent(
     assert second["created"] is False
     assert second["edge"] == first["edge"]
 
-    # Shared substrate: read the edge over a SEPARATE connection (explicit
-    # config), independent of the global pool the tool wrote through.
-    rows = await execute_query(
+    # Shared substrate: read the edge over a genuinely INDEPENDENT connection
+    # (its own AsyncSurreal socket, not the global pool the tool wrote through).
+    # The edge being visible here proves a second session sees the same DB.
+    rows = await _read_independent(
+        cfg,
         "SELECT id, confidence, reference_text, match_method FROM cites "
         "WHERE in = type::thing($s) AND out = type::thing($t);",
         {"s": citing, "t": cited},
-        config=cfg,
     )
     assert len(rows) == 1, "exactly one cites edge (idempotent)"
     assert rows[0]["match_method"] == "mcp"
@@ -327,18 +355,22 @@ async def test_add_note_writes_and_links_notebook(
     assert note_id.startswith("note:")
     assert res["linked_notebook"] == notebook_id
 
-    # Shared substrate: a SECOND connection sees the note + the artifact link.
-    note_rows = await execute_query(
+    # Shared substrate: a genuinely INDEPENDENT second connection (its own
+    # AsyncSurreal socket via db_connection, NOT the writer's global pool) sees
+    # the note + the artifact link — proving cross-connection visibility.
+    note_rows = await _read_independent(
+        cfg,
         "SELECT id, title, content FROM note WHERE id = type::thing($id);",
-        {"id": note_id}, config=cfg,
+        {"id": note_id},
     )
     assert len(note_rows) == 1
     assert note_rows[0]["title"] == title
     assert note_rows[0]["content"] == "hello world"
 
-    link = await execute_query(
+    link = await _read_independent(
+        cfg,
         "SELECT VALUE out FROM artifact WHERE in = type::thing($id);",
-        {"id": note_id}, config=cfg,
+        {"id": note_id},
     )
     assert str(link[0]) == notebook_id
 
@@ -352,6 +384,48 @@ async def test_add_note_without_notebook(
     res = json.loads(await add_note(title=_u("Solo"), content="body only"))
     assert res["id"].startswith("note:")
     assert res["linked_notebook"] is None
+
+
+async def test_shared_substrate_across_two_independent_connections(
+    mcp_global_db: SurrealDBConfig,
+) -> None:
+    """AC2: a node written by a tool (global pool) is visible to a SECOND,
+    independent connection — proving the shared substrate, not mere durability.
+
+    The proof has two halves:
+
+    1. The writer (the ``add_note`` tool) goes through the GLOBAL pool, and the
+       reader (``db_connection(cfg)``) opens its OWN ``AsyncSurreal`` socket that
+       never touches that pool. We assert the reader's connection object is NOT
+       the pooled connection the writer used, so "the second session sees it" is
+       a genuine cross-connection observation.
+    2. That independent reader sees the just-written note.
+    """
+    cfg = mcp_global_db
+    add_note = _tool(create_server(), "add_note")
+
+    # Identify the global pool's own connection (the writer's side).
+    pool = connection_module.get_pool()
+    async with pool.acquire() as pooled_conn:
+        writer_conn_id = id(pooled_conn)
+
+    title = _u("Cross")
+    note_id = json.loads(await add_note(title=title, content="cross-conn body"))[
+        "id"
+    ]
+
+    # A genuinely independent connection: its own socket, distinct object.
+    async with db_connection(cfg) as reader_conn:
+        assert id(reader_conn) != writer_conn_id, (
+            "readback connection must be independent of the global pool"
+        )
+        rows = parse_record_ids(
+            await reader_conn.query(
+                "SELECT id, title FROM note WHERE id = type::thing($id);",
+                {"id": note_id},
+            )
+        )
+    assert len(rows) == 1 and rows[0]["title"] == title
 
 
 # ----------------------------------------------------------------------
