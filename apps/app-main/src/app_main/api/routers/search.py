@@ -55,6 +55,21 @@ async def search_knowledge_base(
                 minimum_score=search_request.minimum_score,
                 text_weight=search_request.text_weight,
             )
+
+            # Optional cross-encoder rerank of the top-N fused results. Default
+            # (rerank=false) leaves the fused output byte-identical. On a
+            # reranker-service outage this falls back to the heuristic reranker
+            # internally — it never raises, so search stays up.
+            if search_request.rerank and results:
+                from app_main.services.rerank_orchestrator import (
+                    rerank_hybrid_results,
+                )
+
+                results = await rerank_hybrid_results(
+                    query=search_request.query,
+                    results=results,
+                    top_n=search_request.rerank_top_n,
+                )
         else:
             results = await search_svc.text_search(
                 keyword=search_request.query,

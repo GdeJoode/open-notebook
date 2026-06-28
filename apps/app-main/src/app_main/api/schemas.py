@@ -105,6 +105,26 @@ class SearchRequest(BaseModel):
         ge=0,
         le=1,
     )
+    rerank: bool = Field(
+        False,
+        description=(
+            "When true (hybrid search only), re-score the top fused results "
+            "with the local cross-encoder reranker service and reorder by its "
+            "score. Falls back to the heuristic reranker if the service is "
+            "unavailable. Default false keeps the path identical to plain "
+            "hybrid search."
+        ),
+    )
+    rerank_top_n: int = Field(
+        50,
+        description=(
+            "How many of the top fused hybrid results to send to the reranker "
+            "when rerank=true. Only the top-N are re-scored; the remainder keep "
+            "their fused order beneath them."
+        ),
+        ge=1,
+        le=200,
+    )
 
 
 class SearchResponse(BaseModel):
