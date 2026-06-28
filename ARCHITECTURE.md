@@ -415,7 +415,81 @@ byte-for-byte unchanged. See `apps/app-main/src/app_main/services/document_layer
 > target)` within a run). Idempotency is a property of the regenerator, not of
 > `RELATE`.
 
-## 10. Further reading
+## 10. Shared graph memory: MCP graph-tools + reranker (Track W)
+
+Track W turns the SurrealDB knowledge graph into a **shared memory substrate**
+that any Claude Code session can read and write through a small set of MCP
+tools, and adds an optional, isolated **reranker** to sharpen hybrid search.
+Most of the machinery already existed (hybrid fusion at the repo layer, an MCP
+server, the repo backings) — Track W exposed it and tied it together.
+
+### The MCP graph-tools layer (one DB, many sessions)
+
+The existing `surrealdb-mcp` server
+(`packages/surrealdb-service/src/surrealdb_service/mcp/server.py`, FastMCP,
+stdio) is the shared substrate: every session that attaches it talks to the
+**same** SurrealDB (one database, not per-session state), so notes/citations one
+session writes are immediately visible to another. Track W.3 added five graph
+tools alongside the original low-level ones (`query_database` / `get_record` /
+`list_sources` / `search_similar` / `get_entity_graph`):
+
+| Tool | Backed by | What it does |
+|---|---|---|
+| `search` | `SearchRepository.hybrid_search` / `.text_search` | Ranked chunk/note search. With a caller-supplied `embedding` → full W.1 hybrid (BM25 ⊕ vector RRF); without → lexical BM25 only |
+| `get_node` | `SELECT * FROM type::thing($id)` | Polymorphic fetch of any node (`entity:` / `source:` / `note:` / `notebook:`) |
+| `related` | `GraphRepository.load_all_edges` | Every edge incident on a node — `relation` (entity↔entity) + `mentions` (source→entity) + `cites` (source→source), both directions, uniform `{id, source, target, edge_type, metadata}` shape |
+| `cite` | `SourceRepository.relate_cites` | Write a `source→cites→source` edge, idempotently (re-cite = no-op; self-cite refused) |
+| `add_note` | `NoteRepository.create_with_embedding` + `add_to_notebook` | Write a note and link it into a notebook |
+
+**Embedding-source contract.** The surrealdb-service package has no embedding
+model on purpose (keeps a heavy dep out of it), so `search` mirrors the existing
+`search_similar` contract: the *caller* supplies any query vector. The embed
+step stays in app-main's local-Ollama pipeline. No `embedding` → lexical BM25.
+
+**Auth.** None — correct for the default `stdio` transport (the only caller is
+the local process). The `sse`/`streamable-http` transports would expose the
+`cite`/`add_note` WRITE tools unauthenticated; gate or add auth before any HTTP
+exposure. See `docs/tracks/W-mcp-graph-memory/OPERATOR_GUIDE.md`.
+
+### Two retrieval layers, deliberately separate
+
+The MCP `search` tool is the **chunk/note hybrid search** (W.1): BM25 over
+source/note text fused with vector similarity via Reciprocal Rank Fusion
+(`SearchRepository.hybrid_search`, exposed on `/search` `type=hybrid`). It
+answers *"which chunks/notes match this query?"*.
+
+This is **not** the source-level Track R retrieval
+(`/sources/{id}/related-hybrid`, §9 computed layer), which answers *"which whole
+documents are related to this one?"* by fusing content-similarity with
+shared-entity salience. Track W keeps them separate: `related` returns **graph
+edges**, `search` returns **ranked passages**, and Track R returns **related
+documents**. (See §9 for the computed-vs-materialized document story the MCP
+tools read from.)
+
+### The reranker service (optional, isolated, default-off)
+
+`services/reranker/` is a small FastAPI microservice loading a local
+multilingual cross-encoder (`BAAI/bge-reranker-v2-m3`, configurable via
+`RERANKER_MODEL`) in its **own container** next to `docling`/`whisperx`. It
+exposes `POST /rerank {query, passages[]} -> [{index, score}]` and
+`GET /health`. This keeps `torch`/`sentence-transformers` **out of `app-main`**
+entirely.
+
+app-main reaches it over plain HTTP (`RERANKER_SERVICE_URL`), no ML libs:
+
+- `services/reranker_http_client.py` — `RerankerHttpClient` (raises
+  `RerankerServiceError` on any transport/service failure).
+- `services/rerank_orchestrator.py` — `rerank_hybrid_results(...)` reorders the
+  top-N fused hits by the service's scores. On `RerankerServiceError` it **falls
+  back** to the zero-dep heuristic `retrieval.reranker.Reranker` (logged, never a
+  500).
+
+The rerank leg is **off by default**: `/search` runs it only when
+`rerank=true`, so the W.1 path stays byte-identical without the flag, and a
+reranker outage degrades gracefully. The model run (~2 GB download, CPU latency)
+is **operator-gated** — see the runbook for the bring-up + smoke + fallback test.
+
+## 11. Further reading
 
 - `docs/SUMMARIZATION_APPROACHES.md` — design + status of all 11 summarization strategies
 - `docs/KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md` — KG architecture and roadmap
@@ -428,4 +502,6 @@ byte-for-byte unchanged. See `apps/app-main/src/app_main/services/document_layer
 - `docs/tracks/D-output-richness/RETRO.md` — Track D retrospective (export surfaces)
 - `docs/tracks/U-document-graph/status.md` — Track U retrospective (document graph: `mentions`/`cites`, computed-vs-materialized)
 - `docs/tracks/J-model-routing/OPERATOR_GUIDE.md` — cloud/local routing: env keys, privacy model, fair-use, enable/disable
+- `docs/tracks/W-mcp-graph-memory/status.md` — Track W retrospective (MCP graph-tools shared substrate + hybrid search + reranker)
+- `docs/tracks/W-mcp-graph-memory/OPERATOR_GUIDE.md` — registering the `surrealdb-mcp` server + gated reranker bring-up/smoke/fallback
 - `docs/troubleshooting/exports.md` — failure-mode diagnostics for the three export formats
