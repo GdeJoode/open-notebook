@@ -22,7 +22,7 @@ async def search_knowledge_base(
     search_svc: SearchService = Depends(get_search_service),
     model_svc: ModelService = Depends(get_model_service),
 ):
-    """Search the knowledge base using text or vector search."""
+    """Search the knowledge base using text, vector, or hybrid search."""
     try:
         if search_request.type == "vector":
             # Verify embedding model is available
@@ -41,6 +41,19 @@ async def search_knowledge_base(
                 include_sources=search_request.search_sources,
                 include_notes=search_request.search_notes,
                 minimum_score=search_request.minimum_score,
+            )
+        elif search_request.type == "hybrid":
+            # Hybrid (BM25 + vector) fusion. Unlike pure vector search this
+            # degrades gracefully: with no embedding model the retrieval layer
+            # falls back to text-only search rather than erroring, so the
+            # endpoint stays usable in unconfigured environments.
+            results = await search_svc.hybrid_search(
+                keyword=search_request.query,
+                results=search_request.limit,
+                include_sources=search_request.search_sources,
+                include_notes=search_request.search_notes,
+                minimum_score=search_request.minimum_score,
+                text_weight=search_request.text_weight,
             )
         else:
             results = await search_svc.text_search(

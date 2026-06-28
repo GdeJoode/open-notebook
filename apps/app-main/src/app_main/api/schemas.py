@@ -86,12 +86,24 @@ class NotebookResponse(BaseModel):
 # Search schemas
 class SearchRequest(BaseModel):
     query: str = Field(..., description="Search query")
-    type: Literal["text", "vector"] = Field("text", description="Search type")
+    type: Literal["text", "vector", "hybrid"] = Field(
+        "text", description="Search type"
+    )
     limit: int = Field(100, description="Maximum number of results", le=1000)
     search_sources: bool = Field(True, description="Include sources in search")
     search_notes: bool = Field(True, description="Include notes in search")
     minimum_score: float = Field(
-        0.2, description="Minimum score for vector search", ge=0, le=1
+        0.2, description="Minimum score for vector/hybrid search", ge=0, le=1
+    )
+    text_weight: float = Field(
+        0.5,
+        description=(
+            "Weight for the BM25 (text) component in hybrid search; the "
+            "vector component gets (1 - text_weight). Only used when "
+            "type='hybrid'."
+        ),
+        ge=0,
+        le=1,
     )
 
 
