@@ -184,3 +184,71 @@ fallback). `docker compose config` validates.
    Then end-to-end against the app: `POST /search {type:"hybrid", rerank:true}`
    on a Dutch query reorders the top-N; `docker compose stop reranker` →
    the same request still returns 200 via the heuristic fallback.
+
+---
+
+## Phase W.3 — MCP graph-tools (Feature 1) — READY FOR REVIEW
+
+**Branch**: `track/w3-mcp-graph-tools` (off `main`, has W.1 + W.2 merged)
+**Commits**:
+- `d7e7c94` feat(graph): unified read-only load_all_edges across relation/mentions/cites
+- `8f7bde0` feat(mcp): 5 graph tools (search/get_node/related/cite/add_note) + relation fix
+- `519a87c` test(migration-67): scope cites assertion to the edge under test
+
+### Embedding-source decision for `search` (KEY DESIGN QUESTION)
+`search_similar` (the existing vector tool) takes a **precomputed embedding** as a
+parameter — the surrealdb-service MCP layer has NO embedding model, and adding one
+would pull a heavy dep into the package (explicitly out of scope). So the new
+`search` tool **reuses that exact contract** (option (a)):
+- `embedding` supplied → full **W.1 hybrid** search (BM25 ⊕ vector RRF).
+- `embedding` omitted → **lexical BM25** fallback (`fn::text_search`), documented
+  in the tool docstring as non-semantic.
+This keeps the package dependency-free and consistent with `search_similar`; the
+embed step stays in app-main's local-Ollama pipeline.
+
+### `load_all_edges` shape
+`GraphRepository.load_all_edges(node_id, edge_types?)` → list of uniform dicts:
+```
+{ "id": <edge id>, "source": <in>, "target": <out>,
+  "edge_type": "relation"|"mentions"|"cites", "metadata": {<per-table fields>} }
+```
+Both endpoint directions (`in = $id OR out = $id`); per-table data fields rolled
+into `metadata` (None-valued dropped); read-only; per-table failures isolated.
+
+### `get_entity_graph` fix
+`->relates_to->entity` / `<-relates_to<-entity` → `->relation->entity` /
+`<-relation<-entity` (the real migration-39 edge). Falsifiability test asserts the
+stale `relates_to` table has 0 rows.
+
+### Per-tool test evidence (docker-backed, all green)
+- `search`: lexical + hybrid(embedding) both return JSON lists.
+- `get_node`: entity/source polymorphic fetch; missing id → `null`.
+- `related`: returns relation(×2, both directions) + mentions + cites; edge_types
+  filter + limit honoured.
+- `get_entity_graph`: reads `relation` (outgoing contains the target); relates_to=0.
+- `cite`: writes, re-cite same pair → `created:false` no duplicate; self-citation
+  refused (`reason:self_citation`); only the `cites` edge written (`match_method:mcp`).
+- `add_note`: writes note + `artifact` notebook link; embedding defaults to `[]`
+  (note.embedding is non-optional array<float>).
+
+### Shared-substrate demonstration
+The MCP tool fns take no config → they write through the GLOBAL connection pool.
+The roundtrip fixture reads each written node/edge back over a SEPARATE connection
+(`config=live_surrealdb`) — same DB, different connection — proving it is shared
+SurrealDB state, not per-session. (`test_cite_writes_and_is_idempotent`,
+`test_add_note_writes_and_links_notebook`.)
+
+### Staging `related` probe (read-only, `SURREAL_DATABASE=staging`)
+`related(entity:00d3qmmq06mel8pmlyfz)` [canonical "Regio Deal", programme] →
+**28 edges: 24 relation + 4 mentions**, both endpoint directions (the entity is
+`source` in some, `target` in others). `get_entity_graph` on it: 19 outgoing + 5
+incoming `relation` neighbours. SELECT-only; no writes to staging.
+
+### Tests
+- `test_graph_load_all_edges.py` — 6 unit tests (stubbed execute_query, no docker).
+- `test_mcp_graph_tools_roundtrip.py` — 10 docker-backed tool tests.
+- Full surrealdb-service suite: **212 passed**.
+
+### Running the MCP server
+`uv run --project packages/surrealdb-service surrealdb-mcp --transport stdio`
+(no auth — stdio-local only; add auth before any HTTP exposure).
