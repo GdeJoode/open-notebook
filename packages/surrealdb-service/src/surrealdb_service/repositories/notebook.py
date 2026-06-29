@@ -282,12 +282,17 @@ class NoteRepository(BaseRepository[Note]):
                 {"from": from_rid, "to": to_rid},
                 self.config,
             )
+            # The RELATE *endpoints* are interpolated as validated literal record
+            # ids (the proven ``BaseRepository.relate`` pattern): SurrealDB's
+            # ``RELATE`` graph syntax does not bind a ``$param`` in the in/out
+            # position the way a normal value clause does, so a parameterized
+            # ``RELATE $from->...->$to`` silently writes nothing. Both ids are
+            # already validated as ``note:<id>`` records above (injection-safe).
+            # Only the SET *values* stay parameterized.
             await execute_query(
-                "RELATE $from->related_note->$to "
+                f"RELATE {str(from_rid)}->related_note->{str(to_rid)} "
                 "SET similarity_score = $score, method = $method",
                 {
-                    "from": from_rid,
-                    "to": to_rid,
                     "score": float(similarity_score),
                     "method": method,
                 },
