@@ -80,10 +80,16 @@ class RetrievalService:
         limit: int = 10,
         include_sources: bool = True,
         include_notes: bool = True,
+        hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Full-text search (no embedding needed)."""
+        """Full-text search (no embedding needed).
+
+        ``hydrate`` (Track X.2): when ``True``, attach per-hit chunk
+        provenance. Off by default so the generic ``/search`` path stays cheap;
+        the answer-citation path opts in.
+        """
         return await self._repo.text_search(
-            query, limit, include_sources, include_notes
+            query, limit, include_sources, include_notes, hydrate=hydrate
         )
 
     async def vector_search(
@@ -93,10 +99,16 @@ class RetrievalService:
         include_sources: bool = True,
         include_notes: bool = True,
         minimum_score: float = 0.2,
+        hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
         """Embed query text, then vector similarity search.
 
         Falls back to text search if no embedding model is configured.
+
+        ``hydrate`` (Track X.2): when ``True``, attach per-hit chunk provenance
+        (exact matching chunk per source, via the query embedding). Off by
+        default; the answer-citation path opts in. On the text-search fallback
+        no chunk-level provenance is available regardless.
         """
         try:
             embedding = await self._embed(query)
@@ -105,11 +117,16 @@ class RetrievalService:
                 "No embedding model — falling back to text search"
             )
             return await self.text_search(
-                query, limit, include_sources, include_notes
+                query, limit, include_sources, include_notes, hydrate=hydrate
             )
 
         return await self._repo.vector_search(
-            embedding, limit, include_sources, include_notes, minimum_score
+            embedding,
+            limit,
+            include_sources,
+            include_notes,
+            minimum_score,
+            hydrate=hydrate,
         )
 
     async def hybrid_search(
@@ -120,10 +137,14 @@ class RetrievalService:
         include_notes: bool = True,
         minimum_score: float = 0.2,
         text_weight: float = 0.5,
+        hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
         """Embed query, then combined text + vector search.
 
         Falls back to text search if no embedding model is configured.
+
+        ``hydrate`` (Track X.2): when ``True``, attach per-hit chunk provenance
+        to the fused set. Off by default; the answer-citation path opts in.
         """
         try:
             embedding = await self._embed(query)
@@ -132,7 +153,7 @@ class RetrievalService:
                 "No embedding model — falling back to text search"
             )
             return await self.text_search(
-                query, limit, include_sources, include_notes
+                query, limit, include_sources, include_notes, hydrate=hydrate
             )
 
         return await self._repo.hybrid_search(
@@ -143,4 +164,5 @@ class RetrievalService:
             include_notes,
             minimum_score,
             text_weight,
+            hydrate=hydrate,
         )

@@ -17,7 +17,9 @@ class TestRetrievalServiceTextSearch:
         svc = RetrievalService(search_repo=repo)
         result = await svc.text_search("python", limit=5)
 
-        repo.text_search.assert_called_once_with("python", 5, True, True)
+        repo.text_search.assert_called_once_with(
+            "python", 5, True, True, hydrate=False
+        )
         assert len(result) == 1
 
     @pytest.mark.asyncio
@@ -28,7 +30,9 @@ class TestRetrievalServiceTextSearch:
         svc = RetrievalService(search_repo=repo)
         await svc.text_search("test", include_sources=False, include_notes=True)
 
-        repo.text_search.assert_called_once_with("test", 10, False, True)
+        repo.text_search.assert_called_once_with(
+            "test", 10, False, True, hydrate=False
+        )
 
 
 class TestRetrievalServiceVectorSearch:
@@ -45,7 +49,7 @@ class TestRetrievalServiceVectorSearch:
 
         embed_model.aembed.assert_called_once_with(["test query"])
         repo.vector_search.assert_called_once_with(
-            [0.1, 0.2, 0.3], 5, True, True, 0.2
+            [0.1, 0.2, 0.3], 5, True, True, 0.2, hydrate=False
         )
         assert len(result) == 1
 
@@ -137,6 +141,28 @@ class TestRetrievalServiceProvenancePassthrough:
 
         assert out[0]["physical_page"] is None
         assert out[0]["relevance"] == 4.0
+
+    @pytest.mark.asyncio
+    async def test_hydrate_opt_in_forwarded(self):
+        """Track X.2: the answer-citation path opts in with ``hydrate=True``;
+        the service must forward that flag to the repo (default stays False so
+        the generic ``/search`` path is unaffected — AC5)."""
+        repo = AsyncMock()
+        repo.text_search = AsyncMock(return_value=[])
+        repo.vector_search = AsyncMock(return_value=[])
+        embed_model = AsyncMock()
+        embed_model.aembed = AsyncMock(return_value=[[0.1, 0.2]])
+
+        svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
+
+        await svc.text_search("q", hydrate=True)
+        assert repo.text_search.call_args.kwargs["hydrate"] is True
+
+        await svc.vector_search("q", hydrate=True)
+        assert repo.vector_search.call_args.kwargs["hydrate"] is True
+
+        await svc.hybrid_search("q", hydrate=True)
+        assert repo.hybrid_search.call_args.kwargs["hydrate"] is True
 
 
 class TestRetrievalServiceUnifiedSearch:
@@ -243,7 +269,9 @@ class TestRetrievalServiceEdgeCases:
         svc = RetrievalService(search_repo=repo)
         result = await svc.text_search("")
 
-        repo.text_search.assert_called_once_with("", 10, True, True)
+        repo.text_search.assert_called_once_with(
+            "", 10, True, True, hydrate=False
+        )
         assert result == []
 
     @pytest.mark.asyncio

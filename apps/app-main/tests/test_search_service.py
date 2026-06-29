@@ -19,7 +19,9 @@ class TestSearchServiceTextSearch:
 
         result = await service.text_search("python", results=5)
 
-        search_repo.text_search.assert_called_once_with("python", 5, True, True)
+        search_repo.text_search.assert_called_once_with(
+            "python", 5, True, True, hydrate=False
+        )
         assert len(result) == 1
 
     @pytest.mark.asyncio
@@ -31,7 +33,9 @@ class TestSearchServiceTextSearch:
             "test", include_sources=False, include_notes=True,
         )
 
-        search_repo.text_search.assert_called_once_with("test", 10, False, True)
+        search_repo.text_search.assert_called_once_with(
+            "test", 10, False, True, hydrate=False
+        )
 
 
 class TestSearchServiceVectorSearch:
@@ -65,7 +69,7 @@ class TestSearchServiceVectorSearch:
 
         mock_embedding_model.aembed.assert_called_once_with(["test query"])
         search_repo.vector_search.assert_called_once_with(
-            [0.1, 0.2, 0.3], 5, True, True, 0.2,
+            [0.1, 0.2, 0.3], 5, True, True, 0.2, hydrate=False,
         )
         assert len(result) == 1
 
@@ -88,7 +92,7 @@ class TestSearchServiceHybridSearch:
 
         mock_embedding_model.aembed.assert_called_once_with(["test"])
         search_repo.hybrid_search.assert_called_once_with(
-            "test", [0.1, 0.2, 0.3], 5, True, True, 0.2, 0.5,
+            "test", [0.1, 0.2, 0.3], 5, True, True, 0.2, 0.5, hydrate=False,
         )
         assert len(result) == 1
 
@@ -109,7 +113,7 @@ class TestSearchServiceHybridSearch:
         await service.hybrid_search("test", results=5, text_weight=0.7)
 
         search_repo.hybrid_search.assert_called_once_with(
-            "test", [0.1, 0.2, 0.3], 5, True, True, 0.2, 0.7,
+            "test", [0.1, 0.2, 0.3], 5, True, True, 0.2, 0.7, hydrate=False,
         )
 
     @pytest.mark.asyncio

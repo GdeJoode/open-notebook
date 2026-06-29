@@ -277,8 +277,10 @@ class TestHydrateProvenance:
 
 
 class TestSearchMethodsWireHydration:
-    """The three search entry points must hydrate, and ``hybrid_search`` must
-    hydrate the fused set once (legs called with ``hydrate=False``).
+    """Hydration is **opt-in** (Track X.2): the three search entry points only
+    hydrate when ``hydrate=True``; the default (generic ``/search`` hot path)
+    skips the extra ``SELECT``. ``hybrid_search`` hydrates the fused set once
+    when enabled (legs always called with ``hydrate=False``).
     """
 
     @pytest.mark.asyncio
@@ -288,7 +290,7 @@ class TestSearchMethodsWireHydration:
         with patch.object(
             search_mod, "execute_query", AsyncMock(return_value=[{"id": "source:s1"}])
         ):
-            await repo.vector_search([0.1, 0.2], results=5)
+            await repo.vector_search([0.1, 0.2], results=5, hydrate=True)
 
         repo.hydrate_provenance.assert_awaited_once()
         _, kwargs = repo.hydrate_provenance.call_args
@@ -301,11 +303,30 @@ class TestSearchMethodsWireHydration:
         with patch.object(
             search_mod, "execute_query", AsyncMock(return_value=[{"id": "source:s1"}])
         ):
-            await repo.text_search("kw", results=5)
+            await repo.text_search("kw", results=5, hydrate=True)
 
         repo.hydrate_provenance.assert_awaited_once()
         _, kwargs = repo.hydrate_provenance.call_args
         assert kwargs["embedding"] is None
+
+    @pytest.mark.asyncio
+    async def test_default_skips_hydration_on_hot_path(self):
+        """The generic ``/search`` path must not pay the hydration cost: with
+        no explicit ``hydrate`` the three entry points leave provenance off
+        (Track X.2 opt-in). Guards the hot-path cost guarantee (AC5)."""
+        repo = SearchRepository()
+        repo.hydrate_provenance = AsyncMock()
+        with patch.object(
+            search_mod, "execute_query", AsyncMock(return_value=[{"id": "source:s1"}])
+        ):
+            await repo.text_search("kw")
+            await repo.vector_search([0.1, 0.2])
+
+        repo.text_search = AsyncMock(return_value=[{"id": "source:s1"}])
+        repo.vector_search = AsyncMock(return_value=[{"id": "source:s1"}])
+        await repo.hybrid_search("kw", [0.1, 0.2])
+
+        repo.hydrate_provenance.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_text_search_hydrate_false_skips(self):
@@ -326,7 +347,7 @@ class TestSearchMethodsWireHydration:
         repo.vector_search = AsyncMock(return_value=[{"id": "source:s1"}])
         repo.hydrate_provenance = AsyncMock(side_effect=lambda hits, embedding=None: hits)
 
-        await repo.hybrid_search("kw", [0.3, 0.4], results=10)
+        await repo.hybrid_search("kw", [0.3, 0.4], results=10, hydrate=True)
 
         # legs called with hydrate=False so we hydrate the fused set once
         assert repo.text_search.call_args.kwargs.get("hydrate") is False

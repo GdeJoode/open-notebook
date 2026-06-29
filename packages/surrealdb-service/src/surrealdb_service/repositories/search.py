@@ -205,7 +205,7 @@ class SearchRepository:
         results: int = 10,
         include_sources: bool = True,
         include_notes: bool = True,
-        hydrate: bool = True,
+        hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Perform a text search across sources and notes.
@@ -215,13 +215,16 @@ class SearchRepository:
             results: Maximum number of results.
             include_sources: Whether to search sources.
             include_notes: Whether to search notes.
-            hydrate: Attach per-hit provenance (Track X.1). No embedding is
+            hydrate: Attach per-hit provenance (Track X.1). **Off by default**:
+                the generic ``/search`` (UI/MCP) hot path does not need
+                provenance and must not pay the extra ``SELECT``; only the
+                answer-citation path (Track X.2) opts in. No embedding is
                 available for a text search and BM25 scores are not reproducible
-                out of context, so no chunk-level keys are attached for any text
-                hit (``chunk_id``/``physical_page``/``section_path``/... stay
-                ``None``); only the source-level ``source`` is set. Disabled
-                internally by ``hybrid_search`` so the fused result set is
-                hydrated once, with the embedding.
+                out of context, so even when enabled no chunk-level keys are
+                attached for any text hit (``chunk_id``/``physical_page``/
+                ``section_path``/... stay ``None``); only the source-level
+                ``source`` is set. Disabled internally by ``hybrid_search`` so
+                the fused result set is hydrated once, with the embedding.
 
         Returns:
             List of search results.
@@ -258,7 +261,7 @@ class SearchRepository:
         include_sources: bool = True,
         include_notes: bool = True,
         minimum_score: float = 0.2,
-        hydrate: bool = True,
+        hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Perform a vector similarity search.
@@ -271,8 +274,10 @@ class SearchRepository:
             minimum_score: Minimum similarity score.
             hydrate: Attach per-hit chunk provenance (Track X.1) using
                 ``embedding`` to resolve the exact matching chunk per source.
-                Disabled internally by ``hybrid_search`` so the fused result set
-                is hydrated once.
+                **Off by default** — the generic ``/search`` hot path skips the
+                extra ``SELECT``; only the answer-citation path (Track X.2) opts
+                in. Disabled internally by ``hybrid_search`` so the fused result
+                set is hydrated once.
 
         Returns:
             List of search results with similarity scores.
@@ -315,6 +320,7 @@ class SearchRepository:
         include_notes: bool = True,
         minimum_score: float = 0.2,
         text_weight: float = 0.5,
+        hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Perform a hybrid text + vector search via Reciprocal Rank Fusion.
@@ -344,6 +350,10 @@ class SearchRepository:
             minimum_score: Minimum similarity score for vector search.
             text_weight: RRF weight for the text (BM25) signal (0-1); the
                 vector signal gets ``1 - text_weight``.
+            hydrate: Attach per-hit chunk provenance to the fused set (Track
+                X.1), resolved with ``embedding``. **Off by default** so the
+                generic ``/search`` hot path skips the extra ``SELECT``; only
+                the answer-citation path (Track X.2) opts in.
 
         Returns:
             Combined, deduplicated, RRF-ranked search results. Each carries
@@ -406,6 +416,8 @@ class SearchRepository:
             key=lambda x: (-x.get("_combined_score", 0.0), str(x.get("id"))),
         )
         top = ranked[:results]
+        if not hydrate:
+            return top
         # Hydrate the final set once, using the query embedding for exact
         # chunk resolution. Additive — leaves the fusion fields intact.
         return await self.hydrate_provenance(top, embedding=embedding)
