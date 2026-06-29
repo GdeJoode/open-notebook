@@ -40,9 +40,13 @@ def _patch_orchestrator(embedded_chunks: int = 5):
     )
 
 
-def _patch_source_repo(*, notebook_id=None):
+def _patch_source_repo(*, notebook_id=None, stage="embedded"):
+    # PL.4: ``advance_source`` reads the stage via ``get_processing_stage`` to
+    # decide what to dispatch; without a DB the mock returns ``stage`` (the embed
+    # handler writes ``embedded`` then advances off it).
     repo = AsyncMock()
     repo.set_processing_stage = AsyncMock(return_value=True)
+    repo.get_processing_stage = AsyncMock(return_value=stage)
     repo.get_notebook_id = AsyncMock(return_value=notebook_id)
     return patch("app_main.dependencies.get_source_repo", return_value=repo), repo
 

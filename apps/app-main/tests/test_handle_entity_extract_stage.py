@@ -20,18 +20,30 @@ import app_main.handlers as handlers
 from app_main.services.entity_extraction_service import SchemaReviewPendingError
 
 
-def _patch_all(extraction_service, *, notebook_id=None, mentions_service=None):
+def _patch_all(
+    extraction_service,
+    *,
+    notebook_id=None,
+    mentions_service=None,
+    stage="extracted",
+):
     """Patch the lazily-imported factories used by handle_entity_extract.
 
     Returns a context-manager stack plus the stage repo spy. ``mentions_service``
     (PL.3) defaults to an AsyncMock whose ``refresh_source`` returns a small
     success result so the post-extract graph refresh + graphed/complete
     transitions run without a DB.
+
+    PL.4: the GRAPH stage now runs via ``advance_source``, which reads the
+    source's stage via ``get_processing_stage``. Without a DB the handler's
+    ``extracted`` write does not persist, so the router returns ``stage``
+    (default ``"extracted"`` — the success path advances off it into GRAPH).
     """
     src_repo = AsyncMock()
     src_repo.get_notebook_id = AsyncMock(return_value=notebook_id)
     stage_repo = AsyncMock()
     stage_repo.set_processing_stage = AsyncMock(return_value=True)
+    stage_repo.get_processing_stage = AsyncMock(return_value=stage)
 
     if mentions_service is None:
         mentions_service = AsyncMock()
@@ -81,6 +93,10 @@ class _RepoRouter:
 
     async def set_processing_stage(self, source_id, stage):
         return await self._stage.set_processing_stage(source_id, stage)
+
+    async def get_processing_stage(self, source_id):
+        # PL.4: advance_source reads this to dispatch GRAPH after extract.
+        return await self._stage.get_processing_stage(source_id)
 
 
 @pytest.mark.asyncio

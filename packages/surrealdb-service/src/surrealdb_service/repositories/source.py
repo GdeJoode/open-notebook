@@ -389,6 +389,31 @@ class SourceRepository(BaseRepository[Source]):
             )
             return False
 
+    async def get_processing_stage(self, source_id: str) -> Optional[str]:
+        """Read the source's pipeline ``processing_stage`` (Track PL.4).
+
+        Returns the persisted stage value (one of the app-level enum values), or
+        ``None`` if the source is missing / the field is unset. The PL.4
+        ``advance_source`` driver reads this to find "where the source is" and
+        dispatch the next stage. Best-effort: returns ``None`` and logs on error
+        rather than raising (the caller falls back to ``ingested``).
+        """
+        try:
+            rows = await execute_query(
+                "SELECT VALUE processing_stage FROM $id",
+                {"id": ensure_record_id(source_id)},
+                self.config,
+            )
+            if rows:
+                value = rows[0]
+                return str(value) if value is not None else None
+            return None
+        except Exception as e:
+            logger.error(
+                f"Failed to read processing_stage for source {source_id}: {e}"
+            )
+            return None
+
     async def find_related_by_embedding(
         self, source_id: str, k: int
     ) -> List[Dict[str, Any]]:
