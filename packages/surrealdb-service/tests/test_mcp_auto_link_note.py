@@ -104,10 +104,19 @@ async def test_auto_link_note_threshold_and_self_exclusion(
 
     assert out["status"] == "linked"
     targets = set(out["linked_note_ids"])
+    # near (~1.0) is above 0.9 → linked; mid (~0.7) and far (~0.0) are below the
+    # threshold → never linked (whether they were ranked-and-dropped or pushed
+    # out of the top-k by other notes in the shared DB, they must not be edges).
     assert near in targets
     assert mid not in targets and far not in targets
-    assert out["below_threshold"] >= 2
     assert q not in targets, "a note must never link to itself"
+    # Every linked candidate was at/above the threshold (none slipped below), and
+    # accounting balances: created + below_threshold + skipped == considered.
+    assert out["created"] >= 1
+    assert (
+        out["created"] + out["below_threshold"] + out["skipped"]
+        == out["candidates_considered"]
+    )
     assert await _targets(cfg, q) == targets
 
 
