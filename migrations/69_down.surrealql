@@ -1,0 +1,19 @@
+-- ============================================================================
+-- Migration 69 DOWN: no-op.
+--
+-- Migration 69 defines the `source_verdict` edge table as
+-- ``TYPE RELATION FROM source TO source`` (the shape Track Z's contradiction
+-- judge needs) and adds its fields (`verdict`, `confidence`, `reasoning`,
+-- `judge_model`, `created_at`). It is a forward-only schema definition with no
+-- faithful inverse (mirrors migrations 66/67/68's down):
+--   * reverting `source_verdict` to TYPE ANY would re-break
+--     ``RELATE source -> source_verdict -> source`` — exactly the correctness 69
+--     establishes; and
+--   * `source_verdict` is a DERIVED, regenerated projection (the judge clears and
+--     re-relates a pair's verdict) — the edge table holds no canonical state
+--     worth a destructive rollback, and on this corpus it is empty until the
+--     judge runs.
+-- 69 deliberately does NOT touch the app-side `claim`/`contradicts` tables, so
+-- there is nothing of theirs to restore here either.
+-- Down intentionally does nothing; mirrors migrations 66/67/68's down convention.
+-- ============================================================================

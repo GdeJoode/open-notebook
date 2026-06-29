@@ -1,0 +1,94 @@
+-- ============================================================================
+-- Migration 69: define the `source_verdict` edge table as a proper
+--   TYPE RELATION FROM source TO source
+-- so Track Z (contradiction detection) can persist a source↔source judgment —
+-- an LLM judge's verdict on whether two RELATED sources reinforce, contradict,
+-- or are neutral — as a real, traversable graph edge.
+--
+-- Background. Track Z judges pairs of RELATED sources (candidates come from the
+-- Track R related substrate, not O(n²)) and, precision-first, persists an edge
+-- ONLY for a confident `contradicts`/`reinforces` verdict. The edge table is
+-- BRAND NEW — no prior migration defines it — so on any DB (fresh container or
+-- staging) it would otherwise be auto-created by the first RELATE as the
+-- SurrealDB default
+--   DEFINE TABLE source_verdict TYPE ANY SCHEMALESS
+-- which stores an untyped record, NOT a graph edge. This is the exact drift
+-- class the `mentions`/`cites`/`related_note` migrations (66/67/68) fixed; 69
+-- defines it correctly up front so the judge's writer always lands a typed
+-- `source -> source_verdict -> source` edge — verified on a FRESH 1..N container
+-- (a table can read correctly on staging yet drift to TYPE ANY on a clean DB).
+--
+-- Why a SEPARATE edge (the `claim`/`contradicts` reconciliation). An app-side,
+-- NON-migration-managed pair exists:
+--   * `claim`       — TYPE ANY SCHEMALESS (~13 rows on staging), and
+--   * `contradicts` — TYPE RELATION IN source OUT claim  (claim-level edge:
+--                     source→claim, fields strength/quote/evidence_type).
+-- That is a DIFFERENT unit (a source contradicting a *claim*) and a different
+-- shape (source→claim). Track Z's core scope (plan Decision 2 & 5) is a
+-- source↔source verdict; claim-level contradiction is a DOCUMENTED EXTENSION,
+-- not Z core. So 69 introduces a cleanly-named, fresh-container-safe
+-- `source_verdict` (source→source) and deliberately does NOT touch the existing
+-- `claim`/`contradicts` scaffolding — they keep their app-side shape and rows.
+--
+-- Strategy (mirrors migrations 66/67/68's non-destructive remediation):
+--   1. DELETE only null-endpoint junk rows (in = NONE OR out = NONE). A real
+--      `source_verdict` edge always has non-null in/out, so this is a no-op on a
+--      healthy table and only clears the non-edge junk a drifted/auto-created
+--      TYPE ANY table could hold (which would otherwise block the RELATION
+--      redefine). A blanket `DELETE source_verdict` would WIPE healthy edges —
+--      the destructive mistake migration 58 made; 62/66/67/68 fixed it with this
+--      null-endpoint-only predicate and 69 follows suit.
+--   2. DEFINE TABLE OVERWRITE ... TYPE RELATION FROM source TO source. On
+--      SurrealDB v2 OVERWRITE converts a drifted/auto-created TYPE ANY table to
+--      RELATION; on an already-correct RELATION table it re-asserts the identical
+--      definition and PRESERVES existing edge records (the 62/66/67/68 empirical
+--      fact, re-checked for `source_verdict` by this track's container tests).
+--   3. DEFINE the edge fields with OVERWRITE. `verdict` is the judgment
+--      (`reinforces` | `contradicts` | `neutral`; DEFAULT `"neutral"` — the
+--      conservative, no-signal value). `confidence` is the judge's [0,1] score
+--      (the per-edge "why-strength", parallel to `cites.confidence` /
+--      `related_note.similarity_score`). `reasoning` is the judge's short
+--      rationale (retained for review — precision-first). `judge_model` records
+--      which model produced the verdict (provenance for later re-judging).
+--      `created_at` mirrors 66/67/68 for provenance parity.
+--
+-- Strict-field / S.4 note. Every strict field below carries a DEFAULT, and the
+-- table is EMPTY on every existing DB (it is brand new — 0 rows everywhere), so
+-- there are NO pre-existing rows to drift and NO backfill UPDATE is required
+-- (the S.4 hazard is a strict field with no default added to a table that
+-- already holds rows; neither condition applies here). The judge writer supplies
+-- `verdict`/`confidence`/`reasoning`/`judge_model` explicitly via RELATE-with-SET,
+-- so the DEFAULTs are a safety floor, never the live value.
+--
+-- Idempotent + forward-only: the DELETE matches nothing on a second pass and
+-- every OVERWRITE re-asserts an identical definition. Down is a documented
+-- no-op (a schema definition has no faithful inverse; reverting to TYPE ANY
+-- would re-break `RELATE source -> source_verdict -> source` — the very
+-- correctness this establishes — and the edge set is a regenerated projection).
+-- ============================================================================
+
+-- 1. Drop ONLY null-endpoint junk rows (the non-edge records a drifted/
+--    auto-created TYPE ANY table could hold). Real `source_verdict` edges always
+--    have non-null in/out, so this never touches them — no-op on a fresh empty
+--    table AND on any healthy edge set.
+DELETE source_verdict WHERE in = NONE OR out = NONE;
+
+-- 2. Assert the canonical edge definition. Converts a drifted/auto-created
+--    TYPE ANY table to RELATION source->source on v2; identical no-op (edges
+--    preserved) on an already-correct RELATION table.
+DEFINE TABLE OVERWRITE source_verdict SCHEMAFULL TYPE RELATION FROM source TO source;
+
+-- 3. Edge fields (all strict WITH defaults — S.4 safe). `verdict` defaults to
+--    the conservative `"neutral"`; `confidence` is the judge's [0,1] score;
+--    `reasoning` is the retained rationale (precision-first); `judge_model` is
+--    provenance; `created_at` mirrors 66/67/68.
+DEFINE FIELD OVERWRITE verdict ON source_verdict TYPE string DEFAULT "neutral";
+DEFINE FIELD OVERWRITE confidence ON source_verdict TYPE float DEFAULT 0.0;
+DEFINE FIELD OVERWRITE reasoning ON source_verdict TYPE string DEFAULT "";
+DEFINE FIELD OVERWRITE judge_model ON source_verdict TYPE string DEFAULT "";
+DEFINE FIELD OVERWRITE created_at ON source_verdict TYPE datetime DEFAULT time::now();
+
+-- Index on verdict so the contradiction triage / viz can filter edges by class
+-- (e.g. only `contradicts`), mirroring idx_cites_confidence / idx_related_note_score.
+-- OVERWRITE so a re-apply converges.
+DEFINE INDEX OVERWRITE idx_source_verdict_verdict ON source_verdict FIELDS verdict;
