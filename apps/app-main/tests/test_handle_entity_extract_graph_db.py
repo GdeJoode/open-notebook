@@ -13,10 +13,12 @@ regenerate:
 We do NOT run the LLM extractor (heavy/flaky). Instead we mock
 ``run_extraction`` to PERSIST entities into the live DB exactly as a real
 extraction would (canonical entities carrying this source in
-``source_documents``), then let the handler's REAL post-extract
-``_refresh_source_mentions`` run against the container — so the seam under test
+``source_documents``), then let the handler's REAL post-extract advance
+(PL.4: ``advance_source`` reads the ``extracted`` stage and runs the inline
+GRAPH refresh) run against the container — so the seam under test
 (extract success -> source-scoped refresh -> graphed/complete) is exercised
-genuinely, end to end, against real SurrealDB RELATE/clear semantics.
+genuinely, end to end, against real SurrealDB RELATE/clear semantics. PL.4 is a
+pure consolidation: this end-to-end result is identical to PL.3.
 
 Gated behind ``@requires_docker``.
 """

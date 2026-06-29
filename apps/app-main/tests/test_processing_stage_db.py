@@ -111,6 +111,30 @@ async def test_set_processing_stage_advances_and_is_idempotent(
 
 
 # ---------------------------------------------------------------------------
+# PL.4 — get_processing_stage reads the persisted stage (the advance_source seam)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_docker
+async def test_get_processing_stage_reads_persisted_value(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    repo = SourceRepository(config=live_surrealdb)
+    sid = await _seed_source(live_surrealdb, _u("Readback"))
+
+    # A fresh row defaults ingested (migration 71); the reader returns it.
+    assert await repo.get_processing_stage(sid) == "ingested"
+
+    # After a write, the reader returns the new value — this is the round-trip
+    # PL.4's advance_source relies on (write stage -> read it -> dispatch next).
+    assert await repo.set_processing_stage(sid, "extracted") is True
+    assert await repo.get_processing_stage(sid) == "extracted"
+
+    # A missing source reads back None (the driver falls back to ingested).
+    assert await repo.get_processing_stage("source:does_not_exist_xyz") is None
+
+
+# ---------------------------------------------------------------------------
 # AC3 — the S.4 hazard: a NONE processing_stage is backfilled AND row stays
 # writable. We synthesise the drift by REMOVE-ing the field, creating a row
 # (so it has NONE for the field), then re-applying migration 71.
