@@ -115,3 +115,151 @@ are not modified. Hydration is pure Python + a read-only follow-up `SELECT`.
   source-level only (no page). The `ask` graph defaults to vector search, so the precise path
   is the primary one. The X.3 faithfulness guard should membership-check the surfaced
   `chunk_id` (present only for vector/hybrid hits).
+
+---
+
+## Phase X.2 — Cited answers in the ask + source_chat graphs (Backend / LangGraph)
+
+**Branch**: `track/x2-cited-answers` (off `main` @ `1a2eaee`, X.1 merged)
+**State**: complete — ready for review.
+
+### Hydration opt-in (the X.1 follow-up; AC5)
+
+X.1 left `SearchRepository.{text,vector}_search` hydrating **by default**, so the
+generic `/search` (UI/MCP) path paid the extra chunk-provenance `SELECT`. X.2
+flips the default **off** across all three repo entry points and threads a
+`hydrate` flag through `RetrievalService.{text,vector,hybrid}_search` (also
+default `False`). Only the answer-citation path opts in (`hydrate=True`):
+
+- `ask.provide_answer` → `RetrievalService.vector_search(..., hydrate=True)`
+  (text fallback also `hydrate=True`).
+- `hybrid_search` now only hydrates the fused set when `hydrate=True`.
+- `SearchService` (the `/search` router's delegate) passes **no** `hydrate`, so
+  the hot path stays unhydrated — confirmed by `test_default_skips_hydration_on_hot_path`
+  and the four `test_search_service` delegation asserts (`hydrate=False`).
+
+### Where provenance is threaded + how citations are derived
+
+**`ask` (cross-source, fan-out)** — `apps/app-main/src/app_main/graphs/ask.py`:
+- `SubGraphState` unchanged in shape; `provide_answer` now formats the retrieved
+  hits into the prompt via `_format_results_with_provenance`, prefixing each
+  block with `[source: <id> | p.<page> | <section>]` (X.1 keys).
+- Citation set per sub-answer = `citations_from_hits(results)` — the provenance
+  of the context hits actually fed to the LLM (deterministic; X.3 adds the
+  membership guard). Accumulated into `ThreadState.citation_groups`
+  (`Annotated[list, operator.add]` across the `Send` fan-out).
+- `write_final_answer` emits `citations = merge_citations(citation_groups)`
+  (de-duplicated by `(source, page, chunk_id)`), additive to `final_answer`.
+
+**`source_chat` (single-source)** — `graphs/source_chat.py` +
+`services/context_service.py`:
+- `ContextService` gains an **optional** `chunk_repo` and `build_source_chunks`,
+  returning the source's content chunks (noise-filtered) with provenance
+  (`chunk_id`/`physical_page`/`printed_page`/`section_path`/`element_type`/`source`),
+  capped by `max_chunks`/`max_tokens`. Graceful empty without `chunk_repo` or on
+  lookup failure.
+- The graph node fetches chunk context, injects page-cited passages
+  (`## SOURCE PASSAGES`, each tagged `[source | p.X | section]`) ahead of the
+  source-level `full_text` fallback, and emits `citations` from the chunk
+  context. No chunks (audio/plain text) → a single source-level citation
+  (`page=None`).
+
+**Citations helper** — new `graphs/citations.py`
+(`hit_to_citation`/`citations_from_hits`/`format_citation_tag`/`merge_citations`),
+the one place the `{source, page, chunk_id, section}` shape and the
+provenance-tag string are defined. Shared by both graphs.
+
+### Prompt-template changes (additive attribution)
+
+- `prompts/ask/query_process.jinja` — explains the provenance tag on each result
+  and asks the model to cite `[document_id, p.<page>]` when a page exists, only
+  using pages that appear in a tag (no invented pages); page-less results cite
+  `[document_id]` as before.
+- `prompts/source_chat.jinja` — same page-grounded instruction for the
+  `## SOURCE PASSAGES` block.
+- Both are purely additive; the existing `[document_id]` citation format and
+  answer shape are preserved.
+
+### API surface (additive)
+
+- `AskResponse` gains `citations: list[dict] = []`; `/search/ask/simple` populates
+  it and the SSE `final_answer` event now carries `citations`.
+- `source_chat` SSE stream emits an additive `citations` event.
+
+### Test evidence (per acceptance criterion)
+
+- **AC1** (ask citation page == chunk page, real source id): `test_ask_graph_citations.py`
+  `TestProvideAnswerCitations::test_citations_match_chunk_provenance` — seeded
+  multi-page source (`source:doc1` p.3 / `source:doc2` p.12); asserts citation
+  page == hit `physical_page`, `chunk_id`, `section`, and `hydrate=True` opt-in.
+  `test_provenance_tags_injected_into_prompt` proves the tags reach the prompt.
+  `TestWriteFinalAnswerCitations::test_merges_citation_groups` — merged/dedup
+  final citations.
+- **AC2** (source_chat chunk-level citations): `test_source_chat_citations.py`
+  `test_chunk_level_citations_emitted` (page+section per chunk, not just title)
+  + `test_page_tags_injected_into_prompt`.
+- **AC3** (existing behavior intact; no 500 on no-page): ask
+  `test_no_page_source_graceful` + `test_empty_results_emit_empty_citations`;
+  source_chat `test_no_chunks_falls_back_to_source_level_citation` (page=None,
+  full_text fallback present) + `test_answer_text_still_produced`. Graph/context
+  suites green.
+- **AC4** (seeded-source assertions): the seeded `SEEDED_HITS`/`CHUNK_CONTEXT`
+  fixtures above; citations asserted equal to the chunks' provenance.
+- **AC5** (generic `/search` skips hydration): `test_search_provenance.py`
+  `test_default_skips_hydration_on_hot_path` + the `test_search_service`
+  delegation asserts (`hydrate=False`); `pipelines/retrieval/test_service.py`
+  `test_hydrate_opt_in_forwarded` confirms the flag forwards only on opt-in.
+- **Helper units**: `test_graph_citations.py` (16) — dedup, page-0 inclusion,
+  page-less, uncitable, merge.
+- **Staging probe** (read-only, opt-in path): `test_search_provenance_staging.py`
+  now passes `hydrate=True` → **2 passed** on `staging` (real `physical_page`/
+  `section_path` on `source:dndibxmjveoxk7tfqfsl`).
+
+Suites run green: surrealdb-service non-docker **97 passed, 2 skipped**;
+retrieval **27 passed**; app-main citations/ask/source_chat/context/search
+**65 passed**. (Pre-existing & ignored: top-level `tests/` import errors and the
+3 `test_source_processing_service` docling `to_docling_options` failures — both
+predate X.2 and are untouched.)
+
+### Test-loading note (env gap)
+
+`ai_prompter` is a runtime dep absent from the test venv, and `ask.py`/
+`source_chat.py` import it (and `source_chat` compiles a checkpointer-bound graph
+at import — a pre-existing `SqliteSaver.from_conn_string` type mismatch on
+`main`). The graph tests load the node modules via `importlib.util.spec_from_file_location`
+with `ai_prompter` (and `SqliteSaver`) stubbed in `sys.modules`, bypassing the
+package `__init__` — same discipline as `test_chat_routing_telemetry`.
+
+### Files
+
+- `packages/surrealdb-service/src/.../repositories/search.py` — hydrate default → off.
+- `pipelines/retrieval/src/retrieval/service.py` — `hydrate` kwarg threaded.
+- `apps/app-main/src/app_main/graphs/citations.py` — NEW citation helpers.
+- `apps/app-main/src/app_main/graphs/ask.py` — provenance in state/prompt + citations.
+- `apps/app-main/src/app_main/graphs/source_chat.py` — chunk context + citations.
+- `apps/app-main/src/app_main/services/context_service.py` — `build_source_chunks`.
+- `apps/app-main/src/app_main/dependencies.py` — `chunk_repo` into `ContextService`.
+- `apps/app-main/src/app_main/api/{schemas.py,routers/search.py,routers/source_chat.py}` — additive citations surface.
+- `prompts/ask/query_process.jinja`, `prompts/source_chat.jinja` — additive attribution.
+- Tests: `test_graph_citations.py`, `test_ask_graph_citations.py`,
+  `test_source_chat_citations.py` (new); `test_context_service.py`,
+  `test_search_provenance.py`, `pipelines/retrieval/tests/test_service.py`,
+  `apps/app-main/tests/test_search_service.py`, `test_search_provenance_staging.py` (updated).
+
+### Commits (on `track/x2-cited-answers`)
+
+- `f751676` refactor(search): make provenance hydration opt-in (X.2)
+- `ea73f7f` feat(ask): cite exact source/page/chunk in answers (X.2)
+- `8de9003` feat(source-chat): chunk-level page citations in single-source chat (X.2)
+- `a819daf` test(search): opt into hydration in the staging probe (X.2)
+
+### Notes for X.3 / memory
+
+- Citations are derived from the **context hits fed to the LLM** (deterministic),
+  not parsed back out of the model's prose. X.3's faithfulness guard should
+  membership-check the *model-emitted* `[id, p.X]` references against this
+  context-hit set (and/or against the retrieval set) — the emitted `chunk_id`
+  is present only for vector/hybrid hits.
+- `source_chat`'s `SqliteSaver.from_conn_string` → `compile(checkpointer=...)`
+  type mismatch is a **pre-existing** latent issue (present on `main`); it does
+  not affect X.2 but is worth a separate fix.
