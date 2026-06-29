@@ -21,7 +21,11 @@ import pytest
 
 import surrealdb_service.repositories.search as search_mod
 from surrealdb_service.repositories import SearchRepository
-from surrealdb_service.repositories.search import _PROVENANCE_KEYS, _hit_source_id
+from surrealdb_service.repositories.search import (
+    _PROVENANCE_KEYS,
+    _hit_is_chunk_backed,
+    _hit_parent_source,
+)
 
 
 def _repo_with_best(best: dict) -> SearchRepository:
@@ -30,26 +34,41 @@ def _repo_with_best(best: dict) -> SearchRepository:
     return repo
 
 
-class TestHitSourceId:
-    def test_source_hit_resolves_via_parent_id(self):
+class TestHitClassDistinguishers:
+    """The source-level anchor (``parent_id``) vs the chunk-backed decision
+    (own ``id`` prefix). A ``source_insight`` hit has a ``source:`` parent but
+    is NOT chunk-backed — that distinction is the whole point of the X.1 fix.
+    """
+
+    def test_parent_source_from_parent_id(self):
         assert (
-            _hit_source_id({"id": "source:a", "parent_id": "source:a"})
+            _hit_parent_source({"id": "source:a", "parent_id": "source:a"})
             == "source:a"
         )
 
-    def test_source_embedding_hit_uses_parent_id_not_id(self):
-        # fn:: sets parent_id to the source even when id differs.
-        hit = {"id": "source:s1", "parent_id": "source:s1"}
-        assert _hit_source_id(hit) == "source:s1"
+    def test_insight_parent_is_its_source(self):
+        # fn:: emits source_insight hits with parent_id == owning source.
+        hit = {"id": "source_insight:i1", "parent_id": "source:s1"}
+        assert _hit_parent_source(hit) == "source:s1"
 
-    def test_note_hit_is_not_source_scoped(self):
-        assert _hit_source_id({"id": "note:n1", "parent_id": "note:n1"}) is None
+    def test_note_has_no_source_parent(self):
+        assert _hit_parent_source({"id": "note:n1", "parent_id": "note:n1"}) is None
 
-    def test_falls_back_to_id_when_no_parent(self):
-        assert _hit_source_id({"id": "source:x"}) == "source:x"
+    def test_chunk_backed_only_for_source_own_id(self):
+        # source_embedding hit -> own id is source: (fn:: SELECT source.id AS id)
+        assert _hit_is_chunk_backed({"id": "source:s1", "parent_id": "source:s1"})
 
-    def test_non_string_id_is_none(self):
-        assert _hit_source_id({"id": None}) is None
+    def test_insight_is_not_chunk_backed(self):
+        # own id is source_insight: even though parent_id is source:
+        assert not _hit_is_chunk_backed(
+            {"id": "source_insight:i1", "parent_id": "source:s1"}
+        )
+
+    def test_note_is_not_chunk_backed(self):
+        assert not _hit_is_chunk_backed({"id": "note:n1", "parent_id": "note:n1"})
+
+    def test_non_string_id_not_chunk_backed(self):
+        assert not _hit_is_chunk_backed({"id": None})
 
 
 class TestHydrateProvenance:
@@ -131,20 +150,84 @@ class TestHydrateProvenance:
         assert by_id["note:n1"]["physical_page"] is None
 
     @pytest.mark.asyncio
-    async def test_text_only_path_passes_no_embedding(self):
-        """Text-search hydration must call the lookup with embedding=None so
-        the source-level (page-less) branch is used.
+    async def test_source_insight_hit_gets_no_chunk_provenance(self):
+        """BLOCKER fix: a source_insight hit (own id ``source_insight:``, parent
+        ``source:``) must NOT be stamped with a chunk's page — an insight has no
+        single originating chunk. All chunk keys stay None; ``source`` is set
+        from parent_id; it is never routed through the chunk lookup.
+        """
+        repo = _repo_with_best(
+            {"source:s1": {"chunk_id": "chunk:c1", "physical_page": 42}}
+        )
+        hits = [
+            {
+                "id": "source_insight:i1",
+                "parent_id": "source:s1",
+                "similarity": 0.88,
+            }
+        ]
+
+        out = await repo.hydrate_provenance(hits, embedding=[0.1, 0.2])
+
+        hit = out[0]
+        # source-level anchor preserved
+        assert hit["source"] == "source:s1"
+        assert hit["similarity"] == 0.88
+        # NO chunk-level provenance — not the source's top embedding chunk
+        assert hit["chunk_id"] is None
+        assert hit["physical_page"] is None
+        assert hit["printed_page"] is None
+        assert hit["section_path"] is None
+        assert hit["element_type"] is None
+        # the insight must never be looked up as a chunk-backed source
+        repo._best_chunk_per_source.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_insight_alongside_embedding_hit_for_same_source(self):
+        """An insight and an embedding hit for the SAME source: only the
+        embedding (``source:``) hit gets the page; the insight stays page-less.
+        """
+        repo = _repo_with_best(
+            {"source:s1": {"chunk_id": "chunk:c1", "physical_page": 7}}
+        )
+        hits = [
+            {"id": "source:s1", "parent_id": "source:s1"},  # embedding hit
+            {"id": "source_insight:i1", "parent_id": "source:s1"},  # insight
+        ]
+
+        out = await repo.hydrate_provenance(hits, embedding=[0.5])
+
+        by_id = {h["id"]: h for h in out}
+        assert by_id["source:s1"]["physical_page"] == 7
+        assert by_id["source:s1"]["chunk_id"] == "chunk:c1"
+        assert by_id["source_insight:i1"]["physical_page"] is None
+        assert by_id["source_insight:i1"]["chunk_id"] is None
+        assert by_id["source_insight:i1"]["source"] == "source:s1"
+        # only the embedding hit's source id was looked up
+        repo._best_chunk_per_source.assert_awaited_once()
+        looked_up = repo._best_chunk_per_source.call_args.args[0]
+        assert looked_up == ["source:s1"]
+
+    @pytest.mark.asyncio
+    async def test_text_only_attaches_no_chunk_keys(self):
+        """Text-only path (embedding=None): assert NO chunk-level provenance is
+        attached for any hit — not even an arbitrary first chunk's
+        section_path/element_type. Source-level only.
         """
         repo = _repo_with_best({})
-        hits = [{"id": "source:s1", "parent_id": "source:s1"}]
+        hits = [
+            {"id": "source:s1", "parent_id": "source:s1", "relevance": 9.0},
+        ]
 
-        await repo.hydrate_provenance(hits, embedding=None)
+        out = await repo.hydrate_provenance(hits, embedding=None)
 
-        repo._best_chunk_per_source.assert_awaited_once()
-        _, kwargs = repo._best_chunk_per_source.call_args
-        # second positional arg is the embedding
-        args = repo._best_chunk_per_source.call_args.args
-        assert args[1] is None
+        hit = out[0]
+        assert hit["source"] == "source:s1"
+        assert hit["relevance"] == 9.0
+        for key in _PROVENANCE_KEYS:
+            assert hit[key] is None
+        # text path must not run the chunk lookup at all
+        repo._best_chunk_per_source.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_lookup_failure_degrades_gracefully(self):

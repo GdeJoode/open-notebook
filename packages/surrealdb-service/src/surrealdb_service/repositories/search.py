@@ -22,19 +22,42 @@ _PROVENANCE_KEYS = (
 )
 
 
-def _hit_source_id(hit: Dict[str, Any]) -> Optional[str]:
-    """The ``source:...`` id a hit belongs to, or ``None`` for non-source hits.
+def _hit_parent_source(hit: Dict[str, Any]) -> Optional[str]:
+    """The ``source:...`` a hit belongs to (its ``parent_id``), or ``None``.
 
-    The ``fn::`` functions return ``parent_id`` == the source id for
-    source-derived hits (source/source_embedding/source_insight) and the note's
-    own id for note hits. We treat a hit as source-scoped only when its
-    ``parent_id`` (falling back to ``id``) is a ``source:`` record — notes and
-    anything else yield ``None`` and get null provenance.
+    The ``fn::`` functions set ``parent_id`` == the owning source id for every
+    source-derived hit class (``source_embedding``/``source_insight``/source
+    title/full_text) and the note's own id for note hits. This is the
+    *source-level* anchor — used to populate the ``source`` field on any
+    source-derived hit. It is **not** sufficient to decide chunk-level
+    provenance (see ``_hit_is_chunk_backed``): a ``source_insight`` hit also
+    carries a ``source:`` parent but has no single originating chunk.
     """
-    candidate = hit.get("parent_id") or hit.get("id")
-    if isinstance(candidate, str) and candidate.startswith("source:"):
-        return candidate
+    parent = hit.get("parent_id")
+    if isinstance(parent, str) and parent.startswith("source:"):
+        return parent
     return None
+
+
+def _hit_is_chunk_backed(hit: Dict[str, Any]) -> bool:
+    """Whether a hit maps to a single, identifiable originating chunk.
+
+    The distinguisher is the hit's **own** ``id`` prefix, not ``parent_id``:
+
+    * ``source:...``  — emitted by the ``source_embedding`` leg of
+      ``fn::vector_search`` (``SELECT source.id AS id``); collapses many chunk
+      embeddings of one source via ``math::max(cosine)``. The winning chunk is
+      recoverable exactly by cosine-argmax, so this class is chunk-backed.
+    * ``source_insight:...`` — a synthesized source-level summary with no single
+      originating chunk; chunk-level provenance must stay ``None``.
+    * ``note:...`` / anything else — not chunk-backed.
+
+    (For a *text* search even a ``source:`` hit may come from the title or
+    full_text leg, which has no chunk; chunk-level provenance is suppressed for
+    the whole text path separately, by passing ``embedding=None``.)
+    """
+    own_id = hit.get("id")
+    return isinstance(own_id, str) and own_id.startswith("source:")
 
 
 class SearchRepository:
@@ -52,7 +75,7 @@ class SearchRepository:
 
         The ``fn::text_search``/``fn::vector_search`` functions collapse a
         source's many matching ``source_embedding`` rows to a single
-        source-level hit (``id`` == the ``source`` id, scored by
+        source-level hit (own ``id`` == the ``source`` id, scored by
         ``math::max(...)``). The page/section provenance, however, lives on the
         ``chunk`` table, reachable via ``source_embedding.chunk`` (migration 27,
         a ``record<chunk>`` link populated by the Docling ingest). This method
@@ -60,60 +83,76 @@ class SearchRepository:
         single batched follow-up ``SELECT`` over ``source_embedding`` joined to
         ``chunk``.
 
-        Precision depends on whether the query embedding is available:
+        **One rule — attach chunk-level provenance
+        (``chunk_id``/``physical_page``/``printed_page``/``section_path``/
+        ``element_type``) only when the EXACT originating chunk is identifiable;
+        otherwise leave those keys ``None`` and attach the ``source`` only.**
+        Applied by hit class (distinguished by the hit's *own* ``id`` prefix,
+        not ``parent_id``):
 
-        * **embedding given** (vector / hybrid): re-score each hit-source's
-          ``source_embedding`` rows by cosine against ``embedding`` and take the
-          top one per source. Because ``fn::vector_search`` collapses with
-          ``math::max(cosine)``, this top chunk is *exactly* the row that
-          produced the source's winning score — so the attached
-          ``physical_page`` is the page of the actual chunk the hit came from
-          (verified against staging to 1e-9).
-        * **embedding ``None``** (text-only): BM25 ``search::score`` is not
-          reproducible outside its originating query context, so we do **not**
-          fabricate a specific chunk/page. We attach the source's *first*
-          chunk's structural provenance (``section_path``/``element_type``) as a
-          best-effort source-level hint and leave ``physical_page`` ``None``
-          rather than assert a page we cannot verify.
+        * **``source:`` hit WITH an embedding** (vector / hybrid) — the
+          ``source_embedding`` leg collapsed many chunk embeddings of one source
+          via ``math::max(cosine)``. The winning chunk is recovered exactly by
+          cosine-argmax, so its ``physical_page`` is the page of the actual
+          chunk the hit came from (verified against staging to 1e-9).
+        * **``source_insight:`` hit** — a synthesized source-level summary with
+          no single originating chunk. Chunk keys stay ``None``; ``source`` is
+          set (from ``parent_id``). Never routed through the chunk lookup.
+        * **text-only path** (``embedding is None``) — BM25 ``search::score`` is
+          not reproducible outside its originating query, and a ``source:`` text
+          hit may even come from the title/full_text leg (no chunk at all). We
+          therefore assert no chunk for *any* text hit: chunk keys ``None``,
+          ``source`` set. (We deliberately do NOT attach an arbitrary first
+          chunk's ``section_path``/``element_type`` — it is not the chunk that
+          produced the hit.)
+        * **notes / anything else** — chunk keys ``None``, no ``source``.
 
-        Hits whose ``id`` is not a ``source`` record (notes, and any hit lacking
-        a chunk-bearing embedding) degrade gracefully: every provenance key is
-        set to ``None``. This is additive — existing keys are untouched and
-        callers that ignore the new keys are unaffected.
+        This is additive — existing keys are untouched and callers that ignore
+        the new keys are unaffected; a lookup failure degrades to all-``None``
+        chunk keys without raising.
 
         Args:
             hits: Search-result dicts (each with an ``id``). Mutated in place.
-            embedding: The query embedding used for the search, if any. Enables
-                exact chunk resolution for vector/hybrid hits.
+            embedding: The query embedding used for the search, if any. Its
+                presence is also the text-vs-vector signal: ``None`` means
+                text-only, so no chunk-level provenance is attached.
 
         Returns:
             The same ``hits`` list, each dict now carrying the provenance keys.
         """
-        # Seed every hit with the full key set so the shape is stable even when
-        # a hit has no chunk (notes, source-only, lookup failure).
+        # Seed every hit with the full key set (stable shape) and the
+        # source-level anchor for any source-derived hit (incl. insights).
         for hit in hits:
             for key in _PROVENANCE_KEYS:
                 hit.setdefault(key, None)
-            hit.setdefault("source", _hit_source_id(hit))
+            hit.setdefault("source", _hit_parent_source(hit))
 
-        # Only ``source:...`` hits can carry chunk provenance.
-        source_ids = sorted(
-            {sid for hit in hits if (sid := _hit_source_id(hit)) is not None}
-        )
-        if not source_ids:
+        # Chunk-level provenance is only attachable for chunk-backed hits when
+        # we have the embedding to pin the exact chunk. source_insight hits,
+        # note hits, and the entire text-only path are excluded by design.
+        if embedding is None:
+            return hits
+
+        chunk_backed = {
+            hit["id"]
+            for hit in hits
+            if _hit_is_chunk_backed(hit)
+        }
+        if not chunk_backed:
             return hits
 
         try:
             best_by_source = await self._best_chunk_per_source(
-                source_ids, embedding
+                sorted(chunk_backed), embedding
             )
         except Exception as e:  # provenance is additive — never break a search
             logger.warning(f"Provenance hydration failed (continuing): {e}")
             return hits
 
         for hit in hits:
-            sid = _hit_source_id(hit)
-            prov = best_by_source.get(sid) if sid is not None else None
+            if not _hit_is_chunk_backed(hit):
+                continue
+            prov = best_by_source.get(hit["id"])
             if prov is None:
                 continue
             for key in _PROVENANCE_KEYS:
@@ -124,50 +163,34 @@ class SearchRepository:
     async def _best_chunk_per_source(
         self,
         source_ids: List[str],
-        embedding: Optional[List[float]],
+        embedding: List[float],
     ) -> Dict[str, Dict[str, Any]]:
-        """Return the provenance of the best chunk per source (batched).
+        """Best (highest-cosine) chunk per source, batched.
 
-        With ``embedding`` the "best" chunk is the highest-cosine one
-        (reproducing ``fn::vector_search``'s ``math::max``); without it we take
-        the source's first ``source_embedding`` row as a source-level fallback
-        and suppress ``physical_page``/``printed_page`` (unverifiable for BM25).
+        Reproduces ``fn::vector_search``'s ``math::max(cosine)`` collapse: the
+        top-1 chunk-bearing ``source_embedding`` row per source is *exactly* the
+        row that produced that source's winning hit score. Only ever called for
+        chunk-backed (``source:``) hits with an embedding in hand.
         """
         record_ids = [ensure_record_id(sid) for sid in source_ids]
+        rows = await execute_query(
+            """
+            SELECT source,
+                   chunk AS chunk_id,
+                   chunk.physical_page AS physical_page,
+                   chunk.printed_page AS printed_page,
+                   chunk.section_path AS section_path,
+                   chunk.element_type AS element_type,
+                   vector::similarity::cosine(embedding, $embed) AS _sim
+            FROM source_embedding
+            WHERE source IN $sources AND chunk IS NOT NONE
+            ORDER BY _sim DESC
+            """,
+            {"embed": embedding, "sources": record_ids},
+            self.config,
+        )
 
-        if embedding is not None:
-            rows = await execute_query(
-                """
-                SELECT source,
-                       chunk AS chunk_id,
-                       chunk.physical_page AS physical_page,
-                       chunk.printed_page AS printed_page,
-                       chunk.section_path AS section_path,
-                       chunk.element_type AS element_type,
-                       vector::similarity::cosine(embedding, $embed) AS _sim
-                FROM source_embedding
-                WHERE source IN $sources AND chunk IS NOT NONE
-                ORDER BY _sim DESC
-                """,
-                {"embed": embedding, "sources": record_ids},
-                self.config,
-            )
-        else:
-            rows = await execute_query(
-                """
-                SELECT source,
-                       chunk AS chunk_id,
-                       chunk.section_path AS section_path,
-                       chunk.element_type AS element_type
-                FROM source_embedding
-                WHERE source IN $sources AND chunk IS NOT NONE
-                ORDER BY order ASC
-                """,
-                {"sources": record_ids},
-                self.config,
-            )
-
-        # Rows are pre-sorted (cosine desc, or order asc) — first per source wins.
+        # Rows are pre-sorted by cosine desc — first per source wins.
         best: Dict[str, Dict[str, Any]] = {}
         for row in rows:
             sid = row.get("source")
@@ -192,11 +215,13 @@ class SearchRepository:
             results: Maximum number of results.
             include_sources: Whether to search sources.
             include_notes: Whether to search notes.
-            hydrate: Attach per-hit chunk provenance (Track X.1). No embedding
-                is available for a text search, so provenance is source-level
-                (``section_path``/``element_type``); ``physical_page`` stays
-                ``None``. Disabled internally by ``hybrid_search`` so the fused
-                result set is hydrated once, with the embedding.
+            hydrate: Attach per-hit provenance (Track X.1). No embedding is
+                available for a text search and BM25 scores are not reproducible
+                out of context, so no chunk-level keys are attached for any text
+                hit (``chunk_id``/``physical_page``/``section_path``/... stay
+                ``None``); only the source-level ``source`` is set. Disabled
+                internally by ``hybrid_search`` so the fused result set is
+                hydrated once, with the embedding.
 
         Returns:
             List of search results.

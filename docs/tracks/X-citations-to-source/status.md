@@ -20,22 +20,38 @@ The provenance lives on the `chunk` table (`physical_page`/`printed_page`/`secti
 
 ### Hydration approach (repo-layer batch SELECT — `fn::` untouched)
 
-`SearchRepository.hydrate_provenance(hits, embedding)` runs **one** batched follow-up
-`SELECT` over `source_embedding` joined to `chunk`, keyed on the hit source ids:
+**One rule (revised after review attempt 1): attach chunk-level provenance only when the
+EXACT originating chunk is identifiable; otherwise leave the chunk keys `None` and attach the
+`source` only.** The distinguisher is the hit's **own `id` prefix**, not `parent_id`
+(the `fn::` id shapes — `migrations/4.surrealql`):
 
-- **vector / hybrid** (embedding present): re-score each hit-source's embeddings by
-  `vector::similarity::cosine` and take the top chunk per source. Because
-  `fn::vector_search` collapses with `math::max(cosine)`, this top chunk is **exactly**
-  the row that produced the source's winning score → the attached `physical_page` is the
-  page of the *actual chunk the hit came from*. Verified equal to the `fn::` collapsed max
-  on staging to **1e-9**.
-- **text-only** (no embedding): BM25 `search::score` is **not** reproducible outside its
-  originating query context (measured 8.32 vs 5.64 on a re-run on staging), so we do **not**
-  fabricate a chunk/page. We attach source-level structural provenance
-  (`section_path`/`element_type` of the source's first chunk) and leave `physical_page`
-  `None` rather than assert an unverifiable page.
-- **notes / non-source hits / lookup failure**: every provenance key → `None`; never raises
-  (the hydration is wrapped so a DB failure degrades silently and leaves existing keys intact).
+| hit class | own `id` | `parent_id` | chunk-backed? |
+|---|---|---|---|
+| source_embedding (vector/hybrid) | `source:Y` | `source:Y` | **yes** (cosine-argmax) |
+| source_insight | `source_insight:X` | `source:Y` | no |
+| source title/full_text (text leg) | `source:Y` | `source:Y` | no (page-less; text path excluded) |
+| note | `note:N` | `note:N` | no |
+
+`SearchRepository.hydrate_provenance(hits, embedding)`:
+
+- **`source:`-own-id hit WITH embedding** (vector/hybrid): one batched `SELECT` over
+  `source_embedding ⋈ chunk` picks the top-1 chunk per source by
+  `vector::similarity::cosine`. Because `fn::vector_search` collapses with `math::max(cosine)`,
+  this is **exactly** the row that produced the hit's score → `physical_page` is the page of
+  the *actual chunk the hit came from*. Verified equal to the `fn::` collapsed max on staging
+  to **1e-9**.
+- **`source_insight:` hit**: a synthesized source-level summary with no single originating
+  chunk → all chunk keys `None`, `source` set from `parent_id`. **Never** routed through the
+  chunk lookup. (Blocker fix: previously `_hit_source_id` returned `parent_id`, so an insight
+  got stamped with the source's top *embedding* chunk's page — a different row that did not
+  produce the hit. Latent on staging only because `source_insight`=0 rows there, but
+  `pipelines/embeddings/service.py` populates `source_insight.embedding` in the real pipeline.)
+- **text-only path** (`embedding is None`): no chunk-level keys for ANY hit (BM25 score is not
+  reproducible out of context, and a `source:` text hit may even come from the title/full_text
+  leg with no chunk). `source` set, all chunk keys `None`. (The earlier "arbitrary first
+  chunk `section_path`/`element_type`" was dropped per review — same principle.)
+- **notes / non-source / lookup failure**: chunk keys `None`; never raises (DB failure degrades
+  silently, existing keys intact).
 
 `hybrid_search` calls its text/vector legs with `hydrate=False` and hydrates the **fused**
 set once, with the embedding (so the page reflects the vector match, not the text leg).
