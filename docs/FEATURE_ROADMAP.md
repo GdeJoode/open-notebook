@@ -1438,6 +1438,55 @@ documented, promotable follow-up, not built in Y.
 
 ---
 
+## Track Z — Contradiction detection (LLM judges related pairs) (NEW)
+
+> **Status**: ✅ CLOSED (2026-06-29). An LLM judges whether two *already-related*
+> sources reinforce / contradict / are neutral, persisting only confident
+> verdicts as `source_verdict` edges — **Feature 3** (the last) of the Constella
+> adoption plan. The highest-risk graph-write feature (a false contradiction
+> pollutes the graph), so **precision-first** throughout: a fabricated
+> contradiction is worse than a missed one. Candidates come from the Track R
+> related substrate (top-`k`, NOT O(n²)); the trigger is on-demand
+> (`POST /sources/{id}/judge-contradictions`); a background job is a documented
+> follow-up. See [`docs/tracks/Z-contradiction/status.md`](./tracks/Z-contradiction/status.md)
+> and `ARCHITECTURE.md` §13.
+>
+> **This CLOSES all five Constella adoption features** — Feature 1 = Track W
+> (shared graph memory), Feature 2 = Track Y (auto-link), Feature 3 = Track Z
+> (contradiction), Feature 4 = Track X (citations to source), Feature 5 = Track W
+> (MCP graph-tools substrate). **5 / 5 done.**
+
+**Vision**: the knowledge graph surfaces *tension*, not just relatedness — which
+sources agree and which conflict — without manufacturing conflict from topic
+overlap. Precision over recall: a conservative `min_confidence` + a `neutral`-by-
+default judge keep the verdict edges trustworthy (the same discipline as the
+Track U `cites` membership gate).
+
+**Phases**: Z.1 verdict-edge schema + idempotent helper — migration 69
+(`source_verdict` `TYPE RELATION FROM source TO source`, strict fields w/ defaults,
+fresh-container-verified; kept distinct from the app-side `claim`/`contradicts`
+scaffolding) + `SourceRepository.relate_verdict` (idempotent clear-before-relate;
+strict id validation before interpolation — the `relate_cites` injection lesson) ·
+Z.2 candidate generation + pairwise judge — `build_candidate_pairs` (related
+substrate, self-excluded, deduped, top-`k`) + `ContradictionJudgeService`
+(compact context → Track J routed LLM `json_mode` → robust **top-level-object-only**
+parse → precision gate; the JSON-array fabrication blocker caught + fixed in
+review) · Z.3 on-demand trigger + integration + docs/RETRO —
+`POST /sources/{id}/judge-contradictions` (route-layer validation: bad id /
+out-of-range bounds → 422, missing source → 404); the MCP `judge_contradiction`
+tool **deferred** (the judge needs the app-main LLM layer; the surrealdb-mcp
+server is repo-direct — documented in the server docstring + RETRO).
+
+**Value**: a precision-first contradiction/reinforcement layer over the related
+graph, lighting up as the corpus grows. **Depends on**: Track R related substrate
+(candidates), Track J model routing (the judge LLM), Z.1 verdict schema.
+**Data reality**: few sources today — a built-and-tested mechanism that lights up
+as the corpus grows (like the Track U `cites` edges). **Extensions** (documented,
+not built in Z): a **background job** judging new/edited sources on ingest;
+**claim-level** contradiction (source→`claim`, a finer grain) as claims accumulate.
+
+---
+
 ## Bijlagen
 
 - `docs/REFACTOR_PLAN.md` — voltooide refactor (Phase 0-7)

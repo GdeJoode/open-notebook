@@ -2,15 +2,44 @@
 
 from typing import Any, Dict, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from app_main.dependencies import get_source_service
+from app_main.api.schemas import SourceJudgeContradictionsResponse
+from app_main.dependencies import (
+    get_contradiction_judge_service,
+    get_source_service,
+)
+from app_main.services.contradiction_judge_service import (
+    ContradictionJudgeService,
+    MAX_K,
+)
 from app_main.services.source_service import SourceService
+from surrealdb_service.repositories.base import _validate_record_id
 
 router = APIRouter()
+
+
+def _validate_source_id(source_id: str) -> str:
+    """Reject a malformed/unsafe source id at the route boundary (Z.3).
+
+    The judge persists through Z.1's ``relate_verdict``, which strict-validates
+    ids before any interpolation. Validating here too means a bad id (a
+    ``;``-bearing injection payload, the wrong table, garbage) returns a clean
+    422 instead of falling through to the service/DB. Mirrors the Y.2 auto-link
+    discipline: validate at the boundary, not only in the repo.
+    """
+    try:
+        validated = _validate_record_id(str(source_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid source id: {exc}")
+    if not validated.startswith("source:"):
+        raise HTTPException(
+            status_code=422, detail="id must be a source record (source:...)"
+        )
+    return validated
 
 
 # ---------------------------------------------------------------------------
@@ -507,3 +536,67 @@ async def stream_source_logs(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post(
+    "/{source_id}/judge-contradictions",
+    response_model=SourceJudgeContradictionsResponse,
+)
+async def judge_contradictions(
+    source_id: str,
+    k: int = Query(
+        5,
+        ge=1,
+        le=MAX_K,
+        description=(
+            "Max related sources to judge against (top-k from the Track R "
+            "related substrate — bounds LLM cost to O(top-k), not O(corpus))"
+        ),
+    ),
+    min_confidence: float = Query(
+        0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Precision gate: only contradicts/reinforces verdicts at/above this "
+            "confidence are persisted as a source_verdict edge"
+        ),
+    ),
+    source_svc: SourceService = Depends(get_source_service),
+    judge_svc: ContradictionJudgeService = Depends(
+        get_contradiction_judge_service
+    ),
+):
+    """Judge a source against its related sources for contradictions (Track Z.3).
+
+    The on-demand trigger for the contradiction judge. Pulls the source's top-``k``
+    related sources from the Track R substrate (already topically related —
+    candidate pairs, NOT O(n²)), asks an LLM to judge each pair as
+    contradicts/reinforces/neutral, and persists a ``source_verdict`` edge ONLY
+    for confident contradicts/reinforces (``confidence >= min_confidence``).
+    Precision-first: a false contradiction is worse than a missed one, so
+    neutral/below-threshold verdicts are judged but written nowhere. Idempotent
+    (Z.1 clear-before-relate) — re-running yields the same edge set.
+
+    Validation happens at the boundary: the source id is strict-validated, and
+    ``k`` / ``min_confidence`` are bounded by ``Query`` constraints — a bad value
+    is a 422, not a 500. A missing source is a 404.
+    """
+    # Route-layer id validation (defense-in-depth; the repo also validates).
+    _validate_source_id(source_id)
+
+    existing = await source_svc.get(source_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    result = await judge_svc.judge_source(
+        source_id, k=k, min_confidence=min_confidence
+    )
+    logger.info(
+        "Judged source {} -> {} edges (judged={}, status={})",
+        source_id,
+        result.edges_written,
+        result.judged,
+        result.status,
+    )
+    return SourceJudgeContradictionsResponse(**result.to_dict())

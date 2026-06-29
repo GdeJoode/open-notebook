@@ -19,6 +19,18 @@ stdio — or add auth — before any HTTP exposure). They mutate the shared grap
 untouched) and is idempotent, and like ``search``/``add_note`` it is
 embedding-free — it requires the note to already be embedded and never pulls an
 embedding model into this package.
+
+No ``judge_contradiction`` tool (Track Z.3 — deliberate deferral). Unlike
+``auto_link_note``, whose primitives (cosine ranking + ``relate_note``) all live
+in surrealdb-service, the contradiction judge REQUIRES the app-main LLM routing
+layer (``RoutedLLMCaller`` / ``make_default_llm_caller``) to judge each pair.
+This MCP server is intentionally a thin, repo-direct layer with NO app-main /
+LLM dependency (and no app-main URL is available to it), so wiring a judge tool
+here would either pull the LLM stack into this package or invert the layering by
+adding a surrealdb-service→app-main HTTP coupling. The on-demand trigger is the
+app-main endpoint ``POST /sources/{id}/judge-contradictions`` instead; an MCP
+tool that calls that endpoint is a documented follow-up, to be done only once an
+app-main base URL is cleanly available to this server.
 """
 
 import argparse

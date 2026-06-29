@@ -340,6 +340,46 @@ class NoteAutoLinkResponse(BaseModel):
     )
 
 
+class SourceJudgeContradictionsResponse(BaseModel):
+    """Summary of an on-demand contradiction-judge run over a source (Track Z.3).
+
+    Mirrors :class:`app_main.services.contradiction_judge_service.JudgeRunResult`.
+    Precision-first: ``edges_written`` counts ONLY confident
+    contradicts/reinforces verdicts; ``neutral`` and ``below_threshold`` are
+    judged but written nowhere.
+    """
+
+    source_id: str = Field(..., description="The source that was judged")
+    status: str = Field(
+        ...,
+        description="judged | not_found — not_found means no such source.",
+    )
+    judged: int = Field(0, description="Related pairs judged this run")
+    contradicts: int = Field(0, description="Pairs judged contradicts")
+    reinforces: int = Field(0, description="Pairs judged reinforces")
+    neutral: int = Field(0, description="Pairs judged neutral (no edge)")
+    below_threshold: int = Field(
+        0,
+        description=(
+            "Contradicts/reinforces verdicts below min_confidence (no edge)"
+        ),
+    )
+    edges_written: int = Field(
+        0, description="source_verdict edges (re)written (confident only)"
+    )
+    candidates_considered: int = Field(
+        0, description="Related pairs considered (top-k from Track R substrate)"
+    )
+    min_confidence: float = Field(
+        ..., description="Effective precision gate applied"
+    )
+    k: int = Field(..., description="Effective top-k related fan-out applied")
+    verdict_pairs: list[dict] = Field(
+        default_factory=list,
+        description="Per-pair {from, to, verdict, confidence, edge_written}",
+    )
+
+
 # Embedding API schemas
 class EmbedRequest(BaseModel):
     item_id: str = Field(..., description="ID of the item to embed")
