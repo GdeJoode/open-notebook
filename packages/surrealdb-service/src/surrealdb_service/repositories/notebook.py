@@ -160,10 +160,13 @@ class NoteRepository(BaseRepository[Note]):
 
         Behaviour:
           * The query note's own row is excluded (``id != $id``).
-          * Notes with an empty ``embedding`` (``array<float>`` is strict and
-            non-optional, so an unembedded note holds ``[]`` not NONE — see
-            [[note-embedding-non-optional]]) are excluded: an empty vector can
-            never be a result and the dimension guard would drop it anyway.
+          * Notes with an empty/absent ``embedding`` are excluded by the shared
+            ``embedding != NONE AND array::len(embedding) > 0`` predicate (the
+            same form the note→source path uses — NS.2 alignment). ``note.embedding``
+            is strict ``array<float>`` so an unembedded note holds ``[]`` not NONE
+            ([[note-embedding-non-optional]]); the ``> 0`` clause drops it, and the
+            ``!= NONE`` clause guards the cross-type case where ``array::len`` would
+            otherwise raise on a NONE field.
           * If the *query* note itself has no/empty embedding, returns ``[]``
             (nothing to compare). The caller distinguishes this from "note not
             found" via a prior existence check; Track Y.2 treats it as the
@@ -200,7 +203,8 @@ class NoteRepository(BaseRepository[Note]):
                 "SELECT id, title, "
                 "vector::similarity::cosine(embedding, $q) AS score "
                 "FROM note "
-                "WHERE array::len(embedding) > 0 AND id != $id "
+                "WHERE embedding != NONE AND array::len(embedding) > 0 "
+                "AND id != $id "
                 "AND array::len(embedding) = array::len($q) "
                 "ORDER BY score DESC, id ASC "
                 "LIMIT $k",
@@ -243,9 +247,13 @@ class NoteRepository(BaseRepository[Note]):
         hard safety net: a dimension mismatch is excluded, never crashed.
 
         Behaviour (mirrors the note→note path):
-          * Sources whose ``embedding`` is NONE (not yet aggregated / no chunk
-            vectors) are excluded — they can never be a result and never crash
-            the cosine call.
+          * Sources with an empty/absent ``embedding`` (not yet aggregated / no
+            chunk vectors) are excluded by the shared ``embedding != NONE AND
+            array::len(embedding) > 0`` predicate — the same form the note→note
+            path uses (NS.2 alignment). A source's ``embedding`` is genuinely
+            NONE when unaggregated (unlike a note's strict ``[]``), so the
+            ``!= NONE`` clause is load-bearing here: ``array::len(NONE)`` raises
+            in SurrealDB, so it must be short-circuited before the length check.
           * If the *query* note has no/empty embedding (``note.embedding`` is
             strict ``array<float>``, so an unembedded note holds ``[]`` not
             NONE — [[note-embedding-non-optional]]), returns ``[]`` (nothing to
@@ -283,7 +291,7 @@ class NoteRepository(BaseRepository[Note]):
                 "SELECT id, title, "
                 "vector::similarity::cosine(embedding, $q) AS score "
                 "FROM source "
-                "WHERE embedding != NONE "
+                "WHERE embedding != NONE AND array::len(embedding) > 0 "
                 "AND array::len(embedding) = array::len($q) "
                 "ORDER BY score DESC, id ASC "
                 "LIMIT $k",
