@@ -28,9 +28,25 @@ def _make_insight(**overrides):
     return SimpleNamespace(**defaults)
 
 
+def _make_chunk(**overrides):
+    defaults = {
+        "id": "chunk:c1",
+        "text": "Chunk text.",
+        "physical_page": 3,
+        "printed_page": 4,
+        "section_path": ["Intro"],
+        "element_type": "text",
+        "order": 0,
+        "is_content": True,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
 def _make_service(
     source=None,
     insights=None,
+    chunks=None,
 ):
     source_repo = MagicMock()
     source_repo.get = AsyncMock(return_value=source)
@@ -41,11 +57,17 @@ def _make_service(
     notebook_repo = MagicMock()
     note_repo = MagicMock()
 
+    chunk_repo = None
+    if chunks is not None:
+        chunk_repo = MagicMock()
+        chunk_repo.get_by_source = AsyncMock(return_value=chunks)
+
     svc = ContextService(
         source_repo=source_repo,
         insight_repo=insight_repo,
         notebook_repo=notebook_repo,
         note_repo=note_repo,
+        chunk_repo=chunk_repo,
     )
     return svc
 
@@ -172,3 +194,64 @@ class TestBuildSourceContext:
         svc = _make_service(source=_make_source(), insights=[_make_insight()])
         result = await svc.build_source_context("source:abc")
         assert result["notes"] == []
+
+
+class TestBuildSourceChunks:
+    """Chunk-level, page-carrying context (Track X.2)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_chunks_with_provenance(self):
+        svc = _make_service(
+            source=_make_source(),
+            chunks=[
+                _make_chunk(id="chunk:a", physical_page=3, section_path=["A"]),
+                _make_chunk(id="chunk:b", physical_page=7, section_path=["B"]),
+            ],
+        )
+        out = await svc.build_source_chunks("source:abc")
+
+        assert [c["chunk_id"] for c in out] == ["chunk:a", "chunk:b"]
+        assert [c["physical_page"] for c in out] == [3, 7]
+        assert all(c["source"] == "source:abc" for c in out)
+        assert out[0]["section_path"] == ["A"]
+
+    @pytest.mark.asyncio
+    async def test_skips_noise_chunks(self):
+        svc = _make_service(
+            source=_make_source(),
+            chunks=[
+                _make_chunk(id="chunk:keep", is_content=True),
+                _make_chunk(id="chunk:noise", is_content=False),
+            ],
+        )
+        out = await svc.build_source_chunks("source:abc")
+        assert [c["chunk_id"] for c in out] == ["chunk:keep"]
+
+    @pytest.mark.asyncio
+    async def test_max_chunks_cap(self):
+        svc = _make_service(
+            source=_make_source(),
+            chunks=[_make_chunk(id=f"chunk:{i}") for i in range(10)],
+        )
+        out = await svc.build_source_chunks("source:abc", max_chunks=3)
+        assert len(out) == 3
+
+    @pytest.mark.asyncio
+    async def test_no_chunk_repo_returns_empty(self):
+        # chunk_repo not injected -> graceful empty (caller falls back to text).
+        svc = _make_service(source=_make_source())
+        out = await svc.build_source_chunks("source:abc")
+        assert out == []
+
+    @pytest.mark.asyncio
+    async def test_lookup_failure_returns_empty(self):
+        svc = _make_service(source=_make_source(), chunks=[])
+        svc._chunk_repo.get_by_source = AsyncMock(side_effect=RuntimeError("db"))
+        out = await svc.build_source_chunks("source:abc")
+        assert out == []
+
+    @pytest.mark.asyncio
+    async def test_prefix_added(self):
+        svc = _make_service(source=_make_source(), chunks=[_make_chunk()])
+        await svc.build_source_chunks("abc")
+        svc._chunk_repo.get_by_source.assert_awaited_once_with("source:abc")

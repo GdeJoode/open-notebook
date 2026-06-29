@@ -35,6 +35,13 @@ When referencing information from the source or its insights, always include cit
 - For source content: [{{ source.id if source else "source:id" }}]
 - For insights: [insight_id] (use the specific insight ID)
 
+When the context contains page-cited passages (a `## SOURCE PASSAGES`
+section), each passage is prefixed with a provenance tag of the form
+`[source: <id> | p.<page> | <section>]`. When you draw a claim from such a
+passage, ground it to that exact location by citing `[<source_id>, p.<page>]`,
+using the page from the passage's provenance tag. Do not invent page numbers;
+only cite a page that appears in a passage's provenance tag.
+
 ## EXAMPLE
 
 User: What are the main themes in this document?

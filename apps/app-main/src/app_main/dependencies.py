@@ -374,6 +374,7 @@ def get_context_service() -> ContextService:
         insight_repo=get_insight_repo(),
         notebook_repo=get_notebook_repo(),
         note_repo=get_note_repo(),
+        chunk_repo=get_chunk_repo(),
     )
 
 

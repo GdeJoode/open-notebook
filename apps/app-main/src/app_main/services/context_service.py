@@ -15,6 +15,7 @@ from loguru import logger
 from shared.utils import token_count
 
 from surrealdb_service.repositories import (
+    ChunkRepository,
     NoteRepository,
     NotebookRepository,
     SourceInsightRepository,
@@ -71,11 +72,15 @@ class ContextService:
         insight_repo: SourceInsightRepository,
         notebook_repo: NotebookRepository,
         note_repo: NoteRepository,
+        chunk_repo: Optional[ChunkRepository] = None,
     ) -> None:
         self._source_repo = source_repo
         self._insight_repo = insight_repo
         self._notebook_repo = notebook_repo
         self._note_repo = note_repo
+        # Optional — only the chunk-level (page-cited) context path needs it
+        # (Track X.2). Kept optional so existing constructions are unaffected.
+        self._chunk_repo = chunk_repo
 
     # ------------------------------------------------------------------
     # Public API
@@ -147,6 +152,70 @@ class ContextService:
             items = self._truncate(items, max_tokens)
 
         return self._format(items)
+
+    async def build_source_chunks(
+        self,
+        source_id: str,
+        max_chunks: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Chunk-level context for a single source (Track X.2).
+
+        Returns the source's content chunks in document order, each carrying
+        its provenance (``chunk_id``/``physical_page``/``printed_page``/
+        ``section_path``/``element_type``/``source``) so ``source_chat`` can
+        cite the exact page/section rather than only the source title. Noise
+        chunks (``is_content == False``) are skipped.
+
+        Degrades gracefully: without an injected ``chunk_repo`` (or on a lookup
+        failure) returns ``[]`` — the caller falls back to source-level
+        ``full_text`` and still answers.
+
+        Args:
+            source_id: Source id (``source:`` prefix optional).
+            max_chunks: Cap on the number of chunks returned (by document order).
+            max_tokens: Token budget; chunks are accumulated in order until the
+                budget would be exceeded.
+        """
+        if self._chunk_repo is None:
+            return []
+
+        full_source_id = (
+            source_id
+            if source_id.startswith("source:")
+            else f"source:{source_id}"
+        )
+
+        try:
+            chunks = await self._chunk_repo.get_by_source(full_source_id)
+        except Exception as e:  # provenance is additive — never break the chat
+            logger.warning(f"Chunk context lookup failed for {source_id}: {e}")
+            return []
+
+        out: List[Dict[str, Any]] = []
+        running_tokens = 0
+        for chunk in chunks:
+            if getattr(chunk, "is_content", True) is False:
+                continue
+            text = getattr(chunk, "text", "") or ""
+            record: Dict[str, Any] = {
+                "chunk_id": getattr(chunk, "id", None),
+                "source": full_source_id,
+                "text": text,
+                "physical_page": getattr(chunk, "physical_page", None),
+                "printed_page": getattr(chunk, "printed_page", None),
+                "section_path": getattr(chunk, "section_path", None),
+                "element_type": getattr(chunk, "element_type", None),
+                "order": getattr(chunk, "order", None),
+            }
+            if max_tokens is not None:
+                running_tokens += token_count(text)
+                if running_tokens > max_tokens and out:
+                    break
+            out.append(record)
+            if max_chunks is not None and len(out) >= max_chunks:
+                break
+        return out
 
     # ------------------------------------------------------------------
     # Internal helpers

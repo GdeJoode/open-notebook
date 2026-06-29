@@ -521,6 +521,15 @@ async def stream_source_chat_response(
             }
             yield f"data: {json.dumps(context_event)}\n\n"
 
+        # Stream chunk-level source citations (Track X.2). Additive — clients
+        # that ignore this event are unaffected.
+        if result.get("citations"):
+            citations_event = {
+                "type": "citations",
+                "data": result["citations"],
+            }
+            yield f"data: {json.dumps(citations_event)}\n\n"
+
         # Completion signal
         yield f"data: {json.dumps({'type': 'complete'})}\n\n"
 
