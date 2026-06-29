@@ -62,27 +62,41 @@ async def test_find_related_ranks_by_cosine_and_excludes_self(
 ) -> None:
     repo = NoteRepository(config=live_surrealdb)
 
-    # Query vector points along x. A near (mostly-x) note should outrank a
-    # far (mostly-y) note; the orthogonal note ranks last.
-    query = await _make_note(live_surrealdb, embedding=[1.0, 0.0, 0.0])
-    near = await _make_note(live_surrealdb, embedding=[0.9, 0.1, 0.0])
-    mid = await _make_note(live_surrealdb, embedding=[0.5, 0.5, 0.0])
-    far = await _make_note(live_surrealdb, embedding=[0.0, 1.0, 0.0])
+    # The `live_surrealdb` fixture is session-scoped with no per-test cleanup, so
+    # notes seeded by other suites (e.g. the MCP auto-link tests, which create
+    # 3-dim notes with even higher cosine to a `[1,0,0]` query) accumulate in the
+    # same `note` table. A 3-dim query would length-match those contaminants and,
+    # under a top-k LIMIT, they would evict the notes seeded here — making this
+    # test pass in isolation but flake in the full suite (the Y.2 lesson: do not
+    # assert absolute top-k membership over a shared table).
+    #
+    # Isolate by seeding in a UNIQUE embedding dimension (5-dim — no other note
+    # in the suite uses >3 dims). `find_related_by_embedding` only considers
+    # candidates whose `array::len(embedding)` equals the query length, so the
+    # 5-dim query's candidate set is exactly this test's notes — every other
+    # note (1/2/3-dim or empty) is excluded by the length guard. The cosine
+    # ranking + self-exclusion below are then asserted on a deterministic set.
+    #
+    # Vectors point along the first axis; a near (mostly-axis-0) note outranks a
+    # far (orthogonal) note, with the 45-degree note in between.
+    query = await _make_note(live_surrealdb, embedding=[1.0, 0.0, 0.0, 0.0, 0.0])
+    near = await _make_note(live_surrealdb, embedding=[0.9, 0.1, 0.0, 0.0, 0.0])
+    mid = await _make_note(live_surrealdb, embedding=[0.5, 0.5, 0.0, 0.0, 0.0])
+    far = await _make_note(live_surrealdb, embedding=[0.0, 1.0, 0.0, 0.0, 0.0])
 
     results = await repo.find_related_by_embedding(query, k=10)
     ids = [r["id"] for r in results]
 
-    # Self excluded.
+    # Self excluded — the query note is never its own related note.
     assert query not in ids, "query note must not be its own related note"
 
-    # The three seeded notes are present and ranked near > mid > far.
-    seeded = [r for r in results if r["id"] in {near, mid, far}]
-    seeded_ids = [r["id"] for r in seeded]
-    assert seeded_ids[:3] == [near, mid, far], (
-        f"cosine ranking wrong: expected [near, mid, far], got {seeded_ids}"
+    # The length guard isolates candidates to this test's 5-dim notes, so the
+    # full result set is exactly {near, mid, far}, ranked near > mid > far.
+    assert ids == [near, mid, far], (
+        f"cosine ranking wrong: expected [near, mid, far], got {ids}"
     )
-    # Scores are descending across the seeded notes.
-    scores = [r["score"] for r in seeded]
+    # Scores are strictly descending across the seeded notes.
+    scores = [r["score"] for r in results]
     assert scores == sorted(scores, reverse=True)
     # Shape: {id, title, score}.
     assert set(results[0].keys()) == {"id", "title", "score"}

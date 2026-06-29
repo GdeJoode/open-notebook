@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 from mcp.server.fastmcp import FastMCP
 
 from surrealdb_service.connection import ensure_record_id, execute_query
+from surrealdb_service.repositories.base import _validate_record_id
 from surrealdb_service.repositories.graph import GraphRepository
 from surrealdb_service.repositories.notebook import NoteRepository
 from surrealdb_service.repositories.search import SearchRepository
@@ -219,9 +220,17 @@ def create_server() -> FastMCP:
             ``created`` is False when the edge already existed or the pair was
             invalid (self-citation / bad id).
         """
+        # Strict-validate the RAW, agent-supplied ids BEFORE they touch the DB.
+        # ``RecordID.parse`` round-trips a payload like
+        # ``source:x; REMOVE TABLE source; --`` verbatim (it splits only on the
+        # first colon — it is NOT a validator), so an unvalidated id would reach
+        # the ``type::thing($src)`` idempotency probe below and make SurrealDB
+        # raise (a 500 out of the tool) BEFORE the ``relate_cites`` chokepoint
+        # ever runs. ``_validate_record_id`` rejects every SurrealQL
+        # metacharacter, so a malformed id returns a clean ``invalid_id`` here.
         try:
-            src = str(ensure_record_id(citing_source_id))
-            tgt = str(ensure_record_id(cited_source_id))
+            src = _validate_record_id(str(ensure_record_id(citing_source_id)))
+            tgt = _validate_record_id(str(ensure_record_id(cited_source_id)))
         except Exception:
             return json.dumps(
                 {
