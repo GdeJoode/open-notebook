@@ -7,6 +7,7 @@ from langchain_core.output_parsers.pydantic import PydanticOutputParser
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
+from loguru import logger
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
@@ -14,6 +15,8 @@ from surrealdb_service.repositories import SearchRepository
 from app_main.graphs.citations import (
     citations_from_hits,
     format_citation_tag,
+    guard_answer_citations,
+    guard_citation_array,
     merge_citations,
 )
 from app_main.graphs.utils import provision_langchain_model
@@ -53,6 +56,9 @@ class ThreadState(TypedDict):
     # Per-sub-answer citation lists, accumulated across the fan-out branches
     # (Track X.2). Merged/de-duplicated into ``citations`` by the final node.
     citation_groups: Annotated[list, operator.add]
+    # Retrieval hits per sub-answer (Track X.3): the context the final node
+    # validates the emitted citations against (the array safety-net).
+    retrieval_hits: Annotated[list, operator.add]
     final_answer: str
     citations: list
 
@@ -131,7 +137,7 @@ async def provide_answer(state: SubGraphState, config: RunnableConfig) -> dict:
     except Exception:
         results = await retrieval_svc.text_search(state["term"], 10, hydrate=True)
     if len(results) == 0:
-        return {"answers": [], "citation_groups": []}
+        return {"answers": [], "citation_groups": [], "retrieval_hits": []}
     payload["results"] = _format_results_with_provenance(results)
     ids = [r["id"] for r in results]
     payload["ids"] = ids
@@ -149,9 +155,25 @@ async def provide_answer(state: SubGraphState, config: RunnableConfig) -> dict:
         model.ainvoke(system_prompt), timeout=MODEL_INVOKE_TIMEOUT
     )
     ai_content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
+    answer_text = clean_thinking_content(ai_content)
+    # Track X.3 faithfulness guard (primary): validate the LLM's inline
+    # ``[id, p.X]`` markers against THIS sub-answer's retrieval set. Hallucinated
+    # markers (a source/page the model never saw) are recorded, not stripped —
+    # least-destructive to the user's answer text. Membership check only, not
+    # semantic support.
+    guard = guard_answer_citations(answer_text, results, strip=False)
+    if guard["dropped_count"]:
+        logger.warning(
+            "ask: {} hallucinated inline citation marker(s) flagged "
+            "(kept {}): {}",
+            guard["dropped_count"],
+            guard["kept_count"],
+            [d["marker"] for d in guard["dropped"]],
+        )
     return {
-        "answers": [clean_thinking_content(ai_content)],
+        "answers": [answer_text],
         "citation_groups": [citations],
+        "retrieval_hits": results,
     }
 
 
@@ -171,9 +193,20 @@ async def write_final_answer(state: ThreadState, config: RunnableConfig) -> dict
     # (Track X.2). Additive — consumers that ignore ``citations`` are
     # unaffected; the answer text is produced exactly as before.
     citations = merge_citations(state.get("citation_groups", []))
+    # Track X.3 array safety-net (secondary): membership-check the chunk-bearing
+    # citations against the union of retrieval hits. A no-op today (citations are
+    # context-derived); regression insurance if that ever stops being true.
+    guarded = guard_citation_array(citations, state.get("retrieval_hits", []))
+    if guarded["dropped_count"]:
+        logger.warning(
+            "ask: {} citation(s) dropped by the array safety-net "
+            "(non-context-derived chunk_id): {}",
+            guarded["dropped_count"],
+            guarded["dropped"],
+        )
     return {
         "final_answer": clean_thinking_content(final_content),
-        "citations": citations,
+        "citations": guarded["citations"],
     }
 
 

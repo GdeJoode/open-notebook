@@ -307,6 +307,12 @@ def guard_citation_array(
     precise, checkable claim; a page-less source-only citation does not and is
     always kept). The check never fabricates — it only filters.
 
+    Precision-first guard: when there is **no chunk-bearing retrieval set** to
+    check against (e.g. the hits were not threaded into the final node, or the
+    answer drew only on page-less context), the citations are already the trusted
+    context-derived set and are returned **unchanged** — we never drop a valid
+    citation merely because the membership index is empty.
+
     Returns ``{"citations", "dropped", "dropped_count"}``.
     """
     retrieved_chunks: Set[str] = {
@@ -314,6 +320,8 @@ def guard_citation_array(
         for hit in hits
         if isinstance(hit.get("chunk_id"), str)
     }
+    if not retrieved_chunks:
+        return {"citations": list(citations), "dropped": [], "dropped_count": 0}
     kept: List[Dict[str, Any]] = []
     dropped: List[Dict[str, Any]] = []
     for citation in citations:
