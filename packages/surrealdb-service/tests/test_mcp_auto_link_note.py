@@ -253,7 +253,7 @@ async def test_auto_link_note_links_sources_above_threshold(
     assert (
         out["source_links_created"]
         + out["source_below_threshold"]
-        + out["source_skipped"]
+        + out["source_skipped_existing"]
         == out["source_candidates_considered"]
     )
     # The persisted note_about edges match the reported set.
