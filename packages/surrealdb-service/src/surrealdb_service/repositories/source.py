@@ -9,7 +9,7 @@ from loguru import logger
 from shared.models import Asset, Chunk, Source, SourceEmbedding, SourceInsight
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
-from surrealdb_service.repositories.base import BaseRepository
+from surrealdb_service.repositories.base import BaseRepository, _validate_record_id
 
 
 class SourceRepository(BaseRepository[Source]):
@@ -786,6 +786,122 @@ class SourceRepository(BaseRepository[Source]):
         except Exception as e:
             logger.error(f"load_cites_edges failed: {e}")
             return []
+
+    async def relate_verdict(
+        self,
+        from_source: str,
+        to_source: str,
+        *,
+        verdict: str,
+        confidence: float,
+        reasoning: str = "",
+        judge_model: str = "",
+    ) -> bool:
+        """Idempotently RELATE a ``source -> source_verdict -> source`` edge (Z.1).
+
+        Stores an LLM judge's verdict on whether two RELATED sources reinforce,
+        contradict, or are neutral. This is the persistence seam for Track Z
+        (contradiction detection); the precision decision (which verdicts are
+        confident enough to persist) lives in the judge, not here.
+
+        RELATE is *not* idempotent: a repeated ``RELATE a -> source_verdict -> b``
+        writes a SECOND row (the Track W/Y lesson), so a re-judged pair would
+        accrue duplicate edges. This helper clears any existing
+        ``(from_source, to_source)`` edge first, then RELATEs exactly once — so
+        the edge set for a directed pair is always a single, current row carrying
+        the latest verdict/confidence.
+
+        Guards (all BEFORE any interpolation — the Y.1 injection lesson):
+          * both ids are validated against the strict ``_RECORD_ID_RE`` pattern
+            via :func:`_validate_record_id`. A ``;``-bearing / ``REMOVE TABLE``-
+            bearing / otherwise malformed id is REFUSED, not interpolated.
+            ``RecordID.parse`` splits only on the first colon and round-trips an
+            injection payload verbatim, so the SDK's own parsing is NOT a
+            validator; the regex is. The endpoints are then interpolated as
+            literal record ids because SurrealDB's RELATE graph syntax does not
+            bind a ``$param`` in the in/out position (a parameterized
+            ``RELATE $from->...->$to`` silently writes 0 rows — issue #4232),
+            which is only safe because every accepted id matches ``table:id`` with
+            no SurrealQL metacharacters. Only the SET *values* stay parameterized;
+          * both ids must be in the ``source`` table (a wrong-table id is rejected
+            rather than silently mis-linked);
+          * a self-edge (``from_source == to_source``) is refused — a source is
+            not "in contradiction" with itself, and the candidate generation
+            already excludes self.
+
+        Args:
+            from_source: source-A record id (edge ``in``).
+            to_source: source-B record id (edge ``out``).
+            verdict: the judgment (``reinforces`` | ``contradicts`` | ``neutral``).
+            confidence: the judge's [0, 1] confidence in the verdict.
+            reasoning: the judge's short rationale (retained for review).
+            judge_model: which model produced the verdict (provenance).
+
+        Returns:
+            True on success; False if refused (invalid/unsafe id, wrong table,
+            self-edge) or on a DB error.
+        """
+        # Strict-validate the RAW input strings BEFORE the SDK touches them.
+        # ``RecordID.parse`` would happily accept ``source:x; REMOVE TABLE source --``
+        # (it splits on the first colon and keeps the rest as the id, round-tripped
+        # verbatim by ``str()``), so validation must run on the raw string against
+        # ``_RECORD_ID_RE`` — which rejects every SurrealQL metacharacter.
+        try:
+            from_str = _validate_record_id(str(from_source))
+            to_str = _validate_record_id(str(to_source))
+        except ValueError as e:
+            logger.error(
+                f"relate_verdict: refusing unsafe/invalid source id "
+                f"({from_source!r}/{to_source!r}): {e}"
+            )
+            return False
+
+        if not (from_str.startswith("source:") and to_str.startswith("source:")):
+            logger.error(
+                f"relate_verdict: both ids must be sources "
+                f"(got {from_str} -> {to_str})"
+            )
+            return False
+
+        if from_str == to_str:
+            logger.warning(f"relate_verdict: refusing self-edge for {from_str}")
+            return False
+
+        from_rid = ensure_record_id(from_str)
+        to_rid = ensure_record_id(to_str)
+
+        try:
+            # Clear-before-relate: drop any prior edge for this exact (in, out)
+            # pair so the re-judge replaces rather than duplicates (RELATE is not
+            # idempotent). Scoped to the directed pair — other edges untouched.
+            await execute_query(
+                "DELETE source_verdict WHERE in = $from AND out = $to",
+                {"from": from_rid, "to": to_rid},
+                self.config,
+            )
+            # Endpoints interpolated as literal record ids (RELATE graph syntax
+            # won't bind a ``$param`` in the in/out position — see the docstring).
+            # Safe because ``from_str``/``to_str`` passed ``_RECORD_ID_RE`` above:
+            # ``table:id`` only, no SurrealQL metacharacters. Only the SET *values*
+            # stay parameterized.
+            await execute_query(
+                f"RELATE {from_str}->source_verdict->{to_str} "
+                "SET verdict = $verdict, confidence = $confidence, "
+                "reasoning = $reasoning, judge_model = $judge_model",
+                {
+                    "verdict": verdict,
+                    "confidence": float(confidence),
+                    "reasoning": reasoning or "",
+                    "judge_model": judge_model or "",
+                },
+                self.config,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                f"relate_verdict: failed to relate {from_str} -> {to_str}: {e}"
+            )
+            return False
 
 
 class ChunkRepository(BaseRepository[Chunk]):
