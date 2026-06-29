@@ -125,57 +125,91 @@ async def _run_provide_answer(answer_text: str):
         )
 
 
-class TestProvideAnswerFaithfulness:
-    @pytest.mark.asyncio
-    async def test_hallucinated_inline_marker_flagged_genuine_kept(self):
-        """AC1: a planted marker citing source:doc1 at p.99 (only p.3 was
-        retrieved) is flagged as hallucinated, while [source:doc2, p.12] (in the
-        retrieval set) is kept. The guard log fires; the answer is unchanged."""
-        # doc1 retrieved at p.3 only -> p.99 is invented; doc2 p.12 is genuine.
-        answer = "Claim A [source:doc1, p.99] and claim B [source:doc2, p.12]."
+async def _run_write_final_answer(final_text: str, *, retrieval_hits=SEEDED_HITS,
+                                  citation_groups=None):
+    """Drive ``write_final_answer`` with a given final-answer text and the
+    accumulated retrieval set, capturing the real marker-guard verdict.
 
-        captured = {}
-        real_guard = ask.guard_answer_citations
+    Returns ``(node_output, guard_result)``.
+    """
+    if citation_groups is None:
+        citation_groups = [ask.citations_from_hits(SEEDED_HITS)]
+    captured = {}
+    real_guard = ask.guard_answer_citations
 
-        def _spy(text, hits, **kw):
-            res = real_guard(text, hits, **kw)
-            captured["res"] = res
-            return res
+    def _spy(text, hits, **kw):
+        res = real_guard(text, hits, **kw)
+        captured["res"] = res
+        return res
 
-        with patch.object(ask, "guard_answer_citations", side_effect=_spy):
-            out = await _run_provide_answer(answer)
+    with patch.object(
+        ask, "provision_langchain_model",
+        AsyncMock(return_value=_mock_model(final_text)),
+    ), patch.object(ask, "guard_answer_citations", side_effect=_spy):
+        out = await ask.write_final_answer(
+            {
+                "question": "q",
+                "strategy": MagicMock(),
+                "answers": ["a"],
+                "citation_groups": citation_groups,
+                "retrieval_hits": retrieval_hits,
+            },
+            {"configurable": {}},
+        )
+    return out, captured.get("res")
 
-        result = captured["res"]
-        assert result["dropped_count"] == 1
-        assert result["dropped"][0]["marker"] == "[source:doc1, p.99]"
-        assert {k["id"] for k in result["kept"]} == {"source:doc2"}
-        # AC3: non-destructive — the user's answer text survives verbatim.
-        assert out["answers"][0] == answer
 
-    @pytest.mark.asyncio
-    async def test_all_genuine_markers_no_drop(self):
-        answer = "A [source:doc1, p.3] and B [source:doc2, p.12]."
-
-        captured = {}
-        real_guard = ask.guard_answer_citations
-
-        def _spy(text, hits, **kw):
-            res = real_guard(text, hits, **kw)
-            captured["res"] = res
-            return res
-
-        with patch.object(ask, "guard_answer_citations", side_effect=_spy):
-            out = await _run_provide_answer(answer)
-        assert captured["res"]["dropped_count"] == 0
-        assert out["answers"][0] == answer
+class TestProvideAnswerThreadsHits:
+    """``provide_answer`` no longer guards markers (the intermediate sub-answers
+    are never surfaced); it threads ``retrieval_hits`` so the final node can
+    guard the user-visible answer."""
 
     @pytest.mark.asyncio
-    async def test_no_marker_answer_not_corrupted(self):
-        answer = "An answer with no citation markers at all."
-        out = await _run_provide_answer(answer)
-        assert out["answers"][0] == answer
-        # retrieval_hits are threaded for the final-node array safety-net.
+    async def test_sub_answer_text_untouched_and_hits_threaded(self):
+        out = await _run_provide_answer("Sub [source:doc1, p.99] answer.")
+        assert out["answers"][0] == "Sub [source:doc1, p.99] answer."
         assert out["retrieval_hits"] == SEEDED_HITS
+
+
+class TestWriteFinalAnswerFaithfulness:
+    """The PRIMARY X.3 guard: the FINAL, user-visible ask answer is validated."""
+
+    @pytest.mark.asyncio
+    async def test_hallucinated_final_marker_flagged_genuine_kept(self):
+        """AC (final-answer): a planted marker citing source:doc1 at p.99 (only
+        p.3 was retrieved) in the FINAL answer is flagged; [source:doc2, p.12]
+        (in the retrieval set) is kept. Answer text stays byte-identical."""
+        final = "Claim A [source:doc1, p.99] and claim B [source:doc2, p.12]."
+        out, res = await _run_write_final_answer(final)
+        assert res["dropped_count"] == 1
+        assert res["dropped"][0]["marker"] == "[source:doc1, p.99]"
+        assert {k["id"] for k in res["kept"]} == {"source:doc2"}
+        # Non-destructive — the user-visible answer survives verbatim.
+        assert out["final_answer"] == final
+
+    @pytest.mark.asyncio
+    async def test_all_genuine_final_markers_no_drop(self):
+        final = "A [source:doc1, p.3] and B [source:doc2, p.12]."
+        out, res = await _run_write_final_answer(final)
+        assert res["dropped_count"] == 0
+        assert out["final_answer"] == final
+
+    @pytest.mark.asyncio
+    async def test_no_marker_final_answer_not_corrupted(self):
+        final = "A synthesized final answer with no citation markers at all."
+        out, res = await _run_write_final_answer(final)
+        assert res["dropped_count"] == 0 and res["kept_count"] == 0
+        assert out["final_answer"] == final
+
+    @pytest.mark.asyncio
+    async def test_final_guard_validates_against_union_of_hits(self):
+        """The membership set is the accumulated union of sub-answer hits — a
+        marker citing a source only retrieved in another sub-answer is kept."""
+        final = "From [source:doc2, p.12]."
+        # doc2 came from a different sub-answer; both are in retrieval_hits.
+        out, res = await _run_write_final_answer(final, retrieval_hits=SEEDED_HITS)
+        assert res["dropped_count"] == 0
+        assert out["final_answer"] == final
 
 
 class TestWriteFinalAnswerArraySafetyNet:

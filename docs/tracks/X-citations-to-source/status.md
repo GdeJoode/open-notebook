@@ -324,15 +324,26 @@ marker parsing — while strict — is still heuristic. `strip=True` is availabl
 conservative whitespace cleanup) for callers that want it, and is unit-tested,
 but the wired graphs flag rather than strip.
 
-### Wiring
+### Wiring (revised after review attempt 1)
 
-- **`ask.provide_answer`**: runs the marker guard on each sub-answer against that
-  sub-answer's retrieval hits; logs drops; threads `retrieval_hits` through
-  `ThreadState` (`Annotated[list, operator.add]`) so the final node can run the
-  array net.
-- **`ask.write_final_answer`**: runs `guard_citation_array` on the merged
-  citations against the accumulated `retrieval_hits`.
-- **`source_chat`**: marker guard against the chunk passages + the page-less
+The marker guard runs on the text the **user actually reads**. In `ask` that is
+the `final_answer` synthesized by `write_final_answer` (a SECOND LLM call), NOT
+the intermediate sub-answers from `provide_answer` (which are never surfaced and
+whose `final_answer.jinja` re-asks for inline markers). The first cut guarded the
+sub-answers and discarded the verdict — leaving the user-visible `ask` answer
+unchecked; review attempt 1 caught this. Fixed:
+
+- **`ask.provide_answer`**: no marker guard (it produces intermediate text). It
+  threads each sub-answer's hits into `ThreadState.retrieval_hits`
+  (`Annotated[list, operator.add]`) so the final node has the full union.
+- **`ask.write_final_answer`**: runs the **marker guard on `final_answer`** (the
+  user-visible answer) against the **union of all sub-answer retrieval hits**,
+  flag/log only (`strip=False`, text byte-identical); then `guard_citation_array`
+  on the merged citations against the same set. The per-sub-answer guard was
+  **dropped** (reviewer minor #2) — once the final answer is guarded, guarding the
+  never-surfaced sub-answers added noise, not value.
+- **`source_chat`**: a single agent answer (no fan-out) → the marker guard runs
+  directly on that answer against the chunk passages + the page-less
   source/insight records the model was given; array net on the emitted citations.
 
 ### X.2 minor #1 (source_chat cites every injected chunk) — decision: DO NOT narrow
@@ -350,15 +361,15 @@ only flag the prose. Proven by `test_citations_array_not_narrowed_by_prose`
 
 ### Test evidence (per acceptance criterion)
 
-- **AC1** (hallucinated inline marker caught, genuine kept): guard units
-  `test_citation_faithfulness_guard.py::TestGuardAnswerCitations`
+- **AC1** (hallucinated inline marker in the **user-visible answer** caught,
+  genuine kept): guard units `test_citation_faithfulness_guard.py::TestGuardAnswerCitations`
   (`test_hallucinated_page_for_real_source_detected`,
   `test_hallucinated_source_detected`, `test_genuine_paged_marker_kept`,
-  `test_mixed_genuine_and_hallucinated`) + integration through the real nodes:
-  `test_ask_graph_faithfulness.py::test_hallucinated_inline_marker_flagged_genuine_kept`
-  (doc1 retrieved at p.3 only → `[source:doc1, p.99]` dropped, `[source:doc2,
-  p.12]` kept) and
-  `test_source_chat_faithfulness.py::test_hallucinated_page_flagged_genuine_kept`.
+  `test_mixed_genuine_and_hallucinated`) + integration on the text the user reads:
+  `test_ask_graph_faithfulness.py::TestWriteFinalAnswerFaithfulness::test_hallucinated_final_marker_flagged_genuine_kept`
+  (the FINAL `ask` answer — doc1 retrieved at p.3 only → `[source:doc1, p.99]`
+  dropped, `[source:doc2, p.12]` kept, validated against the union of sub-answer
+  hits) and `test_source_chat_faithfulness.py::test_hallucinated_page_flagged_genuine_kept`.
 - **AC2** (array net no-op today + catches planted out-of-set): unit
   `TestGuardCitationArray::test_no_op_on_context_derived_array` +
   `test_catches_planted_out_of_set_chunk`; integration
@@ -366,10 +377,10 @@ only flag the prose. Proven by `test_citations_array_not_narrowed_by_prose`
   + `test_array_safety_net_no_op_on_genuine`.
 - **AC3** (no corruption; no 500 on page-less/empty/no-marker): `test_default_is_non_destructive`,
   `test_no_markers_no_corruption`, `test_empty_answer_no_500`,
-  `test_strip_removes_only_the_bad_marker`; integration
-  `test_no_marker_answer_not_corrupted` (ask) +
-  `test_page_less_source_marker_kept` (source_chat); `out["answers"][0] == answer`
-  / `out["messages"].content == answer` assert the prose survives verbatim.
+  `test_strip_removes_only_the_bad_marker`; integration — final `ask` answer
+  byte-identical (`TestWriteFinalAnswerFaithfulness::test_all_genuine_final_markers_no_drop`,
+  `test_no_marker_final_answer_not_corrupted`: `out["final_answer"] == final`) +
+  `test_page_less_source_marker_kept` (`out["messages"].content == answer`).
 - **AC4**: ARCHITECTURE.md §11 + this RETRO + FEATURE_ROADMAP Track X entry,
   Track X CLOSED.
 - **AC5** (suites green): see below.
@@ -451,12 +462,17 @@ the structured `citations` array **from the context hits fed to the LLM**, not b
 parsing the model's prose. This makes citations deterministic, defensible, and
 `⊆` the retrieval set by construction — and it reframed X.3.
 
-**X.3 — "the real risk is the inline markers."** Because the array is
-context-derived, a literal membership check on it is almost a no-op. The genuine
-hallucination surface is the LLM's inline `[doc, p.X]` prose markers — what the
-user reads. The guard validates THOSE against the retrieval set (flag, don't
-strip — least-destructive), keeps the array check as regression insurance, and is
-explicit that this is **membership, not semantic support**.
+**X.3 — "the real risk is the inline markers — in the answer the user actually
+reads."** Because the array is context-derived, a literal membership check on it
+is almost a no-op. The genuine hallucination surface is the LLM's inline
+`[doc, p.X]` prose markers. The subtler trap (caught by review attempt 1): in the
+fan-out `ask` graph, the user-visible answer is the `final_answer` from a *second*
+LLM call (`write_final_answer`), not the intermediate sub-answers — guarding only
+the sub-answers leaves the headline answer unchecked. The guard must run on the
+final synthesized text, validated against the **union** of the sub-answers'
+retrieval hits (flag, don't strip — least-destructive), with the array check as
+regression insurance, and explicit that this is **membership, not semantic
+support**.
 
 **Cross-cutting discipline** (shared with Track U.3 `cites`): precision over
 coverage — flag/drop the unverifiable, never fabricate; additive/backward-compat

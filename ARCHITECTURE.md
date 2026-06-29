@@ -524,11 +524,16 @@ to write inline `[document_id, p.<page>]` attribution markers in the answer pros
 
 **X.3 — faithfulness guard (`graphs/citations.py`).** Because the `citations`
 array is context-derived, the genuine hallucination risk is the **inline prose
-markers**: the model can write `[source:x, p.99]` for a page it never saw.
-`guard_answer_citations` parses those markers and membership-checks each against
-the retrieval set's `(source, page)` pairs / record ids; a marker citing a
-source/page not in the context is flagged (recorded; non-destructive to the
-answer text by default — `strip=True` removes only the offending marker token).
+markers** in the user-visible answer: the model can write `[source:x, p.99]` for
+a page it never saw. `guard_answer_citations` parses those markers and
+membership-checks each against the retrieval set's `(source, page)` pairs /
+record ids; a marker citing a source/page not in the context is flagged
+(recorded; non-destructive to the answer text by default — `strip=True` removes
+only the offending marker token). The guard runs on the **text the user actually
+reads**: in `source_chat` that is the single agent answer; in `ask` it is the
+`final_answer` synthesized by `write_final_answer` (NOT the intermediate
+sub-answers, which are never surfaced), validated against the **union of every
+sub-answer's retrieval hits** (accumulated in `ThreadState.retrieval_hits`).
 `guard_citation_array` is a defensive membership safety-net on the chunk-bearing
 entries of the array — a no-op on current output, regression insurance if
 citations ever stop being context-derived (it short-circuits to a no-op when the

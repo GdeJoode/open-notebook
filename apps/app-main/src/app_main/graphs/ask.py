@@ -156,20 +156,11 @@ async def provide_answer(state: SubGraphState, config: RunnableConfig) -> dict:
     )
     ai_content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
     answer_text = clean_thinking_content(ai_content)
-    # Track X.3 faithfulness guard (primary): validate the LLM's inline
-    # ``[id, p.X]`` markers against THIS sub-answer's retrieval set. Hallucinated
-    # markers (a source/page the model never saw) are recorded, not stripped —
-    # least-destructive to the user's answer text. Membership check only, not
-    # semantic support.
-    guard = guard_answer_citations(answer_text, results, strip=False)
-    if guard["dropped_count"]:
-        logger.warning(
-            "ask: {} hallucinated inline citation marker(s) flagged "
-            "(kept {}): {}",
-            guard["dropped_count"],
-            guard["kept_count"],
-            [d["marker"] for d in guard["dropped"]],
-        )
+    # The Track X.3 inline-marker guard runs on the FINAL synthesized answer
+    # (``write_final_answer``) — the user-visible text — against the accumulated
+    # retrieval set, not here on the intermediate sub-answers (which are never
+    # surfaced). We only thread the per-sub-answer ``results`` into state so the
+    # final node can validate against the full union of hits.
     return {
         "answers": [answer_text],
         "citation_groups": [citations],
@@ -189,14 +180,34 @@ async def write_final_answer(state: ThreadState, config: RunnableConfig) -> dict
         model.ainvoke(system_prompt), timeout=MODEL_INVOKE_TIMEOUT
     )
     final_content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
+    final_answer = clean_thinking_content(final_content)
     # Emit the merged, de-duplicated citation set across all sub-answers
     # (Track X.2). Additive — consumers that ignore ``citations`` are
     # unaffected; the answer text is produced exactly as before.
     citations = merge_citations(state.get("citation_groups", []))
-    # Track X.3 array safety-net (secondary): membership-check the chunk-bearing
-    # citations against the union of retrieval hits. A no-op today (citations are
+    # The retrieval set that informed the final answer = the union of every
+    # sub-answer's hits (accumulated in ``retrieval_hits``). Both X.3 guards
+    # validate against it.
+    retrieval_hits = state.get("retrieval_hits", [])
+    # Track X.3 faithfulness guard (PRIMARY): validate the LLM's inline
+    # ``[id, p.X]`` markers in the FINAL, user-visible answer — the synthesized
+    # text streamed to the client — against the retrieval set. A hallucinated
+    # marker (a source/page the model never saw) is flagged/logged, not stripped
+    # (``strip=False``): the answer text is kept byte-identical, same
+    # least-destructive policy. Membership check only, not semantic support.
+    marker_guard = guard_answer_citations(final_answer, retrieval_hits, strip=False)
+    if marker_guard["dropped_count"]:
+        logger.warning(
+            "ask: {} hallucinated inline citation marker(s) in the final "
+            "answer flagged (kept {}): {}",
+            marker_guard["dropped_count"],
+            marker_guard["kept_count"],
+            [d["marker"] for d in marker_guard["dropped"]],
+        )
+    # Track X.3 array safety-net (SECONDARY): membership-check the chunk-bearing
+    # citations against the same retrieval set. A no-op today (citations are
     # context-derived); regression insurance if that ever stops being true.
-    guarded = guard_citation_array(citations, state.get("retrieval_hits", []))
+    guarded = guard_citation_array(citations, retrieval_hits)
     if guarded["dropped_count"]:
         logger.warning(
             "ask: {} citation(s) dropped by the array safety-net "
@@ -205,7 +216,7 @@ async def write_final_answer(state: ThreadState, config: RunnableConfig) -> dict
             guarded["dropped"],
         )
     return {
-        "final_answer": clean_thinking_content(final_content),
+        "final_answer": final_answer,
         "citations": guarded["citations"],
     }
 
