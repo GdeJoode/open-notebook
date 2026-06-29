@@ -620,7 +620,82 @@ not built in Y.
 > `_handle_embed_single_item`'s chaining), migration `68.surrealql`, and
 > `docs/tracks/Y-auto-link/status.md` (per-AC evidence + RETRO).
 
-## 13. Further reading
+## 13. Contradiction detection: related pairs → LLM judge → `source_verdict` edge (Track Z)
+
+Track Z asks an LLM to judge whether two *already-related* sources **reinforce**,
+**contradict**, or are **neutral**, and persists only confident verdicts as a
+`source_verdict` edge. It is the highest-risk graph-write feature — a false
+contradiction pollutes the graph — so the whole pipeline is **precision-first**:
+*a fabricated contradiction is worse than a missed one* (the same discipline as
+the §9 `cites` membership gate).
+
+**The flow (candidate → judge → gate → edge).**
+
+1. **Candidates from the related substrate, not O(n²).** For a source, the judge
+   pulls its top-`k` related sources from the **Track R** substrate
+   (`find_related_hybrid` / `find_related`, §9 — dense + KG fusion, already
+   topically-ranked) and forms `(source, related)` pairs (self-excluded, deduped,
+   bounded by top-`k`). The corpus is never enumerated; LLM cost is O(top-`k`),
+   not O(pairs).
+2. **Pairwise LLM judge.** Each pair is judged by the **Track J** routed LLM
+   (`RoutedLLMCaller` / `make_default_llm_caller(default_chat_model, json_mode=True)`)
+   over a compact context (both titles + bounded `full_text` snippets). The system
+   prompt is a conservative fact-checker that is repeatedly biased toward
+   `neutral` — it must point at a specific, mutually-exclusive factual conflict to
+   say `contradicts`, never infer one from topic overlap.
+3. **Robust parse (no-false-edge invariant).** The response is parsed to a
+   `{verdict, confidence, reasoning}` accepting **only a top-level JSON object**.
+   Any failure mode — non-JSON, missing keys, an unknown label, a string/NaN
+   confidence, or a top-level JSON *array* (a common "respond with JSON" failure
+   that could smuggle `[{"verdict":"contradicts",...}]`) — degrades to
+   `neutral`/`0.0`. A parse failure can only ever **suppress** an edge, never
+   fabricate one.
+4. **Precision gate → edge.** An edge is written **only** when the verdict is
+   `contradicts`/`reinforces` **and** `confidence >= min_confidence` (default
+   0.7, conservative). `neutral` and below-threshold verdicts are counted but
+   written nowhere. Persistence goes through Z.1's idempotent, injection-safe
+   `relate_verdict` (clear-before-relate per `(in,out)`; strict id validation
+   before interpolation — the cross-track `relate_cites` injection lesson), so
+   re-judging is a no-op for unchanged verdicts. Canonical `source` rows are
+   never mutated.
+
+**Schema.** Migration 69 asserts `source_verdict` as `TYPE RELATION FROM source
+TO source`, strict fields with defaults (`verdict`/`confidence`/`reasoning`/
+`judge_model`/`created_at`), fresh-container-verified. It is kept **distinct** from
+the app-side `claim`/`contradicts` scaffolding (a *source→claim* edge — different
+unit, different shape) and from the triage `VERSTERKT` entity-relation predicate
+(a different layer/grain).
+
+**On-demand trigger.** The judge is driven by `POST
+/sources/{id}/judge-contradictions` (params `k`, `min_confidence`; route-layer
+validation → 422 on a bad id / out-of-range bounds, 404 on a missing source). An
+MCP `judge_contradiction` tool is **deferred** (documented): the judge needs the
+app-main LLM layer, and the surrealdb-mcp server is a thin repo-direct layer with
+no app-main dependency, so an MCP tool would invert that layering — it is a
+follow-up for once an app-main base URL is cleanly available to that server (see
+the server module docstring).
+
+**Cost + the deferred background job.** Judging is O(pairs) of LLM calls, so it is
+**on-demand only** in Z core — automate (a background job over new/edited sources)
+only once the judge is trusted, the same staging the §12 auto-link job took. The
+related-substrate bound + top-`k` cap keep each run cheap.
+
+**Extensions (documented, not built in Z).** (a) A **background job** that judges
+new/edited sources on ingest, gated behind the same precision threshold. (b)
+**Claim-level** contradiction — judging a source against a specific `claim`
+(the app-side *source→claim* `contradicts` edge) rather than source↔source — a
+finer grain that lights up as claims accumulate (sparse today, like §9's `cites`).
+
+**Data reality.** Few sources today, so this is a built-and-tested **mechanism**
+that lights up as the corpus grows — like the §9 `cites` edges.
+
+> See `apps/app-main/src/app_main/services/contradiction_judge_service.py`,
+> `apps/app-main/src/app_main/api/routers/sources_processing.py`
+> (`judge_contradictions`), migration `69.surrealql`,
+> `SourceRepository.relate_verdict`, and `docs/tracks/Z-contradiction/status.md`
+> (per-AC evidence + RETRO).
+
+## 14. Further reading
 
 - `docs/SUMMARIZATION_APPROACHES.md` — design + status of all 11 summarization strategies
 - `docs/KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md` — KG architecture and roadmap
@@ -637,4 +712,5 @@ not built in Y.
 - `docs/tracks/W-mcp-graph-memory/OPERATOR_GUIDE.md` — registering the `surrealdb-mcp` server + gated reranker bring-up/smoke/fallback
 - `docs/tracks/X-citations-to-source/status.md` — Track X retrospective (provenance → citation flow + faithfulness guard; membership-not-semantic)
 - `docs/tracks/Y-auto-link/status.md` — Track Y retrospective (note auto-link: embedding → similarity → `related_note`; on-demand + background-job trigger; note↔source extension)
+- `docs/tracks/Z-contradiction/status.md` — Track Z retrospective (contradiction detection: related pairs → LLM judge → `source_verdict`; precision-first; background-job + claim-level extensions)
 - `docs/troubleshooting/exports.md` — failure-mode diagnostics for the three export formats
