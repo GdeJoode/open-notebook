@@ -9,7 +9,7 @@ from loguru import logger
 from shared.models import ChatMessage, ChatSession, Note, Notebook
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
-from surrealdb_service.repositories.base import BaseRepository
+from surrealdb_service.repositories.base import BaseRepository, _validate_record_id
 
 
 class NotebookRepository(BaseRepository[Notebook]):
@@ -237,11 +237,22 @@ class NoteRepository(BaseRepository[Note]):
         edge set for a pair is always a single, current row carrying the latest
         ``similarity_score``.
 
-        Guards:
+        Guards (all BEFORE any interpolation):
+          * both ids are validated against the strict ``_RECORD_ID_RE`` pattern
+            (the same one ``BaseRepository.relate`` uses) — a ``;``-bearing /
+            ``REMOVE TABLE``-bearing / otherwise malformed id is REFUSED, not
+            interpolated. ``RecordID.parse`` splits only on the first colon and
+            round-trips an injection payload verbatim, so the SDK's own parsing
+            is NOT a validator; the regex is. The endpoints are then interpolated
+            as literal record ids (SurrealDB's RELATE graph syntax does not bind a
+            ``$param`` in the in/out position — a parameterized
+            ``RELATE $from->...->$to`` silently writes nothing), which is only
+            safe because every accepted id matches ``table:id`` with no SurrealQL
+            metacharacters;
+          * both ids must be in the ``note`` table (a wrong-table id is rejected
+            rather than silently mis-linked);
           * a self-edge (``from_note == to_note``) is refused — a note is not
-            "related" to itself, and the cosine ranking already excludes self;
-          * both ids are validated as ``note:<id>`` record ids (injection-safe,
-            and a wrong-table id is rejected rather than silently mis-linked).
+            "related" to itself, and the cosine ranking already excludes self.
 
         Args:
             from_note: source note record id.
@@ -250,28 +261,36 @@ class NoteRepository(BaseRepository[Note]):
             method: how the link was derived (default ``"embedding"``).
 
         Returns:
-            True on success; False if refused (self-edge / invalid id) or on a
-            DB error.
+            True on success; False if refused (invalid/unsafe id, wrong table,
+            self-edge) or on a DB error.
         """
+        # Strict-validate the RAW input strings BEFORE the SDK touches them.
+        # ``RecordID.parse`` would happily accept ``note:x; REMOVE TABLE note --``
+        # (it splits on the first colon and keeps the rest as the id, round-tripped
+        # verbatim by ``str()``), so validation must run on the raw string against
+        # ``_RECORD_ID_RE`` — which rejects every SurrealQL metacharacter.
         try:
-            from_rid = ensure_record_id(from_note)
-            to_rid = ensure_record_id(to_note)
-        except Exception as e:
-            logger.error(f"relate_note: invalid note id ({from_note}/{to_note}): {e}")
-            return False
-
-        if str(from_rid) == str(to_rid):
-            logger.warning(f"relate_note: refusing self-edge for {from_note}")
-            return False
-
-        if not (
-            str(from_rid).startswith("note:") and str(to_rid).startswith("note:")
-        ):
+            from_str = _validate_record_id(str(from_note))
+            to_str = _validate_record_id(str(to_note))
+        except ValueError as e:
             logger.error(
-                f"relate_note: both ids must be notes "
-                f"(got {from_rid} -> {to_rid})"
+                f"relate_note: refusing unsafe/invalid note id "
+                f"({from_note!r}/{to_note!r}): {e}"
             )
             return False
+
+        if not (from_str.startswith("note:") and to_str.startswith("note:")):
+            logger.error(
+                f"relate_note: both ids must be notes (got {from_str} -> {to_str})"
+            )
+            return False
+
+        if from_str == to_str:
+            logger.warning(f"relate_note: refusing self-edge for {from_str}")
+            return False
+
+        from_rid = ensure_record_id(from_str)
+        to_rid = ensure_record_id(to_str)
 
         try:
             # Clear-before-relate: drop any prior edge for this exact (in, out)
@@ -282,15 +301,13 @@ class NoteRepository(BaseRepository[Note]):
                 {"from": from_rid, "to": to_rid},
                 self.config,
             )
-            # The RELATE *endpoints* are interpolated as validated literal record
-            # ids (the proven ``BaseRepository.relate`` pattern): SurrealDB's
-            # ``RELATE`` graph syntax does not bind a ``$param`` in the in/out
-            # position the way a normal value clause does, so a parameterized
-            # ``RELATE $from->...->$to`` silently writes nothing. Both ids are
-            # already validated as ``note:<id>`` records above (injection-safe).
-            # Only the SET *values* stay parameterized.
+            # Endpoints interpolated as literal record ids (RELATE graph syntax
+            # won't bind a ``$param`` in the in/out position — see the docstring).
+            # Safe because ``from_str``/``to_str`` passed ``_RECORD_ID_RE`` above:
+            # ``table:id`` only, no SurrealQL metacharacters. Only the SET *values*
+            # stay parameterized.
             await execute_query(
-                f"RELATE {str(from_rid)}->related_note->{str(to_rid)} "
+                f"RELATE {from_str}->related_note->{to_str} "
                 "SET similarity_score = $score, method = $method",
                 {
                     "score": float(similarity_score),
@@ -301,7 +318,7 @@ class NoteRepository(BaseRepository[Note]):
             return True
         except Exception as e:
             logger.error(
-                f"relate_note: failed to relate {from_note} -> {to_note}: {e}"
+                f"relate_note: failed to relate {from_str} -> {to_str}: {e}"
             )
             return False
 

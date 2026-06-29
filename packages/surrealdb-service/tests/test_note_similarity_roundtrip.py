@@ -225,3 +225,56 @@ async def test_relate_note_rejects_non_note_id(
     assert await repo.relate_note(
         a, str(src[0]["id"]), similarity_score=0.5
     ) is False
+
+
+# ---------------------------------------------------------------------------
+# SECURITY: a SurrealQL-injection id is REFUSED — no rogue edge, no dropped
+# table. `RecordID.parse` splits on the first colon and round-trips an injection
+# payload verbatim, so a `startswith("note:")` check would pass it; the strict
+# `_RECORD_ID_RE` validator must reject it BEFORE interpolation.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_relate_note_refuses_sql_injection_id(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    repo = NoteRepository(config=live_surrealdb)
+    a = await _make_note(live_surrealdb, embedding=[1.0, 0.0])
+    b = await _make_note(live_surrealdb, embedding=[0.5, 0.5])
+
+    # A drop-table payload in BOTH the to and from positions. If interpolated,
+    # `RELATE note:x; REMOVE TABLE note; --->related_note->...` executes as
+    # multiple statements and wipes the `note` table (the reproduced blocker).
+    payload = "note:x; REMOVE TABLE note; --"
+
+    async def _note_count() -> int:
+        rows = await execute_query(
+            "SELECT count() AS c FROM note GROUP ALL;", config=live_surrealdb
+        )
+        return rows[0]["c"] if rows else 0
+
+    async def _related_count() -> int:
+        rows = await execute_query(
+            "SELECT count() AS c FROM related_note GROUP ALL;",
+            config=live_surrealdb,
+        )
+        return rows[0]["c"] if rows else 0
+
+    note_before = await _note_count()
+    related_before = await _related_count()
+    assert note_before >= 2, "setup: at least the two seeded notes must exist"
+
+    # to-position injection
+    assert await repo.relate_note(a, payload, similarity_score=0.9) is False
+    # from-position injection
+    assert await repo.relate_note(payload, b, similarity_score=0.9) is False
+
+    # The `note` table is intact (not dropped) and no rogue edge was written.
+    assert await _note_count() == note_before, (
+        "SECURITY FAIL: the `note` table row count changed — injection executed"
+    )
+    assert await _related_count() == related_before, (
+        "SECURITY FAIL: a rogue `related_note` edge was written from an unsafe id"
+    )

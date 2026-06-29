@@ -27,11 +27,18 @@
 
 3. **`NoteRepository.relate_note(from_note, to_note, *, similarity_score, method)`** —
    idempotent **clear-before-relate** (DELETE the exact `(in, out)` pair, then
-   RELATE once) — RELATE is not idempotent (W.2/W.3). Refuses a self-edge,
-   validates both ids are `note:<id>` records. The RELATE *endpoints* are
-   interpolated as validated literal record ids (the `BaseRepository.relate`
-   pattern); SurrealDB's RELATE graph syntax does **not** bind a `$param` in the
-   in/out position (a parameterized `RELATE $from->...->$to` writes nothing).
+   RELATE once) — RELATE is not idempotent (W.2/W.3). Refuses a self-edge and a
+   wrong-table id. Both endpoint ids are strict-validated against
+   `_RECORD_ID_RE` (the `BaseRepository.relate` validator) **before any
+   interpolation** — a `;`-bearing / `REMOVE TABLE`-bearing / malformed id is
+   refused, never interpolated. The RELATE *endpoints* are then interpolated as
+   these validated literal record ids; SurrealDB's RELATE graph syntax does
+   **not** bind a `$param` in the in/out position (a parameterized
+   `RELATE $from->...->$to` writes nothing), and interpolation is only safe
+   because the accepted id is `table:id` with no SurrealQL metacharacters.
+   (Note: `RecordID.parse` splits on the first colon and round-trips an
+   injection payload verbatim, so the SDK's parsing is **not** a validator — the
+   regex is.)
 
 ### Acceptance — per-criterion evidence
 
@@ -48,11 +55,12 @@ memory engine, full 1..68 migration apply):
 | 3 idempotent single edge | `test_relate_note_idempotent_single_edge` | pass |
 | 3 self-edge refused | `test_relate_note_refuses_self_edge` | pass |
 | 3 fields round-trip + non-note id rejected | `test_relate_note_fields_round_trip`, `test_relate_note_rejects_non_note_id` | pass |
+| 3 SurrealQL-injection id refused (table intact) | `test_relate_note_refuses_sql_injection_id` | pass |
 | 4 canonical note rows untouched | `test_canonical_note_rows_untouched` | pass |
 
 ```
 test_note_similarity_roundtrip.py + test_migration_68_related_note_relation.py
-  → 14 passed
+  → 15 passed
 ```
 
 Regression check: `test_migrations_roundtrip.py`, `test_repositories.py`,
@@ -69,3 +77,21 @@ Regression check: `test_migrations_roundtrip.py`, `test_repositories.py`,
 - **RecordID-vs-string in WHERE**: `WHERE in = $param` only matches when `$param`
   is a `RecordID` (via `ensure_record_id`), not a `"note:x"` string. Test helpers
   that compare edge endpoints must convert.
+- **`RecordID.parse` is NOT an injection validator**: it splits on the first
+  colon and round-trips the rest verbatim, so `note:x; REMOVE TABLE note; --`
+  parses to table `note` + that whole id, and `str()` reproduces it. Any code
+  that interpolates a record id into a query (RELATE endpoints can't be
+  parameterized) MUST strict-validate the raw string against `_RECORD_ID_RE`
+  first — `startswith("note:")` is bypassable and was a data-destroying
+  injection in the first `relate_note` cut (review attempt 1).
+
+### Review log
+- Attempt 1 → REVISIONS_NEEDED: 1 blocker — `relate_note` used
+  `startswith("note:")` (bypassable) then interpolated the id literally, a
+  data-destroying SurrealQL injection (`REMOVE TABLE note`). Fixed: both
+  endpoints strict-validated via `_validate_record_id` (`_RECORD_ID_RE`) before
+  interpolation; added `test_relate_note_refuses_sql_injection_id` (payload in
+  both positions → refused, `note`/`related_note` counts unchanged); corrected
+  the false "injection-safe" claims. Migration 68 / `find_related_by_embedding` /
+  persistence-idempotency-self-edge were verified correct in attempt 1 and are
+  unchanged.
