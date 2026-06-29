@@ -88,6 +88,57 @@ class TestRetrievalServiceHybridSearch:
         repo.text_search.assert_called_once()
 
 
+class TestRetrievalServiceProvenancePassthrough:
+    """Track X.1: the repo attaches chunk provenance; the service must surface
+    those keys verbatim (it only delegates — no stripping/reshaping).
+    """
+
+    @pytest.mark.asyncio
+    async def test_vector_search_surfaces_provenance_keys(self):
+        hit = {
+            "id": "source:s1",
+            "similarity": 0.9,
+            "chunk_id": "chunk:c1",
+            "physical_page": 7,
+            "printed_page": 8,
+            "section_path": ["Methods"],
+            "element_type": "text",
+        }
+        repo = AsyncMock()
+        repo.vector_search = AsyncMock(return_value=[hit])
+        embed_model = AsyncMock()
+        embed_model.aembed = AsyncMock(return_value=[[0.1, 0.2]])
+
+        svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
+        out = await svc.vector_search("q", limit=5)
+
+        assert out[0]["chunk_id"] == "chunk:c1"
+        assert out[0]["physical_page"] == 7
+        assert out[0]["section_path"] == ["Methods"]
+        assert out[0]["element_type"] == "text"
+
+    @pytest.mark.asyncio
+    async def test_text_search_surfaces_none_page_for_noteish_hit(self):
+        # A note hit has provenance keys present but None (page-less) — must
+        # pass through unchanged, never raising.
+        hit = {
+            "id": "note:n1",
+            "relevance": 4.0,
+            "chunk_id": None,
+            "physical_page": None,
+            "section_path": None,
+            "element_type": None,
+        }
+        repo = AsyncMock()
+        repo.text_search = AsyncMock(return_value=[hit])
+
+        svc = RetrievalService(search_repo=repo)
+        out = await svc.text_search("q")
+
+        assert out[0]["physical_page"] is None
+        assert out[0]["relevance"] == 4.0
+
+
 class TestRetrievalServiceUnifiedSearch:
     @pytest.mark.asyncio
     async def test_mode_text(self):
