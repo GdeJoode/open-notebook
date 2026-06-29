@@ -24,11 +24,22 @@ Based on the user question, the context and the retrieved results, please formul
 
 # RESULTS
 
+Each result below is prefixed with a provenance tag in the form
+`[source: <id> | p.<page> | <section>]` identifying the exact source document,
+the physical page, and the section the passage came from. Some results have no
+page (e.g. notes, insights, audio) and will show only `[source: <id>]`.
+
 {{results}}
 
 # CITING SOURCES
 
 It's very important that your response contains references to the searched documents so the user can follow-up and read more about the topic. The way you do that is by adding the id of the specific document in between brackets like this: [document_id].
+
+When a result carries a page (its provenance tag shows `p.<page>`), ground the
+claim to that exact location by citing it as `[document_id, p.<page>]` — using
+the page from the provenance tag of the result you drew the claim from. Do not
+invent or guess page numbers; only cite a page that appears in a result's
+provenance tag. For page-less results, cite `[document_id]` as before.
 
 ## EXAMPLE
 

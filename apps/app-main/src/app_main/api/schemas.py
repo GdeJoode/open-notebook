@@ -143,6 +143,14 @@ class AskRequest(BaseModel):
 class AskResponse(BaseModel):
     answer: str = Field(..., description="Final answer from the knowledge base")
     question: str = Field(..., description="Original question")
+    citations: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "Structured source citations derived from the retrieval context "
+            "(Track X.2): [{source, page, chunk_id, section}]. Additive — may "
+            "be empty when no provenance is available."
+        ),
+    )
 
 
 # Models API schemas
