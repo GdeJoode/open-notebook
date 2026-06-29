@@ -1,8 +1,9 @@
-"""Endpoint tests for POST /notes/{id}/auto-link (Track Y.2).
+"""Endpoint tests for POST /notes/{id}/auto-link (Track Y.2 + NS.2).
 
 Drives the route with overridden DI so no DB/embedding model is needed. Proves:
 
 * happy path: the endpoint drives the service and returns the summary;
+* NS.2: the SAME call/endpoint now also reports the note→source link counts;
 * the no-embedding case returns a clean 200 with status=needs_embedding (the
   route embeds-first via the service; here the service reports it couldn't) —
   never a 500;
@@ -77,6 +78,43 @@ def test_auto_link_happy_path_returns_summary():
     auto_svc.auto_link.assert_awaited_once()
     _, kwargs = auto_svc.auto_link.await_args
     assert kwargs["k"] == 5 and kwargs["min_similarity"] == 0.75
+
+
+def test_auto_link_summary_includes_source_counts():
+    """NS.2: the same endpoint, same call, now also reports the note→source link
+    counts (source_* counters + linked_source_ids) — no new endpoint."""
+    note_svc = AsyncMock()
+    note_svc.get.return_value = _existing_note()
+
+    auto_svc = AsyncMock()
+    auto_svc.auto_link.return_value = AutoLinkResult(
+        note_id="note:q",
+        status="linked",
+        created=1,
+        below_threshold=0,
+        candidates_considered=1,
+        source_links_created=2,
+        source_below_threshold=1,
+        source_candidates_considered=3,
+        embedded=False,
+        min_similarity=0.75,
+        k=5,
+        linked_note_ids=["note:a"],
+        linked_source_ids=["source:x", "source:y"],
+    )
+
+    client = _make_app(note_service=note_svc, auto_link_service=auto_svc)
+    resp = client.post("/api/notes/note:q/auto-link")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # Both link types in one response.
+    assert data["created"] == 1
+    assert data["source_links_created"] == 2
+    assert data["source_below_threshold"] == 1
+    assert data["source_candidates_considered"] == 3
+    assert data["linked_note_ids"] == ["note:a"]
+    assert data["linked_source_ids"] == ["source:x", "source:y"]
 
 
 def test_auto_link_forwards_query_params():

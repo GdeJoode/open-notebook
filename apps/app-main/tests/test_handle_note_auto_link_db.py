@@ -1,4 +1,8 @@
-"""Track Y.3 — DB-backed: the NOTE_AUTO_LINK job actually links a new note.
+"""Track Y.3 + NS.2 — DB-backed: the NOTE_AUTO_LINK job actually links a new note.
+
+NS.2 confirms the same job path now ALSO writes note→source ``note_about`` edges
+(the job just calls the orchestrator, so the source pass carries through with no
+job-layer change).
 
 The unit tests (``test_handle_note_auto_link``) prove the handler drives the
 orchestrator with mocks. This file closes AC1 end-to-end: the JOB PATH — the
@@ -62,6 +66,35 @@ async def _edge_count(config: SurrealDBConfig, from_id: str) -> int:
     return rows[0]["c"] if rows else 0
 
 
+async def _make_source(
+    config: SurrealDBConfig, *, embedding: list[float], title: str | None = None
+) -> str:
+    rows = await execute_query(
+        "CREATE source SET title = $t, embedding = $e RETURN AFTER;",
+        {"t": title or _u("src"), "e": embedding},
+        config=config,
+    )
+    return str(rows[0]["id"])
+
+
+async def _source_targets(config: SurrealDBConfig, from_id: str) -> set[str]:
+    rows = await execute_query(
+        "SELECT out FROM note_about WHERE in = $f;",
+        {"f": ensure_record_id(from_id)},
+        config=config,
+    )
+    return {str(r["out"]) for r in rows}
+
+
+async def _source_edge_count(config: SurrealDBConfig, from_id: str) -> int:
+    rows = await execute_query(
+        "SELECT count() AS c FROM note_about WHERE in = $f GROUP ALL;",
+        {"f": ensure_record_id(from_id)},
+        config=config,
+    )
+    return rows[0]["c"] if rows else 0
+
+
 def _real_service(config: SurrealDBConfig) -> NoteAutoLinkService:
     """A real orchestrator over the live DB; the embed step is a stub (the seeded
     notes already carry embeddings, so embed_note is never reached)."""
@@ -114,6 +147,72 @@ async def test_job_is_idempotent_on_rerun(live_surrealdb: SurrealDBConfig) -> No
 
     assert targets_1 == targets_2
     assert count_1 == count_2, "re-run duplicated edge rows (RELATE not idempotent)"
+
+
+async def test_job_links_both_notes_and_sources(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """NS.2: the JOB PATH (the after-embed trigger) writes BOTH related_note and
+    note_about edges for a freshly-embedded note — confirming the job carries the
+    source pass automatically (it just calls the orchestrator)."""
+    cfg = live_surrealdb
+    q = await _make_note(cfg, embedding=[1.0, 0.0, 0.0])
+    near_note = await _make_note(cfg, embedding=[0.99, 0.01, 0.0])  # ~1.0
+    far_note = await _make_note(cfg, embedding=[0.0, 1.0, 0.0])  # ~0.0
+    near_src = await _make_source(cfg, embedding=[0.98, 0.02, 0.0])  # ~1.0
+    far_src = await _make_source(cfg, embedding=[0.0, 1.0, 0.0])  # ~0.0
+
+    service = _real_service(cfg)
+    with patch(
+        "app_main.dependencies.get_note_auto_link_service",
+        new=AsyncMock(return_value=service),
+    ):
+        result = await handlers.handle_note_auto_link(
+            {"note_id": q, "k": 10, "min_similarity": 0.9}
+        )
+
+    assert result["success"] is True
+    assert result["status"] == "linked"
+    # The job result flattens BOTH counter families.
+    assert result["created"] >= 1
+    assert result["source_links_created"] >= 1
+
+    note_targets = await _targets(cfg, q)
+    assert near_note in note_targets and far_note not in note_targets
+
+    src_targets = await _source_targets(cfg, q)
+    assert near_src in src_targets, "the job did not link the similar source"
+    assert far_src not in src_targets, "below-threshold source must not link"
+
+
+async def test_job_source_links_are_idempotent_on_rerun(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """NS.2: re-running the job yields the identical note_about edge set."""
+    cfg = live_surrealdb
+    q = await _make_note(cfg, embedding=[1.0, 0.0, 0.0])
+    await _make_source(cfg, embedding=[0.97, 0.03, 0.0])
+    await _make_source(cfg, embedding=[0.96, 0.04, 0.0])
+
+    service = _real_service(cfg)
+    payload = {"note_id": q, "k": 10, "min_similarity": 0.8}
+    with patch(
+        "app_main.dependencies.get_note_auto_link_service",
+        new=AsyncMock(return_value=service),
+    ):
+        await handlers.handle_note_auto_link(payload)
+        targets_1, count_1 = (
+            await _source_targets(cfg, q),
+            await _source_edge_count(cfg, q),
+        )
+        await handlers.handle_note_auto_link(payload)
+        targets_2, count_2 = (
+            await _source_targets(cfg, q),
+            await _source_edge_count(cfg, q),
+        )
+
+    assert targets_1 == targets_2
+    assert count_1 == count_2, "re-run duplicated note_about rows"
 
 
 async def test_job_failure_leaves_note_and_edges_intact(
