@@ -1,5 +1,5 @@
 import asyncio
-from typing import Annotated, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from ai_prompter import Prompter
 from langchain_core.messages import SystemMessage
@@ -13,9 +13,16 @@ from shared.models import Source
 from shared.models.source import SourceInsight
 from app_main.config import LANGGRAPH_CHECKPOINT_FILE
 from app_main.dependencies import get_context_service
+from app_main.graphs.citations import citations_from_hits, format_citation_tag
 from app_main.graphs.utils import provision_langchain_model
 
 MODEL_INVOKE_TIMEOUT = 300  # seconds
+
+# Cap the number of chunk blocks injected into the single-source prompt so a
+# long document does not blow the context window. Source-level full_text is
+# still available as a fallback when there are no chunks.
+MAX_CHUNK_BLOCKS = 40
+MAX_CHUNK_TOKENS = 40000
 
 
 class SourceChatState(TypedDict):
@@ -26,6 +33,9 @@ class SourceChatState(TypedDict):
     context: Optional[str]
     model_override: Optional[str]
     context_indicators: Optional[Dict[str, List[str]]]
+    # Chunk-level source citations ({source, page, chunk_id, section}) derived
+    # from the chunk context fed to the model (Track X.2). Additive.
+    citations: Optional[List[Dict[str, Any]]]
 
 
 async def call_model_with_source_context(
@@ -41,6 +51,14 @@ async def call_model_with_source_context(
         include_insights=True,
         include_notes=False,
         max_tokens=50000,
+    )
+    # Chunk-level context with page/section provenance (Track X.2). Empty when
+    # the source has no chunks (audio/plain text) — the prompt then falls back
+    # to source-level full_text, and citations stay source-level.
+    chunk_context = await svc.build_source_chunks(
+        source_id=source_id,
+        max_chunks=MAX_CHUNK_BLOCKS,
+        max_tokens=MAX_CHUNK_TOKENS,
     )
 
     source = None
@@ -66,7 +84,20 @@ async def call_model_with_source_context(
             insights.append(insight)
             context_indicators["insights"].append(insight.id)
 
-    formatted_context = _format_source_context(context_data)
+    formatted_context = _format_source_context(context_data, chunk_context)
+
+    # Citation set = provenance of the chunk context fed to the model
+    # (chunk-level when chunks exist; otherwise the source-level fallback so the
+    # answer still cites the source). Deterministic; X.3 adds the membership
+    # guard.
+    if chunk_context:
+        citations = citations_from_hits(chunk_context)
+    elif source is not None:
+        citations = citations_from_hits(
+            [{"source": source.id, "physical_page": None}]
+        )
+    else:
+        citations = []
 
     prompt_data = {
         "source": source.model_dump() if source else None,
@@ -96,11 +127,38 @@ async def call_model_with_source_context(
         "insights": insights,
         "context": formatted_context,
         "context_indicators": context_indicators,
+        "citations": citations,
     }
 
 
-def _format_source_context(context_data: Dict) -> str:
+def _format_chunk_context(chunk_context: List[Dict[str, Any]]) -> str:
+    """Render chunk-level context blocks, each prefixed with a provenance tag
+    ``[source: <id> | p.<page> | <section>]`` (Track X.2) so the model can cite
+    the exact page/section. Returns ``""`` when there are no chunks."""
+    if not chunk_context:
+        return ""
+    parts = ["## SOURCE PASSAGES (page-cited)"]
+    for chunk in chunk_context:
+        tag = format_citation_tag(chunk)
+        if tag:
+            parts.append(tag)
+        text = chunk.get("text") or ""
+        parts.append(text)
+        parts.append("")
+    return "\n".join(parts)
+
+
+def _format_source_context(
+    context_data: Dict,
+    chunk_context: Optional[List[Dict[str, Any]]] = None,
+) -> str:
     context_parts = []
+
+    # Prefer chunk-level, page-cited passages when available; the source-level
+    # full_text below remains as a fallback/overview.
+    chunk_block = _format_chunk_context(chunk_context or [])
+    if chunk_block:
+        context_parts.append(chunk_block)
 
     if context_data.get("sources"):
         context_parts.append("## SOURCE CONTENT")

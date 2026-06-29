@@ -137,7 +137,12 @@ async def stream_ask_response(
 
             elif "write_final_answer" in chunk:
                 final_answer = chunk["write_final_answer"]["final_answer"]
-                final_data = {"type": "final_answer", "content": final_answer}
+                citations = chunk["write_final_answer"].get("citations", [])
+                final_data = {
+                    "type": "final_answer",
+                    "content": final_answer,
+                    "citations": citations,
+                }
                 yield f"data: {json.dumps(final_data)}\n\n"
 
         completion_data = {"type": "complete", "final_answer": final_answer}
@@ -242,6 +247,7 @@ async def ask_knowledge_base_simple(
             )
 
         final_answer = None
+        citations: list = []
         async for chunk in ask_graph.astream(
             input=dict(question=ask_request.question),
             config=dict(
@@ -255,11 +261,16 @@ async def ask_knowledge_base_simple(
         ):
             if "write_final_answer" in chunk:
                 final_answer = chunk["write_final_answer"]["final_answer"]
+                citations = chunk["write_final_answer"].get("citations", [])
 
         if not final_answer:
             raise HTTPException(status_code=500, detail="No answer generated")
 
-        return AskResponse(answer=final_answer, question=ask_request.question)
+        return AskResponse(
+            answer=final_answer,
+            question=ask_request.question,
+            citations=citations,
+        )
 
     except HTTPException:
         raise

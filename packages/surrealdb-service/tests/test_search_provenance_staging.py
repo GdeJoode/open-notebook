@@ -75,7 +75,11 @@ async def test_vector_hit_carries_real_chunk_page_and_section():
     query_embedding = seed[0]["embedding"]
 
     repo = SearchRepository(config=cfg)
-    hits = await repo.vector_search(query_embedding, results=10, minimum_score=0.2)
+    # Hydration is opt-in as of Track X.2 (the generic /search default is off);
+    # the answer-citation path passes hydrate=True, which we exercise here.
+    hits = await repo.vector_search(
+        query_embedding, results=10, minimum_score=0.2, hydrate=True
+    )
 
     assert hits, "expected at least one vector hit on staging"
 

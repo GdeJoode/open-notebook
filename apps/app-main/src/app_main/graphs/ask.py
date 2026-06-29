@@ -11,6 +11,11 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from surrealdb_service.repositories import SearchRepository
+from app_main.graphs.citations import (
+    citations_from_hits,
+    format_citation_tag,
+    merge_citations,
+)
 from app_main.graphs.utils import provision_langchain_model
 from shared.utils.text import clean_thinking_content
 
@@ -45,7 +50,11 @@ class ThreadState(TypedDict):
     question: str
     strategy: Strategy
     answers: Annotated[list, operator.add]
+    # Per-sub-answer citation lists, accumulated across the fan-out branches
+    # (Track X.2). Merged/de-duplicated into ``citations`` by the final node.
+    citation_groups: Annotated[list, operator.add]
     final_answer: str
+    citations: list
 
 
 async def call_model_with_messages(state: ThreadState, config: RunnableConfig) -> dict:
@@ -86,13 +95,31 @@ async def trigger_queries(state: ThreadState, config: RunnableConfig):
     ]
 
 
+def _format_results_with_provenance(results: list) -> str:
+    """Render retrieval hits as prompt blocks, each prefixed with a provenance
+    tag ``[source: <id> | p.<page> | <section>]`` (Track X.2).
+
+    The tag lets the answering model attribute each claim to the exact
+    source/page/section. Page-less hits (insights/notes/plain text) still carry
+    a ``[source: ...]`` tag. The full hit dict is included after the tag so the
+    existing answer behaviour (which consumed the raw ``results``) is preserved.
+    """
+    blocks = []
+    for hit in results:
+        tag = format_citation_tag(hit)
+        prefix = f"{tag}\n" if tag else ""
+        blocks.append(f"{prefix}{hit}")
+    return "\n\n".join(blocks)
+
+
 async def provide_answer(state: SubGraphState, config: RunnableConfig) -> dict:
-    payload = state
+    payload = dict(state)
     from retrieval.service import RetrievalService
 
     retrieval_svc = RetrievalService(SearchRepository())
     # Try vector search (embeds the query text); falls back to text search
-    # if no embedding model is configured
+    # if no embedding model is configured. Opt into provenance hydration
+    # (Track X.2) so each hit carries its chunk page/section for citation.
     try:
         from app_main.dependencies import get_embedding_service
 
@@ -100,14 +127,17 @@ async def provide_answer(state: SubGraphState, config: RunnableConfig) -> dict:
         retrieval_svc = RetrievalService(
             SearchRepository(), embedding_model=embed_svc.embedding_model
         )
-        results = await retrieval_svc.vector_search(state["term"], 10)
+        results = await retrieval_svc.vector_search(state["term"], 10, hydrate=True)
     except Exception:
-        results = await retrieval_svc.text_search(state["term"], 10)
+        results = await retrieval_svc.text_search(state["term"], 10, hydrate=True)
     if len(results) == 0:
-        return {"answers": []}
-    payload["results"] = results
+        return {"answers": [], "citation_groups": []}
+    payload["results"] = _format_results_with_provenance(results)
     ids = [r["id"] for r in results]
     payload["ids"] = ids
+    # Deterministic citation set = provenance of the context hits fed to the
+    # LLM (Track X.2; X.3 adds the membership/faithfulness guard).
+    citations = citations_from_hits(results)
     system_prompt = Prompter(prompt_template="ask/query_process").render(data=payload)
     model = await provision_langchain_model(
         system_prompt,
@@ -119,7 +149,10 @@ async def provide_answer(state: SubGraphState, config: RunnableConfig) -> dict:
         model.ainvoke(system_prompt), timeout=MODEL_INVOKE_TIMEOUT
     )
     ai_content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
-    return {"answers": [clean_thinking_content(ai_content)]}
+    return {
+        "answers": [clean_thinking_content(ai_content)],
+        "citation_groups": [citations],
+    }
 
 
 async def write_final_answer(state: ThreadState, config: RunnableConfig) -> dict:
@@ -134,7 +167,14 @@ async def write_final_answer(state: ThreadState, config: RunnableConfig) -> dict
         model.ainvoke(system_prompt), timeout=MODEL_INVOKE_TIMEOUT
     )
     final_content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
-    return {"final_answer": clean_thinking_content(final_content)}
+    # Emit the merged, de-duplicated citation set across all sub-answers
+    # (Track X.2). Additive — consumers that ignore ``citations`` are
+    # unaffected; the answer text is produced exactly as before.
+    citations = merge_citations(state.get("citation_groups", []))
+    return {
+        "final_answer": clean_thinking_content(final_content),
+        "citations": citations,
+    }
 
 
 agent_state = StateGraph(ThreadState)
