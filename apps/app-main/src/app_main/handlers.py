@@ -47,6 +47,44 @@ async def _set_processing_stage(source_id: str, stage: str) -> None:
         )
 
 
+async def _refresh_source_mentions(source_id: str) -> None:
+    """Best-effort source-scoped ``mentions`` refresh + stage -> graphed/complete.
+
+    Track PL.3. Called after a successful entity extraction: refresh the
+    document↔entity graph for THIS source (the cheap, no-LLM projection — see
+    ``MentionsProjectionService.refresh_source``), then advance the per-source
+    stage ``graphed`` -> ``complete`` (the KG chain is done).
+
+    Best-effort by design: the entities are already persisted, so a graph-refresh
+    hiccup must NOT fail extraction. On failure we log and leave the stage at
+    ``extracted`` (resumable: a re-extract or a global regenerate recovers the
+    graph). ``complete`` is set right after ``graphed`` — INSIGHTS is a PARALLEL
+    best-effort enrichment off EMBED (see ``_handle_embed_source``) and does NOT
+    gate ``complete``; the KG chain (embed -> extract -> graph) is the spine.
+    """
+    try:
+        from app_main.dependencies import get_mentions_projection_service
+
+        service = get_mentions_projection_service()
+        result = await service.refresh_source(source_id)
+        logger.info(
+            f"PL.3 mentions refreshed for source {source_id}: "
+            f"cleared={result.cleared} created={result.created} "
+            f"failed={result.failed}"
+        )
+    except Exception as graph_err:  # noqa: BLE001 — graph refresh is best-effort
+        logger.error(
+            f"Failed to refresh mentions for source {source_id} (extraction "
+            f"succeeded; stage stays 'extracted', a re-run / regenerate "
+            f"recovers): {graph_err}"
+        )
+        return
+
+    # The graph materialized -> graphed, then complete (KG chain done).
+    await _set_processing_stage(source_id, "graphed")
+    await _set_processing_stage(source_id, "complete")
+
+
 # ---------------------------------------------------------------------------
 # Payload schemas for validation
 # ---------------------------------------------------------------------------
@@ -344,6 +382,16 @@ async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
         # PL.2: extraction (incl. best-effort triage) succeeded -> extracted.
         await _set_processing_stage(validated.source_id, "extracted")
 
+        # PL.3: the KG chain's final link — refresh the document↔entity graph for
+        # THIS source now that its entities are persisted. Before PL.3 the
+        # ``mentions`` graph stayed empty until a manual global regenerate; we
+        # close that here with a source-SCOPED, cheap (no-LLM) projection refresh
+        # inline-after-extract (mentions is a pure projection, not worth a job).
+        # Best-effort: a refresh failure must NOT fail the (already-persisted)
+        # extraction — it logs and the stage simply does not advance past
+        # ``extracted`` (the operator / a re-run / a global regenerate recovers).
+        await _refresh_source_mentions(validated.source_id)
+
         processing_time = time.time() - start_time
         logger.info(
             f"Entity extraction completed for source {validated.source_id} "
@@ -424,39 +472,64 @@ async def _handle_embed_source(payload: Dict[str, Any]) -> Dict[str, Any]:
     # PL.2: the per-chunk + aggregate embed is done -> stage = embedded.
     await _set_processing_stage(source_id, "embedded")
 
+    # PL.3 (folded PL.2 minor): only chain downstream stages when the embed
+    # actually produced chunk vectors. A zero-chunk source (empty/failed parse,
+    # no embeddable text) has no graph to build and nothing to summarize, so
+    # enqueuing extract/insights would just spawn no-op jobs. Mirror the
+    # DOCUMENT_PARSE -> embed guard (``chunk_count > 0`` at handle_process_source)
+    # using the orchestrator's ``embedded_chunks`` count.
+    embedded_chunks = int(result.get("embedded_chunks", 0) or 0)
+
     # PL.2: chain entity extraction off a successful SOURCE embed. This is the
     # foundational auto-chain link — before it, the KG never built without a
     # manual ``POST /sources/{id}/run-entities``. We mirror the
     # DOCUMENT_PARSE -> embed chaining exactly: best-effort enqueue of the
     # existing, internally-coherent ``run_entities`` chain
     # (ENTITY_EXTRACT -> run_extraction -> embed entities -> filter -> persist
-    # typing/relations -> triage). The auto-enqueued extract honours the
-    # schema-review gate the same way the manual path does: the handler raises
-    # SchemaReviewPendingError and the worker parks the job as
+    # typing/relations -> triage -> PL.3 mentions refresh). The auto-enqueued
+    # extract honours the schema-review gate the same way the manual path does:
+    # the handler raises SchemaReviewPendingError and the worker parks the job as
     # PAUSED_FOR_REVIEW (see handle_entity_extract), setting the source stage to
     # awaiting_schema_review — no entities written, no crash. A queue hiccup here
     # must NOT fail the (already-persisted) embed; run-entities or a re-embed can
     # recover. SOURCES ONLY — the note path is _handle_embed_single_item, which
     # chains NOTE_AUTO_LINK, not extraction.
     extract_command_id: Optional[str] = None
-    try:
-        from app_main.services.command_service import CommandService
+    if embedded_chunks > 0:
+        try:
+            from app_main.services.command_service import CommandService
 
-        extract_command_id = await CommandService.submit_command_job(
-            "open_notebook",
-            "run_entities",
-            {"source_id": source_id},
-        )
+            extract_command_id = await CommandService.submit_command_job(
+                "open_notebook",
+                "run_entities",
+                {"source_id": source_id},
+            )
+            logger.info(
+                f"Auto-enqueued run_entities job {extract_command_id} for "
+                f"source {source_id}"
+            )
+        except Exception as extract_err:  # noqa: BLE001 — never fail the embed
+            logger.error(
+                f"Failed to auto-enqueue entity extraction for source "
+                f"{source_id} (embedding succeeded; run-entities can recover): "
+                f"{extract_err}"
+            )
+    else:
         logger.info(
-            f"Auto-enqueued run_entities job {extract_command_id} for "
-            f"source {source_id}"
+            f"Skipping entity-extraction chain for source {source_id}: "
+            f"0 embedded chunks (nothing to graph)"
         )
-    except Exception as extract_err:  # noqa: BLE001 — never fail the embed
-        logger.error(
-            f"Failed to auto-enqueue entity extraction for source "
-            f"{source_id} (embedding succeeded; run-entities can recover): "
-            f"{extract_err}"
-        )
+
+    # PL.3: chain INSIGHTS (the LLM-cost transformation graph) off the same
+    # successful embed, PARALLEL to extraction (it does not gate the KG chain or
+    # ``processing_stage``). Gated by the per-notebook ``auto_insights`` toggle
+    # (default ON) — insights are LLM-cost, so a notebook can opt out while still
+    # getting the (free) graph. Same chunk-count guard + best-effort posture as
+    # the extract chain: a no-chunk source / a queue hiccup / a toggle-read error
+    # must not fail the embed.
+    insight_command_id: Optional[str] = None
+    if embedded_chunks > 0:
+        insight_command_id = await _maybe_chain_insights(source_id)
 
     processing_time = time.time() - start_time
     logger.info(
@@ -466,8 +539,61 @@ async def _handle_embed_source(payload: Dict[str, Any]) -> Dict[str, Any]:
         "success": True,
         **result,
         "extract_command_id": extract_command_id,
+        "insight_command_id": insight_command_id,
         "processing_time": processing_time,
     }
+
+
+async def _maybe_chain_insights(source_id: str) -> Optional[str]:
+    """Best-effort, toggle-gated INSIGHTS enqueue after a source embed (PL.3).
+
+    Resolves the source's owning notebook and reads its ``auto_insights`` toggle
+    (default ON). When ON, enqueues ``run_summaries`` (the ``INSIGHT_EXTRACT``
+    job producing ``source_insight`` rows); when OFF, skips. Best-effort: a
+    toggle-read error defaults to ON (run insights), and a queue hiccup logs and
+    returns ``None`` — neither fails the already-persisted embed. INSIGHTS is a
+    parallel enrichment: it does NOT touch ``processing_stage``.
+
+    Returns the enqueued command id, or ``None`` when skipped/failed.
+    """
+    try:
+        from app_main.dependencies import get_notebook_repo, get_source_repo
+
+        notebook_id = await get_source_repo().get_notebook_id(source_id)
+        if notebook_id is not None:
+            enabled = await get_notebook_repo().get_auto_insights(notebook_id)
+            if not enabled:
+                logger.info(
+                    f"Skipping auto-insights for source {source_id}: notebook "
+                    f"{notebook_id} has auto_insights=off"
+                )
+                return None
+        # notebook_id None (unlinked source) -> default ON, run insights.
+    except Exception as toggle_err:  # noqa: BLE001 — toggle read defaults ON
+        logger.warning(
+            f"Could not resolve auto_insights toggle for source {source_id} "
+            f"(defaulting ON): {toggle_err}"
+        )
+
+    try:
+        from app_main.services.command_service import CommandService
+
+        insight_command_id = await CommandService.submit_command_job(
+            "open_notebook",
+            "run_summaries",
+            {"source_id": source_id},
+        )
+        logger.info(
+            f"Auto-enqueued run_summaries job {insight_command_id} for "
+            f"source {source_id}"
+        )
+        return insight_command_id
+    except Exception as insight_err:  # noqa: BLE001 — never fail the embed
+        logger.error(
+            f"Failed to auto-enqueue insights for source {source_id} "
+            f"(embedding succeeded; run-summaries can recover): {insight_err}"
+        )
+        return None
 
 
 async def _handle_embed_single_item(payload: Dict[str, Any]) -> Dict[str, Any]:
