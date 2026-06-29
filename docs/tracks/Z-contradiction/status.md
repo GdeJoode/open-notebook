@@ -64,6 +64,13 @@ RELATE still works).
 - `test_migrations_roundtrip.py` (up/down all migrations incl. 69) → **19 passed**.
 - No regression: `test_migration_68_related_note_relation.py` +
   `test_note_similarity_roundtrip.py` → **15 passed**.
+  - NOTE: this "no regression" was a targeted-subset run. The FULL
+    `packages/surrealdb-service` suite was red at the time due to a pre-existing
+    Y.1 test-isolation flake in
+    `test_note_similarity_roundtrip.py::test_find_related_ranks_by_cosine_and_excludes_self`
+    (session-scoped fixture, no per-test cleanup → notes from other suites
+    evicted the seeded notes from top-k). Not introduced by Track Z; fixed on
+    `fix/relate-cites-injection` (5-dim isolation subspace). Full suite now green.
 
 ### Warnings
 - mypy on `repositories/source.py`: 2 pre-existing errors (`shared.models`
