@@ -628,6 +628,10 @@ class SourceResponse(BaseModel):
     # Track J.3/J.5: per-document privacy override. True forces the document's
     # LLM stages local (sticky). Surfaced as a read-only "Private" badge.
     private: bool = False
+    # Track PL.4: the per-source pipeline stage (ingested | embedded | extracted
+    # | awaiting_schema_review | graphed | complete | failed) so the UI can show
+    # per-document progress. Defaults "ingested" (migration 71 backfill).
+    processing_stage: str = "ingested"
 
 
 class SourceListResponse(BaseModel):

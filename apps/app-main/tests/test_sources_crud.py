@@ -21,7 +21,7 @@ from app_main.dependencies import get_source_service
 SOURCE_ID = "source:dndibxmjveoxk7tfqfsl"
 
 
-def _fake_source():
+def _fake_source(processing_stage="complete"):
     """A minimal Source-like object covering the fields ``get_source`` reads."""
     return SimpleNamespace(
         id=SOURCE_ID,
@@ -33,6 +33,7 @@ def _fake_source():
         updated="2026-01-02T00:00:00Z",
         command=None,
         private=False,
+        processing_stage=processing_stage,
     )
 
 
@@ -132,3 +133,43 @@ class TestGetSourceEntityCount:
 
         assert resp.status_code == 200
         assert resp.json()["entity_count"] == 0
+
+
+@pytest.mark.usefixtures("monkeypatch")
+class TestGetSourceProcessingStage:
+    """PL.4 AC2: ``GET /sources/{id}`` surfaces the per-source pipeline stage."""
+
+    def test_processing_stage_returned(self, monkeypatch):
+        """The source's ``processing_stage`` is echoed in the detail response so
+        the UI can show per-document progress."""
+        svc = AsyncMock()
+        svc.get.return_value = _fake_source(processing_stage="graphed")
+        svc.get_embedding_count.return_value = 5
+        _patch_execute_query(
+            monkeypatch, entity_count=3, extraction_rows=[]
+        )
+        client = _make_app(svc)
+
+        resp = client.get(f"/api/sources/{SOURCE_ID}")
+
+        assert resp.status_code == 200
+        assert resp.json()["processing_stage"] == "graphed"
+
+    def test_processing_stage_defaults_ingested(self, monkeypatch):
+        """A source object without the field (legacy/None) falls back to
+        ``ingested`` rather than erroring."""
+        svc = AsyncMock()
+        src = _fake_source()
+        # Simulate a source row whose stage is unset (None).
+        src.processing_stage = None
+        svc.get.return_value = src
+        svc.get_embedding_count.return_value = 0
+        _patch_execute_query(
+            monkeypatch, entity_count=None, extraction_rows=[]
+        )
+        client = _make_app(svc)
+
+        resp = client.get(f"/api/sources/{SOURCE_ID}")
+
+        assert resp.status_code == 200
+        assert resp.json()["processing_stage"] == "ingested"
