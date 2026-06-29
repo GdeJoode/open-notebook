@@ -92,6 +92,14 @@ class EmbeddingService:
             source = await self.source_repo.get(source_id)
             if not source or not source.full_text:
                 logger.warning(f"No text or chunks for source {source_id}")
+                # The per-chunk rows were just deleted (idempotent re-embed) and
+                # there is nothing to re-embed, so clear any stale aggregate too
+                # rather than leaving it pointing at vectors that no longer exist.
+                from embeddings.aggregate import populate_source_embedding
+
+                await populate_source_embedding(
+                    source_id, source_repo=self.source_repo
+                )
                 return result
 
             text_chunks = split_text(
@@ -102,6 +110,17 @@ class EmbeddingService:
             result.chunks_used = len(text_chunks)
             embeddings = await self._embed_text_chunks(source_id, text_chunks)
             result.embeddings_created = len(embeddings)
+
+        # Write the source-level aggregate (mean-pool of the per-chunk vectors)
+        # right after the per-chunk rows exist. Without this, a freshly-embedded
+        # source has a NULL ``source.embedding`` and is invisible to "Verwante",
+        # the document-graph relatedness, and contradiction candidates — all of
+        # which read the aggregate, not the per-chunk vectors. Idempotent +
+        # graceful: it recomputes from the current chunk vectors and writes NONE
+        # when there are none. Imported lazily to avoid a module-load cycle.
+        from embeddings.aggregate import populate_source_embedding
+
+        await populate_source_embedding(source_id, source_repo=self.source_repo)
 
         logger.info(
             f"Embedded source {source_id}: {result.embeddings_created} embeddings "

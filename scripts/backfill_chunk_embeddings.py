@@ -57,9 +57,15 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-from shared.utils.vectors import mean_pool
+
+# ``populate_source_embedding`` lives in the embeddings pipeline (the reusable,
+# non-script home shared with the live ``EmbeddingService.embed_source`` step);
+# re-exported here so the script's CLI + tests keep referencing it unchanged.
+from embeddings.aggregate import populate_source_embedding
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.source import SourceRepository
+
+__all__ = ["populate_source_embedding"]
 
 
 async def list_sources_missing_chunk_embeddings() -> List[str]:
@@ -133,33 +139,6 @@ async def count_missing_chunks(source_ids: List[str]) -> int:
         embedded = await repo.get_embedding_count(sid)
         total += max(0, non_empty - embedded)
     return total
-
-
-async def populate_source_embedding(
-    source_id: str, source_repo: Optional[SourceRepository] = None
-) -> Optional[int]:
-    """Mean-pool a source's chunk vectors into ``source.embedding`` (R.0).
-
-    Reusable by the live orchestrator. Reads the source's per-chunk vectors from
-    ``source_embedding``, mean-pools them, and writes the aggregate onto
-    ``source.embedding`` (migration 63). A source with no chunk vectors gets
-    ``NONE`` written (graceful empty), returning ``None``.
-
-    Returns the aggregate vector's dimension on success, or ``None`` when there
-    was nothing to pool.
-    """
-    repo = source_repo or SourceRepository()
-    vectors = await repo.get_embedding_vectors(source_id)
-    aggregate = mean_pool(vectors)
-    await repo.set_aggregate_embedding(source_id, aggregate)
-    if aggregate is None:
-        logger.info(f"source {source_id}: no chunk vectors -> aggregate=NONE")
-        return None
-    logger.info(
-        f"source {source_id}: aggregate embedding set "
-        f"(pooled {len(vectors)} chunk vectors, dim={len(aggregate)})"
-    )
-    return len(aggregate)
 
 
 async def populate_all_source_embeddings(
