@@ -183,13 +183,19 @@ async def auto_link_note(
     note_service: NoteService = Depends(get_note_service),
     auto_link_service: NoteAutoLinkService = Depends(get_note_auto_link_service),
 ):
-    """Auto-link a note to its most-related notes by embedding similarity (Y.2).
+    """Auto-link a note to its most-related notes AND sources by embedding
+    similarity (Y.2 + NS.2).
 
-    Ensures the note has an embedding (embeds it if not), ranks other notes by
-    cosine, and writes idempotent ``related_note`` edges for those at/above
-    ``min_similarity`` (top-``k``). Re-running is a no-op for already-linked
-    pairs (clear-before-relate). Returns a summary; never a 500 for the ordinary
-    no-content / not-found cases.
+    Ensures the note has an embedding (embeds it if not), then runs two passes
+    over that one embedding: it ranks other **notes** by cosine and writes
+    idempotent ``related_note`` edges, and ranks **sources** by cosine and
+    writes idempotent ``note_about`` edges — both for candidates at/above
+    ``min_similarity`` (top-``k`` per pass). Re-running is a no-op for
+    already-linked pairs (clear-before-relate). The summary carries two distinct
+    counter families (``created``/``skipped_existing``/... for notes,
+    ``source_links_created``/``source_skipped_existing``/... for sources) so the
+    two link types never conflate. Never a 500 for the ordinary no-content /
+    not-found cases.
 
     Validation happens at the boundary: the note id is strict-validated, and
     ``k`` / ``min_similarity`` are bounded by ``Query`` constraints — a bad value

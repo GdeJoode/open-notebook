@@ -481,13 +481,17 @@ async def _handle_rebuild_embeddings(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @registry.register(JobType.NOTE_AUTO_LINK)
 async def handle_note_auto_link(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Background auto-link handler for ``JobType.NOTE_AUTO_LINK`` (Track Y.3).
+    """Background auto-link handler for ``JobType.NOTE_AUTO_LINK`` (Track Y.3 +
+    NS.2).
 
-    Runs the Y.2 orchestrator (``NoteAutoLinkService.auto_link``) for a note
-    that already has an embedding (this job is chained off a successful embed,
-    see ``_handle_embed_single_item``). It ranks the note's most-related notes
-    by cosine and writes idempotent ``related_note`` edges above the
-    conservative threshold.
+    Runs the orchestrator (``NoteAutoLinkService.auto_link``) for a note that
+    already has an embedding (this job is chained off a successful embed, see
+    ``_handle_embed_single_item``). Over that one embedding it runs two passes:
+    it ranks the note's most-related **notes** by cosine and writes idempotent
+    ``related_note`` edges, and ranks the most-related **sources** and writes
+    idempotent ``note_about`` edges — both above the conservative threshold. The
+    returned ``result.to_dict()`` carries both counter families, so the source
+    links carry through this trigger automatically (NS.2).
 
     Isolation: this is a SEPARATE job from the embed. The note and its
     embedding are already persisted by the time this runs, so a failure here
