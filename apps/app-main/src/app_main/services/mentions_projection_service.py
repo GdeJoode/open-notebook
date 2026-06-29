@@ -26,6 +26,7 @@ from shared.retrieval.mentions_projection import (
     project_mentions_edges,
 )
 
+from surrealdb_service.connection import ensure_record_id
 from surrealdb_service.repositories import EntityRepository, SourceRepository
 
 
@@ -258,6 +259,111 @@ class MentionsProjectionService:
             emitted_concepts=emitted_concepts,
             n_sources=n_sources,
             min_weight=effective_min_weight,
+        )
+
+    async def refresh_source(
+        self,
+        source_id: str,
+        *,
+        drop_singletons: bool = True,
+        min_weight: float = 0.0,
+        named_only: bool = False,
+    ) -> RegenerateMentionsResult:
+        """Incrementally refresh ONE source's ``mentions`` edges (Track PL.3).
+
+        The source-scoped counterpart to :meth:`regenerate`. The PL.3 auto-chain
+        calls this right after a source's entity extraction so the document graph
+        for that source materializes with NO manual global regenerate — while
+        leaving every other source's edges untouched (a global clear would orphan
+        the rest of the corpus until the next full regenerate).
+
+        Crucially it still runs the FULL corpus projection internally (same R.2
+        weight × R.6 normalization, same true-source-count IDF as
+        :meth:`regenerate`), then keeps only the edges whose ``source_id`` matches
+        this source. This preserves the global weighting — an edge's weight /
+        document-frequency depends on how many sources share the concept, so it
+        must be computed corpus-wide, not from this one source in isolation. Only
+        the WRITE is scoped: clear this source's edges, RELATE the filtered set.
+
+        Idempotent: clears this source's prior edges then RELATEs the projected
+        subset, so a re-run yields the SAME edge set for this source with zero
+        duplicates. The R.6 noise normalization (case/type merge + df==1 drop) is
+        applied by the shared projection exactly as in the global path.
+
+        Args:
+            source_id: The ``source:...`` whose edges are refreshed.
+            drop_singletons: R.6 legibility drop (default True, as in regenerate).
+            min_weight: Per-edge weight cutoff (default 0.0).
+            named_only: The 0.3 named-only preset.
+
+        Returns:
+            A :class:`RegenerateMentionsResult` scoped to this source — ``cleared``
+            / ``created`` count only this source's edges; ``active_entities`` /
+            ``emitted_concepts`` / ``n_sources`` reflect the corpus-wide
+            projection the weights were computed from.
+        """
+        edges, n_sources, stats = await self._project(
+            drop_singletons=drop_singletons,
+            min_weight=min_weight,
+            named_only=named_only,
+        )
+
+        # Scope the WRITE to this source: keep only edges originating here. The
+        # projection ran corpus-wide so each kept edge carries its global weight
+        # / df (the concept's cross-source rarity), not a single-source figure.
+        try:
+            scoped_id = str(ensure_record_id(source_id))
+        except Exception as e:
+            logger.error(
+                "refresh_source: bad source_id {sid!r}: {e}", sid=source_id, e=e
+            )
+            scoped_id = str(source_id)
+        source_edges = [e for e in edges if str(e.source_id) == scoped_id]
+
+        cleared = await self.entity_repo.clear_mentions_for_source(scoped_id)
+
+        created = 0
+        failed = 0
+        for edge in source_edges:
+            try:
+                ok = await self.entity_repo.relate_mention(
+                    edge.source_id,
+                    edge.entity_id,
+                    weight=edge.weight,
+                    concept_name=edge.concept_name,
+                    concept_type=edge.concept_type,
+                    document_frequency=edge.document_frequency,
+                )
+            except Exception as e:  # one bad edge must not abort the refresh
+                logger.warning(
+                    "relate_mention raised for {s}->{t}: {e}",
+                    s=edge.source_id,
+                    t=edge.entity_id,
+                    e=e,
+                )
+                ok = False
+            if ok:
+                created += 1
+            else:
+                failed += 1
+
+        logger.info(
+            "mentions refreshed for {sid}: cleared={cleared} created={created} "
+            "failed={failed} (min_weight={mw})",
+            sid=scoped_id,
+            cleared=cleared,
+            created=created,
+            failed=failed,
+            mw=stats.min_weight,
+        )
+        return RegenerateMentionsResult(
+            cleared=cleared,
+            created=created,
+            failed=failed,
+            active_entities=stats.input_entities,
+            emitted_concepts=stats.emitted_concepts,
+            n_sources=n_sources,
+            min_weight=stats.min_weight,
         )
 
     async def get_document_entity_edges(

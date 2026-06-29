@@ -102,6 +102,40 @@ class NotebookRepository(BaseRepository[Notebook]):
             logger.error(f"Failed to get chat sessions for notebook {notebook_id}: {e}")
             return []
 
+    async def get_auto_insights(self, notebook_id: str) -> bool:
+        """Read the per-notebook auto-INSIGHTS toggle (Track PL.3).
+
+        Returns the notebook's ``auto_insights`` flag — the gate the PL.3 embed
+        auto-chain consults before enqueuing the LLM-cost INSIGHTS stage. Default
+        ON: a missing/legacy row (no toggle field), an unknown notebook, or any
+        read error returns ``True`` so the conservative behaviour is "run
+        insights" (matches the migration-72 default and the track's full-auto
+        choice). The caller treats ``False`` as an explicit opt-out.
+
+        Args:
+            notebook_id: The ``notebook:...`` id to read the toggle from.
+
+        Returns:
+            The notebook's ``auto_insights`` value, or ``True`` when it cannot be
+            resolved.
+        """
+        try:
+            rows = await execute_query(
+                "SELECT VALUE auto_insights FROM $id;",
+                {"id": ensure_record_id(notebook_id)},
+                self.config,
+            )
+            if not rows or rows[0] is None:
+                # Legacy row predating the field, or unknown notebook -> default ON.
+                return True
+            return bool(rows[0])
+        except Exception as e:
+            logger.error(
+                f"Failed to read auto_insights for notebook {notebook_id} "
+                f"(defaulting ON): {e}"
+            )
+            return True
+
 
 class NoteRepository(BaseRepository[Note]):
     """Repository for Note operations."""

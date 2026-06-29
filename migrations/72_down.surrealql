@@ -1,0 +1,11 @@
+-- ============================================================================
+-- Migration 72 DOWN: remove `notebook.auto_insights`.
+--
+-- Faithful inverse: migration 72 ADDS the brand-new `auto_insights` toggle to
+-- the `notebook` table, so the honest rollback is to remove it. No prior
+-- migration defines this field, so there is no earlier definition to restore.
+-- Removing the field drops the per-notebook insights toggle; the auto-chain
+-- handler (PL.3) tolerates its absence (a missing toggle defaults to ON).
+-- ============================================================================
+
+REMOVE FIELD IF EXISTS auto_insights ON TABLE notebook;

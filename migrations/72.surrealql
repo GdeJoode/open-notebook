@@ -1,0 +1,48 @@
+-- ============================================================================
+-- Migration 72: add `notebook.auto_insights` — the per-notebook INSIGHTS toggle
+--   (Track PL.3).
+--
+-- WHY. Track PL.3 auto-chains the INSIGHTS stage (`INSIGHT_EXTRACT` /
+-- `run_summaries`) off a successful source EMBED. Unlike the mentions refresh
+-- (a cheap, pure projection), insight extraction is LLM-COST — it runs the
+-- transformation graph per source. So it is gated behind a per-notebook toggle:
+-- a notebook can opt OUT of auto-insights while still getting the (free) KG
+-- graph. Default ON (true) per the track's "full-auto with gates" decision.
+--
+-- FIELD SHAPE. A strict `bool` DEFAULT true on the SCHEMAFULL `notebook` table
+-- (migration 1): every notebook has a definite toggle value — there is no
+-- honest "NONE" state — so a strict bool with a default is the right model and
+-- keeps the handler read simple (no option-unwrap). Mirrors `source.private`
+-- (migration 52/65): a strict bool default on an EXISTING SCHEMAFULL table.
+--
+-- S.4 RULE (strict field on an EXISTING SCHEMAFULL table -> MUST backfill).
+-- The `notebook` table is SCHEMAFULL and already holds rows. A SurrealDB
+-- SCHEMAFULL table re-validates the WHOLE record on any UPDATE; a DEFAULT
+-- applies only to rows created AFTER this migration, so pre-existing rows would
+-- keep NONE in the new strict field and the strict type would then silently
+-- block ALL future writes to those rows. Per migrations/README.md and the S.2
+-- forward-guard (migration 71 `source.processing_stage`), we backfill in the
+-- SAME migration with a DRIFT-ONLY `WHERE auto_insights = NONE` so a healthy DB
+-- matches 0 rows (true no-op, startup-safe) and only genuinely-NONE rows are
+-- repaired.
+--
+-- BACKFILL VALUE. `true` — existing notebooks predate the toggle; the track
+-- default is auto-insights ON, so a pre-existing notebook keeps that behaviour.
+-- An operator who wants a notebook quieter flips the single field.
+--
+-- Idempotent + forward-only. DEFINE FIELD OVERWRITE re-asserts the identical
+-- definition; the drift-only UPDATE matches nothing on a second pass. Down
+-- removes the field (faithful inverse: the field is brand new here).
+-- ============================================================================
+
+-- 1. Declare the strict field with a default. Applies to rows created from now
+--    on; pre-existing rows are handled by the backfill below.
+DEFINE FIELD OVERWRITE auto_insights ON TABLE notebook TYPE bool DEFAULT true;
+
+-- 2. S.4 backfill — drift-only WHERE so a healthy DB matches 0 rows (no rewrite,
+--    startup-safe) and only pre-existing NONE rows are repaired. Mirrors
+--    migration 71's coalesce shape exactly.
+UPDATE notebook SET
+    auto_insights = auto_insights ?? true
+    WHERE auto_insights = NONE
+    RETURN NONE;

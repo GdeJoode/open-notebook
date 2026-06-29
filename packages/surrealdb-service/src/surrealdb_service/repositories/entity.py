@@ -2418,6 +2418,49 @@ class EntityRepository:
             logger.error(f"clear_mentions failed: {e}")
             return 0
 
+    async def clear_mentions_for_source(self, source_id: str) -> int:
+        """Delete only the ``mentions`` edges incident on one source (PL.3).
+
+        The source-scoped half of the incremental refresh: where
+        :meth:`clear_mentions` wipes the whole projection (the global
+        regenerate), this removes ONLY the edges whose ``in`` endpoint is
+        ``source_id``. The PL.3 auto-chain rebuilds just this source's edges
+        after an extract, so it must not disturb the rest of the corpus's
+        ``mentions`` — clearing all of them would orphan every other source's
+        graph until the next global regenerate.
+
+        Idempotent: a second call (after the rebuild) clears the freshly-written
+        edges so a re-run yields the same edge set, no duplicates.
+
+        Args:
+            source_id: The ``source:...`` whose incident ``mentions`` edges are
+                removed.
+
+        Returns:
+            The count of edges deleted (0 on a malformed id / failure / no edges).
+        """
+        if not source_id:
+            return 0
+        try:
+            src = ensure_record_id(source_id)
+        except Exception as e:
+            logger.error(f"clear_mentions_for_source: bad id {source_id!r}: {e}")
+            return 0
+        try:
+            before = await execute_query(
+                "SELECT count() AS total FROM mentions WHERE in = $src GROUP ALL",
+                {"src": src},
+                self.config,
+            )
+            count = int(before[0].get("total", 0)) if before else 0
+            await execute_query(
+                "DELETE mentions WHERE in = $src;", {"src": src}, self.config
+            )
+            return count
+        except Exception as e:
+            logger.error(f"clear_mentions_for_source failed for {source_id}: {e}")
+            return 0
+
     async def count_mentions(self) -> int:
         """Count rows in the ``mentions`` edge table."""
         try:
