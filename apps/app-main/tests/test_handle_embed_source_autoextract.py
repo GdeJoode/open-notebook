@@ -36,32 +36,56 @@ def _patch_orchestrator(embedded_chunks: int = 5):
     )
 
 
-def _patch_stage_repo():
+def _patch_stage_repo(*, notebook_id=None):
     """Patch the lazily-imported ``get_source_repo`` so the stage write is a
-    no-op spy (no DB)."""
+    no-op spy (no DB).
+
+    ``get_notebook_id`` (used by the PL.3 insights toggle resolution) returns
+    ``notebook_id`` — ``None`` by default (unlinked source -> insights default
+    ON, no toggle read)."""
     repo = AsyncMock()
     repo.set_processing_stage = AsyncMock(return_value=True)
+    repo.get_notebook_id = AsyncMock(return_value=notebook_id)
     return patch("app_main.dependencies.get_source_repo", return_value=repo), repo
+
+
+def _patch_notebook_repo(*, auto_insights: bool = True):
+    """Patch the lazily-imported ``get_notebook_repo`` so the PL.3 toggle read is
+    a no-op spy (no DB) returning ``auto_insights``."""
+    repo = AsyncMock()
+    repo.get_auto_insights = AsyncMock(return_value=auto_insights)
+    return patch("app_main.dependencies.get_notebook_repo", return_value=repo), repo
+
+
+def _enqueued_commands(submit) -> list[str]:
+    """The ``command_name`` of every submit_command_job call (positional arg 1)."""
+    return [call.args[1] for call in submit.await_args_list]
 
 
 @pytest.mark.asyncio
 async def test_autoextract_enqueued_after_embed() -> None:
+    # Unlinked source (notebook_id None) -> insights default ON, no toggle read.
     stage_patch, repo = _patch_stage_repo()
     with _patch_orchestrator(), stage_patch, patch(
         "app_main.services.command_service.CommandService.submit_command_job",
-        new=AsyncMock(return_value="job:extract-1"),
+        new=AsyncMock(return_value="job:1"),
     ) as submit:
         result = await handlers._handle_embed_source({"source_id": "source:abc"})
 
     assert result["success"] is True
-    assert result["extract_command_id"] == "job:extract-1"
-    submit.assert_awaited_once()
-    args = submit.await_args.args
+    assert result["extract_command_id"] == "job:1"
+    # PL.2 extract chain + PL.3 insights chain (default ON for an unlinked
+    # source) both fire off a successful embed with chunks.
+    assert result["insight_command_id"] == "job:1"
+    commands = _enqueued_commands(submit)
+    assert "run_entities" in commands
+    assert "run_summaries" in commands
     # submit_command_job(module_name, command_name, command_args)
-    assert args[1] == "run_entities"
-    assert args[2] == {"source_id": "source:abc"}
+    for call in submit.await_args_list:
+        assert call.args[2] == {"source_id": "source:abc"}
 
-    # PL.2: stage advanced to "embedded" after a successful embed.
+    # PL.2: stage advanced to "embedded" after a successful embed (the graph
+    # stages graphed/complete are set in the extract handler, not here).
     repo.set_processing_stage.assert_awaited_once_with("source:abc", "embedded")
 
 
@@ -75,10 +99,11 @@ async def test_enqueue_failure_does_not_fail_embed() -> None:
         result = await handlers._handle_embed_source({"source_id": "source:abc"})
 
     # The embed already persisted vectors — the result must still come back, and
-    # the stage must still have advanced to embedded (the failure is only the
-    # downstream extract enqueue).
+    # the stage must still have advanced to embedded (the failures are only the
+    # downstream extract + insights enqueues, both best-effort).
     assert result["success"] is True
     assert result["extract_command_id"] is None
+    assert result["insight_command_id"] is None
     repo.set_processing_stage.assert_awaited_once_with("source:abc", "embedded")
 
 

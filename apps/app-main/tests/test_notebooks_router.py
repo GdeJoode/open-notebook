@@ -165,6 +165,57 @@ class TestNotebookPrivacyMode:
         assert resp.json()["privacy_mode"] is None
 
 
+class TestNotebookAutoInsights:
+    """Track PL.3: the per-notebook auto_insights toggle round-trips the API."""
+
+    def test_update_persists_auto_insights_off(self):
+        svc = AsyncMock(spec=NotebookService)
+        svc.get.return_value = make_notebook()
+        svc.get_with_counts.return_value = {
+            "id": "notebook:1",
+            "name": "NB",
+            "description": "",
+            "archived": False,
+            "created": "2025-01-01",
+            "updated": "2025-01-01",
+            "source_count": 0,
+            "note_count": 0,
+            "auto_insights": False,
+        }
+        client = _make_app(svc)
+
+        resp = client.put(
+            "/api/notebooks/notebook:1", json={"auto_insights": False}
+        )
+
+        assert resp.status_code == 200
+        # The opt-out forwarded to the service (False survives exclude_none).
+        svc.update.assert_awaited_once()
+        update_arg = svc.update.await_args.args[1]
+        assert update_arg["auto_insights"] is False
+        assert resp.json()["auto_insights"] is False
+
+    def test_response_auto_insights_defaults_true(self):
+        svc = AsyncMock(spec=NotebookService)
+        svc.get_with_counts.return_value = {
+            "id": "notebook:1",
+            "name": "NB",
+            "description": "",
+            "archived": False,
+            "created": "2025-01-01",
+            "updated": "2025-01-01",
+            "source_count": 0,
+            "note_count": 0,
+        }
+        client = _make_app(svc)
+
+        resp = client.get("/api/notebooks/notebook:1")
+
+        assert resp.status_code == 200
+        # Legacy row without the field -> response default ON.
+        assert resp.json()["auto_insights"] is True
+
+
 class TestDeleteNotebook:
 
     def test_delete_notebook(self):

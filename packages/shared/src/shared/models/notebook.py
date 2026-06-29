@@ -33,6 +33,18 @@ class Notebook(ObjectModel):
         description="Per-notebook privacy mode: None (inherit global) | 'cloud' | 'private'",
     )
 
+    # Per-notebook auto-INSIGHTS toggle (Track PL.3). The KG auto-chain
+    # (embed -> extract -> graph) is cheap, but INSIGHTS (the LLM-cost
+    # transformation graph) is gated here: default ON (true) per the track's
+    # full-auto choice; flip to False to skip auto-insights for a notebook while
+    # still getting the (free) document graph. Mirrors
+    # ``migrations/72.surrealql`` (``notebook.auto_insights TYPE bool DEFAULT
+    # true``); legacy rows read back True via the migration backfill.
+    auto_insights: bool = Field(
+        default=True,
+        description="Auto-run INSIGHTS extraction after embed for this notebook's sources",
+    )
+
     @field_validator("name")
     @classmethod
     def name_must_not_be_empty(cls, v: str) -> str:

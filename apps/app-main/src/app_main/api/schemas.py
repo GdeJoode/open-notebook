@@ -68,6 +68,14 @@ class NotebookUpdate(BaseModel):
     privacy_mode: Optional[str] = Field(
         None, description="Per-notebook privacy mode: 'cloud' | 'private'"
     )
+    # Track PL.3: per-notebook auto-INSIGHTS toggle. True keeps the LLM-cost
+    # INSIGHTS stage auto-chaining off ingest (the default); False opts the
+    # notebook out (it still gets the free document graph). Persists through
+    # notebook_service.update (PUT uses exclude_none, so omitting it leaves the
+    # stored value untouched).
+    auto_insights: Optional[bool] = Field(
+        None, description="Auto-run INSIGHTS extraction after embed for this notebook"
+    )
 
 
 class NotebookResponse(BaseModel):
@@ -81,6 +89,8 @@ class NotebookResponse(BaseModel):
     note_count: int
     # Track J.3: None = inherit global default; 'cloud' | 'private' otherwise.
     privacy_mode: Optional[str] = None
+    # Track PL.3: per-notebook auto-INSIGHTS toggle (default True).
+    auto_insights: bool = True
 
 
 # Search schemas
