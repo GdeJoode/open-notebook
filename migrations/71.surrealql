@@ -1,0 +1,58 @@
+-- ============================================================================
+-- Migration 71: add `source.processing_stage` — the per-source pipeline status
+--   (Track PL.2).
+--
+-- WHY. Track PL makes ingest auto-chain `parse -> embed -> EXTRACT (-> GRAPH ->
+-- INSIGHTS)`. Today nothing on the source row records HOW FAR a document has
+-- progressed, so the UI cannot show per-document progress and the pipeline
+-- cannot be resumed from where it stopped. `processing_stage` is that visible,
+-- resumable status. PL.2 writes `ingested -> embedded -> extracted`
+-- (+ `awaiting_schema_review` when the schema-review gate parks extraction,
+-- `failed` on a hard error); PL.3/PL.4 add `graphed`/`complete`.
+--
+-- FIELD SHAPE. A plain strict `string` (not `option<>`) DEFAULT "ingested":
+-- every source has a definite stage — there is no honest "NONE / no stage"
+-- value (a freshly created row IS at least `ingested`), so a strict string with
+-- a default is the right model and keeps reads/writes simple (no option-unwrap
+-- in the handler transitions). The accepted values are an app-level enum
+-- (ingested | embedded | extracted | awaiting_schema_review | graphed |
+-- complete | failed); SurrealDB stores the bare string. Idempotent: a handler
+-- re-running a stage just re-writes the same value.
+--
+-- S.4 RULE (strict field on an EXISTING SCHEMAFULL table -> MUST backfill).
+-- The `source` table is SCHEMAFULL (migration 1) and already holds rows. A
+-- SurrealDB SCHEMAFULL table re-validates the WHOLE record on any UPDATE; a
+-- DEFAULT applies only to rows created AFTER this migration, so pre-existing
+-- rows would keep NONE in the new strict field and the strict type would then
+-- silently block ALL future writes to those rows ("Found NONE for field
+-- processing_stage, expected a string"). Per migrations/README.md and the S.2
+-- forward-guard (migration 65 `source.private`), we backfill in the SAME
+-- migration with a DRIFT-ONLY `WHERE processing_stage = NONE` so a healthy DB
+-- matches 0 rows (true no-op, startup-safe) and only genuinely-NONE rows are
+-- touched.
+--
+-- BACKFILL VALUE. Existing sources predate the pipeline-stage model; they were
+-- ingested (and most were embedded) before this field existed. We backfill the
+-- conservative `"ingested"` rather than guessing `embedded`/`extracted`: the
+-- pipeline is idempotent and resumable, so a re-run from `ingested` re-embeds
+-- (idempotent: embed deletes-then-writes) and re-extracts (idempotent: dedups
+-- per (in,out,type)) without corruption. A staging backfill of the true stage
+-- for the live corpus, if desired, is a separate gated data task — not this
+-- schema migration.
+--
+-- Idempotent + forward-only. Re-running DEFINE FIELD OVERWRITE re-asserts the
+-- identical definition; the drift-only UPDATE matches nothing on a second pass.
+-- Down removes the field (faithful inverse: the field is brand new here).
+-- ============================================================================
+
+-- 1. Declare the strict field with a default. Applies to rows created from now
+--    on; pre-existing rows are handled by the backfill below.
+DEFINE FIELD OVERWRITE processing_stage ON TABLE source TYPE string DEFAULT "ingested";
+
+-- 2. S.4 backfill — drift-only WHERE so a healthy DB matches 0 rows (no rewrite,
+--    startup-safe) and only pre-existing NONE rows are repaired. Mirrors
+--    migration 65's `source.private` coalesce shape exactly.
+UPDATE source SET
+    processing_stage = processing_stage ?? "ingested"
+    WHERE processing_stage = NONE
+    RETURN NONE;

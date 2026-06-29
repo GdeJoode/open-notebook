@@ -23,6 +23,31 @@ registry = get_registry()
 
 
 # ---------------------------------------------------------------------------
+# Pipeline-stage status (Track PL.2)
+# ---------------------------------------------------------------------------
+
+
+async def _set_processing_stage(source_id: str, stage: str) -> None:
+    """Best-effort write of ``source.processing_stage`` (Track PL.2).
+
+    The stage is a STATUS reflection of an already-completed pipeline step, so a
+    failure to persist it must NEVER fail that step — we log and continue,
+    mirroring the best-effort posture of the embed/extract auto-chaining. The
+    handler is the single funnel every ingest path flows through, so wiring the
+    transitions here keeps the domain services free of the status concern.
+    """
+    try:
+        from app_main.dependencies import get_source_repo
+
+        await get_source_repo().set_processing_stage(source_id, stage)
+    except Exception as stage_err:  # noqa: BLE001 — status write is best-effort
+        logger.error(
+            f"Failed to set processing_stage={stage} for source "
+            f"{source_id} (the pipeline step itself succeeded): {stage_err}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Payload schemas for validation
 # ---------------------------------------------------------------------------
 
@@ -136,6 +161,10 @@ async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
             processing_overrides=validated.processing_overrides,
         )
 
+        # PL.2: the parse + chunk persist is done -> stage = ingested. Best-effort
+        # status write (never fails the already-persisted extraction).
+        await _set_processing_stage(result["source_id"], "ingested")
+
         # R.0 forward-fix: chain embedding off a successful extraction that
         # produced chunks. Best-effort enqueue — a queue hiccup must not fail
         # the (already-persisted) extraction; the operator can still run
@@ -175,6 +204,9 @@ async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     except Exception as e:
+        # PL.2: a hard parse failure -> stage = failed (best-effort; never masks
+        # the original error). Resumable: a re-run retries the parse.
+        await _set_processing_stage(validated.source_id, "failed")
         logger.error(f"Source extraction failed: {e}")
         raise
 
@@ -309,6 +341,9 @@ async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
             multi_schema_enabled=validated.multi_schema_enabled,
         )
 
+        # PL.2: extraction (incl. best-effort triage) succeeded -> extracted.
+        await _set_processing_stage(validated.source_id, "extracted")
+
         processing_time = time.time() - start_time
         logger.info(
             f"Entity extraction completed for source {validated.source_id} "
@@ -321,9 +356,15 @@ async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     except SchemaReviewPendingError as e:
-        # Reraise so the worker / queue machinery parks the job in
-        # PAUSED_FOR_REVIEW (see worker.py B.1f branch). The exception
-        # carries the notebook_id / pending_count for downstream UI use.
+        # PL.2: the schema-review gate parked extraction -> the source stage is
+        # awaiting_schema_review (visible to the UI; no entities were written).
+        # Set BEFORE the reraise so the stage is persisted regardless of how the
+        # worker translates the exception. Then reraise so the worker parks the
+        # job in PAUSED_FOR_REVIEW (see worker.py B.1f branch); the exception
+        # carries notebook_id / pending_count for downstream UI use.
+        await _set_processing_stage(
+            validated.source_id, "awaiting_schema_review"
+        )
         logger.warning(
             f"Entity extraction paused for review: notebook={e.notebook_id} "
             f"source={e.source_id} pending={e.pending_count}"
@@ -331,6 +372,10 @@ async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise
 
     except Exception as e:
+        # PL.2: a hard failure in extraction -> stage = failed (resumable: the
+        # operator / a re-run can retry from here). Status write is best-effort
+        # and must not mask the original error, so it precedes the reraise.
+        await _set_processing_stage(validated.source_id, "failed")
         logger.error(f"Entity extraction failed for source {validated.source_id}: {e}")
         raise
 
@@ -367,7 +412,51 @@ async def _handle_embed_source(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     logger.info(f"Starting embedding for source: {source_id}")
     service = get_source_embedding_orchestrator()
-    result = await service.embed_source(source_id)
+    try:
+        result = await service.embed_source(source_id)
+    except Exception as embed_err:
+        # PL.2: a hard embed failure -> stage = failed (best-effort; never masks
+        # the original error). Resumable: a re-run / run-embed retries.
+        await _set_processing_stage(source_id, "failed")
+        logger.error(f"Embedding failed for source {source_id}: {embed_err}")
+        raise
+
+    # PL.2: the per-chunk + aggregate embed is done -> stage = embedded.
+    await _set_processing_stage(source_id, "embedded")
+
+    # PL.2: chain entity extraction off a successful SOURCE embed. This is the
+    # foundational auto-chain link — before it, the KG never built without a
+    # manual ``POST /sources/{id}/run-entities``. We mirror the
+    # DOCUMENT_PARSE -> embed chaining exactly: best-effort enqueue of the
+    # existing, internally-coherent ``run_entities`` chain
+    # (ENTITY_EXTRACT -> run_extraction -> embed entities -> filter -> persist
+    # typing/relations -> triage). The auto-enqueued extract honours the
+    # schema-review gate the same way the manual path does: the handler raises
+    # SchemaReviewPendingError and the worker parks the job as
+    # PAUSED_FOR_REVIEW (see handle_entity_extract), setting the source stage to
+    # awaiting_schema_review — no entities written, no crash. A queue hiccup here
+    # must NOT fail the (already-persisted) embed; run-entities or a re-embed can
+    # recover. SOURCES ONLY — the note path is _handle_embed_single_item, which
+    # chains NOTE_AUTO_LINK, not extraction.
+    extract_command_id: Optional[str] = None
+    try:
+        from app_main.services.command_service import CommandService
+
+        extract_command_id = await CommandService.submit_command_job(
+            "open_notebook",
+            "run_entities",
+            {"source_id": source_id},
+        )
+        logger.info(
+            f"Auto-enqueued run_entities job {extract_command_id} for "
+            f"source {source_id}"
+        )
+    except Exception as extract_err:  # noqa: BLE001 — never fail the embed
+        logger.error(
+            f"Failed to auto-enqueue entity extraction for source "
+            f"{source_id} (embedding succeeded; run-entities can recover): "
+            f"{extract_err}"
+        )
 
     processing_time = time.time() - start_time
     logger.info(
@@ -376,6 +465,7 @@ async def _handle_embed_source(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "success": True,
         **result,
+        "extract_command_id": extract_command_id,
         "processing_time": processing_time,
     }
 

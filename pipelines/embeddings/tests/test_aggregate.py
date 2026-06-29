@@ -159,3 +159,25 @@ async def test_embed_source_no_chunks_no_text_clears_aggregate() -> None:
     assert result.embeddings_created == 0
     # Aggregate cleared to NONE (no vectors to pool), no exception raised.
     assert repo.aggregate_writes == [None]
+
+
+@pytest.mark.asyncio
+async def test_populate_source_embedding_clears_stale_populated_aggregate() -> None:
+    """PL.2 fold-in of the PL.1 minor: a previously-POPULATED aggregate is
+    cleared to NONE when the source loses its chunk vectors.
+
+    Seed a non-null ``source.embedding`` (a real prior aggregate), then strip the
+    chunk vectors and re-run the aggregate step: the stale populated value MUST
+    be overwritten with NONE — not left dangling. ``populate_source_embedding``
+    always writes (NONE on empty), so a re-embed of a now-empty source never
+    leaves a stale vector behind that retrieval would treat as live.
+    """
+    repo = _StoreRepo([])  # no chunk vectors now
+    # Seed a pre-existing populated aggregate (the "stale" value).
+    repo.aggregate_writes["source:stale"] = [9.0, 9.0, 9.0]
+
+    dim = await populate_source_embedding("source:stale", source_repo=repo)
+
+    assert dim is None
+    # The stale populated aggregate has been overwritten to NONE.
+    assert repo.aggregate_writes["source:stale"] is None
