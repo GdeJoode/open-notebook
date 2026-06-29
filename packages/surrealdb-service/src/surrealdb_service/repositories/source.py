@@ -680,9 +680,20 @@ class SourceRepository(BaseRepository[Source]):
 
         Mirrors the RELATE discipline of :meth:`EntityRepository.relate_mention`:
         the arrow positions need bare record-id literals (SurrealDB issue #4232 —
-        params in the ``in``/``out`` slots are rejected), and the ids are
-        ``source:<alnum>`` record ids straight from the matcher (no user input),
-        so interpolating them is safe; all metadata is bound as parameters.
+        params in the ``in``/``out`` slots are rejected), so the endpoints are
+        interpolated as literal record ids while all metadata is bound as
+        parameters.
+
+        Endpoint safety (the Y.1 / Z.1 injection lesson): although the U.3 matcher
+        passes ids it already trusts, the W.3 MCP ``cite`` tool forwards
+        *agent-supplied, free-string* ids straight into this method — so the ids
+        are NOT inherently trusted at this seam. Both raw id strings are therefore
+        strict-validated against ``_RECORD_ID_RE`` via :func:`_validate_record_id`
+        BEFORE any interpolation. ``str(ensure_record_id(...))`` (=
+        ``RecordID.parse``) splits only on the first colon and round-trips a
+        payload like ``source:x; REMOVE TABLE source; --`` verbatim, so the SDK's
+        parsing is NOT a validator; the regex is. A ``;``-bearing / malformed id
+        is REFUSED (returns False) rather than reaching the interpolated RELATE.
 
         A wrong edge fabricates a citation, so the caller (the matcher) only ever
         passes a confident, non-self pair; this method does NOT re-check precision
@@ -707,12 +718,16 @@ class SourceRepository(BaseRepository[Source]):
         """
         if not citing_source_id or not cited_source_id:
             return False
+        # Strict-validate the RAW input strings BEFORE any interpolation. The W.3
+        # ``cite`` MCP tool forwards agent-supplied ids here, so a malformed /
+        # ``;``-bearing id must be rejected against ``_RECORD_ID_RE`` rather than
+        # round-tripped by ``RecordID.parse`` (which is not a validator).
         try:
-            src = str(ensure_record_id(citing_source_id))
-            tgt = str(ensure_record_id(cited_source_id))
-        except Exception as e:
+            src = _validate_record_id(str(citing_source_id))
+            tgt = _validate_record_id(str(cited_source_id))
+        except ValueError as e:
             logger.error(
-                f"relate_cites: bad id citing={citing_source_id!r} "
+                f"relate_cites: refusing unsafe/invalid id citing={citing_source_id!r} "
                 f"cited={cited_source_id!r}: {e}"
             )
             return False
@@ -722,6 +737,10 @@ class SourceRepository(BaseRepository[Source]):
             logger.warning(f"relate_cites: refused self-citation on {src}")
             return False
         try:
+            # Endpoints interpolated as literal record ids (RELATE graph syntax
+            # won't bind a ``$param`` in the in/out position — issue #4232). Safe
+            # because ``src``/``tgt`` passed ``_RECORD_ID_RE`` above: ``table:id``
+            # only, no SurrealQL metacharacters. Only the SET *values* are bound.
             await execute_query(
                 f"RELATE {src}->cites->{tgt} SET "
                 "confidence = $confidence, reference_text = $reference_text, "
