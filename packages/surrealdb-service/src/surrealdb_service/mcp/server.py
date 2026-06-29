@@ -3,13 +3,22 @@
 Exposes the shared SurrealDB knowledge graph as MCP tools so every Claude Code
 session that attaches this stdio server reads and writes the SAME memory
 substrate (one database, not per-session state). The Track W.3 graph tools
-(``search`` / ``get_node`` / ``related`` / ``cite`` / ``add_note``) sit
-alongside the original low-level tools (``query_database`` / ``get_record`` /
-``list_sources`` / ``search_similar`` / ``get_entity_graph``).
+(``search`` / ``get_node`` / ``related`` / ``cite`` / ``add_note``) and the
+Track Y.2 ``auto_link_note`` tool sit alongside the original low-level tools
+(``query_database`` / ``get_record`` / ``list_sources`` / ``search_similar`` /
+``get_entity_graph``).
 
 Auth: none — this is fine for the stdio-local transport (the only caller is the
 local Claude Code process). If this is ever exposed over HTTP for remote
 sessions, add authentication first.
+
+Write tools (``cite`` / ``add_note`` / ``auto_link_note``) are currently
+registered unconditionally (the W.3 follow-up: gate write-tool registration to
+stdio — or add auth — before any HTTP exposure). They mutate the shared graph;
+``auto_link_note`` writes only ``related_note`` edges (canonical ``note`` rows
+untouched) and is idempotent, and like ``search``/``add_note`` it is
+embedding-free — it requires the note to already be embedded and never pulls an
+embedding model into this package.
 """
 
 import argparse
@@ -325,6 +334,109 @@ def create_server() -> FastMCP:
                 linked = notebook_id
         return json.dumps(
             {"id": note_id, "linked_notebook": linked},
+            default=str,
+            indent=2,
+        )
+
+    @mcp.tool()
+    async def auto_link_note(
+        note_id: str,
+        k: int = 5,
+        min_similarity: float = 0.75,
+    ) -> str:
+        """Link a note to its most-related notes via ``related_note`` edges (Y.2).
+
+        Ranks other notes by embedding cosine similarity
+        (``find_related_by_embedding``) and writes idempotent ``related_note``
+        edges for those at/above ``min_similarity`` (top-``k``). Re-running is a
+        no-op for already-linked pairs (clear-before-relate); self-links are
+        impossible (cosine excludes self; ``relate_note`` refuses a self-edge).
+
+        Embedding (layering — same contract as ``search`` / ``search_similar`` /
+        ``add_note``): this surrealdb-service MCP layer is deliberately
+        embedding-free — the embed model lives in app-main's local-Ollama
+        pipeline, NOT here. So this tool REQUIRES the note to already have an
+        embedding; an unembedded note (strict ``[]`` per
+        [[note-embedding-non-optional]]) returns ``{"status": "needs_embedding"}``
+        — embed it first (the app-main ``POST /notes/{id}/auto-link`` endpoint
+        embeds-then-links; this tool does not). Never a crash either way.
+
+        Args:
+            note_id: the ``note:...`` to link from.
+            k: max related notes to consider/link (top-k by cosine; bounded 1-50).
+            min_similarity: minimum cosine to link (bounded -1..1).
+
+        Returns:
+            JSON ``{note_id, status, created, below_threshold, skipped,
+            candidates_considered, linked_note_ids, k, min_similarity}``. ``status``
+            is ``"linked"`` | ``"needs_embedding"`` | ``"not_found"`` | ``"invalid_id"``.
+        """
+        # Boundary validation (mirrors the app-main route): a bad id is a clean
+        # response, not an exception. relate_note re-validates before any write.
+        eff_k = max(1, min(int(k), 50))
+        eff_min = max(-1.0, min(float(min_similarity), 1.0))
+
+        try:
+            rid = str(ensure_record_id(note_id))
+        except Exception:
+            return json.dumps(
+                {"note_id": note_id, "status": "invalid_id"}, indent=2
+            )
+        if not rid.startswith("note:"):
+            return json.dumps(
+                {"note_id": rid, "status": "invalid_id"}, indent=2
+            )
+
+        repo = NoteRepository()
+
+        # Existence + embedding check. A populated ``note.embedding`` is required
+        # (this layer cannot embed). An empty/absent embedding → needs_embedding.
+        vec = await execute_query(
+            "SELECT VALUE embedding FROM type::thing($id)", {"id": rid}
+        )
+        if not vec:
+            return json.dumps(
+                {"note_id": rid, "status": "not_found"}, indent=2
+            )
+        if not vec[0]:
+            return json.dumps(
+                {"note_id": rid, "status": "needs_embedding"}, indent=2
+            )
+
+        candidates = await repo.find_related_by_embedding(rid, eff_k)
+        created = 0
+        below = 0
+        skipped = 0
+        linked: List[str] = []
+        for cand in candidates:
+            score = cand.get("score")
+            target = cand.get("id")
+            if score is None or target is None:
+                continue
+            if float(score) < eff_min:
+                below += 1
+                continue
+            ok = await repo.relate_note(
+                rid, target, similarity_score=float(score), method="embedding"
+            )
+            if ok:
+                created += 1
+                linked.append(target)
+            else:
+                skipped += 1
+
+        return json.dumps(
+            {
+                "note_id": rid,
+                "status": "linked",
+                "created": created,
+                "below_threshold": below,
+                "skipped": skipped,
+                "candidates_considered": len(candidates),
+                "linked_note_ids": linked,
+                "k": eff_k,
+                "min_similarity": eff_min,
+            },
             default=str,
             indent=2,
         )

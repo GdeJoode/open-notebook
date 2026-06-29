@@ -58,6 +58,7 @@ from app_main.services.mentions_projection_service import (
 )
 from app_main.services.model_service import ModelService
 from app_main.services.networkx_export_service import NetworkxExportService
+from app_main.services.note_auto_link_service import NoteAutoLinkService
 from app_main.services.note_service import NoteService
 from app_main.services.notebook_merge_service import NotebookMergeService
 from app_main.services.notebook_service import NotebookService
@@ -411,6 +412,20 @@ def get_note_service() -> NoteService:
     return NoteService(
         note_repo=get_note_repo(),
         notebook_repo=get_notebook_repo(),
+    )
+
+
+async def get_note_auto_link_service() -> NoteAutoLinkService:
+    """Build the Y.2 auto-link orchestrator.
+
+    Async because it resolves the embedding model from the DB via
+    ``get_embedding_service`` (the same path the embedding handlers use). The
+    embed step keeps this in app-main; surrealdb-service stays embedding-free.
+    """
+    embedding_service = await get_embedding_service()
+    return NoteAutoLinkService(
+        note_repo=get_note_repo(),
+        embedding_service=embedding_service,
     )
 
 
