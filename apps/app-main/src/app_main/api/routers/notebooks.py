@@ -31,6 +31,7 @@ def _notebook_dict_to_response(data: dict) -> NotebookResponse:
         source_count=data.get("source_count", 0),
         note_count=data.get("note_count", 0),
         privacy_mode=data.get("privacy_mode"),
+        auto_insights=data.get("auto_insights", True),
     )
 
 
