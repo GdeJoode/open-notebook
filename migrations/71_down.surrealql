@@ -1,0 +1,11 @@
+-- ============================================================================
+-- Migration 71 DOWN: remove `source.processing_stage`.
+--
+-- Faithful inverse: migration 71 ADDS the brand-new `processing_stage` field to
+-- the `source` table, so the honest rollback is to remove it. No prior migration
+-- defines this field, so there is no earlier definition to restore. Removing the
+-- field drops the per-source pipeline-stage status; the auto-chain handlers
+-- (PL.2) tolerate its absence (a missing stage simply means "unknown").
+-- ============================================================================
+
+REMOVE FIELD IF EXISTS processing_stage ON TABLE source;

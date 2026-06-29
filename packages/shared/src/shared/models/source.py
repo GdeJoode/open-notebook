@@ -151,6 +151,26 @@ class Source(ObjectModel):
         description="Per-source metadata bag (extraction confidence, parser engine used, etc.)",
     )
 
+    # Per-source pipeline status (Track PL.2). Records HOW FAR the auto-chain
+    # (parse -> embed -> EXTRACT -> GRAPH -> INSIGHTS) has carried this source,
+    # so the pipeline is resumable and the UI can show per-document progress.
+    # Written at each transition by the job handlers:
+    #   ingested                -> after parse (chunks persisted)
+    #   embedded                -> after the per-chunk + aggregate embed
+    #   extracted               -> after a successful entity extraction
+    #   awaiting_schema_review  -> the schema-review gate parked extraction
+    #   graphed / complete      -> PL.3/PL.4 (mentions refresh / full chain done)
+    #   failed                  -> a hard failure in a stage
+    # Backed by ``migrations/71.surrealql`` as a strict ``string DEFAULT
+    # "ingested"`` on the SCHEMAFULL ``source`` table; legacy rows are backfilled
+    # to ``"ingested"`` (drift-only, S.4-safe). There is no honest "no stage"
+    # value, so it is a plain (non-optional) string with a default rather than
+    # ``option<>``.
+    processing_stage: str = Field(
+        default="ingested",
+        description="Pipeline stage: ingested|embedded|extracted|awaiting_schema_review|graphed|complete|failed",
+    )
+
     # Per-document privacy override (Track J.3). When True, every LLM stage for
     # this source is forced LOCAL and is NEVER routed to a cloud provider —
     # this is the STICKY, most-specific layer that wins over the notebook and

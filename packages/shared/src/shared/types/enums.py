@@ -205,3 +205,22 @@ class SourceType(str, Enum):
     VIDEO = "video"
     TEXT = "text"
     URL = "url"
+
+
+class ProcessingStage(str, Enum):
+    """Per-source pipeline stage (Track PL.2).
+
+    Records how far the auto-chain (parse -> embed -> EXTRACT -> GRAPH ->
+    INSIGHTS) has carried a source, so the pipeline is resumable and the UI can
+    surface per-document progress. Persisted on ``source.processing_stage``
+    (migration 71). PL.2 writes through ``EXTRACTED`` plus the gate/failure
+    states; ``GRAPHED``/``COMPLETE`` are reached in PL.3/PL.4.
+    """
+
+    INGESTED = "ingested"
+    EMBEDDED = "embedded"
+    EXTRACTED = "extracted"
+    AWAITING_SCHEMA_REVIEW = "awaiting_schema_review"
+    GRAPHED = "graphed"
+    COMPLETE = "complete"
+    FAILED = "failed"

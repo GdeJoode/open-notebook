@@ -361,6 +361,34 @@ class SourceRepository(BaseRepository[Source]):
             )
             return False
 
+    async def set_processing_stage(self, source_id: str, stage: str) -> bool:
+        """Persist the source's pipeline ``processing_stage`` (Track PL.2).
+
+        ``stage`` is one of the app-level enum values (``ingested`` |
+        ``embedded`` | ``extracted`` | ``awaiting_schema_review`` | ``graphed`` |
+        ``complete`` | ``failed``); ``migration 71`` declares the field as a
+        strict ``string DEFAULT "ingested"``. Idempotent — re-writing the same
+        stage is a no-op-equivalent. Best-effort: returns ``False`` and logs on
+        error rather than raising, so a stage-status write never fails the
+        already-completed pipeline step that triggered it.
+        """
+        try:
+            await execute_query(
+                "UPDATE $id SET processing_stage = $stage",
+                {
+                    "id": ensure_record_id(source_id),
+                    "stage": stage,
+                },
+                self.config,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to set processing_stage={stage} for source "
+                f"{source_id}: {e}"
+            )
+            return False
+
     async def find_related_by_embedding(
         self, source_id: str, k: int
     ) -> List[Dict[str, Any]]:
