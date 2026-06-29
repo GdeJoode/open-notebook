@@ -1,0 +1,16 @@
+-- ============================================================================
+-- Migration 68 DOWN: no-op.
+--
+-- Migration 68 defines the `related_note` edge table as
+-- ``TYPE RELATION FROM note TO note`` (the shape the Track Y auto-link feature
+-- needs) and adds its fields (`similarity_score`, `method`, `created_at`). It is
+-- a forward-only schema definition with no faithful inverse (mirrors migrations
+-- 66/67's down):
+--   * reverting `related_note` to TYPE ANY would re-break
+--     ``RELATE note -> related_note -> note`` — exactly the correctness 68
+--     establishes; and
+--   * `related_note` is a DERIVED, regenerated projection (auto-link clears and
+--     re-relates a note's links) — the edge table holds no canonical state worth
+--     a destructive rollback, and on this corpus it is empty until auto-link runs.
+-- Down intentionally does nothing; mirrors migrations 66/67's down convention.
+-- ============================================================================

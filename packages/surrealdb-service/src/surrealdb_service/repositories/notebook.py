@@ -146,6 +146,160 @@ class NoteRepository(BaseRepository[Note]):
             data["embedding"] = embedding
         return await self.create(data)
 
+    async def find_related_by_embedding(
+        self, note_id: str, k: int
+    ) -> List[Dict[str, Any]]:
+        """Return the top-``k`` other notes by cosine similarity (Track Y.1).
+
+        Note-level mirror of ``SourceRepository.find_related_by_embedding``:
+        ranks every *other* note that has a populated ``note.embedding`` against
+        this note's embedding using SurrealDB's native
+        ``vector::similarity::cosine`` — the same operator the chunk/source
+        search paths use. Ranking server-side keeps every vector in the DB (no
+        bulk pull into Python) and reuses the proven cosine path.
+
+        Behaviour:
+          * The query note's own row is excluded (``id != $id``).
+          * Notes with an empty ``embedding`` (``array<float>`` is strict and
+            non-optional, so an unembedded note holds ``[]`` not NONE — see
+            [[note-embedding-non-optional]]) are excluded: an empty vector can
+            never be a result and the dimension guard would drop it anyway.
+          * If the *query* note itself has no/empty embedding, returns ``[]``
+            (nothing to compare). The caller distinguishes this from "note not
+            found" via a prior existence check; Track Y.2 treats it as the
+            needs-embedding signal (embed first, then re-rank).
+          * Ordering is ``score DESC`` with a stable ``id ASC`` tie-break, so
+            equal-similarity notes come back deterministically.
+          * ``k`` bounds the LIMIT; requesting more than exist returns all.
+
+        The embedding dimension is never hardcoded — cosine reads whatever
+        length the stored vectors are. The
+        ``array::len(embedding) = array::len($q)`` predicate guards the cosine
+        call (SurrealDB errors on a length mismatch) and, as a side effect,
+        excludes the empty-embedding notes (``array::len([]) = 0`` never equals
+        a populated query vector's length).
+
+        Returns a list of ``{"id", "title", "score"}`` dicts (ids stringified
+        by ``execute_query``), or ``[]`` on error / no query embedding.
+        """
+        try:
+            rid = ensure_record_id(note_id)
+            query_vec = await execute_query(
+                "SELECT VALUE embedding FROM $id",
+                {"id": rid},
+                self.config,
+            )
+            # ``SELECT VALUE embedding`` yields [vector] for a populated field,
+            # [[]] for the strict-but-empty unembedded note, and [] when the
+            # note is absent. ``not query_vec[0]`` covers both the empty-vector
+            # and absent cases — nothing to compare against.
+            if not query_vec or not query_vec[0]:
+                return []
+
+            rows = await execute_query(
+                "SELECT id, title, "
+                "vector::similarity::cosine(embedding, $q) AS score "
+                "FROM note "
+                "WHERE array::len(embedding) > 0 AND id != $id "
+                "AND array::len(embedding) = array::len($q) "
+                "ORDER BY score DESC, id ASC "
+                "LIMIT $k",
+                {"q": query_vec[0], "id": rid, "k": int(k)},
+                self.config,
+            )
+            return [
+                {
+                    "id": str(r["id"]),
+                    "title": r.get("title"),
+                    "score": float(r["score"]),
+                }
+                for r in (rows or [])
+                if r.get("score") is not None
+            ]
+        except Exception as e:
+            logger.error(f"Failed to find related notes for {note_id}: {e}")
+            return []
+
+    async def relate_note(
+        self,
+        from_note: str,
+        to_note: str,
+        *,
+        similarity_score: float,
+        method: str = "embedding",
+    ) -> bool:
+        """Idempotently RELATE one note to another via ``related_note`` (Y.1).
+
+        RELATE is *not* idempotent: a repeated ``RELATE a -> related_note -> b``
+        writes a SECOND row (Track W.2/W.3 lesson), so notes would accrue
+        duplicate edges on every re-link. This helper clears any existing
+        ``(from_note, to_note)`` edge first, then RELATEs exactly once — so the
+        edge set for a pair is always a single, current row carrying the latest
+        ``similarity_score``.
+
+        Guards:
+          * a self-edge (``from_note == to_note``) is refused — a note is not
+            "related" to itself, and the cosine ranking already excludes self;
+          * both ids are validated as ``note:<id>`` record ids (injection-safe,
+            and a wrong-table id is rejected rather than silently mis-linked).
+
+        Args:
+            from_note: source note record id.
+            to_note: target note record id.
+            similarity_score: the cosine that drove the link (stored on the edge).
+            method: how the link was derived (default ``"embedding"``).
+
+        Returns:
+            True on success; False if refused (self-edge / invalid id) or on a
+            DB error.
+        """
+        try:
+            from_rid = ensure_record_id(from_note)
+            to_rid = ensure_record_id(to_note)
+        except Exception as e:
+            logger.error(f"relate_note: invalid note id ({from_note}/{to_note}): {e}")
+            return False
+
+        if str(from_rid) == str(to_rid):
+            logger.warning(f"relate_note: refusing self-edge for {from_note}")
+            return False
+
+        if not (
+            str(from_rid).startswith("note:") and str(to_rid).startswith("note:")
+        ):
+            logger.error(
+                f"relate_note: both ids must be notes "
+                f"(got {from_rid} -> {to_rid})"
+            )
+            return False
+
+        try:
+            # Clear-before-relate: drop any prior edge for this exact (in, out)
+            # pair so the re-link replaces rather than duplicates (RELATE is not
+            # idempotent). Scoped to the directed pair — other edges untouched.
+            await execute_query(
+                "DELETE related_note WHERE in = $from AND out = $to",
+                {"from": from_rid, "to": to_rid},
+                self.config,
+            )
+            await execute_query(
+                "RELATE $from->related_note->$to "
+                "SET similarity_score = $score, method = $method",
+                {
+                    "from": from_rid,
+                    "to": to_rid,
+                    "score": float(similarity_score),
+                    "method": method,
+                },
+                self.config,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                f"relate_note: failed to relate {from_note} -> {to_note}: {e}"
+            )
+            return False
+
 
 class ChatSessionRepository(BaseRepository[ChatSession]):
     """Repository for ChatSession operations."""
