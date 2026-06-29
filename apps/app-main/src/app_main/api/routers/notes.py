@@ -5,12 +5,46 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
-from app_main.api.schemas import NoteCreate, NoteResponse, NoteUpdate
-from app_main.dependencies import get_note_service, get_notebook_service
+from app_main.api.schemas import (
+    NoteAutoLinkResponse,
+    NoteCreate,
+    NoteResponse,
+    NoteUpdate,
+)
+from app_main.dependencies import (
+    get_note_auto_link_service,
+    get_note_service,
+    get_notebook_service,
+)
+from app_main.services.note_auto_link_service import (
+    MAX_K,
+    NoteAutoLinkService,
+)
 from app_main.services.note_service import NoteService
 from app_main.services.notebook_service import NotebookService
+from surrealdb_service.repositories.base import _validate_record_id
 
 router = APIRouter(prefix="/notes", tags=["notes"])
+
+
+def _validate_note_id(note_id: str) -> str:
+    """Reject a malformed/unsafe note id at the route boundary (defense-in-depth).
+
+    The repo's ``relate_note`` strict-validates ids before any interpolation
+    (Y.1), but validating here too means a bad id (``;``-bearing injection
+    payload, wrong table, garbage) returns a clean 422 instead of falling
+    through to a service/DB layer. Mirrors the Y.1 follow-up: validate at the
+    boundary, not only in the repo.
+    """
+    try:
+        validated = _validate_record_id(str(note_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid note id: {exc}")
+    if not validated.startswith("note:"):
+        raise HTTPException(
+            status_code=422, detail="id must be a note record (note:...)"
+        )
+    return validated
 
 
 def _note_to_response(note) -> NoteResponse:
@@ -129,3 +163,52 @@ async def delete_note(
         raise HTTPException(status_code=404, detail="Note not found")
     await note_service.delete(note_id)
     logger.info("Deleted note {}", note_id)
+
+
+@router.post("/{note_id}/auto-link", response_model=NoteAutoLinkResponse)
+async def auto_link_note(
+    note_id: str,
+    k: int = Query(
+        5,
+        ge=1,
+        le=MAX_K,
+        description="Max related notes to consider/link (top-k by cosine)",
+    ),
+    min_similarity: float = Query(
+        0.75,
+        ge=-1.0,
+        le=1.0,
+        description="Minimum cosine similarity to link",
+    ),
+    note_service: NoteService = Depends(get_note_service),
+    auto_link_service: NoteAutoLinkService = Depends(get_note_auto_link_service),
+):
+    """Auto-link a note to its most-related notes by embedding similarity (Y.2).
+
+    Ensures the note has an embedding (embeds it if not), ranks other notes by
+    cosine, and writes idempotent ``related_note`` edges for those at/above
+    ``min_similarity`` (top-``k``). Re-running is a no-op for already-linked
+    pairs (clear-before-relate). Returns a summary; never a 500 for the ordinary
+    no-content / not-found cases.
+
+    Validation happens at the boundary: the note id is strict-validated, and
+    ``k`` / ``min_similarity`` are bounded by ``Query`` constraints — a bad value
+    is a 422, not a 500.
+    """
+    # Route-layer id validation (defense-in-depth; the repo also validates).
+    _validate_note_id(note_id)
+
+    existing = await note_service.get(note_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    result = await auto_link_service.auto_link(
+        note_id, k=k, min_similarity=min_similarity
+    )
+    logger.info(
+        "Auto-linked note {} -> {} edges (status={})",
+        note_id,
+        result.created,
+        result.status,
+    )
+    return NoteAutoLinkResponse(**result.to_dict())

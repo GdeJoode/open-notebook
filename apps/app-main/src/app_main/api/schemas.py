@@ -304,6 +304,39 @@ class NoteResponse(BaseModel):
     updated: str
 
 
+class NoteAutoLinkResponse(BaseModel):
+    """Summary of an auto-link run (Track Y.2)."""
+
+    note_id: str = Field(..., description="The note that was linked from")
+    status: str = Field(
+        ...,
+        description=(
+            "linked | needs_embedding | not_found — needs_embedding means the "
+            "note had no content to embed; not_found means no such note"
+        ),
+    )
+    created: int = Field(0, description="related_note edges (re)written")
+    skipped_existing: int = Field(
+        0, description="Candidates whose relate was refused/failed"
+    )
+    below_threshold: int = Field(
+        0, description="Ranked candidates dropped below min_similarity"
+    )
+    candidates_considered: int = Field(
+        0, description="Ranked candidates examined (top-k by cosine)"
+    )
+    embedded: bool = Field(
+        False, description="Whether this run embedded the note first"
+    )
+    min_similarity: float = Field(
+        ..., description="Effective min cosine applied"
+    )
+    k: int = Field(..., description="Effective top-k applied")
+    linked_note_ids: list[str] = Field(
+        default_factory=list, description="Note ids linked this run"
+    )
+
+
 # Embedding API schemas
 class EmbedRequest(BaseModel):
     item_id: str = Field(..., description="ID of the item to embed")
