@@ -46,6 +46,9 @@ from app_main.services.cites_materialization_service import (
     CitesMaterializationService,
 )
 from app_main.services.context_service import ContextService
+from app_main.services.contradiction_judge_service import (
+    ContradictionJudgeService,
+)
 from app_main.services.entity_extraction_service import EntityExtractionService
 from app_main.services.graph.doc_graph_builder import DocGraphBuilder
 from app_main.services.hybrid_retrieval_service import HybridRetrievalService
@@ -426,6 +429,32 @@ async def get_note_auto_link_service() -> NoteAutoLinkService:
     return NoteAutoLinkService(
         note_repo=get_note_repo(),
         embedding_service=embedding_service,
+    )
+
+
+async def get_contradiction_judge_service() -> ContradictionJudgeService:
+    """Build the Z.2 contradiction judge over RELATED source pairs.
+
+    Candidates come from the Track R related substrate
+    (``HybridRetrievalService``), persistence from Z.1's idempotent
+    ``relate_verdict``, and the LLM from the J.4 routed caller in JSON mode
+    (``default_chat_model`` — the judge is a chat-style reasoning task, not
+    extraction). Async because it builds the routed caller.
+    """
+    from app_main.services.entity_extraction_service import (
+        make_default_llm_caller,
+    )
+
+    llm_caller = await make_default_llm_caller(
+        default_field="default_chat_model",
+        json_mode=True,
+    )
+    return ContradictionJudgeService(
+        source_service=get_source_service(),
+        related_service=get_hybrid_retrieval_service(),
+        source_repo=get_source_repo(),
+        llm_caller=llm_caller,
+        judge_model=llm_caller.served_model_id or "default_chat_model",
     )
 
 
