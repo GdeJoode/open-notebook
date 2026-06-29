@@ -135,3 +135,96 @@
 - `packages/shared/src/shared/types/enums.py`
 - `packages/surrealdb-service/src/surrealdb_service/repositories/source.py`
 - `pipelines/embeddings/tests/test_aggregate.py`
+
+---
+
+## Phase PL.3 — Auto-chain GRAPH (mentions refresh) + INSIGHTS toggle — READY FOR REVIEW
+
+**Branch**: `track/pl3-autochain-graph-insights` (off `main` with PL.1 + PL.2 merged).
+**Commits**: `af4bd6f` (primitives) → `0ee4bee` (handler wiring + seam tests) →
+`e0610de` (DB tests) → `1b0349a` (notebook API toggle surface).
+
+### What shipped
+- **Source-scoped mentions refresh seam** — `MentionsProjectionService.refresh_source(source_id)`:
+  runs the FULL corpus projection (so each edge keeps its global R.2 weight × R.6
+  IDF / df — the weighting is inherently cross-source), then keeps only edges
+  whose `source_id == this source`, and writes only those:
+  `EntityRepository.clear_mentions_for_source` (a scoped `DELETE mentions WHERE
+  in = $src`) + the same idempotent `relate_mention` RELATE loop the global
+  `regenerate` uses. Source-scoped + idempotent; R.6 noise normalization
+  preserved (df==1 singletons never become edges).
+- **`graphed`/`complete` transitions** — `handle_entity_extract`, after a
+  successful extract (`extracted`), calls the new best-effort
+  `_refresh_source_mentions(source_id)` helper: refresh THIS source's mentions →
+  set `graphed` → set `complete`. A refresh failure logs and leaves the stage at
+  `extracted` (best-effort; extraction already persisted). `complete` is set
+  right after `graphed` — the KG chain (embed→extract→graph) is the spine;
+  INSIGHTS does NOT gate `complete` (simple, no join).
+- **Auto-INSIGHTS chain, per-notebook toggle** — the flag lives on
+  **`notebook.auto_insights`** (migration **72**, strict `bool DEFAULT true`,
+  S.4 drift-only backfill mirroring migration 71; `Notebook.auto_insights` model
+  field; `NotebookRepository.get_auto_insights` defaults ON on
+  missing/legacy/unknown/error). `_handle_embed_source` chains
+  `INSIGHT_EXTRACT`/`run_summaries` PARALLEL to the extract chain via
+  `_maybe_chain_insights`: resolve the owning notebook → read the toggle →
+  enqueue when ON, skip when OFF; unlinked source → default ON. Best-effort
+  (toggle-read error → ON; queue hiccup → logged, embed still returns).
+  Produces `source_insight` rows; does NOT touch `processing_stage`. Settable
+  via the notebook PUT API (`NotebookUpdate.auto_insights` /
+  `NotebookResponse.auto_insights`).
+- **Folded PL.2 minor (chunk-count guard)** — both the extract enqueue AND the
+  insights enqueue in `_handle_embed_source` are now guarded on
+  `embedded_chunks > 0` (the orchestrator's count), mirroring the
+  `DOCUMENT_PARSE→embed` `chunk_count > 0` guard. A zero-chunk source spawns no
+  no-op `run_entities` / `run_summaries` jobs.
+
+### Per-criterion evidence
+- **AC1** (source-scoped mentions appear with NO manual regenerate; endpoint
+  returns them): `@requires_docker`
+  `test_handle_entity_extract_graph_db.py::test_auto_extract_materializes_source_graph_and_completes`
+  drives the REAL `handle_entity_extract` (extraction mocked-but-persisted as a
+  real extraction would) → the source's `mentions` edge materializes via the
+  handler's own refresh, `get_document_entity_edges(source_id)` returns it, and
+  the OTHER source (sharing the concept) gets no edges (scoped). Plus
+  `test_mentions_refresh_source_db.py::test_refresh_source_creates_only_this_sources_edges`.
+- **AC2** (source-scoped + idempotent; R.6 preserved):
+  `test_mentions_refresh_source_db.py::test_refresh_source_is_scoped_and_idempotent`
+  (refresh c0 leaves c1's edges byte-identical; re-run cleared==created==2, no
+  dup pairs; spoke never an endpoint) +
+  `test_refresh_weights_match_global_regenerate` (scoped weights == global
+  regenerate weights).
+- **AC3** (INSIGHTS on/off, best-effort): seam tests
+  `test_handle_embed_source_insights_chain.py` — toggle ON → `run_summaries`
+  enqueued; OFF → skipped (extract still fires); unlinked → default ON; zero
+  chunks → neither enqueued; insights-enqueue failure best-effort. Toggle DB
+  evidence: `test_notebook_auto_insights_db.py` (default ON, explicit off,
+  unknown→ON).
+- **AC4** (`processing_stage` reaches `graphed`→`complete`; suites green):
+  `test_handle_entity_extract_graph_db.py` asserts `complete` end-to-end;
+  `test_handle_entity_extract_stage.py::test_success_sets_stage_extracted_then_graphed_complete`
+  asserts the `extracted→graphed→complete` order and
+  `test_graph_refresh_failure_keeps_stage_extracted` the best-effort fallback.
+  Regression: app-main non-docker **1370 passed** (only the 3 pre-existing
+  `TestBuildIngestionConfig` docling failures); PL.3 + adjacent DB suite **18
+  passed** (incl. the existing global `test_mentions_regenerate_db` 7 +
+  `test_processing_stage_db` 4); shared notebook/settings 19; surrealdb-service
+  non-docker entity/notebook/mention/source 19.
+
+### New files
+- `migrations/72.surrealql`, `migrations/72_down.surrealql`
+- `apps/app-main/tests/test_handle_embed_source_insights_chain.py`
+- `apps/app-main/tests/test_mentions_refresh_source_db.py`
+- `apps/app-main/tests/test_notebook_auto_insights_db.py`
+- `apps/app-main/tests/test_handle_entity_extract_graph_db.py`
+
+### Modified
+- `apps/app-main/src/app_main/handlers.py`
+- `apps/app-main/src/app_main/services/mentions_projection_service.py`
+- `apps/app-main/src/app_main/api/schemas.py`
+- `apps/app-main/src/app_main/api/routers/notebooks.py`
+- `packages/shared/src/shared/models/notebook.py`
+- `packages/surrealdb-service/src/surrealdb_service/repositories/notebook.py`
+- `packages/surrealdb-service/src/surrealdb_service/repositories/entity.py`
+- `apps/app-main/tests/test_handle_embed_source_autoextract.py`
+- `apps/app-main/tests/test_handle_entity_extract_stage.py`
+- `apps/app-main/tests/test_notebooks_router.py`
