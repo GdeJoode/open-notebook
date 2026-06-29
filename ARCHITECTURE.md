@@ -609,11 +609,73 @@ built and tested; the upkeep loop on mutation is the next increment. Because
 is a built-and-tested **mechanism** that lights up as notes accumulate — like the
 §9 `cites` edges (a clean no-op today, correct the moment the data arrives).
 
-**Extension point — note↔source.** Track Y core is note↔note. The orchestrator +
-edge pattern extend to **note↔source** with the same embedding-similarity
-mechanism and a second edge type (a `related_source` relation, or reusing the
-source-level ranking the other direction) — a documented, promotable follow-up,
-not built in Y.
+### 12a. Note→source (`note_about`): the second pass over the same embedding (Track NS)
+
+Track Y core is note↔note. **Track NS** extends it to **note→source** — a note
+auto-links to the *sources it is about* — by reusing Y's machinery rather than
+adding a parallel pipeline. The key insight is that one note has **one
+embedding**, so the orchestrator embeds the note **once** and runs **two passes**
+over that single vector, each a `rank → gate → idempotent RELATE`:
+
+1. **notes** → `find_related_by_embedding` → `relate_note` (the Y path, byte-for-byte unchanged);
+2. **sources** → `find_related_sources_by_embedding` → `relate_note_source` (NS) → `note_about` edges.
+
+Both passes share the **same** `min_similarity` + top-`k` gate (`k` bounds each
+pass independently), and `needs_embedding` / `not_found` short-circuit **both**
+symmetrically. The source pass is **purely additive** — appended after the note
+pass — so Y's behaviour is untouched. `AutoLinkResult` gained a parallel,
+distinctly-named source counter family (`source_links_created`,
+`source_skipped_existing`, `source_below_threshold`,
+`source_candidates_considered`, `linked_source_ids`) so the two link types never
+conflate; one `auto_link` call now reports both. Every trigger inherits this for
+free: the endpoint flattens `result.to_dict()`, the job returns
+`**result.to_dict()`, and the MCP `auto_link_note` tool runs the same second
+pass (repo-direct — both source primitives live in surrealdb-service, so the
+embedding-free layer covers sources without an embedding model).
+
+**The cross-type same-space requirement.** Ranking a note against sources only
+means anything if `note.embedding` and `source.embedding` live in the **same
+vector space**. They do, by construction: a `source.embedding` is the R.0
+mean-pool of that source's chunk vectors, each produced by the *same*
+`EmbeddingService` → `embedding_model.aembed` call that embeds a note
+(mxbai-embed-large, 1024-dim — [[embedding-model-pin-1024]]). cosine(note vector,
+source mean-pool) is then the standard query↔document retrieval signal. The
+`array::len(embedding) = array::len($q)` guard in the ranking query is the hard
+net: any dimension mismatch is *excluded*, never crashed — so even a future
+model swap degrades to "no candidates," not a corrupt edge.
+
+**The edge.** `note_about` (migration 70) is a
+`TYPE RELATION FROM note TO source` table — lowercase snake_case like
+`related_note`/`source_verdict`, schema.org/about-flavoured, and deliberately
+**distinct** from the ontology's uppercase entity-relation `ABOUT` predicate (a
+different layer/grain). It carries the same strict-with-defaults fields
+(`similarity_score`, `method`, `created_at`) and is fresh-container-verified
+(S.4). `relate_note_source` mirrors `relate_note`: strict `_validate_record_id`
+on **both** raw ids before interpolation (the cross-track `relate_cites`
+injection lesson — `RELATE`'s in/out positions cannot bind a `$param`),
+enforcing `note:` (in) / `source:` (out), clear-before-relate per `(in, out)`.
+
+**The no-embedding guard is load-bearing on the source side.** Both ranking
+queries share the predicate `embedding != NONE AND array::len(embedding) > 0`.
+In this SurrealDB version `array::len(NONE)` **raises** (it does not return
+`NONE`), so the bare `> 0` form the plan first suggested crashes on a source
+whose aggregate embedding is genuinely `NONE` (e.g. unaggregated). The `!= NONE`
+clause short-circuits before the length check and is therefore mandatory for the
+source path — correctness-neutral for the note path (strict `[]` embeddings),
+one shared form.
+
+**Data reality.** Unlike the note↔note layer in a note-sparse corpus, the
+note→source layer lights up **immediately** in the current source-heavy corpus —
+a note links to the convenanten / papers it resembles the moment it is embedded.
+That is the explicit reason NS was chosen as Y's first extension.
+
+> See **§12** for the shared orchestrator, trigger, and idempotency model that
+> NS reuses. Source: `apps/app-main/src/app_main/services/note_auto_link_service.py`
+> (the two-pass `auto_link`),
+> `packages/surrealdb-service/.../repositories/notebook.py`
+> (`find_related_sources_by_embedding` + `relate_note_source`), migration
+> `70.surrealql`, and `docs/tracks/NS-note-source-autolink/status.md`
+> (per-AC evidence + RETRO).
 
 > See `apps/app-main/src/app_main/services/note_auto_link_service.py`,
 > `apps/app-main/src/app_main/handlers.py` (`handle_note_auto_link` +
@@ -712,5 +774,6 @@ that lights up as the corpus grows — like the §9 `cites` edges.
 - `docs/tracks/W-mcp-graph-memory/OPERATOR_GUIDE.md` — registering the `surrealdb-mcp` server + gated reranker bring-up/smoke/fallback
 - `docs/tracks/X-citations-to-source/status.md` — Track X retrospective (provenance → citation flow + faithfulness guard; membership-not-semantic)
 - `docs/tracks/Y-auto-link/status.md` — Track Y retrospective (note auto-link: embedding → similarity → `related_note`; on-demand + background-job trigger; note↔source extension)
+- `docs/tracks/NS-note-source-autolink/status.md` — Track NS retrospective (note→source auto-link: the second pass over one embedding → `note_about`; cross-type same-space; the `array::len(NONE)` gotcha)
 - `docs/tracks/Z-contradiction/status.md` — Track Z retrospective (contradiction detection: related pairs → LLM judge → `source_verdict`; precision-first; background-job + claim-level extensions)
 - `docs/troubleshooting/exports.md` — failure-mode diagnostics for the three export formats

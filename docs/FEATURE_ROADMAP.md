@@ -1434,7 +1434,56 @@ embeddings + the embed job (the trigger), the source-level similarity pattern.
 source-heavy corpus / few notes today — a built-and-tested mechanism that lights
 up as notes accumulate (like the Track U `cites` edges). **Extension point**:
 **note↔source** — same embedding-similarity mechanism, a second edge type; a
-documented, promotable follow-up, not built in Y.
+documented follow-up in Y, **now built in Track NS** (below).
+
+---
+
+## Track NS — Note→source auto-link (extend Y: notes link to the sources they're about) (NEW)
+
+> **Status**: ✅ CLOSED (2026-06-29). Y's promoted note↔source extension. A note
+> auto-links to the **sources it is about** (by embedding similarity), persisted
+> as `note_about` graph edges, alongside the existing note→note `related_note`
+> links. The orchestrator embeds the note **once** and runs **two passes** over
+> that one vector (notes, then sources); every trigger — the
+> `POST /notes/{id}/auto-link` endpoint, the `NOTE_AUTO_LINK` job, and the MCP
+> `auto_link_note` tool — carries both link types through for free. Chosen as Y's
+> first extension because, unlike note↔note in a note-sparse corpus, note→source
+> **lights up immediately** in the current source-heavy corpus. See
+> [`docs/tracks/NS-note-source-autolink/status.md`](./tracks/NS-note-source-autolink/status.md)
+> and `ARCHITECTURE.md` §12a.
+
+**Vision**: a note self-locates against the source corpus it lives in — link a
+new note to the convenanten / papers it most resembles — reusing Y's
+orchestrator, threshold/top-k discipline, idempotent + injection-safe RELATE, and
+the after-embed trigger, with a second edge type and a cross-type ranking.
+
+**Phases**: NS.1 note→source similarity + the `note_about` edge —
+`NoteRepository.find_related_sources_by_embedding` (cosine of `note.embedding` vs
+every `source.embedding`, no-embedding graceful) + migration 70
+(`TYPE RELATION FROM note TO source`, fresh-container-safe) + an idempotent,
+injection-safe `relate_note_source` (strict id validation on both endpoints,
+clear-before-relate, `note:`→`source:` typing enforced); the cross-type
+same-space embedding validity verified as a STOP gate first · NS.2 extend the
+orchestrator + triggers — `auto_link` gains the additive second pass
+(`find_related_sources_by_embedding` → threshold/top-k → `relate_note_source`)
+and a parallel, distinctly-named source counter family; the endpoint, job, and
+MCP tool all carry it through · NS.3 integration + docs/RETRO — `ARCHITECTURE.md`
+§12a, this entry, RETRO; the two NS.2 minors folded (trigger docstrings refreshed
+to describe both link types; the MCP `source_skipped` key aligned to
+`source_skipped_existing` to match the HTTP/service layer).
+
+**Value**: in a source-heavy corpus, immediate, visible note→source links from
+the moment a note is embedded — the same meaning-organised graph as Y, but
+landing on the data that actually exists today. **Depends on**: Track Y
+(orchestrator + edge/RELATE pattern + the embed trigger), R.0 source aggregate
+embeddings (the same-space other end of the cosine). **Cross-type validity**:
+note + source embeddings are the same model/space by construction
+(mxbai-embed-large, 1024-dim); the `array::len` guard excludes any mismatch
+rather than crashing. **Gotcha**: `array::len(NONE)` raises in this SurrealDB
+version, so the `!= NONE` guard before the length check is load-bearing on the
+source side. **Extension point**: note→entity (link a note to the entities it
+mentions) and edit-relink (re-run on note edit — idempotent `auto_link` makes it
+a drop-in), both noted follow-ups, not built in NS.
 
 ---
 

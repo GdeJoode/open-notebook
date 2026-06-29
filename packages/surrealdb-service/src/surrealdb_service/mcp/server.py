@@ -399,7 +399,7 @@ def create_server() -> FastMCP:
         Returns:
             JSON ``{note_id, status, created, below_threshold, skipped,
             candidates_considered, linked_note_ids, source_links_created,
-            source_below_threshold, source_skipped, source_candidates_considered,
+            source_below_threshold, source_skipped_existing, source_candidates_considered,
             linked_source_ids, k, min_similarity}``. ``status`` is ``"linked"`` |
             ``"needs_embedding"`` | ``"not_found"`` | ``"invalid_id"``.
         """
@@ -464,7 +464,7 @@ def create_server() -> FastMCP:
         source_candidates = await repo.find_related_sources_by_embedding(rid, eff_k)
         source_created = 0
         source_below = 0
-        source_skipped = 0
+        source_skipped_existing = 0
         linked_sources: List[str] = []
         for cand in source_candidates:
             score = cand.get("score")
@@ -481,7 +481,7 @@ def create_server() -> FastMCP:
                 source_created += 1
                 linked_sources.append(target)
             else:
-                source_skipped += 1
+                source_skipped_existing += 1
 
         return json.dumps(
             {
@@ -494,7 +494,7 @@ def create_server() -> FastMCP:
                 "linked_note_ids": linked,
                 "source_links_created": source_created,
                 "source_below_threshold": source_below,
-                "source_skipped": source_skipped,
+                "source_skipped_existing": source_skipped_existing,
                 "source_candidates_considered": len(source_candidates),
                 "linked_source_ids": linked_sources,
                 "k": eff_k,

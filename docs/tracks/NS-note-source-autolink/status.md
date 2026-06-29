@@ -1,5 +1,13 @@
 # Track NS — Status
 
+> **✅ TRACK NS CLOSED (2026-06-29).** Note→source auto-link shipped: a note
+> auto-links to the sources it is about (`note_about` edges) alongside the
+> note→note `related_note` links, through the same on-demand / job / MCP
+> triggers. NS.1 (similarity + edge + injection-safe relate) → NS.2
+> (orchestrator + triggers) → NS.3 (integration + docs + RETRO). See the RETRO
+> at the foot of this file, `ARCHITECTURE.md` §12a, and the
+> `docs/FEATURE_ROADMAP.md` Track NS entry.
+
 ## Phase NS.1 — Note→source similarity + `note_about` edge + helper (Backend) — READY FOR REVIEW
 
 **Branch**: `track/ns1-note-source-similarity` (off `main` @ `56cd093`, Tracks W/X/Y/Z merged)
@@ -144,3 +152,140 @@ file-by-file; full app-main **1420 passed** (only the 3 known docling failures +
 `test_note_source_similarity_roundtrip.py` in **one** pytest invocation cross-pollutes
 the shared container (those exact-ranking tests aren't isolation-safe) — this
 pre-exists on `main` (confirmed by stashing). Run them file-by-file.
+
+---
+
+## Phase NS.3 — Integration + docs + RETRO (CLOSE) — READY FOR REVIEW
+
+**Branch**: `track/ns3-integration` (off `main` @ `c2cc13f`, NS.1 + NS.2 merged)
+
+### Deliverable 1 — ARCHITECTURE note (`ARCHITECTURE.md` §12a)
+Added **§12a "Note→source (`note_about`): the second pass over the same
+embedding (Track NS)"** under §12 (Track Y), cross-referencing §12 for the shared
+orchestrator/trigger/idempotency rather than restating them. It covers: the
+two-pass-over-one-embedding orchestrator; the `note_about` edge (migration 70,
+`TYPE RELATION FROM note TO source`, distinct from the ontology `ABOUT`); the
+cross-type **same-space** embedding requirement (note + source both
+mxbai-embed-large/1024 by construction, the `array::len` guard as the hard net);
+the `array::len(NONE)`-raises gotcha making the `!= NONE` guard load-bearing on
+the source side; and the source-heavy-corpus immediate-visibility value. Existing
+§12 (Y) is untouched; the §12 "see" block is preserved; the NS entry is added to
+"Further reading" right after the Track Y line.
+
+### Deliverable 2 — the two NS.2 minors, folded
+**(a) Trigger docstrings refreshed.** The Y.2-era docstrings on the two trigger
+surfaces now describe **both** link types (they were already functionally correct
+via the full-`to_dict()` spread, just under-documented):
+- `apps/app-main/src/app_main/api/routers/notes.py` — `POST /notes/{id}/auto-link`
+  docstring now states the two passes (notes → `related_note`, sources →
+  `note_about`) and the two distinct counter families.
+- `apps/app-main/src/app_main/handlers.py` — `handle_note_auto_link` docstring now
+  states both passes and that `result.to_dict()` carries both counter families
+  through the job for free.
+
+**(b) MCP key aligned.** The MCP `auto_link_note` tool's JSON key
+`source_skipped` → **`source_skipped_existing`**
+(`packages/surrealdb-service/.../mcp/server.py`), matching the service/HTTP layer
+(`AutoLinkResult.source_skipped_existing` / `NoteAutoLinkResponse`). **Safe
+rename confirmed**: a repo-wide grep found the *only* consumer of the old key was
+the MCP test itself (`test_mcp_auto_link_note.py`) — no external/HTTP consumer
+reads it — so the MCP and HTTP surfaces now report the identical key, with no
+breakage. The local var and the docstring's returned-keys list were renamed in
+lockstep; the test assertion updated.
+
+### Per-criterion evidence
+- **AC1** (ARCHITECTURE covers the note→source layer + shared two-pass
+  orchestrator; existing sections not clobbered; "Further reading" preserved):
+  §12a added under §12; §12 (Y) and its "see" block untouched; "Further reading"
+  retains every prior line + the new NS line.
+- **AC2** (the two minors folded): router/handler docstrings now describe both
+  link types; MCP key is `source_skipped_existing`, test updated, no consumer
+  breakage (grep-verified).
+- **AC3** (RETRO written; Track NS CLOSED; FEATURE_ROADMAP updated; extensions
+  noted): see RETRO below; CLOSED banner at top of this file + the roadmap Track
+  NS entry (status ✅ CLOSED); note→entity + edit-relink extensions noted in both.
+- **AC4** (suites green): see the suite run below.
+
+### Suites (NS.3)
+- app-main auto-link suite: `test_note_auto_link_service.py` (18) +
+  `test_notes_auto_link_router.py` (9) + `test_handle_note_auto_link_db.py` —
+  **green** (docstring changes are comment-only; no behaviour change).
+- surrealdb-service MCP auto-link: `test_mcp_auto_link_note.py` (9) — **green**
+  after the `source_skipped_existing` rename (the renamed assertion balances).
+- surrealdb-service NS suites: migration-70 + the two `*_similarity_roundtrip.py`
+  run **file-by-file** (pre-existing shared-container cross-pollution); the 3
+  docling failures are the known baseline, unrelated to NS.
+
+---
+
+## Track NS — RETRO
+
+**What NS was.** Track Y's promoted note↔source extension: a note auto-links to
+the **sources it is about** (`note_about` edges) by embedding similarity,
+alongside Y's note→note `related_note` links, through the same on-demand / job /
+MCP triggers.
+
+**What went right.**
+
+1. **Cross-type same-space validation as a STOP gate, done first (NS.1).** The
+   whole feature rests on `cosine(note.embedding, source.embedding)` meaning
+   something. We proved it before writing the ranker: a `source.embedding` is the
+   R.0 mean-pool of chunk vectors from the *same* `EmbeddingService` →
+   `embedding_model.aembed` call that embeds a note (mxbai-embed-large, 1024-dim).
+   A read-only staging probe confirmed 1024-dim sources; the note vector is
+   1024-dim by construction. cosine(note, source mean-pool) is just the standard
+   query↔document retrieval signal. No surprise, no STOP — but checking *first*
+   was the right discipline for a cross-type comparison.
+
+2. **The `array::len(NONE)` SurrealDB gotcha — the `!= NONE` guard is
+   load-bearing.** The plan suggested the bare `array::len(embedding) > 0`
+   no-embedding filter. That **crashes** on the source path: in this SurrealDB
+   version `array::len(NONE)` *raises* (it does not return `NONE`), and a source
+   whose aggregate embedding never aggregated is genuinely `NONE`. The fix —
+   `embedding != NONE AND array::len(embedding) > 0`, the `!= NONE` clause
+   short-circuiting before the length check — is mandatory for sources and
+   correctness-neutral for notes (strict `[]` embeddings). One shared predicate
+   across both ranking queries. This is the load-bearing gotcha of the track.
+
+3. **Additive two-pass design — reuse over a parallel pipeline.** One note has one
+   embedding, so the orchestrator embeds **once** and runs two passes over that
+   vector (notes → `relate_note`; sources → `relate_note_source`). The source pass
+   is appended after the note pass and shares its `min_similarity` + top-`k` gate;
+   the note path is byte-for-byte unchanged; `needs_embedding`/`not_found`
+   short-circuit both symmetrically. NS reused Y's orchestrator, threshold/top-k
+   discipline, after-embed trigger, and NS.1's injection-safe `relate_note_source`
+   (the `relate_cites`/`relate_note` clear-before-relate + strict-id-before-
+   interpolation lesson — `RELATE` can't bind a `$param` in the in/out position).
+   Every trigger inherited the second pass for free because each returns the full
+   `result.to_dict()` — the only trigger work was the MCP repo-direct second pass.
+
+4. **Distinct counter families prevent conflation.** A parallel,
+   distinctly-named source counter family (`source_links_created`,
+   `source_skipped_existing`, …) alongside the note family means one `auto_link`
+   call reports both link types without ever mixing them — and (NS.3) the MCP key
+   was aligned to `source_skipped_existing` so the MCP and HTTP surfaces report
+   identical keys.
+
+5. **Immediate visibility in a source-heavy corpus.** The explicit reason NS was
+   chosen as Y's first extension: unlike note↔note in a note-sparse corpus,
+   note→source lights up the moment a note is embedded — a note links to the
+   convenanten / papers it resembles. NS landed Y's mechanism on the data that
+   actually exists today.
+
+**Friction / honest caveats.**
+- The two `*_similarity_roundtrip.py` exact-ranking tests cross-pollute the shared
+  container if run in one pytest invocation (pre-exists on `main`); they must run
+  file-by-file. Not an NS regression, but a sharp edge for the next implementer.
+- The router log line still reports only the note-edge count (`result.created`);
+  cosmetic, the response body carries both families. Left as-is.
+
+**Extensions noted (not built in NS).**
+- **note→entity** — link a note to the entities it mentions (a third pass / third
+  edge type over the same orchestrator).
+- **edit-relink** — re-run `auto_link` when a note's content/embedding changes so
+  stale `related_note` + `note_about` edges refresh; idempotent `auto_link` makes
+  it a clean drop-in (re-run after the edit's embedding settles), not new
+  machinery — the same honest framing carried from Y.
+
+**Status: ✅ TRACK NS CLOSED (2026-06-29).** All three phases shipped; the
+Constella note-graph now spans note→note **and** note→source.
