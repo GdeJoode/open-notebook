@@ -227,25 +227,27 @@ def parse_verdict(raw: Optional[str]) -> JudgeVerdict:
          "reasoning": "<str>"}
 
     Tolerances:
-      * surrounding prose / code fences are stripped to the first ``{...}`` block;
+      * code fences (```json … ```) are stripped;
       * the verdict label is lower-cased and trimmed; an unknown label -> neutral;
       * a confidence outside [0, 1] is clamped; a non-numeric one -> 0.0;
       * a missing ``reasoning`` -> "".
-    """
-    import json
 
+    Hard rule (the no-false-edge invariant): ONLY a top-level JSON **object** is
+    accepted. A top-level JSON ARRAY — even ``[{"verdict": "contradicts", ...}]``,
+    a common "respond with JSON" failure mode — degrades to ``neutral``; the
+    parser must NEVER descend into an array element and lift a verdict out of it,
+    because that would fabricate a confident edge from a malformed response. Any
+    non-object top-level value (array, scalar, etc.) -> neutral.
+    """
     if not raw or not raw.strip():
         return JudgeVerdict("neutral", 0.0, "")
 
-    obj = _extract_json_object(raw)
+    obj = _parse_top_level_object(raw)
     if obj is None:
-        # Last resort: maybe the whole string is JSON the brace-scan missed.
-        try:
-            obj = json.loads(raw)
-        except Exception:  # noqa: BLE001 — any parse failure -> neutral
-            obj = None
-    if not isinstance(obj, dict):
-        logger.debug("judge parse: non-object response -> neutral; raw={!r}", raw[:200])
+        logger.debug(
+            "judge parse: non-object / unparseable response -> neutral; raw={!r}",
+            raw[:200],
+        )
         return JudgeVerdict("neutral", 0.0, "")
 
     verdict = str(obj.get("verdict", "")).strip().lower()
@@ -261,12 +263,77 @@ def parse_verdict(raw: Optional[str]) -> JudgeVerdict:
     return JudgeVerdict(verdict=verdict, confidence=confidence, reasoning=reasoning)
 
 
-def _extract_json_object(text: str) -> Optional[dict]:
-    """Return the first balanced top-level ``{...}`` object in ``text``, or None.
+def _strip_code_fence(text: str) -> str:
+    """Strip a single surrounding ```/```json code fence, if present.
 
-    Models in json_mode usually emit a bare object, but a stray code fence or a
-    leading sentence shouldn't defeat parsing. Scans for the first ``{`` and the
-    matching ``}`` (brace-depth, string-aware) and json-loads that slice.
+    Many models wrap JSON in a fence even in json_mode. We remove a leading
+    ```` ```json ```` / ```` ``` ```` line and a trailing ```` ``` ```` so the
+    remainder can be parsed as bare JSON. Leaves un-fenced text unchanged.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    # Drop the opening fence line (``` or ```json) and an optional closing fence.
+    after_open = stripped[3:]
+    newline = after_open.find("\n")
+    if newline == -1:
+        return stripped  # malformed single-line fence — leave as-is
+    body = after_open[newline + 1 :]
+    close = body.rfind("```")
+    if close != -1:
+        body = body[:close]
+    return body.strip()
+
+
+def _parse_top_level_object(text: str) -> Optional[dict]:
+    """Parse ``text`` to a JSON object, accepting ONLY a top-level ``dict``.
+
+    The no-false-edge invariant lives here. We first try to parse the cleaned
+    (fence-stripped) text as JSON and accept the result ONLY if it is a ``dict``.
+    A top-level ARRAY (``[...]``) or any scalar -> ``None`` (neutral); we NEVER
+    descend into an array element to lift out a verdict object.
+
+    A prose-wrapped object (``"Here is my judgment: {…}"``) is still recovered by
+    a guarded balanced-``{...}`` scan — BUT only when the cleaned text is not a
+    top-level array (the first meaningful char is not ``[``), so a ``{`` nested
+    inside ``[{…}]`` is never extracted.
+    """
+    import json
+
+    cleaned = _strip_code_fence(text)
+    if not cleaned:
+        return None
+
+    # Direct parse: the json_mode happy path. Accept ONLY a dict; a list/scalar
+    # (e.g. ``[{"verdict": "contradicts", ...}]``) is rejected outright.
+    try:
+        parsed = json.loads(cleaned)
+    except Exception:  # noqa: BLE001 — fall through to the prose scan
+        parsed = None
+    if parsed is not None:
+        return parsed if isinstance(parsed, dict) else None
+
+    # Prose fallback: a balanced ``{...}`` embedded in surrounding text
+    # (``"Here is my judgment: {…}"``). Guard against descending into an array:
+    # if the FIRST JSON-structural character (``[`` or ``{``) is ``[`` — whether
+    # the array is bare (``[{…}]``) or prose-wrapped (``"Result: [{…}]"``) — the
+    # ``{`` that follows is nested inside that array, so we must NOT extract it.
+    # Refuse unless a ``{`` appears at top level before any ``[``.
+    brace = cleaned.find("{")
+    bracket = cleaned.find("[")
+    if brace == -1:
+        return None
+    if bracket != -1 and bracket < brace:
+        return None
+    return _first_balanced_object(cleaned)
+
+
+def _first_balanced_object(text: str) -> Optional[dict]:
+    """Return the first balanced ``{...}`` slice in ``text`` as a dict, or None.
+
+    String-aware brace matching (a ``}`` inside a JSON string does not close the
+    object). Caller guarantees ``text`` is not a top-level array, so the first
+    ``{`` is the object itself, not one nested inside ``[...]``.
     """
     import json
 
@@ -304,11 +371,17 @@ def _extract_json_object(text: str) -> Optional[dict]:
 
 
 def _coerce_confidence(value: Any) -> float:
-    """Coerce a raw confidence to a clamped [0, 1] float; non-numeric -> 0.0."""
-    try:
-        conf = float(value)
-    except (TypeError, ValueError):
+    """Coerce a raw confidence to a clamped [0, 1] float; else -> 0.0.
+
+    Strict-numeric: only a real ``int``/``float`` is accepted. A confidence that
+    arrives as a STRING (``"0.9"``) or any other type signals the model is not
+    honoring json_mode, so it degrades to ``0.0`` (neutral / no edge) rather than
+    being string-parsed into a gate-clearing score — precision-first. ``bool`` is
+    excluded (it is an ``int`` subclass but never a real confidence).
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return 0.0
+    conf = float(value)
     if conf != conf:  # NaN
         return 0.0
     return max(MIN_CONFIDENCE_FLOOR, min(conf, MIN_CONFIDENCE_CEIL))

@@ -109,24 +109,66 @@ def test_parse_neutral():
     assert v.verdict == "neutral"
 
 
+# The load-bearing adversarial set: every one of these MUST degrade to neutral /
+# NO-edge. The no-false-edge invariant is the whole point of Z.2, so the array
+# variants (a top-level array, AND an array CONTAINING a confident verdict
+# object) are first-class cases here, not just scalar arrays.
+_MALFORMED_NO_EDGE = [
+    "",
+    "   ",
+    "not json at all",
+    "{not: valid, json}",
+    '{"confidence": 0.9}',  # missing verdict -> neutral
+    '{"verdict": "definitely-contradicts", "confidence": 0.99}',  # unknown label
+    "[1, 2, 3]",  # scalar array
+    # BLOCKER case: a top-level ARRAY containing a confident verdict object. The
+    # parser must NOT descend into the array and lift the verdict out.
+    '[{"verdict": "contradicts", "confidence": 0.99, "reasoning": "x"}]',
+    # Same, fenced — the fence-strip must not change the array semantics.
+    '```json\n[{"verdict": "contradicts", "confidence": 0.99, "reasoning": "x"}]\n```',
+    # A top-level array with leading prose — still must not be descended into.
+    'Result: [{"verdict": "reinforces", "confidence": 0.98, "reasoning": "y"}]',
+    '{"verdict": "contradicts", "confidence": "0.9"}',  # STRING confidence -> 0.0
+    None,
+]
+
+
+@pytest.mark.parametrize("raw", _MALFORMED_NO_EDGE)
+def test_parse_malformed_degrades_to_neutral_or_no_edge(raw):
+    v = parse_verdict(raw)
+    # Every malformed case is NON-PERSISTABLE — either neutral, or (the string-
+    # confidence case) a label with confidence coerced to 0.0. Never a real edge.
+    assert not v.is_persistable(DEFAULT_MIN_CONFIDENCE)
+
+
 @pytest.mark.parametrize(
     "raw",
     [
-        "",
-        "   ",
-        "not json at all",
-        "{not: valid, json}",
-        '{"confidence": 0.9}',  # missing verdict -> neutral
-        '{"verdict": "definitely-contradicts", "confidence": 0.99}',  # unknown label
-        "[1, 2, 3]",  # JSON array, not object
-        None,
+        '[{"verdict": "contradicts", "confidence": 0.99, "reasoning": "x"}]',
+        '```json\n[{"verdict": "contradicts", "confidence": 0.99, "reasoning": "x"}]\n```',
+        'Result: [{"verdict": "reinforces", "confidence": 0.98, "reasoning": "y"}]',
+        "[1, 2, 3]",
     ],
 )
-def test_parse_malformed_degrades_to_neutral(raw):
+def test_parse_top_level_array_is_always_neutral(raw):
+    # A top-level array NEVER yields a verdict — the parser refuses to reach into
+    # array elements. This is the explicit blocker fix (plan adversarial case c).
     v = parse_verdict(raw)
     assert v.verdict == "neutral"
-    # A malformed/unknown response must never be persistable.
-    assert not v.is_persistable(DEFAULT_MIN_CONFIDENCE)
+    assert v.confidence == 0.0
+
+
+def test_parse_object_with_bracket_in_reasoning_still_parses():
+    # A legit object whose reasoning contains a ``[`` (e.g. a citation marker) is
+    # NOT a top-level array — the object's ``{`` precedes the ``[``, so the guard
+    # must not over-refuse it.
+    raw = (
+        "Here is my judgment: "
+        '{"verdict": "contradicts", "confidence": 0.9, "reasoning": "see [1] vs [2]"}'
+    )
+    v = parse_verdict(raw)
+    assert v.verdict == "contradicts"
+    assert v.confidence == pytest.approx(0.9)
 
 
 def test_parse_strips_fences_and_prose():
@@ -140,17 +182,62 @@ def test_parse_strips_fences_and_prose():
     assert v.confidence == pytest.approx(0.95)
 
 
+def test_parse_bare_fenced_object_ok():
+    # A bare fenced object (no surrounding prose) parses normally.
+    raw = '```json\n{"verdict": "reinforces", "confidence": 0.8, "reasoning": "r"}\n```'
+    v = parse_verdict(raw)
+    assert v.verdict == "reinforces"
+    assert v.confidence == pytest.approx(0.8)
+
+
+def test_parse_brace_inside_reasoning_string_never_wrong_edge():
+    # A stray ``}`` INSIDE the reasoning string must not truncate the object into
+    # a wrong/fabricated verdict. It either parses to the genuine verdict or
+    # degrades to neutral — but NEVER a different/fabricated one.
+    raw = (
+        '{"verdict": "contradicts", "confidence": 0.9, '
+        '"reasoning": "they disagree } on budget"}'
+    )
+    v = parse_verdict(raw)
+    assert v.verdict in ("contradicts", "neutral")
+    if v.verdict == "contradicts":
+        # If it parsed, it parsed the WHOLE object correctly (string-aware).
+        assert v.confidence == pytest.approx(0.9)
+        assert v.reasoning == "they disagree } on budget"
+
+
+def test_parse_two_json_blocks_takes_first_object_only():
+    # Two objects in one response: the first balanced object is used; the parser
+    # never merges or mis-parses across blocks into a fabricated verdict.
+    raw = (
+        '{"verdict": "neutral", "confidence": 0.2, "reasoning": "a"}\n'
+        '{"verdict": "contradicts", "confidence": 0.99, "reasoning": "b"}'
+    )
+    v = parse_verdict(raw)
+    # json.loads of the whole string fails (two top-level values), so the prose
+    # scan recovers the FIRST balanced object — the neutral one. Never the
+    # confident contradicts from the second block.
+    assert v.verdict == "neutral"
+    assert not v.is_persistable(DEFAULT_MIN_CONFIDENCE)
+
+
 def test_parse_clamps_confidence_out_of_range():
     assert parse_verdict('{"verdict": "neutral", "confidence": 5}').confidence == 1.0
     assert parse_verdict('{"verdict": "neutral", "confidence": -3}').confidence == 0.0
 
 
-def test_parse_valid_verdict_with_bad_confidence_is_not_persistable():
-    # A valid label but a non-numeric confidence: the label is preserved, the
-    # confidence degrades to 0.0, so the precision gate (not the parser) blocks
-    # the edge. Proves a parse hiccup can only ever SUPPRESS, never fabricate.
-    v = parse_verdict('{"verdict": "contradicts", "confidence": "high"}')
+def test_parse_valid_verdict_with_string_confidence_is_not_persistable():
+    # A valid label but a STRING confidence ("0.9"): the label is preserved, the
+    # confidence degrades to 0.0 (the model isn't honoring json_mode), so the
+    # gate blocks the edge. A parse hiccup can only SUPPRESS, never fabricate.
+    v = parse_verdict('{"verdict": "contradicts", "confidence": "0.9"}')
     assert v.verdict == "contradicts"
+    assert v.confidence == 0.0
+    assert not v.is_persistable(DEFAULT_MIN_CONFIDENCE)
+
+
+def test_parse_non_string_confidence_high_word_is_zero():
+    v = parse_verdict('{"verdict": "contradicts", "confidence": "high"}')
     assert v.confidence == 0.0
     assert not v.is_persistable(DEFAULT_MIN_CONFIDENCE)
 
@@ -242,6 +329,29 @@ async def test_malformed_response_writes_no_edge_no_crash():
     svc, repo, _ = _service("the documents seem related but I cannot output JSON")
     verdict, written = await svc.judge_pair("source:a", "source:b")
     assert verdict.verdict == "neutral"
+    assert written is False
+    repo.relate_verdict.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # The BLOCKER: an array containing a confident verdict object — end-to-end
+        # this must NOT write an edge (the reviewer's confirmed false-edge case).
+        '[{"verdict": "contradicts", "confidence": 0.99, "reasoning": "x"}]',
+        '```json\n[{"verdict": "contradicts", "confidence": 0.99, "reasoning": "x"}]\n```',
+        'Result: [{"verdict": "contradicts", "confidence": 0.99, "reasoning": "x"}]',
+        "[1, 2, 3]",
+        '{"verdict": "contradicts", "confidence": "0.99"}',  # string confidence
+        '{"verdict": "definitely-contradicts", "confidence": 0.99}',  # unknown label
+        "not json at all",
+    ],
+)
+async def test_adversarial_response_writes_no_edge_end_to_end(raw):
+    # Drive each adversarial response through the FULL judge_pair path and assert
+    # relate_verdict is NEVER awaited — the no-false-edge invariant end-to-end.
+    svc, repo, _ = _service(raw)
+    _, written = await svc.judge_pair("source:a", "source:b")
     assert written is False
     repo.relate_verdict.assert_not_awaited()
 

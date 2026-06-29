@@ -164,6 +164,24 @@ async def test_below_threshold_writes_no_edge_on_real_db(
 
 
 @pytest.mark.asyncio
+async def test_json_array_response_writes_no_edge_on_real_db(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    # The blocker, end-to-end on the real DB: a top-level array containing a
+    # confident contradicts object must NOT create a source_verdict row.
+    a = await _make_source(live_surrealdb)
+    b = await _make_source(live_surrealdb)
+    svc = _service(
+        live_surrealdb,
+        '[{"verdict": "contradicts", "confidence": 0.99, "reasoning": "x"}]',
+    )
+    verdict, written = await svc.judge_pair(a, b)
+    assert verdict.verdict == "neutral"
+    assert written is False
+    assert await _edge_rows(live_surrealdb, a, b) == []
+
+
+@pytest.mark.asyncio
 async def test_canonical_source_rows_untouched(
     live_surrealdb: SurrealDBConfig,
 ) -> None:
