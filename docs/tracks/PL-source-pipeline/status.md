@@ -64,3 +64,74 @@
 - `pipelines/embeddings/src/embeddings/service.py`
 - `scripts/backfill_chunk_embeddings.py`
 - `apps/app-main/tests/test_backfill_chunk_embeddings_db.py`
+
+---
+
+## Phase PL.2 — Auto-chain EXTRACT after EMBED + `processing_stage` — DONE
+
+**Branch**: `track/pl2-autochain-extract` (off `main` with PL.1 merged).
+
+### What shipped
+- **Auto-chain seam**: `_handle_embed_source` (`apps/app-main/.../handlers.py`) now,
+  after a successful SOURCE embed, best-effort enqueues `run_entities`
+  (`CommandService.submit_command_job("open_notebook","run_entities",{source_id})`) —
+  mirroring the `DOCUMENT_PARSE→embed` chain exactly (try/except, log, never fail the
+  embed). Sources only; the note path (`_handle_embed_single_item`) still chains
+  `NOTE_AUTO_LINK`. This closes the foundational gap (the KG never built automatically).
+- **`source.processing_stage`** — migration **71** (strict `string DEFAULT "ingested"`
+  on the SCHEMAFULL `source` table + drift-only S.4 backfill, mirroring migration 65
+  `source.private`; `71_down` REMOVEs the brand-new field). Model field
+  `Source.processing_stage` + `ProcessingStage` enum (`shared/types/enums.py`) +
+  `SourceRepository.set_processing_stage` (best-effort).
+- **Stage transitions** (handler-level, best-effort via `_set_processing_stage`):
+  parse OK → `ingested`; embed OK → `embedded`; extract OK → `extracted`; schema gate →
+  `awaiting_schema_review` (then reraise → worker parks `PAUSED_FOR_REVIEW`); hard
+  failure (parse/embed/extract) → `failed`.
+- **Gate respected**: the auto-enqueued extract uses the existing `run_extraction`
+  path, so an unreviewed-schema notebook raises `SchemaReviewPendingError` → handler
+  sets `awaiting_schema_review` and reraises → no entities, no crash.
+
+### Per-criterion evidence
+- **AC1** (ingest→entities with no manual call): seam proven in
+  `apps/app-main/tests/test_handle_embed_source_autoextract.py::test_autoextract_enqueued_after_embed`
+  (embed → exactly one `run_entities` enqueue for the source + stage=`embedded`). The
+  plan permits the seam assertion in lieu of a full LLM roundtrip.
+- **AC2** (gate parks, zero entities): `@requires_docker`
+  `test_handle_entity_extract_gate_db.py::test_auto_extract_parks_on_schema_review_gate`
+  drives the REAL `handle_entity_extract` against a live container with a
+  `review_required` `NotebookSchema` → `SchemaReviewPendingError`,
+  `processing_stage == awaiting_schema_review`, 0 `entity` rows. PASS.
+- **AC3** (`processing_stage` advances, persisted, idempotent; S.4-safe fresh):
+  `@requires_docker` `test_processing_stage_db.py` — default `ingested` on a fresh row,
+  `set_processing_stage` advances `ingested→embedded→extracted→awaiting_schema_review→failed`
+  (idempotent re-write), migration-71 backfill repairs a NONE row AND keeps it writable
+  (the S.4 hazard), down/forward roundtrip. 4 passed.
+- **AC4** (best-effort preserved; suites green): triage best-effort unchanged
+  (`_run_triage` keeps its own log-and-continue guard); embed→extract chaining
+  best-effort proven by
+  `test_handle_embed_source_autoextract.py::test_enqueue_failure_does_not_fail_embed`
+  and embed-hard-failure→`failed`+no-chain by `test_embed_failure_sets_stage_failed`;
+  entity-extract stage matrix in `test_handle_entity_extract_stage.py`. Regression:
+  app-main non-docker `-k "extract or triage or embed or entity or source or stage ..."`
+  → 438 passed (only the 3 pre-existing `TestBuildIngestionConfig` docling failures,
+  unrelated); shared 151 passed; surrealdb-service source 13 passed; embeddings
+  aggregate 6 passed.
+
+### PL.1 fold-in (the populated→NONE stale-clear)
+- `pipelines/embeddings/tests/test_aggregate.py::test_populate_source_embedding_clears_stale_populated_aggregate`
+  — seed a non-null aggregate, strip the chunk vectors, re-run → aggregate overwritten
+  to NONE. PASS.
+
+### New files
+- `migrations/71.surrealql`, `migrations/71_down.surrealql`
+- `apps/app-main/tests/test_handle_embed_source_autoextract.py`
+- `apps/app-main/tests/test_handle_entity_extract_stage.py`
+- `apps/app-main/tests/test_handle_entity_extract_gate_db.py`
+- `apps/app-main/tests/test_processing_stage_db.py`
+
+### Modified
+- `apps/app-main/src/app_main/handlers.py`
+- `packages/shared/src/shared/models/source.py`
+- `packages/shared/src/shared/types/enums.py`
+- `packages/surrealdb-service/src/surrealdb_service/repositories/source.py`
+- `pipelines/embeddings/tests/test_aggregate.py`
