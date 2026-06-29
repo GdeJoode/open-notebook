@@ -436,6 +436,119 @@ async def test_backfill_chunks_real_run_creates_embeddings_and_idempotent(
 
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
+async def test_embed_source_writes_aggregate_equal_to_mean_pool(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """PL.1 AC1: the live embed step populates ``source.embedding`` itself.
+
+    Seed a source + chunks, run the real ``EmbeddingService.embed_source`` (fake
+    local model, no Ollama), and assert the aggregate is now present on the
+    source, has the chunk-vector dimension, and equals ``mean_pool`` of the
+    per-chunk vectors — i.e. a freshly-embedded source is related-retrievable
+    with no separate backfill step.
+    """
+    import surrealdb_service.connection as conn
+    from embeddings.service import EmbeddingService
+    from shared.utils.vectors import mean_pool
+
+    orig = conn._pool
+    conn._pool = conn.ConnectionPool(config=live_surrealdb)
+    try:
+        repo = SourceRepository(config=live_surrealdb)
+        sid = await _make_source_with_chunks(live_surrealdb, 3)
+
+        # Pre-embed: no aggregate yet.
+        assert (await repo.get(sid)).embedding is None
+
+        svc = EmbeddingService(source_repo=repo, embedding_model=_FakeModel())
+        await svc.embed_source(sid)
+
+        # Aggregate is now present, dim == chunk-vector dim (8 for the fake).
+        chunk_vectors = await repo.get_embedding_vectors(sid)
+        assert len(chunk_vectors) == 3
+        src = await repo.get(sid)
+        assert src.embedding is not None
+        assert len(src.embedding) == len(chunk_vectors[0]) == 8
+        # And it equals the mean-pool of the per-chunk vectors.
+        assert src.embedding == pytest.approx(mean_pool(chunk_vectors))
+
+        # find_related: a second embedded source surfaces this one (the aggregate
+        # is what relatedness reads).
+        other = await _make_source_with_chunks(live_surrealdb, 2)
+        await svc.embed_source(other)
+        related = await repo.find_related_by_embedding(other, k=5)
+        assert any(str(r["id"]) == sid for r in related)
+    finally:
+        conn._pool = orig
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_embed_source_reembed_recomputes_aggregate(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """PL.1 AC2: re-embedding recomputes the aggregate (idempotent, no dup)."""
+    import surrealdb_service.connection as conn
+    from embeddings.service import EmbeddingService
+    from shared.utils.vectors import mean_pool
+
+    orig = conn._pool
+    conn._pool = conn.ConnectionPool(config=live_surrealdb)
+    try:
+        repo = SourceRepository(config=live_surrealdb)
+        sid = await _make_source_with_chunks(live_surrealdb, 3)
+
+        svc = EmbeddingService(source_repo=repo, embedding_model=_FakeModel())
+        await svc.embed_source(sid)
+        first = (await repo.get(sid)).embedding
+        assert first is not None
+
+        # Re-embed: still exactly 3 chunk vectors, aggregate stays = mean_pool
+        # (no duplication, no error). delete_embeddings + rebuild is idempotent.
+        await svc.embed_source(sid)
+        chunk_vectors = await repo.get_embedding_vectors(sid)
+        assert len(chunk_vectors) == 3
+        again = (await repo.get(sid)).embedding
+        assert again == pytest.approx(mean_pool(chunk_vectors))
+        assert again == pytest.approx(first)
+    finally:
+        conn._pool = orig
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_embed_source_no_chunks_no_text_clears_aggregate(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """PL.1 AC2 (graceful): a source with no chunks/text gets NONE, no crash."""
+    import surrealdb_service.connection as conn
+    from embeddings.service import EmbeddingService
+
+    orig = conn._pool
+    conn._pool = conn.ConnectionPool(config=live_surrealdb)
+    try:
+        repo = SourceRepository(config=live_surrealdb)
+        # No chunks; full_text empty so the text-split fallback also no-ops.
+        created = await execute_query(
+            "CREATE source SET title = $t, full_text = '';",
+            {"t": _uid("pl1-empty")},
+            config=live_surrealdb,
+        )
+        sid = str(created[0]["id"])
+
+        svc = EmbeddingService(source_repo=repo, embedding_model=_FakeModel())
+        result = await svc.embed_source(sid)  # must not raise
+
+        assert result.embeddings_created == 0
+        assert await repo.get_embedding_count(sid) == 0
+        # Aggregate stays NONE (graceful empty).
+        assert (await repo.get(sid)).embedding is None
+    finally:
+        conn._pool = orig
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
 async def test_populate_all_source_embeddings_db(
     live_surrealdb: SurrealDBConfig,
 ) -> None:
