@@ -67,6 +67,20 @@ class EmbeddingPayload(BaseModel):
     include_insights: bool = True
 
 
+class NoteAutoLinkPayload(BaseModel):
+    """Payload for the Track Y.3 background auto-link job.
+
+    Enqueued after a note is embedded. ``k`` / ``min_similarity`` are optional
+    so the chained enqueue can omit them and the orchestrator applies the
+    conservative Y.2 defaults.
+    """
+
+    command_name: str = "auto_link_note"
+    note_id: str
+    k: Optional[int] = None
+    min_similarity: Optional[float] = None
+
+
 class ExportObsidianPayload(BaseModel):
     """Payload schema for the auto-pipeline ``EXPORT_OBSIDIAN`` job (D.1b).
 
@@ -385,12 +399,41 @@ async def _handle_embed_single_item(payload: Dict[str, Any]) -> Dict[str, Any]:
     else:
         raise ValueError(f"Invalid item_type: {item_type}")
 
+    # Track Y.3: chain background auto-link off a successful note embed. A note
+    # can only be ranked by similarity once it HAS an embedding, so this is the
+    # trigger point — the embed job is the gate, the auto-link job is the
+    # follow-up. Best-effort enqueue: a queue hiccup here must not fail the
+    # (already-persisted) embed; the on-demand endpoint / a re-run can recover.
+    # We only chain when something was actually embedded (a no-content note
+    # produces 0 embeddings and has nothing to link).
+    auto_link_command_id: Optional[str] = None
+    if item_type == "note" and result.embeddings_created > 0:
+        try:
+            from app_main.services.command_service import CommandService
+
+            auto_link_command_id = await CommandService.submit_command_job(
+                "open_notebook",
+                "auto_link_note",
+                {"note_id": item_id},
+            )
+            logger.info(
+                f"Auto-enqueued auto_link_note job {auto_link_command_id} "
+                f"for note {item_id}"
+            )
+        except Exception as link_err:  # noqa: BLE001 — never fail the embed
+            logger.error(
+                f"Failed to auto-enqueue auto-link for note {item_id} "
+                f"(embedding succeeded; the on-demand endpoint can recover): "
+                f"{link_err}"
+            )
+
     processing_time = time.time() - start_time
     return {
         "success": True,
         "item_id": item_id,
         "item_type": item_type,
         "chunks_created": result.embeddings_created,
+        "auto_link_command_id": auto_link_command_id,
         "processing_time": processing_time,
     }
 
@@ -427,6 +470,57 @@ async def _handle_rebuild_embeddings(payload: Dict[str, Any]) -> Dict[str, Any]:
         "sources_processed": result.sources_processed,
         "notes_processed": result.notes_processed,
         "insights_processed": result.insights_processed,
+        "processing_time": processing_time,
+    }
+
+
+# ---------------------------------------------------------------------------
+# NOTE_AUTO_LINK — background auto-link, chained after a note is embedded (Y.3)
+# ---------------------------------------------------------------------------
+
+
+@registry.register(JobType.NOTE_AUTO_LINK)
+async def handle_note_auto_link(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Background auto-link handler for ``JobType.NOTE_AUTO_LINK`` (Track Y.3).
+
+    Runs the Y.2 orchestrator (``NoteAutoLinkService.auto_link``) for a note
+    that already has an embedding (this job is chained off a successful embed,
+    see ``_handle_embed_single_item``). It ranks the note's most-related notes
+    by cosine and writes idempotent ``related_note`` edges above the
+    conservative threshold.
+
+    Isolation: this is a SEPARATE job from the embed. The note and its
+    embedding are already persisted by the time this runs, so a failure here
+    cannot corrupt the note — it fails this job only (the worker records it),
+    and the operator / on-demand endpoint can re-run. The handler raises on a
+    hard failure (so the worker marks the job FAILED, not silently swallowed),
+    but the ordinary no-embedding / not-found cases are reported via the
+    orchestrator's ``status`` and are NOT errors.
+
+    Idempotent: ``auto_link`` clears-before-relates each pair, so re-running
+    this job yields the identical edge set (Y.1/Y.2 idempotency).
+    """
+    start_time = time.time()
+    validated = NoteAutoLinkPayload(**payload)
+
+    from app_main.dependencies import get_note_auto_link_service
+
+    service = await get_note_auto_link_service()
+    result = await service.auto_link(
+        validated.note_id,
+        k=validated.k,
+        min_similarity=validated.min_similarity,
+    )
+
+    processing_time = time.time() - start_time
+    logger.info(
+        f"Auto-link job for note {validated.note_id} finished "
+        f"(status={result.status}, created={result.created}) "
+        f"in {processing_time:.2f}s"
+    )
+    return {
+        "success": True,
+        **result.to_dict(),
         "processing_time": processing_time,
     }
 

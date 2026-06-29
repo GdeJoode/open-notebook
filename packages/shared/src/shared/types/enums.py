@@ -155,6 +155,12 @@ class JobType(str, Enum):
     # export-side JobType. Track E may add ``RESEARCH`` next to this --
     # whoever lands first wins, the second track rebases.
     EXPORT_OBSIDIAN = "export_obsidian"
+    # Track Y.3: background auto-link. Enqueued (best-effort) after a note is
+    # successfully embedded, this links the note to its most-related notes by
+    # embedding similarity (the ``related_note`` graph edges). A separate job
+    # from EMBEDDING_GENERATE so a linking failure stays isolated from the
+    # (already-persisted) note + embedding.
+    NOTE_AUTO_LINK = "note_auto_link"
 
 
 class JobStatus(str, Enum):

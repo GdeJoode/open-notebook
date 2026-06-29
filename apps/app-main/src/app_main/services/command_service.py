@@ -61,6 +61,8 @@ _COMMAND_TO_JOB_TYPE: Dict[str, JobType] = {
     "run_entities": JobType.ENTITY_EXTRACT,
     "process_text": JobType.CHUNK_EXTRACT,
     "analyze_data": JobType.INSIGHT_EXTRACT,
+    # Track Y.3: background auto-link, chained after a note is embedded.
+    "auto_link_note": JobType.NOTE_AUTO_LINK,
 }
 
 

@@ -119,23 +119,25 @@ class NoteAutoLinkService:
         eff_min = max(MIN_SIMILARITY_FLOOR, min(eff_min, MIN_SIMILARITY_CEIL))
         return eff_k, eff_min
 
-    async def _ensure_embedding(self, note_id: str) -> tuple[bool, bool]:
+    async def _ensure_embedding(self, note_id: str) -> tuple[bool, bool, bool]:
         """Ensure the note has a usable embedding, embedding it if needed.
 
         ``note.embedding`` is strict ``array<float>`` so an unembedded note holds
         ``[]`` (never NONE) — see [[note-embedding-non-optional]]. We embed when
         the field is missing/empty, then re-check.
 
-        Returns ``(has_embedding, embedded_now)``. ``has_embedding`` is False —
-        never a crash — when the note has no content to embed or the embed step
-        produced nothing; the caller turns that into a ``needs_embedding`` result.
+        Returns ``(found, has_embedding, embedded_now)``. ``found`` is False for
+        a missing note (so the caller can report ``not_found`` without a second
+        ``get`` — the Y.2 follow-up). ``has_embedding`` is False — never a
+        crash — when the note has no content to embed or the embed step produced
+        nothing; the caller turns that into a ``needs_embedding`` result.
         """
         note = await self.note_repo.get(note_id)
         if note is None:
-            return (False, False)
+            return (False, False, False)
 
         if note.embedding:
-            return (True, False)
+            return (True, True, False)
 
         # No/empty embedding → embed via the injected EmbeddingService. embed_note
         # is a no-op (embeddings_created=0) for a note with no content; it never
@@ -145,16 +147,16 @@ class NoteAutoLinkService:
             embed_result = await self.embedding_service.embed_note(note_id)
         except Exception as e:  # noqa: BLE001 — degrade to needs-embedding, never crash
             logger.warning(f"auto-link: embed_note failed for {note_id}: {e}")
-            return (False, False)
+            return (True, False, False)
 
         if not embed_result or embed_result.embeddings_created < 1:
             logger.info(
                 f"auto-link: note {note_id} could not be embedded "
                 "(no content / nothing produced) — needs-embedding"
             )
-            return (False, False)
+            return (True, False, False)
 
-        return (True, True)
+        return (True, True, True)
 
     async def auto_link(
         self,
@@ -187,12 +189,12 @@ class NoteAutoLinkService:
         """
         eff_k, eff_min = self._clamp_params(k, min_similarity)
 
-        has_embedding, embedded_now = await self._ensure_embedding(note_id)
+        found, has_embedding, embedded_now = await self._ensure_embedding(note_id)
         if not has_embedding:
-            # not_found vs needs_embedding: a missing note never gets an embedding
-            # AND never exists; distinguish for a clearer caller signal.
-            note = await self.note_repo.get(note_id)
-            status = "not_found" if note is None else "needs_embedding"
+            # not_found vs needs_embedding: ``found`` is carried out of
+            # ``_ensure_embedding`` so we don't re-``get`` the note here (Y.2
+            # follow-up — the redundant double get is gone).
+            status = "needs_embedding" if found else "not_found"
             return AutoLinkResult(
                 note_id=note_id,
                 status=status,

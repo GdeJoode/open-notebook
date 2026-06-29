@@ -312,7 +312,10 @@ class NoteAutoLinkResponse(BaseModel):
         ...,
         description=(
             "linked | needs_embedding | not_found — needs_embedding means the "
-            "note had no content to embed; not_found means no such note"
+            "note had no content to embed; not_found means no such note. "
+            "(The MCP auto_link_note tool can additionally return invalid_id; "
+            "the HTTP route validates the id at the boundary and returns 422 "
+            "first, so this response never carries invalid_id — Y.2 follow-up.)"
         ),
     )
     created: int = Field(0, description="related_note edges (re)written")
