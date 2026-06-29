@@ -133,3 +133,26 @@ RELATE still works).
 ### Notes / follow-ups (for Z.3)
 - `min_confidence` default 0.7 is the precision dial; expose as an endpoint param.
 - `judge_model` provenance is stamped from the served chat model id.
+
+### Z.2 review round 1 — REVISIONS addressed (commit `10606fe`)
+**Blocker (false `contradicts` edge from a JSON array)** — FIXED. The parser now
+accepts ONLY a top-level JSON **object**:
+- `_parse_top_level_object`: fence-strip → `json.loads` → accept ONLY a `dict`;
+  a top-level array/scalar → neutral. Never descends into an array element.
+- Prose fallback (`"…: {…}"`) kept but guarded: if the first JSON-structural char
+  is `[` (bare `[{…}]` OR prose-wrapped `"Result: [{…}]"`) → refuse, since the
+  `{` is nested inside the array. A legit object whose `reasoning` contains `[`
+  (object's `{` precedes the `[`) still parses.
+
+**Major (missing adversarial parse tests)** — ADDED. New cases, each asserted at
+BOTH `parse_verdict` and end-to-end `judge_pair` (relate_verdict NOT awaited):
+array containing a confident verdict object (bare/fenced/prose-wrapped), scalar
+array, `}` inside the reasoning string (genuine-or-neutral, never wrong), two
+JSON blocks (first object only), string confidence. Plus a DB test that the
+array case writes no real `source_verdict` row.
+
+**Minor (string confidence)** — folded in: `_coerce_confidence` is strict-numeric;
+a STRING confidence (`"0.9"`) → 0.0 (no edge), `bool` excluded.
+
+Re-run: judge unit + DB → **66 passed**; no regression (summarization/hybrid/
+auto-link → 25 passed).
