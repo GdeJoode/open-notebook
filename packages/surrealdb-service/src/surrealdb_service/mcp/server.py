@@ -15,10 +15,12 @@ sessions, add authentication first.
 Write tools (``cite`` / ``add_note`` / ``auto_link_note``) are currently
 registered unconditionally (the W.3 follow-up: gate write-tool registration to
 stdio — or add auth — before any HTTP exposure). They mutate the shared graph;
-``auto_link_note`` writes only ``related_note`` edges (canonical ``note`` rows
-untouched) and is idempotent, and like ``search``/``add_note`` it is
-embedding-free — it requires the note to already be embedded and never pulls an
-embedding model into this package.
+``auto_link_note`` writes ``related_note`` (note→note, Y.2) and ``note_about``
+(note→source, NS.2) edges (canonical ``note`` / ``source`` rows untouched) and is
+idempotent, and like ``search``/``add_note`` it is embedding-free — it requires
+the note to already be embedded and never pulls an embedding model into this
+package (all four ranking/relate primitives, note AND source, live in
+surrealdb-service).
 
 No ``judge_contradiction`` tool (Track Z.3 — deliberate deferral). Unlike
 ``auto_link_note``, whose primitives (cosine ranking + ``relate_note``) all live
@@ -365,13 +367,20 @@ def create_server() -> FastMCP:
         k: int = 5,
         min_similarity: float = 0.75,
     ) -> str:
-        """Link a note to its most-related notes via ``related_note`` edges (Y.2).
+        """Link a note to its related NOTES and the SOURCES it's about (Y.2 + NS.2).
 
-        Ranks other notes by embedding cosine similarity
-        (``find_related_by_embedding``) and writes idempotent ``related_note``
-        edges for those at/above ``min_similarity`` (top-``k``). Re-running is a
-        no-op for already-linked pairs (clear-before-relate); self-links are
-        impossible (cosine excludes self; ``relate_note`` refuses a self-edge).
+        Ranks by embedding cosine similarity and writes idempotent edges for the
+        candidates at/above ``min_similarity`` (top-``k``), in TWO passes over the
+        note's one embedding:
+          * notes → ``related_note`` (``find_related_by_embedding`` /
+            ``relate_note`` — Y.2);
+          * sources → ``note_about`` (``find_related_sources_by_embedding`` /
+            ``relate_note_source`` — NS.2, "this note is about this source").
+        Both passes are repo-direct (all four primitives live in surrealdb-service,
+        so this embedding-free MCP layer can do both — NS.2 option (a)). Re-running
+        is a no-op for already-linked pairs (clear-before-relate); note self-links
+        are impossible (cosine excludes self; ``relate_note`` refuses a self-edge);
+        note↔source is cross-type so a self-edge is N/A.
 
         Embedding (layering — same contract as ``search`` / ``search_similar`` /
         ``add_note``): this surrealdb-service MCP layer is deliberately
@@ -384,13 +393,15 @@ def create_server() -> FastMCP:
 
         Args:
             note_id: the ``note:...`` to link from.
-            k: max related notes to consider/link (top-k by cosine; bounded 1-50).
+            k: max related notes/sources per pass (top-k by cosine; bounded 1-50).
             min_similarity: minimum cosine to link (bounded -1..1).
 
         Returns:
             JSON ``{note_id, status, created, below_threshold, skipped,
-            candidates_considered, linked_note_ids, k, min_similarity}``. ``status``
-            is ``"linked"`` | ``"needs_embedding"`` | ``"not_found"`` | ``"invalid_id"``.
+            candidates_considered, linked_note_ids, source_links_created,
+            source_below_threshold, source_skipped, source_candidates_considered,
+            linked_source_ids, k, min_similarity}``. ``status`` is ``"linked"`` |
+            ``"needs_embedding"`` | ``"not_found"`` | ``"invalid_id"``.
         """
         # Boundary validation (mirrors the app-main route): a bad id is a clean
         # response, not an exception. relate_note re-validates before any write.
@@ -424,6 +435,7 @@ def create_server() -> FastMCP:
                 {"note_id": rid, "status": "needs_embedding"}, indent=2
             )
 
+        # Pass 1 — note -> related_note -> note (Y.2).
         candidates = await repo.find_related_by_embedding(rid, eff_k)
         created = 0
         below = 0
@@ -446,6 +458,31 @@ def create_server() -> FastMCP:
             else:
                 skipped += 1
 
+        # Pass 2 — note -> note_about -> source (NS.2). Additive, same gate; the
+        # note pass above is untouched. Repo-direct: both source primitives live
+        # in this package, so the embedding-free MCP layer covers sources too.
+        source_candidates = await repo.find_related_sources_by_embedding(rid, eff_k)
+        source_created = 0
+        source_below = 0
+        source_skipped = 0
+        linked_sources: List[str] = []
+        for cand in source_candidates:
+            score = cand.get("score")
+            target = cand.get("id")
+            if score is None or target is None:
+                continue
+            if float(score) < eff_min:
+                source_below += 1
+                continue
+            ok = await repo.relate_note_source(
+                rid, target, similarity_score=float(score), method="embedding"
+            )
+            if ok:
+                source_created += 1
+                linked_sources.append(target)
+            else:
+                source_skipped += 1
+
         return json.dumps(
             {
                 "note_id": rid,
@@ -455,6 +492,11 @@ def create_server() -> FastMCP:
                 "skipped": skipped,
                 "candidates_considered": len(candidates),
                 "linked_note_ids": linked,
+                "source_links_created": source_created,
+                "source_below_threshold": source_below,
+                "source_skipped": source_skipped,
+                "source_candidates_considered": len(source_candidates),
+                "linked_source_ids": linked_sources,
                 "k": eff_k,
                 "min_similarity": eff_min,
             },

@@ -1,20 +1,24 @@
-"""Container tests for the MCP ``auto_link_note`` tool (Track Y.2).
+"""Container tests for the MCP ``auto_link_note`` tool (Track Y.2 + NS.2).
 
 The tool is the embedding-free MCP entrypoint to auto-link (option a): it ranks
-related notes (``find_related_by_embedding``) and writes idempotent
-``related_note`` edges (``relate_note``) directly, and REQUIRES the note to
-already have an embedding — an unembedded note returns ``needs_embedding`` (this
-layer cannot embed). These tests exercise the registered tool against a real
-SurrealDB container so the full repo path (cosine + RELATE) runs, not mocks.
+related notes (``find_related_by_embedding``) AND the sources a note is about
+(``find_related_sources_by_embedding``) and writes idempotent ``related_note``
+(note→note) and ``note_about`` (note→source) edges directly, and REQUIRES the
+note to already have an embedding — an unembedded note returns
+``needs_embedding`` (this layer cannot embed). These tests exercise the
+registered tool against a real SurrealDB container so the full repo path (cosine
++ RELATE) runs, not mocks.
 
-Proven (Y.2 AC1/AC2 for the MCP surface):
+Proven (Y.2 + NS.2 AC for the MCP surface):
 
 * threshold: only candidates at/above ``min_similarity`` become edges;
 * top-k: ``k`` caps the linked set;
 * self-exclusion: the note never links to itself;
 * idempotency: re-running yields the identical edge set (no duplicate rows);
 * needs-embedding: an unembedded note → ``needs_embedding``, no edges, no crash;
-* not_found / invalid_id: clean statuses, never an exception.
+* not_found / invalid_id: clean statuses, never an exception;
+* NS.2 source pass: the same gate writes ``note_about`` edges; a single call
+  reports BOTH note and source counts; source links are idempotent on re-run.
 
 Mirrors ``test_mcp_graph_tools_roundtrip``: the tool fns take no config arg (they
 go through the global connection pool), so the ``mcp_global_db`` fixture points
@@ -87,6 +91,35 @@ async def _targets(config: SurrealDBConfig, from_id: str) -> set[str]:
         config=config,
     )
     return {str(r["out"]) for r in rows}
+
+
+async def _make_source(
+    config: SurrealDBConfig, *, embedding: list[float], title: str | None = None
+) -> str:
+    rows = await execute_query(
+        "CREATE source SET title = $t, embedding = $e RETURN AFTER;",
+        {"t": title or _u("src"), "e": embedding},
+        config=config,
+    )
+    return str(rows[0]["id"])
+
+
+async def _source_targets(config: SurrealDBConfig, from_id: str) -> set[str]:
+    rows = await execute_query(
+        "SELECT out FROM note_about WHERE in = $f;",
+        {"f": ensure_record_id(from_id)},
+        config=config,
+    )
+    return {str(r["out"]) for r in rows}
+
+
+async def _source_edge_count(config: SurrealDBConfig, from_id: str) -> int:
+    rows = await execute_query(
+        "SELECT count() AS c FROM note_about WHERE in = $f GROUP ALL;",
+        {"f": ensure_record_id(from_id)},
+        config=config,
+    )
+    return rows[0]["c"] if rows else 0
 
 
 async def test_auto_link_note_threshold_and_self_exclusion(
@@ -191,3 +224,104 @@ async def test_auto_link_note_not_found_and_invalid_id(
     )
     wrong = json.loads(await fn(str(src[0]["id"]), k=5))
     assert wrong["status"] == "invalid_id"
+
+
+# ---------------------------------------------------------------------------
+# NS.2 — the source pass: the tool also writes note_about edges and reports
+# both counts; threshold/top-k/idempotency hold for sources too.
+# ---------------------------------------------------------------------------
+
+
+async def test_auto_link_note_links_sources_above_threshold(
+    mcp_global_db: SurrealDBConfig,
+) -> None:
+    cfg = mcp_global_db
+    fn = _tool(create_server(), "auto_link_note")
+
+    q = await _make_note(cfg, embedding=[1.0, 0.0, 0.0])
+    near = await _make_source(cfg, embedding=[0.99, 0.01, 0.0])  # ~1.0
+    far = await _make_source(cfg, embedding=[0.0, 1.0, 0.0])  # ~0.0
+
+    out = json.loads(await fn(q, k=10, min_similarity=0.9))
+
+    assert out["status"] == "linked"
+    src_targets = set(out["linked_source_ids"])
+    assert near in src_targets, "highly-similar source must be linked"
+    assert far not in src_targets, "below-threshold source must not be linked"
+    assert out["source_links_created"] >= 1
+    # Accounting balances for the source pass.
+    assert (
+        out["source_links_created"]
+        + out["source_below_threshold"]
+        + out["source_skipped"]
+        == out["source_candidates_considered"]
+    )
+    # The persisted note_about edges match the reported set.
+    assert await _source_targets(cfg, q) == src_targets
+
+
+async def test_auto_link_note_reports_both_note_and_source_counts(
+    mcp_global_db: SurrealDBConfig,
+) -> None:
+    """A single tool call produces BOTH related_note and note_about edges and the
+    summary carries both counters (no conflation)."""
+    cfg = mcp_global_db
+    fn = _tool(create_server(), "auto_link_note")
+
+    q = await _make_note(cfg, embedding=[1.0, 0.0, 0.0])
+    sim_note = await _make_note(cfg, embedding=[0.98, 0.02, 0.0])
+    sim_src = await _make_source(cfg, embedding=[0.97, 0.03, 0.0])
+
+    out = json.loads(await fn(q, k=10, min_similarity=0.8))
+
+    assert out["status"] == "linked"
+    assert sim_note in set(out["linked_note_ids"])
+    assert sim_src in set(out["linked_source_ids"])
+    # Both link types persisted.
+    assert sim_note in await _targets(cfg, q)
+    assert sim_src in await _source_targets(cfg, q)
+    # Both counter families present.
+    assert {
+        "created",
+        "source_links_created",
+        "candidates_considered",
+        "source_candidates_considered",
+    } <= out.keys()
+
+
+async def test_auto_link_note_source_top_k_caps(
+    mcp_global_db: SurrealDBConfig,
+) -> None:
+    cfg = mcp_global_db
+    fn = _tool(create_server(), "auto_link_note")
+
+    q = await _make_note(cfg, embedding=[1.0, 0.0, 0.0])
+    for _ in range(5):
+        await _make_source(cfg, embedding=[0.95, 0.05, 0.0])
+
+    out = json.loads(await fn(q, k=2, min_similarity=0.5))
+    assert out["status"] == "linked"
+    assert out["source_links_created"] == 2, "k=2 must cap source links"
+    assert await _source_edge_count(cfg, q) == 2
+
+
+async def test_auto_link_note_source_idempotent_on_rerun(
+    mcp_global_db: SurrealDBConfig,
+) -> None:
+    cfg = mcp_global_db
+    fn = _tool(create_server(), "auto_link_note")
+
+    q = await _make_note(cfg, embedding=[1.0, 0.0, 0.0])
+    await _make_source(cfg, embedding=[0.97, 0.03, 0.0])
+    await _make_source(cfg, embedding=[0.96, 0.04, 0.0])
+
+    json.loads(await fn(q, k=10, min_similarity=0.8))
+    targets_1 = await _source_targets(cfg, q)
+    count_1 = await _source_edge_count(cfg, q)
+
+    json.loads(await fn(q, k=10, min_similarity=0.8))
+    targets_2 = await _source_targets(cfg, q)
+    count_2 = await _source_edge_count(cfg, q)
+
+    assert targets_1 == targets_2, "re-run changed the linked source set"
+    assert count_1 == count_2, "re-run duplicated note_about rows"

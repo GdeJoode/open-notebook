@@ -15,6 +15,13 @@ them correctly:
 * a note that cannot be embedded → needs_embedding result, no crash, no edges;
 * the run is idempotency-driving: every link goes through relate_note (which is
   itself clear-before-relate), so re-running re-issues the same idempotent calls.
+
+NS.2 extends this to a SECOND pass — note→source — over the same embedding:
+``find_related_sources_by_embedding`` → same threshold/top-k gate →
+``relate_note_source``. The dedicated tests at the bottom prove the source pass
+applies the gate, folds its (separate) counts into the summary, is additive to
+the note pass (both run in one call), and never crosses wires with the note
+counters.
 """
 
 from __future__ import annotations
@@ -46,9 +53,18 @@ def _embed_result(created: int):
     return r
 
 
-def _make_service(*, note, candidates, relate_ok=True, embed_created=1):
-    """Build a service whose repo returns ``note`` from get() and ``candidates``
-    from find_related_by_embedding(). embedding_service.embed_note flips the
+def _make_service(
+    *,
+    note,
+    candidates,
+    source_candidates=None,
+    relate_ok=True,
+    relate_source_ok=True,
+    embed_created=1,
+):
+    """Build a service whose repo returns ``note`` from get(), ``candidates``
+    from find_related_by_embedding(), and ``source_candidates`` from
+    find_related_sources_by_embedding(). embedding_service.embed_note flips the
     note to an embedded state.
     """
     repo = AsyncMock()
@@ -66,6 +82,10 @@ def _make_service(*, note, candidates, relate_ok=True, embed_created=1):
     embed_svc.embed_note.side_effect = _embed_note
     repo.find_related_by_embedding.return_value = candidates
     repo.relate_note.return_value = relate_ok
+    # NS.2 source pass: default to no source candidates so existing note-only
+    # tests stay note-focused; source-specific tests pass an explicit list.
+    repo.find_related_sources_by_embedding.return_value = source_candidates or []
+    repo.relate_note_source.return_value = relate_source_ok
     return NoteAutoLinkService(note_repo=repo, embedding_service=embed_svc), repo, embed_svc
 
 
@@ -264,3 +284,136 @@ async def test_defaults_applied_when_params_omitted():
     assert result.k == DEFAULT_K
     assert result.min_similarity == DEFAULT_MIN_SIMILARITY
     repo.find_related_by_embedding.assert_awaited_once_with("note:q", DEFAULT_K)
+
+
+# ===========================================================================
+# NS.2 — the note → source pass (note_about edges).
+# ===========================================================================
+
+
+async def test_source_pass_threshold_gate_only_links_above():
+    """Only sources at/above min_similarity become note_about edges."""
+    note = _note("note:q", [1.0, 0.0, 0.0])
+    sources = [
+        {"id": "source:a", "title": "a", "score": 0.95},  # >= 0.75 -> link
+        {"id": "source:b", "title": "b", "score": 0.78},  # >= 0.75 -> link
+        {"id": "source:c", "title": "c", "score": 0.50},  # <  0.75 -> drop
+    ]
+    svc, repo, _ = _make_service(
+        note=note, candidates=[], source_candidates=sources
+    )
+
+    result = await svc.auto_link("note:q", min_similarity=0.75, k=10)
+
+    assert result.status == "linked"
+    assert result.source_links_created == 2
+    assert result.source_below_threshold == 1
+    assert result.source_candidates_considered == 3
+    assert set(result.linked_source_ids) == {"source:a", "source:b"}
+    # relate_note_source called ONLY for above-threshold sources, carrying score.
+    related = {
+        c.args[1]: c.kwargs["similarity_score"]
+        for c in repo.relate_note_source.await_args_list
+    }
+    assert related == {"source:a": 0.95, "source:b": 0.78}
+    # The note pass had no candidates → note counters stay zero (no cross-wiring).
+    assert result.created == 0 and result.below_threshold == 0
+
+
+async def test_source_top_k_forwarded_to_source_ranking():
+    note = _note("note:q", [1.0, 0.0])
+    svc, repo, _ = _make_service(
+        note=note, candidates=[], source_candidates=[]
+    )
+
+    await svc.auto_link("note:q", k=3, min_similarity=0.5)
+    # k is forwarded to BOTH rankings (the LIMIT enforces top-k in each).
+    repo.find_related_sources_by_embedding.assert_awaited_once_with("note:q", 3)
+
+
+async def test_source_relate_refused_counts_as_source_skipped():
+    note = _note("note:q", [1.0, 0.0])
+    sources = [{"id": "source:a", "title": "a", "score": 0.9}]
+    svc, repo, _ = _make_service(
+        note=note,
+        candidates=[],
+        source_candidates=sources,
+        relate_source_ok=False,
+    )
+
+    result = await svc.auto_link("note:q", min_similarity=0.5)
+    assert result.source_links_created == 0
+    assert result.source_skipped_existing == 1
+
+
+async def test_both_passes_run_in_one_call_and_counts_are_separate():
+    """A single auto_link produces BOTH related_note and note_about edges, with
+    the two link types reported in distinct counters (additive, no conflation)."""
+    note = _note("note:q", [1.0, 0.0, 0.0])
+    notes = [
+        {"id": "note:a", "title": "a", "score": 0.95},
+        {"id": "note:b", "title": "b", "score": 0.60},  # below 0.75
+    ]
+    sources = [
+        {"id": "source:x", "title": "x", "score": 0.90},
+        {"id": "source:y", "title": "y", "score": 0.92},
+        {"id": "source:z", "title": "z", "score": 0.40},  # below 0.75
+    ]
+    svc, repo, _ = _make_service(
+        note=note, candidates=notes, source_candidates=sources
+    )
+
+    result = await svc.auto_link("note:q", min_similarity=0.75, k=10)
+
+    # Note pass.
+    assert result.created == 1
+    assert result.below_threshold == 1
+    assert result.candidates_considered == 2
+    assert result.linked_note_ids == ["note:a"]
+    # Source pass.
+    assert result.source_links_created == 2
+    assert result.source_below_threshold == 1
+    assert result.source_candidates_considered == 3
+    assert set(result.linked_source_ids) == {"source:x", "source:y"}
+    # Both relate primitives were driven from the one call.
+    repo.relate_note.assert_awaited_once()
+    assert repo.relate_note_source.await_count == 2
+    # The summary dict carries both link types.
+    d = result.to_dict()
+    assert d["created"] == 1 and d["source_links_created"] == 2
+    assert d["linked_source_ids"] and d["linked_note_ids"]
+
+
+async def test_note_pass_unaffected_when_no_sources():
+    """Additivity: with zero source candidates, the note pass is identical to
+    Y.2 and status is still 'linked' (source pass is a clean no-op)."""
+    note = _note("note:q", [1.0, 0.0])
+    notes = [{"id": "note:a", "title": "a", "score": 0.9}]
+    svc, repo, _ = _make_service(
+        note=note, candidates=notes, source_candidates=[]
+    )
+
+    result = await svc.auto_link("note:q", min_similarity=0.5)
+
+    assert result.status == "linked"
+    assert result.created == 1
+    assert result.source_links_created == 0
+    assert result.source_candidates_considered == 0
+    repo.relate_note_source.assert_not_awaited()
+
+
+async def test_needs_embedding_runs_neither_pass():
+    """A note that cannot be embedded reports needs_embedding and neither the
+    note nor the source ranking runs (NS.2 extends the Y.2 guard symmetrically)."""
+    note = _note("note:q", [])
+    svc, repo, _ = _make_service(
+        note=note, candidates=[], source_candidates=[], embed_created=0
+    )
+
+    result = await svc.auto_link("note:q")
+
+    assert result.status == "needs_embedding"
+    assert result.source_links_created == 0
+    repo.find_related_by_embedding.assert_not_awaited()
+    repo.find_related_sources_by_embedding.assert_not_awaited()
+    repo.relate_note_source.assert_not_awaited()
