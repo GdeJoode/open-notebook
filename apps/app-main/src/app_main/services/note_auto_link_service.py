@@ -1,22 +1,35 @@
-"""Auto-link orchestrator for notes (Track Y.2).
+"""Auto-link orchestrator for notes (Track Y.2 + NS.2).
 
-Given a note, find its most-related notes by embedding similarity and persist the
-links as ``related_note`` RELATE edges. This is the orchestration layer over the
-Y.1 primitives: it ensures the note is embedded, ranks candidates
-(``NoteRepository.find_related_by_embedding``), applies a precision gate
-(``min_similarity`` + top-``k``), and writes idempotent edges
-(``NoteRepository.relate_note``).
+Given a note, find its most-related notes AND the sources it's most about by
+embedding similarity, and persist the links as RELATE edges:
+
+  * note → ``related_note`` → note (Y.2), and
+  * note → ``note_about`` → source (NS.2 — "this note is about this source").
+
+This is the orchestration layer over the Y.1 / NS.1 primitives: it ensures the
+note is embedded ONCE, then runs two ranking+gate+relate passes over that same
+embedding:
+
+  * notes: ``find_related_by_embedding`` → gate → ``relate_note``;
+  * sources: ``find_related_sources_by_embedding`` → gate → ``relate_note_source``.
+
+Both passes share the same ``min_similarity`` + top-``k`` precision gate and fold
+their counts into a single ``AutoLinkResult`` summary, so one ``auto_link`` call
+produces BOTH link types. The source pass is purely additive — the note→note
+path is unchanged.
 
 Layering: the embed step (``EmbeddingService.embed_note``) lives in app-main's
 local-Ollama pipeline, so this orchestrator lives here too — NOT in
 surrealdb-service, which is deliberately embedding-free (the W.3 MCP design).
 The MCP ``auto_link_note`` tool therefore does NOT call this service; it calls
-the embedding-free repo primitives directly and requires the note to already
+the embedding-free repo primitives directly (both the note and source ranking +
+relate primitives live in surrealdb-service) and requires the note to already
 have an embedding (see ``mcp/server.py``).
 
-Reversibility: only ``related_note`` edges are written; canonical ``note`` rows
-are never mutated by linking. The embed step may populate ``note.embedding`` (a
-needed, non-destructive backfill of a field that was ``[]``).
+Reversibility: only ``related_note`` / ``note_about`` edges are written; canonical
+``note`` and ``source`` rows are never mutated by linking. The embed step may
+populate ``note.embedding`` (a needed, non-destructive backfill of a field that
+was ``[]``).
 """
 
 from __future__ import annotations
@@ -48,24 +61,39 @@ MIN_SIMILARITY_CEIL: float = 1.0
 class AutoLinkResult:
     """Summary of an auto-link run for a single note.
 
-    ``status`` is the high-level outcome:
-      * ``"linked"`` — ranking ran and edges were (re)written as needed;
+    ``status`` is the high-level outcome of the whole run (BOTH the note→note and
+    note→source passes, which share the one embedding):
+      * ``"linked"`` — ranking ran and edges were (re)written as needed for
+        related notes and/or related sources;
       * ``"needs_embedding"`` — the note could not be embedded (no content, or
-        the embed step produced nothing), so similarity could not run. This is a
-        clean signal, never an error/crash.
+        the embed step produced nothing), so neither similarity pass could run.
+        This is a clean signal, never an error/crash.
       * ``"not_found"`` — no such note.
+
+    Note→note counters (``created`` / ``below_threshold`` / ``skipped_existing`` /
+    ``candidates_considered`` / ``linked_note_ids``) and note→source counters
+    (the ``source_*`` fields / ``linked_source_ids``) are kept separate so the two
+    link types are never conflated.
     """
 
     note_id: str
     status: str
+    # note -> related_note -> note (Y.2)
     created: int = 0
     skipped_existing: int = 0
     below_threshold: int = 0
     candidates_considered: int = 0
+    # note -> note_about -> source (NS.2). Kept as a parallel, distinctly-named
+    # set of counters so the two link types never conflate in the summary.
+    source_links_created: int = 0
+    source_skipped_existing: int = 0
+    source_below_threshold: int = 0
+    source_candidates_considered: int = 0
     embedded: bool = False
     min_similarity: float = DEFAULT_MIN_SIMILARITY
     k: int = DEFAULT_K
     linked_note_ids: List[str] = field(default_factory=list)
+    linked_source_ids: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -75,15 +103,25 @@ class AutoLinkResult:
             "skipped_existing": self.skipped_existing,
             "below_threshold": self.below_threshold,
             "candidates_considered": self.candidates_considered,
+            "source_links_created": self.source_links_created,
+            "source_skipped_existing": self.source_skipped_existing,
+            "source_below_threshold": self.source_below_threshold,
+            "source_candidates_considered": self.source_candidates_considered,
             "embedded": self.embedded,
             "min_similarity": self.min_similarity,
             "k": self.k,
             "linked_note_ids": self.linked_note_ids,
+            "linked_source_ids": self.linked_source_ids,
         }
 
 
 class NoteAutoLinkService:
-    """Orchestrate note → related-notes → ``related_note`` edges (Y.2)."""
+    """Orchestrate a note's auto-links (Y.2 + NS.2).
+
+    One ``auto_link`` call embeds the note once, then writes both
+    note→``related_note``→note edges (Y.2) and note→``note_about``→source edges
+    (NS.2) for the candidates that clear the shared precision gate.
+    """
 
     def __init__(
         self,
@@ -92,7 +130,8 @@ class NoteAutoLinkService:
     ):
         """
         Args:
-            note_repo: the Y.1 note repository (similarity + idempotent relate).
+            note_repo: the Y.1 / NS.1 note repository (note + source similarity +
+                idempotent ``relate_note`` / ``relate_note_source``).
             embedding_service: an ``EmbeddingService`` with ``embed_note`` —
                 injected (not imported) so this service stays testable without
                 a live embedding model and so the embed dependency is explicit.
@@ -165,27 +204,41 @@ class NoteAutoLinkService:
         k: Optional[int] = None,
         min_similarity: Optional[float] = None,
     ) -> AutoLinkResult:
-        """Auto-link ``note_id`` to its most-related notes.
+        """Auto-link ``note_id`` to its most-related notes AND sources.
 
-        Flow: ensure-embedding → rank by cosine (``find_related_by_embedding``)
-        → keep only candidates at/above ``min_similarity`` (top-``k`` is enforced
-        by the ranking LIMIT) → idempotently RELATE each via ``relate_note``
-        (carrying the cosine ``similarity_score``).
+        Flow: ensure-embedding (once) → then two passes over that one embedding,
+        each ``rank → gate → idempotent RELATE``:
+          1. notes — ``find_related_by_embedding`` → ``relate_note`` (Y.2);
+          2. sources — ``find_related_sources_by_embedding`` →
+             ``relate_note_source`` (NS.2).
+        Both passes keep only candidates at/above ``min_similarity`` (top-``k``
+        is enforced by each ranking's LIMIT) and carry the cosine
+        ``similarity_score`` onto the edge. Their counts land in distinct fields
+        of the one ``AutoLinkResult`` (note counters vs ``source_*``), so a single
+        call reports BOTH link types.
 
-        Idempotent: ``relate_note`` clears-before-relates each pair, so re-running
-        yields the identical edge set (no duplicate rows). Self-links are
-        impossible (cosine excludes self; ``relate_note`` refuses a self-edge).
+        Additivity: the source pass is appended after the note pass and shares the
+        same gate/params — the existing note→note behaviour is unchanged. If the
+        source ranking returns nothing (e.g. no embedded sources), the note pass
+        still completes and ``status`` is still ``"linked"``.
+
+        Idempotent: ``relate_note`` / ``relate_note_source`` each clear-before-relate
+        their pair, so re-running yields the identical edge sets (no duplicate
+        rows). Note self-links are impossible (cosine excludes self; ``relate_note``
+        refuses a self-edge); note↔source is cross-type so a self-edge is N/A.
 
         Args:
             note_id: the note to link from.
-            k: max related notes to consider/link (clamped to [1, ``MAX_K``];
-                default ``DEFAULT_K``).
+            k: max related notes/sources to consider/link per pass (clamped to
+                [1, ``MAX_K``]; default ``DEFAULT_K``). The same ``k`` bounds both
+                passes independently.
             min_similarity: minimum cosine to link (clamped to [-1, 1]; default
-                ``DEFAULT_MIN_SIMILARITY``).
+                ``DEFAULT_MIN_SIMILARITY``). The same threshold gates both passes.
 
         Returns:
-            An ``AutoLinkResult`` summary. Never raises for the ordinary
-            no-embedding / not-found cases — those are reported via ``status``.
+            An ``AutoLinkResult`` summary covering both passes. Never raises for the
+            ordinary no-embedding / not-found cases — those are reported via
+            ``status``.
         """
         eff_k, eff_min = self._clamp_params(k, min_similarity)
 
@@ -203,18 +256,20 @@ class NoteAutoLinkService:
                 k=eff_k,
             )
 
-        candidates = await self.note_repo.find_related_by_embedding(note_id, eff_k)
-
         result = AutoLinkResult(
             note_id=note_id,
             status="linked",
-            candidates_considered=len(candidates),
             embedded=embedded_now,
             min_similarity=eff_min,
             k=eff_k,
         )
 
-        for cand in candidates:
+        # Pass 1 — note → related_note → note (Y.2).
+        note_candidates = await self.note_repo.find_related_by_embedding(
+            note_id, eff_k
+        )
+        result.candidates_considered = len(note_candidates)
+        for cand in note_candidates:
             score = cand.get("score")
             target = cand.get("id")
             if score is None or target is None:
@@ -234,13 +289,43 @@ class NoteAutoLinkService:
                 # error — count it as skipped rather than failing the whole run.
                 result.skipped_existing += 1
 
+        # Pass 2 — note → note_about → source (NS.2). Additive: same embedding,
+        # same gate; the note pass above is untouched. A failure to relate a
+        # single source is counted as skipped (never fails the whole run), exactly
+        # like the note pass.
+        source_candidates = await self.note_repo.find_related_sources_by_embedding(
+            note_id, eff_k
+        )
+        result.source_candidates_considered = len(source_candidates)
+        for cand in source_candidates:
+            score = cand.get("score")
+            target = cand.get("id")
+            if score is None or target is None:
+                continue
+            if float(score) < eff_min:
+                result.source_below_threshold += 1
+                continue
+
+            ok = await self.note_repo.relate_note_source(
+                note_id, target, similarity_score=float(score), method="embedding"
+            )
+            if ok:
+                result.source_links_created += 1
+                result.linked_source_ids.append(target)
+            else:
+                result.source_skipped_existing += 1
+
         logger.info(
-            "auto-link {}: created={} below_threshold={} skipped={} "
+            "auto-link {}: notes(created={} below={} skipped={}) "
+            "sources(created={} below={} skipped={}) "
             "(k={}, min_sim={}, embedded={})",
             note_id,
             result.created,
             result.below_threshold,
             result.skipped_existing,
+            result.source_links_created,
+            result.source_below_threshold,
+            result.source_skipped_existing,
             eff_k,
             eff_min,
             embedded_now,
