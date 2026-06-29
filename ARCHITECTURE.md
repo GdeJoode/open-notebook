@@ -547,7 +547,80 @@ valid citation).
 > is the same precision-first discipline as the Track U.3 `cites` edges:
 > drop/flag the unverifiable, never fabricate.
 
-## 12. Further reading
+## 12. Note auto-link: embedding → similarity → `related_note` edges (Track Y)
+
+When a note is created, its most-related notes are found by embedding similarity
+and the links are persisted as `related_note` graph edges — the same
+embedding-similarity mechanism the source layer already used
+(`SourceRepository.find_related_by_embedding`), lifted to the note level.
+
+**The flow** (three layers, each tested in isolation):
+
+1. **Similarity (Y.1)** — `NoteRepository.find_related_by_embedding(note_id, k)`
+   ranks other notes by `vector::similarity::cosine` over `note.embedding`,
+   excludes self and empty-embedding notes, returns the top-`k`
+   `[{id, title, score}]`. An unembedded note (the strict-but-empty `[]`
+   embedding — see [[note-embedding-non-optional]]) yields `[]`, never a crash.
+2. **Edge + idempotent RELATE (Y.1)** — `related_note` is a
+   `TYPE RELATION FROM note TO note` table (migration 68, fields
+   `similarity_score`, `method`, `created_at`). `NoteRepository.relate_note`
+   **clears-before-relates** each `(in, out)` pair so re-linking yields the
+   identical edge set (`RELATE` is not idempotent — same lesson as the §9
+   materializers). Both endpoints are strict-validated against `_RECORD_ID_RE`
+   **before** interpolation, because `RELATE`'s graph syntax cannot bind a
+   `$param` in the in/out position (a parameterized `RELATE $from->...->$to`
+   silently writes nothing).
+3. **Orchestrator + precision gate (Y.2)** —
+   `NoteAutoLinkService.auto_link(note_id, k, min_similarity)` ensures the note
+   is embedded, ranks candidates, keeps only those at/above `min_similarity`
+   (conservative defaults `min_similarity=0.75`, `k=5` — no graph explosion),
+   and writes idempotent edges. It lives in **app-main**, not surrealdb-service,
+   because the embed step (`EmbeddingService.embed_note`) is app-main's
+   local-Ollama pipeline; surrealdb-service stays embedding-free (its MCP
+   `auto_link_note` tool is the embedding-free sibling that requires a
+   pre-embedded note — the same split as the W.3 `search`/`add_note` tools).
+
+**The trigger — two halves (the phased decision):**
+
+- **On-demand (Y.2)** — `POST /notes/{id}/auto-link` and the MCP `auto_link_note`
+  tool drive the orchestrator directly.
+- **Background (Y.3)** — the job queue. A note can only be ranked by similarity
+  once it *has* an embedding, so the **embed job is the trigger**:
+  `_handle_embed_single_item` best-effort enqueues a `NOTE_AUTO_LINK` job after a
+  note is successfully embedded (mirroring the R.0 `DOCUMENT_PARSE` →
+  `embed_source` chaining). `handle_note_auto_link` then runs the orchestrator.
+
+**Isolation (Y.3).** Auto-link is a **separate job** from the embed, deliberately:
+the note + its embedding are persisted by the upstream embed job before the
+auto-link job runs, so a linking failure can never corrupt the note. The enqueue
+seam is best-effort (a queue hiccup never fails the embed); the auto-link job
+itself raises on a hard failure so the worker records it `FAILED`, but it only
+ever writes `related_note` edges (no note CRUD), and `relate_note` is idempotent,
+so a re-run is safe and a failed run leaves no half-written graph state.
+
+**The sync model.** The job handles **new** notes (create → embed → link).
+**Re-linking on note EDIT** (content/embedding change → stale edges) is a noted
+follow-up, *not* Track Y core — the same honest framing as §9: the mechanism is
+built and tested; the upkeep loop on mutation is the next increment. Because
+`auto_link` is idempotent, an edit-triggered re-link would be a clean drop-in
+(re-run after the edit's embedding settles) rather than new machinery.
+
+**Data reality.** The current corpus is source-heavy with few notes, so auto-link
+is a built-and-tested **mechanism** that lights up as notes accumulate — like the
+§9 `cites` edges (a clean no-op today, correct the moment the data arrives).
+
+**Extension point — note↔source.** Track Y core is note↔note. The orchestrator +
+edge pattern extend to **note↔source** with the same embedding-similarity
+mechanism and a second edge type (a `related_source` relation, or reusing the
+source-level ranking the other direction) — a documented, promotable follow-up,
+not built in Y.
+
+> See `apps/app-main/src/app_main/services/note_auto_link_service.py`,
+> `apps/app-main/src/app_main/handlers.py` (`handle_note_auto_link` +
+> `_handle_embed_single_item`'s chaining), migration `68.surrealql`, and
+> `docs/tracks/Y-auto-link/status.md` (per-AC evidence + RETRO).
+
+## 13. Further reading
 
 - `docs/SUMMARIZATION_APPROACHES.md` — design + status of all 11 summarization strategies
 - `docs/KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md` — KG architecture and roadmap
@@ -563,4 +636,5 @@ valid citation).
 - `docs/tracks/W-mcp-graph-memory/status.md` — Track W retrospective (MCP graph-tools shared substrate + hybrid search + reranker)
 - `docs/tracks/W-mcp-graph-memory/OPERATOR_GUIDE.md` — registering the `surrealdb-mcp` server + gated reranker bring-up/smoke/fallback
 - `docs/tracks/X-citations-to-source/status.md` — Track X retrospective (provenance → citation flow + faithfulness guard; membership-not-semantic)
+- `docs/tracks/Y-auto-link/status.md` — Track Y retrospective (note auto-link: embedding → similarity → `related_note`; on-demand + background-job trigger; note↔source extension)
 - `docs/troubleshooting/exports.md` — failure-mode diagnostics for the three export formats

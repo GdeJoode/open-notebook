@@ -1394,6 +1394,50 @@ actually back the claim) would need a second LLM pass and is deferred.
 
 ---
 
+## Track Y — Auto-link (new note → related notes → RELATE) (NEW)
+
+> **Status**: ✅ CLOSED (2026-06-29). When a note is created and embedded, its
+> most-related notes are found by embedding similarity and the links are
+> persisted as `related_note` graph edges — Feature 2 of the Constella adoption
+> plan. The substrate existed (note embeddings, source-level
+> `find_related_by_embedding`, RELATE patterns); Track Y added note-level
+> similarity, a note↔note edge table, the orchestrator + precision gate, and
+> **both** halves of the phased trigger: on-demand (endpoint + MCP tool) and a
+> background job chained off the embed. See
+> [`docs/tracks/Y-auto-link/status.md`](./tracks/Y-auto-link/status.md) and
+> `ARCHITECTURE.md` §12.
+
+**Vision**: notes self-organise into a related-notes graph by meaning, the same
+embedding-similarity mechanism the source layer already used, lifted to the note
+level. Precision over coverage: a conservative `min_similarity` + top-`k` keep
+the graph sparse and meaningful (no graph explosion), reusing the R.6 discipline.
+
+**Phases**: Y.1 note-level similarity + the `related_note` edge table —
+`NoteRepository.find_related_by_embedding` (cosine, self-excluded, no-embedding
+graceful) + migration 68 (`TYPE RELATION FROM note TO note`, fresh-container-safe)
++ an idempotent clear-before-relate helper (RELATE is not idempotent; both
+endpoints strict-validated before interpolation — RELATE can't bind a `$param` in
+the in/out position, a data-destroying-injection lesson) · Y.2 orchestrator +
+on-demand trigger — `NoteAutoLinkService.auto_link` (ensure-embedding → rank →
+threshold/top-k → idempotent edges; conservative `min_similarity=0.75`, `k=5`),
+`POST /notes/{id}/auto-link`, and the embedding-free MCP `auto_link_note` tool ·
+Y.3 background job + integration + docs/RETRO — a `NOTE_AUTO_LINK` job chained
+off a successful note embed (`_handle_embed_single_item`), best-effort enqueue +
+isolated failure (a linking failure never corrupts the already-persisted note),
+idempotent.
+
+**Value**: a meaning-organised note graph that grows automatically as notes
+accumulate, reusing the existing embedding substrate. **Depends on**: note
+embeddings + the embed job (the trigger), the source-level similarity pattern.
+**Sync model**: handles NEW notes; re-linking on note EDIT is a noted follow-up
+(idempotent `auto_link` makes it a drop-in), not Y core. **Data reality**:
+source-heavy corpus / few notes today — a built-and-tested mechanism that lights
+up as notes accumulate (like the Track U `cites` edges). **Extension point**:
+**note↔source** — same embedding-similarity mechanism, a second edge type; a
+documented, promotable follow-up, not built in Y.
+
+---
+
 ## Bijlagen
 
 - `docs/REFACTOR_PLAN.md` — voltooide refactor (Phase 0-7)
