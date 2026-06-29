@@ -76,3 +76,60 @@ RELATE still works).
 - mypy on `repositories/source.py`: 2 pre-existing errors (`shared.models`
   missing stubs; `get_embedding_count` `no-any-return`) — both present on `main`,
   unrelated to this change. `relate_verdict` is mypy-clean.
+
+---
+
+## Phase Z.2 — Candidate generation + pairwise LLM judge (Backend) — READY FOR REVIEW
+
+**Branch**: `track/z2-judge` (off `main` @ `80e860a`, Z.1 + relate_cites security fix merged)
+**Commits**:
+- `cc6030b` feat(judge): Z.2 contradiction judge — candidate gen + precision-first pairwise judge
+- `6f81652` test(judge): Z.2 unit + @requires_docker coverage (LLM mocked)
+
+### What landed
+- **`apps/app-main/.../services/contradiction_judge_service.py`**:
+  - `build_candidate_pairs(source_id, related_ids, k)` — pure/testable: forms
+    `(source, related)` pairs, self-excluded, deduped, bounded by top-k,
+    rank-order preserved. Candidates come from the Track R substrate, never O(n²).
+  - `parse_verdict(raw)` — robust parse to a normalised `JudgeVerdict`. Strips
+    fences/prose to the first balanced `{...}`; any malformed/missing/unknown
+    label / non-numeric confidence degrades to `neutral`/`0.0`. A parse failure
+    can only SUPPRESS an edge, never fabricate one.
+  - `ContradictionJudgeService.judge_pair` / `judge_source` — compact context
+    (titles + bounded `full_text` snippets, capped at 2000 chars/source), routed
+    LLM via the injected `(system, user) -> str` caller (json_mode), precision
+    gate, idempotent persistence via Z.1 `relate_verdict`. `judge_source` returns
+    a `{judged, contradicts, reinforces, neutral, below_threshold, edges_written,
+    candidates_considered, verdict_pairs, ...}` summary.
+  - `JUDGE_SYSTEM_PROMPT` — a careful fact-checking judge; strict-JSON output;
+    repeated, explicit bias toward `neutral` when unsure (precision-first).
+- **Precision gate**: persist ONLY `verdict ∈ {contradicts, reinforces}` AND
+  `confidence >= min_confidence`. Default `min_confidence = 0.7` (conservative;
+  lower only once trusted). Default `k = 5`, `MAX_K = 50`.
+- **DI**: `get_contradiction_judge_service()` (async) wires the
+  `HybridRetrievalService` related substrate + Z.1 `relate_verdict` + the J.4
+  routed caller (`default_chat_model`, json_mode). `related_service` accepts
+  hybrid (`find_related_hybrid`) OR dense-only (`find_related`).
+
+### Test runs
+- `test_contradiction_judge_service.py` (unit, LLM mocked, no DB) → **40 passed**.
+- `test_contradiction_judge_db.py` (`@requires_docker`, real SourceService +
+  SourceRepository, LLM mocked) → **5 passed** (one edge on confident contradicts;
+  idempotent re-judge; neutral/below-threshold → no edge; canonical rows untouched).
+- No regression: `test_routed_summarization` + `test_hybrid_retrieval_service` +
+  `test_note_auto_link_service` → **25 passed**; `test_routing_e2e` +
+  `test_routed_extraction` + `test_source_related_hybrid_router` → **18 passed**.
+
+### Per-AC evidence
+1. Structured `{verdict, confidence, reasoning}` + correct gate — each verdict
+   class tested: confident contradicts → edge, confident reinforces → edge,
+   neutral → no edge, low-confidence contradicts → no edge, malformed → no edge
+   (no crash). (unit + DB).
+2. Candidates from the related substrate (hybrid first, dense fallback); no
+   self-pair; `(a,b)` judged once; bounded by top-k. (unit).
+3. Idempotent (re-judge → one edge, latest verdict) + injection-safe via Z.1. (DB).
+4. All tests with the LLM mocked; `@requires_docker` only on the DB-write file.
+
+### Notes / follow-ups (for Z.3)
+- `min_confidence` default 0.7 is the precision dial; expose as an endpoint param.
+- `judge_model` provenance is stamped from the served chat model id.
