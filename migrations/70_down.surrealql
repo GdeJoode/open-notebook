@@ -1,0 +1,18 @@
+-- ============================================================================
+-- Migration 70 DOWN: no-op.
+--
+-- Migration 70 defines the `note_about` edge table as
+-- ``TYPE RELATION FROM note TO source`` (the shape Track NS's note→source
+-- auto-link needs) and adds its fields (`similarity_score`, `method`,
+-- `created_at`). It is a forward-only schema definition with no faithful
+-- inverse (mirrors migrations 66/67/68/69's down):
+--   * reverting `note_about` to TYPE ANY would re-break
+--     ``RELATE note -> note_about -> source`` — exactly the correctness 70
+--     establishes; and
+--   * `note_about` is a DERIVED, regenerated projection (the auto-link
+--     orchestrator clears and re-relates a note's source links) — the edge
+--     table holds no canonical state worth a destructive rollback, and on this
+--     corpus it is empty until the auto-link runs.
+-- Down intentionally does nothing; mirrors migrations 66/67/68/69's down
+-- convention.
+-- ============================================================================

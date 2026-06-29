@@ -1,0 +1,87 @@
+-- ============================================================================
+-- Migration 70: define the `note_about` edge table as a proper
+--   TYPE RELATION FROM note TO source
+-- so the note↔source auto-link feature (Track NS) can persist "this note is
+-- about this source" links — found by embedding cosine — as real graph edges
+-- that can be RELATEd, traversed, drawn and exported, alongside the note↔note
+-- `related_note` edges (migration 68) and source↔source `source_verdict` edges
+-- (migration 69).
+--
+-- Background. Track NS (note→source auto-link) extends Track Y: a note links to
+-- the SOURCES it most resembles (cosine of `note.embedding` vs the source
+-- aggregate `source.embedding` — same mxbai-embed-large 1024-dim space) and
+-- stores each link as a `note_about` edge. The table is BRAND NEW — no prior
+-- migration defines it — so on any DB (fresh container or staging) it would
+-- otherwise be auto-created by the first RELATE as the SurrealDB default
+--   DEFINE TABLE note_about TYPE ANY SCHEMALESS
+-- which stores an untyped record, NOT a graph edge. This is the exact drift
+-- class the `mentions`/`cites`/`related_note`/`source_verdict` migrations
+-- (66/67/68/69) fixed; 70 defines it correctly up front so the auto-link writer
+-- always lands a typed `note -> note_about -> source` edge.
+--
+-- Naming / ontology. `note_about` mirrors the lowercase, snake_case,
+-- type-prefixed edge-naming convention of `related_note` (68) and
+-- `source_verdict` (69), and echoes schema.org/about ("this note is about this
+-- source"). It does NOT collide with the ontology's uppercase `ABOUT`
+-- relationship type (schema_core.yaml), which is an entity↔entity KG relation —
+-- a different layer from this note↔document edge.
+--
+-- Strategy (mirrors migrations 66/67/68/69's non-destructive remediation):
+--   1. DELETE only null-endpoint junk rows (in = NONE OR out = NONE). A real
+--      `note_about` edge always has non-null in/out, so this is a no-op on a
+--      healthy table and only clears the non-edge junk a drifted/auto-created
+--      TYPE ANY table could hold (which would otherwise block the RELATION
+--      redefine). A blanket `DELETE note_about` would WIPE healthy edges — the
+--      destructive mistake migration 58 made; 62/66/67/68/69 fixed it with this
+--      null-endpoint-only predicate and 70 follows suit.
+--   2. DEFINE TABLE OVERWRITE ... TYPE RELATION FROM note TO source. On
+--      SurrealDB v2 OVERWRITE converts a drifted/auto-created TYPE ANY table to
+--      RELATION; on an already-correct RELATION table it re-asserts the
+--      identical definition and PRESERVES existing edge records (the
+--      migration-62/66/67/68/69 empirical fact, re-checked for `note_about` by
+--      this track's container tests). `note_about` is a regenerated projection
+--      (auto-link clears and re-relates per note), so there is no canonical edge
+--      state worth a destructive rollback.
+--   3. DEFINE the edge fields with OVERWRITE. `similarity_score` is the cosine
+--      that drove the link (the per-edge "why", for thresholding the viz /
+--      triage, parallel to `related_note.similarity_score`). `method` records
+--      how the link was derived (`"embedding"` today). `created_at` mirrors
+--      66/67/68/69 for provenance parity.
+--
+-- Strict-field / S.4 note. Every strict field below carries a DEFAULT, and the
+-- table is EMPTY on every existing DB (it is brand new — 0 rows everywhere), so
+-- there are NO pre-existing rows to drift and NO backfill UPDATE is required
+-- (the S.4 hazard is a strict field with no default added to a table that
+-- already holds rows; neither condition applies here). The auto-link writer
+-- supplies `similarity_score`/`method` explicitly via RELATE-with-SET, so the
+-- DEFAULTs are a safety floor, never the live value.
+--
+-- Idempotent + forward-only: the DELETE matches nothing on a second pass and
+-- every OVERWRITE re-asserts an identical definition. Down is a documented
+-- no-op (a schema definition has no faithful inverse; reverting to TYPE ANY
+-- would re-break `RELATE note -> note_about -> source` — the very correctness
+-- this establishes — and the edge set is a regenerated projection).
+-- ============================================================================
+
+-- 1. Drop ONLY null-endpoint junk rows (the non-edge records a drifted/
+--    auto-created TYPE ANY table could hold). Real `note_about` edges always
+--    have non-null in/out, so this never touches them — no-op on a fresh empty
+--    table AND on any healthy edge set.
+DELETE note_about WHERE in = NONE OR out = NONE;
+
+-- 2. Assert the canonical edge definition. Converts a drifted/auto-created
+--    TYPE ANY table to RELATION note->source on v2; identical no-op (edges
+--    preserved) on an already-correct RELATION table.
+DEFINE TABLE OVERWRITE note_about SCHEMAFULL TYPE RELATION FROM note TO source;
+
+-- 3. Edge fields (all strict WITH defaults — S.4 safe). `similarity_score` is
+--    the cosine similarity that drove the link; `method` is how it was derived
+--    (`"embedding"` today); `created_at` is provenance (mirrors 66/67/68/69).
+DEFINE FIELD OVERWRITE similarity_score ON note_about TYPE float DEFAULT 0.0;
+DEFINE FIELD OVERWRITE method ON note_about TYPE string DEFAULT "embedding";
+DEFINE FIELD OVERWRITE created_at ON note_about TYPE datetime DEFAULT time::now();
+
+-- Index on similarity_score so the auto-link triage / viz can threshold edges
+-- (mirrors idx_related_note_score / idx_cites_confidence). OVERWRITE so a
+-- re-apply converges.
+DEFINE INDEX OVERWRITE idx_note_about_score ON note_about FIELDS similarity_score;
