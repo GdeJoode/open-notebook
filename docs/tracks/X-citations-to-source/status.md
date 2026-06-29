@@ -263,3 +263,226 @@ package `__init__` — same discipline as `test_chat_routing_telemetry`.
 - `source_chat`'s `SqliteSaver.from_conn_string` → `compile(checkpointer=...)`
   type mismatch is a **pre-existing** latent issue (present on `main`); it does
   not affect X.2 but is worth a separate fix.
+
+---
+
+## Phase X.3 — Faithfulness guard + integration + docs + RETRO (Integration)
+
+**Branch**: `track/x3-faithfulness-guard` (off `main` @ `5fda8e8`, X.1 + X.2 merged)
+**State**: complete — ready for review. **Closes Track X.**
+
+### The key insight — where the real faithfulness risk is
+
+The X.2 `citations` array is built **from the context hits fed to the LLM**
+(`citations_from_hits`), *not* parsed back out of the model's prose — so it is
+already `⊆` the retrieval set **by construction**. A literal "is each emitted
+`chunk_id` in the retrieval set" check is therefore nearly a no-op.
+
+The genuine hallucination risk is the **LLM's inline `[document_id, p.<page>]`
+markers in the answer prose** — what the user actually reads and trusts. The
+model can write `[source:x, p.99]` for a page that was never in its context. So
+the guard's *primary* job is to validate THOSE.
+
+### Guard design (`graphs/citations.py`)
+
+**Primary — `guard_answer_citations(answer, hits, *, strip=False)`.** Parses the
+inline markers out of the answer text with a strict bracket grammar
+(`[<record_id>]` / `[<record_id>, p.<n>]`; `record_id = <type>:<id>`) and
+membership-checks each against the retrieval set:
+
+- a paged marker `[source, p.N]` is faithful iff `(source, N)` is in the set of
+  retrieved `(source, physical_page)` pairs — so a marker citing a *real source
+  at a page it was never retrieved at* (model invented the page) is caught;
+- a page-less `[id]` is faithful iff `id` is a record present in the context
+  (the hit's own `id`/`parent_id`/`source`).
+
+Records every marker as `kept`/`dropped` with the raw marker substring. The
+strict grammar deliberately ignores non-record brackets (`[1]`, `[see below]`)
+so unrelated prose is never touched. Page-0 is handled (physical_page is
+0-indexed). Empty/`None`/no-marker answers return cleanly (no 500).
+
+**Secondary — `guard_citation_array(citations, hits)`.** Defensive membership
+safety-net: filters chunk-bearing citation entries against the retrieved
+`chunk_id`s. A **no-op on current X.2 output** (proven in a test) — its value is
+regression insurance if citations ever stop being context-derived. Short-circuits
+to a no-op when the retrieval set carries **no** chunk_ids, so a missing/unthreaded
+hit set never drops a valid citation (precision-first).
+
+Both are **membership** checks (the cited source/page/chunk *was retrieved*),
+NOT **semantic-support** checks (that the passage backs the claim) — that would
+need a second LLM pass and is out of scope. Documented as an explicit limitation
+in `ARCHITECTURE.md` §11.
+
+### Flag vs strip — decision: FLAG (non-destructive) by default
+
+The guard defaults to `strip=False`: it records dropped vs kept markers and logs
+the hallucinated ones (`logger.warning`) but **leaves the user's answer text
+untouched**. Rationale (precision-first / least-destructive): silently rewriting
+the prose a user sees is more harmful than a flagged-but-present marker, and
+marker parsing — while strict — is still heuristic. `strip=True` is available
+(removes *only* the offending marker token, never surrounding text, with
+conservative whitespace cleanup) for callers that want it, and is unit-tested,
+but the wired graphs flag rather than strip.
+
+### Wiring (revised after review attempt 1)
+
+The marker guard runs on the text the **user actually reads**. In `ask` that is
+the `final_answer` synthesized by `write_final_answer` (a SECOND LLM call), NOT
+the intermediate sub-answers from `provide_answer` (which are never surfaced and
+whose `final_answer.jinja` re-asks for inline markers). The first cut guarded the
+sub-answers and discarded the verdict — leaving the user-visible `ask` answer
+unchecked; review attempt 1 caught this. Fixed:
+
+- **`ask.provide_answer`**: no marker guard (it produces intermediate text). It
+  threads each sub-answer's hits into `ThreadState.retrieval_hits`
+  (`Annotated[list, operator.add]`) so the final node has the full union.
+- **`ask.write_final_answer`**: runs the **marker guard on `final_answer`** (the
+  user-visible answer) against the **union of all sub-answer retrieval hits**,
+  flag/log only (`strip=False`, text byte-identical); then `guard_citation_array`
+  on the merged citations against the same set. The per-sub-answer guard was
+  **dropped** (reviewer minor #2) — once the final answer is guarded, guarding the
+  never-surfaced sub-answers added noise, not value.
+- **`source_chat`**: a single agent answer (no fan-out) → the marker guard runs
+  directly on that answer against the chunk passages + the page-less
+  source/insight records the model was given; array net on the emitted citations.
+
+### X.2 minor #1 (source_chat cites every injected chunk) — decision: DO NOT narrow
+
+`source_chat` injects up to ~40 chunks and cites all of them. The inline-marker
+guard gives the set the model *referenced in prose*, but we **deliberately do not
+narrow** the structured `citations` array to it. Narrowing on prose parsing risks
+dropping valid provenance (the model can synthesize from a passage without
+writing an explicit `[id, p.X]` for it, and in single-source chat it often writes
+page-less `[source:id]`). Per the plan's guidance — "do not drop valid provenance
+based on fragile parsing; if narrowing risks recall, leave the array as the
+context set and just flag the prose" — we keep the full validated context set and
+only flag the prose. Proven by `test_citations_array_not_narrowed_by_prose`
+(answer cites only p.3; both context chunks p.3 + p.9 survive the array).
+
+### Test evidence (per acceptance criterion)
+
+- **AC1** (hallucinated inline marker in the **user-visible answer** caught,
+  genuine kept): guard units `test_citation_faithfulness_guard.py::TestGuardAnswerCitations`
+  (`test_hallucinated_page_for_real_source_detected`,
+  `test_hallucinated_source_detected`, `test_genuine_paged_marker_kept`,
+  `test_mixed_genuine_and_hallucinated`) + integration on the text the user reads:
+  `test_ask_graph_faithfulness.py::TestWriteFinalAnswerFaithfulness::test_hallucinated_final_marker_flagged_genuine_kept`
+  (the FINAL `ask` answer — doc1 retrieved at p.3 only → `[source:doc1, p.99]`
+  dropped, `[source:doc2, p.12]` kept, validated against the union of sub-answer
+  hits) and `test_source_chat_faithfulness.py::test_hallucinated_page_flagged_genuine_kept`.
+- **AC2** (array net no-op today + catches planted out-of-set): unit
+  `TestGuardCitationArray::test_no_op_on_context_derived_array` +
+  `test_catches_planted_out_of_set_chunk`; integration
+  `test_ask_graph_faithfulness.py::test_array_safety_net_drops_planted_out_of_set`
+  + `test_array_safety_net_no_op_on_genuine`.
+- **AC3** (no corruption; no 500 on page-less/empty/no-marker): `test_default_is_non_destructive`,
+  `test_no_markers_no_corruption`, `test_empty_answer_no_500`,
+  `test_strip_removes_only_the_bad_marker`; integration — final `ask` answer
+  byte-identical (`TestWriteFinalAnswerFaithfulness::test_all_genuine_final_markers_no_drop`,
+  `test_no_marker_final_answer_not_corrupted`: `out["final_answer"] == final`) +
+  `test_page_less_source_marker_kept` (`out["messages"].content == answer`).
+- **AC4**: ARCHITECTURE.md §11 + this RETRO + FEATURE_ROADMAP Track X entry,
+  Track X CLOSED.
+- **AC5** (suites green): see below.
+
+### Suites run green
+
+```
+uv run --project apps/app-main pytest \
+  apps/app-main/tests/test_graph_citations.py \
+  apps/app-main/tests/test_citation_faithfulness_guard.py \
+  apps/app-main/tests/test_ask_graph_citations.py \
+  apps/app-main/tests/test_ask_graph_faithfulness.py \
+  apps/app-main/tests/test_source_chat_citations.py \
+  apps/app-main/tests/test_source_chat_faithfulness.py \
+  apps/app-main/tests/test_context_service.py \
+  apps/app-main/tests/test_search_service.py
+→ 80 passed
+```
+
+Plus surrealdb-service + retrieval suites unaffected (X.3 changed only
+`graphs/citations.py` + the two graphs). Pre-existing & ignored, untouched: the
+top-level `tests/` import errors, the 3 `test_source_processing_service` docling
+`to_docling_options` failures, and the `source_chat` `SqliteSaver.from_conn_string`
+type mismatch (a separate ticket — see below).
+
+### Separate ticket (NOT fixed in Track X)
+
+`source_chat.py` does `memory = SqliteSaver.from_conn_string(...)` then
+`.compile(checkpointer=memory)`; under this langgraph version `from_conn_string`
+returns a `_GeneratorContextManager`, not a saver. Pre-existing on `main`; the
+graph tests stub it. **Recommend a dedicated fix** (use the context manager
+form, or `SqliteSaver(conn)` directly). Out of scope for Track X.
+
+### Files
+
+- `apps/app-main/src/app_main/graphs/citations.py` — `guard_answer_citations`,
+  `guard_citation_array`, `parse_inline_markers`, `_retrieval_index`.
+- `apps/app-main/src/app_main/graphs/ask.py` — marker guard + `retrieval_hits`
+  state + array net.
+- `apps/app-main/src/app_main/graphs/source_chat.py` — marker guard + array net.
+- `apps/app-main/tests/test_citation_faithfulness_guard.py` — guard units (NEW).
+- `apps/app-main/tests/test_ask_graph_faithfulness.py` — ask integration (NEW).
+- `apps/app-main/tests/test_source_chat_faithfulness.py` — source_chat integration (NEW).
+- `ARCHITECTURE.md` §11 — provenance → citation flow + membership-not-semantic.
+- `docs/FEATURE_ROADMAP.md` — Track X entry, CLOSED.
+
+### Commits (on `track/x3-faithfulness-guard`)
+
+- `219b4eb` feat(citations): faithfulness guard for inline markers + array safety-net (X.3)
+- `9a26ced` feat(ask,source-chat): wire X.3 faithfulness guard into both graphs
+- _docs commit_ (this RETRO + ARCHITECTURE + roadmap) — see git log.
+
+---
+
+## Track X — RETROSPECTIVE (CLOSED 2026-06-29)
+
+Track X delivered **page-level, source-faithful citations on generated answers**
+by reusing provenance that already existed on the `chunk` table — no
+re-extraction. The arc, and what each phase actually discovered:
+
+**X.1 — "`fn::` collapses to source-level; hydrate by own-id-prefix."** The
+biggest surprise: the `fn::vector_search` / `fn::text_search` SurrealDB functions
+`GROUP BY source` with `math::max(similarity)`, collapsing a source's many
+matching embeddings into a *single source-level hit* — the originating chunk
+(and its page) is lost *inside the function*. Rather than rewrite the `fn::`
+(risky, shared), X.1 re-attached the chunk by a batched `source_embedding ⋈
+chunk` cosine-argmax SELECT keyed off the hit's **own `id` prefix** (not
+`parent_id`), proven equal to the collapsed `math::max` to 1e-9 on staging.
+
+**X.1 — the insight-hit wrong-page blocker.** First attempt keyed the chunk
+lookup off `parent_id`, which stamped a `source_insight` hit with the source's
+top *embedding* chunk's page — a different row that did not produce the hit.
+Latent on staging only (0 insight rows there), but the real pipeline populates
+`source_insight.embedding`. Fix: distinguish by the hit's own id prefix and route
+insights to a source-level (page-less) citation, never the chunk lookup.
+
+**X.2 — deterministic-citations-from-context.** The pivotal design choice: build
+the structured `citations` array **from the context hits fed to the LLM**, not by
+parsing the model's prose. This makes citations deterministic, defensible, and
+`⊆` the retrieval set by construction — and it reframed X.3.
+
+**X.3 — "the real risk is the inline markers — in the answer the user actually
+reads."** Because the array is context-derived, a literal membership check on it
+is almost a no-op. The genuine hallucination surface is the LLM's inline
+`[doc, p.X]` prose markers. The subtler trap (caught by review attempt 1): in the
+fan-out `ask` graph, the user-visible answer is the `final_answer` from a *second*
+LLM call (`write_final_answer`), not the intermediate sub-answers — guarding only
+the sub-answers leaves the headline answer unchecked. The guard must run on the
+final synthesized text, validated against the **union** of the sub-answers'
+retrieval hits (flag, don't strip — least-destructive), with the array check as
+regression insurance, and explicit that this is **membership, not semantic
+support**.
+
+**Cross-cutting discipline** (shared with Track U.3 `cites`): precision over
+coverage — flag/drop the unverifiable, never fabricate; additive/backward-compat
+throughout (`citations` is a new field; existing consumers unaffected); reuse
+before rebuild (the provenance, the answer graphs, the citation helper all
+existed or were extended, not replaced).
+
+**Carry-forwards**: (1) a **semantic-support** citation check (does the cited
+passage actually back the claim) is the natural next step — needs a second LLM
+pass, deferred. (2) The `source_chat` `SqliteSaver.from_conn_string` type
+mismatch is a separate pre-existing ticket.
+
+**Track X is CLOSED.**

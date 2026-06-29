@@ -7,13 +7,19 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from loguru import logger
 from typing_extensions import TypedDict
 
 from shared.models import Source
 from shared.models.source import SourceInsight
 from app_main.config import LANGGRAPH_CHECKPOINT_FILE
 from app_main.dependencies import get_context_service
-from app_main.graphs.citations import citations_from_hits, format_citation_tag
+from app_main.graphs.citations import (
+    citations_from_hits,
+    format_citation_tag,
+    guard_answer_citations,
+    guard_citation_array,
+)
 from app_main.graphs.utils import provision_langchain_model
 
 MODEL_INVOKE_TIMEOUT = 300  # seconds
@@ -121,13 +127,42 @@ async def call_model_with_source_context(
         model.ainvoke(payload), timeout=MODEL_INVOKE_TIMEOUT
     )
 
+    # Track X.3 faithfulness guard. The retrieval set is the chunk passages plus
+    # the page-less source/insight records the model was given (so a legitimate
+    # [source] / [insight] marker is recognised). Inline-marker validation
+    # (primary) flags hallucinated [id, p.X] markers; the array safety-net
+    # (secondary) is a no-op on the context-derived citations. Membership only,
+    # not semantic support; non-destructive to the answer text.
+    guard_hits: List[Dict[str, Any]] = list(chunk_context or [])
+    if source is not None:
+        guard_hits.append({"id": source.id, "source": source.id})
+    for insight in insights:
+        guard_hits.append({"id": insight.id})
+    answer_text = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
+    marker_guard = guard_answer_citations(answer_text, guard_hits, strip=False)
+    if marker_guard["dropped_count"]:
+        logger.warning(
+            "source_chat: {} hallucinated inline citation marker(s) flagged "
+            "(kept {}): {}",
+            marker_guard["dropped_count"],
+            marker_guard["kept_count"],
+            [d["marker"] for d in marker_guard["dropped"]],
+        )
+    guarded_array = guard_citation_array(citations, guard_hits)
+    if guarded_array["dropped_count"]:
+        logger.warning(
+            "source_chat: {} citation(s) dropped by the array safety-net: {}",
+            guarded_array["dropped_count"],
+            guarded_array["dropped"],
+        )
+
     return {
         "messages": ai_message,
         "source": source,
         "insights": insights,
         "context": formatted_context,
         "context_indicators": context_indicators,
-        "citations": citations,
+        "citations": guarded_array["citations"],
     }
 
 
