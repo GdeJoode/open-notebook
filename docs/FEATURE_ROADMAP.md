@@ -1355,6 +1355,45 @@ existing `surrealdb-mcp` server + repos. **Feeds**: later Constella features
 
 ---
 
+## Track X — Citations to exact source (Docling provenance → answers) (NEW)
+
+> **Status**: ✅ CLOSED (2026-06-29). Generated answers now cite the **exact
+> source / page / chunk** a claim came from. The provenance (file/page/section)
+> was already STORED on the `chunk` table by the Docling ingest but never
+> threaded into answers; Track X passes it retrieval → answer graphs → a
+> structured `citations` array, and guards the LLM's inline prose markers
+> against the retrieval set. No re-extraction — pure reuse of stored provenance.
+> See [`docs/tracks/X-citations-to-source/status.md`](./tracks/X-citations-to-source/status.md)
+> and `ARCHITECTURE.md` §11.
+
+**Vision**: every answer is traceable to the page it stands on — Feature 4 of
+the Constella adoption plan. Precision over coverage: a citation is only emitted
+for a source/page/chunk that was actually retrieved; hallucinated attributions
+are flagged/dropped (membership check, not semantic support — that limitation is
+explicit).
+
+**Phases**: X.1 thread chunk provenance through retrieval — `fn::` collapses a
+source's matching embeddings to one source-level hit, so the originating chunk's
+page is re-attached by a batched `source_embedding ⋈ chunk` cosine-argmax SELECT
+(the exact row behind the collapsed `math::max`, verified to 1e-9 on staging);
+hydration is opt-in so the `/search` hot path is untouched · X.2 cited answers
+in the `ask` + `source_chat` graphs — provenance tags in the prompt + a
+structured `citations: [{source, page, chunk_id, section}]` array derived
+**deterministically from the context hits** (not parsed from prose) · X.3
+faithfulness guard — the real risk is the LLM's inline `[doc, p.X]` prose
+markers (the array is context-derived, so already `⊆` the retrieval set);
+`guard_answer_citations` membership-checks those markers and flags hallucinated
+ones (non-destructive to the answer text), with a defensive array safety-net for
+regression insurance + ARCHITECTURE note + RETRO.
+
+**Value**: trustworthy, page-level attribution on answers, reusing provenance
+that already existed end-to-end. **Depends on**: the Docling ingest provenance on
+`chunk` (X.1 hydration), the `ask` / `source_chat` answer graphs. **Limitation**:
+membership-not-semantic — a semantic-support check (does the cited passage
+actually back the claim) would need a second LLM pass and is deferred.
+
+---
+
 ## Bijlagen
 
 - `docs/REFACTOR_PLAN.md` — voltooide refactor (Phase 0-7)

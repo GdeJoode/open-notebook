@@ -489,7 +489,60 @@ The rerank leg is **off by default**: `/search` runs it only when
 reranker outage degrades gracefully. The model run (~2 GB download, CPU latency)
 is **operator-gated** — see the runbook for the bring-up + smoke + fallback test.
 
-## 11. Further reading
+## 11. Provenance → citation flow (Track X)
+
+Answers cite the **exact source/page/chunk** a claim came from. The provenance
+(file/page/section) is already stored on the `chunk` table by the Docling
+ingest; Track X threads it through retrieval into the answer graphs and guards
+the result. Three stages:
+
+**X.1 — provenance hydration (retrieval layer).** The `fn::vector_search` /
+`fn::text_search` SurrealDB functions collapse a source's many matching
+embedding rows to a *single source-level hit* (`GROUP BY source` with
+`math::max(similarity)`), so the originating chunk's page is lost inside the
+function. `SearchRepository.hydrate_provenance` re-attaches it **without
+touching the `fn::`**: for a `source:`-own-id vector/hybrid hit it runs one
+batched `SELECT` over `source_embedding ⋈ chunk` picking the top-1 chunk by
+`vector::similarity::cosine` — exactly the row that produced the collapsed
+`math::max`, verified equal to 1e-9 on staging. Each hit then carries
+`chunk_id`/`physical_page`/`printed_page`/`section_path`/`element_type`/`source`
+(value-or-`None`). Hydration is **opt-in** (`hydrate=True`) so the generic
+`/search` hot path does not pay the extra `SELECT`; only the answer-citation
+path opts in. Text-only hits and `source_insight` hits get no chunk page (the
+BM25 score is not reproducible out of context, and an insight has no single
+originating chunk) — they cite the `source` page-less.
+
+**X.2 — context-derived citations (answer graphs).** `ask.provide_answer` and
+`source_chat` inject each hit's provenance into the prompt as a tag
+`[source: <id> | p.<page> | <section>]`, and emit a structured `citations:
+[{source, page, chunk_id, section}]` array. The array is built **from the
+context hits actually fed to the LLM** (`graphs/citations.py::citations_from_hits`),
+*not* parsed back out of the model's prose — so it is deterministic and `⊆` the
+retrieval set by construction. The prompt templates additionally ask the model
+to write inline `[document_id, p.<page>]` attribution markers in the answer prose
+(what the user sees), citing only pages that appear in a provenance tag.
+
+**X.3 — faithfulness guard (`graphs/citations.py`).** Because the `citations`
+array is context-derived, the genuine hallucination risk is the **inline prose
+markers**: the model can write `[source:x, p.99]` for a page it never saw.
+`guard_answer_citations` parses those markers and membership-checks each against
+the retrieval set's `(source, page)` pairs / record ids; a marker citing a
+source/page not in the context is flagged (recorded; non-destructive to the
+answer text by default — `strip=True` removes only the offending marker token).
+`guard_citation_array` is a defensive membership safety-net on the chunk-bearing
+entries of the array — a no-op on current output, regression insurance if
+citations ever stop being context-derived (it short-circuits to a no-op when the
+retrieval set carries no chunk_ids, so an empty/unthreaded hit set never drops a
+valid citation).
+
+> **Limitation — membership, not semantic support.** The guard verifies the
+> cited source/page/chunk *was retrieved* (it was in the model's context); it
+> does **not** verify the cited passage actually *supports* the claim. A
+> semantic-support check would need a second LLM pass and is out of scope. This
+> is the same precision-first discipline as the Track U.3 `cites` edges:
+> drop/flag the unverifiable, never fabricate.
+
+## 12. Further reading
 
 - `docs/SUMMARIZATION_APPROACHES.md` — design + status of all 11 summarization strategies
 - `docs/KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md` — KG architecture and roadmap
@@ -504,4 +557,5 @@ is **operator-gated** — see the runbook for the bring-up + smoke + fallback te
 - `docs/tracks/J-model-routing/OPERATOR_GUIDE.md` — cloud/local routing: env keys, privacy model, fair-use, enable/disable
 - `docs/tracks/W-mcp-graph-memory/status.md` — Track W retrospective (MCP graph-tools shared substrate + hybrid search + reranker)
 - `docs/tracks/W-mcp-graph-memory/OPERATOR_GUIDE.md` — registering the `surrealdb-mcp` server + gated reranker bring-up/smoke/fallback
+- `docs/tracks/X-citations-to-source/status.md` — Track X retrospective (provenance → citation flow + faithfulness guard; membership-not-semantic)
 - `docs/troubleshooting/exports.md` — failure-mode diagnostics for the three export formats
