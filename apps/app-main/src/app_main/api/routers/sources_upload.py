@@ -443,7 +443,26 @@ async def _create_source_impl(
 
         else:
             # SYNC PATH
-            logger.info("Using sync processing path")
+            #
+            # Track PL.5 — decouple from the shared worker. The sync contract is
+            # "the caller gets a fully-processed source back synchronously". We
+            # honour that contract WITHOUT occupying the shared single-worker for
+            # the whole parse: instead of enqueuing ``process_source`` onto the
+            # shared queue and polling its status for up to 300s (which both
+            # blocked the request AND starved every other queued job behind the
+            # one busy worker slot), we run the SAME DOCUMENT_PARSE handler
+            # in-request via the registry. The heavy parse therefore executes in
+            # this request's own coroutine — the shared worker stays free to
+            # drain other jobs concurrently. The handler still calls
+            # ``advance_source`` internally, so the lightweight EMBED→EXTRACT→…
+            # auto-chain is enqueued as normal background jobs (correct: those
+            # are the steps that *should* run on the worker after the parse).
+            #
+            # What remains by design: a *sync* caller still blocks for the
+            # duration of its own parse (that is the contract — callers who do
+            # not want to block use ``async_processing=true``, the async path
+            # above). The starvation of the shared queue is gone.
+            logger.info("Using sync processing path (in-request, off the shared worker)")
 
             try:
                 source = await source_svc.create(
@@ -457,9 +476,12 @@ async def _create_source_impl(
                 for nb_id in source_data.notebooks or []:
                     await source_svc.add_to_notebook(source.id, nb_id)
 
-                from app_main.services.command_service import CommandService
+                from app_main.services.command_service import get_registry
+                from shared.types.enums import JobType
 
-                command_args = {
+                payload = {
+                    "module_name": "open_notebook",
+                    "command_name": "process_source",
                     "source_id": str(source.id),
                     "content_state": content_state,
                     "notebook_ids": source_data.notebooks,
@@ -467,30 +489,14 @@ async def _create_source_impl(
                     "private": source_data.private,
                 }
 
-                command_id = await CommandService.submit_command_job(
-                    "open_notebook",
-                    "process_source",
-                    command_args,
-                )
-
-                # Wait for completion with timeout
-                import time
-
-                start_time = time.time()
-                timeout = 300  # 5 minutes
-
-                while time.time() - start_time < timeout:
-                    status_data = await CommandService.get_command_status(
-                        command_id
-                    )
-                    cmd_status = status_data.get("status", "unknown")
-                    if cmd_status in ["completed", "failed"]:
-                        break
-                    await asyncio.sleep(1)
-
-                if cmd_status == "failed":
-                    error_msg = status_data.get("error_message", "Unknown error")
-                    logger.error(f"Sync processing failed: {error_msg}")
+                try:
+                    # Run the DOCUMENT_PARSE handler directly (same funnel as the
+                    # worker would use), in this request's coroutine. No shared
+                    # queue, no poll. The handler's internal advance_source still
+                    # enqueues the downstream EMBED chain as background jobs.
+                    await get_registry().execute(JobType.DOCUMENT_PARSE, payload)
+                except Exception as proc_err:
+                    logger.error(f"Sync processing failed: {proc_err}")
                     try:
                         await source_svc.delete(source.id)
                     except Exception:
@@ -502,7 +508,7 @@ async def _create_source_impl(
                             pass
                     raise HTTPException(
                         status_code=500,
-                        detail=f"Processing failed: {error_msg}",
+                        detail=f"Processing failed: {proc_err}",
                     )
 
                 # Re-fetch the processed source
