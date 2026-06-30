@@ -36,15 +36,21 @@ def _patch_orchestrator(embedded_chunks: int = 5):
     )
 
 
-def _patch_stage_repo(*, notebook_id=None):
+def _patch_stage_repo(*, notebook_id=None, stage="embedded"):
     """Patch the lazily-imported ``get_source_repo`` so the stage write is a
     no-op spy (no DB).
 
     ``get_notebook_id`` (used by the PL.3 insights toggle resolution) returns
     ``notebook_id`` — ``None`` by default (unlinked source -> insights default
-    ON, no toggle read)."""
+    ON, no toggle read).
+
+    PL.4: ``advance_source`` reads the source's stage via ``get_processing_stage``
+    to decide what to dispatch next. Without a DB the write does not persist, so
+    the mock returns ``stage`` (default ``"embedded"`` — the embed handler writes
+    ``embedded`` then advances off it)."""
     repo = AsyncMock()
     repo.set_processing_stage = AsyncMock(return_value=True)
+    repo.get_processing_stage = AsyncMock(return_value=stage)
     repo.get_notebook_id = AsyncMock(return_value=notebook_id)
     return patch("app_main.dependencies.get_source_repo", return_value=repo), repo
 

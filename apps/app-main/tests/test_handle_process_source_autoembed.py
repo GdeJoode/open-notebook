@@ -20,6 +20,16 @@ import pytest
 import app_main.handlers as handlers
 
 
+def _patch_stage_repo(*, stage="ingested"):
+    """Patch ``get_source_repo`` so the PL.2 ``ingested`` stage write is a no-op
+    spy and PL.4's ``advance_source`` reads back ``stage`` (default
+    ``"ingested"`` — the parse handler advances off it into EMBED)."""
+    repo = AsyncMock()
+    repo.set_processing_stage = AsyncMock(return_value=True)
+    repo.get_processing_stage = AsyncMock(return_value=stage)
+    return patch("app_main.dependencies.get_source_repo", return_value=repo)
+
+
 @pytest.mark.asyncio
 async def test_autoembed_enqueued_when_chunks_created() -> None:
     processor = AsyncMock()
@@ -27,7 +37,7 @@ async def test_autoembed_enqueued_when_chunks_created() -> None:
         return_value={"source_id": "source:abc", "chunk_count": 5}
     )
 
-    with _patch_dep(processor), patch(
+    with _patch_dep(processor), _patch_stage_repo(), patch(
         "app_main.services.command_service.CommandService.submit_command_job",
         new=AsyncMock(return_value="job:embed-1"),
     ) as submit:
@@ -52,7 +62,7 @@ async def test_no_autoembed_when_zero_chunks() -> None:
         return_value={"source_id": "source:empty", "chunk_count": 0}
     )
 
-    with _patch_dep(processor), patch(
+    with _patch_dep(processor), _patch_stage_repo(), patch(
         "app_main.services.command_service.CommandService.submit_command_job",
         new=AsyncMock(),
     ) as submit:
@@ -73,7 +83,7 @@ async def test_enqueue_failure_does_not_fail_extraction() -> None:
         return_value={"source_id": "source:abc", "chunk_count": 3}
     )
 
-    with _patch_dep(processor), patch(
+    with _patch_dep(processor), _patch_stage_repo(), patch(
         "app_main.services.command_service.CommandService.submit_command_job",
         new=AsyncMock(side_effect=RuntimeError("queue down")),
     ):

@@ -228,3 +228,117 @@
 - `apps/app-main/tests/test_handle_embed_source_autoextract.py`
 - `apps/app-main/tests/test_handle_entity_extract_stage.py`
 - `apps/app-main/tests/test_notebooks_router.py`
+
+---
+
+## Phase PL.4 — One `SourcePipeline` definition + status surfaced — READY FOR REVIEW
+
+**Branch**: `track/pl4-pipeline-definition` (off `main` with PL.1 + PL.2 + PL.3 merged).
+**Commits**: `5d72fd6` (consolidation) → `9c26e64` (API exposure + pipeline unit
+tests) → `6024aba` (migration-72 minor + get_processing_stage roundtrip).
+
+### What shipped — pure consolidation, NO behavior change vs PL.3
+
+- **One declarative `SOURCE_PIPELINE` + the `advance_source` driver** —
+  `apps/app-main/src/app_main/services/source_pipeline.py`. The PL.1–PL.3
+  chaining was scattered across the handlers (each handler wrote
+  `processing_stage` AND held the ad-hoc next-stage enqueue inline). PL.4 moves
+  ALL of it into one place:
+  - `SOURCE_PIPELINE` is an ordered list of `PipelineStage` dataclasses, each
+    with `name` / `produces` (the `processing_stage` value) / `auto` / `gate` /
+    `depends_on` / `enqueue_command` (None = inline) / `parallel`. The spine is
+    `INGEST(ingested) → EMBED(embedded) → EXTRACT(extracted, gate=schema_review)
+    → GRAPH(graphed→complete, inline)`; INSIGHTS is a `parallel` branch off EMBED
+    (`gate=auto_insights`, `produces=None` — it never advances the spine).
+  - `advance_source(source_id, *, embedded_chunks=None)` reads
+    `source.processing_stage` via the new `SourceRepository.get_processing_stage`,
+    finds "where the source is", and dispatches the next allowed stage(s): the
+    spine successor (enqueue a job, or run GRAPH inline + advance graphed→complete)
+    plus any parallel branch (INSIGHTS, toggle-gated). It honours `auto`,
+    `depends_on`, the gates, the `embedded_chunks > 0` guard (EMBED fan-out only),
+    and is best-effort + idempotent (every enqueue/inline run is guarded; the
+    downstream jobs are themselves idempotent so a double-dispatch is safe).
+  - Parked/terminal stages (`awaiting_schema_review`, `failed`, `complete`) do
+    NOT auto-advance — they need an explicit resume (a review, a re-run).
+- **Handlers became THIN** — `handle_process_source`, `_handle_embed_source`,
+  `handle_entity_extract` now do their stage's work, write their produced stage
+  (`_set_processing_stage`, re-exported from the pipeline module), then call
+  `advance_source`. **No source-pipeline ad-hoc enqueue remains in handlers.py**
+  (grep: the only `submit_command_job` left is the Y.3 NOTE auto-link in
+  `_handle_embed_single_item` — a different, non-source pipeline). The
+  schema-review gate stays IN the extract handler (it must reraise
+  `SchemaReviewPendingError` for the worker → `PAUSED_FOR_REVIEW`);
+  `advance_source` is only reached on the success path.
+- **`MentionsProjectionService.refresh_source` invariant PRESERVED unchanged** —
+  GRAPH still runs the FULL corpus projection then filters the write (global
+  R.2 weight × R.6 IDF/df); PL.4 only relocated the *call site* (handler →
+  `advance_source._run_graph_inline`), not the projection.
+- **`processing_stage` on the source read API** — added to `SourceResponse`
+  (`api/schemas.py`) and surfaced in `get_source` / `update_source`
+  (`api/routers/sources_crud.py`), so the UI can show per-document progress
+  (`ingested → … → complete`, or a parked `awaiting_schema_review` / `failed`).
+
+### `complete`-with-zero-edges semantics (folded PL.3 minor b)
+
+`complete` means "the KG chain RAN", not "the KG is non-empty". A source whose
+entities share no `df>1` concept with the rest of the corpus produces 0
+`mentions` edges (R.6 noise normalization drops `df==1` singletons), yet its
+extraction succeeded and its GRAPH "refreshed to empty" — so it correctly
+reaches `graphed → complete`. This is a legitimate terminal state; the UI should
+read "complete with 0 edges" as a healthy outcome, not a failure. (Documented in
+the `source_pipeline.py` module docstring too.)
+
+### Per-criterion evidence
+
+- **AC1** (chain driven by `advance_source`; handlers hold no ad-hoc enqueues;
+  stage-transition table tested): grep proof above. Unit tests
+  `apps/app-main/tests/test_source_pipeline.py` (13) pin the table — each stage →
+  the correct next action (`ingested`→EMBED, `embedded`→EXTRACT+INSIGHTS,
+  `extracted`→GRAPH inline→graphed→complete), gates respected (toggle off skips
+  INSIGHTS, KG chain still fires), the chunk-count guard (0 chunks → neither
+  chained), parked/terminal stages do not advance, best-effort enqueue never
+  raises, plus a structural assertion on the definition's shape.
+- **AC2** (`processing_stage` returned by the read endpoint): `test_sources_crud.py`
+  `TestGetSourceProcessingStage` — `GET /sources/{id}` echoes the source's stage
+  (`graphed`) and falls back to `ingested` when unset.
+- **AC3** (behavior-identical / no regression): the PL.1–PL.3 seam tests
+  (`test_handle_process_source_autoembed`, `test_handle_embed_source_autoextract`,
+  `test_handle_embed_source_insights_chain`, `test_handle_entity_extract_stage`)
+  still green AFTER routing through `advance_source` (the mocks now supply
+  `get_processing_stage` — the only test-side change, the assertions on what gets
+  enqueued / which stages are written are UNCHANGED). The end-to-end equality:
+  `@requires_docker test_handle_entity_extract_graph_db` drives the REAL
+  `handle_entity_extract` against a live container → through the consolidated
+  `advance_source` → GRAPH inline refresh → the SAME source-scoped `mentions`
+  edge materializes and `processing_stage == complete`, scoped (the other source
+  gets no edges) — identical to PL.3. The gate park
+  (`test_handle_entity_extract_gate_db`) and the source-scoped refresh
+  (`test_mentions_refresh_source_db`) suites also green.
+- **AC4** (full app-main suite green + migration-72 S.4 added): app-main
+  non-docker **1385 passed** (only the 3 pre-existing `TestBuildIngestionConfig`
+  docling failures — baseline, docling not installed). The folded migration-72
+  S.4 writability test (`test_notebook_auto_insights_db::
+  test_migration_72_backfills_none_and_row_stays_writable`) mirrors the
+  migration-71 one (a genuinely-NONE `notebook.auto_insights` row is repaired by
+  the drift-only backfill AND stays writable) → green. `mypy` clean on
+  `source_pipeline.py` (the 2 reported errors are pre-existing `shared.*`
+  missing-stub warnings, unrelated).
+
+### New files
+- `apps/app-main/src/app_main/services/source_pipeline.py`
+- `apps/app-main/tests/test_source_pipeline.py`
+
+### Modified
+- `apps/app-main/src/app_main/handlers.py` (now thin — delegates to `advance_source`)
+- `apps/app-main/src/app_main/api/schemas.py` (+`SourceResponse.processing_stage`)
+- `apps/app-main/src/app_main/api/routers/sources_crud.py` (surface the stage)
+- `packages/surrealdb-service/src/surrealdb_service/repositories/source.py`
+  (+`get_processing_stage`)
+- `apps/app-main/tests/test_handle_process_source_autoembed.py`
+- `apps/app-main/tests/test_handle_embed_source_autoextract.py`
+- `apps/app-main/tests/test_handle_embed_source_insights_chain.py`
+- `apps/app-main/tests/test_handle_entity_extract_stage.py`
+- `apps/app-main/tests/test_handle_entity_extract_graph_db.py` (docstring)
+- `apps/app-main/tests/test_processing_stage_db.py` (+get_processing_stage roundtrip)
+- `apps/app-main/tests/test_notebook_auto_insights_db.py` (+migration-72 S.4 test)
+- `apps/app-main/tests/test_sources_crud.py` (+processing_stage API assertion)
