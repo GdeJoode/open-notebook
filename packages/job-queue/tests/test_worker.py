@@ -12,7 +12,11 @@ from job_queue.exceptions import JobPausedForReviewError
 from job_queue.queue import JobQueue
 from job_queue.registry import HandlerRegistry
 from job_queue.repository import JobRepository
-from job_queue.worker import JobWorker
+from job_queue.worker import (
+    DEFAULT_MAX_CONCURRENCY,
+    JobWorker,
+    _resolve_max_concurrency,
+)
 
 
 def _make_job(
@@ -296,3 +300,205 @@ class TestJobWorker:
         calls = repository.update_status.call_args_list
         assert calls[-1].args == ("job:test1", JobStatus.PAUSED_FOR_REVIEW)
         repository.add_to_dead_letter.assert_not_called()
+
+
+# ----------------------------------------------------------------------
+# Track PL.5: bounded, configurable worker concurrency.
+#
+# The default is 1 (serial — historical behaviour). Raising it lets
+# independent jobs run in parallel WITHOUT changing the chain-enforced
+# stage ordering (a successor stage is only ever enqueued after its
+# predecessor completes, so the worker never has to serialize to keep
+# the pipeline correct — see worker.py module docstring + source_pipeline).
+# ----------------------------------------------------------------------
+
+
+class TestConcurrencyResolution:
+    """The concurrency limit: explicit arg > env > serial default."""
+
+    def test_default_is_serial(self, monkeypatch):
+        monkeypatch.delenv("JOB_WORKER_CONCURRENCY", raising=False)
+        assert _resolve_max_concurrency(None) == DEFAULT_MAX_CONCURRENCY == 1
+
+    def test_explicit_arg_wins_over_env(self, monkeypatch):
+        monkeypatch.setenv("JOB_WORKER_CONCURRENCY", "5")
+        assert _resolve_max_concurrency(3) == 3
+
+    def test_env_used_when_no_arg(self, monkeypatch):
+        monkeypatch.setenv("JOB_WORKER_CONCURRENCY", "4")
+        assert _resolve_max_concurrency(None) == 4
+
+    def test_non_positive_falls_back_to_serial(self, monkeypatch):
+        monkeypatch.delenv("JOB_WORKER_CONCURRENCY", raising=False)
+        assert _resolve_max_concurrency(0) == 1
+        assert _resolve_max_concurrency(-2) == 1
+
+    def test_garbage_env_falls_back_to_serial(self, monkeypatch):
+        monkeypatch.setenv("JOB_WORKER_CONCURRENCY", "not-an-int")
+        assert _resolve_max_concurrency(None) == 1
+
+    def test_negative_env_falls_back_to_serial(self, monkeypatch):
+        monkeypatch.setenv("JOB_WORKER_CONCURRENCY", "-3")
+        assert _resolve_max_concurrency(None) == 1
+
+    def test_worker_exposes_resolved_concurrency(self):
+        q = JobQueue(max_size=10)
+        repo = MagicMock(spec=JobRepository)
+        worker = JobWorker(q, repo, HandlerRegistry(), max_concurrency=3)
+        assert worker.max_concurrency == 3
+
+
+class TestWorkerConcurrency:
+    """Behavioural: with concurrency >= 2, a heavy job does NOT block an
+    independent light job; with concurrency == 1 they strictly serialize."""
+
+    def _repo(self):
+        repo = MagicMock(spec=JobRepository)
+        repo.update_status = AsyncMock()
+        repo.add_to_dead_letter = AsyncMock()
+        repo.list_jobs = AsyncMock(return_value=[])
+        return repo
+
+    @pytest.mark.asyncio
+    async def test_two_independent_jobs_run_in_parallel(self):
+        """concurrency=2: a heavy job and a light job overlap in time.
+
+        The heavy handler blocks on an Event the light handler sets; if the
+        worker serialized, the heavy job would never see the Event set (the
+        light job couldn't start) and the test would deadlock to its timeout.
+        Observing overlap (both started before either finished) proves the
+        two jobs were NOT serialized.
+        """
+        queue = JobQueue(max_size=10)
+        repository = self._repo()
+        registry = HandlerRegistry()
+
+        heavy = _make_job(job_id="job:heavy", job_type=JobType.DOCUMENT_PARSE)
+        light = _make_job(job_id="job:light", job_type=JobType.EMBEDDING_GENERATE)
+        repository.get = AsyncMock(
+            side_effect=lambda jid: {"job:heavy": heavy, "job:light": light}[jid]
+        )
+
+        started: list[str] = []
+        finished: list[str] = []
+        light_started = asyncio.Event()
+        both_running = asyncio.Event()
+
+        @registry.register(JobType.DOCUMENT_PARSE)
+        async def heavy_handler(payload):
+            started.append("heavy")
+            # Wait until the light job has also started → proves overlap.
+            await asyncio.wait_for(light_started.wait(), timeout=2.0)
+            both_running.set()
+            finished.append("heavy")
+            return {"heavy": True}
+
+        @registry.register(JobType.EMBEDDING_GENERATE)
+        async def light_handler(payload):
+            started.append("light")
+            light_started.set()
+            finished.append("light")
+            return {"light": True}
+
+        worker = JobWorker(queue, repository, registry, max_concurrency=2)
+
+        await queue.enqueue("job:heavy")
+        await queue.enqueue("job:light")
+        await worker.start()
+        # If they ran in parallel, both_running fires quickly.
+        await asyncio.wait_for(both_running.wait(), timeout=2.0)
+        await worker.stop()
+
+        assert both_running.is_set()
+        assert set(started) == {"heavy", "light"}
+        # The light job finished while the heavy job was still mid-flight
+        # (the heavy job only finishes AFTER light_started, which light sets
+        # right before it returns) — i.e. they were not serialized.
+        assert "light" in finished
+        assert "heavy" in finished
+
+    @pytest.mark.asyncio
+    async def test_serial_default_does_not_overlap(self):
+        """concurrency=1 (default): the second job cannot start until the
+        first finishes. The first handler checks that the second hasn't run
+        yet, proving strict serialization is preserved by default."""
+        queue = JobQueue(max_size=10)
+        repository = self._repo()
+        registry = HandlerRegistry()
+
+        a = _make_job(job_id="job:a", job_type=JobType.DOCUMENT_PARSE)
+        b = _make_job(job_id="job:b", job_type=JobType.EMBEDDING_GENERATE)
+        repository.get = AsyncMock(
+            side_effect=lambda jid: {"job:a": a, "job:b": b}[jid]
+        )
+
+        order: list[str] = []
+        concurrently_running = {"value": False}
+        active = {"count": 0}
+
+        @registry.register(JobType.DOCUMENT_PARSE)
+        async def handler_a(payload):
+            active["count"] += 1
+            if active["count"] > 1:
+                concurrently_running["value"] = True
+            order.append("a")
+            await asyncio.sleep(0.05)
+            active["count"] -= 1
+            return {}
+
+        @registry.register(JobType.EMBEDDING_GENERATE)
+        async def handler_b(payload):
+            active["count"] += 1
+            if active["count"] > 1:
+                concurrently_running["value"] = True
+            order.append("b")
+            await asyncio.sleep(0.05)
+            active["count"] -= 1
+            return {}
+
+        # No max_concurrency → default 1 (serial).
+        worker = JobWorker(queue, repository, registry)
+        assert worker.max_concurrency == 1
+
+        await queue.enqueue("job:a")
+        await queue.enqueue("job:b")
+        await worker.start()
+        await asyncio.sleep(0.3)
+        await worker.stop()
+
+        assert order == ["a", "b"]
+        # Never two handlers active at once under the serial default.
+        assert concurrently_running["value"] is False
+
+    @pytest.mark.asyncio
+    async def test_concurrency_bound_is_respected(self):
+        """With concurrency=2 and 4 jobs, at most 2 run at the same time."""
+        queue = JobQueue(max_size=10)
+        repository = self._repo()
+        registry = HandlerRegistry()
+
+        jobs = {
+            f"job:{i}": _make_job(job_id=f"job:{i}", job_type=JobType.DOCUMENT_PARSE)
+            for i in range(4)
+        }
+        repository.get = AsyncMock(side_effect=lambda jid: jobs[jid])
+
+        active = {"count": 0, "peak": 0}
+
+        @registry.register(JobType.DOCUMENT_PARSE)
+        async def handler(payload):
+            active["count"] += 1
+            active["peak"] = max(active["peak"], active["count"])
+            await asyncio.sleep(0.05)
+            active["count"] -= 1
+            return {}
+
+        worker = JobWorker(queue, repository, registry, max_concurrency=2)
+        for i in range(4):
+            await queue.enqueue(f"job:{i}")
+        await worker.start()
+        await asyncio.sleep(0.4)
+        await worker.stop()
+
+        # Parallelism happened (peak >= 2) but never exceeded the bound.
+        assert active["peak"] == 2
