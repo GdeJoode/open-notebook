@@ -26,16 +26,11 @@ from app_main.services.ingestion.config_builder import build_ingestion_config
 from app_main.services.log_stream import get_log_stream
 from app_main.services.parsing import (
     DEFAULT_THRESHOLD,
+    DOCLING_PARSEABLE_EXTENSIONS,
     extract_with_auto_fallback,
-    select_parser_engine,
+    resolve_parser_route,
 )
 from shared.models.settings import ContentSettings
-
-
-_DOCLING_PARSEABLE_EXTENSIONS = {
-    ".pdf", ".docx", ".doc", ".xlsx", ".xls",
-    ".pptx", ".ppt", ".html", ".htm", ".txt", ".md",
-}
 
 
 def _use_docling_service() -> bool:
@@ -46,7 +41,7 @@ def _use_docling_service() -> bool:
 
 
 def _is_docling_parseable_extension(path: Path) -> bool:
-    return path.suffix.lower() in _DOCLING_PARSEABLE_EXTENSIONS
+    return path.suffix.lower() in DOCLING_PARSEABLE_EXTENSIONS
 
 
 @dataclass
@@ -150,35 +145,22 @@ class SourceExtractor:
         )
         log_stream.emit(emit_key, f"Processing file: {source_path.name}")
 
-        # Decide which parser engine to actually run. Settings default to
-        # "docling"; only routable extensions get the chance to pick MinerU.
+        # Decide how to parse this file in ONE place. resolve_parser_route is
+        # the single source of truth: it folds the concrete-engine choice and
+        # the A.1c auto-fallback decision together so they can't drift. Settings
+        # default to "docling"; only routable extensions get the chance to pick
+        # MinerU, and only an explicit "auto" on a docling-parseable file arms
+        # the confidence fallback.
         parser_engine_setting = getattr(content_settings, "parser_engine", "docling") or "docling"
-        is_docling_ext = _is_docling_parseable_extension(source_path)
-        if is_docling_ext:
-            resolved_engine = select_parser_engine(
-                parser_engine_setting,
-                source_path,
-                mineru_supported_extensions=getattr(
-                    content_settings, "mineru_supported_extensions", None
-                ),
-            )
-        else:
-            # Audio/video and other non-document extensions skip the
-            # docling/mineru dispatch entirely — IngestionWorkflow picks
-            # the right pipeline (WhisperX etc.).
-            resolved_engine = "docling"
-
-        # Auto-mode (A.1c) wraps Docling+MinerU in extract_with_auto_fallback.
-        # The dispatcher's select_parser_engine() still resolves "auto" to
-        # "docling" for forward-compat; we branch on the raw user setting
-        # here so auto-fallback only fires when (a) the user explicitly
-        # picked auto and (b) the extension is docling-parseable.
-        use_auto_fallback = (
-            parser_engine_setting == "auto"
-            and is_docling_ext
-            and resolved_engine != "mineru"
+        route = resolve_parser_route(
+            parser_engine_setting,
+            source_path,
+            mineru_supported_extensions=getattr(
+                content_settings, "mineru_supported_extensions", None
+            ),
         )
-        use_mineru = resolved_engine == "mineru"
+        use_auto_fallback = route.use_auto_fallback
+        use_mineru = route.engine == "mineru"
 
         engine_used: str
         result: Any

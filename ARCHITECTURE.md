@@ -757,7 +757,116 @@ that lights up as the corpus grows — like the §9 `cites` edges.
 > `SourceRepository.relate_verdict`, and `docs/tracks/Z-contradiction/status.md`
 > (per-AC evidence + RETRO).
 
-## 14. Further reading
+## 14. Source-ingestion pipeline: auto source→KG with gates (Track PL)
+
+Before Track PL, ingest auto-chained only `parse → chunk → embed(per-chunk)` and
+**stopped**. Everything analytical — the mean-pool `source.embedding` aggregate,
+entity/relation extraction, the `mentions` document-graph, insights — was manual
+or orphaned. Track PL makes ingest a **fully automatic, gated, idempotent**
+pipeline from a raw source to its KG end-result, and consolidates the wiring
+into one declarative definition with a per-source status model.
+
+### The auto-chain
+
+```
+DOCUMENT_PARSE ─► EMBED ─┬─► EXTRACT ─► GRAPH ─► complete
+  (ingested)   (embedded) │  (extracted) (graphed)
+                          │      ▲
+                          │      └─ gate: schema_review → awaiting_schema_review
+                          └─► INSIGHTS  (parallel, toggle: notebook.auto_insights;
+                                         does NOT advance the spine)
+```
+
+- **EMBED** writes per-chunk vectors **and** the mean-pool `source.embedding`
+  aggregate (PL.1 — previously only a backfill script wrote the aggregate, so
+  fresh sources were invisible to "Verwante"/document-graph/contradiction, all
+  of which read `source.embedding`). The aggregate logic lives in a reusable
+  module (`pipelines/embeddings/.../aggregate.py`), not a script.
+- **EXTRACT** (PL.2) auto-runs the existing ontology-guided `run_extraction`
+  chain (typing + relations + triage). It is **gated**: an unreviewed
+  `NotebookSchema` raises `SchemaReviewPendingError` → the source parks at
+  `awaiting_schema_review` and the job goes `PAUSED_FOR_REVIEW` (no entities
+  written until reviewed).
+- **GRAPH** (PL.3) refreshes the source-scoped `mentions` projection **inline**
+  (cheap, no LLM). Invariant: it runs the **full-corpus** projection (so each
+  edge keeps its global R.2 weight × R.6 IDF/df — the weighting is inherently
+  cross-source) then writes **only this source's** edges. Source-scoped writes,
+  global projection — not a per-source recomputation.
+- **INSIGHTS** is a **parallel** enrichment branch off EMBED, behind the
+  per-notebook `notebook.auto_insights` toggle (default on). It produces
+  `source_insight` rows and never gates `complete`.
+- **contradiction (Z)** and **`cites` (U.3)** stay **on-demand/deferred** — not
+  part of the auto-chain.
+
+### One pipeline definition + `advance_source` (PL.4)
+
+The chaining used to be scattered across handlers (each handler wrote its stage
+AND held an ad-hoc next-stage enqueue inline — the "R.0 forward-fix" pattern).
+PL.4 consolidates it into ONE declarative `SOURCE_PIPELINE`
+(`apps/app-main/.../services/source_pipeline.py`): an ordered list of
+`PipelineStage` dataclasses (`name` / `produces` / `auto` / `gate` /
+`depends_on` / `enqueue_command` / `parallel`). The single driver
+`advance_source(source_id)` reads the source's `processing_stage`, finds "where
+it is", and dispatches the next allowed stage(s) — the spine successor plus any
+parallel branch — honouring `auto`, `depends_on`, the gates, and the
+`embedded_chunks > 0` guard. Handlers became **thin**: do the stage's work,
+write the produced stage, call `advance_source`. (The schema-review gate stays
+in the extract handler because it must *reraise* for the worker.)
+
+### The `processing_stage` status model
+
+Each source carries a strict `processing_stage` string (migration 71,
+`DEFAULT "ingested"`): `ingested → embedded → extracted → graphed → complete`,
+plus the parked/terminal `awaiting_schema_review` and `failed`. Stages are
+idempotent and **resumable** — `advance_source` can pick up from the current
+stage; parked/terminal stages need an explicit resume (a review, a re-run).
+The stage is surfaced on the source read API (`SourceResponse.processing_stage`)
+so the UI can show per-document progress. `complete` means "the KG chain RAN",
+not "the KG is non-empty": a source whose entities share no df>1 concept with
+the corpus produces 0 `mentions` edges (R.6 drops df==1 singletons) yet
+correctly reaches `graphed → complete`.
+
+### Gates
+
+- **Schema review** (EXTRACT): unreviewed schema → park at
+  `awaiting_schema_review`, zero entities written.
+- **`auto_insights` toggle** (INSIGHTS, per-notebook, default on): off → skip
+  the parallel insights branch; the KG spine still runs.
+- **Global LLM-cost reality**: full-auto extraction means every new doc triggers
+  extraction; the schema-review gate + the per-notebook toggle are the brakes.
+
+### Worker + sync-path (PL.5)
+
+- **Bounded worker concurrency** (`JobWorker`, default **1** == serial /
+  historical behaviour; raise via `JOB_WORKER_CONCURRENCY`). Safe because stage
+  ordering is enforced by the **job chain**, not by worker serialization — a
+  successor stage is only ever enqueued *after* its predecessor completes, so
+  concurrent workers cannot reorder a source's stages. The DB layer is
+  per-connection-pooled (no shared session state) and the LLM path is already
+  `asyncio.Lock`-coordinated (Track J rate limiter + circuit breakers).
+- **Sync ingest decoupled from the shared worker**: the sync upload path runs
+  the `DOCUMENT_PARSE` handler **in-request** (via the registry) instead of
+  enqueuing it onto the shared queue and polling 300s — so a sync ingest no
+  longer occupies the single worker slot for the whole parse and no longer
+  starves other queued jobs. The handler's internal `advance_source` still
+  enqueues the lightweight downstream chain as background jobs.
+- **Cleanups**: the dead `USE_MINERU_SERVICE` env removed (routing is decided
+  per-source by the `parser_engine` ContentSetting); the parser-`auto` decision
+  unified into one source of truth (`engine_dispatcher.resolve_parser_route`,
+  consumed by `SourceExtractor`), eliminating the drift between the dispatcher
+  and the extractor's separate raw-`"auto"` re-check.
+
+> See `apps/app-main/src/app_main/services/source_pipeline.py`
+> (`SOURCE_PIPELINE` + `advance_source`),
+> `pipelines/embeddings/src/embeddings/aggregate.py`,
+> `apps/app-main/src/app_main/handlers.py` (thin stage handlers),
+> `apps/app-main/.../services/mentions_projection_service.py`
+> (`refresh_source`), `packages/job-queue/src/job_queue/worker.py` (concurrency),
+> `apps/app-main/.../api/routers/sources_upload.py` (sync decouple),
+> migrations `71`/`72`, and `docs/tracks/PL-source-pipeline/` (plan, status,
+> RETRO; per-AC evidence per phase).
+
+## 15. Further reading
 
 - `docs/SUMMARIZATION_APPROACHES.md` — design + status of all 11 summarization strategies
 - `docs/KNOWLEDGE_GRAPH_IMPLEMENTATION_PLAN.md` — KG architecture and roadmap
@@ -776,4 +885,5 @@ that lights up as the corpus grows — like the §9 `cites` edges.
 - `docs/tracks/Y-auto-link/status.md` — Track Y retrospective (note auto-link: embedding → similarity → `related_note`; on-demand + background-job trigger; note↔source extension)
 - `docs/tracks/NS-note-source-autolink/status.md` — Track NS retrospective (note→source auto-link: the second pass over one embedding → `note_about`; cross-type same-space; the `array::len(NONE)` gotcha)
 - `docs/tracks/Z-contradiction/status.md` — Track Z retrospective (contradiction detection: related pairs → LLM judge → `source_verdict`; precision-first; background-job + claim-level extensions)
+- `docs/tracks/PL-source-pipeline/RETRO.md` — Track PL retrospective (auto source→KG pipeline: orphaned-aggregate bug, foundational auto-extract gap, the source-scoped-mentions-must-be-global-projection invariant, one `SourcePipeline`/`advance_source` consolidation, the worker-concurrency decision)
 - `docs/troubleshooting/exports.md` — failure-mode diagnostics for the three export formats

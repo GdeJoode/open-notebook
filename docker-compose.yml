@@ -229,7 +229,6 @@ services:
       - DOCLING_SERVICE_URL=http://docling:8100
       - USE_DOCLING_SERVICE=true
       - MINERU_SERVICE_URL=http://mineru:8104
-      - USE_MINERU_SERVICE=true
       - RERANKER_SERVICE_URL=http://reranker:8105
     extra_hosts:
       - "host.docker.internal:host-gateway"
