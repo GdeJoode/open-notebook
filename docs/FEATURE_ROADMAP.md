@@ -1536,6 +1536,47 @@ not built in Z): a **background job** judging new/edited sources on ingest;
 
 ---
 
+## Track PL — Source-ingestion pipeline (auto source→KG with gates) (NEW)
+
+> **Status**: ✅ CLOSED (2026-06-30). Ingest used to auto-chain only
+> `parse→chunk→embed(per-chunk)` and **stop** — the entire KG/analytical layer
+> (the mean-pool `source.embedding` aggregate, entity/relation extraction, the
+> `mentions` document-graph, insights) was manual or orphaned. Track PL makes
+> ingest a **fully-automatic, gated, idempotent** pipeline from a raw source to
+> its KG end-result, and consolidates the wiring into one declarative
+> `SOURCE_PIPELINE` + `advance_source` driver with a per-source
+> `processing_stage` status model. See
+> [`docs/tracks/PL-source-pipeline/status.md`](./tracks/PL-source-pipeline/status.md),
+> [`docs/tracks/PL-source-pipeline/RETRO.md`](./tracks/PL-source-pipeline/RETRO.md),
+> and `ARCHITECTURE.md` §14.
+
+**Vision**: a new document becomes a knowledge-graph citizen with **no manual
+step** — embedded (+ aggregate), extracted, graphed, complete — while explicit
+gates (schema-review, the per-notebook `auto_insights` toggle) keep cost and
+correctness in the operator's hands. Idempotent + resumable from
+`processing_stage` throughout; contradiction (Z) and `cites` (U.3) stay
+on-demand/deferred.
+
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| PL.1 | Fix the orphaned `source.embedding` aggregate (write it in the live embed step; promote the helper out of the backfill script) + migration-safe backfill | ✅ |
+| PL.2 | Auto-chain EXTRACT after EMBED + `source.processing_stage` model (migration 71) + schema-review gate | ✅ |
+| PL.3 | Auto-chain GRAPH (source-scoped `mentions` refresh) + INSIGHTS parallel branch behind `notebook.auto_insights` toggle (migration 72) | ✅ |
+| PL.4 | One declarative `SOURCE_PIPELINE` + `advance_source` driver (thin handlers); `processing_stage` on the source read API | ✅ |
+| PL.5 | Bounded configurable worker concurrency (default 1, opt-in) + sync-ingest decoupled from the shared worker + cleanups (dead `USE_MINERU_SERVICE`, one parser-`auto` source of truth) + ARCHITECTURE/RETRO | ✅ |
+
+**The spine**: `DOCUMENT_PARSE → EMBED(+aggregate) → EXTRACT → GRAPH(mentions)
+→ complete`, with INSIGHTS parallel off EMBED. **Gates**: schema-review parks
+EXTRACT at `awaiting_schema_review`; the per-notebook toggle gates INSIGHTS.
+**Invariant preserved**: source-scoped `mentions` is a GLOBAL projection filtered
+on write (the R.2×R.6 weights are inherently cross-source). **Worker decision**:
+concurrency made bounded + configurable but **default 1 (serial)** — safe because
+stage ordering is enforced by the job chain, not by worker serialization; turning
+it on for the live deployment is a documented opt-in follow-up. **Deferred**:
+contradiction (Z) + `cites` (U.3, blocked on Track V) stay on-demand.
+
+---
+
 ## Bijlagen
 
 - `docs/REFACTOR_PLAN.md` — voltooide refactor (Phase 0-7)

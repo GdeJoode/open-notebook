@@ -342,3 +342,142 @@ the `source_pipeline.py` module docstring too.)
 - `apps/app-main/tests/test_processing_stage_db.py` (+get_processing_stage roundtrip)
 - `apps/app-main/tests/test_notebook_auto_insights_db.py` (+migration-72 S.4 test)
 - `apps/app-main/tests/test_sources_crud.py` (+processing_stage API assertion)
+
+---
+
+## Phase PL.5 — Worker concurrency / sync-path + cleanups — DONE (Track CLOSED)
+
+**Branch**: `track/pl5-worker-cleanup` (off `main` with PL.1–PL.4 merged).
+**Commits**: `efe8371` (dead env) → `bb287d3` (parser-auto single source of
+truth) → `5b56e8f` (worker concurrency) → `855964f` (sync-path decouple) →
+`<docs>` (ARCHITECTURE §14 + RETRO + roadmap + status).
+
+### What shipped (safe → risky, exactly as planned)
+
+**1. Cleanups (safe, high-value)**
+- **Dead `USE_MINERU_SERVICE` removed** — it was set in `docker-compose.yml:232`
+  but read **nowhere** in Python (grep-confirmed: only `MINERU_SERVICE_URL` is
+  read, by `mineru_http_client.py`). MinerU routing is decided per-source by the
+  `parser_engine` ContentSetting via `engine_dispatcher`. Compose env removed;
+  the compose comment already documented the docling fallback when MinerU is down.
+  (Historical mentions in `docs/MYKG_COMPARISON.md` / `docs/tracks/A-mineru/`
+  are design-history, left intact.)
+- **Parser-`auto` decision unified** — the `"auto"` decision was split across
+  two sites that could drift: `engine_dispatcher.select_parser_engine` resolved
+  `auto→docling`, while `SourceExtractor._process_file` independently re-checked
+  the raw `"auto"` string to arm the A.1c confidence fallback (and kept its own
+  copy of the docling-parseable extension set). Added `resolve_parser_route()` in
+  `engine_dispatcher` as the ONE place folding both decisions (concrete engine +
+  `use_auto_fallback` + `is_docling_extension`); moved the extension set into the
+  dispatcher (`DOCLING_PARSEABLE_EXTENSIONS`); `_process_file` now calls it once.
+  `select_parser_engine` is unchanged (still pure, per-file routing). Behaviour
+  unchanged.
+
+**2. Sync-path decouple** — the sync upload path enqueued `process_source` onto
+the shared single-worker queue then polled 300s — blocking the request AND
+starving every other queued job behind the one busy worker slot. Now runs the
+SAME `DOCUMENT_PARSE` handler **in-request** via the registry, so the heavy parse
+executes in the request's own coroutine and never occupies the shared worker
+(other jobs keep draining). Sync contract preserved (the caller still gets a
+fully-populated `SourceResponse`; the handler's internal `advance_source` still
+enqueues the lightweight EMBED→EXTRACT chain as background jobs). The 300s poll
+is gone. **What remains by design**: a *sync* caller still blocks for its own
+parse duration (the contract; `async_processing=true` is the non-blocking path).
+
+**3. Worker concurrency — verified first, smallest safe change** — hazard
+analysis (full reasoning in the `worker.py` docstring + RETRO): stage ordering is
+enforced by the job CHAIN, not by worker serialization (a successor stage is only
+enqueued after its predecessor completes — `advance_source`), the DB layer is
+per-connection-pooled (no shared session state), the LLM path is already
+`asyncio.Lock`-coordinated (Track J rate limiter + circuit breakers), and the
+only same-source parallelism (INSIGHTS ∥ EXTRACT) is on disjoint idempotent data.
+Shipped a bounded `asyncio.Semaphore` in `JobWorker`, **default 1 (serial —
+behaviour-identical to today)**, raised via `JOB_WORKER_CONCURRENCY` / a
+constructor arg. The dispatch loop acquires a slot BEFORE dequeuing (the bound is
+honoured, the queue isn't drained into memory) and runs each job as a tracked
+task that releases its slot on completion; `stop()` awaits in-flight tasks.
+Misconfiguration (<1 / non-int) falls back to serial. **Decision: ship the
+mechanism, keep the live default serial** — turning concurrency on for the
+deployment + choosing a tuned default is a documented opt-in follow-up (wants a
+load test against the live corpus; reversible by setting the env back to 1).
+
+### Per-criterion evidence
+
+- **AC1** (dead env removed; parser-`auto` in one place; routing tests green):
+  grep-confirmed no Python reads `USE_MINERU_SERVICE`. The de-dup is
+  behaviour-preserving — `test_source_processing_service.py` (the
+  docling/mineru/auto-fallback routing suite) **114 passed** + the new
+  `TestResolveParserRoute` table in `test_engine_dispatcher.py` (`route.engine`
+  == `select_parser_engine` for every docling-parseable file × setting; auto
+  arms the fallback only on a docling-parseable doc; audio/video never
+  auto-fallback). Only the 3 pre-existing `TestBuildIngestionConfig`
+  docling-not-installed baseline failures remain.
+- **AC2** (sync path no longer starves the shared worker):
+  `test_sources_upload_sync_decouple.py` pins that the sync path calls
+  `registry.execute(JobType.DOCUMENT_PARSE)` in-request exactly once, does NOT
+  submit `process_source` onto the shared queue, does NOT poll
+  `get_command_status`, returns a fully-populated `SourceResponse`, and cleans up
+  on a handler failure (500). The async-path tests
+  (`test_source_private_plumbing.py`) stay green (path unaffected). 12 passed.
+  Documented remainder: a sync caller still blocks for its own parse duration.
+- **AC3** (bounded configurable concurrency demonstrated NOT to serialize two
+  independent jobs AND not to break ordering/race): `test_worker.py`
+  `TestWorkerConcurrency` — `test_two_independent_jobs_run_in_parallel`
+  (concurrency=2: a heavy + a light job overlap; would deadlock to timeout if
+  serialized), `test_serial_default_does_not_overlap` (default=1 → strictly
+  serial, never two handlers active), `test_concurrency_bound_is_respected`
+  (peak == 2 with 4 jobs). Ordering is NOT broken because it's chain-enforced,
+  not worker-enforced (RETRO + worker docstring). The 10 pre-existing worker
+  tests pass unchanged (default-preserving). `TestConcurrencyResolution` pins the
+  explicit > env > serial-default precedence + the misconfig fallbacks.
+- **AC4** (no regression; suites green; 3 docling baseline): app-main non-docker
+  **1481 passed** (only the 3 `TestBuildIngestionConfig` docling failures —
+  baseline, docling not installed); job-queue **48 passed** (was 38, +10 new
+  concurrency tests). `mypy` clean on the changed files modulo the pre-existing
+  `shared.*` / `ingestion.*` missing-stub warnings (the one `arg-type` on the
+  `resolve_parser_route` call pre-existed verbatim on `main` at the
+  `select_parser_engine` call — not a regression).
+
+### Docs / closure
+- `ARCHITECTURE.md` **§14** — the full source pipeline (the auto-chain
+  ingest→embed(+aggregate)→extract→graph→complete + parallel insights, the
+  `SOURCE_PIPELINE`/`advance_source` definition, the `processing_stage` status
+  model, the gates, the worker + sync-path notes, the cleanups).
+- `docs/tracks/PL-source-pipeline/RETRO.md` — the orphaned-aggregate bug, the
+  foundational auto-extract gap, the source-scoped-mentions-must-be-global-
+  projection invariant, the PL.4 consolidation, and the verify-first worker
+  decision + hazard model.
+- `docs/FEATURE_ROADMAP.md` — **Track PL ✅ CLOSED** entry (per-phase table +
+  spine/gates/worker-decision/deferred summary).
+
+### New files
+- `apps/app-main/tests/test_sources_upload_sync_decouple.py`
+- `docs/tracks/PL-source-pipeline/RETRO.md`
+
+### Modified
+- `docker-compose.yml` (dead env removed)
+- `apps/app-main/src/app_main/services/parsing/engine_dispatcher.py`
+  (+`resolve_parser_route`, `ParserRoute`, `DOCLING_PARSEABLE_EXTENSIONS`)
+- `apps/app-main/src/app_main/services/parsing/__init__.py` (re-exports)
+- `apps/app-main/src/app_main/services/source_extractor.py` (calls
+  `resolve_parser_route`)
+- `apps/app-main/src/app_main/api/routers/sources_upload.py` (sync decouple)
+- `packages/job-queue/src/job_queue/worker.py` (bounded concurrency)
+- `apps/app-main/tests/test_engine_dispatcher.py` (+`TestResolveParserRoute`)
+- `packages/job-queue/tests/test_worker.py` (+concurrency tests)
+- `ARCHITECTURE.md`, `docs/FEATURE_ROADMAP.md`
+
+---
+
+## TRACK PL — CLOSED (2026-06-30)
+
+All five phases (PL.1–PL.5) shipped + merged. Ingest is now a fully-automatic,
+gated, idempotent source→KG pipeline: `parse → embed(+aggregate) → extract →
+graph → complete`, with INSIGHTS parallel, the schema-review + `auto_insights`
+gates, one declarative `SOURCE_PIPELINE`/`advance_source`, a per-source
+`processing_stage` model surfaced on the API, bounded (opt-in) worker
+concurrency, a decoupled sync path, and the dead/duplicated-code cleanups.
+**Deferred (intentional)**: contradiction (Z) + `cites` (U.3) stay on-demand;
+turning worker concurrency > 1 on for the live deployment is a documented opt-in
+follow-up (mechanism built + tested + reversible). See `RETRO.md` + `ARCHITECTURE.md`
+§14.
