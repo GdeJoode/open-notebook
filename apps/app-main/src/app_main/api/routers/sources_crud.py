@@ -166,6 +166,11 @@ async def get_sources(
                     command_id=command_id,
                     status=status,
                     processing_info=processing_info,
+                    # UX.1: populate the spine from the source row (matches the
+                    # single-source handler pattern above).
+                    processing_stage=str(
+                        row.get("processing_stage", "ingested") or "ingested"
+                    ),
                 )
             )
 

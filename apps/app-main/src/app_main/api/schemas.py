@@ -648,6 +648,10 @@ class SourceListResponse(BaseModel):
     command_id: Optional[str] = None
     status: Optional[str] = None
     processing_info: Optional[Dict[str, Any]] = None
+    # Track UX.1: surface the per-source pipeline stage on the list endpoint too
+    # (mirrors SourceResponse.processing_stage) so list-derived cards read the
+    # spine directly without an N-per-card fan-out. Defaults "ingested".
+    processing_stage: str = "ingested"
 
 
 class RelatedSourceResponse(BaseModel):

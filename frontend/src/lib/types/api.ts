@@ -1,3 +1,5 @@
+import type { ProcessingStage } from '@/lib/pipeline/processing-stage'
+
 export interface NotebookResponse {
   id: string
   name: string
@@ -40,6 +42,10 @@ export interface SourceListResponse {
   command_id?: string
   status?: string
   processing_info?: ProcessingInfo
+  // Track UX.1: the per-source pipeline stage (spine). Now returned by the
+  // list endpoint too (backend Part B); optional so list-derived cards degrade
+  // to an all-`pending` spine when absent (legacy/pre-backfill data).
+  processing_stage?: ProcessingStage
 }
 
 export interface ProcessingInfo {

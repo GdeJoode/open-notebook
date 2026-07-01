@@ -2,12 +2,30 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { sourcesApi } from '@/lib/api/sources'
 import { QUERY_KEYS } from '@/lib/api/query-client'
 import { useToast } from '@/lib/hooks/use-toast'
-import { 
-  CreateSourceRequest, 
-  UpdateSourceRequest, 
+import {
+  CreateSourceRequest,
+  UpdateSourceRequest,
   SourceResponse,
-  SourceStatusResponse 
+  SourceStatusResponse
 } from '@/lib/types/api'
+import { isPollableStage } from '@/lib/pipeline/processing-stage'
+
+/** Poll cadence (ms) for an in-flight source's pipeline stage. */
+const PIPELINE_POLL_MS = 2000
+
+/**
+ * `refetchInterval` decision for {@link useSourcePipeline}. Exported so the
+ * stop/continue logic is unit-testable without rendering the hook: returns
+ * `2000` while the source's `processing_stage` can still advance on its own
+ * (including when the stage is not yet known) and `false` once it is terminal
+ * (`complete`/`failed`) or gated (`awaiting_schema_review`).
+ */
+export function pipelineRefetchInterval(query: {
+  state: { data?: SourceResponse }
+}): number | false {
+  const stage = query.state.data?.processing_stage
+  return isPollableStage(stage) ? PIPELINE_POLL_MS : false
+}
 
 export function useSources(notebookId?: string) {
   return useQuery({
@@ -26,6 +44,34 @@ export function useSource(id: string) {
     enabled: !!id,
     staleTime: 30 * 1000, // 30 seconds - shorter stale time for more responsive updates
     refetchOnWindowFocus: true, // Refetch when user comes back to the tab
+  })
+}
+
+/**
+ * Poll GET `/sources/{id}` as the pipeline-stage spine (Track UX.1).
+ *
+ * Unlike {@link useSource} (30s stale, no polling) and {@link useSourceStatus}
+ * (the job axis), this hook treats `processing_stage` as the source of truth for
+ * per-document progress and refetches every 2s while the stage can still advance
+ * (undefined ⇒ keep polling), stopping at `complete`/`failed`/
+ * `awaiting_schema_review`. It shares the `source(id)` query cache with
+ * {@link useSource} so mounting both does not duplicate requests.
+ */
+export function useSourcePipeline(id: string, enabled = true) {
+  return useQuery({
+    queryKey: QUERY_KEYS.source(id),
+    queryFn: () => sourcesApi.get(id),
+    enabled: !!id && enabled,
+    refetchInterval: pipelineRefetchInterval,
+    staleTime: 0, // stage must be fresh to drive live progress
+    retry: (failureCount, error) => {
+      // Don't retry on 404 (source not found) — mirror useSourceStatus.
+      const axiosError = error as { response?: { status?: number } }
+      if (axiosError?.response?.status === 404) {
+        return false
+      }
+      return failureCount < 3
+    },
   })
 }
 
