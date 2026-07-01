@@ -69,3 +69,65 @@
 ### Deviations
 - Added component-test infrastructure (jsdom + testing-library + vite react plugin) — none existed in `frontend/` before. Justified by the plan's test strategy ("Component (vitest + RTL)") which mandates `.test.tsx` component tests from UX.2 onward. Additive, dev-only.
 - `failed` node placement: with no failed-at position on the spine and counts barred from setting state, the failure is surfaced at the entry (Ingest) node. A future signal (`failedStage`) could localise it; documented in-code.
+
+---
+
+## Phase UX.3 — SourceCard 5-segment mini progress bar — DONE (ready for review)
+
+**Branch**: `track/ux3-sourcecard-mini-bar` (off `main`, UX.1+UX.2 merged).
+**Commits**: `716c812` (counts adapter) · `1dd0187` (SourceCard rewrite).
+
+### Counts adapter (AC0, BLOCKING) — `frontend/src/lib/pipeline/source-counts.ts` (new)
+- `toPipelineCounts(source)` maps `0 ⇒ undefined` for the count-gated stages
+  (`embedded_chunks`, `entity_count`, `insights_count`) and derives
+  `graph_present` from `relation_count > 0`. Positive counts pass through.
+- Why: the list endpoint types those counts as required `number` (default `0`).
+  On the `failed` path `derivePipelineNodes` locates the failure at the first
+  spine stage with no output signal, treating `undefined` = not-reached and `0`
+  = reached-but-empty. Passing a raw list `0` reads as "Ingest reached" and
+  mislabels a parse failure as "Ingest done / Embed failed". Collapsing
+  `0 ⇒ undefined` at the seam restores "Ingest failed". Documented in-module.
+- Test: `source-counts.test.ts` — 0⇒undefined + pass-through of >0 + graph_present,
+  plus end-to-end failed-path assertions (incl. a guard test proving raw zeros
+  WOULD mislabel Ingest as done).
+
+### SourceCard — `frontend/src/components/sources/SourceCard.tsx` (modified)
+- Removed the `STATUS_CONFIG`/`useSourceStatus` badge block, the processing
+  message, the bottom failed-retry block, and the job-progress bar. Replaced with
+  a single `<PipelineStatus variant="card" />` fed from the card's own
+  `processing_stage` + `toPipelineCounts(effectiveSource)`.
+- Polling gated: `useSourcePipeline(source.id, enabled)` with
+  `enabled = propStage !== undefined ? isPollableStage(propStage) : (command_id || active job || wasProcessing)`.
+  Terminal (`complete`/`failed`) and gated (`awaiting_schema_review`) cards ⇒
+  `enabled=false` (no repeating `/sources/{id}`); the hook's own
+  `refetchInterval` is the second stop-gate. Prefer polled data
+  (`pipelineData ?? source`) for the effective stage/counts.
+- Completion refresh: a stage-based `useEffect` calls `onRefresh()` once an
+  in-flight card settles to a terminal stage (replaces the old
+  `useSourceStatus` completion detection).
+- Actions: gated node → `onClick(source.id)` (deep-link to detail/review); failed
+  node → existing `onRetry(source.id)`. Dropdown Retry/Delete/Remove preserved
+  (Retry gated on `stage === 'failed'`). Insights/topic badges preserved for
+  completed (and unknown-stage) cards. Added `aria-label="Source actions"` on the
+  icon-only menu trigger.
+- Test: `frontend/src/components/sources/__tests__/SourceCard.test.tsx` — bar per
+  stage (ingested/embedded/extracted/graphed/complete/awaiting_schema_review/
+  failed); AC0 parse-failure (Ingest failed) + embedded-then-failed (Extract
+  failed); gated Review-schema deep-link + failed Retry; terminal cards
+  `enabled=false`, non-terminal `enabled=true`; undefined ⇒ all-pending + title.
+
+### Commands (from `frontend/`)
+- `npm run lint` — pass (only pre-existing warnings in untouched files; none in new/changed files).
+- `npx tsc --noEmit` — 0 errors.
+- `npx vitest run src/components/sources src/lib/pipeline` — 119 passed (5 files).
+- Full `npx vitest run` — 226 passed (18 files); no regression (203 baseline + 23 new UX.3 tests).
+
+### Deviations
+- Dropped `useSourceStatus` from the card entirely (the plan only mandated
+  replacing the badge block). Its two jobs are preserved: the active-node spinner
+  now reads the job axis from the source payload's `status` field via
+  `PipelineStatus jobStatus`, and completion-refresh is driven by the stage
+  transition. Fewer request axes per card.
+- Gated/failed cards also stop polling (`enabled=false`), not only terminal ones:
+  `isPollableStage` already treats `awaiting_schema_review` as non-pollable (no
+  automatic progress until the user acts), matching the UX.1 hook contract.
