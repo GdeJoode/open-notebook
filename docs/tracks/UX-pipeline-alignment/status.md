@@ -355,3 +355,46 @@ left untouched.
 - `npx tsc --noEmit` — 0 errors.
 - `npx vitest run src/components/sources` — 70 passed (4 files).
 - Full `npx vitest run` — 262 passed (22 files); no regression (258 baseline + 4 new).
+
+## Round 3 — Blocker: per-entry Retry never resumed polling after full settle
+
+### Root cause
+- The multi-file poll effect was keyed on `multiPollKey` = the joined list of ALL
+  entry ids. When every entry settled, the interval self-cleared inside its tick,
+  but the id list was unchanged, so the key was unchanged and the effect never
+  re-ran. `handleMultiNodeAction(id, 'retry')` re-armed an entry to `processing`
+  but — id set unchanged ⇒ key unchanged ⇒ effect did not re-fire — the cleared
+  interval stayed dead and the re-armed entry spun forever, never polled again.
+
+### Fix (`CreateSourcePipeline.tsx`)
+- Effect key changed from ALL ids to the sorted set of POLLABLE ids.
+  - Before: `multiPollKey = multiSources.map(s=>s.id).filter(Boolean).join(',')`,
+    dep `[phase, isMulti, multiPollKey]`.
+  - After: `pollableKey = multiSources.filter(s => s.id && isPollableEntry(s.status))
+    .map(s=>s.id).sort().join(',')`, dep `[phase, isMulti, pollableKey]`.
+- Added an empty-set guard: `if (phase !== 'processing' || !isMulti || pollableKey
+  === '') return` — no interval runs when nothing is pollable.
+- Self-correcting: settle ⇒ key `''` (interval clears); Retry re-arms one entry to
+  `processing` ⇒ key `'' → 'source:a'`, effect re-fires, interval recreated and the
+  entry is polled again; re-settle ⇒ key back to `''`. Key changes only when the
+  pollable SET changes (not on per-tick count updates) so round-2's no-churn
+  property holds. Cleanup clears the prior interval before recreating — no double
+  interval. Single-source path untouched (React Query invalidation).
+
+### Test (upgraded, replaces the shallow retry test)
+- New `resumes polling a re-armed entry after Retry once the batch has fully
+  settled`: `{source:a failed, source:b complete}` batch, advance PAST the clearing
+  tick (poll a >3s window with no new `sourcesApi.get` ⇒ interval proven dead) and
+  freeze the get() count; then click Retry and assert a NEW `sourcesApi.get('source:a')`
+  lands beyond the frozen count — polling actually resumed, not merely that
+  `retryMutate` fired. Confirmed to FAIL on the old all-ids key (`resumed: false`).
+
+### Commands (from `frontend/`)
+- `npm run lint` — pass (0 errors; only pre-existing warnings; none in changed files).
+- `npx tsc --noEmit` — 0 errors.
+- `npx vitest run src/components/sources` — 70 passed (4 files).
+- Full `npx vitest run` — 262 passed (22 files); no regression (retry test upgraded
+  in place, count unchanged at 262).
+
+### Commit
+- `a8a6111` fix(ux5): key multi-poll on pollable ids so retry resumes polling
