@@ -210,9 +210,17 @@ export function CreateSourcePipeline() {
     multiSourcesRef.current = multiSources
   }, [multiSources])
 
-  const multiPollKey = multiSources
+  // Key the poll effect on the set of POLLABLE entry ids (creating/processing),
+  // not all ids. This makes the effect self-correcting: when every entry settles
+  // the key becomes '' and the interval clears; when a per-entry Retry re-arms an
+  // entry to `processing` it re-enters this set, the key changes (e.g. '' →
+  // 'source:a'), the effect RE-FIRES and recreates the interval to poll it again.
+  // Sorted so a stable set yields a stable key — count/stage updates that don't
+  // change WHICH entries are pollable won't churn the interval (round-2 fix).
+  const pollableKey = multiSources
+    .filter((s) => s.id && isPollableEntry(s.status))
     .map((s) => s.id)
-    .filter(Boolean)
+    .sort()
     .join(',')
 
   // Multi-source stage polling: read each in-flight entry's `processing_stage`
@@ -220,7 +228,10 @@ export function CreateSourcePipeline() {
   // an entry once it settles (complete / failed / gated) and the interval is
   // cleared once ALL entries are settled — no unbounded polling on the gate.
   useEffect(() => {
-    if (phase !== 'processing' || !isMulti) return
+    // No pollable entries ⇒ no interval. Combined with keying on `pollableKey`,
+    // the interval exists iff something is still advancing: it clears when the
+    // batch settles and is recreated when Retry re-arms an entry to `processing`.
+    if (phase !== 'processing' || !isMulti || pollableKey === '') return
 
     const pollInterval = setInterval(async () => {
       const stillProcessing = multiSourcesRef.current.filter(
@@ -246,9 +257,11 @@ export function CreateSourcePipeline() {
     }, 3000)
 
     return () => clearInterval(pollInterval)
-    // `multiPollKey` (the joined id list) is the stable identity; the tick reads
-    // live entries from the ref, so `multiSources` is intentionally not a dep.
-  }, [phase, isMulti, multiPollKey])
+    // `pollableKey` (the sorted pollable-id set) is the stable identity; the tick
+    // reads live entries from the ref, so `multiSources` is intentionally not a
+    // dep. Cleanup clears the prior interval before the effect recreates one, so
+    // a re-fire (e.g. Retry re-arming an entry) never leaves a double interval.
+  }, [phase, isMulti, pollableKey])
 
   // Advance the flow to Done once the pipeline settles. `complete` ⇒ Done;
   // `awaiting_schema_review` parks on the gated node (no false Done); `failed`

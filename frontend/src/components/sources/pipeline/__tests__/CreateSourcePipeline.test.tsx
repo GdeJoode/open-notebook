@@ -301,7 +301,7 @@ describe('multi-file batch — schema gate settles the batch (no infinite poll, 
     expect(H.push).toHaveBeenCalledWith('/sources/source:a')
   }, 15000)
 
-  it('wires the per-entry Retry action for a failed entry', async () => {
+  it('resumes polling a re-armed entry after Retry once the batch has fully settled', async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 })
     // source:a fails; source:b completes ⇒ settled batch with a retryable entry.
     H.state.stageById = { 'source:a': 'failed', 'source:b': 'complete' }
@@ -316,9 +316,43 @@ describe('multi-file batch — schema gate settles the batch (no infinite poll, 
     )
     expect(screen.getByText(/Automatic processing finished/i)).toBeTruthy()
 
+    // FULLY settle: advance PAST the clearing tick so the poll interval is gone.
+    // Once no more get() calls land across a >3s window, the interval is proven
+    // dead — this is the exact state in which the old (all-ids) key never
+    // resumed. Freeze the get() count in that dead state.
+    let frozenCount = 0
+    await waitFor(
+      async () => {
+        const before = H.sourcesGet.mock.calls.length
+        await new Promise((r) => setTimeout(r, 3500))
+        expect(H.sourcesGet.mock.calls.length).toBe(before)
+        frozenCount = before
+      },
+      { timeout: 12000, interval: 500 }
+    )
+    // Sanity: source:a WAS polled at least once before settling.
+    expect(
+      H.sourcesGet.mock.calls.some((c) => c[0] === 'source:a')
+    ).toBe(true)
+
+    // Retry re-arms source:a to `processing`; the pollable-id set changes from ''
+    // to 'source:a', so the poll effect must re-fire and recreate the interval.
     await user.click(retryButton)
     expect(H.retryMutate).toHaveBeenCalledWith('source:a')
-  }, 15000)
+
+    // Polling actually RESUMED: a NEW get() for source:a lands beyond the frozen
+    // (interval-dead) point. Asserting only that retryMutate fired would miss the
+    // dead-interval bug this test guards against.
+    await waitFor(
+      () => {
+        const resumed = H.sourcesGet.mock.calls
+          .slice(frozenCount)
+          .some((c) => c[0] === 'source:a')
+        expect(resumed).toBe(true)
+      },
+      { timeout: 8000, interval: 200 }
+    )
+  }, 25000)
 })
 
 describe('advanced ingestion overrides survive Input→Organize→Back and reach the create call', () => {
