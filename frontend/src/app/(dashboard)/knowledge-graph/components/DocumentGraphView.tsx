@@ -294,12 +294,11 @@ export default function DocumentGraphView({ onNodeClick }: DocumentGraphViewProp
           <h3 className="mb-2 text-lg font-medium">No shared-concept links yet</h3>
           <p className="mb-4 max-w-md text-muted-foreground">
             No <code>mentions</code> edges have been projected, so documents
-            aren’t linked via shared concepts yet. Regenerate the document graph
-            from the knowledge-graph projection to populate it.
+            aren’t linked via shared concepts yet.
           </p>
           <p className="text-xs text-muted-foreground">
-            Run <code>POST /knowledge-graph/document-graph/regenerate</code> on the
-            backend, then reload.
+            The document graph is built automatically as sources reach the{' '}
+            <code>graphed</code> stage — add or process sources, then reload.
           </p>
         </div>
       ) : (

@@ -131,3 +131,66 @@
 - Gated/failed cards also stop polling (`enabled=false`), not only terminal ones:
   `isPollableStage` already treats `awaiting_schema_review` as non-pollable (no
   automatic progress until the user acts), matching the UX.1 hook contract.
+
+---
+
+## Phase UX.4 — Source-detail spine + Graph signal + drop stale regen text — DONE (ready for review)
+
+**Branch**: `track/ux4-detail-spine-graph` (off `main`, UX.1+UX.2+UX.3 merged) — NOT merged, NOT pushed.
+**Commits**: `85f2ea7` (drop stale regenerate guidance) · `a91d28e` (source-detail spine + graph signal).
+
+### SourceDetailContent — `frontend/src/components/source/SourceDetailContent.tsx` (modified)
+- Replaced the "Processing Status Bar" — the four independent output badges
+  (chunks / embedded / entities / insights, old l.567–608) — with a single
+  `<PipelineStatus variant="detail" />` collapsed spine, fed from
+  `effectiveStage` + `toPipelineCounts(effectiveSource)` (the shared
+  `0 ⇒ undefined` adapter; no raw list zeros). `ParserEngineBadge` + the Zotero
+  badge are retained beneath the spine (not pipeline-output badges).
+- **Live polling**: `useSourcePipeline(sourceId, pipelineEnabled)` where
+  `pipelineEnabled = source != null && isPollableStage(source.processing_stage)`.
+  In-flight sources advance the spine live; terminal (`complete`/`failed`) and
+  gated (`awaiting_schema_review`) pages pass `enabled=false` (bounded). The
+  spine reads `effectiveSource = pipelineData ?? source` so counts/stage are the
+  freshest available.
+- **Graph node/signal**: resolves from `processing_stage` via the state machine
+  (`done` at graphed/complete, `pending` earlier) and is enriched by
+  `graph_present` (`relation_count > 0`). No new derivation added — the counts
+  adapter + stage make `derivePipelineNodes` resolve the Graph node.
+- **Deep-link wiring**: the `Tabs` were made controlled
+  (`value={activeTab} onValueChange={setActiveTab}`); `onNodeClick(deepLinkTab)`
+  sets the tab (Ingest/Embed→`chunks`, Extract/Graph→`entities`,
+  Insights→`insights`; Complete→undefined→no-op). The pipeline `deepLinkTab`
+  values already equal the detail tab `value`s, so the map is the identity.
+- **Gate + failed actions**: `onNodeAction('review-schema')` opens the Entities
+  tab (where entity/schema review lives); `onNodeAction('retry')` calls a new
+  `handleRetry` wired to `sourcesApi.retry` then `fetchSource`.
+- All 6 tab triggers still mount and the header actions dropdown is unchanged
+  (manual runners are reframed in UX.6, not here).
+- Test: `frontend/src/components/source/__tests__/SourceDetailContent.spine.test.tsx`
+  — spine state per `processing_stage`; old badges gone; expand reveals per-node
+  counts; Graph node graphed-vs-non-graphed; Extract→Entities and
+  Insights→Insights tab switches; gated Review-schema (→Entities) + failed Retry
+  (→`sourcesApi.retry`); 6 tabs + dropdown present; terminal `enabled=false`,
+  in-flight `enabled=true`. Heavy children + react-markdown mocked; PipelineStatus
+  + Radix Tabs kept real.
+
+### DocumentGraphView — `frontend/src/app/(dashboard)/knowledge-graph/components/DocumentGraphView.tsx` (modified)
+- Removed the stale empty-state guidance ("Regenerate the document graph …
+  Run `POST /knowledge-graph/document-graph/regenerate`"); replaced with a note
+  that the document graph is built automatically as sources reach the `graphed`
+  stage. Grep confirms 0 hits for both removed strings under `frontend/src`.
+- Guard test: `frontend/src/app/(dashboard)/knowledge-graph/components/__tests__/DocumentGraphView.regen-text.test.ts`.
+
+### Commands (from `frontend/`)
+- `npm run lint` — pass (only pre-existing warnings; `Network`/`Play` in
+  SourceDetailContent pre-date this branch on `main`; none in new/changed code).
+- `npx tsc --noEmit` — 0 errors.
+- `npx vitest run src/components/source src/app` — 84 passed (5 files).
+- Full `npx vitest run` — 246 passed (20 files); no regression (226 baseline + 20
+  new UX.4 tests: 17 spine + 3 regen-guard).
+
+### Deviations
+- The failed Retry action uses `sourcesApi.retry` (the source requeue endpoint),
+  as no dedicated retry handler existed on the detail page. The plan permitted
+  reusing "whatever retry/reprocess handler already exists"; `retry` is the
+  closest semantic match (full requeue) and was already in the API layer.
