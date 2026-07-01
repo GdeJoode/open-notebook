@@ -74,8 +74,12 @@ import { ParserEngineBadge } from '@/components/source/ParserEngineBadge'
 import { SourceEntitiesTab } from '@/components/source/SourceEntitiesTab'
 import { RelatedSources } from '@/components/source/RelatedSources'
 import { PipelineConfigPanel } from '@/components/sources/pipeline/PipelineConfigPanel'
+import { PipelineStatus } from '@/components/sources/pipeline'
 import { DEFAULT_PIPELINE_CONFIG, type DoclingPipelineConfig } from '@/lib/api/sources'
-import { useSourceChunks } from '@/lib/hooks/use-sources'
+import { useSourceChunks, useSourcePipeline } from '@/lib/hooks/use-sources'
+import { isPollableStage } from '@/lib/pipeline/processing-stage'
+import { toPipelineCounts } from '@/lib/pipeline/source-counts'
+import type { PipelineDeepLinkTab, PipelineNodeAction } from '@/lib/pipeline/pipeline-stages'
 import { useZoteroStatus, useZoteroPush } from '@/lib/hooks/use-zotero'
 
 interface SourceDetailContentProps {
@@ -109,8 +113,17 @@ export function SourceDetailContent({
   const [showReprocessDialog, setShowReprocessDialog] = useState(false)
   const [reprocessConfig, setReprocessConfig] = useState<DoclingPipelineConfig>({ ...DEFAULT_PIPELINE_CONFIG })
   const [isReprocessing, setIsReprocessing] = useState(false)
+  // Controlled tab state so the pipeline spine can deep-link into a tab.
+  const [activeTab, setActiveTab] = useState('content')
   // Fetch chunks data
   const { data: chunksData, isLoading: chunksLoading } = useSourceChunks(sourceId)
+
+  // Track UX.4: poll the pipeline stage for in-flight sources so the detail
+  // spine advances live. Bounded — `useSourcePipeline` stops refetching at the
+  // terminal (complete/failed) or gated (awaiting_schema_review) stages, and we
+  // only enable it while the loaded source is still pollable.
+  const pipelineEnabled = source != null && isPollableStage(source.processing_stage)
+  const { data: pipelineData } = useSourcePipeline(sourceId, pipelineEnabled)
 
   // Zotero integration
   const { data: zoteroStatus } = useZoteroStatus()
@@ -261,6 +274,34 @@ export function SourceDetailContent({
       toast.error('Failed to start reprocessing')
     } finally {
       setIsReprocessing(false)
+    }
+  }
+
+  const handleRetry = async () => {
+    if (!source) return
+    try {
+      await sourcesApi.retry(sourceId)
+      toast.success('Source requeued for processing')
+      await fetchSource()
+    } catch (err) {
+      console.error('Failed to retry source:', err)
+      toast.error('Failed to retry processing')
+    }
+  }
+
+  const handlePipelineNodeClick = (tab: PipelineDeepLinkTab | undefined) => {
+    // Ingest/Embed → Chunks, Extract/Graph → Entities, Insights → Insights.
+    // Complete has no deep-link (undefined) and is a no-op.
+    if (tab) setActiveTab(tab)
+  }
+
+  const handlePipelineNodeAction = (action: PipelineNodeAction) => {
+    // Gated ⇒ send the user to the Entities tab (schema/entity review lives
+    // there); Failed ⇒ requeue via the existing retry path.
+    if (action === 'review-schema') {
+      setActiveTab('entities')
+    } else if (action === 'retry') {
+      void handleRetry()
     }
   }
 
@@ -422,6 +463,14 @@ export function SourceDetailContent({
     )
   }
 
+  // Prefer the live-polled payload for the spine so an in-flight source advances
+  // without a manual reload; fall back to the initially-loaded source. The Graph
+  // node resolves from `processing_stage` (done at graphed/complete) enriched by
+  // `relation_count` (graph_present) via the shared counts adapter.
+  const effectiveSource = pipelineData ?? source
+  const effectiveStage = effectiveSource.processing_stage
+  const jobStatus = (effectiveSource as { status?: string }).status
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -564,41 +613,24 @@ export function SourceDetailContent({
         </div>
       </div>
 
-      {/* Processing Status Bar */}
-      <div className="px-2 pb-3">
+      {/* Pipeline spine (Track UX.4) — the collapsed `processing_stage` spine
+          replaces the four independent output badges. Fed from the freshest
+          available payload (live poll for in-flight sources, else the loaded
+          source); clicking a node deep-links into its tab. */}
+      <div className="px-2 pb-3 flex flex-col gap-2">
+        <PipelineStatus
+          variant="detail"
+          processingStage={effectiveStage}
+          jobStatus={jobStatus}
+          counts={toPipelineCounts(effectiveSource)}
+          onNodeClick={handlePipelineNodeClick}
+          onNodeAction={handlePipelineNodeAction}
+        />
         <div className="flex flex-wrap gap-2 text-xs">
           <ParserEngineBadge
             metadata={source.metadata}
             sourceStatus={source.status}
           />
-          <Badge variant={chunksData?.total_chunks ? "default" : "secondary"} className="gap-1">
-            {chunksData?.total_chunks ? (
-              <><CheckCircle className="h-3 w-3" /> {chunksData.total_chunks} chunks</>
-            ) : (
-              "Not extracted"
-            )}
-          </Badge>
-          <Badge variant={source.embedded ? "default" : "secondary"} className="gap-1">
-            {source.embedded ? (
-              <><CheckCircle className="h-3 w-3" /> Embedded</>
-            ) : (
-              "Not embedded"
-            )}
-          </Badge>
-          <Badge variant={(source.entity_count ?? 0) > 0 ? "default" : "secondary"} className="gap-1">
-            {(source.entity_count ?? 0) > 0 ? (
-              <><CheckCircle className="h-3 w-3" /> {source.entity_count} entities</>
-            ) : (
-              "No entities"
-            )}
-          </Badge>
-          <Badge variant={insights.length > 0 ? "default" : "secondary"} className="gap-1">
-            {insights.length > 0 ? (
-              <><CheckCircle className="h-3 w-3" /> {insights.length} insights</>
-            ) : (
-              "No insights"
-            )}
-          </Badge>
           {!!(source as unknown as Record<string, unknown>).zotero_key && (
             <Badge variant="default" className="gap-1 bg-red-700">
               <BookMarked className="h-3 w-3" /> Zotero
@@ -609,7 +641,7 @@ export function SourceDetailContent({
 
       {/* Tabs Content */}
       <div className="flex-1 px-2 min-h-0">
-        <Tabs defaultValue="content" className="h-full flex flex-col">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
           <TabsList className="grid w-full grid-cols-6 flex-shrink-0">
             <TabsTrigger value="content">Content</TabsTrigger>
             <TabsTrigger value="insights">
