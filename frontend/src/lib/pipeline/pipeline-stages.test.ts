@@ -253,13 +253,35 @@ describe('counts enrich done nodes only, never change state (AC4)', () => {
       derivePipelineNodes({
         processingStage: 'complete',
         jobStatus: 'completed',
-        counts: { embedded_chunks: 24, entity_count: 18, insights_count: 3, graph_present: true },
+        counts: { embedded_chunks: 24, entity_count: 18, insights_count: 3 },
       })
     )
     expect(nodes.embed.countLabel).toBe('24 chunks')
     expect(nodes.extract.countLabel).toBe('18 entities')
     expect(nodes.graph.countLabel).toBe('linked')
     expect(nodes.insights.countLabel).toBe('3 insights')
+  })
+
+  it('keys the Graph "linked" badge off stage, not entity relations (UX.4 nit)', () => {
+    // A `graphed` source with zero entity relations is still in the document
+    // graph, so its done Graph node must show "linked".
+    const nodes = byKey(
+      derivePipelineNodes({
+        processingStage: 'graphed',
+        jobStatus: 'completed',
+        counts: { entity_count: 0 },
+      })
+    )
+    expect(nodes.graph.state).toBe('done')
+    expect(nodes.graph.countLabel).toBe('linked')
+  })
+
+  it('does not show "linked" while the Graph node is not yet done', () => {
+    const nodes = byKey(
+      derivePipelineNodes({ processingStage: 'extracted', jobStatus: 'completed' })
+    )
+    expect(nodes.graph.state).toBe('pending')
+    expect(nodes.graph.countLabel).toBeUndefined()
   })
 
   it('does not attach counts to pending nodes', () => {

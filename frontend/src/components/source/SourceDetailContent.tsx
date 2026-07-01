@@ -465,8 +465,8 @@ export function SourceDetailContent({
 
   // Prefer the live-polled payload for the spine so an in-flight source advances
   // without a manual reload; fall back to the initially-loaded source. The Graph
-  // node resolves from `processing_stage` (done at graphed/complete) enriched by
-  // `relation_count` (graph_present) via the shared counts adapter.
+  // node resolves from `processing_stage` (done at graphed/complete) and its
+  // "linked" badge is keyed off that stage via the shared counts adapter.
   const effectiveSource = pipelineData ?? source
   const effectiveStage = effectiveSource.processing_stage
   const jobStatus = (effectiveSource as { status?: string }).status

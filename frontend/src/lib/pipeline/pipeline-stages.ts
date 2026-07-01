@@ -71,8 +71,6 @@ export interface PipelineCounts {
   embedded_chunks?: number
   entity_count?: number
   insights_count?: number
-  /** Whether the source participates in the document graph (mentions edges). */
-  graph_present?: boolean
 }
 
 export interface PipelineNode {
@@ -170,8 +168,13 @@ function enrichCount(
       return n > 0 ? { count: n, countLabel: `${n} entities` } : { count: n }
     }
     case 'graph': {
-      // Graph carries no numeric count; the graph-present flag is a soft badge.
-      return counts.graph_present ? { countLabel: 'linked' } : {}
+      // Graph carries no numeric count. The "linked" badge is keyed off the
+      // STAGE, not entity↔entity relation_count: `enrichCount` runs only on
+      // `done` nodes, and a done Graph node means the source reached the
+      // `graphed`/`complete` stage — i.e. its document-graph `mentions` edges
+      // exist. A graphed source with zero entity relations is still linked
+      // (UX.4 nit: relation_count is not document-graph membership).
+      return { countLabel: 'linked' }
     }
     default:
       return {}
