@@ -1,0 +1,16 @@
+-- ============================================================================
+-- Migration 73 DOWN: no-op.
+--
+-- Migration 73 is a data-only backfill: it rewrites `source.processing_stage`
+-- VALUES for legacy rows that were at `"ingested"`, deriving the true stage from
+-- each source's outputs. It defines no schema (the field itself is owned by
+-- migration 71, whose own down removes it). A faithful inverse would have to
+-- restore the pre-73 value ("ingested") for exactly the rows this migration
+-- touched — but that information is not recorded, and blindly resetting derived
+-- rows back to "ingested" would REINTRODUCE the very bug 73 fixes (and could
+-- clobber rows the live pipeline advanced in the meantime). So the honest
+-- rollback is to leave the derived, correct values in place.
+-- ============================================================================
+
+-- Intentionally empty (data-only forward migration; no schema to revert).
+RETURN NONE;

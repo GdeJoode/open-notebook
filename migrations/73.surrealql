@@ -1,0 +1,70 @@
+-- ============================================================================
+-- Migration 73: backfill `source.processing_stage` for legacy sources (Track UX.1).
+--
+-- WHY. Migration 71 added `source.processing_stage` and backfilled EVERY
+-- pre-existing row to the conservative `"ingested"` (it deliberately did not
+-- guess a higher stage). Correct for resumability, but the UI (Track UX) now
+-- surfaces `processing_stage` as the per-document progress spine, so a
+-- fully-processed legacy source falsely reads as "stage 1 / ingested". This
+-- migration derives the TRUE stage from the source's actual outputs so the spine
+-- is honest without re-running the pipeline.
+--
+-- DERIVATION (conservative, most-advanced wins). Applied ONLY to rows currently
+-- at `"ingested"` so a row the live auto-chain already advanced is never
+-- clobbered. Three drift-only UPDATEs run in descending-stage order; because
+-- each is gated on `processing_stage = "ingested"`, a higher tier claims a row
+-- first and the row then drops out of the later tiers' filters (an else-cascade):
+--   1. has outgoing `mentions` edges (document-graph membership) => "complete".
+--      GRAPH -> COMPLETE is atomic in the live handler, so a graphed source is
+--      fully done; mentions membership therefore implies "complete".
+--   2. else an `entity` row references it (source id in `entity.source_documents`,
+--      counting only active/reference entities like the read handler) => "extracted".
+--   3. else it has a non-empty source-level aggregate `embedding` => "embedded".
+--   4. else it stays `"ingested"` (genuinely only parsed).
+--
+-- SET SEMANTICS. The two membership sets are computed with `LET` BEFORE any
+-- UPDATE, so they reflect the pre-migration data and are unaffected by the
+-- rewrites. The whole file is sent as one multi-statement query (the migration
+-- runner strips comments and joins lines), so the `LET` bindings persist across
+-- the subsequent UPDATEs.
+--   * `$graphed` compares RecordId-to-RecordId (`source.id IN SELECT VALUE in
+--     FROM mentions`) — no string coercion, robust.
+--   * `$extracted` matches in STRING space (`type::string(id) IN ...`) because
+--     `entity.source_documents` stores STRINGIFIED record ids (see the read
+--     handler's `source_documents CONTAINS str(source.id)` at sources_crud.py) —
+--     this mirrors that proven comparison exactly.
+--
+-- NONE-GUARD. `source.embedding` is `option<array<float>>` (migration 63) and is
+-- NONE on unembedded rows; `array::len(NONE)` RAISES, so the embedded tier
+-- guards `embedding != NONE` BEFORE `array::len(...) > 0`.
+--
+-- Idempotent + forward-only. On a second pass every already-derived row is no
+-- longer `"ingested"`, so all three UPDATEs match nothing (true no-op). On a
+-- healthy/empty DB the LET sets are empty and every UPDATE touches 0 rows. Down
+-- is a faithful no-op: this migration only rewrites a field's VALUE (it defines
+-- no schema), and the correct pre-71-derivation cannot be reconstructed, so the
+-- rollback intentionally leaves the derived values in place.
+-- ============================================================================
+
+-- Membership sets, computed from the pre-migration data.
+LET $graphed = array::distinct((SELECT VALUE in FROM mentions));
+LET $extracted = array::distinct(array::flatten((SELECT VALUE source_documents FROM entity WHERE status = "active" OR status = "reference")));
+
+-- Tier 1 — graphed/complete: source participates in the document graph.
+UPDATE source SET processing_stage = "complete"
+    WHERE processing_stage = "ingested"
+    AND id IN $graphed
+    RETURN NONE;
+
+-- Tier 2 — extracted: at least one current entity references this source.
+UPDATE source SET processing_stage = "extracted"
+    WHERE processing_stage = "ingested"
+    AND type::string(id) IN $extracted
+    RETURN NONE;
+
+-- Tier 3 — embedded: source carries a non-empty aggregate embedding.
+UPDATE source SET processing_stage = "embedded"
+    WHERE processing_stage = "ingested"
+    AND embedding != NONE
+    AND array::len(embedding) > 0
+    RETURN NONE;
