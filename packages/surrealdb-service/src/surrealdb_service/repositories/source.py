@@ -547,6 +547,7 @@ class SourceRepository(BaseRepository[Source]):
         if notebook_id:
             query = f"""
                 SELECT id, asset, created, title, updated, topics, command,
+                processing_stage,
                 (SELECT VALUE count() FROM source_insight
                  WHERE source = $parent.id GROUP ALL)[0].count OR 0
                  AS insights_count,
@@ -568,6 +569,7 @@ class SourceRepository(BaseRepository[Source]):
         else:
             query = f"""
                 SELECT id, asset, created, title, updated, topics, command,
+                processing_stage,
                 (SELECT VALUE count() FROM source_insight
                  WHERE source = $parent.id GROUP ALL)[0].count OR 0
                  AS insights_count,
