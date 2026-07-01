@@ -18,6 +18,14 @@
  *     graph-present flag) are ENRICHMENT on `done` nodes only. A count of `0`
  *     must never change a node's state (e.g. a `graphed` source with
  *     `entity_count === 0` still renders Extract as `done`).
+ *
+ * The single, deliberate exception to that last rule is the terminal `failed`
+ * path: the backend writes `processing_stage = 'failed'` at three points (parse,
+ * embed, entity-extract), OVERWRITING the prior good stage, so the string loses
+ * its position. There — and ONLY there — the output counts SET state, because a
+ * positive output is the only honest evidence of which stage was actually
+ * reached before the break. On every non-`failed` path `processing_stage` stays
+ * authoritative and counts remain enrichment-only.
  */
 
 import type { ProcessingStage } from './processing-stage'
@@ -152,12 +160,14 @@ function enrichCount(
     case 'embed': {
       const n = counts.embedded_chunks
       if (n === undefined) return {}
-      return { count: n, countLabel: n > 0 ? `${n} chunks` : undefined }
+      // Omit the label key entirely on 0 (avoid a misleading "0 chunks" chip and
+      // a stray `countLabel: undefined` on the node).
+      return n > 0 ? { count: n, countLabel: `${n} chunks` } : { count: n }
     }
     case 'extract': {
       const n = counts.entity_count
       if (n === undefined) return {}
-      return { count: n, countLabel: n > 0 ? `${n} entities` : undefined }
+      return n > 0 ? { count: n, countLabel: `${n} entities` } : { count: n }
     }
     case 'graph': {
       // Graph carries no numeric count; the graph-present flag is a soft badge.
@@ -247,12 +257,54 @@ export function derivePipelineNodes(
   }
 
   if (stage === 'failed') {
-    // The `failed` stage overwrites position on the backend, so we cannot know
-    // which node failed from the spine alone (counts are barred from setting
-    // state). Surface the failure at the pipeline entry with a Retry action;
-    // later nodes stay pending rather than falsely claiming progress.
-    setState(0, 'failed')
-    spine[0].action = 'retry'
+    // TERMINAL FAILED PATH — the ONE place counts SET state.
+    //
+    // The backend writes `processing_stage = 'failed'` at three distinct points
+    // (parse `handlers.py:183`, entity-extract `handlers.py:361`, embed
+    // `handlers.py:403`), OVERWRITING the prior good stage, so the string
+    // carries NO position. Pinning the failure at the entry node would regress
+    // stages that demonstrably completed (e.g. a source that ingested + embedded
+    // fine but broke at extraction) and misdirect Retry at Ingest.
+    //
+    // Positive output counts are reliable truth even when the stage string lost
+    // its position, so we locate the failure at the FIRST spine stage whose
+    // output signal is absent. This is the deliberate, documented exception to
+    // the "counts never set state" rule that governs the (unchanged) success
+    // paths, where a count of 0 must never move a node.
+    const embeddedChunks = counts?.embedded_chunks
+    const entityCount = counts?.entity_count
+    const embedReached = (embeddedChunks ?? 0) > 0
+    const extractReached = (entityCount ?? 0) > 0
+    // PipelineCounts has no dedicated parse/chunk count, so Ingest is treated as
+    // reached when ANY downstream count signal is present (even a value of 0): a
+    // source that exposes an embed/extract count at all necessarily got past
+    // parse and row-creation. With no count signal whatsoever, the only honest
+    // conclusion is that parse itself failed.
+    const ingestReached =
+      embedReached ||
+      extractReached ||
+      embeddedChunks !== undefined ||
+      entityCount !== undefined
+
+    let failedIndex: number
+    if (!ingestReached) {
+      failedIndex = 0 // Parse failed — no evidence the source got past Ingest.
+    } else if (!embedReached) {
+      failedIndex = EMBED_INDEX // Embed produced no chunks.
+    } else if (!extractReached) {
+      failedIndex = 2 // Extract produced no entities.
+    } else {
+      // All three spine signals are present. The backend does not write `failed`
+      // at graph/complete, so this is unexpected; rather than false-claim an
+      // earlier node completed-then-failed, deterministically pin the failure at
+      // the furthest spine node (Graph).
+      failedIndex = 3
+    }
+
+    for (let i = 0; i < failedIndex; i++) setState(i, 'done')
+    setState(failedIndex, 'failed')
+    spine[failedIndex].action = 'retry'
+    hydrateDone()
     return [...spine, deriveInsightsNode(input)]
   }
 

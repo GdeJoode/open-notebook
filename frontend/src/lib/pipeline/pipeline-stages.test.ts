@@ -88,6 +88,9 @@ describe('exhaustive stage -> state mapping, job terminal (AC2)', () => {
       expect: { ingest: 'done', embed: 'done', extract: 'done', graph: 'done', complete: 'done' },
     },
     {
+      // With no count signals a `failed` source is treated as a parse failure:
+      // the failure pins at the entry node (see the dedicated failed-path suite
+      // below for count-driven localisation).
       stage: 'failed',
       expect: { ingest: 'failed', embed: 'pending', extract: 'pending', graph: 'pending', complete: 'pending' },
     },
@@ -106,10 +109,79 @@ describe('exhaustive stage -> state mapping, job terminal (AC2)', () => {
     expect(nodes.extract.action).toBe('review-schema')
   })
 
-  it('failed exposes a retry action on the failed node', () => {
+  it('failed with no counts exposes a retry action on the (parse) entry node', () => {
     const nodes = byKey(derivePipelineNodes({ processingStage: 'failed' }))
     expect(nodes.ingest.state).toBe('failed')
     expect(nodes.ingest.action).toBe('retry')
+  })
+})
+
+describe('failed path localises the break via output signals (Major fix)', () => {
+  // `processing_stage = 'failed'` overwrites position on the backend (parse /
+  // embed / entity-extract), so the failed node is located from the FIRST spine
+  // stage whose output signal is absent. This is the ONE place counts set state.
+
+  it('embedded + no entities => Ingest done, Embed done, Extract failed', () => {
+    const nodes = byKey(
+      derivePipelineNodes({
+        processingStage: 'failed',
+        counts: { embedded_chunks: 5, entity_count: 0 },
+      })
+    )
+    expect(nodes.ingest.state).toBe('done')
+    expect(nodes.embed.state).toBe('done')
+    expect(nodes.extract.state).toBe('failed')
+    expect(nodes.graph.state).toBe('pending')
+    expect(nodes.complete.state).toBe('pending')
+    // Retry is attached to the FAILED node, not the entry node.
+    expect(nodes.extract.action).toBe('retry')
+    expect(nodes.ingest.action).toBeUndefined()
+    // Proven-complete stages keep their enrichment.
+    expect(nodes.embed.countLabel).toBe('5 chunks')
+  })
+
+  it('no counts (parse failure) => Ingest failed, rest pending', () => {
+    const nodes = byKey(derivePipelineNodes({ processingStage: 'failed' }))
+    expect(nodes.ingest.state).toBe('failed')
+    expect(nodes.ingest.action).toBe('retry')
+    for (const key of ['embed', 'extract', 'graph', 'complete'] as PipelineNodeKey[]) {
+      expect(nodes[key].state).toBe('pending')
+    }
+  })
+
+  it('embedded_chunks === 0 => Ingest done, Embed failed, rest pending', () => {
+    const nodes = byKey(
+      derivePipelineNodes({
+        processingStage: 'failed',
+        counts: { embedded_chunks: 0 },
+      })
+    )
+    expect(nodes.ingest.state).toBe('done')
+    expect(nodes.embed.state).toBe('failed')
+    expect(nodes.embed.action).toBe('retry')
+    expect(nodes.extract.state).toBe('pending')
+    expect(nodes.graph.state).toBe('pending')
+    expect(nodes.complete.state).toBe('pending')
+    expect(nodes.ingest.action).toBeUndefined()
+  })
+
+  it('all spine outputs present => documented Graph fallback', () => {
+    const nodes = byKey(
+      derivePipelineNodes({
+        processingStage: 'failed',
+        counts: { embedded_chunks: 8, entity_count: 4 },
+      })
+    )
+    expect(nodes.ingest.state).toBe('done')
+    expect(nodes.embed.state).toBe('done')
+    expect(nodes.extract.state).toBe('done')
+    expect(nodes.graph.state).toBe('failed')
+    expect(nodes.graph.action).toBe('retry')
+    expect(nodes.complete.state).toBe('pending')
+    // No earlier node false-claims the failure.
+    expect(nodes.ingest.action).toBeUndefined()
+    expect(nodes.embed.action).toBeUndefined()
+    expect(nodes.extract.action).toBeUndefined()
   })
 })
 
