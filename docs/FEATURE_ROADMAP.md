@@ -1577,6 +1577,43 @@ contradiction (Z) + `cites` (U.3, blocked on Track V) stay on-demand.
 
 ---
 
+## Track UX — Frontend pipeline alignment (surface `processing_stage` as the spine) (NEW)
+
+> **Status**: ✅ CLOSED (2026-07-01). Track PL rebuilt the backend into a full
+> auto-chain with a per-source `source.processing_stage`, but the Next.js
+> frontend still reflected the pre-auto era: it reconstructed an approximate
+> status from output-counts + a coarse job status, in the wrong order, and
+> exposed manual "Run X" buttons for steps that now happen automatically. Track
+> UX makes `processing_stage` the single source of truth across every source
+> surface (list / detail / create), collapses the 9-step creation wizard into a
+> lean 4-step flow, relocates parser config to the Reprocess dialog, and
+> reframes the leftover manual controls as recovery-only actions. See
+> [`docs/tracks/UX-pipeline-alignment/status.md`](./tracks/UX-pipeline-alignment/status.md)
+> and `ARCHITECTURE.md` §14.
+
+**Frontend spine**: one canonical `PipelineStatus` component (variants
+`live` / `card` / `detail`) renders the runtime-order spine
+`Ingest → Embed → Extract → Graph → Complete` (Embed **before** Extract) with
+Insights as a parallel branch, driven purely by `processing_stage`. Output
+counts are enrichment on `done` nodes, never the status source; the job axis
+only drives the current node's spinner. GRAPH / EXTRACT / INSIGHTS run
+automatically, so the manual runners are recovery-only.
+
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| UX.1 | `processing_stage` TS union + `useSourcePipeline` stage-polling hook (+ list-schema field + backfill migration) | ✅ |
+| UX.2 | Canonical `PipelineStatus` component + pure stage state machine (`derivePipelineNodes`) | ✅ |
+| UX.3 | SourceCard 5-segment mini progress bar (bounded per-card polling) | ✅ |
+| UX.4 | Source-detail spine + Graph signal + drop stale regenerate guidance | ✅ |
+| UX.5 | Lean 4-step creation flow (Input → Organize → Processing → Done) + config relocation | ✅ |
+| UX.6 | Recovery-only manual controls + deferred Contradictions stub + orphaned-tab cleanup + docs/e2e | ✅ |
+
+**Deferred**: the Contradictions surface (UX.6) is a data-absent-safe stub —
+Track Z ships a `POST /sources/{id}/judge-contradictions` trigger but no
+verdicts read API yet, so the panel renders nothing until a GET lands.
+
+---
+
 ## Bijlagen
 
 - `docs/REFACTOR_PLAN.md` — voltooide refactor (Phase 0-7)
