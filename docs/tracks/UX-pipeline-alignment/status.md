@@ -194,3 +194,207 @@
   as no dedicated retry handler existed on the detail page. The plan permitted
   reusing "whatever retry/reprocess handler already exists"; `retry` is the
   closest semantic match (full requeue) and was already in the API layer.
+
+---
+
+## Phase UX.5 — Lean 4-step creation flow + config relocation
+
+**Branch:** `track/ux5-lean-create-flow` (off `main`) — NOT merged, NOT pushed.
+**Commits:** `d282b2d` (components), `53db087` (flow), `045ac24` (tests + e2e).
+**State:** Ready for review.
+
+### New — `frontend/src/components/sources/steps/AdvancedIngestionSettings.tsx`
+- Collapsed Radix `Collapsible` disclosure on the Input screen: parser engine /
+  OCR engine / table mode, every field defaulting to `Auto`. Emits a
+  `processing_overrides` key only for a field moved off `Auto` (all-Auto ⇒ `{}`,
+  backend auto-routes). Keyboard-accessible: Tab to the trigger, Enter/Space
+  toggle, `aria-expanded` reflects state.
+
+### New — `frontend/src/components/sources/pipeline/ProcessingLogConsole.tsx`
+- The streaming-log console mounted UNDER the live tracker (SSE via
+  `useProcessingLogs` while in-flight; falls back to persisted
+  `fetchProcessingLogs` once settled). Extracted so the create flow no longer
+  depends on `ExtractionTab` for logs.
+
+### `frontend/src/components/sources/pipeline/CreateSourcePipeline.tsx` (rewritten)
+- `STEP_LABELS` reduced to 4: `Input → Organize → Processing → Done`. The
+  mandatory Config step and the Extract/Postprocess/Classification/Entities/Embed
+  manual tabs are gone.
+- Deleted: `derivePipelineStatuses`, `manualStatuses`, `handleStartEntities`,
+  `handleStartEmbed`, the auto-detect-manual-completion effect, the job-status
+  inference block, `handleExtractionContinue`/`handlePostprocessContinue`,
+  `classificationReady`, the debug `console.log` polling effect.
+- Progress now comes from one live `<PipelineStatus variant="live">` fed by
+  `useSourcePipeline(sourceId)` (the `processing_stage` spine); `useSourceStatus`
+  drives only the current node's spinner. `ProcessingLogConsole` is passed as its
+  children (mounted beneath the tracker).
+- Flow control: an effect watches `processingComplete`. `complete` ⇒
+  `phase='complete'`, `activeTab=Done`. `awaiting_schema_review` keeps
+  `phase='processing'` and the tracker parks the Extract node as `gated` with a
+  "Review schema" action (no false Done). `failed` keeps `phase='processing'` and
+  the tracker renders the failed node + Retry (wired to `useRetrySource`); we do
+  NOT flip to the `error` phase (the footer has no error rendering, and the node
+  action is the recovery path). Node actions: `retry → retrySource.mutate`,
+  `review-schema → router.push('/sources/{id}')`.
+- Multi-file batching preserved. Each entry now carries its OWN
+  `processing_stage`: the multi-source poll calls `sourcesApi.get(entry.id)` (was
+  `sourcesApi.status`) and maps stage → entry status
+  (`complete→completed`, `failed→failed`, else `processing`). The Processing step
+  renders one `<PipelineStatus variant="card">` per entry driven by
+  `entry.stage`, so each source advances independently.
+- `AdvancedIngestionSettings` mounts collapsed under `SourceTypeStep` on the
+  Input step; its overrides thread into `processingOverrides` → the create call's
+  `processing_overrides` (undefined when empty).
+- Removed dead imports from this file only (tab files left in place for UX.6):
+  `ProcessingConfigStep`, `ExtractionTab`, `EntitiesTab`, `EmbeddingTab`,
+  `PreprocessingTab`, `SummariesTab`.
+
+### `frontend/src/components/sources/pipeline/PipelineFooter.tsx` (modified)
+- Added a `lastConfigStep` prop; Submit now shows on the last config step
+  (Organize = 2) instead of the hard-coded old `3`.
+
+### `frontend/src/components/source/SourceDetailContent.tsx` (modified)
+- Reprocess dialog copy reframed as the PRIMARY parser/OCR config home ("The
+  primary place to change parsing / OCR settings …"). Still calls
+  `sourcesApi.reprocess` via `PipelineConfigPanel` — no endpoint/behavior change.
+
+### AdvancedIngestionSettings override contract
+- Contribution = the set of fields moved off `Auto`
+  (`parser_engine` / `docling_ocr_engine` / `docling_table_mode`). Collapsed +
+  all-Auto (default) ⇒ `{}` (no overrides). Changed fields persist across
+  collapse (no silent config loss). The parent sends `processing_overrides` only
+  when the object is non-empty.
+
+### Tests
+- `frontend/src/components/sources/steps/__tests__/AdvancedIngestionSettings.test.tsx`
+  — 6 tests: collapsed default (`aria-expanded=false`), Enter/Space keyboard
+  toggle, `{}` on mount, Auto defaults, single-field override, multi-field
+  override omitting untouched fields. (Radix Select driven via pointer-capture +
+  scrollIntoView polyfills.)
+- `frontend/src/components/sources/pipeline/__tests__/CreateSourcePipeline.test.tsx`
+  — 6 tests: 4 steps / no Config-Extract-Embed-Classification; live tracker mounts
+  with Embed-before-Extract + log console; `complete → Done`; parks on
+  `awaiting_schema_review` (Review schema, no Done, Extract `gated`); no
+  Start-Entities/Start-Embed buttons; multi-file batch drives per-source card
+  state from each source's polled `processing_stage`.
+- `frontend/e2e/track-ux/create-source-pipeline.spec.ts` — route-mocked create →
+  live tracker walks `ingested→embedded→extracted→graphed→complete` → Done.
+
+### Commands (from `frontend/`)
+- `npm run lint` — pass (0 errors; only pre-existing warnings; none in new/changed files).
+- `npx tsc --noEmit` — 0 errors.
+- `npx vitest run src/components/sources` — 66 passed (4 files).
+- Full `npx vitest run` — 258 passed (22 files); no regression (246 UX.4 baseline + 12 new).
+- `npx playwright test e2e/track-ux/create-source-pipeline.spec.ts` — 1 passed
+  (10.7s). Ran against a self-served `next dev` on port 8599 (port 8502 was held
+  by a Docker container serving the OLD build); pass the same `PLAYWRIGHT_BASE_URL`
+  to reproduce. The spec is fully route-mocked (no live backend / DB / worker).
+
+### Deviations
+- `PipelineFooter` gained a `lastConfigStep` prop (the plan said "trim the
+  stepper to 4 steps"; the stepper itself is data-driven and needed no change, but
+  the footer had the old last-config-step hard-coded to `3`).
+- `failed` stays in `phase='processing'` (tracker shows the failed node + Retry)
+  rather than switching to the `error` phase — the footer has no `error` rendering
+  and the recovery action lives on the node, matching AC3.
+- The streaming console was extracted into a new `ProcessingLogConsole` component
+  (the old console was embedded inside `ExtractionTab`, which the lean flow drops).
+
+---
+
+## Phase UX.5 — Review revisions (Blocker + Major)
+
+**Branch:** `track/ux5-lean-create-flow` — NOT merged, NOT pushed.
+**State:** Ready for re-review. Addresses the two review defects; the approved
+single-source spine / log streaming / 4-step model / reprocess relocation were
+left untouched.
+
+### Blocker — multi-file batch wedged on the schema-review gate
+`frontend/src/components/sources/pipeline/CreateSourcePipeline.tsx`:
+- New `stageToEntryStatus` maps `awaiting_schema_review → 'gated'` (a settled,
+  poll-stopping state) instead of the non-terminal `'processing'`. `isSettledEntry`
+  (complete/failed/gated) and `isPollableEntry` (creating/processing) replace the
+  old `isTerminalEntry`.
+- Poll effect now filters on `isPollableEntry` and clears the interval once no
+  entry is pollable — a gated entry no longer polls `GET /sources/{id}` forever.
+- The batch advances to Done only on `multiAllComplete` (pure success), mirroring
+  the single-source rule. A settled-with-issues batch (`multiAllSettled` but some
+  gated/failed) stays on Processing in a non-hanging terminal state with a settled
+  banner + per-entry recovery cards; `processingStepStatus` reports `failed`/
+  `completed` accordingly (no false green Done).
+- Per-entry cards now pass `onNodeAction={handleMultiNodeAction(entry.id, …)}`:
+  review-schema ⇒ `router.push('/sources/{id}')`; retry ⇒ `retrySource.mutate(id)`
+  and re-arm the entry to `processing` so its poll resumes.
+
+### Major — advanced overrides discarded on back-navigation
+- `frontend/src/components/sources/steps/AdvancedIngestionSettings.tsx` is now a
+  CONTROLLED presentational component: parent owns `parserEngine`/`ocrEngine`/
+  `tableMode` + the open state (exported choice types). Removed the mount-time
+  `onOverridesChange({})` reset that wiped selections on remount.
+- Parent `CreateSourcePipeline` holds the four pieces of state and derives
+  `processing_overrides` via `useMemo` (all-Auto ⇒ `{}`, only changed fields
+  emitted). Input→Organize→Back now rehydrates the disclosure (still expanded,
+  Docling still selected) and the create call still sends `{parser_engine:'docling'}`.
+
+### Minor — interval churn
+- Poll effect keyed on a stable `multiPollKey` (joined entry ids) and reads live
+  entries from `multiSourcesRef`; the 3s interval is created once and lives until
+  the stop condition (no per-tick teardown). Cadence + stop semantics unchanged.
+
+### Tests
+- `CreateSourcePipeline.test.tsx` +3: gated multi-batch (polling stops — no further
+  `sourcesApi.get` after settle, settled banner, Review schema → `push('/sources/source:a')`);
+  failed multi-batch (Retry → `retryMutate('source:a')`); override persistence across
+  Input→Organize→Back reaching the create call with `processing_overrides`.
+- `AdvancedIngestionSettings.test.tsx` rewritten for the controlled API (+1 remount
+  persistence test); a11y + Auto-defaults + only-changed-fields contract preserved
+  via a controlled harness.
+
+### Commands (from `frontend/`)
+- `npm run lint` — pass (0 errors; only pre-existing warnings; none in changed files).
+- `npx tsc --noEmit` — 0 errors.
+- `npx vitest run src/components/sources` — 70 passed (4 files).
+- Full `npx vitest run` — 262 passed (22 files); no regression (258 baseline + 4 new).
+
+## Round 3 — Blocker: per-entry Retry never resumed polling after full settle
+
+### Root cause
+- The multi-file poll effect was keyed on `multiPollKey` = the joined list of ALL
+  entry ids. When every entry settled, the interval self-cleared inside its tick,
+  but the id list was unchanged, so the key was unchanged and the effect never
+  re-ran. `handleMultiNodeAction(id, 'retry')` re-armed an entry to `processing`
+  but — id set unchanged ⇒ key unchanged ⇒ effect did not re-fire — the cleared
+  interval stayed dead and the re-armed entry spun forever, never polled again.
+
+### Fix (`CreateSourcePipeline.tsx`)
+- Effect key changed from ALL ids to the sorted set of POLLABLE ids.
+  - Before: `multiPollKey = multiSources.map(s=>s.id).filter(Boolean).join(',')`,
+    dep `[phase, isMulti, multiPollKey]`.
+  - After: `pollableKey = multiSources.filter(s => s.id && isPollableEntry(s.status))
+    .map(s=>s.id).sort().join(',')`, dep `[phase, isMulti, pollableKey]`.
+- Added an empty-set guard: `if (phase !== 'processing' || !isMulti || pollableKey
+  === '') return` — no interval runs when nothing is pollable.
+- Self-correcting: settle ⇒ key `''` (interval clears); Retry re-arms one entry to
+  `processing` ⇒ key `'' → 'source:a'`, effect re-fires, interval recreated and the
+  entry is polled again; re-settle ⇒ key back to `''`. Key changes only when the
+  pollable SET changes (not on per-tick count updates) so round-2's no-churn
+  property holds. Cleanup clears the prior interval before recreating — no double
+  interval. Single-source path untouched (React Query invalidation).
+
+### Test (upgraded, replaces the shallow retry test)
+- New `resumes polling a re-armed entry after Retry once the batch has fully
+  settled`: `{source:a failed, source:b complete}` batch, advance PAST the clearing
+  tick (poll a >3s window with no new `sourcesApi.get` ⇒ interval proven dead) and
+  freeze the get() count; then click Retry and assert a NEW `sourcesApi.get('source:a')`
+  lands beyond the frozen count — polling actually resumed, not merely that
+  `retryMutate` fired. Confirmed to FAIL on the old all-ids key (`resumed: false`).
+
+### Commands (from `frontend/`)
+- `npm run lint` — pass (0 errors; only pre-existing warnings; none in changed files).
+- `npx tsc --noEmit` — 0 errors.
+- `npx vitest run src/components/sources` — 70 passed (4 files).
+- Full `npx vitest run` — 262 passed (22 files); no regression (retry test upgraded
+  in place, count unchanged at 262).
+
+### Commit
+- `a8a6111` fix(ux5): key multi-poll on pollable ids so retry resumes polling

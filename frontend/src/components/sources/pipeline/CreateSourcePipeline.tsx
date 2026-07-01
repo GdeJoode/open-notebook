@@ -1,27 +1,37 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useNotebooks } from '@/lib/hooks/use-notebooks'
-import { useCreateSource, useSource, useSourceStatus } from '@/lib/hooks/use-sources'
+import {
+  useCreateSource,
+  useSourcePipeline,
+  useSourceStatus,
+  useRetrySource,
+} from '@/lib/hooks/use-sources'
 import { sourcesApi } from '@/lib/api/sources'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { useToast } from '@/lib/hooks/use-toast'
 import { CreateSourceRequest, SettingsResponse } from '@/lib/types/api'
+import type { ProcessingStage } from '@/lib/pipeline/processing-stage'
+import { toPipelineCounts } from '@/lib/pipeline/source-counts'
+import type { PipelineNodeAction } from '@/lib/pipeline/pipeline-stages'
 import { SourceTypeStep } from '../steps/SourceTypeStep'
 import { NotebooksStep } from '../steps/NotebooksStep'
-import { ProcessingConfigStep } from '../steps/ProcessingConfigStep'
+import {
+  AdvancedIngestionSettings,
+  type ParserEngineChoice,
+  type OcrEngineChoice,
+  type TableModeChoice,
+} from '../steps/AdvancedIngestionSettings'
 import { PipelineHeader } from './PipelineHeader'
 import { PipelineStepper, type PipelineStep, type StepStatus } from './PipelineStepper'
 import { PipelineFooter, type PipelinePhase } from './PipelineFooter'
-import { ExtractionTab } from './tabs/ExtractionTab'
-import { EntitiesTab } from './tabs/EntitiesTab'
-import { EmbeddingTab } from './tabs/EmbeddingTab'
-import { PreprocessingTab } from './tabs/PreprocessingTab'
-import { SummariesTab } from './tabs/SummariesTab'
+import { PipelineStatus } from './PipelineStatus'
+import { ProcessingLogConsole } from './ProcessingLogConsole'
 import { CompletionTab } from './tabs/CompletionTab'
 import { BatchModeDialog, type BatchMode } from './BatchModeDialog'
 
@@ -57,27 +67,64 @@ const createSourceSchema = z.object({
 
 type CreateSourceFormData = z.infer<typeof createSourceSchema>
 
+// Lean 4-step creation flow (Track UX.5). The mandatory Config step and the old
+// Extract/Postprocess/Classification/Entities/Embed manual tabs are gone: the
+// pipeline runs automatically and its progress is surfaced by the live
+// `PipelineStatus` tracker on the Processing step.
+const STEP_INPUT = 1
+const STEP_ORGANIZE = 2
+const STEP_PROCESSING = 3
+const STEP_DONE = 4
+const LAST_CONFIG_STEP = STEP_ORGANIZE
+
 const STEP_LABELS = [
-  { id: 1, label: 'Input', phase: 'config' as const },
-  { id: 2, label: 'Organize', phase: 'config' as const },
-  { id: 3, label: 'Config', phase: 'config' as const },
-  { id: 4, label: 'Extract', phase: 'pipeline' as const, description: 'Required — parses document into text chunks' },
-  { id: 5, label: 'Postprocess', phase: 'pipeline' as const, description: 'Optional — review chunks, classify content and filter noise' },
-  { id: 6, label: 'Classification', phase: 'pipeline' as const, description: 'Required — classify document type and select ontologies' },
-  { id: 7, label: 'Entities', phase: 'pipeline' as const, description: 'Optional — extract people, organizations, concepts for the knowledge graph' },
-  { id: 8, label: 'Embed', phase: 'pipeline' as const, description: 'Optional — create vector embeddings for semantic search' },
-  { id: 9, label: 'Done', phase: 'pipeline' as const },
+  { id: STEP_INPUT, label: 'Input', phase: 'config' as const },
+  { id: STEP_ORGANIZE, label: 'Organize', phase: 'config' as const },
+  { id: STEP_PROCESSING, label: 'Processing', phase: 'pipeline' as const, description: 'Runs automatically — ingest, embed, extract, graph' },
+  { id: STEP_DONE, label: 'Done', phase: 'pipeline' as const },
 ]
 
 interface MultiSourceEntry {
   id: string
   title: string
-  status: 'pending' | 'creating' | 'processing' | 'completed' | 'failed'
+  status: 'pending' | 'creating' | 'processing' | 'completed' | 'gated' | 'failed'
+  stage?: ProcessingStage
   fileName?: string
+}
+
+/**
+ * Map a polled `processing_stage` to an entry status. `awaiting_schema_review`
+ * becomes the gated status — a SETTLED (poll-stopping) state, not `processing`:
+ * a gated entry makes no further automatic progress until a human reviews it, so
+ * treating it as still-processing polled `GET /sources/{id}` forever and wedged
+ * the batch (it could never reach a settled aggregate).
+ */
+function stageToEntryStatus(
+  stage: ProcessingStage | undefined
+): MultiSourceEntry['status'] {
+  if (stage === 'complete') return 'completed'
+  if (stage === 'failed') return 'failed'
+  if (stage === 'awaiting_schema_review') return 'gated'
+  return 'processing'
+}
+
+/** An entry the poller should keep reading (still advancing on its own). */
+function isPollableEntry(status: MultiSourceEntry['status']): boolean {
+  return status === 'creating' || status === 'processing'
+}
+
+/**
+ * An entry that has stopped advancing automatically: succeeded, failed, or
+ * parked on the schema-review gate. Polling stops for these and the batch is
+ * considered settled once every entry is settled.
+ */
+function isSettledEntry(status: MultiSourceEntry['status']): boolean {
+  return status === 'completed' || status === 'failed' || status === 'gated'
 }
 
 export function CreateSourcePipeline() {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const { toast } = useToast()
 
   // URL params
@@ -85,7 +132,7 @@ export function CreateSourcePipeline() {
 
   // Phase & navigation state
   const [phase, setPhase] = useState<PipelinePhase>('config')
-  const [activeTab, setActiveTab] = useState(1)
+  const [activeTab, setActiveTab] = useState(STEP_INPUT)
   const [sourceId, setSourceId] = useState<string | undefined>()
 
   // Multi-file state
@@ -99,40 +146,96 @@ export function CreateSourcePipeline() {
   const [selectedNotebooks, setSelectedNotebooks] = useState<string[]>(
     defaultNotebookId ? [defaultNotebookId] : []
   )
-  const [processingOverrides, setProcessingOverrides] = useState<Record<string, unknown>>({})
 
-  // Track classification readiness (ontology selected for all sources)
-  const [classificationReady, setClassificationReady] = useState(false)
+  // Advanced ingestion overrides — state is OWNED here (not in the child) so a
+  // user's parser/OCR/table selection survives Input→Organize→Back, which
+  // conditionally unmounts the `AdvancedIngestionSettings` disclosure.
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [parserEngine, setParserEngine] = useState<ParserEngineChoice>('auto')
+  const [ocrEngine, setOcrEngine] = useState<OcrEngineChoice>('auto')
+  const [tableMode, setTableMode] = useState<TableModeChoice>('auto')
 
-  // Track whether we've configured embed/transformations
+  // Derive `processing_overrides` from the choices: a field left on Auto
+  // contributes nothing, so an all-Auto panel yields `{}` (no overrides) and the
+  // backend auto-routes. Only fields moved off Auto are emitted.
+  const processingOverrides = useMemo<Partial<SettingsResponse>>(() => {
+    const overrides: Partial<SettingsResponse> = {}
+    if (parserEngine !== 'auto') overrides.parser_engine = parserEngine
+    if (ocrEngine !== 'auto') overrides.docling_ocr_engine = ocrEngine
+    if (tableMode !== 'auto') overrides.docling_table_mode = tableMode
+    return overrides
+  }, [parserEngine, ocrEngine, tableMode])
+
+  // Track whether embed was enabled (for the completion summary)
   const [embedEnabled, setEmbedEnabled] = useState(false)
-  const [summariesEnabled, setSummariesEnabled] = useState(false)
 
   // API hooks
   const createSource = useCreateSource()
+  const retrySource = useRetrySource()
   const { data: notebooks = [], isLoading: notebooksLoading } = useNotebooks()
   const { data: settings } = useSettings()
 
-  // Poll source data when in processing phase (single source mode)
-  const statusEnabled = phase === 'processing' && sourceIds.length <= 1
-  const { data: sourceData } = useSource(sourceId || '')
+  const isMulti = sourceIds.length > 1
+
+  // Single-source spine: poll GET /sources/{id} for `processing_stage` (the
+  // stage source of truth) and the job axis for the current node's spinner.
+  const singleEnabled = !!sourceId && !isMulti && phase !== 'config'
+  const { data: pipelineData } = useSourcePipeline(sourceId || '', singleEnabled)
+  const statusEnabled = phase === 'processing' && !isMulti
   const { data: statusData } = useSourceStatus(sourceId || '', statusEnabled)
 
-  // Debug: log polling state
-  useEffect(() => {
-    console.log('[Pipeline] polling debug:', { sourceId, phase, sourceIdsLength: sourceIds.length, statusEnabled, statusData: statusData?.status })
-  }, [sourceId, phase, sourceIds.length, statusEnabled, statusData])
+  const singleStage = pipelineData?.processing_stage
+  const singleComplete = singleStage === 'complete'
 
-  // Track previous auto-advance tab to avoid infinite loops
-  const lastAutoAdvancedRef = useRef<number>(0)
+  // Multi-source aggregate: each entry's status is driven by its OWN
+  // `processing_stage` (polled below), never a shared inference. The batch is
+  // SETTLED once every entry has stopped advancing (complete / failed / gated);
+  // it advances to Done only on pure success (every entry complete), mirroring
+  // the single-source rule where gated/failed stays on Processing with its
+  // recovery action rather than claiming a false Done.
+  const multiAllSettled =
+    multiSources.length > 0 && multiSources.every((s) => isSettledEntry(s.status))
+  const multiAllComplete =
+    multiSources.length > 0 && multiSources.every((s) => s.status === 'completed')
+  const multiAnyFailed = multiSources.some((s) => s.status === 'failed')
 
-  // Multi-source status polling
+  const processingComplete = isMulti ? multiAllComplete : singleComplete
+
+  // Hold the latest entries in a ref so the poll effect can read them without
+  // depending on `multiSources` — depending on it would tear down and recreate
+  // the interval on EVERY tick (each tick rewrites `multiSources`), resetting
+  // the 3s timer. The effect is instead keyed on the stable set of entry ids.
+  const multiSourcesRef = useRef(multiSources)
   useEffect(() => {
-    if (phase !== 'processing' || sourceIds.length <= 1) return
+    multiSourcesRef.current = multiSources
+  }, [multiSources])
+
+  // Key the poll effect on the set of POLLABLE entry ids (creating/processing),
+  // not all ids. This makes the effect self-correcting: when every entry settles
+  // the key becomes '' and the interval clears; when a per-entry Retry re-arms an
+  // entry to `processing` it re-enters this set, the key changes (e.g. '' →
+  // 'source:a'), the effect RE-FIRES and recreates the interval to poll it again.
+  // Sorted so a stable set yields a stable key — count/stage updates that don't
+  // change WHICH entries are pollable won't churn the interval (round-2 fix).
+  const pollableKey = multiSources
+    .filter((s) => s.id && isPollableEntry(s.status))
+    .map((s) => s.id)
+    .sort()
+    .join(',')
+
+  // Multi-source stage polling: read each in-flight entry's `processing_stage`
+  // from GET /sources/{id} and map it to the entry's status. Polling STOPS for
+  // an entry once it settles (complete / failed / gated) and the interval is
+  // cleared once ALL entries are settled — no unbounded polling on the gate.
+  useEffect(() => {
+    // No pollable entries ⇒ no interval. Combined with keying on `pollableKey`,
+    // the interval exists iff something is still advancing: it clears when the
+    // batch settles and is recreated when Retry re-arms an entry to `processing`.
+    if (phase !== 'processing' || !isMulti || pollableKey === '') return
 
     const pollInterval = setInterval(async () => {
-      const stillProcessing = multiSources.filter(
-        s => s.id && (s.status === 'processing' || s.status === 'creating')
+      const stillProcessing = multiSourcesRef.current.filter(
+        (s) => s.id && isPollableEntry(s.status)
       )
       if (stillProcessing.length === 0) {
         clearInterval(pollInterval)
@@ -141,27 +244,35 @@ export function CreateSourcePipeline() {
 
       for (const entry of stillProcessing) {
         try {
-          const statusResult = await sourcesApi.status(entry.id)
-          const jobStatus = statusResult.status
-
-          if (jobStatus === 'completed') {
-            setMultiSources(prev => prev.map(s =>
-              s.id === entry.id ? { ...s, status: 'completed' as const } : s
-            ))
-          } else if (jobStatus === 'failed') {
-            setMultiSources(prev => prev.map(s =>
-              s.id === entry.id ? { ...s, status: 'failed' as const } : s
-            ))
-          }
-          // 'running' / 'queued' → keep as 'processing'
+          const source = await sourcesApi.get(entry.id)
+          const stage = source.processing_stage
+          const nextStatus = stageToEntryStatus(stage)
+          setMultiSources((prev) =>
+            prev.map((s) => (s.id === entry.id ? { ...s, stage, status: nextStatus } : s))
+          )
         } catch {
-          // Ignore polling errors
+          // Ignore transient polling errors — the next tick retries.
         }
       }
     }, 3000)
 
     return () => clearInterval(pollInterval)
-  }, [phase, sourceIds.length, multiSources])
+    // `pollableKey` (the sorted pollable-id set) is the stable identity; the tick
+    // reads live entries from the ref, so `multiSources` is intentionally not a
+    // dep. Cleanup clears the prior interval before the effect recreates one, so
+    // a re-fire (e.g. Retry re-arming an entry) never leaves a double interval.
+  }, [phase, isMulti, pollableKey])
+
+  // Advance the flow to Done once the pipeline settles. `complete` ⇒ Done;
+  // `awaiting_schema_review` parks on the gated node (no false Done); `failed`
+  // stays on the Processing step with the failed node + Retry.
+  useEffect(() => {
+    if (phase !== 'processing') return
+    if (processingComplete) {
+      setPhase('complete')
+      setActiveTab(STEP_DONE)
+    }
+  }, [phase, processingComplete])
 
   // Form
   const {
@@ -169,7 +280,6 @@ export function CreateSourcePipeline() {
     handleSubmit,
     control,
     watch,
-    setValue: setFormValue,
     formState: { errors },
     reset,
   } = useForm<CreateSourceFormData>({
@@ -201,11 +311,10 @@ export function CreateSourcePipeline() {
   const watchedFile = watch('file')
   const watchedTitle = watch('title')
 
-
-  // Step validation
+  // Step validation (config steps only — the pipeline runs itself)
   const isStepValid = useCallback((step: number): boolean => {
     switch (step) {
-      case 1:
+      case STEP_INPUT:
         if (!selectedType) return false
         if (selectedType === 'queue') return false
         if (selectedType === 'link') return !!watchedUrl && watchedUrl.trim() !== ''
@@ -218,144 +327,29 @@ export function CreateSourcePipeline() {
           return !!watchedFile
         }
         return true
-      case 2:
-      case 3:
+      case STEP_ORGANIZE:
         return true
       default:
         return false
     }
   }, [selectedType, watchedUrl, watchedContent, watchedFile, watchedTitle])
 
-  // Track manual step statuses (user-triggered)
-  const [manualStatuses, setManualStatuses] = useState<Record<number, StepStatus>>({
-    5: 'pending',  // Preprocess
-    6: 'pending',  // Summaries
-    7: 'pending',  // Entities
-    8: 'pending',  // Embed
-  })
-
-  // Derive pipeline stage statuses from polled data
-  // Order: 4=Extract, 5=Preprocess, 6=Summaries, 7=Entities, 8=Embed, 9=Done
-  const derivePipelineStatuses = useCallback((): Record<number, StepStatus> => {
-    if (phase === 'config') {
-      return { 4: 'locked', 5: 'locked', 6: 'locked', 7: 'locked', 8: 'locked', 9: 'locked' }
+  // Processing step status for the stepper.
+  const processingStepStatus: StepStatus = (() => {
+    if (phase === 'config') return 'locked'
+    if (phase === 'complete' || processingComplete) return 'completed'
+    if (isMulti) {
+      // Settled but not all-complete ⇒ a non-hanging terminal state: `failed`
+      // when any entry failed, otherwise the automatic work finished and only a
+      // human gate remains (surfaced by the per-entry cards below).
+      if (multiAllSettled) return multiAnyFailed ? 'failed' : 'completed'
+      return 'running'
     }
+    return singleStage === 'failed' ? 'failed' : 'running'
+  })()
 
-    // Multi-source mode: status based on multiSources state
-    if (sourceIds.length > 1) {
-      const allDone = multiSources.every(s => s.status === 'completed' || s.status === 'failed')
-      const anyProcessing = multiSources.some(s => s.status === 'processing' || s.status === 'creating')
-
-      let extractionStatus: StepStatus = 'running'
-      if (allDone) extractionStatus = 'completed'
-      else if (anyProcessing) extractionStatus = 'running'
-
-      const unlocked = extractionStatus === 'completed' ? 'pending' : 'locked'
-      return {
-        4: extractionStatus,
-        5: unlocked,
-        6: unlocked,
-        7: unlocked,
-        8: unlocked,
-        9: 'locked',
-      }
-    }
-
-    // Single source mode
-    const jobStatus = statusData?.status
-    const hasFullText = !!sourceData?.full_text
-    const hasEmbeddings = (sourceData?.embedded_chunks || 0) > 0
-    const hasInsights = (sourceData?.insights_count || 0) > 0
-    const jobFailed = jobStatus === 'failed'
-    const jobCompleted = jobStatus === 'completed'
-
-    // Step 4: Extraction (automatic)
-    let extractionStatus: StepStatus = phase === 'processing' ? 'running' : 'pending'
-    if (hasFullText || jobCompleted) extractionStatus = 'completed'
-    else if (jobFailed) extractionStatus = 'failed'
-    else if (jobStatus === 'running' || jobStatus === 'queued') extractionStatus = 'running'
-
-    const extractionDone = extractionStatus === 'completed'
-
-    // Step 5: Preprocess (manual trigger)
-    let preprocessStatus: StepStatus = extractionDone ? 'pending' : 'locked'
-    if (manualStatuses[5] === 'running') preprocessStatus = 'running'
-    else if (manualStatuses[5] === 'completed') preprocessStatus = 'completed'
-    else if (manualStatuses[5] === 'failed') preprocessStatus = 'failed'
-
-    // Step 6: Summaries (manual trigger)
-    let summariesStatus: StepStatus = extractionDone ? 'pending' : 'locked'
-    if (manualStatuses[6] === 'running') summariesStatus = 'running'
-    else if (manualStatuses[6] === 'completed' || hasInsights) summariesStatus = 'completed'
-    else if (manualStatuses[6] === 'failed') summariesStatus = 'failed'
-
-    // Step 7: Entities (manual trigger)
-    let entitiesStatus: StepStatus = extractionDone ? 'pending' : 'locked'
-    if (manualStatuses[7] === 'running') entitiesStatus = 'running'
-    else if (manualStatuses[7] === 'completed') entitiesStatus = 'completed'
-    else if (manualStatuses[7] === 'failed') entitiesStatus = 'failed'
-
-    // Step 8: Embed (manual trigger)
-    let embeddingStatus: StepStatus = extractionDone ? 'pending' : 'locked'
-    if (manualStatuses[8] === 'running') embeddingStatus = 'running'
-    else if (manualStatuses[8] === 'completed' || hasEmbeddings) embeddingStatus = 'completed'
-    else if (manualStatuses[8] === 'failed') embeddingStatus = 'failed'
-
-    // Step 9: Done — complete when extraction is done (manual steps are optional)
-    let doneStatus: StepStatus = 'locked'
-    if (extractionDone) doneStatus = 'completed'
-    else if (jobFailed) doneStatus = 'failed'
-
-    return {
-      4: extractionStatus,
-      5: preprocessStatus,
-      6: summariesStatus,
-      7: entitiesStatus,
-      8: embeddingStatus,
-      9: doneStatus,
-    }
-  }, [phase, statusData, sourceData, manualStatuses, sourceIds.length, multiSources])
-
-  const pipelineStatuses = derivePipelineStatuses()
-
-  // Auto-advance: stay on step 4 during extraction.
-  // Only advance past step 4 when user clicks "Continue to Preprocessing" (single or multi).
-  // For steps 5+ (manual triggers), auto-advance to the running step.
-  useEffect(() => {
-    if (phase !== 'processing') return
-
-    // If we're on step 4 (extraction), don't auto-advance — user will click Continue
-    if (activeTab === 4) return
-
-    // For steps 5+, find the running step and advance to it
-    const statusOrder = [5, 6, 7, 8, 9] as const
-    let targetTab = activeTab
-
-    for (const stepId of statusOrder) {
-      const s = pipelineStatuses[stepId]
-      if (s === 'running') {
-        targetTab = stepId
-        break
-      }
-    }
-
-    // Auto-advance to completion tab — only when the user is already on Done (tab 9).
-    // Never auto-skip past manual tabs 5-8; the user navigates away from those explicitly.
-    if (pipelineStatuses[9] === 'completed' && phase === 'processing' && activeTab === 9) {
-      setPhase('complete')
-      return
-    }
-
-    if (pipelineStatuses[9] === 'failed') {
-      setPhase('error')
-    }
-
-    // Only auto-advance forward, not backward
-    if (targetTab > activeTab && targetTab > lastAutoAdvancedRef.current) {
-      lastAutoAdvancedRef.current = targetTab
-      setActiveTab(targetTab)
-    }
-  }, [phase, pipelineStatuses, activeTab])
+  const doneStepStatus: StepStatus =
+    phase === 'complete' || processingComplete ? 'completed' : 'locked'
 
   // Build step objects for stepper
   const steps: PipelineStep[] = STEP_LABELS.map((s) => {
@@ -364,28 +358,26 @@ export function CreateSourcePipeline() {
       if (s.id < activeTab) status = 'completed'
       else if (s.id === activeTab) status = 'active'
       else status = 'pending'
-
-      // Once in processing, all config steps are completed
+      // Once processing has begun, all config steps are settled.
       if (phase !== 'config') status = 'completed'
+    } else if (s.id === STEP_PROCESSING) {
+      status = processingStepStatus
     } else {
-      status = pipelineStatuses[s.id] || 'locked'
-      if (s.id === activeTab && status === 'locked') status = 'pending'
+      status = doneStepStatus
     }
     return { ...s, status }
   })
 
   // Step click handler
   const handleStepClick = (stepId: number) => {
-    const step = steps.find(s => s.id === stepId)
+    const step = steps.find((s) => s.id === stepId)
     if (!step) return
-
-    // Config tabs are always navigable
+    // Config tabs are navigable while still configuring.
     if (step.phase === 'config' && phase === 'config') {
       setActiveTab(stepId)
       return
     }
-
-    // Pipeline tabs only when not locked
+    // Pipeline tabs are navigable once unlocked.
     if (step.status !== 'locked') {
       setActiveTab(stepId)
     }
@@ -393,21 +385,55 @@ export function CreateSourcePipeline() {
 
   // Navigation
   const handleNext = () => {
-    if (activeTab < 3 && isStepValid(activeTab)) {
+    if (activeTab < LAST_CONFIG_STEP && isStepValid(activeTab)) {
       setActiveTab(activeTab + 1)
     }
   }
 
   const handleBack = () => {
-    if (activeTab > 1) {
+    if (activeTab > STEP_INPUT) {
       setActiveTab(activeTab - 1)
     }
   }
 
+  // Recovery actions on the live tracker's gated/failed nodes.
+  const handleNodeAction = useCallback(
+    (action: PipelineNodeAction) => {
+      if (!sourceId) return
+      if (action === 'retry') {
+        retrySource.mutate(sourceId)
+      } else if (action === 'review-schema') {
+        router.push(`/sources/${sourceId}`)
+      }
+    },
+    [sourceId, retrySource, router]
+  )
+
+  // Per-entry recovery for the multi-file batch: mirrors `handleNodeAction` but
+  // scoped to a single entry. `review-schema` deep-links to that source; `retry`
+  // re-arms the pipeline AND flips the entry back to `processing` so the poller
+  // (which stopped once the entry settled as `failed`) resumes for it.
+  const handleMultiNodeAction = useCallback(
+    (entryId: string, action: PipelineNodeAction) => {
+      if (!entryId) return
+      if (action === 'retry') {
+        retrySource.mutate(entryId)
+        setMultiSources((prev) =>
+          prev.map((s) =>
+            s.id === entryId ? { ...s, status: 'processing', stage: undefined } : s
+          )
+        )
+      } else if (action === 'review-schema') {
+        router.push(`/sources/${entryId}`)
+      }
+    },
+    [retrySource, router]
+  )
+
   // Notebook toggle
   const handleNotebookToggle = (notebookId: string) => {
-    setSelectedNotebooks(prev =>
-      prev.includes(notebookId) ? prev.filter(id => id !== notebookId) : [...prev, notebookId]
+    setSelectedNotebooks((prev) =>
+      prev.includes(notebookId) ? prev.filter((id) => id !== notebookId) : [...prev, notebookId]
     )
   }
 
@@ -423,7 +449,7 @@ export function CreateSourcePipeline() {
       delete_source: false,
       async_processing: true,
       processing_overrides: Object.keys(processingOverrides).length > 0
-        ? processingOverrides as Partial<SettingsResponse>
+        ? processingOverrides
         : undefined,
     }
 
@@ -434,7 +460,8 @@ export function CreateSourcePipeline() {
     return createRequest
   }
 
-  // Submit multiple files sequentially
+  // Submit multiple files sequentially (batch upload — preserved from the
+  // 9-step flow; only the status source changed to `processing_stage`).
   const submitMultipleFiles = async (data: CreateSourceFormData) => {
     const fileList = data.file as FileList
     const entries: MultiSourceEntry[] = []
@@ -449,20 +476,16 @@ export function CreateSourcePipeline() {
     }
     setMultiSources(entries)
 
-    // Record what was enabled for status derivation
     setEmbedEnabled(!!data.embed || settings?.default_embedding_option === 'always')
-    setSummariesEnabled(false)
 
     setPhase('processing')
-    setActiveTab(4)
-    lastAutoAdvancedRef.current = 4
+    setActiveTab(STEP_PROCESSING)
 
     const ids: string[] = []
 
     for (let i = 0; i < fileList.length; i++) {
       const file = fileList[i]
-      // Update status to creating
-      setMultiSources(prev => prev.map((e, idx) =>
+      setMultiSources((prev) => prev.map((e, idx) =>
         idx === i ? { ...e, status: 'creating' as const } : e
       ))
 
@@ -475,28 +498,28 @@ export function CreateSourcePipeline() {
         const result = await createSource.mutateAsync(request)
         ids.push(result.id)
 
-        setMultiSources(prev => prev.map((e, idx) =>
-          idx === i ? { ...e, id: result.id, status: 'processing' as const, title: result.title || file.name } : e
+        setMultiSources((prev) => prev.map((e, idx) =>
+          idx === i
+            ? { ...e, id: result.id, status: 'processing' as const, title: result.title || file.name }
+            : e
         ))
       } catch (error) {
         console.error(`Error creating source for ${file.name}:`, error)
-        setMultiSources(prev => prev.map((e, idx) =>
+        setMultiSources((prev) => prev.map((e, idx) =>
           idx === i ? { ...e, status: 'failed' as const } : e
         ))
       }
     }
 
     setSourceIds(ids)
-    // Don't auto-complete — polling effect will detect actual completion
+    // Completion is detected by the multi-source stage poller, not here.
   }
 
   // Form submission
   const onSubmit = async (data: CreateSourceFormData) => {
-    // Detect multi-file upload
     const isMultiFile = data.type === 'upload' && data.file instanceof FileList && data.file.length > 1
 
     if (isMultiFile && batchMode === null) {
-      // Store form data and show batch dialog
       pendingFormDataRef.current = data
       setShowBatchDialog(true)
       return
@@ -516,11 +539,9 @@ export function CreateSourcePipeline() {
       return
     }
 
-    // Single file / link / text submission (original flow)
+    // Single file / link / text submission
     try {
-      // Record what was enabled for status derivation
       setEmbedEnabled(!!data.embed || settings?.default_embedding_option === 'always')
-      setSummariesEnabled(false)
 
       const file = data.type === 'upload' && data.file
         ? (data.file instanceof FileList ? data.file[0] : data.file)
@@ -532,8 +553,7 @@ export function CreateSourcePipeline() {
       setSourceId(result.id)
       setSourceIds([result.id])
       setPhase('processing')
-      setActiveTab(4)
-      lastAutoAdvancedRef.current = 4
+      setActiveTab(STEP_PROCESSING)
     } catch (error) {
       console.error('Error creating source:', error)
       toast({
@@ -561,7 +581,7 @@ export function CreateSourcePipeline() {
   const handleReset = () => {
     reset()
     setPhase('config')
-    setActiveTab(1)
+    setActiveTab(STEP_INPUT)
     setSourceId(undefined)
     setSourceIds([])
     setMultiSources([])
@@ -569,61 +589,12 @@ export function CreateSourcePipeline() {
     setShowBatchDialog(false)
     pendingFormDataRef.current = null
     setSelectedNotebooks(defaultNotebookId ? [defaultNotebookId] : [])
-    setProcessingOverrides({})
+    setAdvancedOpen(false)
+    setParserEngine('auto')
+    setOcrEngine('auto')
+    setTableMode('auto')
     setEmbedEnabled(false)
-    setSummariesEnabled(false)
-    setManualStatuses({ 5: 'pending', 6: 'pending', 7: 'pending', 8: 'pending' })
-    setClassificationReady(false)
-    lastAutoAdvancedRef.current = 0
   }
-
-  // Manual step trigger handlers
-  const handleStartEntities = async () => {
-    if (!sourceId) return
-    setManualStatuses(prev => ({ ...prev, 7: 'running' }))
-    try {
-      await sourcesApi.runEntities(sourceId)
-    } catch {
-      setManualStatuses(prev => ({ ...prev, 7: 'failed' }))
-    }
-  }
-
-  const handleStartEmbed = async () => {
-    if (!sourceId) return
-    setManualStatuses(prev => ({ ...prev, 8: 'running' }))
-    try {
-      await sourcesApi.runEmbed(sourceId)
-    } catch {
-      setManualStatuses(prev => ({ ...prev, 8: 'failed' }))
-    }
-  }
-
-  // Auto-detect manual step completion from polled data
-  useEffect(() => {
-    if (!sourceData) return
-    const hasInsights = (sourceData.insights_count || 0) > 0
-    const hasEntities = (sourceData.entity_count || 0) > 0
-    const hasEmbeddings = (sourceData.embedded_chunks || 0) > 0
-
-    setManualStatuses(prev => {
-      const next = { ...prev }
-      if (hasInsights && prev[6] === 'running') next[6] = 'completed'
-      if (hasEntities && prev[7] === 'running') next[7] = 'completed'
-      if (hasEmbeddings && prev[8] === 'running') next[8] = 'completed'
-      return next
-    })
-  }, [sourceData])
-
-  // Handle "Continue to Preprocessing" from ExtractionTab
-  const handleExtractionContinue = useCallback(() => {
-    setActiveTab(5)
-    lastAutoAdvancedRef.current = 5
-  }, [])
-
-  const handlePostprocessContinue = useCallback(() => {
-    setActiveTab(6)
-    lastAutoAdvancedRef.current = 6
-  }, [])
 
   // Determine source type label for completion
   const getSourceTypeLabel = () => {
@@ -636,6 +607,8 @@ export function CreateSourcePipeline() {
   // Compute file count for batch dialog
   const batchFileCount = watchedFile instanceof FileList ? watchedFile.length : 0
 
+  const isProcessingTab = activeTab === STEP_PROCESSING
+
   return (
     <div className="flex flex-col h-full">
       <PipelineHeader />
@@ -646,23 +619,39 @@ export function CreateSourcePipeline() {
       />
 
       <div className="flex-1 overflow-hidden flex flex-col">
-        <div className={activeTab === 4 || activeTab === 5 || activeTab === 6 || activeTab === 7
+        <div className={isProcessingTab
           ? "flex-1 flex flex-col min-h-0 px-6 py-6"
           : "flex-1 overflow-y-auto max-w-3xl mx-auto w-full px-6 py-6"
         }>
-          <form onSubmit={handleSubmit(onSubmit)} className={activeTab === 4 || activeTab === 5 || activeTab === 6 || activeTab === 7 ? "flex-1 flex flex-col min-h-0" : undefined}>
-            {/* Config tabs */}
-            {activeTab === 1 && (
-              <SourceTypeStep
-                // @ts-expect-error - Type inference issue with zod schema
-                control={control}
-                register={register}
-                // @ts-expect-error - Type inference issue with zod schema
-                errors={errors}
-              />
+          <form
+            onSubmit={handleSubmit(onSubmit)}
+            className={isProcessingTab ? "flex-1 flex flex-col min-h-0" : undefined}
+          >
+            {/* Step 1 — Input (source type + optional advanced ingestion settings) */}
+            {activeTab === STEP_INPUT && (
+              <div className="space-y-6">
+                <SourceTypeStep
+                  // @ts-expect-error - Type inference issue with zod schema
+                  control={control}
+                  register={register}
+                  // @ts-expect-error - Type inference issue with zod schema
+                  errors={errors}
+                />
+                <AdvancedIngestionSettings
+                  open={advancedOpen}
+                  onOpenChange={setAdvancedOpen}
+                  parserEngine={parserEngine}
+                  ocrEngine={ocrEngine}
+                  tableMode={tableMode}
+                  onParserEngineChange={setParserEngine}
+                  onOcrEngineChange={setOcrEngine}
+                  onTableModeChange={setTableMode}
+                />
+              </div>
             )}
 
-            {activeTab === 2 && (
+            {/* Step 2 — Organize */}
+            {activeTab === STEP_ORGANIZE && (
               <NotebooksStep
                 notebooks={notebooks}
                 selectedNotebooks={selectedNotebooks}
@@ -671,144 +660,57 @@ export function CreateSourcePipeline() {
               />
             )}
 
-            {activeTab === 3 && (
-              <ProcessingConfigStep
-                settings={settings}
-                overrides={processingOverrides}
-                onOverridesChange={setProcessingOverrides}
-              />
+            {/* Step 3 — Processing (live pipeline tracker + streaming log) */}
+            {activeTab === STEP_PROCESSING && (
+              isMulti ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    {multiAllSettled && !multiAllComplete
+                      ? multiAnyFailed
+                        ? 'Automatic processing finished. Some sources failed — retry them below.'
+                        : 'Automatic processing finished. Some sources need a schema review below.'
+                      : `Processing ${multiSources.length} sources — each advances through the pipeline independently.`}
+                  </p>
+                  {multiSources.map((entry, i) => (
+                    <div key={entry.id || i} className="rounded-md border p-3">
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="truncate text-sm font-medium" title={entry.title}>
+                          {entry.title}
+                        </span>
+                      </div>
+                      <PipelineStatus
+                        variant="card"
+                        processingStage={entry.stage}
+                        onNodeAction={(action) => handleMultiNodeAction(entry.id, action)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <PipelineStatus
+                  variant="live"
+                  processingStage={singleStage}
+                  jobStatus={statusData?.status}
+                  counts={pipelineData ? toPipelineCounts(pipelineData) : undefined}
+                  onNodeAction={handleNodeAction}
+                >
+                  <ProcessingLogConsole
+                    sourceId={sourceId}
+                    active={phase === 'processing' && !singleComplete && singleStage !== 'failed'}
+                  />
+                </PipelineStatus>
+              )
             )}
 
-            {/* Pipeline tabs: Extract → Preprocess → Summaries → Entities → Embed → Done */}
-            {activeTab === 4 && (
-              <ExtractionTab
-                overallStatus={pipelineStatuses[4]}
-                onContinue={handleExtractionContinue}
-                files={multiSources.length > 1
-                  ? multiSources.map(s => ({
-                      name: s.fileName || s.title,
-                      sourceId: s.id || undefined,
-                      status: s.status,
-                    }))
-                  : [{
-                      name: selectedType === 'upload'
-                        ? (watchedFile instanceof FileList ? watchedFile[0]?.name : (watchedFile as File)?.name) || 'File'
-                        : selectedType === 'link'
-                          ? watchedUrl || 'URL'
-                          : watchedTitle || 'Text',
-                      sourceId: sourceId,
-                      status: pipelineStatuses[4] === 'completed' ? 'completed'
-                        : pipelineStatuses[4] === 'failed' ? 'failed'
-                        : pipelineStatuses[4] === 'running' ? 'processing'
-                        : 'pending',
-                    }]
-                }
-              />
-            )}
-
-            {activeTab === 5 && (
-              <PreprocessingTab
-                status={pipelineStatuses[5]}
-                extractionComplete={pipelineStatuses[4] === 'completed'}
-                sourceId={sourceId}
-                files={multiSources.length > 1
-                  ? multiSources.map(s => ({
-                      name: s.fileName || s.title,
-                      sourceId: s.id || undefined,
-                      status: s.status,
-                    }))
-                  : [{
-                      name: selectedType === 'upload'
-                        ? (watchedFile instanceof FileList ? watchedFile[0]?.name : (watchedFile as File)?.name) || 'File'
-                        : selectedType === 'link'
-                          ? watchedUrl || 'URL'
-                          : watchedTitle || 'Text',
-                      sourceId: sourceId,
-                      status: pipelineStatuses[4] === 'completed' ? 'completed'
-                        : pipelineStatuses[4] === 'failed' ? 'failed'
-                        : pipelineStatuses[4] === 'running' ? 'processing'
-                        : 'pending',
-                    }]
-                }
-                onContinue={handlePostprocessContinue}
-              />
-            )}
-
-            {activeTab === 6 && (
-              <SummariesTab
-                status={pipelineStatuses[6]}
-                extractionComplete={pipelineStatuses[4] === 'completed'}
-                sourceId={sourceId}
-                files={multiSources.length > 1
-                  ? multiSources.map(s => ({
-                      name: s.fileName || s.title,
-                      sourceId: s.id || undefined,
-                      status: s.status,
-                    }))
-                  : [{
-                      name: selectedType === 'upload'
-                        ? (watchedFile instanceof FileList ? watchedFile[0]?.name : (watchedFile as File)?.name) || 'File'
-                        : selectedType === 'link'
-                          ? watchedUrl || 'URL'
-                          : watchedTitle || 'Text',
-                      sourceId: sourceId,
-                      status: pipelineStatuses[4] === 'completed' ? 'completed'
-                        : pipelineStatuses[4] === 'failed' ? 'failed'
-                        : pipelineStatuses[4] === 'running' ? 'processing'
-                        : 'pending',
-                    }]
-                }
-                onClassificationReady={setClassificationReady}
-              />
-            )}
-
-            {activeTab === 7 && (
-              <EntitiesTab
-                status={pipelineStatuses[7]}
-                extractionComplete={pipelineStatuses[4] === 'completed'}
-                sourceId={sourceId}
-                files={multiSources.length > 1
-                  ? multiSources.map(s => ({
-                      name: s.fileName || s.title,
-                      sourceId: s.id || undefined,
-                      status: s.status,
-                    }))
-                  : [{
-                      name: selectedType === 'upload'
-                        ? (watchedFile instanceof FileList ? watchedFile[0]?.name : (watchedFile as File)?.name) || 'File'
-                        : selectedType === 'link'
-                          ? watchedUrl || 'URL'
-                          : watchedTitle || 'Text',
-                      sourceId: sourceId,
-                      status: pipelineStatuses[4] === 'completed' ? 'completed'
-                        : pipelineStatuses[4] === 'failed' ? 'failed'
-                        : pipelineStatuses[4] === 'running' ? 'processing'
-                        : 'pending',
-                    }]
-                }
-                onStart={handleStartEntities}
-                classificationReady={classificationReady}
-              />
-            )}
-
-            {activeTab === 8 && (
-              <EmbeddingTab
-                status={pipelineStatuses[8]}
-                embeddedChunks={sourceData?.embedded_chunks}
-                errorMessage={statusData?.message}
-                extractionComplete={pipelineStatuses[4] === 'completed'}
-                onStart={handleStartEmbed}
-              />
-            )}
-
-            {activeTab === 9 && (
-              multiSources.length > 1 ? (
+            {/* Step 4 — Done */}
+            {activeTab === STEP_DONE && (
+              isMulti ? (
                 <CompletionTab
                   sourceTitle={`${multiSources.length} sources`}
                   sourceType={getSourceTypeLabel()}
                   embedEnabled={embedEnabled}
-                  summariesEnabled={summariesEnabled}
-                  sources={multiSources.map(s => ({
+                  summariesEnabled={false}
+                  sources={multiSources.map((s) => ({
                     id: s.id,
                     title: s.title,
                     status: s.status === 'completed' ? 'completed'
@@ -818,15 +720,15 @@ export function CreateSourcePipeline() {
                 />
               ) : (
                 <CompletionTab
-                  sourceTitle={sourceData?.title || watchedTitle}
+                  sourceTitle={pipelineData?.title || watchedTitle}
                   sourceType={getSourceTypeLabel()}
-                  chunkCount={sourceData?.embedded_chunks}
-                  entityCount={undefined}
-                  relationCount={undefined}
-                  embeddedChunks={sourceData?.embedded_chunks}
-                  insightsCount={sourceData?.insights_count}
+                  chunkCount={pipelineData?.embedded_chunks}
+                  entityCount={pipelineData?.entity_count}
+                  relationCount={pipelineData?.relation_count}
+                  embeddedChunks={pipelineData?.embedded_chunks}
+                  insightsCount={pipelineData?.insights_count}
                   embedEnabled={embedEnabled}
-                  summariesEnabled={summariesEnabled}
+                  summariesEnabled={(pipelineData?.insights_count || 0) > 0}
                 />
               )
             )}
@@ -837,6 +739,7 @@ export function CreateSourcePipeline() {
       <PipelineFooter
         phase={phase}
         activeTab={activeTab}
+        lastConfigStep={LAST_CONFIG_STEP}
         isStepValid={isStepValid(activeTab)}
         isSubmitting={createSource.isPending}
         sourceId={sourceIds.length === 1 ? sourceIds[0] : sourceId}

@@ -1058,7 +1058,9 @@ export function SourceDetailContent({
           <DialogHeader>
             <DialogTitle>Reprocess Document</DialogTitle>
             <DialogDescription>
-              Re-run Docling ingestion with different pipeline settings. This will replace existing chunks and extracted content.
+              The primary place to change parsing / OCR settings. Re-run Docling
+              ingestion with different pipeline settings — this replaces the
+              existing chunks and extracted content.
             </DialogDescription>
           </DialogHeader>
           <PipelineConfigPanel

@@ -8,6 +8,8 @@ export type PipelinePhase = 'config' | 'processing' | 'complete' | 'error'
 interface PipelineFooterProps {
   phase: PipelinePhase
   activeTab: number
+  /** The last config-phase step; Submit shows here instead of Next. */
+  lastConfigStep: number
   isStepValid: boolean
   isSubmitting: boolean
   sourceId?: string
@@ -20,6 +22,7 @@ interface PipelineFooterProps {
 export function PipelineFooter({
   phase,
   activeTab,
+  lastConfigStep,
   isStepValid,
   isSubmitting,
   sourceId,
@@ -65,7 +68,7 @@ export function PipelineFooter({
   }
 
   // Config phase
-  const isLastConfigStep = activeTab === 3
+  const isLastConfigStep = activeTab === lastConfigStep
   return (
     <div className="flex justify-between items-center px-6 py-4 border-t border-border bg-muted/30">
       <Button
