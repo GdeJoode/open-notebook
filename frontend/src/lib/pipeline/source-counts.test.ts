@@ -27,7 +27,6 @@ describe('toPipelineCounts maps 0 => undefined for count-gated stages (AC0)', ()
       embedded_chunks: undefined,
       entity_count: undefined,
       insights_count: undefined,
-      graph_present: false,
     })
   })
 
@@ -40,13 +39,15 @@ describe('toPipelineCounts maps 0 => undefined for count-gated stages (AC0)', ()
       embedded_chunks: 12,
       entity_count: 4,
       insights_count: 3,
-      graph_present: false,
     })
   })
 
-  it('derives graph_present from relation_count > 0', () => {
-    expect(toPipelineCounts(row({ relation_count: 5 })).graph_present).toBe(true)
-    expect(toPipelineCounts(row({ relation_count: 0 })).graph_present).toBe(false)
+  it('ignores relation_count (Graph "linked" is keyed off stage, not relations)', () => {
+    // UX.4 nit: relation_count is entity↔entity relations, not document-graph
+    // membership, so it no longer feeds the counts adapter.
+    expect(toPipelineCounts(row({ relation_count: 5 }))).not.toHaveProperty(
+      'graph_present'
+    )
   })
 })
 

@@ -398,3 +398,115 @@ left untouched.
 
 ### Commit
 - `a8a6111` fix(ux5): key multi-poll on pollable ids so retry resumes polling
+
+---
+
+## Phase UX.6 — Recovery-only controls + Contradictions stub + integration + docs (FINAL)
+
+**Branch:** `track/ux6-cleanup-contradictions-docs` (off `main`) — NOT merged, NOT pushed.
+**Commits:** `ade6a95` (nits), `36682b8` (tab cleanup), `b24dcb2` (recovery + stub),
+`ff9dadc` (tests), `4dcc7d3` (e2e), + docs/status commit.
+**State:** Ready for review. **This closes Track UX (all 6 phases done).**
+
+### 1. Manual runners → recovery-only (`SourceDetailContent.tsx`)
+- The header-dropdown runners are grouped under a `DropdownMenuLabel` "Re-run /
+  recovery". Each is enabled only when the source is on a recovery stage
+  (`failed` / `awaiting_schema_review`) OR its own output is genuinely missing;
+  otherwise it renders **disabled** with a "Runs automatically" hint.
+- Per-runner enable logic (`isRecoveryStage = failed || awaiting_schema_review`,
+  `hasText = !!full_text`):
+  - **Run Preprocessing** → `hasText && isRecoveryStage` (recovery-only; needs text as input).
+  - **Generate Summaries** → `hasText && (isRecoveryStage || insights.length === 0)`.
+  - **Extract Entities** → `hasText && (isRecoveryStage || entity_count === 0)`.
+  - **Embed Content** → `isRecoveryStage || !source.embedded`.
+- `renderRecoveryRunner` helper renders each item; `title="Runs automatically"`
+  on the DOM element + a visible muted caption (radix disables pointer-events, so
+  a visible caption backstops the native title). Embed passes `running: isEmbedding`
+  (it tracks its own flag, not `isRunningPipeline`).
+- **Reprocess stays always available and unchanged** (its only guard is
+  `!source.asset?.file_path`) — the UX.5 parser-config home, not a recovery action.
+- Added `aria-label="Source actions"` to the icon-only detail dropdown trigger
+  (a11y for an icon-only button + test seam).
+
+### 2. Contradictions stub (`SourceContradictions.tsx`, new)
+- Deferred, data-absent-SAFE. There is NO verdicts read API yet (Track Z ships
+  only a `POST /sources/{id}/judge-contradictions` trigger). The panel:
+  - renders **nothing** when no `fetchVerdicts` loader is wired (today's reality —
+    no network call, no 404 noise);
+  - if a loader is injected (future API / test seam), lazily loads on mount,
+    **swallows any error** into a quiet "No contradictions detected" empty state,
+    and renders verdicts when present;
+  - never throws on render nor leaks an unhandled promise rejection (a cancel
+    flag guards the async `.then/.catch/.finally`).
+- Mounted conditionally on the detail view (self-gates to null today). Documented
+  in the component as deferred pending a verdicts GET.
+
+### 3. Orphaned tab cleanup (`sources/pipeline/tabs/`)
+- Grep-verified the importer graph. UX.5 removed the wizard tab imports, leaving
+  a **closed dead cluster**: `ExtractionTab`, `EmbeddingTab`, `EntitiesTab`,
+  `PreprocessingTab`, `SummariesTab` only referenced each other (a `FileEntry`
+  type re-export in `ExtractionTab`), with **zero external importers** and zero
+  test importers.
+- **DELETED (5):** `ExtractionTab.tsx`, `EmbeddingTab.tsx`, `EntitiesTab.tsx`,
+  `PreprocessingTab.tsx`, `SummariesTab.tsx`.
+- **KEPT (2):** `CompletionTab.tsx` (imported by `CreateSourcePipeline.tsx`),
+  `EntityGraphView.tsx` (imported by the live `StructureViewer` → `StructureGraphView`).
+- tsc clean after deletion; no broken import.
+
+### 4. Deferred nits
+- **UX.3 nit** (`SourceCard.tsx:115`): the post-settle `setTimeout(onRefresh, 500)`
+  had no cleanup. Now stores the timer id and clears it in the effect cleanup, so
+  a card unmounting within 500ms no longer fires a refresh on a dead component.
+- **UX.4 nit** (`graph_present` semantics): the Graph node's "linked" badge was
+  keyed off `relation_count` (entity↔entity relations), which is NOT document-graph
+  `mentions` membership. **Fixed by keying off the STAGE**: `enrichCount` runs only
+  on `done` nodes, and a done Graph node means the source reached `graphed`/
+  `complete`, so the badge now shows "linked" for any graphed source (even with 0
+  entity relations — more truthful). Dropped the now-dead `graph_present` field from
+  `PipelineCounts` / `toPipelineCounts`; updated `source-counts.test.ts` and
+  `pipeline-stages.test.ts` (added a graphed-with-0-relations → "linked" assertion).
+
+### 5. Docs
+- `ARCHITECTURE.md` §14 — added a "Frontend: `processing_stage` as the pipeline
+  spine (Track UX)" subsection: the spine across list/detail/create, the pure
+  state machine, GRAPH/EXTRACT/INSIGHTS automatic, recovery-only runners.
+- `FEATURE_ROADMAP.md` — added a "Track UX" section (status ✅ CLOSED, 6-phase
+  table) matching the Track PL/Z format.
+- This `status.md` — finalized with all 6 phases.
+
+### Tests
+- `SourceDetailContent.recovery.test.tsx` (new, 6): runners disabled + "Runs
+  automatically" on `complete`; all enabled on `failed` and on
+  `awaiting_schema_review`; per-missing-output enable; Reprocess always enabled.
+- `SourceContradictions.test.tsx` (new, 4): renders nothing without a fetcher;
+  quiet empty state on empty/rejecting data; verdicts when present; no throw /
+  no unhandled rejection when the (absent) endpoint rejects.
+- `pipeline-stages.test.ts` (+2): Graph "linked" keyed off stage; no "linked"
+  while Graph not done. `source-counts.test.ts` updated (relation_count no longer
+  feeds a graph flag).
+- E2E `e2e/track-ux/pipeline-spine.spec.ts` (new): route-mocked `complete` source
+  detail → asserts Graph node `done` + recovery runners disabled + Reprocess
+  available. Skips (not fails) when auth-gated or when the served frontend is a
+  stale build predating the UX.4+ spine.
+
+### Commands (from `frontend/`)
+- `npm run lint` — 0 errors; only pre-existing warnings; **no new warnings in
+  changed files** (also removed two pre-existing dead `lucide` imports —
+  `Network`, `Play` — from `SourceDetailContent.tsx` while editing it).
+- `npx tsc --noEmit` — 0 errors.
+- `npx vitest run src/components/source src/lib/pipeline` — 174 passed (11 files).
+- Full `npx vitest run` — **274 passed** (24 files); no regression to the 262
+  baseline (+12 new: 6 recovery + 4 contradictions + 2 graph-linked).
+- E2E `npx playwright test e2e/track-ux/pipeline-spine.spec.ts` — **skipped** at
+  runtime: the served frontend at the default `PLAYWRIGHT_BASE_URL`
+  (`http://localhost:8502`) is a **stale build** that still renders the pre-UX.4
+  output-badge bar (no `data-variant="detail"` spine) — confirmed because the
+  pre-existing UX.5 spec also hard-fails against the same stale artifact. The spec
+  is correct and passes its guards; running it for real needs a served stack built
+  from this branch (or current `main`).
+
+### Deviations / notes
+- ARCHITECTURE.md lives at the **repo root** (`./ARCHITECTURE.md`), not
+  `docs/ARCHITECTURE.md` as the plan wrote — updated the real file.
+- The e2e is reported honestly as environment-blocked (stale served stack), per
+  the plan's "report honestly if it needs a served stack". No false pass.

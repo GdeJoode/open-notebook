@@ -866,6 +866,35 @@ correctly reaches `graphed → complete`.
 > migrations `71`/`72`, and `docs/tracks/PL-source-pipeline/` (plan, status,
 > RETRO; per-AC evidence per phase).
 
+### Frontend: `processing_stage` as the pipeline spine (Track UX)
+
+The Next.js frontend surfaces `source.processing_stage` as the **single source
+of truth** for pipeline progress across every source surface — the list cards,
+the source-detail header, and the creation flow. A pure, React-free state
+machine (`frontend/src/lib/pipeline/pipeline-stages.ts` →
+`derivePipelineNodes`) maps the stage plus the job axis and output counts into
+the ordered spine `Ingest → Embed → Extract → Graph → Complete` (Embed **before**
+Extract) with Insights as a parallel branch. One canonical `PipelineStatus`
+component renders it in three variants (`live` / `card` / `detail`). Rules
+mirror the backend: `processing_stage` decides which node is `done`, the job
+axis (`/sources/{id}/status`) only drives the current node's spinner, and output
+counts are enrichment on `done` nodes (never the status source). `graphed`/
+`complete` marks the Graph node `done` (its "linked" badge is keyed off the
+stage, not entity-relation counts). `awaiting_schema_review` parks Extract as a
+gated node; `failed` renders the failed node with a Retry action.
+
+Because GRAPH / EXTRACT / INSIGHTS now run automatically in the backend
+auto-chain, the leftover manual "Run X" runners on the detail view are
+**recovery-only**: each is enabled only when the source is on a recovery stage
+(`failed` / `awaiting_schema_review`) or its own output is genuinely missing,
+and otherwise renders disabled with a "Runs automatically" hint. Reprocess stays
+always available as the parser/Docling config home.
+
+> See `frontend/src/lib/pipeline/` (`processing-stage.ts`, `pipeline-stages.ts`,
+> `source-counts.ts`), `frontend/src/components/sources/pipeline/PipelineStatus.tsx`,
+> `frontend/src/lib/hooks/use-sources.ts` (`useSourcePipeline`), and
+> `docs/tracks/UX-pipeline-alignment/` (plan, status; per-AC evidence per phase).
+
 ## 15. Further reading
 
 - `docs/SUMMARIZATION_APPROACHES.md` — design + status of all 11 summarization strategies

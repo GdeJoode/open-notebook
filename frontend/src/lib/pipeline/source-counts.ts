@@ -22,6 +22,11 @@
  * wiring seam, so "reached-but-empty" and "never-reached" are only ever
  * distinguished by real evidence (a positive count), never by the list default.
  * A positive count passes through unchanged.
+ *
+ * Note (UX.4 nit): the Graph node's "linked" badge is keyed off the STAGE, not
+ * off `relation_count`, so no graph flag is derived here. `relation_count`
+ * counts entity↔entity relations, which is NOT the same as document-graph
+ * `mentions` membership; a `graphed` source with zero relations is still linked.
  */
 
 import type { SourceListResponse } from '@/lib/types/api'
@@ -34,19 +39,17 @@ function positiveOrUndefined(value: number | undefined): number | undefined {
 
 /**
  * Build {@link PipelineCounts} from a source row, mapping `0 ⇒ undefined` for
- * the count-gated stages (see the module doc for why). `relation_count > 0`
- * becomes the soft `graph_present` flag (document-graph membership).
+ * the count-gated stages (see the module doc for why).
  */
 export function toPipelineCounts(
   source: Pick<
     SourceListResponse,
-    'embedded_chunks' | 'entity_count' | 'insights_count' | 'relation_count'
+    'embedded_chunks' | 'entity_count' | 'insights_count'
   >
 ): PipelineCounts {
   return {
     embedded_chunks: positiveOrUndefined(source.embedded_chunks),
     entity_count: positiveOrUndefined(source.entity_count),
     insights_count: positiveOrUndefined(source.insights_count),
-    graph_present: (source.relation_count ?? 0) > 0,
   }
 }

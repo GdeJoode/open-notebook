@@ -112,7 +112,10 @@ export function SourceCard({
     if (wasProcessing && isTerminalStage(effectiveStage)) {
       setWasProcessing(false)
       if (onRefresh) {
-        setTimeout(() => onRefresh(), 500)
+        // Store the id and clear it on unmount / re-run so a card that unmounts
+        // within the 500ms window doesn't fire a refresh on a dead component.
+        const timer = setTimeout(() => onRefresh(), 500)
+        return () => clearTimeout(timer)
       }
     }
   }, [pipelineEnabled, effectiveStage, wasProcessing, onRefresh])

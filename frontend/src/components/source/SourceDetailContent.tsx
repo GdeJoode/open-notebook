@@ -21,6 +21,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -48,9 +49,7 @@ import {
   Database,
   AlertCircle,
   MessageSquare,
-  Network,
   GitGraph,
-  Play,
   ScanSearch,
   BrainCircuit,
   Settings2,
@@ -72,6 +71,7 @@ import { NotebookAssociations } from '@/components/source/NotebookAssociations'
 import { PdfChunkViewer } from '@/components/source/PdfChunkViewer'
 import { ParserEngineBadge } from '@/components/source/ParserEngineBadge'
 import { SourceEntitiesTab } from '@/components/source/SourceEntitiesTab'
+import { SourceContradictions } from '@/components/source/SourceContradictions'
 import { RelatedSources } from '@/components/source/RelatedSources'
 import { PipelineConfigPanel } from '@/components/sources/pipeline/PipelineConfigPanel'
 import { PipelineStatus } from '@/components/sources/pipeline'
@@ -465,11 +465,60 @@ export function SourceDetailContent({
 
   // Prefer the live-polled payload for the spine so an in-flight source advances
   // without a manual reload; fall back to the initially-loaded source. The Graph
-  // node resolves from `processing_stage` (done at graphed/complete) enriched by
-  // `relation_count` (graph_present) via the shared counts adapter.
+  // node resolves from `processing_stage` (done at graphed/complete) and its
+  // "linked" badge is keyed off that stage via the shared counts adapter.
   const effectiveSource = pipelineData ?? source
   const effectiveStage = effectiveSource.processing_stage
   const jobStatus = (effectiveSource as { status?: string }).status
+
+  // Track UX.6: the manual "Run X" runners are now RECOVERY-only. Each stage
+  // runs automatically in the backend auto-chain, so a runner is enabled only
+  // when the source is on a recovery stage (`failed` / `awaiting_schema_review`)
+  // OR its own output is genuinely missing; otherwise it renders disabled with a
+  // "Runs automatically" hint. Reprocess (below) stays always available — it is
+  // the parser-config home from UX.5, not a recovery action.
+  const isRecoveryStage =
+    effectiveStage === 'failed' || effectiveStage === 'awaiting_schema_review'
+  const hasText = !!source.full_text
+  const recovery = {
+    preprocessing: hasText && isRecoveryStage,
+    summaries: hasText && (isRecoveryStage || insights.length === 0),
+    entities: hasText && (isRecoveryStage || (source.entity_count ?? 0) === 0),
+    embed: isRecoveryStage || !source.embedded,
+  }
+
+  const renderRecoveryRunner = (opts: {
+    runningKey: string
+    enabled: boolean
+    label: string
+    runningLabel: string
+    icon: React.ReactNode
+    onClick: () => void
+    /** Embed tracks its own `isEmbedding` flag rather than `isRunningPipeline`. */
+    running?: boolean
+  }) => {
+    const running = opts.running ?? isRunningPipeline === opts.runningKey
+    const disabled = running || !opts.enabled
+    // "Runs automatically" applies when we disabled a runner because the stage
+    // is on the happy path and the output already exists (not while it is
+    // actively running).
+    const autoReason = disabled && !running
+    return (
+      <DropdownMenuItem
+        onClick={opts.onClick}
+        disabled={disabled}
+        title={autoReason ? 'Runs automatically' : undefined}
+      >
+        {opts.icon}
+        <span className="flex-1">{running ? opts.runningLabel : opts.label}</span>
+        {autoReason && (
+          <span className="ml-2 text-xs text-muted-foreground">
+            Runs automatically
+          </span>
+        )}
+      </DropdownMenuItem>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -530,7 +579,7 @@ export function SourceDetailContent({
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon">
+                <Button variant="ghost" size="icon" aria-label="Source actions">
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -558,34 +607,43 @@ export function SourceDetailContent({
                   <Settings2 className="mr-2 h-4 w-4" />
                   Reprocess Document...
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={handleRunPreprocessing}
-                  disabled={!source.full_text || isRunningPipeline === 'preprocessing'}
-                >
-                  <ScanSearch className="mr-2 h-4 w-4" />
-                  {isRunningPipeline === 'preprocessing' ? 'Preprocessing...' : 'Run Preprocessing'}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={handleRunSummaries}
-                  disabled={!source.full_text || isRunningPipeline === 'summaries'}
-                >
-                  <Sparkles className="mr-2 h-4 w-4" />
-                  {isRunningPipeline === 'summaries' ? 'Generating...' : 'Generate Summaries'}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={handleRunEntities}
-                  disabled={!source.full_text || isRunningPipeline === 'entities'}
-                >
-                  <BrainCircuit className="mr-2 h-4 w-4" />
-                  {isRunningPipeline === 'entities' ? 'Extracting...' : 'Extract Entities'}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={handleEmbedContent}
-                  disabled={isEmbedding || source.embedded}
-                >
-                  <Database className="mr-2 h-4 w-4" />
-                  {isEmbedding ? 'Embedding...' : source.embedded ? 'Already Embedded' : 'Embed Content'}
-                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-xs text-muted-foreground">
+                  Re-run / recovery
+                </DropdownMenuLabel>
+                {renderRecoveryRunner({
+                  runningKey: 'preprocessing',
+                  enabled: recovery.preprocessing,
+                  label: 'Run Preprocessing',
+                  runningLabel: 'Preprocessing...',
+                  icon: <ScanSearch className="mr-2 h-4 w-4" />,
+                  onClick: handleRunPreprocessing,
+                })}
+                {renderRecoveryRunner({
+                  runningKey: 'summaries',
+                  enabled: recovery.summaries,
+                  label: 'Generate Summaries',
+                  runningLabel: 'Generating...',
+                  icon: <Sparkles className="mr-2 h-4 w-4" />,
+                  onClick: handleRunSummaries,
+                })}
+                {renderRecoveryRunner({
+                  runningKey: 'entities',
+                  enabled: recovery.entities,
+                  label: 'Extract Entities',
+                  runningLabel: 'Extracting...',
+                  icon: <BrainCircuit className="mr-2 h-4 w-4" />,
+                  onClick: handleRunEntities,
+                })}
+                {renderRecoveryRunner({
+                  runningKey: 'embed',
+                  enabled: recovery.embed,
+                  label: 'Embed Content',
+                  runningLabel: 'Embedding...',
+                  icon: <Database className="mr-2 h-4 w-4" />,
+                  onClick: handleEmbedContent,
+                  running: isEmbedding,
+                })}
                 {zoteroStatus?.connected && (
                   <DropdownMenuItem
                     onClick={() => zoteroPush.mutate({ sourceId })}
@@ -637,6 +695,10 @@ export function SourceDetailContent({
             </Badge>
           )}
         </div>
+        {/* Track UX.6 (deferred): contradiction verdicts. Self-gating stub —
+            renders nothing until a verdicts read API is wired (see the
+            component doc). Safe no-op today. */}
+        <SourceContradictions sourceId={sourceId} />
       </div>
 
       {/* Tabs Content */}
