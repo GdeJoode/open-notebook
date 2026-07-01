@@ -250,3 +250,116 @@ describe('multi-file batch — each entry driven by its OWN processing_stage', (
     ).toBe('pending')
   }, 15000)
 })
+
+/** Upload two files and pick "Individual Sources" to start the batch loop. */
+async function submitTwoFileBatch(
+  user: ReturnType<typeof userEvent.setup>,
+  container: HTMLElement
+) {
+  await user.click(screen.getByRole('tab', { name: /Upload/i }))
+  const fileInput = container.querySelector('#file') as HTMLInputElement
+  const f1 = new File(['one'], 'one.pdf', { type: 'application/pdf' })
+  const f2 = new File(['two'], 'two.pdf', { type: 'application/pdf' })
+  await user.upload(fileInput, [f1, f2])
+  await user.click(screen.getByRole('button', { name: 'Next' }))
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  await user.click(screen.getByRole('button', { name: /Individual Sources/i }))
+}
+
+describe('multi-file batch — schema gate settles the batch (no infinite poll, no wedge)', () => {
+  it('stops polling a gated entry, surfaces a settled state, and wires its Review schema action', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    // source:a parks on the schema-review gate; source:b completes.
+    H.state.stageById = {
+      'source:a': 'awaiting_schema_review',
+      'source:b': 'complete',
+    }
+
+    const { container } = render(<CreateSourcePipeline />)
+    await submitTwoFileBatch(user, container)
+
+    // The batch reaches a settled state (NOT wedged on "Processing…"): the
+    // gated entry surfaces a Review schema action.
+    const reviewButton = await screen.findByRole(
+      'button',
+      { name: /Review schema/i },
+      { timeout: 8000 }
+    )
+    // Settled banner tells the user automatic work finished.
+    expect(screen.getByText(/Automatic processing finished/i)).toBeTruthy()
+    // Never falsely advanced to the Done summary.
+    expect(screen.queryByText('Source Created Successfully')).toBeNull()
+
+    // Polling has STOPPED for the settled batch: no further sourcesApi.get calls.
+    const settledCount = H.sourcesGet.mock.calls.length
+    expect(settledCount).toBeGreaterThan(0)
+    await new Promise((r) => setTimeout(r, 3500))
+    expect(H.sourcesGet.mock.calls.length).toBe(settledCount)
+
+    // The per-entry Review schema action deep-links to THAT entry's source.
+    await user.click(reviewButton)
+    expect(H.push).toHaveBeenCalledWith('/sources/source:a')
+  }, 15000)
+
+  it('wires the per-entry Retry action for a failed entry', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    // source:a fails; source:b completes ⇒ settled batch with a retryable entry.
+    H.state.stageById = { 'source:a': 'failed', 'source:b': 'complete' }
+
+    const { container } = render(<CreateSourcePipeline />)
+    await submitTwoFileBatch(user, container)
+
+    const retryButton = await screen.findByRole(
+      'button',
+      { name: /Retry/i },
+      { timeout: 8000 }
+    )
+    expect(screen.getByText(/Automatic processing finished/i)).toBeTruthy()
+
+    await user.click(retryButton)
+    expect(H.retryMutate).toHaveBeenCalledWith('source:a')
+  }, 15000)
+})
+
+describe('advanced ingestion overrides survive Input→Organize→Back and reach the create call', () => {
+  it('keeps Docling selected after back-navigation and sends processing_overrides', async () => {
+    H.state.stage = 'ingested'
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    render(<CreateSourcePipeline />)
+
+    // Fill a text source on the Input step.
+    await user.click(screen.getByRole('tab', { name: /Text/i }))
+    await user.type(
+      screen.getByPlaceholderText('Give your source a descriptive title'),
+      'Overrides survive'
+    )
+    await user.type(
+      screen.getByPlaceholderText('Paste or type your content here...'),
+      'Body'
+    )
+
+    // Expand Advanced ingestion settings and pick the Docling parser.
+    await user.click(screen.getByRole('button', { name: 'Advanced ingestion settings' }))
+    await user.click(screen.getByLabelText('Parser engine'))
+    await user.click(await screen.findByRole('option', { name: 'Docling' }))
+
+    // Navigate Input → Organize → Back to Input (remounts the disclosure).
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+
+    // The disclosure is still expanded and Docling is still selected.
+    await waitFor(() =>
+      expect(screen.getByLabelText('Parser engine').textContent).toContain('Docling')
+    )
+
+    // Submitting sends the preserved override to the backend.
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.click(screen.getByRole('button', { name: 'Submit' }))
+
+    await waitFor(() =>
+      expect(H.createMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ processing_overrides: { parser_engine: 'docling' } })
+      )
+    )
+  }, 15000)
+})

@@ -299,3 +299,59 @@
   and the recovery action lives on the node, matching AC3.
 - The streaming console was extracted into a new `ProcessingLogConsole` component
   (the old console was embedded inside `ExtractionTab`, which the lean flow drops).
+
+---
+
+## Phase UX.5 — Review revisions (Blocker + Major)
+
+**Branch:** `track/ux5-lean-create-flow` — NOT merged, NOT pushed.
+**State:** Ready for re-review. Addresses the two review defects; the approved
+single-source spine / log streaming / 4-step model / reprocess relocation were
+left untouched.
+
+### Blocker — multi-file batch wedged on the schema-review gate
+`frontend/src/components/sources/pipeline/CreateSourcePipeline.tsx`:
+- New `stageToEntryStatus` maps `awaiting_schema_review → 'gated'` (a settled,
+  poll-stopping state) instead of the non-terminal `'processing'`. `isSettledEntry`
+  (complete/failed/gated) and `isPollableEntry` (creating/processing) replace the
+  old `isTerminalEntry`.
+- Poll effect now filters on `isPollableEntry` and clears the interval once no
+  entry is pollable — a gated entry no longer polls `GET /sources/{id}` forever.
+- The batch advances to Done only on `multiAllComplete` (pure success), mirroring
+  the single-source rule. A settled-with-issues batch (`multiAllSettled` but some
+  gated/failed) stays on Processing in a non-hanging terminal state with a settled
+  banner + per-entry recovery cards; `processingStepStatus` reports `failed`/
+  `completed` accordingly (no false green Done).
+- Per-entry cards now pass `onNodeAction={handleMultiNodeAction(entry.id, …)}`:
+  review-schema ⇒ `router.push('/sources/{id}')`; retry ⇒ `retrySource.mutate(id)`
+  and re-arm the entry to `processing` so its poll resumes.
+
+### Major — advanced overrides discarded on back-navigation
+- `frontend/src/components/sources/steps/AdvancedIngestionSettings.tsx` is now a
+  CONTROLLED presentational component: parent owns `parserEngine`/`ocrEngine`/
+  `tableMode` + the open state (exported choice types). Removed the mount-time
+  `onOverridesChange({})` reset that wiped selections on remount.
+- Parent `CreateSourcePipeline` holds the four pieces of state and derives
+  `processing_overrides` via `useMemo` (all-Auto ⇒ `{}`, only changed fields
+  emitted). Input→Organize→Back now rehydrates the disclosure (still expanded,
+  Docling still selected) and the create call still sends `{parser_engine:'docling'}`.
+
+### Minor — interval churn
+- Poll effect keyed on a stable `multiPollKey` (joined entry ids) and reads live
+  entries from `multiSourcesRef`; the 3s interval is created once and lives until
+  the stop condition (no per-tick teardown). Cadence + stop semantics unchanged.
+
+### Tests
+- `CreateSourcePipeline.test.tsx` +3: gated multi-batch (polling stops — no further
+  `sourcesApi.get` after settle, settled banner, Review schema → `push('/sources/source:a')`);
+  failed multi-batch (Retry → `retryMutate('source:a')`); override persistence across
+  Input→Organize→Back reaching the create call with `processing_overrides`.
+- `AdvancedIngestionSettings.test.tsx` rewritten for the controlled API (+1 remount
+  persistence test); a11y + Auto-defaults + only-changed-fields contract preserved
+  via a controlled harness.
+
+### Commands (from `frontend/`)
+- `npm run lint` — pass (0 errors; only pre-existing warnings; none in changed files).
+- `npx tsc --noEmit` — 0 errors.
+- `npx vitest run src/components/sources` — 70 passed (4 files).
+- Full `npx vitest run` — 262 passed (22 files); no regression (258 baseline + 4 new).

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -21,7 +21,12 @@ import { toPipelineCounts } from '@/lib/pipeline/source-counts'
 import type { PipelineNodeAction } from '@/lib/pipeline/pipeline-stages'
 import { SourceTypeStep } from '../steps/SourceTypeStep'
 import { NotebooksStep } from '../steps/NotebooksStep'
-import { AdvancedIngestionSettings } from '../steps/AdvancedIngestionSettings'
+import {
+  AdvancedIngestionSettings,
+  type ParserEngineChoice,
+  type OcrEngineChoice,
+  type TableModeChoice,
+} from '../steps/AdvancedIngestionSettings'
 import { PipelineHeader } from './PipelineHeader'
 import { PipelineStepper, type PipelineStep, type StepStatus } from './PipelineStepper'
 import { PipelineFooter, type PipelinePhase } from './PipelineFooter'
@@ -82,13 +87,39 @@ const STEP_LABELS = [
 interface MultiSourceEntry {
   id: string
   title: string
-  status: 'pending' | 'creating' | 'processing' | 'completed' | 'failed'
+  status: 'pending' | 'creating' | 'processing' | 'completed' | 'gated' | 'failed'
   stage?: ProcessingStage
   fileName?: string
 }
 
-function isTerminalEntry(status: MultiSourceEntry['status']): boolean {
-  return status === 'completed' || status === 'failed'
+/**
+ * Map a polled `processing_stage` to an entry status. `awaiting_schema_review`
+ * becomes the gated status — a SETTLED (poll-stopping) state, not `processing`:
+ * a gated entry makes no further automatic progress until a human reviews it, so
+ * treating it as still-processing polled `GET /sources/{id}` forever and wedged
+ * the batch (it could never reach a settled aggregate).
+ */
+function stageToEntryStatus(
+  stage: ProcessingStage | undefined
+): MultiSourceEntry['status'] {
+  if (stage === 'complete') return 'completed'
+  if (stage === 'failed') return 'failed'
+  if (stage === 'awaiting_schema_review') return 'gated'
+  return 'processing'
+}
+
+/** An entry the poller should keep reading (still advancing on its own). */
+function isPollableEntry(status: MultiSourceEntry['status']): boolean {
+  return status === 'creating' || status === 'processing'
+}
+
+/**
+ * An entry that has stopped advancing automatically: succeeded, failed, or
+ * parked on the schema-review gate. Polling stops for these and the batch is
+ * considered settled once every entry is settled.
+ */
+function isSettledEntry(status: MultiSourceEntry['status']): boolean {
+  return status === 'completed' || status === 'failed' || status === 'gated'
 }
 
 export function CreateSourcePipeline() {
@@ -115,7 +146,25 @@ export function CreateSourcePipeline() {
   const [selectedNotebooks, setSelectedNotebooks] = useState<string[]>(
     defaultNotebookId ? [defaultNotebookId] : []
   )
-  const [processingOverrides, setProcessingOverrides] = useState<Partial<SettingsResponse>>({})
+
+  // Advanced ingestion overrides — state is OWNED here (not in the child) so a
+  // user's parser/OCR/table selection survives Input→Organize→Back, which
+  // conditionally unmounts the `AdvancedIngestionSettings` disclosure.
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [parserEngine, setParserEngine] = useState<ParserEngineChoice>('auto')
+  const [ocrEngine, setOcrEngine] = useState<OcrEngineChoice>('auto')
+  const [tableMode, setTableMode] = useState<TableModeChoice>('auto')
+
+  // Derive `processing_overrides` from the choices: a field left on Auto
+  // contributes nothing, so an all-Auto panel yields `{}` (no overrides) and the
+  // backend auto-routes. Only fields moved off Auto are emitted.
+  const processingOverrides = useMemo<Partial<SettingsResponse>>(() => {
+    const overrides: Partial<SettingsResponse> = {}
+    if (parserEngine !== 'auto') overrides.parser_engine = parserEngine
+    if (ocrEngine !== 'auto') overrides.docling_ocr_engine = ocrEngine
+    if (tableMode !== 'auto') overrides.docling_table_mode = tableMode
+    return overrides
+  }, [parserEngine, ocrEngine, tableMode])
 
   // Track whether embed was enabled (for the completion summary)
   const [embedEnabled, setEmbedEnabled] = useState(false)
@@ -139,20 +188,43 @@ export function CreateSourcePipeline() {
   const singleComplete = singleStage === 'complete'
 
   // Multi-source aggregate: each entry's status is driven by its OWN
-  // `processing_stage` (polled below), never a shared inference.
-  const multiAllDone =
-    multiSources.length > 0 && multiSources.every((s) => isTerminalEntry(s.status))
+  // `processing_stage` (polled below), never a shared inference. The batch is
+  // SETTLED once every entry has stopped advancing (complete / failed / gated);
+  // it advances to Done only on pure success (every entry complete), mirroring
+  // the single-source rule where gated/failed stays on Processing with its
+  // recovery action rather than claiming a false Done.
+  const multiAllSettled =
+    multiSources.length > 0 && multiSources.every((s) => isSettledEntry(s.status))
+  const multiAllComplete =
+    multiSources.length > 0 && multiSources.every((s) => s.status === 'completed')
+  const multiAnyFailed = multiSources.some((s) => s.status === 'failed')
 
-  const processingComplete = isMulti ? multiAllDone : singleComplete
+  const processingComplete = isMulti ? multiAllComplete : singleComplete
+
+  // Hold the latest entries in a ref so the poll effect can read them without
+  // depending on `multiSources` — depending on it would tear down and recreate
+  // the interval on EVERY tick (each tick rewrites `multiSources`), resetting
+  // the 3s timer. The effect is instead keyed on the stable set of entry ids.
+  const multiSourcesRef = useRef(multiSources)
+  useEffect(() => {
+    multiSourcesRef.current = multiSources
+  }, [multiSources])
+
+  const multiPollKey = multiSources
+    .map((s) => s.id)
+    .filter(Boolean)
+    .join(',')
 
   // Multi-source stage polling: read each in-flight entry's `processing_stage`
-  // from GET /sources/{id} and map it to the entry's status.
+  // from GET /sources/{id} and map it to the entry's status. Polling STOPS for
+  // an entry once it settles (complete / failed / gated) and the interval is
+  // cleared once ALL entries are settled — no unbounded polling on the gate.
   useEffect(() => {
     if (phase !== 'processing' || !isMulti) return
 
     const pollInterval = setInterval(async () => {
-      const stillProcessing = multiSources.filter(
-        (s) => s.id && (s.status === 'processing' || s.status === 'creating')
+      const stillProcessing = multiSourcesRef.current.filter(
+        (s) => s.id && isPollableEntry(s.status)
       )
       if (stillProcessing.length === 0) {
         clearInterval(pollInterval)
@@ -163,8 +235,7 @@ export function CreateSourcePipeline() {
         try {
           const source = await sourcesApi.get(entry.id)
           const stage = source.processing_stage
-          const nextStatus: MultiSourceEntry['status'] =
-            stage === 'complete' ? 'completed' : stage === 'failed' ? 'failed' : 'processing'
+          const nextStatus = stageToEntryStatus(stage)
           setMultiSources((prev) =>
             prev.map((s) => (s.id === entry.id ? { ...s, stage, status: nextStatus } : s))
           )
@@ -175,7 +246,9 @@ export function CreateSourcePipeline() {
     }, 3000)
 
     return () => clearInterval(pollInterval)
-  }, [phase, isMulti, multiSources])
+    // `multiPollKey` (the joined id list) is the stable identity; the tick reads
+    // live entries from the ref, so `multiSources` is intentionally not a dep.
+  }, [phase, isMulti, multiPollKey])
 
   // Advance the flow to Done once the pipeline settles. `complete` ⇒ Done;
   // `awaiting_schema_review` parks on the gated node (no false Done); `failed`
@@ -252,8 +325,14 @@ export function CreateSourcePipeline() {
   const processingStepStatus: StepStatus = (() => {
     if (phase === 'config') return 'locked'
     if (phase === 'complete' || processingComplete) return 'completed'
-    if (!isMulti && singleStage === 'failed') return 'failed'
-    return 'running'
+    if (isMulti) {
+      // Settled but not all-complete ⇒ a non-hanging terminal state: `failed`
+      // when any entry failed, otherwise the automatic work finished and only a
+      // human gate remains (surfaced by the per-entry cards below).
+      if (multiAllSettled) return multiAnyFailed ? 'failed' : 'completed'
+      return 'running'
+    }
+    return singleStage === 'failed' ? 'failed' : 'running'
   })()
 
   const doneStepStatus: StepStatus =
@@ -315,6 +394,27 @@ export function CreateSourcePipeline() {
       }
     },
     [sourceId, retrySource, router]
+  )
+
+  // Per-entry recovery for the multi-file batch: mirrors `handleNodeAction` but
+  // scoped to a single entry. `review-schema` deep-links to that source; `retry`
+  // re-arms the pipeline AND flips the entry back to `processing` so the poller
+  // (which stopped once the entry settled as `failed`) resumes for it.
+  const handleMultiNodeAction = useCallback(
+    (entryId: string, action: PipelineNodeAction) => {
+      if (!entryId) return
+      if (action === 'retry') {
+        retrySource.mutate(entryId)
+        setMultiSources((prev) =>
+          prev.map((s) =>
+            s.id === entryId ? { ...s, status: 'processing', stage: undefined } : s
+          )
+        )
+      } else if (action === 'review-schema') {
+        router.push(`/sources/${entryId}`)
+      }
+    },
+    [retrySource, router]
   )
 
   // Notebook toggle
@@ -476,7 +576,10 @@ export function CreateSourcePipeline() {
     setShowBatchDialog(false)
     pendingFormDataRef.current = null
     setSelectedNotebooks(defaultNotebookId ? [defaultNotebookId] : [])
-    setProcessingOverrides({})
+    setAdvancedOpen(false)
+    setParserEngine('auto')
+    setOcrEngine('auto')
+    setTableMode('auto')
     setEmbedEnabled(false)
   }
 
@@ -521,7 +624,16 @@ export function CreateSourcePipeline() {
                   // @ts-expect-error - Type inference issue with zod schema
                   errors={errors}
                 />
-                <AdvancedIngestionSettings onOverridesChange={setProcessingOverrides} />
+                <AdvancedIngestionSettings
+                  open={advancedOpen}
+                  onOpenChange={setAdvancedOpen}
+                  parserEngine={parserEngine}
+                  ocrEngine={ocrEngine}
+                  tableMode={tableMode}
+                  onParserEngineChange={setParserEngine}
+                  onOcrEngineChange={setOcrEngine}
+                  onTableModeChange={setTableMode}
+                />
               </div>
             )}
 
@@ -540,8 +652,11 @@ export function CreateSourcePipeline() {
               isMulti ? (
                 <div className="space-y-3">
                   <p className="text-sm text-muted-foreground">
-                    Processing {multiSources.length} sources — each advances through the
-                    pipeline independently.
+                    {multiAllSettled && !multiAllComplete
+                      ? multiAnyFailed
+                        ? 'Automatic processing finished. Some sources failed — retry them below.'
+                        : 'Automatic processing finished. Some sources need a schema review below.'
+                      : `Processing ${multiSources.length} sources — each advances through the pipeline independently.`}
                   </p>
                   {multiSources.map((entry, i) => (
                     <div key={entry.id || i} className="rounded-md border p-3">
@@ -553,6 +668,7 @@ export function CreateSourcePipeline() {
                       <PipelineStatus
                         variant="card"
                         processingStage={entry.stage}
+                        onNodeAction={(action) => handleMultiNodeAction(entry.id, action)}
                       />
                     </div>
                   ))}

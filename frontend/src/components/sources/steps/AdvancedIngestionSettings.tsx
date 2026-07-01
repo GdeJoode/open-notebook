@@ -1,6 +1,5 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
 import { ChevronRight, Settings2 } from "lucide-react"
 
 import {
@@ -16,75 +15,58 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { SettingsResponse } from "@/lib/types/api"
 
 /**
  * Power-user parser overrides on the create-flow Input screen (Track UX.5).
  *
  * This is the collapsed "Advanced ingestion settings" disclosure. Its whole
  * reason to exist is to keep parser/OCR config OUT of the mandatory flow: every
- * field defaults to `Auto` (meaning "let the backend auto-route"), and the
- * component only contributes a `processing_overrides` key for a field the user
- * actually changed away from `Auto`. When nothing is changed it contributes an
- * empty object, so the create call sends no overrides and the backend picks the
- * engine itself. The full parser config surface lives on the post-ingest
- * Reprocess dialog (its primary, reversible home).
+ * field defaults to `Auto` (meaning "let the backend auto-route"). The full
+ * parser config surface lives on the post-ingest Reprocess dialog (its primary,
+ * reversible home).
+ *
+ * The component is intentionally PRESENTATIONAL and fully CONTROLLED: the parent
+ * (`CreateSourcePipeline`) owns the field state and the open/collapsed state.
+ * That is what lets a user's selection survive back-navigation (Input →
+ * Organize → Back), which conditionally unmounts this child — an earlier version
+ * held the state internally and reset every field to `Auto` on mount, silently
+ * wiping the user's parser/OCR/table choice. Lifting the state fixes that: a
+ * remount now rehydrates from the parent instead of clearing.
+ *
+ * The "all-Auto ⇒ no overrides" and "emit only changed fields" contract now
+ * lives in the parent, which derives `processing_overrides` from these choices.
  */
 
+export type ParserEngineChoice = "auto" | "docling" | "simple"
+export type OcrEngineChoice = "auto" | "easyocr" | "rapidocr" | "tesseract"
+export type TableModeChoice = "auto" | "accurate" | "fast"
+
 export interface AdvancedIngestionSettingsProps {
-  /**
-   * Called whenever the effective overrides change. Receives only the fields
-   * the user moved off `Auto`; an empty object means "no overrides".
-   */
-  onOverridesChange: (overrides: Partial<SettingsResponse>) => void
-  defaultOpen?: boolean
+  parserEngine: ParserEngineChoice
+  ocrEngine: OcrEngineChoice
+  tableMode: TableModeChoice
+  onParserEngineChange: (value: ParserEngineChoice) => void
+  onOcrEngineChange: (value: OcrEngineChoice) => void
+  onTableModeChange: (value: TableModeChoice) => void
+  /** Controlled disclosure state (lifted so it survives back-navigation). */
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }
 
-type ParserEngineChoice = "auto" | "docling" | "simple"
-type OcrEngineChoice = "auto" | "easyocr" | "rapidocr" | "tesseract"
-type TableModeChoice = "auto" | "accurate" | "fast"
-
-const AUTO = "auto"
-
 export function AdvancedIngestionSettings({
-  onOverridesChange,
-  defaultOpen = false,
+  parserEngine,
+  ocrEngine,
+  tableMode,
+  onParserEngineChange,
+  onOcrEngineChange,
+  onTableModeChange,
+  open,
+  onOpenChange,
 }: AdvancedIngestionSettingsProps) {
-  const [open, setOpen] = useState(defaultOpen)
-  const [parserEngine, setParserEngine] = useState<ParserEngineChoice>(AUTO)
-  const [ocrEngine, setOcrEngine] = useState<OcrEngineChoice>(AUTO)
-  const [tableMode, setTableMode] = useState<TableModeChoice>(AUTO)
-
-  // Recompute overrides from the current field state. A field left on `Auto`
-  // contributes nothing, so an all-`Auto` panel yields `{}` (no overrides) and
-  // the backend auto-routes. Changed fields persist across collapse so the user
-  // never silently loses a selection.
-  const emit = useCallback(
-    (
-      parser: ParserEngineChoice,
-      ocr: OcrEngineChoice,
-      table: TableModeChoice
-    ) => {
-      const overrides: Partial<SettingsResponse> = {}
-      if (parser !== AUTO) overrides.parser_engine = parser
-      if (ocr !== AUTO) overrides.docling_ocr_engine = ocr
-      if (table !== AUTO) overrides.docling_table_mode = table
-      onOverridesChange(overrides)
-    },
-    [onOverridesChange]
-  )
-
-  // Keep the parent in sync on mount so it starts from a known (empty) state.
-  useEffect(() => {
-    onOverridesChange({})
-    // Only on mount — subsequent changes flow through the `emit` handlers.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
   return (
     <Collapsible
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={onOpenChange}
       className="rounded-md border bg-muted/30"
     >
       <CollapsibleTrigger
@@ -115,11 +97,7 @@ export function AdvancedIngestionSettings({
               </Label>
               <Select
                 value={parserEngine}
-                onValueChange={(v) => {
-                  const next = v as ParserEngineChoice
-                  setParserEngine(next)
-                  emit(next, ocrEngine, tableMode)
-                }}
+                onValueChange={(v) => onParserEngineChange(v as ParserEngineChoice)}
               >
                 <SelectTrigger id="adv-parser-engine" aria-label="Parser engine">
                   <SelectValue />
@@ -138,11 +116,7 @@ export function AdvancedIngestionSettings({
               </Label>
               <Select
                 value={ocrEngine}
-                onValueChange={(v) => {
-                  const next = v as OcrEngineChoice
-                  setOcrEngine(next)
-                  emit(parserEngine, next, tableMode)
-                }}
+                onValueChange={(v) => onOcrEngineChange(v as OcrEngineChoice)}
               >
                 <SelectTrigger id="adv-ocr-engine" aria-label="OCR engine">
                   <SelectValue />
@@ -162,11 +136,7 @@ export function AdvancedIngestionSettings({
               </Label>
               <Select
                 value={tableMode}
-                onValueChange={(v) => {
-                  const next = v as TableModeChoice
-                  setTableMode(next)
-                  emit(parserEngine, ocrEngine, next)
-                }}
+                onValueChange={(v) => onTableModeChange(v as TableModeChoice)}
               >
                 <SelectTrigger id="adv-table-mode" aria-label="Table mode">
                   <SelectValue />
