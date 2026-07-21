@@ -1,0 +1,12 @@
+# Persistente Chrome-sessie (bevat je login — NOOIT committen!)
+chrome_profiel/
+
+# Uitvoerbestanden
+bewaarde_posts.json
+profiel.json
+kandidaten.xlsx
+namen.xlsx
+
+# Python
+__pycache__/
+*.pyc
