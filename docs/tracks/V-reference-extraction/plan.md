@@ -31,15 +31,23 @@ because nothing feeds it** — V closes that gap.
 | `ParsedReference` (the contract) | `packages/shared/.../retrieval/cites_matching.py:78` | V.3 output type — keep stable |
 | `normalize_doi`, `_surnames`, matcher | same file | V.3 DOI normalization; U.3 does the matching |
 | U.3 cites materialization | `apps/app-main/.../services/cites_materialization_service.py` | V.5 hand-off target |
-| `CrossrefProvider` (K.4) | `packages/shared/.../vocabulary/crossref_provider.py` | V.4 external DOI/title resolution + precision guard |
+| `CrossrefProvider` (K.4) | `packages/shared/.../vocabulary/crossref_provider.py` | V.4 DOI resolution + precision-guard pattern to mirror |
+| Vocabulary provider interface | `packages/shared/.../vocabulary/provider.py` (`VocabMatch`), `http_client.py` | V.4 pattern to mirror for the new `WorkResolver` cascade |
 | Chunk structure (`section_path`, `physical_page`, `element_type`) | `surrealdb-service/.../repositories/source.py` (X.1/I.F) | V.1 region location |
 | cheap-first→LLM-on-margin cascade | `design-thematic-classification.md` pattern | V.2 form classifier |
+
+> **Interface note**: the existing provider interface is entity-vocabulary shaped
+> (`lookup(name, entity_type) -> List[VocabMatch]`, Track K). Reference resolution
+> is a **different shape** (`resolve(ParsedReference) -> ResolvedWork`). V.4 adds a
+> sibling **`WorkResolver`** interface + one provider per source, reusing K.4's
+> HTTP client + precision-guard *pattern*, not the entity `VocabProvider` directly.
 
 ## Scope & cut-line
 
 **In scope (v1)**: bibliography-**section** references (the locatable ~90%): locate
-region → segment → parse → `ParsedReference` → optional Crossref resolution →
-feed U.3 as a **post-ingest pass**.
+region → segment → parse → `ParsedReference` → optional **multi-source resolution**
+(OpenAlex + Crossref + RePEc + overheid.nl, see V.4) → feed U.3 as a **post-ingest
+pass**.
 
 **Out of scope / best-effort (documented)**:
 - Inline footnotes/endnotes: v1 recovers only what appears as `full_text` markers;
@@ -53,8 +61,17 @@ feed U.3 as a **post-ingest pass**.
   regex fallback** for the bibliography block. Rec: both, structure preferred.
 - **V-D2** (footnotes): v1 = `full_text` marker recovery only; layout/superscript
   deferred. Rec: accept the gap, log what was skipped.
-- **V-D3** (external lookup): **DOI-first** (cheap, precise) via Crossref; title/
-  author web search **opt-in behind a flag** (broader, noisier). Rec: DOI default.
+- **V-D3** (external lookup): a **multi-source resolver cascade** routed by
+  reference *shape*, behind one `WorkResolver` interface + the K.4 precision guard
+  (single high-confidence match). Rec order: DOI → **Crossref** then **DataCite**;
+  econ working-paper → **RePEc/CitEc**; arXiv-id → **arXiv**; NL policy/Kamerstuk →
+  **overheid.nl (KOOP SRU)**; title/author fallback → **OpenAlex** (broadest, open);
+  then identity-enrich authors→**ORCID**, institutions→**ROR**. Phase order: ship
+  **OpenAlex first** (largest open recall) + keep Crossref, add RePEc + overheid.nl
+  as the domain-specific second layer; ORCID/ROR/DataCite/arXiv are Q9-anticipated
+  follow-ons. Title/author search stays opt-in per source (noisier). ⚠ **NARCIS**
+  (old NL research portal) was **discontinued 2023 — do not use**; OpenAIRE covers
+  the NL/EU research + funding graph instead.
 - **V-D4** (build site): **post-ingest pass** (decoupled from Docling), not inline
   enrichment. Rec: post-ingest — keeps the load-bearing ingest path untouched (T).
 
@@ -93,16 +110,36 @@ entries carry a normalized DOI; (3) author-year entries carry surnames + year;
 author-year, and title-only forms.
 **PR boundary**: parsing only; output not yet persisted.
 
-### V.4 — External resolution (Backend, opt-in) · reuse Crossref (K.4)
-**Deliverables**: `references/resolver.py` — for external refs, resolve via
-`CrossrefProvider` (DOI-first; title/author only when the flag is set), single
-high-confidence match (K.4 precision guard); attach confirmed metadata, else leave
-unresolved.
-**ACs**: (1) DOI refs resolve to confirmed metadata; (2) ambiguous → unresolved (no
-false enrichment); (3) title/author lookup gated behind the flag; (4) network failure
-→ graceful skip, logged.
-**Tests**: mock Crossref (no live network in CI); precision-guard rejection case.
-**PR boundary**: resolution only.
+### V.4 — External resolution: multi-source `WorkResolver` cascade (Backend, opt-in)
+**Deliverables**:
+- `references/work_resolver.py` — a `WorkResolver` interface
+  (`resolve(ParsedReference) -> ResolvedWork | None`) + a cascade that routes by
+  reference *shape* and stops at the first high-confidence hit (K.4 precision guard).
+- One provider per source, mirroring the K.4 HTTP-client + precision-guard pattern:
+  | Provider | Source | Routes when | Access |
+  |---|---|---|---|
+  | `CrossrefResolver` | Crossref | has DOI (journal/book) | open |
+  | `DataCiteResolver` | DataCite | has DOI (dataset/thesis/preprint/software) | open |
+  | `OpenAlexResolver` | OpenAlex | title/author fallback (broadest recall) | open, no key |
+  | `RePEcResolver` | RePEc/CitEc | econ working-paper shape | **access code (email)** |
+  | `ArxivResolver` | arXiv | arXiv id present | open |
+  | `OverheidResolver` | overheid.nl (KOOP SRU) | NL Kamerstuk/policy citation | open |
+- Identity enrichment (post-match, opt-in): authors→**ORCID**, institutions→**ROR**.
+- **Phasing**: v1 ships **OpenAlex + Crossref** (biggest open recall) and the
+  **RePEc + overheid.nl** domain layer; DataCite/arXiv/ORCID/ROR are Q9-anticipated
+  follow-ons behind the same interface.
+
+**ACs**: (1) DOI refs resolve via Crossref/DataCite to confirmed metadata;
+(2) a title/author-only econ working-paper resolves via OpenAlex or RePEc where a
+DOI is absent; (3) an NL policy citation resolves via overheid.nl; (4) ambiguous →
+**unresolved** (no false enrichment — precision guard, single high-confidence match);
+(5) each source's title/author search is opt-in (noisier) and per-source rate-limited;
+(6) any provider network failure → graceful skip to the next in the cascade, logged;
+(7) RePEc runs only when its access code is configured, else that leg is skipped
+(no hard dependency).
+**Tests**: mocked HTTP per provider (no live network in CI); the shape-router picks
+the right provider per fixture; precision-guard rejection case; RePEc-absent skip.
+**PR boundary**: resolution only; assumes V.3 merged.
 
 ### V.5 — Orchestration: feed U.3 + post-ingest hook (Integration) · reuse-heavy
 **Deliverables**: `references/reference_extraction_service.py` — run V.1→V.4 per
@@ -127,7 +164,13 @@ plan-only); `RETRO.md`; `_status.md` update.
 1. **Docling's generic node types** → region location may miss non-standard layouts
    → structure + full_text dual path (V-D1); log `located_via=none` misses.
 2. **LLM cost on segmentation** → cheap-first, LLM strictly on the ambiguous margin.
-3. **External-lookup noise** → DOI-first + K.4 precision guard; title search opt-in.
+3. **External-lookup noise** (across the V.4 cascade) → DOI-first (Crossref/DataCite)
+   before title/author fallback (OpenAlex); K.4 single-high-confidence precision
+   guard; per-source title search opt-in + rate-limited.
+5. **Source availability/coupling** → RePEc needs an emailed access code (skip-leg
+   if absent, never a hard dep); providers are independent behind `WorkResolver` so
+   one being down/unconfigured degrades gracefully to the rest. NARCIS is retired
+   (2023) — excluded; OpenAIRE is the NL/EU alternative if broader recall is wanted.
 4. **Live verification** → the end-to-end edge-count AC (V.5.1) needs a live
    SurrealDB; explicitly a deferred live-run AC, consistent with the tracked
    ~54 live-gap items in `_status.md`.
@@ -141,6 +184,9 @@ schema — V produces input to an existing mechanism.
 ## Open questions for the operator
 
 - [ ] Approve the track / schedule it as the next build?
-- [ ] V-D3: DOI-only external resolution in v1, or also title/author web search?
+- [ ] V-D3: confirm the v1 resolver set — **OpenAlex + Crossref + RePEc +
+      overheid.nl** (rec), or start DOI-only (Crossref/DataCite) and add the rest later?
+- [ ] RePEc access-code request worth it for v1, or defer until the econ-working-paper
+      miss-rate from OpenAlex/Crossref is measured?
 - [ ] Footnote recovery: accept the v1 `full_text`-marker-only gap, or invest in
       layout/superscript recovery now?
