@@ -1,0 +1,25 @@
+Regional Development and Institutional Quality
+
+1. Introduction
+
+This paper examines the relationship between institutional quality and regional
+economic performance. We build on a large literature that links inclusive
+institutions to long-run prosperity, and extend it to the sub-national level.
+
+2. Conclusion
+
+Institutional quality matters for regional convergence. Place-based policy that
+strengthens local institutions can reduce persistent disparities.
+
+References
+
+Acemoglu, D., & Robinson, J. A. (2012). Why Nations Fail: The Origins of Power, Prosperity, and Poverty. Crown Business.
+
+Acemoglu, D., Johnson, S., & Robinson, J. A. (2001). The colonial origins of comparative development: An empirical investigation. American Economic Review, 91(5), 1369-1401. https://doi.org/10.1257/aer.91.5.1369
+
+Rodríguez-Pose, A. (2018). The revenge of the places that don't matter (and what to do about it). Cambridge Journal of Regions, Economy and Society, 11(1), 189-209.
+
+Appendix A. Data sources
+
+The regional accounts data are drawn from Eurostat and the national statistics
+office. Variable definitions are listed in Table A1.
