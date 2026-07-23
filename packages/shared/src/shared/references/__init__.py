@@ -1,10 +1,16 @@
-"""External work-resolution for parsed references (Track V.4).
+"""Reference extraction (Track V.1–V.3) + external work-resolution (Track V.4).
 
-Track V turns a document's bibliography/footnotes into ``ParsedReference`` units
-(the Track V → U.3 boundary, defined in :mod:`shared.retrieval.cites_matching`).
-U.3 matches those references against the IN-corpus sources; this subpackage
-resolves the EXTERNAL ones — mapping a ``ParsedReference`` to a canonical
-:class:`ResolvedWork` in an external authority.
+Track V turns a source's persisted document structure into ``ParsedReference``
+units (the Track V → U.3 boundary, defined in
+:mod:`shared.retrieval.cites_matching`). This subpackage holds both halves:
+
+* **Producer (V.1–V.3)** — :func:`extract_references` chains region location
+  (:func:`locate_reference_region`), segmentation (:func:`segment_region`) and
+  per-entry parsing (:func:`parse_reference`) to yield a source's
+  ``List[ParsedReference]`` from its chunks. Pure/offline — no DB, no LLM.
+* **Resolver (V.4)** — U.3 matches those references against the IN-corpus
+  sources; this half resolves the EXTERNAL ones — mapping a ``ParsedReference``
+  to a canonical :class:`ResolvedWork` in an external authority.
 
 The public surface is the :class:`ResolverCascade`: it routes a reference by its
 *shape* (DOI, arXiv id, Dutch Kamerstuk, econ working paper, or bare title)
@@ -23,7 +29,15 @@ from shared.references.datacite_resolver import DataCiteResolver
 from shared.references.enrichment import ReferenceEnricher
 from shared.references.openalex_resolver import OpenAlexResolver
 from shared.references.overheid_resolver import OverheidResolver
+from shared.references.reference_extractor import extract_references
+from shared.references.reference_parser import parse_reference
+from shared.references.region_locator import (
+    LocatedRegion,
+    ReferenceChunk,
+    locate_reference_region,
+)
 from shared.references.repec_resolver import RePEcResolver
+from shared.references.segmenter import AmbiguityResolver, segment_region
 from shared.references.work_resolver import (
     DOI_MATCH_CONFIDENCE,
     MIN_MATCH_CONFIDENCE,
@@ -41,6 +55,14 @@ from shared.references.work_resolver import (
 )
 
 __all__ = [
+    # Producer (V.1–V.3)
+    "ReferenceChunk",
+    "LocatedRegion",
+    "locate_reference_region",
+    "segment_region",
+    "AmbiguityResolver",
+    "parse_reference",
+    "extract_references",
     # Core
     "ResolvedWork",
     "WorkResolver",
