@@ -1,5 +1,111 @@
 # Track V — status
 
+## Phase V.5 — reference-extraction ORCHESTRATION + post-ingest hook — READY FOR REVIEW
+
+**Branch**: `track/v5-reference-orchestration` (off `track/v123-reference-producer` @ `764f28f`; stacked)
+**Date**: 2026-07-24
+**Scope**: the integration that makes Track V functional end-to-end — connect the
+V.1–V.3 producer to Track U.3's already-built `cites` materialization, behind a
+GUARDED, config-gated post-ingest hook. No change to U.3's matcher, the `cites`
+schema, `ParsedReference`, or any V.1–V.4 file (import-only reuse).
+
+### What was built
+
+1. **`ReferenceExtractionService`** —
+   `apps/app-main/src/app_main/services/references/reference_extraction_service.py`
+   (sibling to `cites_materialization_service.py`, `*Service` naming).
+   - `extract_source_references(source_id) -> List[ParsedReference]` — reads the
+     source's persisted chunks via the EXISTING repo layer
+     (`SourceRepository.get_chunks` + `.get()` for `full_text`), projects each
+     `Chunk` to the producer's DB-free `ReferenceChunk`, runs `extract_references`
+     (V.1–V.3). Returns `[]` for a source with no bibliography; never raises.
+   - `materialize_corpus(*, resolve_external=False) -> ReferenceMaterializationSummary`
+     — the public entry point: enumerate sources (`load_source_records`), extract
+     each one's references, assemble the `{source_id: [ParsedReference]}` map, then
+     call U.3's EXISTING `CitesMaterializationService.materialize(map)` **once**.
+   - Summary shape: `sources_scanned`, `sources_with_references`, `refs_extracted`,
+     `edges_materialized` (U.3's `created`), `external_resolved`.
+   - **Why whole-corpus, not per-source**: U.3's `materialize` is a clear-before-
+     relate regenerator — `SourceRepository.clear_cites()` is a bare
+     `DELETE cites` over the WHOLE table. Handing it a single source's references
+     would wipe every OTHER source's edges. References are not persisted (the
+     producer is pure), so re-assembling the full map is the only correct,
+     non-destructive way to drive U.3's existing entry point. Idempotency comes
+     from U.3's clear-before-relate — no second dedup was added (per constraint).
+   - **Optional external resolution**: `resolve_external=True` routes each
+     extracted reference through the V.4 `ResolverCascade` BEFORE materialization
+     and counts confident resolutions; per-reference guarded (a raising leg = a
+     no-match). Default OFF keeps the core path offline + fast. RePEc stays
+     config-gated as built (self-gates on `REPEC_API_KEY`).
+
+2. **The guarded post-ingest hook** — `services/source_pipeline.py` (the Track PL
+   seam).
+   - New `StageName.REFERENCES` + a `SOURCE_PIPELINE` entry: a **PARALLEL** branch
+     `depends_on=INGEST` (it needs chunks, not embeddings), `gate="references"`,
+     `enqueue_command="extract_references"`, `produces=None` — enrichment, so it
+     never sets `processing_stage` and never gates `complete`. Mirrors the
+     existing INSIGHTS parallel-branch pattern exactly.
+   - `_maybe_chain_references(source_id)` mirrors `_maybe_chain_insights`: reads
+     the config gate, and when ON delegates to the existing
+     `_best_effort_enqueue` (try/except, logs, returns `None` on failure — never
+     propagates). A queue hiccup or a no-reference source is a clean no-op.
+   - **Config flag**: `ENABLE_REFERENCE_EXTRACTION` (new
+     `config.get_reference_extraction_enabled()`, read at call time like the
+     existing upload guards), **DEFAULT OFF** — the safe value. With the flag off
+     `advance_source` off `ingested` enqueues exactly what it did pre-V.5
+     (`embed_source` only); the only addition is the guarded, config-gated no-op.
+     Pinned by `test_ingested_flag_off_enqueues_only_embed`.
+
+3. **Job-queue path** (long work off the ingest thread) — new
+   `JobType.REFERENCE_EXTRACT`, command `extract_references` registered in
+   `_COMMAND_TO_JOB_TYPE`, and `handle_reference_extract` in `handlers.py`. The
+   pass runs in its OWN job, so a reference/matching failure is isolated from the
+   already-persisted source + chunks.
+
+4. **DI** — `get_reference_extraction_service(*, resolve_external=False)` and
+   `get_reference_resolver_cascade()` in `dependencies.py`. The V.4 cascade is
+   built ONLY when resolution is requested, so the default offline pass never
+   constructs a network client.
+
+### Tests / checks
+- `uv run pytest apps/app-main/tests/test_reference_extraction_service.py
+  apps/app-main/tests/test_reference_pipeline_hook.py
+  apps/app-main/tests/test_handle_reference_extract.py
+  apps/app-main/tests/test_reference_extraction_flag.py
+  apps/app-main/tests/test_source_pipeline.py
+  apps/app-main/tests/test_handle_process_source_autoembed.py
+  apps/app-main/tests/test_handle_embed_source_insights_chain.py
+  apps/app-main/tests/test_handlers.py -q`
+  → **56 passed, 1 skipped** (25 new; adjacent pipeline/handler suites show no
+  regressions). All offline — no DB, no network.
+- New files: `test_reference_extraction_service.py` (service unit — extraction →
+  mocked U.3 hand-off + payload assertion, idempotent re-run, no-refs/empty clean
+  no-op, `full_text` fallback, `resolve_external` cascade invocation + soft
+  failure), `test_reference_pipeline_hook.py` (stage shape, flag OFF/ON dispatch,
+  best-effort enqueue, failing hook does not fail ingest),
+  `test_handle_reference_extract.py` (command→JobType routing asserted at the
+  submit seam per the job-queue-singleton pattern, handler summary,
+  `resolve_external` threading, reraise on hard failure),
+  `test_reference_extraction_flag.py` (gate default + lenient parsing).
+- `uv run ruff check` on all changed files → clean.
+- `uv run mypy` on the new service → clean; the only remaining diagnostics are the
+  pre-existing cross-package `import-untyped` baseline (identical on the sibling
+  `cites_materialization_service.py`) plus the known `mypy.ini` duplicate-option
+  warning.
+
+### `# TODO(V-live)` — deferred to the live smoke
+- **True end-to-end `cites` edge count on real documents** — the headline
+  acceptance criterion. Deliberately NOT required in CI: covered offline at the
+  seam, with the live assertion parked as the skipped
+  `test_end_to_end_cites_edge_count` in `test_reference_extraction_service.py`
+  (`# TODO(V-live)`). Needs a live DB + real ingested documents with
+  bibliographies; note U.1 measured 0 intra-corpus citations on the current
+  corpus, so a non-zero edge count needs a corpus that actually cites itself.
+- Inherited V.1–V.3 / V.4 live TODOs below still stand (segmentation robustness,
+  author parsing, region bounds, and the V.4 provider contracts).
+
+---
+
 ## Phases V.1 + V.2 + V.3 — reference-EXTRACTION producer (Backend) — READY FOR REVIEW
 
 **Branch**: `track/v123-reference-producer` (off `track/v4-work-resolver` @ `ebfc64d`; stacked PR)
