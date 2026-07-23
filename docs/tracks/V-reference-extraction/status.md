@@ -1,5 +1,82 @@
 # Track V — status
 
+## Phases V.1 + V.2 + V.3 — reference-EXTRACTION producer (Backend) — READY FOR REVIEW
+
+**Branch**: `track/v123-reference-producer` (off `track/v4-work-resolver` @ `ebfc64d`; stacked PR)
+**Date**: 2026-07-24
+**Scope**: pure text processing only — the producer side that turns a source's
+document structure into a `List[ParsedReference]` (the V → U.3/V.4 boundary type,
+unchanged). NO DB, NO external APIs, NO LLM, NO U.3 / `cites` materialization
+wiring (that is V.5). Complements V.4 (the resolver side) in the same
+`packages/shared/src/shared/references/` subpackage.
+
+### What was built
+The three pure producer stages + a thin chain, sibling to the V.4 resolver files.
+
+1. **V.1 — `references/region_locator.py`** — locate the bibliography region.
+   - `ReferenceChunk`: DB-free projection of a persisted `chunk`
+     (`text`/`section_path`/`element_type`/`order`/`page`), mirroring the fields
+     V needs (docling_document_json is transient — structure is the chunks).
+   - `locate_reference_region(chunks, full_text="") -> LocatedRegion`:
+     structure-first (a chunk whose `section_path` tail / heading matches an
+     EN+NL reference vocabulary — References/Referenties/Bibliography/Literatuur/
+     Bronnen/Works Cited/…), else a `full_text` heading-only regex fallback with
+     an appendix/acknowledgements terminator so a trailing appendix is not
+     swallowed. `located_via` ∈ {`structure`,`full_text`,`none`}; span is the
+     char offset into `full_text` when known. Absent region → empty, never raises.
+2. **V.2 — `references/segmenter.py`** — split the region into entries.
+   - `segment_region(region_text, *, ambiguity_resolver=None) -> List[str]`:
+     cheap-first deterministic heuristics — numbered lists (`[1]`/`1.`/`(1)`),
+     blank-line paragraph blocks, or author-year start-detection. Continuation
+     lines are merged so a wrapped multi-line entry stays ONE entry (bounded
+     over-segmentation). `ambiguity_resolver` is the LLM-on-the-margin seam
+     (per `design-thematic-classification`); the default path never calls it.
+3. **V.3 — `references/reference_parser.py`** — parse one entry.
+   - `parse_reference(entry) -> ParsedReference`: DOI (regex + shared
+     `normalize_doi`), year (parenthesized-slot-first; Dutch vergaderjaar
+     `2023/24`→2023), authors (APA `Surname, I.` comma-form AND IEEE
+     initials-first `I. Surname`; matcher normalizes to surnames), best-effort
+     quoted/APA title+venue. `raw_text` ALWAYS set → a partially-parseable entry
+     still yields a valid `ParsedReference`.
+4. **Chain — `references/reference_extractor.py`** —
+   `extract_references(chunks, full_text="", *, ambiguity_resolver=None) ->
+   List[ParsedReference]`: locate → segment → parse; empty region → `[]`. Pure;
+   V.5 orchestration/U.3/DB wiring is deliberately NOT here.
+
+New producer surface is exported from `references/__init__.py` (extends the V.4
+exports cleanly; V.4 resolver files untouched).
+
+### Tests / checks
+- `uv run pytest packages/shared/tests/ -q` → **602 passed** (42 new; 560 prior,
+  no regressions). New files: `test_reference_region_locator.py` (V.1),
+  `test_reference_segmenter.py` (V.2), `test_reference_parser.py` (V.3),
+  `test_reference_extractor.py` (chain). All offline/deterministic — no DB, no
+  network, no LLM. Fixtures: `tests/fixtures/references/*.txt` (synthetic,
+  committed; mimic APA/IEEE/Dutch bibliographies + Kamerstuk, not the gitignored
+  real corpus).
+- `uv run ruff check` on changed files → clean.
+- `uv run mypy` on the 4 new source modules → clean (the `mypy.ini`
+  duplicate-option warning is pre-existing/unrelated, as in V.4).
+
+### `# TODO(V-live)` — confirm against the real corpus (tomorrow's manual smoke)
+- **Segmentation robustness** (`segmenter.py`): the numbered/blank-line/
+  author-year strategy selection is validated on synthetic fixtures; confirm the
+  author-year start-detection opener + continuation-cue behave on real wrapped,
+  no-blank-line paper bibliographies (economics PDFs) and the Regio Deal
+  convenanten.
+- **Author parsing** (`reference_parser.py`): APA vs IEEE routing is heuristic;
+  confirm coverage on real mixed-style bibliographies (particle surnames,
+  "et al.", corporate authors).
+- **Full-text region bounds** (`region_locator.py`): the fallback takes the LAST
+  heading-only "References" line to end / next terminator; confirm on real
+  `full_text` that no in-body "references" prose false-triggers and the terminator
+  set covers the real tail sections.
+- **Footnotes/endnotes**: v1 intentionally handles only bibliography-section
+  references (Docling emits no footnote element type; layout/superscript recovery
+  is deferred to a later phase — noted in the region_locator docstring).
+
+---
+
 ## Phase V.4 — external work-resolution cascade (Backend) — READY FOR REVIEW
 
 **Branch**: `track/v4-work-resolver` (off `main` @ `5735deb`)
