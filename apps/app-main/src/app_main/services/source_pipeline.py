@@ -64,6 +64,7 @@ class StageName(str, Enum):
     EXTRACT = "extract"
     GRAPH = "graph"
     INSIGHTS = "insights"
+    REFERENCES = "references"
 
 
 @dataclass(frozen=True)
@@ -151,6 +152,21 @@ SOURCE_PIPELINE: List[PipelineStage] = [
         depends_on=StageName.EMBED,
         enqueue_command="run_summaries",
         gate="auto_insights",
+        parallel=True,
+    ),
+    # Track V.5: PARALLEL reference-extraction pass off INGEST, behind the global
+    # ``references`` gate (``ENABLE_REFERENCE_EXTRACTION`` env, DEFAULT OFF). It
+    # depends on INGEST (it needs the persisted chunks, not embeddings) and does
+    # NOT set processing_stage — it is enrichment, so it never gates ``complete``.
+    # With the gate OFF (the default) ``advance_source`` off ``ingested`` enqueues
+    # NOTHING new — the un-flagged ingest path is byte-for-byte the pre-V.5 path.
+    PipelineStage(
+        name=StageName.REFERENCES,
+        produces=None,
+        auto=True,
+        depends_on=StageName.INGEST,
+        enqueue_command="extract_references",
+        gate="references",
         parallel=True,
     ),
 ]
@@ -284,6 +300,9 @@ async def advance_source(
             continue
         if branch.gate == "auto_insights":
             job_id = await _maybe_chain_insights(source_id)
+            result.enqueued[branch.name.value] = job_id
+        elif branch.gate == "references":
+            job_id = await _maybe_chain_references(source_id)
             result.enqueued[branch.name.value] = job_id
 
     return result
@@ -430,3 +449,30 @@ async def _maybe_chain_insights(source_id: str) -> Optional[str]:
         )
 
     return await _best_effort_enqueue(source_id, "run_summaries", "insights")
+
+
+async def _maybe_chain_references(source_id: str) -> Optional[str]:
+    """Best-effort, config-gated V.5 reference-extraction enqueue.
+
+    Consults the global ``ENABLE_REFERENCE_EXTRACTION`` flag (default OFF — the
+    safe value, keeping the un-flagged ingest path byte-for-byte identical to
+    pre-V.5). When ON, enqueues ``extract_references`` (``REFERENCE_EXTRACT``,
+    the whole-corpus reference pass that feeds U.3's ``cites`` materialization);
+    when OFF, skips with no enqueue. Best-effort: a queue hiccup logs and returns
+    ``None`` — never fails the already-persisted ingest. REFERENCES is a parallel
+    enrichment: it does NOT touch ``processing_stage``.
+
+    Returns the enqueued command id, or ``None`` when gated off / failed.
+    """
+    from app_main.config import get_reference_extraction_enabled
+
+    if not get_reference_extraction_enabled():
+        logger.debug(
+            f"Skipping reference extraction for source {source_id}: "
+            f"ENABLE_REFERENCE_EXTRACTION is off"
+        )
+        return None
+
+    return await _best_effort_enqueue(
+        source_id, "extract_references", "references"
+    )

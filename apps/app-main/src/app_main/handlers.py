@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from pydantic import BaseModel
-
 from shared.types.enums import JobType
 
 from app_main.services.command_service import get_registry
@@ -26,6 +25,8 @@ from app_main.services.command_service import get_registry
 # holds an ad-hoc next-stage enqueue any more (PL.1–PL.3 had them scattered).
 from app_main.services.source_pipeline import (
     advance_source,
+)
+from app_main.services.source_pipeline import (
     set_processing_stage as _set_processing_stage,
 )
 
@@ -89,6 +90,21 @@ class NoteAutoLinkPayload(BaseModel):
     note_id: str
     k: Optional[int] = None
     min_similarity: Optional[float] = None
+
+
+class ReferenceExtractPayload(BaseModel):
+    """Payload for the Track V.5 reference-extraction post-ingest job.
+
+    Enqueued (best-effort, config-gated) after a source is ingested. ``source_id``
+    is the TRIGGERING source (carried for job↔source linkage + logging); the pass
+    itself is whole-corpus because U.3's ``materialize`` regenerates the entire
+    ``cites`` projection. ``resolve_external`` is opt-in and defaults OFF so the
+    auto-chained pass stays fully offline.
+    """
+
+    command_name: str = "extract_references"
+    source_id: Optional[str] = None
+    resolve_external: bool = False
 
 
 class ExportObsidianPayload(BaseModel):
@@ -582,6 +598,70 @@ async def handle_note_auto_link(payload: Dict[str, Any]) -> Dict[str, Any]:
         **result.to_dict(),
         "processing_time": processing_time,
     }
+
+
+# ---------------------------------------------------------------------------
+# REFERENCE_EXTRACT — extract_references, chained (gated) after ingest (V.5)
+# ---------------------------------------------------------------------------
+
+
+@registry.register(JobType.REFERENCE_EXTRACT)
+async def handle_reference_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Track V.5 handler: extract corpus references and materialize ``cites``.
+
+    Runs the whole-corpus reference pass (``ReferenceExtractionService`` — extract
+    each source's references from its persisted chunks, then feed U.3's existing
+    ``materialize`` entry point). The pass is a SEPARATE job from ``DOCUMENT_PARSE``
+    so a reference/matching failure stays isolated from the (already-persisted)
+    source + chunks: this handler raises on a hard failure (the worker records the
+    job FAILED), but the ingest that enqueued it has long since succeeded.
+
+    Whole-corpus, not per-source: U.3's ``materialize`` is a clear-before-relate
+    regenerator of the entire ``cites`` table, so feeding it one source's refs
+    would wipe every other source's edges. The pass therefore (re)assembles the
+    full corpus map and materializes once — idempotent (re-run yields the same
+    edge set) and non-destructive (canonical ``source`` rows untouched).
+    """
+    validated = ReferenceExtractPayload(**payload)
+    start_time = time.time()
+
+    try:
+        from app_main.dependencies import get_reference_extraction_service
+
+        logger.info(
+            f"Starting reference extraction pass "
+            f"(triggered by source={validated.source_id}, "
+            f"resolve_external={validated.resolve_external})"
+        )
+        service = get_reference_extraction_service(
+            resolve_external=validated.resolve_external
+        )
+        summary = await service.materialize_corpus(
+            resolve_external=validated.resolve_external
+        )
+
+        processing_time = time.time() - start_time
+        logger.info(
+            f"Reference extraction pass completed in {processing_time:.2f}s "
+            f"(refs={summary.refs_extracted}, "
+            f"cites_edges={summary.edges_materialized})"
+        )
+        return {
+            "success": True,
+            "sources_scanned": summary.sources_scanned,
+            "sources_with_references": summary.sources_with_references,
+            "refs_extracted": summary.refs_extracted,
+            "edges_materialized": summary.edges_materialized,
+            "external_resolved": summary.external_resolved,
+            "processing_time": processing_time,
+        }
+
+    except Exception as e:
+        logger.error(
+            f"Reference extraction pass failed "
+            f"(triggered by source={validated.source_id}): {e}"
+        )
+        raise
 
 
 # ---------------------------------------------------------------------------

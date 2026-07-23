@@ -63,3 +63,40 @@ def get_rate_limit_rpm() -> int:
     DS upstream uses 60; ON gets a little slack per Q-I-H1-1.
     """
     return _int_env("RATE_LIMIT_RPM", 120)
+
+
+# ---------------------------------------------------------------------------
+# Reference-extraction post-ingest pass (Track V.5)
+# ---------------------------------------------------------------------------
+# The V.5 orchestration (extract a source's references -> feed U.3's ``cites``
+# materialization) hangs off ingest as a GUARDED, best-effort, OPT-IN post-ingest
+# stage. It is OFF by default so the ingest path is byte-for-byte the same as
+# before (only a guarded, config-gated no-op is added). Ops opt in by setting
+# ``ENABLE_REFERENCE_EXTRACTION=true``. Read at call time (like the upload guards
+# above) so tests can monkeypatch the env after import.
+
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    """Read a boolean env var, falling back to ``default`` on missing/blank.
+
+    Lenient like :func:`_int_env`: an unset/blank value returns ``default``; any
+    other value is truthy only when it is one of ``1/true/yes/on`` (case-
+    insensitive). A mis-set flag never crashes ingest — it falls back to the safe
+    default instead.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in _TRUE_VALUES
+
+
+def get_reference_extraction_enabled() -> bool:
+    """Whether the V.5 reference-extraction post-ingest pass is enabled.
+
+    Default ``False`` (the safe value): an un-flagged ingest never enqueues the
+    reference pass, keeping the pipeline behaviour identical to pre-V.5. Set
+    ``ENABLE_REFERENCE_EXTRACTION=true`` to turn the guarded pass on.
+    """
+    return _bool_env("ENABLE_REFERENCE_EXTRACTION", False)

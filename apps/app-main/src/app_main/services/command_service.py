@@ -7,13 +7,11 @@ submit/status/cancel/list without knowing the underlying implementation.
 
 from typing import Any, Dict, List, Optional
 
-from loguru import logger
-
-from shared.models.jobs import Job, JobSubmitRequest
-from shared.types.enums import JobPriority, JobStatus, JobType
-
 from job_queue import JobQueue, JobRepository, JobService, JobWorker
 from job_queue.registry import HandlerRegistry
+from loguru import logger
+from shared.models.jobs import Job, JobSubmitRequest
+from shared.types.enums import JobPriority, JobStatus, JobType
 
 # ---------------------------------------------------------------------------
 # Module-level singletons — initialised once at import time.
@@ -63,6 +61,8 @@ _COMMAND_TO_JOB_TYPE: Dict[str, JobType] = {
     "analyze_data": JobType.INSIGHT_EXTRACT,
     # Track Y.3: background auto-link, chained after a note is embedded.
     "auto_link_note": JobType.NOTE_AUTO_LINK,
+    # Track V.5: reference-extraction post-ingest pass (feeds U.3 ``cites``).
+    "extract_references": JobType.REFERENCE_EXTRACT,
 }
 
 
