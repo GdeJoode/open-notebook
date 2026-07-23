@@ -1,5 +1,11 @@
 # Track L — Entity typing fidelity — status
 
+> ✅ **TRACK CLOSED (reconciled 2026-07-23)** — all phases L.1–L.4 are **merged
+> to `main`** via merge commits `5b7cb7f` · `33f9400` · `c83a83d` · `9bcf0ee`.
+> The "ready for review" cells below predate the merges and are kept as an audit
+> trail. No code is pending. Roadmap Track L status updated from PLANNED →
+> CLOSED. See [`../_status.md`](../_status.md).
+
 Append-only ledger. One row per phase attempt.
 
 | Phase | Title | PR | Branch | Date | Status |
