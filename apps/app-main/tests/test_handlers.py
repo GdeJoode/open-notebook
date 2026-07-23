@@ -48,6 +48,7 @@ def test_existing_handlers_still_registered():
         JobType.EMBEDDING_GENERATE,
         JobType.EXPORT_OBSIDIAN,  # D.1b
         JobType.NOTE_AUTO_LINK,  # Y.3
+        JobType.REFERENCE_EXTRACT,  # V.5
     }
     actual = set(registry.registered_types)
     missing = expected - actual
