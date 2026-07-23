@@ -101,6 +101,41 @@ The only refs NOT in `main` are outside the track workflow:
 5. **This dashboard is not auto-maintained** — regenerate it (or wire up the
    `cross-track-monitor` agent) after the next phase merge, otherwise it drifts.
 
+## Open items / backlog (merged ≠ fully built)
+
+The merge-readiness audit proves no *branch* is unmerged. That is NOT the same as
+"every planned feature is done". Real open work, evidence-based (2026-07-23):
+
+### A. Genuinely open small track
+- **Track V — reference-extraction** — `docs/tracks/V-reference-extraction/` has
+  **only `plan.md`**, no status, no implementation. Track U.3 defined just the
+  `ParsedReference` interface/stub it would feed; the actual citation parsing was
+  never built. Nearest "forgotten small feature".
+
+### B. Deferred follow-ups inside CLOSED tracks
+| Item | What | Size |
+|---|---|---|
+| **A.3** | markitdown / ephemeral-venv reuse | ~½ day (roadmap: "nice-to-have, not blocking") |
+| **M.5** | heterogeneous-chain integration test + metrics + ARCHITECTURE docs | small |
+| **I.H2** | `chunk_edit` table (currently loguru-audit only) | small |
+| **I.H1 AC5** | multi-worker shared state (currently in-memory backend) | small |
+| **J FU-J4-2** | error-mapping edge: a 400 error with a 5xx number in its body can misclassify as failover-eligible | tiny |
+| **D.0 #1** | SurrealQL promotion of a filter | tiny |
+| **A e2e workflow** | `.github/workflows/e2e.yml` still parked as `.pending` | orchestrator task |
+
+### C. Live-verification gaps (the biggest honest caveat)
+**~54 acceptance criteria** across the ledgers are marked "deferred to a live run"
+because the sandbox had no Docker/SurrealDB — migration apply/revert, live counts,
+latency, visual checks. The code is **merged but never verified against a live
+database**. Not an open *feature*, but an open *risk*: "shipped" is here partly
+"shipped, live-unproven". A single live-DB validation pass would close most.
+
+### D. Not-started / parked / deferred (known, larger)
+- **Not started**: C (content quality), E (research workflows), F (operations),
+  G (agent integration). **Deferred**: H (vision parser, after G).
+  **Parked**: T.2b (prompt change). **Proposed**: OKF (see
+  `OKF-open-knowledge-format/plan.md`).
+
 ## Next up (per roadmap dependency order)
 
 - **Documentation cleanup only** for the landed work (items 1–2 above) — there is
