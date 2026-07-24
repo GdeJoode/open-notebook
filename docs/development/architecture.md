@@ -138,9 +138,19 @@ async def ask_graph(state: AskState):
 
 ### Source extraction pipeline
 
-Document ingestion is dispatched through `apps/app-main/src/app_main/services/parsing/engine_dispatcher.py`, which maps the user's `parser_engine` setting (`simple` / `docling` / `mineru` / `auto`) and the file extension to a concrete extraction client. The two GPU-backed parser engines (`services/docling/`, `services/mineru/`) are independent FastAPI containers that share an input volume and expose a symmetric `/process` endpoint. Audio/video files bypass the dispatcher entirely and route to WhisperX via the in-process `IngestionWorkflow`.
+Document ingestion is dispatched through `apps/app-main/src/app_main/services/parsing/engine_dispatcher.py`, which maps the user's `parser_engine` setting (`simple` / `docling` / `mineru` / `markitdown` / `auto`) and the file extension to a concrete extraction client. `markitdown` (Track A.3) is a lightweight, ML-free engine (an optional dependency) that converts born-digital files to Markdown and adapts them to the shared `ExtractedDocument` with no spatial data. The two GPU-backed parser engines (`services/docling/`, `services/mineru/`) are independent FastAPI containers that share an input volume and expose a symmetric `/process` endpoint. Audio/video files bypass the dispatcher entirely and route to WhisperX via the in-process `IngestionWorkflow`.
 
 When `parser_engine = "auto"`, the orchestrator `auto_fallback.py` runs Docling first, scores the result via `confidence.py::score_docling_extraction` (six weighted signals: OCR confidence, text density, heading rate, table success, image ratio, unknown-element ratio), and re-parses with MinerU only when the overall score is below `docling_min_confidence` (default 0.95). The chosen engine, confidence, signal breakdown, and a `fallback_triggered` flag are persisted on the per-source `Source.metadata` bag (SurrealDB `FLEXIBLE TYPE option<object>`, migration #43) and rendered in the UI by `ParserEngineBadge`.
+
+The ingest chain is declarative and resumable: `services/source_pipeline.py` defines one ordered `SOURCE_PIPELINE` (INGEST→EMBED→EXTRACT→GRAPH, with INSIGHTS/REFERENCES as parallel best-effort branches), and `advance_source` reads a source's `processing_stage` (`ingested`/`embedded`/`extracted`/`graphed`/`complete`, plus the parked `awaiting_schema_review`/`failed`) and dispatches the next stage — so a source resumes from where it stopped. On a stage failure, `set_failed_stage` records **which** stage failed on `Source.metadata.failed_stage` (Track F.7) so a retry knows where to resume.
+
+### Operations & quality (Track F)
+
+A per-notebook quality layer, all off the KG the pipeline builds:
+
+- **Audit** (`services/audit/audit_service.py`) — six always-on, LLM-free checks (citation completeness, stale sources, low-confidence survivors, long-pending orphans, community cohesion, schema drift) computed as pure functions over a notebook's entities/sources/relations and persisted to the `audit_findings` table (migration 75, snapshot-per-run). Surfaced at `GET/POST /api/notebooks/{id}/audit` and the `AuditWidget`.
+- **Deep audit** (`services/audit/deep_audit_service.py`) — two on-demand checks (`POST …/audit/deep`): conflicting facts (surfaces Z.2's existing `source_verdict` contradiction edges — no new LLM call) and provenance gaps (relations with no source evidence).
+- **Librarian** (`services/audit/librarian_service.py`) — an opt-in (`notebook.librarian_enabled`) periodic re-run of the audit via the command/job seam (`JobType.LIBRARIAN_AUDIT`), enqueued per opt-in notebook by an external periodic trigger.
 
 - **Routing**: `apps/app-main/src/app_main/services/parsing/engine_dispatcher.py`
 - **Auto-fallback**: `apps/app-main/src/app_main/services/parsing/auto_fallback.py`

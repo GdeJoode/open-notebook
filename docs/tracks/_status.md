@@ -161,16 +161,15 @@ assertions), and the `test-build-*` CI jobs reference a missing `Dockerfile.sing
 regressions — see item A (e2e workflow) and the CI-hygiene follow-up.
 
 ### D. Not-started / parked / deferred (known, larger)
-- **Not started**: C (content quality), E (research workflows), F (operations),
+- **Not started**: C (content quality), E (research workflows),
   G (agent integration). **Deferred**: H (vision parser, after G).
   **Parked**: T.2b (prompt change), RePEc resolver-leg (config-gated, deliberately
-  not enabled). **Shipped**: OKF (was proposed; merged via #48 — see
-  `OKF-open-knowledge-format/`).
+  not enabled). **Shipped**: OKF (merged via #48); **F — operations** (audit +
+  librarian + failure-provenance; F.1–F.7 via #58–#64, 2026-07-24 — see
+  `F-operations/{plan,status,RETRO}.md`; F.7b `chunked`-split deferred).
 
 ## Next up (per roadmap dependency order)
 
-- **Documentation cleanup only** for the landed work (items 1–2 above) — there is
-  no code merge backlog.
-- Then the untouched roadmap tracks: **C** (content quality), **E** (research
-  workflows), **F** (operations), **G** (agent integration) — with **H** deferred
-  until **G** lands.
+- Then the untouched roadmap tracks: **G** (agent integration) — with **H**
+  deferred until **G** lands — plus **C** (content quality) and **E** (research
+  workflows). (**F** shipped 2026-07-24.)

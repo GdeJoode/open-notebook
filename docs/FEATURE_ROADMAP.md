@@ -476,6 +476,13 @@ Planning-stap die query opbreekt in 3-7 subqueries → parallelle subagents per 
 
 ## Track F — Operations & quality (audit, librarian, resumable)
 
+> **SHIPPED 2026-07-24** (F.1–F.7, PRs #58–#64). Always-on LLM-free quality audit
+> (6 checks) + on-demand deep audit (conflicting facts / provenance gaps, LLM-free
+> by reusing Z.2's `source_verdict` edges) + widget/deep-UI, an opt-in periodic
+> **librarian** job (+ toggle UI), and **failure-stage provenance** on the ingest
+> pipeline. Deferred: F.7b (`chunked` sub-stage split — `ingested` already ⊇
+> chunked) and e2e specs. See `docs/tracks/F-operations/{plan,status,RETRO}.md`.
+
 ### F1 — Audit met 8 concrete checks (Q3 finalized)
 
 **Always-on dashboard widget** (6 LLM-vrije checks):
