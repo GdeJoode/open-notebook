@@ -168,3 +168,24 @@ async def test_network_failure_returns_none():
         ParsedReference(raw_text="Kamerstukken II 2019/20, 35 300, nr. 1")
     )
     assert work is None
+
+
+@pytest.mark.asyncio
+async def test_dossier_substring_in_identifier_does_not_false_match():
+    # identifier digits "3530012" CONTAIN "35300" as a substring but not as a
+    # whole digit-group, and there is no dedicated <dossiernummer>. With an
+    # unrelated title this must NOT produce a 0.95 dossier match.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, text=_sru("Iets heel anders", "kst-3530012-9", dossiernummer=None)
+        )
+
+    resolver = _resolver(handler)
+    work = await resolver.resolve(
+        ParsedReference(
+            raw_text="Kamerstukken II 2019/20, 35 300, nr. 1",
+            title="Onvergelijkbare titel over iets anders",
+        )
+    )
+    # No dedicated dossiernummer, digit-group mismatch, no title overlap → no hit.
+    assert work is None

@@ -316,8 +316,7 @@ class AuditService:
         created = marker_rows[0].get("created")
         rows = await execute_query(
             "SELECT * FROM audit_findings "
-            "WHERE notebook = $nb AND run_id = $run AND check_id != $marker "
-            "ORDER BY severity",
+            "WHERE notebook = $nb AND run_id = $run AND check_id != $marker",
             {
                 "nb": ensure_record_id(notebook_id),
                 "run": run_id,
@@ -336,6 +335,11 @@ class AuditService:
             )
             for r in (rows or [])
         ]
+        # Sort by SEVERITY RANK (error > warn > info), not the raw string — a
+        # `ORDER BY severity` in SurrealQL is alphabetical (error < info < warn),
+        # which would render info above the more-urgent warn.
+        _rank = {"error": 0, "warn": 1, "info": 2}
+        findings.sort(key=lambda f: _rank.get(f.severity, 3))
         return AuditRunResponse(
             notebook_id=notebook_id,
             run_id=run_id,

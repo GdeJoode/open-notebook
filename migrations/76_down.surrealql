@@ -1,0 +1,12 @@
+-- ============================================================================
+-- Migration 76 DOWN: remove the `notebook.librarian_enabled` field.
+--
+-- Faithful inverse: the forward migration only DEFINEs this one field. REMOVE
+-- FIELD IF EXISTS so the rollback is idempotent and safe where 76 never applied.
+-- The opt-in values are discarded with the field — acceptable: it is a pure
+-- feature toggle with no downstream schema dependency.
+-- ============================================================================
+
+REMOVE FIELD IF EXISTS librarian_enabled ON TABLE notebook;
+
+RETURN NONE;

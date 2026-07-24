@@ -152,12 +152,14 @@ class OverheidResolver:
         uri = self._find_local_text(record, "preferredUrl") or identifier
 
         # Strongest signal: the reference's dossiernummer matches the record's.
-        # Prefer the dedicated <dossiernummer> element; fall back to digits in the
-        # identifier (holds for ``kst-<dossier>-<nr>`` ids, not for ``blg-…``).
+        # Prefer the dedicated <dossiernummer> element; fall back to a WHOLE
+        # digit-group of the identifier (holds for ``kst-<dossier>-<nr>``). A
+        # digit-GROUP match, not a substring — ``35300 in "353001"`` is a false
+        # positive that a group check ("35300" ∈ ["35300","1"]) rejects.
         record_dossier = self._find_local_text(record, "dossiernummer")
         if ref_dossier and (
             (record_dossier and ref_dossier == self._digits(record_dossier))
-            or (identifier and ref_dossier in self._digits(identifier))
+            or (identifier and ref_dossier in self._digit_groups(identifier))
         ):
             return self._build(
                 title or identifier, identifier, uri, doc_type, year,
@@ -206,6 +208,15 @@ class OverheidResolver:
     @staticmethod
     def _digits(text: str) -> str:
         return re.sub(r"\D", "", text or "")
+
+    @staticmethod
+    def _digit_groups(text: str) -> list:
+        """Contiguous digit-runs of ``text`` — e.g. ``kst-35300-1`` → ``["35300","1"]``.
+
+        Used for the dossier fallback so a dossiernummer must equal a WHOLE group
+        of the identifier, not merely be a substring of the concatenated digits.
+        """
+        return re.findall(r"\d+", text or "")
 
     @staticmethod
     def _parse_year(issued: str) -> Optional[int]:

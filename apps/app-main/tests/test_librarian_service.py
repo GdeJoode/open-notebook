@@ -93,3 +93,36 @@ async def test_consumer_runs_audit_and_writes_snapshot(live_surrealdb):
         assert markers and str(markers[0]["run_id"]) == result["run_id"]
     finally:
         conn._pool = orig
+
+
+@pytest.mark.requires_docker
+async def test_librarian_enabled_field_persists_and_is_queryable(live_surrealdb):
+    # Regression (migration 76): on the SCHEMAFULL notebook table the opt-in flag
+    # must actually persist and the list query must find it. Before the migration
+    # the field was silently dropped and list_librarian_notebook_ids was always [].
+    import uuid
+
+    from surrealdb_service.connection import ensure_record_id, execute_query
+    from surrealdb_service.repositories import NotebookRepository
+
+    repo = NotebookRepository(config=live_surrealdb)
+    name = f"lib-{uuid.uuid4().hex[:8]}"
+    created = await execute_query(
+        "CREATE notebook SET name = $n, librarian_enabled = true, archived = false",
+        {"n": name},
+        live_surrealdb,
+    )
+    nb_id = str(created[0]["id"])
+
+    assert await repo.get_librarian_enabled(nb_id) is True
+    ids = await repo.list_librarian_notebook_ids()
+    assert nb_id in ids
+
+    # Toggling off persists too and drops it from the list.
+    await execute_query(
+        "UPDATE $id SET librarian_enabled = false",
+        {"id": ensure_record_id(nb_id)},
+        live_surrealdb,
+    )
+    assert await repo.get_librarian_enabled(nb_id) is False
+    assert nb_id not in await repo.list_librarian_notebook_ids()

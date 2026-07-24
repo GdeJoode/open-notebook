@@ -108,7 +108,7 @@ async def test_run_deep_is_fail_soft(monkeypatch):
     # Both checks failed → two check_error findings were appended.
     appended = audit.append_findings.await_args.args[2]
     assert len(appended) == 2
-    assert all(f.check_id == "check_error" for f in appended)
+    assert all(f.check_id == "deep_check_error" for f in appended)
 
 
 # -- light live path --------------------------------------------------------
@@ -129,4 +129,32 @@ async def test_run_deep_on_empty_notebook_is_clean(live_surrealdb):
     result = await svc.run_deep(nb)
     assert result.notebook_id == nb
     assert result.run_id  # a run was established
-    assert all(f.check_id != "check_error" for f in result.findings)
+    assert all(f.check_id not in ("check_error", "deep_check_error") for f in result.findings)
+
+
+@pytest.mark.requires_docker
+async def test_run_deep_clears_prior_deep_findings_no_duplication(live_surrealdb):
+    # Regression: a repeat POST …/audit/deep must REPLACE, not duplicate, the deep
+    # findings on a run (append is a bare CREATE loop). Simulate a prior deep run
+    # leaving a stale conflicting_facts finding, then run_deep on an empty notebook
+    # (no new deep findings) → the stale one is cleared.
+    import uuid
+
+    from app_main.services.audit.audit_service import AuditService
+    from shared.models.audit import AuditFinding
+
+    nb = f"notebook:deepdup-{uuid.uuid4().hex[:8]}"
+    audit = AuditService(config=live_surrealdb)
+    svc = DeepAuditService(audit_service=audit, config=live_surrealdb)
+
+    run = await audit.run_all(nb)  # establish a (clean) run
+    await audit.append_findings(
+        nb,
+        run.run_id,
+        [AuditFinding(check_id="conflicting_facts", severity="warn", title="stale")],
+    )
+    before = await audit.latest(nb)
+    assert any(f.check_id == "conflicting_facts" for f in before.findings)
+
+    result = await svc.run_deep(nb)  # empty notebook → clears, appends nothing
+    assert not any(f.check_id == "conflicting_facts" for f in result.findings)
