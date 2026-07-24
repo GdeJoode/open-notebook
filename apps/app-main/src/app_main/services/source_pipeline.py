@@ -348,6 +348,58 @@ async def set_processing_stage(source_id: str, stage: str) -> None:
         )
 
 
+async def set_failed_stage(source_id: str, stage: str) -> None:
+    """Mark a source failed AND record which stage failed (F.7 failure provenance).
+
+    Sets ``processing_stage = "failed"`` (the existing terminal-parked value,
+    unchanged — no new status value, no parallel field) and best-effort writes
+    ``source.metadata.failed_stage`` (+ ``failed_at``) so a resume knows where to
+    retry instead of restarting from ``ingested``. ``metadata`` is the source's
+    existing flexible bag, so this needs NO migration. Both writes are best-effort:
+    a status/metadata write must never mask the pipeline failure it records.
+
+    Resumability is already provided by :func:`advance_source` (a source resumes
+    from its ``processing_stage``); this only adds the *which-stage-failed* record
+    the pre-F.7 bare ``failed`` lacked. ``stage`` is a :class:`StageName` value
+    (``"ingest"`` / ``"embed"`` / ``"extract"`` / ``"graph"``).
+    """
+    await set_processing_stage(source_id, "failed")
+    try:
+        from surrealdb_service.connection import ensure_record_id, execute_query
+
+        from app_main.dependencies import get_source_repo
+
+        await execute_query(
+            "UPDATE $id SET metadata.failed_stage = $stage, "
+            "metadata.failed_at = time::now();",
+            {"id": ensure_record_id(source_id), "stage": stage},
+            get_source_repo().config,
+        )
+    except Exception as meta_err:  # noqa: BLE001 — provenance write is best-effort
+        logger.error(
+            f"Failed to record failed_stage={stage} for source {source_id} "
+            f"(the source is still marked 'failed'): {meta_err}"
+        )
+
+
+async def read_failed_stage(source_id: str) -> Optional[str]:
+    """The recorded ``failed_stage`` for a failed source, else ``None``."""
+    try:
+        from surrealdb_service.connection import ensure_record_id, execute_query
+
+        from app_main.dependencies import get_source_repo
+
+        rows = await execute_query(
+            "SELECT VALUE metadata.failed_stage FROM $id;",
+            {"id": ensure_record_id(source_id)},
+            get_source_repo().config,
+        )
+        return str(rows[0]) if rows and rows[0] else None
+    except Exception as e:  # noqa: BLE001 — read is best-effort
+        logger.warning(f"Could not read failed_stage for source {source_id}: {e}")
+        return None
+
+
 async def _best_effort_enqueue(
     source_id: str, command_name: str, stage_label: str
 ) -> Optional[str]:
