@@ -8,6 +8,7 @@ import { NotebookHeader } from '../../components/NotebookHeader'
 import { SchemaBrowser } from '@/components/notebooks/schema/SchemaBrowser'
 import { CoverageStatsTable } from '@/components/notebooks/schema/CoverageStatsTable'
 import { OrphansDashboard } from '@/components/notebooks/orphans/OrphansDashboard'
+import { AuditWidget } from '@/components/notebooks/audit/AuditWidget'
 import { PendingExtensionsPanel } from '@/components/notebooks/schema/PendingExtensionsPanel'
 import { TtlDownloadButton } from '@/components/notebooks/schema/TtlDownloadButton'
 import { NetworkxExportMenu } from '@/components/notebooks/exports/NetworkxExportMenu'
@@ -134,6 +135,13 @@ export default function NotebookSchemaPage() {
                 Orphans
               </h2>
               <OrphansDashboard notebookId={notebookId} />
+            </section>
+
+            <section aria-labelledby="audit-heading">
+              <h2 id="audit-heading" className="mb-3 text-lg font-semibold">
+                Quality audit
+              </h2>
+              <AuditWidget notebookId={notebookId} />
             </section>
           </div>
         </div>
