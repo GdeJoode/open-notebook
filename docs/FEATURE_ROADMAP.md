@@ -391,6 +391,35 @@ GraphML, GEXF, GML, JSON-tree, edge-list, adjacency-list, pickle.
 
 ---
 
+## Track OKF — Open Knowledge Format export/import
+
+> **Status**: ✅ **SHIPPED (2026-07-24)** — OKF v0.1 export + import,
+> the MCP agent surface, and the notebook-header export UI. A
+> vendor-neutral interchange adapter at the edges of the system,
+> reuse-heavy over the Track D projection + K.3/K.5 dedup; mostly a
+> conformance layer, not a new projection engine. Lossy-by-design: the
+> omitted-field ledger surfaces the dropped substrate (embeddings,
+> chunk provenance, verdict edges, hybrid-search signal) through the
+> REST `X-OKF-Export-Report` header, the MCP report, and the UI — never
+> silent. See the OKF section in
+> [`ARCHITECTURE.md`](../ARCHITECTURE.md) and
+> [`docs/tracks/OKF-open-knowledge-format/`](./tracks/OKF-open-knowledge-format/).
+
+| Phase | Title | Status |
+|---|---|---|
+| OKF.1 | Bundle mapper (shared projection → OKF v0.1 tree + manifest) | ✅ |
+| OKF.2 | `POST /notebooks/{id}/export/okf` + zip packaging + async job seam | ✅ |
+| OKF.3 | OKF import service (`(name,type)` dedup, injection-safe RELATE, idempotent) | ✅ |
+| OKF.4 | MCP `export_okf` / `import_okf` tools (lazy-import app-main exception) | ✅ |
+| OKF.5 | Export dialog + omitted-field ledger UI + docs + RETRO + close-out | ✅ |
+
+**Vision**: make curated open-notebook knowledge portable to arbitrary
+AI agents via a vendor-neutral spec, without coupling external
+consumers to SurrealDB or the MCP tools. OKF complements — never
+replaces — the graph/search/provenance substrate.
+
+---
+
 ## Track E — Research workflows (E1 + E3 first, E2 later)
 
 ### E1 — Single-agent research

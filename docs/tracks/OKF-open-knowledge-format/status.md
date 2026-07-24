@@ -1,5 +1,51 @@
 # Track OKF — status
 
+## OKF.5 — UI export option + docs + RETRO · READY FOR REVIEW
+
+**Branch**: `track/okf5-ui-docs` (off `track/okf4-mcp`).
+
+### What landed
+
+**1. OKF export UI** — an "Export OKF" button in the notebook header
+(`frontend/src/app/(dashboard)/notebooks/components/NotebookHeader.tsx`) opens
+a new zip-only dialog `frontend/src/components/notebooks/exports/OkfExportDialog.tsx`.
+It mirrors the Track-D Obsidian dialog exactly (shared `ExportFilter` sliders +
+switches + entity-types input + the live `/export-preview` parity widget) minus
+the vault-path delivery-mode toggle (OKF is zip-only). New hook
+`frontend/src/lib/hooks/use-okf-export.ts` posts to `POST /notebooks/{id}/export/okf`
+with `{mode:'zip', filter}`, triggers the blob download, and parses the
+`X-OKF-Export-Report` response header.
+
+**2. Lossy-by-design surfaced** — the dialog shows an up-front `role="note"`
+banner ("embeddings, chunk-level provenance, and verdict / contradiction edges
+are not included") and, after export, itemises the server's omitted-field
+ledger (`metadata.omitted_fields`) as a keyboard-operable `<details>`
+disclosure. The 202 deferred-job path closes the dialog with a "queued" toast.
+
+**3. Types** — `frontend/src/lib/types/exports.ts` gains `OkfExportRequest`,
+`OkfExportReport`, `OkfExportMetadata`, `OkfOmittedFields`, `OkfExportDeferred`.
+
+**4. Docs + close-out** — `ARCHITECTURE.md` OKF interchange section (near the
+Track D export docs); `docs/FEATURE_ROADMAP.md` Track OKF ✅ SHIPPED entry with
+the OKF.1–OKF.5 phase list; `RETRO.md`; `docs/tracks/_status.md` OKF row.
+
+### Tests
+
+`cd frontend`
+- `npx vitest run src/lib/hooks/__tests__/use-okf-export.test.ts src/components/notebooks/exports/__tests__/OkfExportDialog.test.tsx` — **7 passed** (3 hook `parseOkfExportReport`, 4 dialog: default state + a11y + submit-forwards-filter + ledger surfaced).
+- `npx tsc --noEmit` — clean.
+- `npx eslint <changed files>` — clean.
+
+### Not in scope / deferred (per plan)
+
+- **Import UI** — deferred. Import is available over REST
+  (`POST /notebooks/{id}/import/okf`) + MCP; no frontend surface yet (a minimal
+  "import OKF bundle" entry is a small follow-up). Noted in RETRO.
+- Durable artifact store + download-polling UI for the deferred (202) large-
+  notebook path — the seam exists (`JobType.EXPORT_OKF`), the UI relies on the
+  "queued" toast. Noted in RETRO follow-ups.
+- No `# TODO`s left in the code.
+
 ## OKF.4 — Agent surface: MCP tools + REST import · READY FOR REVIEW
 
 **Branch**: `track/okf4-mcp` (off `track/okf3-import`).
