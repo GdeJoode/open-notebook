@@ -11,6 +11,8 @@ export interface NotebookResponse {
   note_count: number
   // Track J.3/J.5: null = inherit the global default; 'cloud' | 'private' override.
   privacy_mode?: 'cloud' | 'private' | null
+  // Track F.5: per-notebook librarian opt-in (periodic quality audit).
+  librarian_enabled?: boolean
 }
 
 export interface NoteResponse {
@@ -223,6 +225,8 @@ export interface UpdateNotebookRequest {
   archived?: boolean
   // Track J.3/J.5: null clears the override (inherit global); 'cloud' | 'private' set it.
   privacy_mode?: 'cloud' | 'private' | null
+  // Track F.5: toggle the per-notebook librarian opt-in.
+  librarian_enabled?: boolean
 }
 
 export interface CreateNoteRequest {
