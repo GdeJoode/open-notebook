@@ -28,9 +28,18 @@ from shared.references.arxiv_resolver import ArxivResolver
 from shared.references.crossref_resolver import CrossrefResolver
 from shared.references.datacite_resolver import DataCiteResolver
 from shared.references.enrichment import ReferenceEnricher
+from shared.references.footnote_classifier import classify_footnote
+from shared.references.footnote_reference_extractor import (
+    FootnoteReferenceExtractor,
+)
 from shared.references.grobid_reference_service import (
     GrobidReferenceService,
+    parse_footnotes_tei,
     parse_grobid_tei,
+)
+from shared.references.kamerstuk import (
+    KamerstukIdentifier,
+    parse_kamerstuk_identifier,
 )
 from shared.references.openalex_resolver import OpenAlexResolver
 from shared.references.overheid_resolver import OverheidResolver
@@ -55,6 +64,12 @@ __all__ = [
     # Producer (GROBID, G.2) — the sole, style-agnostic reference engine
     "GrobidReferenceService",
     "parse_grobid_tei",
+    # Footnote path (policy documents, GF.*)
+    "parse_footnotes_tei",
+    "FootnoteReferenceExtractor",
+    "classify_footnote",
+    "KamerstukIdentifier",
+    "parse_kamerstuk_identifier",
     # Core
     "ResolvedWork",
     "WorkResolver",
