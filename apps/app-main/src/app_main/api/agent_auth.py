@@ -105,6 +105,14 @@ class AgentAuditMiddleware(BaseHTTPMiddleware):
         start = time.time()
         response = await call_next(request)
         latency_ms = int((time.time() - start) * 1000)
+        # Do NOT audit a throttled (429) request. The per-IP pre-auth throttle
+        # already bounds those to the per-minute cap; writing one agent_audit_log
+        # row per rejected flood request would itself be a write-amplification DoS
+        # (the throttle bounds the auth DB READ, this bounds the audit DB WRITE).
+        # The ~N/min requests that pass the throttle and reach auth ARE recorded
+        # (incl. 401s), so brute-force visibility is preserved — and bounded.
+        if response.status_code == 429:
+            return response
         ctx = getattr(request.state, "agent_key", None)
         try:
             from app_main.services.agents.audit_service import AgentAuditService

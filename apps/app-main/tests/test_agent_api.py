@@ -91,3 +91,35 @@ def test_extract_entities_with_valid_read_key_returns_entities(monkeypatch):
     body = resp.json()
     assert body["entities"][0]["name"] == "Alice"
     assert body["entities"][0]["entity_type"] == "Person"
+
+
+def test_throttled_429_is_not_audited(monkeypatch):
+    # N1 fix: a request rejected by the pre-auth throttle must NOT write an audit
+    # row (else a flood is a write-amplification DoS). The throttle bounds writes
+    # to the ~N/min that reach auth.
+    import app_main.api.agent_rate_limit as arl
+    import app_main.services.agents.audit_service as aud
+
+    monkeypatch.setenv("AGENT_RATE_LIMIT_RPM", "1")
+    arl._ip_hits.clear()
+    record = AsyncMock()
+    monkeypatch.setattr(aud.AgentAuditService, "record", record)
+    monkeypatch.setattr(
+        agent_auth.AgentKeyService,
+        "authenticate",
+        AsyncMock(return_value={"id": "agent_keys:1", "agent_id": "a", "permission": "read"}),
+    )
+    client = _make_client()
+
+    r1 = client.post(
+        "/api/v1/agents/extract-entities", json={"text": "x"}, headers={"X-API-Key": "ak"}
+    )
+    r2 = client.post(
+        "/api/v1/agents/extract-entities", json={"text": "x"}, headers={"X-API-Key": "ak"}
+    )
+    assert r1.status_code == 200
+    assert r2.status_code == 429
+    # The 200 is audited; the 429 is NOT.
+    audited = [c.kwargs.get("status") for c in record.await_args_list]
+    assert 200 in audited
+    assert 429 not in audited

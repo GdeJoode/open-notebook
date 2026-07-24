@@ -105,9 +105,15 @@ class AgentKeyService:
         non-agent_keys id (e.g. ``notebook:abc``) can never flip ``revoked`` on an
         unrelated table's row — it simply matches nothing.
         """
+        try:
+            rid = ensure_record_id(key_id)
+        except Exception:
+            # A malformed / colon-less id parses to nothing — honour the
+            # idempotent bool contract (no match) instead of raising.
+            return False
         rows = await execute_query(
             "UPDATE agent_keys SET revoked = true WHERE id = $id RETURN AFTER",
-            {"id": ensure_record_id(key_id)},
+            {"id": rid},
             self.config,
         )
         return bool(rows)

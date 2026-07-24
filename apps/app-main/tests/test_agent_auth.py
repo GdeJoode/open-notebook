@@ -105,3 +105,10 @@ async def test_agent_ip_throttle_429s_after_limit(monkeypatch):
         await dep(req)  # 3 → over the cap
     assert exc.value.status_code == 429
     assert exc.value.headers.get("Retry-After") == "60"
+
+
+async def test_revoke_malformed_id_returns_false_no_raise():
+    # N5 fix: a colon-less id must honour the idempotent bool contract, not raise.
+    from app_main.services.agents.key_service import AgentKeyService
+
+    assert await AgentKeyService().revoke("nocolon") is False

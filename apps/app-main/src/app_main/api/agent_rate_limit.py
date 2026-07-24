@@ -71,9 +71,15 @@ def agent_ip_throttle():
             )
         hits.append(now)
         _ip_hits[ip] = hits
+        # Prune keys whose WINDOW is fully expired. The stored list is never
+        # empty (we just appended `now`), so an `if not v` check would free
+        # nothing — the leak is a key that called once and never returned,
+        # keeping a stale 1-element list forever. Filter by the window instead.
+        # The current ip's own entry has a fresh `now`, so it is never pruned.
         if len(_ip_hits) > _PRUNE_ABOVE:
-            for k in [k for k, v in list(_ip_hits.items()) if not v]:
-                _ip_hits.pop(k, None)
+            for k, v in list(_ip_hits.items()):
+                if all(now - t >= _WINDOW_SEC for t in v):
+                    _ip_hits.pop(k, None)
 
     return _dep
 
