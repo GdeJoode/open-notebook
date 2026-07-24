@@ -31,14 +31,13 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 from xml.etree import ElementTree as ET
 
 import httpx
 from loguru import logger
-
-from datetime import datetime, timezone
 
 from shared.retrieval.cites_matching import ParsedReference, normalize_doi
 

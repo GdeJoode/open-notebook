@@ -446,8 +446,8 @@ def test_dedup_collapses_duplicate_doi():
 
 def test_precision_guard_drops_future_year_clause() -> None:
     from shared.references.grobid_reference_service import (
-        parse_grobid_tei,
         _MAX_PLAUSIBLE_YEAR,
+        parse_grobid_tei,
     )
     future = _MAX_PLAUSIBLE_YEAR + 2
     tei = f"""<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><back><listBibl>
