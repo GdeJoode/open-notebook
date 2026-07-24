@@ -49,7 +49,9 @@ a later phase).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 from loguru import logger
@@ -77,6 +79,36 @@ def _dedup_key(ref: ParsedReference) -> str:
     if ref.doi:
         return f"doi:{ref.doi}"
     return "raw:" + " ".join((ref.raw_text or "").lower().split())
+
+
+#: The compose mount `./notebook_data:/app/data`: a source's stored
+#: `data/uploads/…` path is container-relative. In-container it resolves as-is;
+#: for a local run the `data/` prefix maps to the host `notebook_data/`.
+_MOUNT_PREFIX = "data/"
+_HOST_UPLOADS_ROOT = "notebook_data/"
+
+
+def _resolve_asset_pdf(file_path: str) -> str:
+    """Resolve a source's recorded asset path to an on-disk PDF across environments.
+
+    Sources store a container-relative path (``data/uploads/X.pdf``, the
+    ``./notebook_data:/app/data`` mount). Tries, in order: the path as-is
+    (in-container, and local papers under ``data/uploads``); an explicit
+    ``OPEN_NOTEBOOK_UPLOADS_ROOT`` override (root + basename); the mount inverse
+    ``data/`` → ``notebook_data/`` (local dev). Returns the first existing
+    candidate, else the original path unchanged (GROBID then reports it not found
+    and the pass yields ``[]`` — best-effort).
+    """
+    candidates = [file_path]
+    root = os.environ.get("OPEN_NOTEBOOK_UPLOADS_ROOT")
+    if root:
+        candidates.append(str(Path(root) / Path(file_path).name))
+    if file_path.startswith(_MOUNT_PREFIX):
+        candidates.append(_HOST_UPLOADS_ROOT + file_path[len(_MOUNT_PREFIX):])
+    for candidate in candidates:
+        if Path(candidate).is_file():
+            return candidate
+    return file_path
 
 
 def _merge_references(
@@ -149,9 +181,9 @@ class ReferenceExtractionService:
         Reads the source row, takes the uploaded file at ``asset.file_path``, and
         hands the PDF to GROBID (decision G-D1). Best-effort: a source with no
         asset, no ``file_path``, or a non-PDF path (URL/note sources) yields ``[]``
-        — never raises. The ``file_path`` is passed through verbatim (it is
-        repo-root-relative in local runs); path resolution is the caller's/env's
-        concern.
+        — never raises. The stored ``file_path`` is container-relative
+        (``data/uploads/…``, the ``notebook_data`` mount); :func:`_resolve_asset_pdf`
+        maps it to an on-disk PDF across environments before GROBID reads it.
 
         When a :class:`FootnoteReferenceExtractor` is wired (GF.4), the source's
         references are the GROBID **bibliography** refs PLUS the **footnote** refs
@@ -169,9 +201,10 @@ class ReferenceExtractionService:
                 fp=file_path,
             )
             return []
-        refs = list(await self.grobid_service.extract_references(file_path))
+        pdf_path = _resolve_asset_pdf(str(file_path))
+        refs = list(await self.grobid_service.extract_references(pdf_path))
         if self._footnote_extractor is not None:
-            footnote_refs = await self._footnote_extractor.extract(file_path)
+            footnote_refs = await self._footnote_extractor.extract(pdf_path)
             refs = _merge_references(refs, footnote_refs)
         return refs
 
