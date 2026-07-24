@@ -161,6 +161,7 @@ class SourceExtractor:
         )
         use_auto_fallback = route.use_auto_fallback
         use_mineru = route.engine == "mineru"
+        use_markitdown = route.engine == "markitdown"
 
         engine_used: str
         result: Any
@@ -185,6 +186,19 @@ class SourceExtractor:
             client = MineruHttpClient()
             result = await client.process(source_path)
             engine_used = "mineru"
+        elif use_markitdown:
+            from app_main.services.parsing.markitdown_parser import (
+                parse_with_markitdown,
+            )
+
+            logger.info(f"Routing {source_path.name} to markitdown (Track A.3)")
+            log_stream.emit(
+                emit_key,
+                f"Parsing with markitdown: {source_path.name}",
+            )
+            # Pure-Python, sync — run off the event loop so it doesn't block.
+            result = await asyncio.to_thread(parse_with_markitdown, source_path)
+            engine_used = "markitdown"
         else:
             result, engine_used = await self._run_docling(
                 source_path=source_path,

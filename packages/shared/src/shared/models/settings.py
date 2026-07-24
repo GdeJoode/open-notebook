@@ -29,7 +29,7 @@ class ContentSettings(RecordModel):
     #                  (auto-fallback ships in Phase A.1c; in A.1b "auto" behaves like
     #                   "docling" to keep this migration purely structural)
     parser_engine: Optional[
-        Literal["simple", "docling", "mineru", "auto"]
+        Literal["simple", "docling", "mineru", "markitdown", "auto"]
     ] = Field("docling", description="Document parser engine (simple | docling | mineru | auto)")
 
     # File extensions that MinerU accepts. When parser_engine selects MinerU but the

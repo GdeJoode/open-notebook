@@ -65,8 +65,11 @@ Wat we **niet** overnemen:
 > [`docs/tracks/A-mineru/RETRO.md`](./tracks/A-mineru/RETRO.md) for
 > the retrospective and
 > [`docs/tracks/A-mineru/threshold-tuning.md`](./tracks/A-mineru/threshold-tuning.md)
-> for the default-0.95 calibration decision. A3 (markitdown / ephemeral
-> venv reuse) remains as "nice-to-have" follow-up; not blocking.
+> for the default-0.95 calibration decision. A3 (markitdown as a third,
+> lightweight ML-free parser engine) SHIPPED 2026-07-24 — `parser_engine="markitdown"`
+> via an optional dependency + a flat markdown→`ExtractedDocument` adapter (no
+> spatial data). A live smoke over a real corpus (verifying markitdown output
+> quality vs docling) remains the operator follow-up.
 
 **Vision**: twee parser-routes in de UI (docling/MinerU) + automatische fallback wanneer docling-confidence te laag is.
 
@@ -940,7 +943,7 @@ On vault file change:
 
 ### 4.2 Track-onafhankelijke quick wins (tussendoor)
 
-- A3 markitdown (½ dag)
+- ~~A3 markitdown (½ dag)~~ — SHIPPED 2026-07-24 (`parser_engine="markitdown"`, optional dep + markdown→Document adapter)
 - C4 deterministic UUID (1-2 dagen)
 - Vocabulary architecture prep (ORCID/arXiv/Wikidata stubs): geen werk, alleen interface-skeletons
 
