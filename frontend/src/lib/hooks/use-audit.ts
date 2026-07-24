@@ -28,6 +28,14 @@ export function useNotebookAudit(notebookId: string) {
   })
 }
 
+function _findingsSummary(data: AuditRunResponse): string {
+  if (!data.findings.length) return 'No issues found.'
+  const errors = data.findings.filter((f) => f.severity === 'error').length
+  return `${data.findings.length} finding${
+    data.findings.length === 1 ? '' : 's'
+  }${errors ? ` (${errors} error${errors === 1 ? '' : 's'})` : ''}.`
+}
+
 export function useRunAudit(
   notebookId: string,
 ): UseMutationResult<AuditRunResponse, Error, void> {
@@ -56,6 +64,30 @@ export function useRunAudit(
       toast({
         title: 'Audit failed',
         description: 'Could not run the quality audit.',
+        variant: 'destructive' as const,
+      })
+    },
+  })
+}
+
+export function useRunDeepAudit(
+  notebookId: string,
+): UseMutationResult<AuditRunResponse, Error, void> {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  return useMutation({
+    mutationFn: () => auditApi.runDeep(notebookId),
+    onSuccess: (data) => {
+      queryClient.setQueryData(NOTEBOOK_AUDIT_QUERY_KEY(notebookId), data)
+      queryClient.invalidateQueries({
+        queryKey: NOTEBOOK_AUDIT_QUERY_KEY(notebookId),
+      })
+      toast({ title: 'Deep audit complete', description: _findingsSummary(data) })
+    },
+    onError: () => {
+      toast({
+        title: 'Deep audit failed',
+        description: 'Could not run the deep audit.',
         variant: 'destructive' as const,
       })
     },
