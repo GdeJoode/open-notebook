@@ -411,6 +411,14 @@ pipeline); the only new logic is request-shape mapping + audit, both thin.
 
 ### Phase G.4 — "API Keys" settings tab (UI)
 
+> **Status (2026-07-24): SHIPPED (PR #70).** Mint / list / revoke + a per-key
+> audit-log drawer, with a show-once plaintext reveal. Added a session-authed
+> backend read (`GET /api/agent-keys/{key_id}/audit-log`, resolves key→agent_id
+> server-side) since the `X-API-Key` agent-router audit-log needs a key the
+> operator doesn't hold. Adversarial review APPROVED (1 round): session-gated,
+> no IDOR, parameterized SurrealQL, table-scoped, show-once never hits
+> cache/DOM/logs; e2e drives revoked-key → 401.
+
 **Goal**: A settings tab to mint, list, and revoke agent keys and view a key's
 audit-log — the roadmap's "API Keys tab in settings". Mirrors `VaultSync.tsx` /
 `ZoteroSettings.tsx`.
