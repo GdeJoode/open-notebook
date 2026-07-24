@@ -18,6 +18,8 @@ raw text, no DB) — proving the throttle + auth + per-key limit + audit path en
 end; later phases add the ingest façade and the other capabilities.
 """
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from shared.models.agents import (
     ExtractEntitiesRequest,
@@ -25,16 +27,24 @@ from shared.models.agents import (
     ExtractedEntity,
     GenerateSummaryRequest,
     GenerateSummaryResponse,
+    JobStatusResponse,
+    ProcessSourceResponse,
+    ProcessUrlRequest,
 )
 
-from app_main.api.agent_auth import require_agent_key
+from app_main.api.agent_auth import AgentKeyContext, require_agent_key
 from app_main.api.agent_rate_limit import (
     agent_default_limit,
     agent_ip_throttle,
     agent_key_func,
 )
 from app_main.api.rate_limit import limiter
-from app_main.dependencies import get_summarization_service
+from app_main.dependencies import (
+    get_notebook_service,
+    get_source_service,
+    get_summarization_service,
+    get_transformation_service,
+)
 from app_main.services.summarization_service import SummarizationService
 
 router = APIRouter(
@@ -98,6 +108,88 @@ async def generate_summary(
     return GenerateSummaryResponse(
         summary=result.get("summary", ""), strategy=result.get("strategy", "")
     )
+
+
+@router.post("/process-url", response_model=ProcessSourceResponse)
+@limiter.limit(agent_default_limit, key_func=agent_key_func)
+async def process_url(
+    request: Request,
+    response: Response,
+    body: ProcessUrlRequest,
+    _key=Depends(require_agent_key("write")),
+    source_svc=Depends(get_source_service),
+    notebook_svc=Depends(get_notebook_service),
+    transformation_svc=Depends(get_transformation_service),
+) -> ProcessSourceResponse:
+    """Ingest a URL headlessly via the SAME process_source chain as the UI.
+
+    A thin façade over `_create_source_impl` (type="link") — no parallel pipeline.
+    Returns the enqueued job id to poll via GET /agents/jobs/{id}.
+    (process-document / process-audio, which take a multipart upload + reuse
+    enforce_upload_guards, are deferred to G.3b.)
+    """
+    from app_main.api.routers.sources_upload import _create_source_impl
+    from app_main.api.schemas import SourceCreate
+
+    source_create = SourceCreate(
+        type="link",
+        url=body.url,
+        notebook_id=body.notebook_id,
+        transformations=body.transformations,
+    )
+    result = await _create_source_impl(
+        source_create, None, source_svc, notebook_svc, transformation_svc
+    )
+    # The enqueued process_source command id is stashed on the source as `command`.
+    src = await source_svc.get(result.id)
+    job_id = str(getattr(src, "command", "") or "")
+    return ProcessSourceResponse(
+        job_id=job_id, source_id=str(result.id), status="queued"
+    )
+
+
+@router.get("/jobs/{job_id:path}", response_model=JobStatusResponse)
+async def get_job_status(
+    request: Request,
+    job_id: str,
+    _key=Depends(require_agent_key("read")),
+) -> JobStatusResponse:
+    """Poll a job's status — verbatim CommandService.get_command_status.
+
+    An unknown id returns the ``status:"unknown"`` shape (200, not 500).
+    """
+    from app_main.services.command_service import CommandService
+
+    status = await CommandService.get_command_status(job_id)
+    return JobStatusResponse(
+        job_id=str(status.get("job_id", job_id)),
+        status=str(status.get("status", "unknown")),
+        result=status.get("result"),
+        error=status.get("error"),
+    )
+
+
+@router.get("/audit-log")
+async def get_audit_log(
+    request: Request,
+    agent_id: Optional[str] = None,
+    limit: int = 100,
+    key: AgentKeyContext = Depends(require_agent_key("read")),
+) -> dict:
+    """The calling key's own agent_audit_log entries (newest first).
+
+    Scoped to the caller's ``agent_id`` — a ``read`` key passing a different
+    ``?agent_id=`` is still scoped to itself (no cross-agent leak). Only an
+    ``admin`` key may read another agent's trail via ``?agent_id=``.
+    """
+    from app_main.services.agents.audit_service import AgentAuditService
+
+    target = key.agent_id
+    if agent_id and key.permission == "admin":
+        target = agent_id
+    limit = max(1, min(limit, 500))
+    entries = await AgentAuditService().list_for_agent(target, limit=limit)
+    return {"agent_id": target, "entries": entries}
 
 
 @router.get("/openapi.json")
