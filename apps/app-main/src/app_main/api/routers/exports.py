@@ -26,26 +26,18 @@ import io
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from fastapi.responses import StreamingResponse
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
+from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
-
-from app_main.dependencies import (
-    get_entity_repo,
-    get_jsonl_export_service,
-    get_networkx_export_service,
-    get_notebook_service,
-    get_obsidian_export_service,
-)
-from app_main.services.jsonl_export_service import JsonlExportService
-from app_main.services.networkx_export_service import NetworkxExportService
-from app_main.services.notebook_service import NotebookService
-from app_main.services.obsidian_export_service import (
-    EXCLUDED_ENTITY_STATUSES,
-    ObsidianExportService,
-    VaultPathNotConfigured,
-)
 from shared.models.export import (
     ExportFilter,
     JsonlExportRequest,
@@ -54,8 +46,34 @@ from shared.models.export import (
 )
 from surrealdb_service.repositories import EntityRepository
 
+from app_main.dependencies import (
+    get_entity_repo,
+    get_jsonl_export_service,
+    get_networkx_export_service,
+    get_notebook_service,
+    get_obsidian_export_service,
+    get_okf_export_service,
+    get_okf_import_service,
+)
+from app_main.services.command_service import CommandService
+from app_main.services.jsonl_export_service import JsonlExportService
+from app_main.services.networkx_export_service import NetworkxExportService
+from app_main.services.notebook_service import NotebookService
+from app_main.services.obsidian_export_service import (
+    EXCLUDED_ENTITY_STATUSES,
+    ObsidianExportService,
+    VaultPathNotConfigured,
+)
+from app_main.services.okf_export_service import OkfExportService
+from app_main.services.okf_import_service import OkfImportService
 
 router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["exports"])
+
+# Above this surviving-entity count an OKF export is deferred to the job
+# queue rather than built inline on the request path (OKF.2 constraint §5).
+# A few thousand entities renders + zips in well under 10s inline; beyond
+# that the async path keeps the request from blocking the worker.
+OKF_ASYNC_ENTITY_THRESHOLD = 2000
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +369,191 @@ async def export_notebook_jsonl(
         media_type="application/zip",
         headers=headers,
     )
+
+
+# ---------------------------------------------------------------------------
+# OKF (Open Knowledge Format) bundle export (OKF.2)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/export/okf",
+    responses={
+        200: {
+            "content": {"application/zip": {}},
+            "description": (
+                "Zipped OKF v0.1 Knowledge Bundle (markdown concepts + "
+                "index.md). The ExportReport (incl. the omitted-field ledger) "
+                "is surfaced in the ``X-OKF-Export-Report`` response header."
+            ),
+        },
+        202: {
+            "content": {"application/json": {}},
+            "description": (
+                "Large notebook: the export was deferred to the job queue. "
+                "Body carries ``{job_id, status, entity_count}``; poll the "
+                "job-status surface for completion."
+            ),
+        },
+        404: {"description": "Notebook not found."},
+        422: {"description": "Invalid filter shape in request body."},
+    },
+)
+async def export_notebook_okf(
+    notebook_id: str,
+    request: ObsidianExportRequest,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    export_service: OkfExportService = Depends(get_okf_export_service),
+) -> Response:
+    """Export the notebook's curated KG projection as an OKF v0.1 bundle.
+
+    Reuses :class:`ObsidianExportRequest` for the ``filter`` knob set (the
+    OKF exporter shares the Track-D filter contract and only ever produces a
+    zip). Normal notebooks build + zip inline and stream the archive back;
+    notebooks whose surviving-entity count exceeds
+    :data:`OKF_ASYNC_ENTITY_THRESHOLD` are deferred to the job queue
+    (``JobType.EXPORT_OKF``) and return ``202`` with a pollable job id.
+
+    Auth is the notebook-scoped lookup shared by every export route (G-Q1);
+    no new auth surface is introduced.
+    """
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    # Cheap size probe (projected, embedding-free query) to decide inline vs
+    # deferred. The projection reused here is exactly what the export applies,
+    # so the threshold reflects the real bundle size.
+    entity_count = await export_service.count_entities(notebook_id, request.filter)
+    if entity_count > OKF_ASYNC_ENTITY_THRESHOLD:
+        job_id = await CommandService.submit_command_job(
+            module_name="open_notebook.commands",
+            command_name="export_okf",
+            command_args={
+                "notebook_id": notebook_id,
+                "filter": request.filter.model_dump(mode="json"),
+            },
+        )
+        logger.info(
+            "okf export deferred: notebook={nb} entities={n} job={job}",
+            nb=notebook_id,
+            n=entity_count,
+            job=job_id,
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "job_id": job_id,
+                "status": "queued",
+                "entity_count": entity_count,
+                "threshold": OKF_ASYNC_ENTITY_THRESHOLD,
+            },
+        )
+
+    artifact = await export_service.export(notebook_id, request)
+
+    # Surface the ExportReport (incl. the OKF-D3 omitted-field ledger) in a
+    # response header so the zip body stays a clean archive download.
+    # ``model_dump_json`` is single-line compact JSON — safe as a header value.
+    report_json = artifact.report.model_dump_json()
+    safe_name = _safe_filename(notebook_id, "okf.zip")
+    return StreamingResponse(
+        io.BytesIO(artifact.zip_bytes or b""),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}"',
+            "X-OKF-Export-Report": report_json,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# OKF (Open Knowledge Format) bundle import (OKF.4)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/import/okf",
+    responses={
+        200: {
+            "content": {"application/json": {}},
+            "description": (
+                "Import complete. Body is the ``OkfImportReport`` "
+                "(imported/matched/skipped counts + the non-silent "
+                "skip/dangling ledger)."
+            ),
+        },
+        404: {"description": "Notebook not found."},
+        422: {
+            "description": (
+                "Malformed bundle container (not a .zip / unreadable "
+                "archive). A malformed *concept* inside a valid bundle is "
+                "skipped non-silently and reported in the 200 body, never "
+                "a 422."
+            ),
+        },
+    },
+)
+async def import_notebook_okf(
+    notebook_id: str,
+    file: UploadFile = File(
+        ..., description="An OKF v0.1 Knowledge Bundle as a .zip archive."
+    ),
+    apply_dedup: bool = Query(
+        True,
+        description=(
+            "Run the K.5 propose + K.3 auto-merge dedup pass after "
+            "persistence so an imported entity is matched against the "
+            "existing graph, not duplicated. Idempotent."
+        ),
+    ),
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    import_service: OkfImportService = Depends(get_okf_import_service),
+) -> JSONResponse:
+    """Import an uploaded OKF v0.1 bundle into this notebook (the OKF.3 seam).
+
+    The inverse of ``POST /export/okf`` and the REST surface OKF.3 deferred to
+    this phase. The multipart-uploaded zip is handed to
+    :meth:`OkfImportService.import_bundle` (notebook-scoped), which parses the
+    concepts, upserts entities via the deterministic ``(name, type)`` dedup +
+    the injection-safe RELATE primitive, and creates notes/sources
+    idempotently — all provenance-tagged ``okf-import``.
+
+    Auth is the same notebook-scoped lookup every export route uses (G-Q1); no
+    new auth surface. A malformed *bundle container* (non-zip / unreadable
+    archive) is a 422; a malformed *concept* within a valid bundle is skipped
+    non-silently and surfaced in the report — never a half-written graph.
+    """
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    data = await file.read()
+
+    try:
+        report = await import_service.import_bundle(
+            data, notebook_id=notebook_id, apply_dedup=apply_dedup
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        # Malformed bundle CONTAINER (not a zip, unreadable archive). A bad
+        # concept never reaches here — it is skip-recorded inside the service.
+        logger.warning("okf import rejected bundle for {nb}: {e}", nb=notebook_id, e=exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    logger.info(
+        "okf import: notebook={nb} entities +{ec}/~{em} relations +{rc} "
+        "notes +{nc}/~{nm} sources +{sc}/~{sm} skipped={sk}",
+        nb=notebook_id,
+        ec=report.entities_created,
+        em=report.entities_matched,
+        rc=report.relations_created,
+        nc=report.notes_created,
+        nm=report.notes_matched,
+        sc=report.sources_created,
+        sm=report.sources_matched,
+        sk=len(report.skipped),
+    )
+    return JSONResponse(content=report.to_dict())
 
 
 # ---------------------------------------------------------------------------

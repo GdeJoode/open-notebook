@@ -63,6 +63,8 @@ _COMMAND_TO_JOB_TYPE: Dict[str, JobType] = {
     "auto_link_note": JobType.NOTE_AUTO_LINK,
     # Track V.5: reference-extraction post-ingest pass (feeds U.3 ``cites``).
     "extract_references": JobType.REFERENCE_EXTRACT,
+    # Track OKF.2: deferred OKF bundle export for large notebooks.
+    "export_okf": JobType.EXPORT_OKF,
 }
 
 

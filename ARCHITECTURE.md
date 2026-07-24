@@ -247,6 +247,42 @@ filesystem paths. The Obsidian vault-path branch carries
 the raw vault path NEVER lands in `metrics`. Recursive-walk
 assertions in the test suite confirm this for all three services.
 
+### Open Knowledge Format interchange (Track OKF)
+
+Track OKF (closed 2026-07-24) adds a fourth, **vendor-neutral** export
+target — Google Cloud's **Open Knowledge Format** (OKF v0.1) — plus its
+inverse import. OKF is an interchange adapter at the *edges* of the
+system: it makes a curated notebook projection portable to arbitrary
+OKF-aware agents without coupling them to SurrealDB or the MCP tools. It
+complements, never replaces, the graph/search/provenance substrate.
+
+The track is **mostly a conformance layer** over the Track D projection:
+it reuses the same `ExportFilter`, the same shared entity/relation/note
+projection, and the same `ExportReport` accounting; the genuinely new
+work is the SPEC-conformant frontmatter/link mapping and the bundle
+tree + manifest.
+
+| Surface | Location | Notes |
+| --- | --- | --- |
+| `POST /api/notebooks/{id}/export/okf` | `apps/app-main/src/app_main/services/okf_export_service.py` | Maps the shared projection → an OKF v0.1 Knowledge Bundle (one Markdown concept per entity + `index.md`, standard-markdown links between concepts). Normal notebooks build + zip inline and stream the archive; notebooks over `OKF_ASYNC_ENTITY_THRESHOLD` defer to the job queue (`JobType.EXPORT_OKF`) and return `202` with a pollable `job_id`. The `ExportReport` (incl. the omitted-field ledger) is surfaced in the **`X-OKF-Export-Report`** response header so the zip body stays a clean archive. Byte-stable output (sorted keys, caller-injected timestamp). |
+| `POST /api/notebooks/{id}/import/okf` | `apps/app-main/src/app_main/services/okf_import_service.py` | Multipart-uploaded zip → entities/relations/notes/sources, upserted via deterministic `(name, type)` dedup + the injection-safe RELATE primitive, all provenance-tagged `okf-import` and idempotent under re-import. A malformed bundle *container* is a `422`; a malformed *concept* inside a valid bundle is skipped non-silently and reported in the `200` body — never a half-written graph. `apply_dedup` runs the K.5 propose + K.3 auto-merge pass so an imported entity is matched to the existing graph. |
+| MCP `export_okf` / `import_okf` | `packages/surrealdb-service/src/surrealdb_service/mcp/server.py` | The agent-facing surface (Track OKF.4), following the Track W tool conventions. These are the **one deliberate exception** to surrealdb-service's repo-direct, no-app-main rule: the OKF services are app-main orchestrators, so the tools reach them via a lazy import inside the tool body (`get_okf_export_service` / `get_okf_import_service`) and degrade to a clean `import_error` when app-main is absent, keeping module import app-main-free. |
+| OKF export dialog | `frontend/src/components/notebooks/exports/OkfExportDialog.tsx` + `frontend/src/lib/hooks/use-okf-export.ts` | "Export OKF" in the notebook header opens a zip-only dialog mirroring the Obsidian dialog (shared `ExportFilter` knobs + the live `/export-preview` parity widget). It states the lossy-by-design loss up-front and, after export, itemises the omitted-field ledger parsed from the `X-OKF-Export-Report` header. |
+
+**Lossy-by-design ledger.** Embeddings, chunk-level provenance
+(Track X), verdict/contradiction edges (Track Z), and hybrid-search
+signal (Track W) have no OKF representation and are intentionally
+dropped. `OKF_OMITTED_FIELDS` in `okf_export_service.py` is the single
+source of truth: every dropped substrate field maps to a human-readable
+reason, is copied verbatim into each `ExportReport.metadata.omitted_fields`,
+and is surfaced through both the REST header and the UI so the loss is
+explicit, never silent (OKF-D4: drop-and-report, not `x-` extensions).
+
+The OKF export reuses `ObsidianExportRequest` for its filter contract
+(it only ever emits a zip, so `mode` is fixed to `"zip"`), and shares
+the Track D four-stage filter pipeline above — dialog counts and the
+actual bundle cannot drift.
+
 ## 8. Cloud/local model routing (Track J)
 
 The three LLM pipeline stages — **entity extraction**, **summarization**,

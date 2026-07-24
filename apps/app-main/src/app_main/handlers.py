@@ -731,3 +731,122 @@ async def handle_export_obsidian(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"{validated.notebook_id}: {e}"
         )
         raise
+
+
+# ---------------------------------------------------------------------------
+# EXPORT_OKF — Open Knowledge Format bundle export (large-notebook path, OKF.2)
+# ---------------------------------------------------------------------------
+
+
+class ExportOkfPayload(BaseModel):
+    """Payload schema for the deferred ``JobType.EXPORT_OKF`` job (OKF.2).
+
+    ``filter`` is a free-form dict matching
+    :class:`shared.models.export.ExportFilter`; it is validated inside the
+    handler by constructing ``ExportFilter(**filter)`` so a bad knob is
+    rejected at the job-execution boundary.
+    """
+
+    notebook_id: str
+    filter: Dict[str, Any] = {}
+
+
+@registry.register(JobType.EXPORT_OKF)
+async def handle_export_okf(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Deferred handler for a large-notebook OKF bundle export (Phase OKF.2).
+
+    The user-initiated route runs the export inline for normal notebooks and
+    enqueues this job only when the surviving-entity count exceeds the inline
+    threshold. The handler rebuilds the bundle and, when a server-side
+    ``vault_path`` is configured, persists the zip under
+    ``<vault_path>/okf_exports/`` so the operator can retrieve it; the job
+    result carries the flattened :class:`ExportReport` (incl. the OKF-D3
+    omitted-field ledger) for the pollable job-status surface.
+    """
+    validated = ExportOkfPayload(**payload)
+    start_time = time.time()
+
+    from shared.models.export import ExportFilter, ObsidianExportRequest
+
+    from app_main.dependencies import get_okf_export_service, get_settings_service
+
+    try:
+        logger.info(
+            f"Starting OKF bundle export for notebook: {validated.notebook_id}"
+        )
+        service = get_okf_export_service()
+        request = ObsidianExportRequest(
+            mode="zip", filter=ExportFilter(**validated.filter)
+        )
+        artifact = await service.export(validated.notebook_id, request)
+
+        bundle_persisted = False
+        try:
+            settings = await get_settings_service().get()
+            vault_path_raw = getattr(settings, "vault_path", None)
+            if vault_path_raw and artifact.zip_bytes:
+                _persist_okf_zip(
+                    vault_path_raw, validated.notebook_id, artifact.zip_bytes
+                )
+                bundle_persisted = True
+            else:
+                logger.warning(
+                    "OKF export job {nb}: no vault_path configured; the zip is "
+                    "not persisted server-side (report-only job result).",
+                    nb=validated.notebook_id,
+                )
+        except Exception as persist_exc:  # noqa: BLE001 - persistence is best-effort
+            logger.error(
+                "OKF export job {nb}: failed to persist zip: {err}",
+                nb=validated.notebook_id,
+                err=persist_exc,
+            )
+
+        processing_time = time.time() - start_time
+        report = artifact.report.model_dump(mode="json")
+        return {
+            "success": True,
+            **report,
+            "bundle_persisted": bundle_persisted,
+            "processing_time": processing_time,
+        }
+
+    except Exception as e:
+        logger.error(
+            f"OKF bundle export failed for notebook {validated.notebook_id}: {e}"
+        )
+        raise
+
+
+def _persist_okf_zip(vault_path_raw: str, notebook_id: str, zip_bytes: bytes) -> str:
+    """Atomically write an OKF export zip under ``<vault_path>/okf_exports/``.
+
+    Uses the same tmp-write-then-``os.replace`` atomicity as the Obsidian
+    vault writer so a half-written archive is impossible. Returns the final
+    path. Raises ``ValueError`` if ``vault_path`` is not an absolute existing
+    writable directory.
+    """
+    import os
+    import re as _re
+    from pathlib import Path
+
+    vault_path = Path(vault_path_raw)
+    if not vault_path.is_absolute():
+        raise ValueError(f"vault_path must be absolute; got {vault_path!r}")
+    if not vault_path.is_dir():
+        raise ValueError(f"vault_path is not a directory: {vault_path!r}")
+    if not os.access(vault_path, os.W_OK):
+        raise ValueError(f"vault_path is not writable: {vault_path!r}")
+
+    target_dir = (vault_path / "okf_exports").resolve()
+    target_dir.relative_to(vault_path.resolve())  # defense-in-depth
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    stem = _re.sub(r'[:/\\\r\n\t\x00"\'<>|?*]', "_", notebook_id)
+    final_path = (target_dir / f"{stem}.zip").resolve()
+    final_path.relative_to(target_dir)
+    tmp_path = final_path.with_name(f"{stem}.zip.tmp.{os.getpid()}")
+    with open(tmp_path, "wb") as fh:
+        fh.write(zip_bytes)
+    os.replace(tmp_path, final_path)
+    return str(final_path)

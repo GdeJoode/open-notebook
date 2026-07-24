@@ -71,6 +71,8 @@ from app_main.services.note_service import NoteService
 from app_main.services.notebook_merge_service import NotebookMergeService
 from app_main.services.notebook_service import NotebookService
 from app_main.services.obsidian_export_service import ObsidianExportService
+from app_main.services.okf_export_service import OkfExportService
+from app_main.services.okf_import_service import OkfImportService
 from app_main.services.ontology_service import OntologyService
 from app_main.services.podcast_service import PodcastService
 from app_main.services.preprocessing_service import PreprocessingService
@@ -733,6 +735,49 @@ def get_obsidian_export_service() -> ObsidianExportService:
         entity_repository=entity_repo,
         relation_repository=entity_repo,
         settings_service=get_settings_service(),
+    )
+
+
+def get_okf_export_service() -> OkfExportService:
+    """FastAPI provider for the OKF v0.1 bundle export service (OKF.2).
+
+    ``entity_repo`` answers both ``list_entities_for_notebook`` and
+    ``list_relations_for_notebook`` (D.0); ``notebook_repo`` answers
+    ``get_notes`` / ``get_sources`` for the note + source concepts.
+    """
+    entity_repo = get_entity_repo()
+    return OkfExportService(
+        entity_repository=entity_repo,
+        notebook_repository=get_notebook_repo(),
+        relation_repository=entity_repo,
+    )
+
+
+def get_okf_import_service() -> OkfImportService:
+    """FastAPI provider for the OKF v0.1 bundle import service (OKF.3).
+
+    Wires the canonical persist surfaces (entity upsert + the persistence
+    service's injection-safe RELATE primitive, note/source repositories) plus
+    the K.5 candidate-dedup proposer and K.3 recanonicalization apply so an
+    imported entity is matched against the existing graph, not duplicated. One
+    shared ``EntityRepository`` keeps every batch loader on the same config.
+    """
+    from app_main.services.entity_persistence_service import (
+        EntityPersistenceService,
+    )
+    from app_main.services.entity_resolution import (
+        CandidateDedupService,
+        RecanonicalizationService,
+    )
+
+    entity_repo = get_entity_repo()
+    return OkfImportService(
+        entity_repository=entity_repo,
+        persistence_service=EntityPersistenceService(entity_repository=entity_repo),
+        note_repository=get_note_repo(),
+        source_repository=get_source_repo(),
+        candidate_dedup_service=CandidateDedupService(entity_repo=entity_repo),
+        recanonicalization_service=RecanonicalizationService(entity_repo=entity_repo),
     )
 
 

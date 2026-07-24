@@ -155,6 +155,11 @@ class JobType(str, Enum):
     # export-side JobType. Track E may add ``RESEARCH`` next to this --
     # whoever lands first wins, the second track rebases.
     EXPORT_OBSIDIAN = "export_obsidian"
+    # Track OKF Phase OKF.2: async Open Knowledge Format bundle export for
+    # large notebooks. The user-initiated zip export stays sync on the
+    # ``POST /notebooks/{id}/export/okf`` route; this job type is the deferred
+    # path taken when the notebook exceeds the inline export threshold.
+    EXPORT_OKF = "export_okf"
     # Track Y.3: background auto-link. Enqueued (best-effort) after a note is
     # successfully embedded, this links the note to its most-related notes by
     # embedding similarity (the ``related_note`` graph edges). A separate job

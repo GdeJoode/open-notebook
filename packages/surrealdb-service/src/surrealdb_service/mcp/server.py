@@ -22,6 +22,21 @@ the note to already be embedded and never pulls an embedding model into this
 package (all four ranking/relate primitives, note AND source, live in
 surrealdb-service).
 
+OKF interchange tools (``export_okf`` / ``import_okf``, Track OKF.4) are the one
+DELIBERATE exception to this package's repo-direct, no-app-main rule. Unlike the
+graph tools above — whose every primitive (ranking, RELATE, repositories) lives
+in surrealdb-service — the OKF export/import services are *orchestrators* that
+already exist only in app-main (they compose these same repositories with the
+shared export projection and the K.5/K.3 dedup stack, no LLM). Reimplementing
+them here would fork that logic; calling app-main over HTTP would need a base URL
+this server does not have (the same blocker as ``judge_contradiction``). So these
+two tools reach app-main via a **lazy import inside the tool body**
+(``app_main.dependencies.get_okf_export_service`` / ``get_okf_import_service``):
+module import stays app-main-free (the core tools load with no app-main present),
+and the OKF tools degrade to a clean ``import_error`` response when app-main is
+not installed rather than crashing the server. This is the documented OKF.4
+wiring, not a new pattern for the graph tools.
+
 No ``judge_contradiction`` tool (Track Z.3 — deliberate deferral). Unlike
 ``auto_link_note``, whose primitives (cosine ranking + ``relate_note``) all live
 in surrealdb-service, the contradiction judge REQUIRES the app-main LLM routing
@@ -36,7 +51,10 @@ app-main base URL is cleanly available to this server.
 """
 
 import argparse
+import base64
+import io
 import json
+import zipfile
 from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -520,6 +538,173 @@ def create_server() -> FastMCP:
             {"id": rid},
         )
         return json.dumps(results, default=str, indent=2)
+
+    # ------------------------------------------------------------------
+    # Track OKF.4 — Open Knowledge Format interchange (app-main-backed)
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    async def export_okf(
+        notebook_id: str,
+        min_connections: int = 5,
+        min_confidence: float = 0.9,
+        min_relation_confidence: Optional[float] = None,
+        entity_types: Optional[List[str]] = None,
+        include_orphans: bool = False,
+        include_archived: bool = False,
+    ) -> str:
+        """Export a notebook's curated KG projection as an OKF v0.1 bundle.
+
+        Delegates to the app-main :class:`OkfExportService` (no reimplementation
+        — see the module docstring's OKF.4 layering note). The returned bundle is
+        the exporter's ``{path: text}`` mapping (the legible, agent-readable form
+        the SPEC-v0.1 exporter builds and the one ``import_okf`` round-trips
+        directly), unzipped from the service's deterministic archive.
+
+        Args:
+            notebook_id: The ``notebook:...`` to export.
+            min_connections: Minimum entity degree to include (ExportFilter).
+                Lower to 0 to export the long tail; the Track-D default is 5.
+            min_confidence: Minimum entity confidence in [0, 1] (default 0.9).
+            min_relation_confidence: Minimum relation confidence; ``None``
+                inherits ``min_confidence``.
+            entity_types: Optional allow-list of entity types (``None`` = all).
+            include_orphans: Include ``pending_reconnect`` entities.
+            include_archived: Include archived entities.
+
+        Returns:
+            JSON ``{"status": "exported", "notebook_id", "bundle": {path: text},
+            "report": {...}}``. ``report`` carries the counts + the OKF-D3
+            omitted-field ledger (what the bundle does NOT carry — embeddings,
+            chunk provenance, verdict edges, similarity signal). On a missing
+            app-main install: ``{"status": "import_error"}``; on an invalid
+            filter: ``{"status": "invalid_filter"}``.
+
+        Note: unlike the REST ``/export/okf`` endpoint, this tool always builds
+        inline (no job-queue deferral for large notebooks — an MCP call is a
+        single synchronous request/response).
+        """
+        try:
+            from app_main.dependencies import get_okf_export_service
+            from shared.models.export import ExportFilter, ObsidianExportRequest
+        except ImportError as exc:
+            return json.dumps(
+                {"status": "import_error", "error": str(exc)}, indent=2
+            )
+
+        try:
+            request = ObsidianExportRequest(
+                filter=ExportFilter(
+                    min_connections=min_connections,
+                    min_confidence=min_confidence,
+                    min_relation_confidence=min_relation_confidence,
+                    entity_types=entity_types,
+                    include_orphans=include_orphans,
+                    include_archived=include_archived,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - Pydantic ValidationError etc.
+            return json.dumps(
+                {"status": "invalid_filter", "error": str(exc)}, indent=2
+            )
+
+        service = get_okf_export_service()
+        artifact = await service.export(notebook_id, request)
+
+        # Unzip the deterministic archive into the legible {path: text} bundle
+        # that import_okf accepts verbatim (a clean in-process round-trip).
+        bundle: Dict[str, str] = {}
+        with zipfile.ZipFile(io.BytesIO(artifact.zip_bytes or b"")) as archive:
+            for name in sorted(archive.namelist()):
+                bundle[name] = archive.read(name).decode("utf-8")
+
+        return json.dumps(
+            {
+                "status": "exported",
+                "notebook_id": notebook_id,
+                "bundle": bundle,
+                "report": artifact.report.model_dump(mode="json"),
+            },
+            default=str,
+            indent=2,
+        )
+
+    @mcp.tool()
+    async def import_okf(
+        bundle: Optional[Dict[str, str]] = None,
+        zip_base64: Optional[str] = None,
+        notebook_id: Optional[str] = None,
+        apply_dedup: bool = True,
+    ) -> str:
+        """Import an OKF v0.1 bundle into the shared graph.
+
+        The inverse of :func:`export_okf`; delegates to the app-main
+        :class:`OkfImportService` (deterministic ``(name, type)`` entity dedup,
+        the injection-safe RELATE primitive, idempotent notes/sources, K.5/K.3
+        fuzzy collapse) — no reimplementation. Accepts either the ``{path: text}``
+        mapping :func:`export_okf` returns OR a base64-encoded bundle zip.
+
+        Args:
+            bundle: The ``{concept_path: markdown}`` mapping (as returned by
+                ``export_okf``). Mutually exclusive with ``zip_base64``.
+            zip_base64: A base64-encoded OKF bundle ``.zip`` (for callers that
+                hold the archive rather than the mapping).
+            notebook_id: Optional ``notebook:...`` to link imported notes/sources
+                into and to scope the dedup pass.
+            apply_dedup: Run the K.5 propose + K.3 auto-merge pass after
+                persistence (idempotent; default on).
+
+        Returns:
+            JSON ``{"status": "imported", ...OkfImportReport}`` with
+            imported/matched/skipped counts + the non-silent skip/dangling
+            ledger. Error shapes: ``{"status": "bad_request"}`` (neither/both
+            inputs, or undecodable base64), ``{"status": "malformed_bundle"}``
+            (not a valid zip container), ``{"status": "import_error"}``
+            (app-main not installed).
+        """
+        try:
+            from app_main.dependencies import get_okf_import_service
+        except ImportError as exc:
+            return json.dumps(
+                {"status": "import_error", "error": str(exc)}, indent=2
+            )
+
+        if (bundle is None) == (not zip_base64):
+            return json.dumps(
+                {
+                    "status": "bad_request",
+                    "error": "provide exactly one of 'bundle' or 'zip_base64'",
+                },
+                indent=2,
+            )
+
+        source: Any
+        if bundle is not None:
+            source = bundle
+        else:
+            try:
+                source = base64.b64decode(zip_base64 or "", validate=True)
+            except Exception as exc:  # noqa: BLE001 - binascii.Error
+                return json.dumps(
+                    {"status": "bad_request", "error": f"invalid base64: {exc}"},
+                    indent=2,
+                )
+
+        service = get_okf_import_service()
+        try:
+            report = await service.import_bundle(
+                source, notebook_id=notebook_id, apply_dedup=apply_dedup
+            )
+        except (ValueError, FileNotFoundError, zipfile.BadZipFile) as exc:
+            # Malformed bundle CONTAINER (not a zip / unreadable archive) — a bad
+            # concept inside a valid bundle is skip-recorded, never raised.
+            return json.dumps(
+                {"status": "malformed_bundle", "error": str(exc)}, indent=2
+            )
+
+        return json.dumps(
+            {"status": "imported", **report.to_dict()}, default=str, indent=2
+        )
 
     return mcp
 

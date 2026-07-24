@@ -56,6 +56,7 @@ phase merge.
 | **X** — citations-to-source | Exact chunk/page provenance in answers | ✅ CLOSED | yes | 2026-06-29 | |
 | **Y** — auto-link | New note → related notes → RELATE | ✅ CLOSED | yes | 2026-06-29 | ARCHITECTURE §12 |
 | **Z** — contradiction | LLM judges related pairs → verdict edges | ✅ CLOSED | yes | 2026-06-29 | |
+| **OKF** — open-knowledge-format | OKF v0.1 export/import + MCP + UI (interchange adapter) | 🔍 REVIEW | no | 2026-07-24 | Full stack OKF.1–OKF.5 on branch chain `track/okf1-export`→`track/okf5-ui-docs`, ready for review; RETRO present. Flips to ✅ CLOSED on merge. Docs under `OKF-open-knowledge-format/`. Lossy-by-design ledger surfaced via REST header + MCP report + UI |
 
 ## Merge-readiness finding (2026-07-23)
 
