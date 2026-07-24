@@ -124,7 +124,7 @@ The merge-readiness audit proves no *branch* is unmerged. That is NOT the same a
 | **I.H1 AC5** | multi-worker shared state (currently in-memory backend) | small |
 | **J FU-J4-2** | error-mapping edge: a 400 error with a 5xx number in its body can misclassify as failover-eligible | tiny |
 | **D.0 #1** | SurrealQL promotion of a filter | tiny |
-| **A e2e workflow** | `.github/workflows/e2e.yml` still parked as `.pending` | orchestrator task |
+| **A e2e workflow** | ~~parked as `.pending`~~ — **already ACTIVE** (2026-07-24): `e2e.yml` triggers on every PR to main. The real open work is that it is **red** — ~13 pre-existing Playwright specs fail (track-i result-tabs / structure-graph "renders without console errors", ux-pipeline-spine disabled-state). Needs a local frontend+compose run to fix; not headless-fixable. | follow-up: fix 13 e2e specs |
 
 ### C. Live-verification gaps (largely closed 2026-07-24)
 **~54 acceptance criteria** across the ledgers were marked "deferred to a live run"
