@@ -1,0 +1,567 @@
+<TEI xmlns="http://www.tei-c.org/ns/1.0" xmlns:xlink="http://www.w3.org/1999/xlink" 
+ xmlns:mml="http://www.w3.org/1998/Math/MathML">
+	<teiHeader/>
+	<text>
+		<front/>
+		<body/>
+		<back>
+			<div>
+				<listBibl>
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Entrepreneurial enterprises, large established firms and other components of the free-market growth machine</title>
+		<author>
+			<persName><forename type="first">W</forename><forename type="middle">J</forename><surname>Baumol</surname></persName>
+		</author>
+		<idno type="DOI">10.1023/B:SBEJ.0000026057.47641.a6</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Small Business Economics</title>
+		<imprint>
+			<biblScope unit="volume">23</biblScope>
+			<biblScope unit="page" from="9" to="21" />
+			<date type="published" when="2004">2004</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">New business formation and regional development: A survey and assessment of the evidence</title>
+		<author>
+			<persName><forename type="first">M</forename><surname>Fritsch</surname></persName>
+		</author>
+		<idno type="DOI">10.1561/0300000043</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Foundations and Trends in Entrepreneurship</title>
+		<imprint>
+			<biblScope unit="volume">9</biblScope>
+			<biblScope unit="page" from="249" to="364" />
+			<date type="published" when="2013">2013</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">The theory of economic development -An inquiry into profits, capital, credit, interest, and the business cycle</title>
+		<author>
+			<persName><forename type="first">J</forename><forename type="middle">A</forename><surname>Schumpeter</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1934">1934. 1983</date>
+			<publisher>repr. New Bunswick: Transaction</publisher>
+			<pubPlace>Cambridge, MA</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title level="m" type="main">Business cycles: A theoretical, historical, and statistical analysis of the capitalist process</title>
+		<author>
+			<persName><forename type="first">J</forename><forename type="middle">A</forename><surname>Schumpeter</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1939">1939</date>
+			<publisher>McGraw-Hill</publisher>
+			<pubPlace>New York</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title level="m" type="main">Capitalism, socialism and democracy</title>
+		<author>
+			<persName><forename type="first">J</forename><forename type="middle">A</forename><surname>Schumpeter</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1942">1942</date>
+			<publisher>Harper &amp; Row</publisher>
+			<pubPlace>New York</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">The economy as a whole&apos;: The seventh chapter to Schumpeter&apos;s The Theory of Economic Development</title>
+		<author>
+			<persName><forename type="first">J</forename><forename type="middle">A</forename><surname>Schumpeter</surname></persName>
+		</author>
+		<idno type="DOI">10.1080/13662710220123653</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Industry and Innovation</title>
+		<imprint>
+			<biblScope unit="volume">9</biblScope>
+			<biblScope unit="page" from="93" to="145" />
+			<date type="published" when="2002">2002</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">The origin of the Schumpeterian research program: A chapter omitted from Schumpeter&apos;s Theory of Economic Development</title>
+		<author>
+			<persName><forename type="first">Y</forename><surname>Shionoya</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Institutional and Theoretical Economics</title>
+		<imprint>
+			<biblScope unit="volume">146</biblScope>
+			<biblScope unit="page" from="314" to="327" />
+			<date type="published" when="1990">1990</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title level="m" type="main">The monopolistic competition revolution in retrospect</title>
+		<author>
+			<persName><forename type="first">S</forename><surname>Brakman</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">B</forename><forename type="middle">J</forename><surname>Heijdra</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2004">2004</date>
+			<publisher>Cambridge University Press</publisher>
+			<pubPlace>Cambridge</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Monopolistic competition and optimum product diversity</title>
+		<author>
+			<persName><forename type="first">A</forename><surname>Dixit</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">J</forename><forename type="middle">E</forename><surname>Stiglitz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">American Economic Review</title>
+		<imprint>
+			<biblScope unit="volume">67</biblScope>
+			<biblScope unit="page" from="297" to="308" />
+			<date type="published" when="1977">1977</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">A model of regional growth rate differences on Kaldorian lines</title>
+		<author>
+			<persName><forename type="first">R</forename><forename type="middle">J</forename><surname>Dixon</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">A</forename><forename type="middle">P</forename><surname>Thirlwall</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Oxford Economic Papers</title>
+		<imprint>
+			<biblScope unit="volume">27</biblScope>
+			<biblScope unit="page" from="201" to="214" />
+			<date type="published" when="1975">1975</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Spatially unbalanced growth in the British economy</title>
+		<author>
+			<persName><forename type="first">B</forename><surname>Gardiner</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">R</forename><surname>Martin</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">P</forename><surname>Sunley</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">P</forename><surname>Tyler</surname></persName>
+		</author>
+		<idno type="DOI">10.1093/jeg/lbt003</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Economic Geography</title>
+		<imprint>
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="issue">6</biblScope>
+			<biblScope unit="page" from="889" to="928" />
+			<date type="published" when="2013">2013</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Alternative theories of distribution</title>
+		<author>
+			<persName><forename type="first">N</forename><surname>Kaldor</surname></persName>
+		</author>
+		<idno type="DOI">10.2307/2296292</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Review of Economic Studies</title>
+		<imprint>
+			<biblScope unit="volume">23</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="83" to="100" />
+			<date type="published" when="1955">1955</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">A model of economic growth</title>
+		<author>
+			<persName><forename type="first">N</forename><surname>Kaldor</surname></persName>
+		</author>
+		<idno type="DOI">10.2307/2227704</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Economic Journal</title>
+		<imprint>
+			<biblScope unit="volume">67</biblScope>
+			<biblScope unit="page" from="591" to="624" />
+			<date type="published" when="1957">1957</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">The case for regional policies</title>
+		<author>
+			<persName><forename type="first">N</forename><surname>Kaldor</surname></persName>
+		</author>
+		<idno type="DOI">10.1111/j.1467-9485.1970.tb00712.x</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Scottish Journal of Political Economy</title>
+		<imprint>
+			<biblScope unit="volume">17</biblScope>
+			<biblScope unit="page" from="337" to="348" />
+			<date type="published" when="1970">1970</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Recollections of an economist</title>
+		<author>
+			<persName><forename type="first">N</forename><surname>Kaldor</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Banca Nazionale del Lavoro Quarterly Review</title>
+		<imprint>
+			<biblScope unit="volume">39</biblScope>
+			<biblScope unit="page" from="3" to="26" />
+			<date type="published" when="1986-03">1986. March</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Your position is thoroughly orthodox and entirely wrong&apos;: Nicholas Kaldor and Joan Robinson, 1933-1983</title>
+		<author>
+			<persName><forename type="first">J</forename><forename type="middle">E</forename><surname>King</surname></persName>
+		</author>
+		<idno type="DOI">10.1017/S1053837200002443</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of the History of Economic Thought</title>
+		<imprint>
+			<biblScope unit="volume">20</biblScope>
+			<biblScope unit="page" from="411" to="432" />
+			<date type="published" when="1998">1998</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Scale economics, product differentiation, and the patterns of trade</title>
+		<author>
+			<persName><forename type="first">P</forename><surname>Krugman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">American Economic Review</title>
+		<imprint>
+			<biblScope unit="volume">70</biblScope>
+			<biblScope unit="page" from="950" to="959" />
+			<date type="published" when="1980">1980</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Increasing returns and economic geography</title>
+		<author>
+			<persName><forename type="first">P</forename><surname>Krugman</surname></persName>
+		</author>
+		<idno type="DOI">10.1086/261763</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Political Economy</title>
+		<imprint>
+			<biblScope unit="volume">99</biblScope>
+			<biblScope unit="page" from="483" to="499" />
+			<date type="published" when="1991">1991</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">History and industry location: The case of the manufacturing belt</title>
+		<author>
+			<persName><forename type="first">P</forename><surname>Krugman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">American Economic Review; Papers and Proceedings</title>
+		<imprint>
+			<biblScope unit="volume">81</biblScope>
+			<biblScope unit="page" from="80" to="83" />
+			<date type="published" when="1991">1991b</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<monogr>
+		<author>
+			<persName><forename type="first">P</forename><surname>Krugman</surname></persName>
+		</author>
+		<title level="m">Geography and trade</title>
+		<meeting><address><addrLine>Cambridge, MA</addrLine></address></meeting>
+		<imprint>
+			<publisher>MIT Press</publisher>
+			<date type="published" when="1991">1991c</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Increasing returns, imperfect competition and the positive theory of international trade</title>
+		<author>
+			<persName><forename type="first">P</forename><surname>Krugman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Handbook of international economics</title>
+		<editor>
+			<persName><forename type="first">G</forename><surname>Grossman</surname></persName>
+		</editor>
+		<editor>
+			<persName><forename type="first">K</forename><surname>Rogoff</surname></persName>
+		</editor>
+		<meeting><address><addrLine>Amsterdam</addrLine></address></meeting>
+		<imprint>
+			<publisher>Elsevier</publisher>
+			<date type="published" when="1995">1995</date>
+			<biblScope unit="volume">III</biblScope>
+			<biblScope unit="page" from="1243" to="1277" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Two cheers for formalism</title>
+		<author>
+			<persName><forename type="first">P</forename><surname>Krugman</surname></persName>
+		</author>
+		<idno type="DOI">10.1111/1468-0297.00378</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Economic Journal</title>
+		<imprint>
+			<biblScope unit="volume">108</biblScope>
+			<biblScope unit="page" from="1829" to="1836" />
+			<date type="published" when="1998">1998</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Critical Survey: The new &apos;geographical turn&apos; in economics: Some critical reflections</title>
+		<author>
+			<persName><forename type="first">R</forename><surname>Martin</surname></persName>
+		</author>
+		<idno type="DOI">10.1093/cje/23.1.65</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Cambridge Journal of Economics</title>
+		<imprint>
+			<biblScope unit="volume">23</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="65" to="91" />
+			<date type="published" when="1999">1999</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Cumulative causation, endogenous growth, and regional development</title>
+		<author>
+			<persName><forename type="first">R</forename><surname>Martin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Wiley-AAG encyclopedia of geography: People, the earth, environment and technology</title>
+		<editor>
+			<persName><forename type="first">M</forename><surname>Dunford</surname></persName>
+		</editor>
+		<imprint>
+			<date type="published" when="2017">Forthcoming 2017</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Returns to scale and regional growth: The static-dynamic Verdoorn law paradox revisited</title>
+		<author>
+			<persName><forename type="first">J</forename><forename type="middle">S L</forename><surname>Mccombie</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">M</forename><surname>Roberts</surname></persName>
+		</author>
+		<idno type="DOI">10.1111/j.1467-9787.2007.00505.x</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Regional Science</title>
+		<imprint>
+			<biblScope unit="volume">47</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="179" to="208" />
+			<date type="published" when="2007">2007</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">The impact of trade on intra-industry reallocations and aggregate industry productivity</title>
+		<author>
+			<persName><forename type="first">M</forename><forename type="middle">J</forename><surname>Melitz</surname></persName>
+		</author>
+		<idno type="DOI">10.1111/1468-0262.00467</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Econometrica</title>
+		<imprint>
+			<biblScope unit="volume">71</biblScope>
+			<biblScope unit="page" from="1695" to="1725" />
+			<date type="published" when="2003">2003</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<monogr>
+		<title level="m" type="main">Prices and quantities: A macroeconomic analysis</title>
+		<author>
+			<persName><forename type="first">A</forename><forename type="middle">M</forename><surname>Okun</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1981">1981</date>
+			<publisher>The Brookings Institution</publisher>
+			<pubPlace>Washington, DC</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+		<author>
+			<persName><forename type="first">D</forename><surname>Rodrik</surname></persName>
+		</author>
+		<title level="m">Economics rules</title>
+		<meeting><address><addrLine>New York</addrLine></address></meeting>
+		<imprint>
+			<publisher>Norton</publisher>
+			<date type="published" when="2015">2015</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Combined and uneven development: Reflections on the north-south divide</title>
+		<author>
+			<persName><forename type="first">R</forename><forename type="middle">E</forename><surname>Rowthorn</surname></persName>
+		</author>
+		<idno type="DOI">10.1080/17421772.2010.516445</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Spatial Economic Analysis</title>
+		<imprint>
+			<biblScope unit="volume">5</biblScope>
+			<biblScope unit="page" from="363" to="388" />
+			<date type="published" when="2010">2010</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<monogr>
+		<author>
+			<persName><forename type="first">A</forename><forename type="middle">P</forename><surname>Thirlwall</surname></persName>
+		</author>
+		<title level="m">Nicholas Kaldor</title>
+		<meeting><address><addrLine>Brighton</addrLine></address></meeting>
+		<imprint>
+			<publisher>Wheatsheaf</publisher>
+			<date type="published" when="1987">1987</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Kaldor&apos;s 1970 regional growth model revisited</title>
+		<author>
+			<persName><forename type="first">A</forename><forename type="middle">P</forename><surname>Thirlwall</surname></persName>
+		</author>
+		<ptr target="https://www.kent.ac.uk/economics/documents/research/papers/2013/1311.pdf" />
+	</analytic>
+	<monogr>
+		<title level="m">School of Economics Discussion Papers No. KDPE 1311)</title>
+		<imprint>
+			<date type="published" when="2013">2013</date>
+		</imprint>
+		<respStmt>
+			<orgName>University of Kent</orgName>
+		</respStmt>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

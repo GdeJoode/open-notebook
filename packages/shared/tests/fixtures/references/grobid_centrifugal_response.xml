@@ -1,0 +1,1207 @@
+<TEI xmlns="http://www.tei-c.org/ns/1.0" xmlns:xlink="http://www.w3.org/1999/xlink" 
+ xmlns:mml="http://www.w3.org/1998/Math/MathML">
+	<teiHeader/>
+	<text>
+		<front/>
+		<body/>
+		<back>
+			<div>
+				<listBibl>
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Fractionalization</title>
+		<author>
+			<persName><forename type="first">A</forename><surname>Alesina</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">A</forename><surname>Devleeschauwer</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">W</forename><surname>Easterly</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">S</forename><surname>Kurlat</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">R</forename><surname>Wacziarg</surname></persName>
+		</author>
+		<idno type="DOI">10.1023/A:1024471506938</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Economic Growth</title>
+		<imprint>
+			<biblScope unit="volume">8</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="155" to="194" />
+			<date type="published" when="2003">2003</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title level="m" type="main">The size of nations</title>
+		<author>
+			<persName><forename type="first">A</forename><surname>Alesina</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">E</forename><surname>Spolaore</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2003">2003</date>
+			<publisher>MIT Press</publisher>
+			<pubPlace>Cambridge, Mass</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">Why countries are fiscally decentralizing</title>
+		<author>
+			<persName><forename type="first">M</forename><surname>Arzaghi</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">J</forename><forename type="middle">V</forename><surname>Henderson</surname></persName>
+		</author>
+		<idno type="DOI">10.1016/j.jpubeco.2003.10.009</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Public Economics</title>
+		<imprint>
+			<biblScope unit="volume">89</biblScope>
+			<biblScope unit="issue">7</biblScope>
+			<biblScope unit="page" from="1157" to="1189" />
+			<date type="published" when="2005">2005</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title level="m" type="main">The organization of economic activity: Issues pertinent to the choice of market versus nonmarket allocation. The analysis and evaluation of public expenditure: The PPB system</title>
+		<author>
+			<persName><forename type="first">K</forename><forename type="middle">J</forename><surname>Arrow</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1969">1969</date>
+			<biblScope unit="volume">1</biblScope>
+			<biblScope unit="page" from="59" to="73" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title level="m" type="main">The political geography of inequality: Regions and redistribution</title>
+		<author>
+			<persName><forename type="first">P</forename><surname>Beramendi</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2012">2012</date>
+			<publisher>Cambridge University Press</publisher>
+			<pubPlace>Cambridge</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">The process of government centralization: A constitutional view</title>
+		<author>
+			<persName><forename type="first">C</forename><forename type="middle">B</forename><surname>Blankart</surname></persName>
+		</author>
+		<idno type="DOI">10.1023/A:1009018032437</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Constitutional Political Economy</title>
+		<imprint>
+			<biblScope unit="volume">11</biblScope>
+			<biblScope unit="page" from="27" to="39" />
+			<date type="published" when="2000">2000</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title level="m" type="main">Peace by design: Managing intrastate conflict through decentralization</title>
+		<author>
+			<persName><forename type="first">D</forename><surname>Brancati</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2009">2009</date>
+			<publisher>Oxford University Press</publisher>
+			<pubPlace>Oxford</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title level="m" type="main">The power to tax: Analytical foundations of a fiscal constitution</title>
+		<author>
+			<persName><forename type="first">G</forename><surname>Brennan</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">J</forename><forename type="middle">M</forename><surname>Buchanan</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1980">1980</date>
+			<publisher>Cambridge University Press</publisher>
+			<pubPlace>Cambridge</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">The ways of federalism in Western Countries and the horizons of territorial autonomy in Spain</title>
+		<author>
+			<persName><forename type="first">C</forename><surname>Colino</surname></persName>
+		</author>
+		<idno type="DOI">10.1007/978-3-642-27717-7_7</idno>
+		<editor>López-Basaguren A., Escajedo San-Epifanio L.</editor>
+		<imprint>
+			<date type="published" when="2013">2013</date>
+			<publisher>Springer</publisher>
+			<pubPlace>Berlin, Heidelberg</pubPlace>
+		</imprint>
+	</monogr>
+	<note>Intergovernmental relations in the Spanish federal system: In search of a model</note>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Conceptualizing, measuring, and theorizing dynamic de/centralization in federations</title>
+		<author>
+			<persName><forename type="first">P</forename><surname>Dardanelli</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">J</forename><surname>Kincaid</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">A</forename><surname>Fenna</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">A</forename><surname>Kaiser</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">A</forename><surname>Lecours</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">A</forename><forename type="middle">K</forename><surname>Singh</surname></persName>
+		</author>
+		<idno type="DOI">10.1093/publius/pjy036</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Publius: The Journal of Federalism</title>
+		<imprint>
+			<biblScope unit="volume">49</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="1" to="29" />
+			<date type="published" when="2019">2019</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">Federalism, fiscal authority, and centralization in Latin America</title>
+		<author>
+			<persName><forename type="first">A</forename><surname>Diaz-Cayeros</surname></persName>
+		</author>
+		<idno type="DOI">10.1017/CBO9780511490908</idno>
+		<imprint>
+			<date type="published" when="2006">2006</date>
+			<publisher>Cambridge University Press</publisher>
+			<pubPlace>Cambridge</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Decentralization and political institutions</title>
+		<author>
+			<persName><forename type="first">R</forename><surname>Enikolopov</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">E</forename><surname>Zhuravskaya</surname></persName>
+		</author>
+		<idno type="DOI">10.1016/j.jpubeco.2007.02.006</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Public Economics</title>
+		<imprint>
+			<biblScope unit="volume">91</biblScope>
+			<biblScope unit="issue">11-12</biblScope>
+			<biblScope unit="page" from="2261" to="2290" />
+			<date type="published" when="2007">2007</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Political support for decentralization: An analysis of the Colombian and Venezuelan legislatures</title>
+		<author>
+			<persName><forename type="first">M</forename><forename type="middle">C</forename><surname>Escobar-Lemmon</surname></persName>
+		</author>
+		<idno type="DOI">10.1111/1540-5907.00048</idno>
+	</analytic>
+	<monogr>
+		<title level="j">American Journal of Political Science</title>
+		<imprint>
+			<biblScope unit="volume">47</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="683" to="697" />
+			<date type="published" when="2003">2003</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Does economic globalization affect regional inequality? A cross-country analysis</title>
+		<author>
+			<persName><forename type="first">R</forename><surname>Ezcurra</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">A</forename><surname>Rodríguez-Pose</surname></persName>
+		</author>
+		<idno type="DOI">10.1016/j.worlddev.2013.07.002</idno>
+	</analytic>
+	<monogr>
+		<title level="j">World Development</title>
+		<imprint>
+			<biblScope unit="volume">52</biblScope>
+			<biblScope unit="page" from="92" to="103" />
+			<date type="published" when="2013">2013</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Decentralization and governance</title>
+		<author>
+			<persName><forename type="first">J.-P</forename><surname>Faguet</surname></persName>
+		</author>
+		<idno type="DOI">10.1016/j.worlddev.2013.01.002</idno>
+	</analytic>
+	<monogr>
+		<title level="j">World Development</title>
+		<imprint>
+			<biblScope unit="volume">53</biblScope>
+			<biblScope unit="page" from="2" to="13" />
+			<date type="published" when="2014">2014</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title level="m" type="main">Decentralization and subnational politics in Latin America</title>
+		<author>
+			<persName><forename type="first">T</forename><surname>Falleti</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2010">2010</date>
+			<publisher>Cambridge University Press</publisher>
+			<pubPlace>Cambridge</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Decentralization and economic growth reconsidered: The role of regional authority</title>
+		<author>
+			<persName><forename type="first">A</forename><surname>Filippetti</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">A</forename><surname>Sacchi</surname></persName>
+		</author>
+		<idno type="DOI">10.1177/0263774X16642230</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Environment and Planning C: Government and Policy</title>
+		<imprint>
+			<biblScope unit="volume">34</biblScope>
+			<biblScope unit="issue">8</biblScope>
+			<biblScope unit="page" from="1793" to="1824" />
+			<date type="published" when="2016">2016</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Decentralization and corruption: Evidence across countries</title>
+		<author>
+			<persName><forename type="first">R</forename><surname>Fisman</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">R</forename><surname>Gatti</surname></persName>
+		</author>
+		<idno type="DOI">10.1016/S0047-2727(00)00158-4</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Public Economics</title>
+		<imprint>
+			<biblScope unit="volume">83</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="325" to="345" />
+			<date type="published" when="2002">2002</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">Problem-driven governance and political economy analysis</title>
+		<author>
+			<persName><forename type="first">V</forename><surname>Fritz</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">K</forename><surname>Kaiser</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">B</forename><surname>Levy</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2009">2009</date>
+			<publisher>World Bank</publisher>
+			<pubPlace>Washington, DC</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Fiscal decentralization: A political theory with Latin American cases</title>
+		<author>
+			<persName><forename type="first">C</forename><surname>Garman</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">S</forename><surname>Haggard</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">E</forename><surname>Willis</surname></persName>
+		</author>
+		<idno type="DOI">10.1353/wp.2001.0002</idno>
+	</analytic>
+	<monogr>
+		<title level="j">World Politics</title>
+		<imprint>
+			<biblScope unit="volume">53</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="205" to="236" />
+			<date type="published" when="2001">2001</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<monogr>
+		<title level="m" type="main">Localising power in post-authoritarian Indonesia: A Southeast Asia perspective</title>
+		<author>
+			<persName><forename type="first">V</forename><surname>Hadiz</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2010">2010</date>
+			<publisher>Stanford University Press</publisher>
+			<pubPlace>Stanford</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Beyond federalism: Estimating and explaining the territorial structure of government</title>
+		<author>
+			<persName><forename type="first">L</forename><surname>Hooghe</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">G</forename><surname>Marks</surname></persName>
+		</author>
+		<idno type="DOI">10.1093/publius/pjs029</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Publius: The Journal of Federalism</title>
+		<imprint>
+			<biblScope unit="volume">43</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="179" to="204" />
+			<date type="published" when="2013">2013</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<monogr>
+		<title level="m" type="main">Community, scale, and regional governance: A postfunctionalist theory of governance</title>
+		<author>
+			<persName><forename type="first">L</forename><surname>Hooghe</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">G</forename><surname>Marks</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2016">2016</date>
+			<publisher>Oxford University Press</publisher>
+			<biblScope unit="volume">II</biblScope>
+			<pubPlace>Oxford</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+		<title level="m" type="main">Measuring regional authority: A postfunctionalist theory of governance</title>
+		<author>
+			<persName><forename type="first">L</forename><surname>Hooghe</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">G</forename><surname>Marks</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">A</forename><forename type="middle">H</forename><surname>Schakel</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">S</forename><forename type="middle">C</forename><surname>Osterkatz</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">S</forename><surname>Niedzwiecki</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">S</forename><surname>Shair-Rosenfield</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2016">2016</date>
+			<publisher>Oxford University Press</publisher>
+			<biblScope unit="volume">I</biblScope>
+			<pubPlace>Oxford</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<monogr>
+		<author>
+			<persName><forename type="first">P</forename><surname>John</surname></persName>
+		</author>
+		<title level="m">Analyzing public policy</title>
+		<imprint>
+			<date type="published" when="2014">2014</date>
+		</imprint>
+	</monogr>
+	<note>nd ed. London: Routledge</note>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+		<title level="m" type="main">Rescaling the European state: The making of territory and the rise of the meso</title>
+		<author>
+			<persName><forename type="first">M</forename><surname>Keating</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2013">2013</date>
+			<publisher>Oxford University Press</publisher>
+			<pubPlace>Oxford</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Fiscal decentralization and regional disparities: The importance of good governance</title>
+		<author>
+			<persName><forename type="first">A</forename><forename type="middle">P</forename><surname>Kyriacou</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">L</forename><surname>Muinelo-Gallo</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">O</forename><surname>Roca-Sagalés</surname></persName>
+		</author>
+		<idno type="DOI">10.1111/pirs.12061</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Papers in Regional Science</title>
+		<imprint>
+			<biblScope unit="volume">94</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="89" to="108" />
+			<date type="published" when="2015">2015</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Fiscal decentralization in specific areas of government: An empirical evaluation using country panel data</title>
+		<author>
+			<persName><forename type="first">L</forename><forename type="middle">E</forename><surname>Letelier-Saavedra</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">J</forename><forename type="middle">L</forename><surname>Sáez-Lozano</surname></persName>
+		</author>
+		<idno type="DOI">10.1068/c13111r</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Environment and Planning C: Government and Policy</title>
+		<imprint>
+			<biblScope unit="volume">33</biblScope>
+			<biblScope unit="issue">6</biblScope>
+			<biblScope unit="page" from="1344" to="1360" />
+			<date type="published" when="2015">2015</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Regional inequality and decentralization: An empirical analysis</title>
+		<author>
+			<persName><forename type="first">C</forename><surname>Lessmann</surname></persName>
+		</author>
+		<idno type="DOI">10.1068/a44267</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Environment and Planning A</title>
+		<imprint>
+			<biblScope unit="volume">44</biblScope>
+			<biblScope unit="issue">6</biblScope>
+			<biblScope unit="page" from="1363" to="1388" />
+			<date type="published" when="2012">2012</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">One size fits all? Decentralization, corruption, and the monitoring of bureaucrats</title>
+		<author>
+			<persName><forename type="first">C</forename><surname>Lessmann</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">G</forename><surname>Markwardt</surname></persName>
+		</author>
+		<idno type="DOI">10.1016/j.worlddev.2009.11.003</idno>
+	</analytic>
+	<monogr>
+		<title level="j">World Development</title>
+		<imprint>
+			<biblScope unit="volume">38</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="631" to="646" />
+			<date type="published" when="2010">2010</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">The fiscal decentralization and economic growth nexus revisited</title>
+		<author>
+			<persName><forename type="first">J</forename><forename type="middle">E</forename><surname>Ligthart</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">P</forename><surname>Van Oudheusden</surname></persName>
+		</author>
+		<idno type="DOI">10.1111/1475-5890.12099</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Fiscal Studies</title>
+		<imprint>
+			<biblScope unit="volume">38</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="141" to="171" />
+			<date type="published" when="2017">2017</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">Patterns of regional authority</title>
+		<author>
+			<persName><forename type="first">G</forename><surname>Marks</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">L</forename><surname>Hooghe</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">A</forename><forename type="middle">H</forename><surname>Schakel</surname></persName>
+		</author>
+		<idno type="DOI">10.1080/13597560801979506</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Regional and Federal Studies</title>
+		<imprint>
+			<biblScope unit="volume">18</biblScope>
+			<biblScope unit="issue">2-3</biblScope>
+			<biblScope unit="page" from="167" to="181" />
+			<date type="published" when="2008">2008</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Smart specialization, regional growth and applications to European Union cohesion policy</title>
+		<author>
+			<persName><forename type="first">P</forename><surname>Mccann</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">R</forename><surname>Ortega-Argilés</surname></persName>
+		</author>
+		<idno type="DOI">10.1080/00343404.2013.799769</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Regional Studies</title>
+		<imprint>
+			<biblScope unit="volume">49</biblScope>
+			<biblScope unit="issue">8</biblScope>
+			<biblScope unit="page" from="1291" to="1302" />
+			<date type="published" when="2015">2015</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<monogr>
+		<title level="m" type="main">The politics of ethnic conflict regulation</title>
+		<author>
+			<persName><forename type="first">J</forename><surname>Mcgarry</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">B</forename><surname>O'leary</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1993">1993</date>
+			<publisher>Routledge</publisher>
+			<pubPlace>London</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<monogr>
+		<title level="m" type="main">Brazilian politics: Reforming a democratic state in a changing world</title>
+		<author>
+			<persName><forename type="first">A</forename><forename type="middle">P</forename><surname>Montero</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2007">2007</date>
+			<publisher>Polity Press</publisher>
+			<pubPlace>Cambridge</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<monogr>
+		<title level="m" type="main">The theory of public finance: A study in public economy</title>
+		<author>
+			<persName><forename type="first">R</forename><forename type="middle">A</forename><surname>Musgrave</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1959">1959</date>
+			<publisher>McGraw-Hill</publisher>
+			<pubPlace>New York</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<monogr>
+		<title level="m" type="main">Fiscal federalism</title>
+		<author>
+			<persName><forename type="first">W</forename><forename type="middle">E</forename><surname>Oates</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1972">1972</date>
+			<publisher>Harcourt Brace Jovanovich</publisher>
+			<pubPlace>New York</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<analytic>
+		<title level="a" type="main">Toward a second-generation theory of fiscal federalism</title>
+		<author>
+			<persName><forename type="first">W</forename><forename type="middle">E</forename><surname>Oates</surname></persName>
+		</author>
+		<idno type="DOI">10.1007/s10797-005-1619-9</idno>
+	</analytic>
+	<monogr>
+		<title level="j">International Tax and Public Finance</title>
+		<imprint>
+			<biblScope unit="volume">12</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="349" to="373" />
+			<date type="published" when="2005">2005</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<analytic>
+		<title level="a" type="main">On the determinants of fiscal centralization: Theory and evidence</title>
+		<author>
+			<persName><forename type="first">U</forename><surname>Panizza</surname></persName>
+		</author>
+		<idno type="DOI">10.1016/S0047-2727(99)00020-1</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Public Economics</title>
+		<imprint>
+			<biblScope unit="volume">74</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="97" to="139" />
+			<date type="published" when="1999">1999</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">Decentralization and democracy in developing countries: An overview</title>
+		<author>
+			<persName><forename type="first">Pius</forename><surname>Kulipossa</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">F</forename></persName>
+		</author>
+		<idno type="DOI">10.1080/0961452042000284003</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Development in Practice</title>
+		<imprint>
+			<biblScope unit="volume">14</biblScope>
+			<biblScope unit="issue">6</biblScope>
+			<biblScope unit="page" from="768" to="779" />
+			<date type="published" when="2004">2004</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<monogr>
+		<title level="m" type="main">Der Finanzausgleich. Handbuch der Finanzwissenschaft (Fiscal equalisation. Handbook of financial science</title>
+		<author>
+			<persName><forename type="first">J</forename><surname>Popitz</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1927">1927</date>
+			<biblScope unit="volume">2</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<monogr>
+		<title level="m" type="main">Der künftige Finanzausgleich zwischen Reich, Ländern und Gemeinden (The future financial equalisation between the federal state, provinces and municipalities</title>
+		<author>
+			<persName><forename type="first">J</forename><surname>Popitz</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1932">1932</date>
+			<pubPlace>Berlin</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<monogr>
+		<title level="m" type="main">Hamilton&apos;s paradox: The promise and peril of fiscal federalism</title>
+		<author>
+			<persName><forename type="first">J</forename><surname>Rodden</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2006">2006</date>
+			<publisher>Cambridge University Press</publisher>
+			<biblScope unit="volume">2</biblScope>
+			<pubPlace>Cambridge</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<analytic>
+		<title level="a" type="main">Fiscal decentralization and the business cycle: An empirical study of seven federations</title>
+		<author>
+			<persName><forename type="first">J</forename><surname>Rodden</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">E</forename><surname>Wibbels</surname></persName>
+		</author>
+		<idno type="DOI">10.1111/j.1468-0343.2009.00350.x</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Economics &amp; Politics</title>
+		<imprint>
+			<biblScope unit="volume">22</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="37" to="67" />
+			<date type="published" when="2010">2010</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<analytic>
+		<title level="a" type="main">Does decentralization matter for regional disparities? A cross-country analysis</title>
+		<author>
+			<persName><forename type="first">A</forename><surname>Rodríguez-Pose</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">R</forename><surname>Ezcurra</surname></persName>
+		</author>
+		<idno type="DOI">10.1093/jeg/lbp049</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Economic Geography</title>
+		<imprint>
+			<biblScope unit="volume">10</biblScope>
+			<biblScope unit="issue">5</biblScope>
+			<biblScope unit="page" from="619" to="644" />
+			<date type="published" when="2010">2010</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<analytic>
+		<title level="a" type="main">Is fiscal decentralization harmful for economic growth? Evidence from the OECD countries</title>
+		<author>
+			<persName><forename type="first">A</forename><surname>Rodríguez-Pose</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">R</forename><surname>Ezcurra</surname></persName>
+		</author>
+		<idno type="DOI">10.1093/jeg/lbq025</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Economic Geography</title>
+		<imprint>
+			<biblScope unit="volume">11</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="619" to="643" />
+			<date type="published" when="2011">2011</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<analytic>
+		<title level="a" type="main">The global trend towards devolution and its implications</title>
+		<author>
+			<persName><forename type="first">A</forename><surname>Rodríguez-Pose</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">N</forename><surname>Gill</surname></persName>
+		</author>
+		<idno type="DOI">10.1068/c0235</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Environment and Planning C: Government and Policy</title>
+		<imprint>
+			<biblScope unit="volume">21</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="333" to="351" />
+			<date type="published" when="2003">2003</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<analytic>
+		<title level="a" type="main">On the &apos;economic dividend&apos; of devolution</title>
+		<author>
+			<persName><forename type="first">A</forename><surname>Rodríguez-Pose</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">N</forename><surname>Gill</surname></persName>
+		</author>
+		<idno type="DOI">10.1080/00343400500128390</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Regional Studies</title>
+		<imprint>
+			<biblScope unit="volume">39</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="405" to="420" />
+			<date type="published" when="2005">2005</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b48">
+	<analytic>
+		<title level="a" type="main">From identity to the economy: Analysing the evolution of the decentralisation discourse</title>
+		<author>
+			<persName><forename type="first">A</forename><surname>Rodríguez-Pose</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">R</forename><surname>Sandall</surname></persName>
+		</author>
+		<idno type="DOI">10.1068/cav2</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Environment and planning C: Government and Policy</title>
+		<imprint>
+			<biblScope unit="volume">26</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="54" to="72" />
+			<date type="published" when="2008">2008</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b49">
+	<analytic>
+		<title level="a" type="main">Unfunded mandates and the economic impact of decentralization: When finance does not follow function</title>
+		<author>
+			<persName><forename type="first">A</forename><surname>Rodríguez-Pose</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">M</forename><surname>Vidal-Bover</surname></persName>
+		</author>
+		<idno type="DOI">10.1177/00323217221136666</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Political Studies</title>
+		<imprint>
+			<biblScope unit="volume">72</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="652" to="676" />
+			<date type="published" when="2024">2024</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b50">
+	<monogr>
+		<title level="m" type="main">The globalization paradox: Democracy and the future of the world economy</title>
+		<author>
+			<persName><forename type="first">D</forename><surname>Rodrik</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2012">2012</date>
+			<publisher>WW Norton &amp; Company</publisher>
+			<pubPlace>New York</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b51">
+	<monogr>
+		<title level="m" type="main">Federalism: Origin, operation, significance</title>
+		<author>
+			<persName><forename type="first">W</forename><forename type="middle">H</forename><surname>Riker</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1964">1964</date>
+			<pubPlace>Little, Brown</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b52">
+	<analytic>
+		<title level="a" type="main">The pure theory of public expenditure</title>
+		<author>
+			<persName><forename type="first">P</forename><forename type="middle">A</forename><surname>Samuelson</surname></persName>
+		</author>
+		<idno type="DOI">10.2307/1925895</idno>
+	</analytic>
+	<monogr>
+		<title level="j">The Review of Economics and Statistics</title>
+		<imprint>
+			<biblScope unit="volume">36</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="387" to="389" />
+			<date type="published" when="1954">1954</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b53">
+	<analytic>
+		<title level="a" type="main">Diagrammatic exposition of a theory of public expenditure</title>
+		<author>
+			<persName><forename type="first">P</forename><forename type="middle">A</forename><surname>Samuelson</surname></persName>
+		</author>
+		<idno type="DOI">10.2307/1925849</idno>
+	</analytic>
+	<monogr>
+		<title level="j">The Review of Economics and Statistics</title>
+		<imprint>
+			<biblScope unit="volume">37</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="350" to="356" />
+			<date type="published" when="1955">1955</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b54">
+	<analytic>
+		<title level="a" type="main">Language difference and regional authority</title>
+		<author>
+			<persName><forename type="first">S</forename><surname>Shair-Rosenfield</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">A</forename><forename type="middle">H</forename><surname>Schakel</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">S</forename><surname>Niedzwiecki</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">G</forename><surname>Marks</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">L</forename><surname>Hooghe</surname></persName>
+		</author>
+		<author>
+			<persName><forename type="first">S</forename><surname>Chapman-Osterkatz</surname></persName>
+		</author>
+		<idno type="DOI">10.1080/13597566.2020.1831476</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Regional &amp; Federal Studies</title>
+		<imprint>
+			<biblScope unit="volume">31</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="73" to="97" />
+			<date type="published" when="2021">2021</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b55">
+	<analytic>
+		<title level="a" type="main">The effects of economic and political integration on fiscal decentralization: Evidence from OECD countries</title>
+		<author>
+			<persName><forename type="first">D</forename><surname>Stegarescu</surname></persName>
+		</author>
+		<idno type="DOI">10.1111/j.1540-5982.2009.01524.x</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Canadian Journal of Economics</title>
+		<imprint>
+			<biblScope unit="volume">42</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="694" to="718" />
+			<date type="published" when="2009">2009</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b56">
+	<monogr>
+		<title level="m" type="main">The regional world: Territorial development in a global economy</title>
+		<author>
+			<persName><forename type="first">M</forename><surname>Storper</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1997">1997</date>
+			<publisher>Guilford Press</publisher>
+			<pubPlace>New York</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b57">
+	<analytic>
+		<title level="a" type="main">A pure theory of local expenditures</title>
+		<author>
+			<persName><forename type="first">C</forename><forename type="middle">M</forename><surname>Tiebout</surname></persName>
+		</author>
+		<idno type="DOI">10.1086/257839</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Political Economy</title>
+		<imprint>
+			<biblScope unit="volume">64</biblScope>
+			<biblScope unit="issue">5</biblScope>
+			<biblScope unit="page" from="416" to="424" />
+			<date type="published" when="1956">1956</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b58">
+	<monogr>
+		<title level="m" type="main">Defining and measuring decentralization: A global perspective. Unpublished manuscript</title>
+		<author>
+			<persName><forename type="first">D</forename><surname>Treisman</surname></persName>
+		</author>
+		<ptr target="https://www.sscnet.ucla.edu/polisci/faculty/tre-isman/Papers/defin.pdf" />
+		<imprint>
+			<date type="published" when="2002">2002</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b59">
+	<monogr>
+		<title level="m" type="main">The Architecture of government: Rethinking political decentralization</title>
+		<author>
+			<persName><forename type="first">D</forename><surname>Treisman</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2007">2007</date>
+			<publisher>Cambridge University Press</publisher>
+			<pubPlace>Cambridge</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b60">
+	<analytic>
+		<title level="a" type="main">Second-generation fiscal federalism: Political aspects of decentralization and economic development</title>
+		<author>
+			<persName><forename type="first">B</forename><forename type="middle">R</forename><surname>Weingast</surname></persName>
+		</author>
+		<idno type="DOI">10.1016/j.worlddev.2013.01.003</idno>
+	</analytic>
+	<monogr>
+		<title level="j">World Development</title>
+		<imprint>
+			<biblScope unit="volume">53</biblScope>
+			<biblScope unit="page" from="14" to="25" />
+			<date type="published" when="2014">2014</date>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b61">
+	<analytic>
+		<title level="a" type="main">The political economy of democratic decentralization (English)</title>
+		<author>
+			<orgName type="collaboration">World Bank Group</orgName>
+		</author>
+		<ptr target="https://doc-uments.worldbank.org/en/publication/documents-re-ports/documentdetail/386101468739238037/the-politi-cal-economy-of-democratic-decentralizationWorldBank" />
+	</analytic>
+	<monogr>
+		<title level="m">Directions in development</title>
+		<meeting><address><addrLine>Washington, D.C.; Washington, D.C.</addrLine></address></meeting>
+		<imprint>
+			<publisher>World Bank Group</publisher>
+			<date type="published" when="2000">2000. 2012. 2012</date>
+		</imprint>
+	</monogr>
+	<note type="report_type">World Development Report</note>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

@@ -29,6 +29,19 @@ services:
     # block-cache + working set and starve the other services. Block cache (2 GB)
     # + overhead sits well under 4 GB, so this should never OOM-kill in practice.
     mem_limit: 4g
+  # GROBID — style-agnostic reference parsing (Track V, replaces the V.2/V.3
+  # heuristic). Lightweight CRF image (~500MB, CPU-only); pinned for reproducible
+  # parsing. API on 8070. Fed source PDFs via POST /api/processReferences.
+  grobid:
+    image: grobid/grobid:0.8.2-crf
+    init: true
+    ulimits:
+      core: 0
+    networks: [web]
+    ports:
+      - "8070:8070"
+    restart: unless-stopped
+
   docling:
     build:
       context: .

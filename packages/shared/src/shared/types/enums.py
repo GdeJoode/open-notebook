@@ -161,6 +161,12 @@ class JobType(str, Enum):
     # from EMBEDDING_GENERATE so a linking failure stays isolated from the
     # (already-persisted) note + embedding.
     NOTE_AUTO_LINK = "note_auto_link"
+    # Track V.5: reference-extraction post-ingest pass. Enqueued (best-effort,
+    # config-gated OFF by default) after a source is ingested, this extracts the
+    # corpus' references (V.1-V.3) and feeds U.3's whole-corpus ``cites``
+    # materialization. A separate job from DOCUMENT_PARSE so a reference/matching
+    # failure stays isolated from the (already-persisted) source + chunks.
+    REFERENCE_EXTRACT = "reference_extract"
 
 
 class JobStatus(str, Enum):
