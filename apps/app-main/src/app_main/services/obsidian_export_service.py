@@ -144,6 +144,12 @@ from shared.services.metrics import record_metric
 from shared.utils.external_ids import resolve_external_ids
 from shared.utils.name_normalizer import normalize_entity_name
 
+from app_main.services.export_projection import (
+    EXCLUDED_ENTITY_STATUSES,
+    apply_min_connections_filter,
+    project_graph,
+)
+
 
 class VaultPathNotConfigured(Exception):
     """Raised when ``mode="vault_path"`` is requested but Settings is unset.
@@ -239,16 +245,12 @@ class ExportArtifact(BaseModel):
     )
 
 
-# Entity statuses that must never reach an exporter regardless of the
-# orphan_* lifecycle filter. Mirrors the D.3 precedent: ``merged`` rows
-# are tombstones pointing at canonical successors, ``archived`` rows are
-# user-deleted. Both are noise from the analyst's perspective.
+# Entity statuses that must never reach an exporter. The canonical
+# definition now lives in :mod:`export_projection` (OKF-D2 shared projection);
+# it is re-exported here so the D.1c preview router and the exports router --
+# which import ``EXCLUDED_ENTITY_STATUSES`` from this module -- keep working
+# against one source of truth.
 #
-# Public (no leading underscore) so the D.1c preview router can apply
-# the same filter without redefining the set -- the preview must mirror
-# what the actual export produces (Q-D-1c parity).
-EXCLUDED_ENTITY_STATUSES = frozenset({"archived", "merged"})
-
 # Back-compat alias for any external import path that was using the
 # previous private name. New code should reference the public symbol.
 _EXCLUDED_ENTITY_STATUSES = EXCLUDED_ENTITY_STATUSES
@@ -843,44 +845,20 @@ class ObsidianExportService:
         entities: List[Entity] = await self._entity_repo.list_entities_for_notebook(
             notebook_id, filter_
         )
-        # Status post-filter (D.3 precedent). The D.0 SurrealQL gates on
-        # orphan_status (a different axis); we keep this Python-side
-        # until D.2 promotes both axes to the query layer.
-        entities = [
-            e
-            for e in entities
-            if (e.status or "active") not in _EXCLUDED_ENTITY_STATUSES
-        ]
-
         relations: List[Relation] = await self._relation_repo.list_relations_for_notebook(
             notebook_id, filter_
         )
 
-        # min_connections post-filter. The D.0 SurrealQL does not gate
-        # on degree (it filters by orphan_status + confidence + type),
-        # so we compute degree on the surviving entity set and drop
-        # entities below the threshold. The relation set is left as-is
-        # at this stage; relations whose endpoint we just dropped will
-        # be discarded in the wikilink renderer (Q-D-4 silent-drop).
-        entities = self._apply_min_connections_filter(
-            entities, relations, filter_.min_connections
+        # OKF-D2: the status post-filter, min_connections post-filter, and
+        # dropped-relation accounting are the shared projection surface both
+        # the Obsidian and OKF exporters must agree on. Delegating to
+        # ``project_graph`` keeps the two bundles selecting the same subset.
+        projection = project_graph(entities, relations, filter_)
+        return (
+            projection.entities,
+            projection.relations,
+            projection.dropped_relations,
         )
-
-        # Now recompute the "dropped relation" count: a relation whose
-        # endpoint isn't in the surviving entity set counts as dropped
-        # for telemetry purposes (matches D.3 ``_GraphBuildSummary``).
-        surviving_ids = {str(e.id) for e in entities if e.id}
-        dropped_relations = 0
-        for relation in relations:
-            src = str(relation.in_entity) if relation.in_entity else None
-            dst = str(relation.out_entity) if relation.out_entity else None
-            if not src or not dst:
-                dropped_relations += 1
-                continue
-            if src not in surviving_ids or dst not in surviving_ids:
-                dropped_relations += 1
-
-        return entities, relations, dropped_relations
 
     @staticmethod
     def _apply_min_connections_filter(
@@ -890,28 +868,12 @@ class ObsidianExportService:
     ) -> List[Entity]:
         """Drop entities whose in+out degree is below ``min_connections``.
 
-        ``min_connections=0`` short-circuits — keep everyone, no degree
-        computation needed. For non-zero thresholds we count in+out
-        relations per entity (counting an entity-self-loop as 2, matching
-        graph-theory degree).
+        Thin delegator to :func:`export_projection.apply_min_connections_filter`
+        kept on the service so the D.1c preview router
+        (``ObsidianExportService._apply_min_connections_filter``) keeps its
+        existing call site while the algorithm lives in the shared module.
         """
-        if min_connections <= 0:
-            return entities
-
-        degree: Counter[str] = Counter()
-        for relation in relations:
-            src = str(relation.in_entity) if relation.in_entity else None
-            dst = str(relation.out_entity) if relation.out_entity else None
-            if src:
-                degree[src] += 1
-            if dst:
-                degree[dst] += 1
-
-        return [
-            e
-            for e in entities
-            if e.id and degree[str(e.id)] >= min_connections
-        ]
+        return apply_min_connections_filter(entities, relations, min_connections)
 
     # ------------------------------------------------------------------
     # Filename + wikilink plumbing
