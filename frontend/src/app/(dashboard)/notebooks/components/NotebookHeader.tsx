@@ -16,6 +16,7 @@ import { formatDistanceToNow } from 'date-fns'
 import { InlineEdit } from '@/components/common/InlineEdit'
 import { JsonlExportButton } from '@/components/notebooks/exports/JsonlExportButton'
 import { ObsidianExportDialog } from '@/components/notebooks/exports/ObsidianExportDialog'
+import { OkfExportDialog } from '@/components/notebooks/exports/OkfExportDialog'
 import { cn } from '@/lib/utils'
 
 interface NotebookHeaderProps {
@@ -36,6 +37,8 @@ export function NotebookHeader({
   // D.1c -- Obsidian export dialog open-state. The dialog itself owns
   // its filter + mode internals; we just gate visibility.
   const [obsidianDialogOpen, setObsidianDialogOpen] = useState(false)
+  // OKF.5 -- Open Knowledge Format export dialog open-state.
+  const [okfDialogOpen, setOkfDialogOpen] = useState(false)
 
   const updateNotebook = useUpdateNotebook()
   const deleteNotebook = useDeleteNotebook()
@@ -105,6 +108,16 @@ export function NotebookHeader({
               >
                 <Download className="h-4 w-4 mr-2" />
                 Export Obsidian
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setOkfDialogOpen(true)}
+                data-testid="open-okf-export-dialog"
+                aria-label="Export this notebook to Open Knowledge Format"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export OKF
               </Button>
               <JsonlExportButton notebookId={notebook.id} />
               <Button
@@ -201,6 +214,12 @@ export function NotebookHeader({
       <ObsidianExportDialog
         open={obsidianDialogOpen}
         onOpenChange={setObsidianDialogOpen}
+        notebookId={notebook.id}
+      />
+
+      <OkfExportDialog
+        open={okfDialogOpen}
+        onOpenChange={setOkfDialogOpen}
         notebookId={notebook.id}
       />
     </>

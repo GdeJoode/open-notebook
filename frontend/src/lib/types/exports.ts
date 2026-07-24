@@ -97,3 +97,62 @@ export interface ExportPreviewCounts {
 export interface JsonlExportRequest {
   filter: ExportFilter
 }
+
+/**
+ * Request body for ``POST /api/notebooks/{id}/export/okf`` (Track OKF.2).
+ *
+ * The OKF endpoint reuses the Track-D ``ObsidianExportRequest`` Pydantic
+ * model server-side, so the wire body carries both ``mode`` and ``filter``.
+ * OKF only ever emits an ``application/zip`` bundle (there is no vault_path
+ * write mode), so the hook always sends ``mode: 'zip'`` -- the field exists
+ * purely to satisfy the shared request contract.
+ */
+export interface OkfExportRequest {
+  filter: ExportFilter
+}
+
+/**
+ * OKF omitted-field ledger (OKF-D3) surfaced in the ``metadata`` block of
+ * the export report. Maps each dropped substrate field to a human-readable
+ * reason it has no OKF representation. Copied verbatim from
+ * ``OKF_OMITTED_FIELDS`` server-side so the lossy-by-design loss is
+ * explicit, never silent.
+ */
+export type OkfOmittedFields = Record<string, string>
+
+/**
+ * ``metadata`` block of the OKF ExportReport. OKF packs its bundle-specific
+ * counts + the omitted-field ledger here rather than widening the shared
+ * ``ExportReport`` shape.
+ */
+export interface OkfExportMetadata {
+  notes_written?: number
+  sources_written?: number
+  dropped_relations?: number
+  omitted_fields?: OkfOmittedFields
+  okf_version?: string
+  [key: string]: unknown
+}
+
+/**
+ * OKF export report — the JSON payload the server serialises into the
+ * ``X-OKF-Export-Report`` response header alongside the zip body. It is the
+ * same ``ExportReport`` shape as the Obsidian/JSONL exports, narrowed so the
+ * dialog can read the OKF-specific ``metadata`` (esp. ``omitted_fields``)
+ * without an ``unknown`` cast.
+ */
+export interface OkfExportReport extends Omit<ExportReport, 'metadata'> {
+  metadata?: OkfExportMetadata
+}
+
+/**
+ * Body returned by ``POST /api/notebooks/{id}/export/okf`` when the notebook
+ * is large enough to be deferred to the job queue (HTTP 202). The export runs
+ * asynchronously; poll the job-status surface with ``job_id``.
+ */
+export interface OkfExportDeferred {
+  job_id: string
+  status: string
+  entity_count: number
+  threshold: number
+}
