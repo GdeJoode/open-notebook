@@ -8,6 +8,9 @@ from functools import lru_cache
 
 from esperanto import EmbeddingModel
 from llm_manager import ModelManager, get_model_manager
+from shared.references.footnote_reference_extractor import (
+    FootnoteReferenceExtractor,
+)
 from shared.references.grobid_reference_service import GrobidReferenceService
 from shared.references.work_resolver import ResolverCascade
 from surrealdb_service.connection import execute_query
@@ -572,22 +575,43 @@ def get_grobid_reference_service() -> GrobidReferenceService:
     return GrobidReferenceService()
 
 
+def get_footnote_reference_extractor(
+    grobid_service: GrobidReferenceService,
+) -> FootnoteReferenceExtractor:
+    """Provide the GF.4 footnote reference extractor (policy-document path).
+
+    Shares the given GROBID service (fulltext footnotes + ``processCitation``) and
+    an :class:`OverheidResolver` for best-effort KOOP SRU enrichment of government
+    references. Government refs are always recorded; resolution only attaches
+    metadata (GF-D3), so an unreachable KOOP never breaks the pass.
+    """
+    from shared.references import FootnoteReferenceExtractor, OverheidResolver
+
+    return FootnoteReferenceExtractor(
+        grobid_service, overheid_resolver=OverheidResolver()
+    )
+
+
 def get_reference_extraction_service(
     *, resolve_external: bool = False
 ) -> ReferenceExtractionService:
     """Provide the G.3 reference-extraction orchestration service.
 
-    Wires the GROBID producer (sole engine) and U.3's ``cites`` materializer. The
-    V.4 cascade is only built when ``resolve_external`` is requested so the default
-    reference pass never constructs an external-authority network client.
+    Wires the GROBID producer (sole engine), U.3's ``cites`` materializer, and the
+    GF.4 footnote extractor (so policy documents' footnote references merge with the
+    bibliography refs). The V.4 cascade is only built when ``resolve_external`` is
+    requested so the default reference pass never constructs an external-authority
+    network client.
     """
+    grobid_service = get_grobid_reference_service()
     return ReferenceExtractionService(
         source_repo=get_source_repo(),
         cites_service=get_cites_materialization_service(),
-        grobid_service=get_grobid_reference_service(),
+        grobid_service=grobid_service,
         resolver_cascade=(
             get_reference_resolver_cascade() if resolve_external else None
         ),
+        footnote_extractor=get_footnote_reference_extractor(grobid_service),
     )
 
 

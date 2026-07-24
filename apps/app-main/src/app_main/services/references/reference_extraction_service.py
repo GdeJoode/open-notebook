@@ -53,6 +53,9 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
 
 from loguru import logger
+from shared.references.footnote_reference_extractor import (
+    FootnoteReferenceExtractor,
+)
 from shared.references.grobid_reference_service import GrobidReferenceService
 from shared.references.work_resolver import ResolverCascade
 from shared.retrieval.cites_matching import ParsedReference
@@ -61,6 +64,38 @@ from surrealdb_service.repositories import SourceRepository
 from app_main.services.cites_materialization_service import (
     CitesMaterializationService,
 )
+
+
+def _dedup_key(ref: ParsedReference) -> str:
+    """A coarse identity for a reference: its DOI, else its normalized raw text.
+
+    Bibliography and footnote refs rarely overlap (one is a scholarly biblStruct,
+    the other a government identifier), but a DOI-carrying footnote citation could
+    duplicate a bibliography entry — collapse those on the shared DOI, otherwise on
+    the lowercased/whitespace-collapsed verbatim text.
+    """
+    if ref.doi:
+        return f"doi:{ref.doi}"
+    return "raw:" + " ".join((ref.raw_text or "").lower().split())
+
+
+def _merge_references(
+    bibliography: List[ParsedReference], footnotes: List[ParsedReference]
+) -> List[ParsedReference]:
+    """Bibliography refs plus footnote refs, dropping obvious duplicates.
+
+    Bibliography refs keep their order and priority; a footnote ref is appended
+    only when its :func:`_dedup_key` was not already seen.
+    """
+    merged: List[ParsedReference] = list(bibliography)
+    seen = {_dedup_key(ref) for ref in bibliography}
+    for ref in footnotes:
+        key = _dedup_key(ref)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(ref)
+    return merged
 
 
 @dataclass(frozen=True)
@@ -98,11 +133,13 @@ class ReferenceExtractionService:
         grobid_service: GrobidReferenceService,
         *,
         resolver_cascade: Optional[ResolverCascade] = None,
+        footnote_extractor: Optional[FootnoteReferenceExtractor] = None,
     ) -> None:
         self.source_repo = source_repo
         self.cites_service = cites_service
         self.grobid_service = grobid_service
         self._resolver_cascade = resolver_cascade
+        self._footnote_extractor = footnote_extractor
 
     async def extract_source_references(
         self, source_id: str
@@ -115,6 +152,12 @@ class ReferenceExtractionService:
         — never raises. The ``file_path`` is passed through verbatim (it is
         repo-root-relative in local runs); path resolution is the caller's/env's
         concern.
+
+        When a :class:`FootnoteReferenceExtractor` is wired (GF.4), the source's
+        references are the GROBID **bibliography** refs PLUS the **footnote** refs
+        (the policy-document citation type GROBID's bibliography model misses),
+        deduplicated on obvious overlaps. Without one, only the bibliography refs
+        are returned (the existing G.* behaviour, unchanged).
         """
         source = await self.source_repo.get(source_id)
         asset = getattr(source, "asset", None) if source else None
@@ -126,8 +169,11 @@ class ReferenceExtractionService:
                 fp=file_path,
             )
             return []
-        refs = await self.grobid_service.extract_references(file_path)
-        return list(refs)
+        refs = list(await self.grobid_service.extract_references(file_path))
+        if self._footnote_extractor is not None:
+            footnote_refs = await self._footnote_extractor.extract(file_path)
+            refs = _merge_references(refs, footnote_refs)
+        return refs
 
     async def materialize_corpus(
         self, *, resolve_external: bool = False
