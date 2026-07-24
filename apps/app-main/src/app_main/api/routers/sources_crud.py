@@ -28,6 +28,7 @@ from app_main.api.schemas import (
 )
 from app_main.config import UPLOADS_FOLDER
 from app_main.dependencies import (
+    get_chunk_audit,
     get_chunk_mutator,
     get_chunk_repo,
     get_hybrid_retrieval_service,
@@ -36,6 +37,7 @@ from app_main.dependencies import (
     get_source_service,
     get_transformation_service,
 )
+from app_main.services.audit.chunk_audit import ChunkAuditService
 from app_main.services.hybrid_retrieval_service import HybridRetrievalService
 from app_main.services.kg_retrieval_service import KGRetrievalService
 from app_main.exceptions import InvalidInputError
@@ -1042,3 +1044,47 @@ async def split_chunk(
     except Exception as e:
         logger.error(f"Error splitting chunk {chunk_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error splitting chunk: {str(e)}")
+
+
+@router.get("/{source_id}/chunk-history")
+async def get_chunk_history(
+    source_id: str,
+    source_svc: SourceService = Depends(get_source_service),
+    audit: ChunkAuditService = Depends(get_chunk_audit),
+):
+    """Return the append-only chunk-edit audit trail for a source (Track I.H2).
+
+    Lists every merge/split recorded against the source's chunks, most recent
+    first, with the before/after JSON summaries. Empty when no structural edits
+    have been made (or the audit table predates them).
+    """
+    try:
+        source = await source_svc.get(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        rows = await audit.history(str(source.id))
+        # RecordId / datetime values are not natively JSON-serializable.
+        return {
+            "source_id": str(source.id),
+            "history": [
+                {
+                    "id": str(row.get("id")),
+                    "op": row.get("op"),
+                    "chunk": str(row.get("chunk")) if row.get("chunk") else None,
+                    "before": row.get("before"),
+                    "after": row.get("after"),
+                    "actor": row.get("actor"),
+                    "ts": str(row.get("ts")) if row.get("ts") else None,
+                }
+                for row in rows
+            ],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading chunk history for {source_id}: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error reading chunk history: {str(e)}"
+        )

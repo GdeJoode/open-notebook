@@ -25,9 +25,10 @@ callers re-fetch via the chunk repository after the commit succeeds. All
 the transaction is built, so the common failure modes never reach the
 database at all.
 
-Audit trail (AC4): each op logs a before/after summary via loguru. The
-durable ``chunk_edit`` table is deferred to phase I.H2 and is intentionally
-not built here.
+Audit trail (AC4): each op logs a before/after summary via loguru AND — when a
+:class:`ChunkAuditService` is injected (I.H2) — appends a durable ``chunk_edit``
+row after the commit. The audit writer is optional and fail-soft, so the mutator
+still works (loguru-only) when none is wired.
 """
 
 from __future__ import annotations
@@ -42,6 +43,8 @@ from surrealdb_service.connection import (
     execute_query,
     execute_transaction,
 )
+
+from app_main.services.audit.chunk_audit import ChunkAuditService
 
 # Text separator inserted between two merged chunks. Two newlines mirror a
 # paragraph break, which is how Docling/MinerU chunks read when adjacent.
@@ -113,8 +116,13 @@ class ChunkMutator:
     inside one SurrealQL transaction.
     """
 
-    def __init__(self, config: Optional[SurrealDBConfig] = None) -> None:
+    def __init__(
+        self,
+        config: Optional[SurrealDBConfig] = None,
+        audit: Optional[ChunkAuditService] = None,
+    ) -> None:
         self.config = config
+        self._audit = audit
 
     async def _get_chunk(self, chunk_id: str) -> Optional[Chunk]:
         try:
@@ -250,6 +258,15 @@ class ChunkMutator:
         result = await self._get_chunk(str(keep.id))
         if result is None:  # pragma: no cover - survivor must exist post-commit
             raise ChunkMutationError("Merged chunk vanished after commit")
+
+        if self._audit is not None:
+            await self._audit.record(
+                source_id=str(source_id),
+                op="merge",
+                before=[keep, drop],
+                after=[result],
+                chunk_id=str(keep.id),
+            )
         return result
 
     async def split(
@@ -361,4 +378,13 @@ class ChunkMutator:
         )
         if original is None or new_chunk is None:  # pragma: no cover
             raise ChunkMutationError("Split result incomplete after commit")
+
+        if self._audit is not None:
+            await self._audit.record(
+                source_id=str(source_id),
+                op="split",
+                before=[chunk],
+                after=[original, new_chunk],
+                chunk_id=str(original.id),
+            )
         return [original, new_chunk]

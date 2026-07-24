@@ -1,0 +1,41 @@
+-- ============================================================================
+-- Migration 74: durable `chunk_edit` audit log (Track I.H2, core slice).
+--
+-- WHY. The inspect-workspace chunk mutator (merge/split, Track I.D-3) records
+-- each structural edit only to loguru today — see the "Audit trail (AC4)" note in
+-- services/chunking/chunk_mutator.py, which explicitly defers the DURABLE log to
+-- this phase. This migration materializes that append-only table so every chunk
+-- mutation leaves a queryable before/after trail.
+--
+-- SCOPE. This is the audit half of I.H2. The frozen `document_snapshot` /
+-- restore / retention-cron / HistoryPanel UI half is deliberately NOT built here
+-- (tracked as I.H2b); a later migration owns that table.
+--
+-- SHAPE. Append-only: rows are only ever CREATE'd, never updated. `before`/`after`
+-- hold JSON-encoded chunk summaries (a string, not a SCHEMAFULL object — the two
+-- ops have different arity: merge before = [keep, drop], split after = [left,
+-- right]; a JSON string keeps the row shape uniform and avoids object-schema
+-- drift). `source` is stored directly (not only via `chunk`) so per-source
+-- history survives a chunk being deleted by a merge, and so the read query
+-- filters without a join. `chunk` is optional for the same reason.
+--
+-- OVERWRITE guards (v2 drift). Like note_about (migration 70): on a fresh
+-- container an unqualified first reference can auto-create the table as TYPE ANY,
+-- which then blocks a plain DEFINE. OVERWRITE converts/pins it deterministically,
+-- so apply is idempotent on both a clean and a drifted DB.
+-- ============================================================================
+
+DEFINE TABLE OVERWRITE chunk_edit SCHEMAFULL;
+DEFINE FIELD OVERWRITE source ON chunk_edit TYPE record<source>;
+DEFINE FIELD OVERWRITE chunk  ON chunk_edit TYPE option<record<chunk>>;
+DEFINE FIELD OVERWRITE op     ON chunk_edit TYPE string
+    ASSERT $value IN ["merge", "split"];
+DEFINE FIELD OVERWRITE before ON chunk_edit TYPE option<string>;
+DEFINE FIELD OVERWRITE after  ON chunk_edit TYPE option<string>;
+DEFINE FIELD OVERWRITE actor  ON chunk_edit TYPE option<string>;
+DEFINE FIELD OVERWRITE ts     ON chunk_edit TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX OVERWRITE ce_source ON chunk_edit FIELDS source;
+DEFINE INDEX OVERWRITE ce_ts     ON chunk_edit FIELDS ts;
+
+RETURN NONE;
