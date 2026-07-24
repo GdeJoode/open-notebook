@@ -89,6 +89,26 @@ async def test_no_footnotes_yields_no_references() -> None:
     assert await extractor.extract(b"%PDF fake") == []
 
 
+async def test_wrapped_footnote_whitespace_is_normalized() -> None:
+    # A government footnote docling wrapped across lines with trailing/leading
+    # whitespace. Normalization stores a clean, single-spaced raw_text and keeps the
+    # identifier intact across the (space-boundary) line break.
+    grobid = _grobid_stub(footnotes=["  Kamerstuk\n   31305-489  \n"])
+    extractor = FootnoteReferenceExtractor(grobid)
+
+    refs = await extractor.extract(b"%PDF fake")
+
+    assert len(refs) == 1
+    assert refs[0].raw_text == "Kamerstuk 31305-489"
+    assert refs[0].venue == "Kamerstuk"  # classified + routed as government
+
+
+async def test_whitespace_only_footnotes_are_skipped() -> None:
+    grobid = _grobid_stub(footnotes=["   \n\t ", ""])
+    extractor = FootnoteReferenceExtractor(grobid)
+    assert await extractor.extract(b"%PDF fake") == []
+
+
 # --------------------------------------------------------------------------
 # academic footnote → GROBID processCitation
 # --------------------------------------------------------------------------

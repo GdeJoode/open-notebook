@@ -14,9 +14,20 @@ Precision signal (in order of strength):
 * **Title overlap** — otherwise the returned title must clear the shared
   token-overlap floor against the reference text; below it the leg falls through.
 
-# TODO(V.4-live): confirm the SRU record structure — the exact dcterms element
-# nesting (title / identifier / type / issued) and the enriched preferredUrl — and
-# the dossier-identifier format against a live KOOP SRU response.
+Live-confirmed against KOOP SRU (2026-07-24)
+============================================
+Verified the record structure and query grammar against the live endpoint; three
+corrections followed:
+
+* **Query grammar** — ``cql.textAndIndexes="a b"`` is a PHRASE match (a multi-word
+  citation string then matches ~nothing: "31305 mobiliteit" → 0 records). The
+  ``all`` relation ANDs the words instead (→ 892 records), which is what we want.
+* **Year** — records expose ``dcterms:date`` / ``available`` / ``modified``, NOT
+  ``issued``; reading only ``issued`` always yielded ``year=None``. We now fall
+  through those in order.
+* **Dossiernummer** — a record carries a dedicated ``<dossiernummer>`` element
+  (e.g. ``31305``). The dossier match now prefers it, keeping the
+  digits-in-``identifier`` heuristic (true for ``kst-…`` ids) as a fallback.
 """
 
 from __future__ import annotations
@@ -98,7 +109,10 @@ class OverheidResolver:
         terms = [t for t in _CQL_TERM.sub(" ", raw).split() if len(t) > 2][:8]
         if not terms:
             return None
-        return f'cql.textAndIndexes="{" ".join(terms)}"'
+        # The ``all`` relation ANDs the words. Quoting them instead
+        # (``textAndIndexes="a b"``) is an EXACT-PHRASE match that finds ~nothing
+        # for a citation string — confirmed live (phrase → 0 records, all → 892).
+        return f'cql.textAndIndexes all "{" ".join(terms)}"'
 
     def _parse_response(
         self, body: str, ref: ParsedReference
@@ -127,11 +141,24 @@ class OverheidResolver:
         if not title and not identifier:
             return None
         doc_type = self._find_local_text(record, "type")
-        year = self._parse_year(self._find_local_text(record, "issued"))
+        # KOOP records carry the date as dcterms:date/available/modified, not
+        # ``issued`` — try them in order of preference (confirmed live).
+        year = self._parse_year(
+            self._find_local_text(record, "issued")
+            or self._find_local_text(record, "date")
+            or self._find_local_text(record, "available")
+            or self._find_local_text(record, "modified")
+        )
         uri = self._find_local_text(record, "preferredUrl") or identifier
 
-        # Strongest signal: the reference's dossiernummer is in the record id.
-        if ref_dossier and identifier and ref_dossier in self._digits(identifier):
+        # Strongest signal: the reference's dossiernummer matches the record's.
+        # Prefer the dedicated <dossiernummer> element; fall back to digits in the
+        # identifier (holds for ``kst-<dossier>-<nr>`` ids, not for ``blg-…``).
+        record_dossier = self._find_local_text(record, "dossiernummer")
+        if ref_dossier and (
+            (record_dossier and ref_dossier == self._digits(record_dossier))
+            or (identifier and ref_dossier in self._digits(identifier))
+        ):
             return self._build(
                 title or identifier, identifier, uri, doc_type, year,
                 confidence=_DOSSIER_CONFIDENCE,

@@ -35,6 +35,19 @@ from shared.references.overheid_resolver import OverheidResolver
 from shared.retrieval.cites_matching import ParsedReference
 
 
+def _normalize_footnote_text(text: str) -> str:
+    """Collapse whitespace to single spaces and strip the ends.
+
+    Footnote text arrives from docling/GROBID with the stray newlines and runs of
+    spaces a note picks up when it wraps across lines in the source PDF. Normalizing
+    here does double duty: a citation split over a line break — a Kamerstuk
+    identifier, a DOI — is only matchable once the break is gone, and the value
+    stored as ``ParsedReference.raw_text`` stays clean for dedup and display. Empty
+    or whitespace-only input collapses to ``""`` (skipped by the caller).
+    """
+    return " ".join((text or "").split())
+
+
 class FootnoteReferenceExtractor:
     """Extract references from a PDF's footnotes, routing each by kind (GF.4)."""
 
@@ -71,7 +84,10 @@ class FootnoteReferenceExtractor:
         """
         footnotes = await self._grobid.fulltext_footnotes(pdf)
         references: List[ParsedReference] = []
-        for text in footnotes:
+        for raw in footnotes:
+            text = _normalize_footnote_text(raw)
+            if not text:
+                continue
             kind = classify_footnote(text)
             if kind == "government":
                 references.append(await self._government_reference(text))
