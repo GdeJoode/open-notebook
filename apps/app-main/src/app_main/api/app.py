@@ -169,6 +169,7 @@ def create_app() -> FastAPI:
 
     # --- Routers ---
     from app_main.api.routers import (
+        audit,
         auth,
         chat,
         commands,
@@ -247,6 +248,7 @@ def create_app() -> FastAPI:
     application.include_router(source_chat.router, prefix="/api", tags=["source-chat"])
     application.include_router(ontologies.router, prefix="/api", tags=["ontologies"])
     application.include_router(orphans.router, prefix="/api", tags=["orphans"])
+    application.include_router(audit.router, prefix="/api", tags=["audit"])
     application.include_router(
         knowledge_graph.router, prefix="/api", tags=["knowledge-graph"]
     )
