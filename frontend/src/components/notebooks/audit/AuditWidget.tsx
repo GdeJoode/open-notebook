@@ -6,7 +6,11 @@ import { AlertTriangle, CheckCircle2, Info, Loader2, RefreshCw } from 'lucide-re
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
-import { useNotebookAudit, useRunAudit } from '@/lib/hooks/use-audit'
+import {
+  useNotebookAudit,
+  useRunAudit,
+  useRunDeepAudit,
+} from '@/lib/hooks/use-audit'
 import type { AuditFinding, AuditSeverity } from '@/lib/types/audit'
 
 interface AuditWidgetProps {
@@ -14,6 +18,9 @@ interface AuditWidgetProps {
 }
 
 const SEVERITY_ORDER: AuditSeverity[] = ['error', 'warn', 'info']
+
+/** check_ids produced by the F.3 deep (LLM-derived) audit — badged in the UI. */
+const DEEP_CHECK_IDS = new Set(['conflicting_facts', 'provenance_gaps'])
 
 const SEVERITY_META: Record<
   AuditSeverity,
@@ -35,6 +42,7 @@ const SEVERITY_META: Record<
 export function AuditWidget({ notebookId }: AuditWidgetProps) {
   const { data, isLoading, isError } = useNotebookAudit(notebookId)
   const runAudit = useRunAudit(notebookId)
+  const runDeep = useRunDeepAudit(notebookId)
 
   const grouped = useMemo(() => {
     const g: Record<AuditSeverity, AuditFinding[]> = {
@@ -67,6 +75,23 @@ export function AuditWidget({ notebookId }: AuditWidgetProps) {
     </Button>
   )
 
+  const deepButton = (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      onClick={() => runDeep.mutate()}
+      disabled={runDeep.isPending}
+      data-testid="audit-run-deep"
+      aria-label="Run the deep (LLM-derived) audit"
+    >
+      {runDeep.isPending ? (
+        <Loader2 className="h-4 w-4 mr-2 animate-spin" aria-hidden="true" />
+      ) : null}
+      {runDeep.isPending ? 'Deep audit…' : 'Run deep audit'}
+    </Button>
+  )
+
   const header = (
     <div className="flex items-center justify-between">
       <div>
@@ -77,7 +102,10 @@ export function AuditWidget({ notebookId }: AuditWidgetProps) {
           </p>
         )}
       </div>
-      {rerunButton}
+      <div className="flex items-center gap-1">
+        {deepButton}
+        {rerunButton}
+      </div>
     </div>
   )
 
@@ -153,6 +181,15 @@ export function AuditWidget({ notebookId }: AuditWidgetProps) {
                         </a>
                       ) : (
                         f.title
+                      )}
+                      {DEEP_CHECK_IDS.has(f.check_id) && (
+                        <Badge
+                          variant="outline"
+                          className="ml-1.5 align-middle text-[10px] font-normal"
+                          data-testid="audit-llm-badge"
+                        >
+                          LLM
+                        </Badge>
                       )}
                     </span>
                   </li>

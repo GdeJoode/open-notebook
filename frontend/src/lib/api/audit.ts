@@ -24,4 +24,12 @@ export const auditApi = {
     )
     return response.data
   },
+
+  /** Run the on-demand deep checks (conflicting facts + provenance gaps). */
+  runDeep: async (notebookId: string): Promise<AuditRunResponse> => {
+    const response = await apiClient.post<AuditRunResponse>(
+      `${nbPath(notebookId)}/audit/deep`,
+    )
+    return response.data
+  },
 }

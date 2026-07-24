@@ -13,6 +13,7 @@ import type { AuditRunResponse } from '@/lib/types/audit'
  */
 
 const mutateSpy = vi.fn()
+const deepSpy = vi.fn()
 let auditState: {
   data?: AuditRunResponse
   isLoading: boolean
@@ -22,11 +23,13 @@ let auditState: {
 vi.mock('@/lib/hooks/use-audit', () => ({
   useNotebookAudit: () => auditState,
   useRunAudit: () => ({ mutate: mutateSpy, isPending: false }),
+  useRunDeepAudit: () => ({ mutate: deepSpy, isPending: false }),
 }))
 
 afterEach(cleanup)
 beforeEach(() => {
   mutateSpy.mockReset()
+  deepSpy.mockReset()
   auditState = { data: undefined, isLoading: false, isError: false }
 })
 
@@ -94,5 +97,32 @@ describe('AuditWidget', () => {
     renderWidget()
     await user.click(screen.getByTestId('audit-rerun'))
     expect(mutateSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs the deep audit on its own button', async () => {
+    auditState = { data: RESPONSE, isLoading: false, isError: false }
+    const user = userEvent.setup()
+    renderWidget()
+    await user.click(screen.getByTestId('audit-run-deep'))
+    expect(deepSpy).toHaveBeenCalledTimes(1)
+    expect(mutateSpy).not.toHaveBeenCalled() // distinct from Re-run
+  })
+
+  it('badges deep (LLM-derived) findings and not the cheap ones', () => {
+    auditState = {
+      data: {
+        notebook_id: 'notebook:abc',
+        run_id: 'run-1',
+        findings: [
+          { check_id: 'citation_completeness', severity: 'error', title: 'No cite' },
+          { check_id: 'conflicting_facts', severity: 'warn', title: 'Sources conflict' },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    }
+    renderWidget()
+    // Exactly one LLM badge (the conflicting_facts finding).
+    expect(screen.getAllByTestId('audit-llm-badge')).toHaveLength(1)
   })
 })
