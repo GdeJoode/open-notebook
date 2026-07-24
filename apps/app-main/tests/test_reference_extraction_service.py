@@ -74,6 +74,7 @@ def _make_service(
     grobid_refs=None,
     materialize_created=0,
     resolver=None,
+    footnote_extractor=None,
 ):
     """Build a service with mocked source_repo, GROBID service, cites_service.
 
@@ -104,6 +105,7 @@ def _make_service(
         cites_service=cites_service,
         grobid_service=grobid,
         resolver_cascade=resolver,
+        footnote_extractor=footnote_extractor,
     )
     return service, src_repo, grobid, cites_service
 
@@ -165,6 +167,73 @@ async def test_missing_source_row_yields_no_references() -> None:
     )
     assert await service.extract_source_references("source:s1") == []
     grobid.extract_references.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# GF.4 — footnote refs merge with the bibliography refs
+# ---------------------------------------------------------------------------
+
+
+def _footnote_stub(refs):
+    """A stub FootnoteReferenceExtractor returning ``refs`` for any PDF."""
+    extractor = AsyncMock()
+    extractor.extract = AsyncMock(return_value=list(refs))
+    return extractor
+
+
+async def test_footnote_refs_merge_with_bibliography_refs() -> None:
+    gov_ref = ParsedReference(raw_text="Kamerstuk 31305-489", venue="Kamerstuk")
+    service, _, grobid, _ = _make_service(
+        records=[{"id": "source:s1"}],
+        sources_by_id={"source:s1": _source_with_pdf("data/uploads/npvr.pdf")},
+        footnote_extractor=_footnote_stub([gov_ref]),
+    )
+
+    refs = await service.extract_source_references("source:s1")
+
+    # The 2 GROBID bibliography refs PLUS the 1 footnote ref.
+    assert len(refs) == 3
+    assert any(r.raw_text == "Kamerstuk 31305-489" for r in refs)
+    # Bibliography refs are unchanged and still present.
+    assert any(r.doi == "10.1257/aer.91.5.1369" for r in refs)
+    grobid.extract_references.assert_awaited_once()
+
+
+async def test_footnote_merge_dedups_on_shared_doi() -> None:
+    # A footnote citation duplicating a bibliography entry (same DOI) is collapsed.
+    dup = ParsedReference(
+        raw_text="Card again", title="dup", doi="10.1257/aer.91.5.1369"
+    )
+    service, _, _, _ = _make_service(
+        records=[{"id": "source:s1"}],
+        sources_by_id={"source:s1": _source_with_pdf()},
+        footnote_extractor=_footnote_stub([dup]),
+    )
+    refs = await service.extract_source_references("source:s1")
+    assert len(refs) == 2  # the duplicate footnote ref is dropped
+
+
+async def test_no_footnote_extractor_leaves_bibliography_unchanged() -> None:
+    # AC(3): without a footnote extractor, the academic-paper path is unchanged.
+    service, _, _, _ = _make_service(
+        records=[{"id": "source:s1"}],
+        sources_by_id={"source:s1": _source_with_pdf()},
+    )
+    refs = await service.extract_source_references("source:s1")
+    assert [r.doi for r in refs] == [None, "10.1257/aer.91.5.1369"]
+
+
+async def test_footnote_extractor_skipped_for_non_pdf_source() -> None:
+    extractor = _footnote_stub([ParsedReference(raw_text="x")])
+    service, _, _, _ = _make_service(
+        records=[{"id": "source:s1"}],
+        sources_by_id={
+            "source:s1": _source_with_pdf("https://example.com/x.html")
+        },
+        footnote_extractor=extractor,
+    )
+    assert await service.extract_source_references("source:s1") == []
+    extractor.extract.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

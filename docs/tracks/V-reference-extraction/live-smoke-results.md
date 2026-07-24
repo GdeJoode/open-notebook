@@ -66,10 +66,39 @@ Formats vary (`Kamerstukken II 2024/25, 36410, nr. 111` · `12345-VII-blg-1` · 
 
 ---
 
+## GF — footnote + Kamerstuk path (policy documents), 2026-07-24
+
+Built (GF.1–GF.4) and live-validated on the **NPVR voortgangsbrief (30 Jan 2026)**.
+Pipeline: GROBID `processFulltextDocument` → footnotes → classify
+(government / academic / prose) → government via the tolerant `KamerstukIdentifier`
+normalizer + `OverheidResolver`, academic via GROBID `processCitation`.
+
+Live NPVR result — 7 footnotes → **3 government references** (4 prose correctly
+dropped):
+
+| footnote | classified | parsed id |
+|---|---|---|
+| `Kamerstuk 31305-489` | government | dossier 31305, nr 489, kamerstuk |
+| `Motie 36410-111` | government | dossier 36410, nr 111, motie |
+| `Bij beleids-en investeringslogica … gebiedsgericht …` | government | dossier 29697, nr 158 (inline in prose; 29697 = the NPVR parent dossier — a real reference) |
+| 4 explanatory notes | prose | — (correctly no misfire) |
+
+Normalizer is format-tolerant (one structured id from many surface forms;
+`12345-VII, blg I` ≡ `12345-VII-blg-1`) and does not fire on a bare year / page /
+€ amount (GF-D1: number + government cue). Government refs are recorded regardless;
+`OverheidResolver` resolution is best-effort enrichment (GF-D3). Academic-in-footnote
+routes to GROBID (GF-D2).
+
+**This closes the policy-citation gap**: the pipeline now picks up references to other
+Kamerstukken/moties in footnotes — the primary citation type for the policy corpus.
+
+Minor live-TODO: for a prose-embedded reference the `ParsedReference.raw_text` is the
+whole footnote paragraph (the resolver still reads the dossiernummer from it) — could
+be trimmed to the identifier + context.
+
 ## Remaining live TODOs
-- **GF footnote+Kamerstuk path** — the primary citation type for the policy corpus
-  (convenanten + Kamerbrieven); not yet built.
-- **Convenant PDF path reconciliation** — `data/uploads/` vs `notebook_data/uploads/`.
+- **Convenant PDF path reconciliation** — `data/uploads/` vs `notebook_data/uploads/`
+  (so the GF path can run over the convenanten too).
 - **overheid.nl KOOP record mapping** (V.4) — query valid, record→work mapping needs a
   real dossier.
 - **RePEc** — request `REPEC_API_KEY`, then live-verify CitEc.
