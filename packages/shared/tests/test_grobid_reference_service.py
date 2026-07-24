@@ -157,18 +157,34 @@ def test_empty_and_garbage_tei_yield_empty_list() -> None:
     assert parse_grobid_tei("<not-xml") == []
 
 
-def test_biblstruct_without_title_or_doi_is_skipped() -> None:
+def test_biblstruct_without_year_or_doi_is_skipped() -> None:
+    # Bibliography path (guard on): a bare-year-only entry (no title/authors) and a
+    # title-only entry (no year/doi) are both dropped; a title+year one is kept.
     tei = """<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><back><div><listBibl>
       <biblStruct><monogr><imprint>
         <date type="published" when="1999">1999</date>
       </imprint></monogr></biblStruct>
       <biblStruct><analytic>
-        <title level="a" type="main">A real title</title>
+        <title level="a" type="main">A title-only signatory-like line</title>
       </analytic></biblStruct>
+      <biblStruct><analytic>
+        <title level="a" type="main">A real title</title>
+      </analytic><monogr><imprint><date when="2005"/></imprint></monogr></biblStruct>
     </listBibl></div></back></text></TEI>"""
     refs = parse_grobid_tei(tei)
-    assert len(refs) == 1
-    assert refs[0].title == "A real title"
+    titles = [r.title for r in refs]
+    assert titles == ["A real title"]
+
+
+def test_guard_off_keeps_title_only_citation() -> None:
+    # parse_citation path (guard off): a single academic footnote citation with a
+    # title but no parseable year is still kept.
+    tei = """<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><back><div><listBibl>
+      <biblStruct><analytic>
+        <title level="a" type="main">A footnote work with no year</title>
+      </analytic></biblStruct>
+    </listBibl></div></back></text></TEI>"""
+    assert len(parse_grobid_tei(tei, guard=False)) == 1
 
 
 # --------------------------------------------------------------------------
@@ -400,3 +416,45 @@ async def test_live_grobid_extracts_npvr_footnotes() -> None:
     blob = " || ".join(footnotes)
     assert "Kamerstuk 31305-489" in blob
     assert "Motie 36410-111" in blob
+
+
+# --- precision guard + dedup (drop policy-doc mis-parses, collapse repeats) ---
+
+_TEI_GUARD = """<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><back><listBibl>
+  <biblStruct><analytic><title level="a">Het college van burgemeester en wethouders van de gemeente Nederweert, hierna te noemen</title></analytic></biblStruct>
+  <biblStruct><analytic><title level="a" type="main">A real paper</title><idno type="DOI">10.1000/x</idno></analytic><monogr><imprint><date when="2010"/></imprint></monogr></biblStruct>
+  <biblStruct><analytic><title level="a" type="main">A real paper</title><idno type="DOI">10.1000/x</idno></analytic><monogr><imprint><date when="2010"/></imprint></monogr></biblStruct>
+  <biblStruct><analytic><title level="a">A book without doi</title></analytic><monogr><imprint><date when="1999"/></imprint></monogr></biblStruct>
+</listBibl></back></text></TEI>"""
+
+
+def test_precision_guard_drops_year_and_doi_less_entries():
+    from shared.references.grobid_reference_service import parse_grobid_tei
+    refs = parse_grobid_tei(_TEI_GUARD)
+    titles = [r.title for r in refs]
+    # signatory line (no year, no doi) dropped; the two real ones kept
+    assert "Het college van burgemeester en wethouders van de gemeente Nederweert, hierna te noemen" not in " ".join(titles)
+    assert "A book without doi" in titles  # has a year -> kept
+
+
+def test_dedup_collapses_duplicate_doi():
+    from shared.references.grobid_reference_service import parse_grobid_tei
+    refs = parse_grobid_tei(_TEI_GUARD)
+    dois = [r.doi for r in refs if r.doi]
+    assert dois.count("10.1000/x") == 1  # the duplicate DOI collapsed
+
+
+def test_precision_guard_drops_future_year_clause() -> None:
+    from shared.references.grobid_reference_service import (
+        _MAX_PLAUSIBLE_YEAR,
+        parse_grobid_tei,
+    )
+    future = _MAX_PLAUSIBLE_YEAR + 2
+    tei = f"""<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><back><listBibl>
+      <biblStruct><analytic><title level="a">Deze Regio Deal treedt in werking</title></analytic>
+        <monogr><imprint><date when="{future}"/></imprint></monogr></biblStruct>
+      <biblStruct><analytic><title level="a">A real paper</title></analytic>
+        <monogr><imprint><date when="2010"/></imprint></monogr></biblStruct>
+    </listBibl></back></text></TEI>"""
+    titles = [r.title for r in parse_grobid_tei(tei)]
+    assert titles == ["A real paper"]  # the future-dated clause is dropped

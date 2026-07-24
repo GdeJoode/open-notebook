@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 from xml.etree import ElementTree as ET
@@ -39,6 +40,9 @@ import httpx
 from loguru import logger
 
 from shared.retrieval.cites_matching import ParsedReference, normalize_doi
+
+#: A publication year past this is implausible (a future date, i.e. not a citation).
+_MAX_PLAUSIBLE_YEAR = datetime.now(timezone.utc).year + 1
 
 # TEI namespace every element in a GROBID response lives under.
 _TEI_NS = "http://www.tei-c.org/ns/1.0"
@@ -58,6 +62,11 @@ def _text(el: Optional[ET.Element]) -> str:
     if el is None or el.text is None:
         return ""
     return " ".join(el.text.split())
+
+
+def _text_key(text: str) -> str:
+    """Normalized title key for dedup: lowercased, whitespace-collapsed."""
+    return " ".join((text or "").lower().split())
 
 
 def _first_year(raw: str) -> Optional[int]:
@@ -190,18 +199,28 @@ def parse_footnotes_tei(tei_xml: str) -> List[str]:
     return footnotes
 
 
-def parse_grobid_tei(tei_xml: str) -> List[ParsedReference]:
-    """Map a GROBID ``/api/processReferences`` TEI document to parsed references.
+def parse_grobid_tei(tei_xml: str, *, guard: bool = True) -> List[ParsedReference]:
+    """Map a GROBID TEI document to parsed references.
 
-    PURE and offline-testable: every ``<biblStruct>`` in the document becomes one
-    :class:`ParsedReference`. A biblStruct that yields neither a title nor a DOI is
-    a junk parse and is skipped rather than emitted as an empty reference.
+    PURE and offline-testable. Each ``<biblStruct>`` becomes one
+    :class:`ParsedReference`, always **deduplicated** (repeats collapse on DOI, else
+    normalized title + year).
+
+    With ``guard=True`` (the ``/api/processReferences`` bibliography path) a
+    **precision guard** also applies: a real citation carries a DOI, or a year plus
+    something to identify it (a title or authors). This drops GROBID's mis-parses of
+    non-bibliography structure in policy documents — signatory blocks
+    ("… hierna te noemen"), party lists, tables — into year-less "references".
+    ``guard=False`` (a single ``/api/processCitation`` result, already classified as
+    an academic footnote) keeps any structured parse (a title or a DOI), since a
+    lone scholarly citation may legitimately lack a parseable year.
 
     Args:
         tei_xml: The raw TEI XML body returned by GROBID.
+        guard: Apply the precision guard (bibliography path). Default ``True``.
 
     Returns:
-        One :class:`ParsedReference` per usable ``<biblStruct>``, in document order.
+        One :class:`ParsedReference` per kept ``<biblStruct>``, in document order.
     """
     if not tei_xml or not tei_xml.strip():
         return []
@@ -212,14 +231,29 @@ def parse_grobid_tei(tei_xml: str) -> List[ParsedReference]:
         return []
 
     references: List[ParsedReference] = []
+    seen: set = set()
     for bibl in root.iter(f"{{{_TEI_NS}}}biblStruct"):
         title = _extract_title(bibl)
         doi = _extract_doi(bibl)
-        # No title AND no DOI → nothing to match on; drop the junk parse.
-        if not title and not doi:
-            continue
-        authors = _extract_authors(bibl)
         year = _extract_year(bibl)
+        authors = _extract_authors(bibl)
+        # A publication year cannot be in the future; a future "year" is a policy-doc
+        # artifact (e.g. a Regio Deal effectuation clause "… treedt in werking … 2028").
+        year_ok = year is not None and year <= _MAX_PLAUSIBLE_YEAR
+        if guard:
+            # Bibliography: a DOI, or a plausible year + an identifier (title/authors).
+            keep = doi is not None or (year_ok and (bool(title) or bool(authors)))
+        else:
+            # Single already-classified citation: keep any structured parse.
+            keep = bool(title) or doi is not None
+        if not keep:
+            continue
+        # Dedup: collapse repeats (a work cited twice, or a mis-parse duplicated).
+        # Key on the DOI when present, else the normalized title + year.
+        key = ("doi", doi) if doi else ("tv", _text_key(title), year)
+        if key in seen:
+            continue
+        seen.add(key)
         venue = _extract_venue(bibl)
         raw_text = _synthesize_raw_text(authors, year, title, venue, doi)
         references.append(
@@ -364,7 +398,9 @@ class GrobidReferenceService:
             logger.warning("GROBID processCitation failed ({}): {}", url, exc)
             return None
 
-        refs = parse_grobid_tei(response.text)
+        # A single already-classified academic footnote citation: keep the parse
+        # even if GROBID could not extract a year (guard is for the bibliography).
+        refs = parse_grobid_tei(response.text, guard=False)
         return refs[0] if refs else None
 
     async def aclose(self) -> None:
