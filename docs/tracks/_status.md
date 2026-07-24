@@ -115,12 +115,25 @@ The merge-readiness audit proves no *branch* is unmerged. That is NOT the same a
   policy-document cross-references (Kamerbrieven/convenanten). Merged via #42 + #44.
   See `V-reference-extraction/{grobid-integration-plan,footnote-kamerstuk-plan,live-smoke-results}.md`.
 
+### Follow-up session — 2026-07-24 (10 items shipped, 12 PRs)
+
+A post-ingest follow-up pass off the interactive backlog. Shipped and merged:
+OKF → main (#48) + **async download endpoint** (#55) + **frontend import UI**
+(#56) — OKF is now fully first-class (export/import/MCP/UI, inline + deferred);
+**I.H2 chunk_edit audit-log core** (#52, snapshots→I.H2b); **A.3 markitdown**
+parser engine (#53); **reference polish** (#51: GROBID container URL, footnote
+whitespace, and **3 live-verified KOOP-resolver bugs** — phrase-vs-`all` query
+recall, `issued`→`date` year, dedicated `<dossiernummer>`); a **flaky-test
+isolation** fix (#49) and the **live-validation** dashboard update (#50). Still
+open: **F**, **G** (next sprints), **M.5** (deferred), **I.H2b**, A.3 live smoke,
+OKF download-polling UI.
+
 ### B. Deferred follow-ups inside CLOSED tracks
 | Item | What | Size |
 |---|---|---|
-| **A.3** | markitdown / ephemeral-venv reuse | ~½ day (roadmap: "nice-to-have, not blocking") |
-| **M.5** | heterogeneous-chain integration test + metrics + ARCHITECTURE docs | small |
-| **I.H2** | `chunk_edit` table (currently loguru-audit only) | small |
+| ~~**A.3**~~ | ~~markitdown~~ — **SHIPPED** #53 (`parser_engine="markitdown"` + markdown→Document adapter). Follow-up: live corpus smoke vs docling |
+| **M.5** | heterogeneous-chain integration test + metrics + ARCHITECTURE docs | ~~small~~ **1.5–2d** (deferred: regression gate over shipped M.1–M.4, blocks nothing) |
+| ~~**I.H2**~~ | ~~`chunk_edit` table~~ — **audit core SHIPPED** #52 (migration 74 + `ChunkAuditService` + history endpoint). **I.H2b** (snapshots/restore/UI) deferred |
 | **I.H1 AC5** | multi-worker shared state (currently in-memory backend) | small |
 | **J FU-J4-2** | error-mapping edge: a 400 error with a 5xx number in its body can misclassify as failover-eligible | tiny |
 | **D.0 #1** | SurrealQL promotion of a filter | tiny |
