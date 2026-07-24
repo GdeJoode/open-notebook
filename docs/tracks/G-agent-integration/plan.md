@@ -331,6 +331,26 @@ Assumes G.1 merged.
 
 ### Phase G.3 — Ingest façade + job status + audit-log read (Backend)
 
+> **Status (2026-07-24): SHIPPED (PR #69, squash `1c662b3`).** `POST /process-url`
+> (write, async job → real `job_id`) + `GET /jobs/{job_id}` (read, **ownership-bound**:
+> a job the caller didn't enqueue → 404) + `GET /audit-log` (read, self-scoped;
+> admin may read another agent's trail). `process-document` / `process-audio`
+> (multipart upload + `enforce_upload_guards`) are **deferred to G.3b**. Converged
+> clean over **5 adversarial-review rounds** (see follow-ups below).
+>
+> **Known trade-offs / follow-ups (from the review, accepted — not regressions):**
+> - **SSRF on `body.url`** is guarded pre-flight (`_reject_ssrf_url`): non-http(s)
+>   schemes + any host that NORMALIZES to loopback/private/link-local/reserved/
+>   metadata, including numeric (decimal/octal/hex/short/trailing-dot) AND Unicode
+>   homoglyph-dot / fullwidth / outlined-digit encodings. **Deferred to the shared
+>   fetch-layer** (affects the password-gated UI equally): hostname→private-IP
+>   **DNS-rebinding**, and a public URL that **30x-redirects** to a private target.
+> - **Poll-authz is derived from the best-effort audit write** (`agent_owns_job`
+>   reads the row `process-url` stamps). Fail-SAFE (a failed audit CREATE → owner
+>   404s their own poll, never a leak). A dedicated non-audit ownership store would
+>   decouple it — deployment follow-up.
+> - `JobStatusResponse.error` now reads `error_message` (pre-existing null bug).
+
 **Goal**: The file/URL/audio capabilities as a **thin façade over the shipped
 `process_source` job chain**, plus job polling and the audit-log read endpoint.
 This is where an agent actually ingests a document headlessly.
