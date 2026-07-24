@@ -71,11 +71,13 @@ an open bet.
 
 ## Known follow-ups
 
-- **Async large-notebook artifact store.** OKF.2 has the job-queue seam
-  (`JobType.EXPORT_OKF` + `202`), but a durable artifact store + a download-
-  polling UI for the deferred path is not built; the UI closes the dialog and
-  relies on the "queued" toast. A large-notebook export today is only fully
-  first-class on the inline path.
+- **Async large-notebook artifact store.** ~~not built~~ **backend done
+  (2026-07-24)**: the deferred handler persists the zip under
+  `<vault_path>/okf_exports/` (keyed by notebook id via the shared
+  `okf_artifact_path`), and `GET /notebooks/{id}/export/okf/download` serves it
+  — `404` until the job completes, so a client polls to `200`. The `202` body
+  now carries a `download_url`. Remaining: a **download-polling UI** for the
+  deferred path (the dialog still relies on the "queued" toast).
 - **MCP lazy-import layering exception.** `export_okf` / `import_okf` are the
   one deliberate exception to surrealdb-service's repo-direct, no-app-main rule:
   the OKF services are app-main orchestrators, so the tools reach them via a

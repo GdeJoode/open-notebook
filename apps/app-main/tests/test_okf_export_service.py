@@ -425,3 +425,38 @@ async def test_count_entities_uses_projection():
         "notebook:c", ExportFilter(min_connections=0, min_confidence=0.0)
     )
     assert n == 2
+
+
+# ---------------------------------------------------------------------------
+# okf_artifact_path — the shared write/read scheme for the async artifact store
+# ---------------------------------------------------------------------------
+
+from pathlib import Path as _Path  # noqa: E402
+
+import pytest as _pytest  # noqa: E402
+from app_main.services.okf_export_service import okf_artifact_path  # noqa: E402
+
+
+def test_okf_artifact_path_scheme(tmp_path: _Path):
+    p = okf_artifact_path(str(tmp_path), "notebook:abc-123")
+    # Under <vault>/okf_exports, colon sanitised to underscore, .zip suffix.
+    assert p.parent == (tmp_path / "okf_exports").resolve()
+    assert p.name == "notebook_abc-123.zip"
+
+
+def test_okf_artifact_path_sanitises_traversal_chars(tmp_path: _Path):
+    # Slashes/dots in the id are sanitised, so the result never escapes okf_exports.
+    p = okf_artifact_path(str(tmp_path), "../../etc/passwd")
+    assert p.parent == (tmp_path / "okf_exports").resolve()
+    assert "/" not in p.name
+    p.relative_to((tmp_path / "okf_exports").resolve())  # stays inside
+
+
+def test_okf_artifact_path_rejects_relative_vault():
+    with _pytest.raises(ValueError):
+        okf_artifact_path("relative/vault", "notebook:abc")
+
+
+def test_okf_artifact_path_rejects_missing_vault(tmp_path: _Path):
+    with _pytest.raises(ValueError):
+        okf_artifact_path(str(tmp_path / "does-not-exist"), "notebook:abc")

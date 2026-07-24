@@ -821,31 +821,24 @@ async def handle_export_okf(payload: Dict[str, Any]) -> Dict[str, Any]:
 def _persist_okf_zip(vault_path_raw: str, notebook_id: str, zip_bytes: bytes) -> str:
     """Atomically write an OKF export zip under ``<vault_path>/okf_exports/``.
 
-    Uses the same tmp-write-then-``os.replace`` atomicity as the Obsidian
-    vault writer so a half-written archive is impossible. Returns the final
-    path. Raises ``ValueError`` if ``vault_path`` is not an absolute existing
-    writable directory.
+    The target path comes from :func:`okf_artifact_path` — the single scheme the
+    download endpoint reads back, so the two never drift. Uses the same
+    tmp-write-then-``os.replace`` atomicity as the Obsidian vault writer so a
+    half-written archive is impossible. Returns the final path. Raises
+    ``ValueError`` if ``vault_path`` is not an absolute existing writable dir.
     """
     import os
-    import re as _re
     from pathlib import Path
 
+    from app_main.services.okf_export_service import okf_artifact_path
+
     vault_path = Path(vault_path_raw)
-    if not vault_path.is_absolute():
-        raise ValueError(f"vault_path must be absolute; got {vault_path!r}")
-    if not vault_path.is_dir():
-        raise ValueError(f"vault_path is not a directory: {vault_path!r}")
     if not os.access(vault_path, os.W_OK):
         raise ValueError(f"vault_path is not writable: {vault_path!r}")
 
-    target_dir = (vault_path / "okf_exports").resolve()
-    target_dir.relative_to(vault_path.resolve())  # defense-in-depth
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    stem = _re.sub(r'[:/\\\r\n\t\x00"\'<>|?*]', "_", notebook_id)
-    final_path = (target_dir / f"{stem}.zip").resolve()
-    final_path.relative_to(target_dir)
-    tmp_path = final_path.with_name(f"{stem}.zip.tmp.{os.getpid()}")
+    final_path = okf_artifact_path(vault_path_raw, notebook_id)
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = final_path.with_name(f"{final_path.stem}.zip.tmp.{os.getpid()}")
     with open(tmp_path, "wb") as fh:
         fh.write(zip_bytes)
     os.replace(tmp_path, final_path)

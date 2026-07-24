@@ -63,6 +63,48 @@ from shared.utils.name_normalizer import normalize_entity_name
 from app_main.services.export_projection import project_graph
 
 # ---------------------------------------------------------------------------
+# Deferred-export artifact store (OKF.2 large-notebook path)
+# ---------------------------------------------------------------------------
+
+#: Subdirectory under the configured vault where deferred (async) OKF exports
+#: are persisted so they can be downloaded after the job completes.
+OKF_EXPORTS_SUBDIR = "okf_exports"
+
+#: Character class replaced when turning a notebook id into a filesystem stem.
+#: The write path (async handler) and the read path (download endpoint) share
+#: this via :func:`okf_artifact_path`, so a persisted artifact is always
+#: retrievable by the same notebook id (no scheme drift between the two sites).
+_ARTIFACT_UNSAFE = re.compile(r'[:/\\\r\n\t\x00"\'<>|?*]')
+
+
+def okf_artifact_path(vault_path_raw: str, notebook_id: str) -> "Path":
+    """The persisted OKF zip path for a notebook — the single source of truth.
+
+    Keyed by the sanitised notebook id under ``<vault_path>/okf_exports/``, so a
+    re-export overwrites the notebook's latest bundle and the download endpoint
+    resolves exactly the path the async handler wrote. Validates that
+    ``vault_path`` is an absolute existing directory (raises ``ValueError``
+    otherwise) and guards against path traversal; it does NOT require the
+    ``okf_exports`` subdir to exist yet (the write path creates it; the read
+    path treats a missing file as "not ready").
+    """
+    from pathlib import Path
+
+    vault_path = Path(vault_path_raw)
+    if not vault_path.is_absolute():
+        raise ValueError(f"vault_path must be absolute; got {vault_path!r}")
+    if not vault_path.is_dir():
+        raise ValueError(f"vault_path is not a directory: {vault_path!r}")
+
+    export_dir = (vault_path / OKF_EXPORTS_SUBDIR).resolve()
+    export_dir.relative_to(vault_path.resolve())  # defense-in-depth
+    stem = _ARTIFACT_UNSAFE.sub("_", notebook_id)
+    final_path = (export_dir / f"{stem}.zip").resolve()
+    final_path.relative_to(export_dir)  # path-traversal guard on the stem
+    return final_path
+
+
+# ---------------------------------------------------------------------------
 # Bundle conventions
 # ---------------------------------------------------------------------------
 
