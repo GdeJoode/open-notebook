@@ -32,6 +32,18 @@ class PasswordAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         for excluded_path in self.excluded_paths:
+            # A trailing "/" on a MULTI-char entry marks a PREFIX exclusion (a whole
+            # sub-tree). Used for the agent API (Track G.1, G-D1): /api/v1/agents/*
+            # is excluded from the shared-password gate because require_agent_key is
+            # its SOLE (fail-closed) authenticator. The bare root "/" is an EXACT
+            # match only (handled above) — it must never be treated as a prefix, or
+            # it would match every path and disable the gate entirely.
+            if (
+                len(excluded_path) > 1
+                and excluded_path.endswith("/")
+                and request.url.path.startswith(excluded_path)
+            ):
+                return await call_next(request)
             if "*" in excluded_path:
                 import re
 

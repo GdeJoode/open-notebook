@@ -1,0 +1,14 @@
+-- ============================================================================
+-- Migration 76 DOWN: remove the agent-integration tables.
+--
+-- Faithful inverse of the forward migration (both tables brand new). REMOVE ...
+-- IF EXISTS so the rollback is idempotent and safe on a DB where 76 never
+-- applied. Order: the audit log first (it record-links agent_keys), then the
+-- keys table. Discarding the rows is acceptable — keys are re-mintable and the
+-- audit log is an append-only trail with no downstream schema dependency.
+-- ============================================================================
+
+REMOVE TABLE IF EXISTS agent_audit_log;
+REMOVE TABLE IF EXISTS agent_keys;
+
+RETURN NONE;
