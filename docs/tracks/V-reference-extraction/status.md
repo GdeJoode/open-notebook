@@ -1,5 +1,71 @@
 # Track V — status
 
+## Phases GF.1–GF.4 — footnote + Kamerstuk reference path (policy documents) — READY FOR REVIEW
+
+**Branch**: `track/gf-footnote-kamerstuk` (off `feature/reference-extraction`)
+**Date**: 2026-07-24
+**Scope**: extract references from the FOOTNOTES of policy documents (Kamerbrieven,
+convenanten) and route each by kind — the citation type GROBID's bibliography model
+(`processReferences`) returns nothing for, and the primary type for the policy
+corpus. No change to `materialize_corpus`, the guarded hook, U.3, `ParsedReference`,
+or the `cites` schema.
+
+### What was built (per phase)
+
+- **GF.1 — footnote extraction** (`grobid_reference_service.py`):
+  `parse_footnotes_tei(tei)` (PURE) pulls each `<note place="foot">` text from a
+  `processFulltextDocument` TEI; `GrobidReferenceService.fulltext_footnotes(pdf)`
+  is the best-effort HTTP wrapper (`[]` on any failure, never raises);
+  `parse_citation(text)` is a thin `processCitation` wrapper reusing
+  `parse_grobid_tei` for the academic path.
+- **GF.2 — Kamerstuk normalizer** (`references/kamerstuk.py`, PURE):
+  `parse_kamerstuk_identifier(text) -> KamerstukIdentifier | None` — one
+  format-tolerant normalizer (not per-format branches). Fires only on a
+  dossiernummer + a government cue (GF-D1).
+- **GF.3 — classifier** (`references/footnote_classifier.py`, PURE):
+  `classify_footnote(text) -> "government"|"academic"|"prose"`. Government first
+  (a kamerstuk id), academic on a scholarly cue (GF-D2), else prose (dropped).
+- **GF.4 — extractor + wiring** (`references/footnote_reference_extractor.py`):
+  `FootnoteReferenceExtractor.extract(pdf)` runs GF.1→GF.3, routes government →
+  recorded `ParsedReference` + best-effort `OverheidResolver` enrich (GF-D3),
+  academic → `processCitation`, prose → dropped. Merged into
+  `ReferenceExtractionService.extract_source_references` (bibliography refs PLUS
+  footnote refs, deduped on DOI / verbatim text); wired in `dependencies.py`.
+
+### Normalizer variant → normalized id (GF.2)
+
+| input | dossier | hoofdstuk | subtype | nummer | kind |
+|---|---|---|---|---|---|
+| `Tweede Kamer, vergaderjaar 24/25, 12345-VII, blg I` | 12345 | VII | blg | 1 | kamerstuk |
+| `12345-VII-blg-1` | 12345 | VII | blg | 1 | kamerstuk |
+| `Kamerstukken II 2024/25, 36410, nr. 111` | 36410 | – | – | 111 | kamerstuk |
+| `Kamerstuk 31305-489` | 31305 | – | – | 489 | kamerstuk |
+| `Motie 36410-111` | 36410 | – | – | 111 | motie |
+| `Kamerstuk 29697-158` (embedded in prose) | 29697 | – | – | 158 | kamerstuk |
+
+`12345-VII, blg I` ≡ `12345-VII-blg-1` (equal). Non-firing (GF-D1): `2026`,
+`blz. 12`, `€ 3,5 miljoen`, plain prose, a bare number without a cue.
+
+### Tests
+
+- `packages/shared/tests/test_kamerstuk_identifier.py` — 18 tests (variant table +
+  equality + negatives).
+- `packages/shared/tests/test_footnote_classifier.py` — 14 tests (3-way split).
+- `packages/shared/tests/test_grobid_reference_service.py` — +GF.1 offline
+  (7 footnotes incl. the two identifiers) + `fulltext_footnotes`/`parse_citation`
+  wrapper tests + a gated live NPVR-PDF test.
+- `packages/shared/tests/test_footnote_reference_extractor.py` — 10 tests, drives
+  GF.1→GF.4 from the recorded NPVR TEI + a stubbed resolver; gated live NPVR test.
+- `apps/app-main/tests/test_reference_extraction_service.py` — +merge/dedup +
+  no-extractor-unchanged + non-PDF-skip.
+
+Command: `uv run --no-sync pytest packages/shared/tests/ apps/app-main/tests/ -q`
+→ **2162 passed, 2 skipped** (the two live GROBID gates). ruff clean; mypy clean on
+the new modules (the one `surrealdb_service.repositories` import-untyped note is
+pre-existing). Not pushed — awaiting review.
+
+---
+
 ## Phase V.5 — reference-extraction ORCHESTRATION + post-ingest hook — READY FOR REVIEW
 
 **Branch**: `track/v5-reference-orchestration` (off `track/v123-reference-producer` @ `764f28f`; stacked)
