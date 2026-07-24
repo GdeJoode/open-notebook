@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { NotebookResponse } from '@/lib/types/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Archive, ArchiveRestore, Download, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, Download, Trash2, Upload } from 'lucide-react'
 import { useUpdateNotebook, useDeleteNotebook } from '@/lib/hooks/use-notebooks'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { PrivacyModeToggle } from '@/components/routing/PrivacyModeToggle'
@@ -17,6 +17,7 @@ import { InlineEdit } from '@/components/common/InlineEdit'
 import { JsonlExportButton } from '@/components/notebooks/exports/JsonlExportButton'
 import { ObsidianExportDialog } from '@/components/notebooks/exports/ObsidianExportDialog'
 import { OkfExportDialog } from '@/components/notebooks/exports/OkfExportDialog'
+import { OkfImportDialog } from '@/components/notebooks/exports/OkfImportDialog'
 import { cn } from '@/lib/utils'
 
 interface NotebookHeaderProps {
@@ -39,6 +40,8 @@ export function NotebookHeader({
   const [obsidianDialogOpen, setObsidianDialogOpen] = useState(false)
   // OKF.5 -- Open Knowledge Format export dialog open-state.
   const [okfDialogOpen, setOkfDialogOpen] = useState(false)
+  // OKF import dialog open-state.
+  const [okfImportDialogOpen, setOkfImportDialogOpen] = useState(false)
 
   const updateNotebook = useUpdateNotebook()
   const deleteNotebook = useDeleteNotebook()
@@ -118,6 +121,16 @@ export function NotebookHeader({
               >
                 <Download className="h-4 w-4 mr-2" />
                 Export OKF
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setOkfImportDialogOpen(true)}
+                data-testid="open-okf-import-dialog"
+                aria-label="Import an Open Knowledge Format bundle into this notebook"
+              >
+                <Upload className="h-4 w-4 mr-2" />
+                Import OKF
               </Button>
               <JsonlExportButton notebookId={notebook.id} />
               <Button
@@ -220,6 +233,11 @@ export function NotebookHeader({
       <OkfExportDialog
         open={okfDialogOpen}
         onOpenChange={setOkfDialogOpen}
+        notebookId={notebook.id}
+      />
+      <OkfImportDialog
+        open={okfImportDialogOpen}
+        onOpenChange={setOkfImportDialogOpen}
         notebookId={notebook.id}
       />
     </>

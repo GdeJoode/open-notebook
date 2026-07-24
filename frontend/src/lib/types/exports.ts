@@ -156,3 +156,35 @@ export interface OkfExportDeferred {
   entity_count: number
   threshold: number
 }
+
+/** One non-silently-skipped concept from an OKF import (`OkfImportReport`). */
+export interface OkfSkippedConcept {
+  path: string
+  reason: string
+}
+
+/** One link whose target could not be resolved to a record (§5.3). */
+export interface OkfDanglingLink {
+  from: string
+  to: string
+}
+
+/**
+ * Body returned by ``POST /api/notebooks/{id}/import/okf`` — the
+ * ``OkfImportReport``: created/matched counts plus the non-silent skip and
+ * dangling-link ledger.
+ */
+export interface OkfImportReport {
+  entities_created: number
+  entities_matched: number
+  entities_failed: number
+  relations_created: number
+  notes_created: number
+  notes_matched: number
+  sources_created: number
+  sources_matched: number
+  dedup_merges: number
+  import_source_id: string | null
+  skipped: OkfSkippedConcept[]
+  dangling_links: OkfDanglingLink[]
+}
