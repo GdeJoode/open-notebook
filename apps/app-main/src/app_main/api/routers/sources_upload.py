@@ -48,22 +48,42 @@ router = APIRouter()
 
 
 def generate_unique_filename(original_filename: str, upload_folder: str) -> str:
-    """Generate unique filename (append counter if file exists)."""
+    """Generate a unique path inside ``upload_folder`` (append a counter if taken).
+
+    ``original_filename`` is the UNTRUSTED multipart filename. Reduce it to its
+    basename (``Path(...).name``) before joining, so path separators / ``..`` can
+    NOT escape the uploads folder — a filename like ``../../etc/cron.d/x`` would
+    otherwise resolve outside it (arbitrary file write / RCE-class primitive,
+    reachable via both the UI upload route and the G.3b agent upload endpoints).
+    A name that reduces to empty / ``.`` / ``..`` falls back to ``upload``. As
+    defense-in-depth the returned path is asserted to stay within the (resolved)
+    uploads folder, so a future regression can't silently reintroduce the escape.
+    """
     file_path = Path(upload_folder)
     file_path.mkdir(parents=True, exist_ok=True)
+    folder_resolved = file_path.resolve()
 
-    stem = Path(original_filename).stem
-    suffix = Path(original_filename).suffix
+    safe_name = Path(original_filename).name
+    if not safe_name or safe_name in (".", ".."):
+        safe_name = "upload"
+
+    stem = Path(safe_name).stem
+    suffix = Path(safe_name).suffix
 
     counter = 0
     while True:
         if counter == 0:
-            new_filename = original_filename
+            new_filename = safe_name
         else:
             new_filename = f"{stem} ({counter}){suffix}"
 
         full_path = file_path / new_filename
         if not full_path.exists():
+            resolved = full_path.resolve()
+            if folder_resolved != resolved and folder_resolved not in resolved.parents:
+                raise HTTPException(
+                    status_code=400, detail="Invalid upload filename"
+                )
             return str(full_path)
         counter += 1
 
