@@ -84,10 +84,10 @@ an open bet.
   lazy import inside the tool body and degrade to `import_error` when app-main
   is absent. Documented in the MCP server module header; revisit if/when the
   OKF services move to a shared package.
-- **Import UI.** The OKF.5 UI ships export only; importing a bundle is
-  available over REST (`POST /notebooks/{id}/import/okf`) and MCP but has no
-  frontend surface yet — a minimal "import OKF bundle" entry is a small
-  follow-up.
+- **Import UI.** ~~export only~~ **DONE (2026-07-24)**: `OkfImportDialog` +
+  `use-okf-import` add an "Import OKF" entry to the notebook header — upload a
+  `.zip`, toggle dedup, and see the created/matched counts + the skip /
+  dangling-link ledger. Wraps the existing `POST /notebooks/{id}/import/okf`.
 - **External-id round-trip.** An entity without a real external id exports a
   synthesised `urn:open-notebook:…`; on import it is kept as an `okf_resource`
   property but not re-promoted to `external_ids`, so a re-export regenerates a
