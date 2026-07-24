@@ -307,6 +307,32 @@ def test_filename_collision_suffixes_within_kind():
     assert "entities/smith-2.md" in result.bundle
 
 
+def test_concept_stems_are_link_safe_no_spaces():
+    """Multi-word names hyphenate so standard markdown links don't break."""
+    entities = [
+        _entity("entity:a", "Alice de Jong"),
+        _entity("entity:b", "Bob"),
+    ]
+    relations = [_relation("entity:a", "entity:b", "KNOWS")]
+    result = build_okf_bundle(
+        entities=entities,
+        relations=relations,
+        notes=[],
+        sources=[],
+        dropped_relations=0,
+        notebook_id="notebook:x",
+        timestamp="2026-07-24T00:00:00+00:00",
+    )
+    assert "entities/alice-de-jong.md" in result.bundle
+    # No bundle path contains a space (would terminate a markdown link URL).
+    for path in result.bundle:
+        assert " " not in path, f"space in concept path {path!r}"
+    # The relation link target resolves and is space-free.
+    for target in _LINK.findall(result.bundle["entities/bob.md"]):
+        assert " " not in target
+        assert target in result.bundle
+
+
 # ---------------------------------------------------------------------------
 # Service (mocked repos)
 # ---------------------------------------------------------------------------

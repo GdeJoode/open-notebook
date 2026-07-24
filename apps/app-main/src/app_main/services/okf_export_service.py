@@ -115,15 +115,19 @@ OKF_OMITTED_FIELDS: Dict[str, str] = {
 
 
 def _safe_stem(name: str) -> str:
-    """Normalise + strip filesystem-unsafe chars from a concept name.
+    """Normalise a concept name into a link-safe, flat path segment.
 
     Layered on :func:`normalize_entity_name` (which lower-cases + collapses
-    whitespace but leaves ``/``, ``:`` etc. intact) so the result is a single
-    flat path segment. Empty input collapses to ``""`` and the caller
-    substitutes ``"untitled"``.
+    whitespace but leaves ``/``, ``:``, spaces etc. intact). Unlike the
+    Obsidian exporter — whose ``[[wikilinks]]`` tolerate spaces — OKF concept
+    IDs are file paths embedded in *standard* markdown links, where a space
+    would terminate the URL. So whitespace is hyphenated and filesystem-unsafe
+    characters are replaced with ``_``. Empty input collapses to ``""`` and the
+    caller substitutes ``"untitled"``.
     """
     base = normalize_entity_name(name or "")
     safe = _UNSAFE_STEM.sub("_", base)
+    safe = re.sub(r"\s+", "-", safe).strip("-")
     if len(safe) > _MAX_STEM_LEN:
         safe = safe[:_MAX_STEM_LEN]
     return safe
