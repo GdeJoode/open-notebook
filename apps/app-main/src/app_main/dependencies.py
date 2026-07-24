@@ -122,6 +122,12 @@ def get_chunk_audit() -> ChunkAuditService:
     return ChunkAuditService()
 
 
+def get_audit_service() -> "AuditService":
+    from app_main.services.audit.audit_service import AuditService
+
+    return AuditService()
+
+
 def get_chunk_mutator() -> ChunkMutator:
     # Wire the durable chunk_edit audit log (I.H2); mutations still work without it.
     return ChunkMutator(audit=ChunkAuditService())

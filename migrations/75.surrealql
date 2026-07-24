@@ -1,0 +1,37 @@
+-- ============================================================================
+-- Migration 75: `audit_findings` table (Track F.1 — operations & quality audit).
+--
+-- WHY. Track F.1 adds an always-on, LLM-free quality audit: six cheap checks
+-- (citation completeness, stale sources, low-confidence survivors, long-pending
+-- orphans, community cohesion, schema drift) run per notebook and their results
+-- persist here so the dashboard can read the latest snapshot without re-running.
+--
+-- SHAPE (F-D2: snapshot-per-run, latest-wins). One row per finding; a whole audit
+-- run shares a `run_id`. The reader returns the newest run's rows; older runs are
+-- pruned by the service (keep-N) so the table does not grow unbounded. `detail`
+-- holds a JSON string (offending ids/counts) — a string, not a SCHEMAFULL object,
+-- so heterogeneous per-check payloads share one uniform column (same rationale as
+-- migration 74's chunk_edit before/after).
+--
+-- OVERWRITE guards (v2 drift). Like chunk_edit (74) / note_about (70): on a fresh
+-- container an unqualified first reference can auto-create the table as TYPE ANY,
+-- blocking a plain DEFINE. OVERWRITE pins it deterministically, so apply is
+-- idempotent on a clean and a drifted DB alike.
+-- ============================================================================
+
+DEFINE TABLE OVERWRITE audit_findings SCHEMAFULL;
+DEFINE FIELD OVERWRITE notebook ON audit_findings TYPE record<notebook>;
+DEFINE FIELD OVERWRITE run_id   ON audit_findings TYPE string;
+DEFINE FIELD OVERWRITE check_id ON audit_findings TYPE string;
+DEFINE FIELD OVERWRITE severity ON audit_findings TYPE string
+    ASSERT $value IN ["error", "warn", "info"];
+DEFINE FIELD OVERWRITE title    ON audit_findings TYPE string;
+DEFINE FIELD OVERWRITE detail   ON audit_findings TYPE option<string>;
+DEFINE FIELD OVERWRITE subject  ON audit_findings TYPE option<string>;
+DEFINE FIELD OVERWRITE count    ON audit_findings TYPE option<int>;
+DEFINE FIELD OVERWRITE created  ON audit_findings TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX OVERWRITE af_notebook ON audit_findings FIELDS notebook;
+DEFINE INDEX OVERWRITE af_run      ON audit_findings FIELDS run_id;
+
+RETURN NONE;

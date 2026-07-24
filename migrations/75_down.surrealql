@@ -1,0 +1,13 @@
+-- ============================================================================
+-- Migration 75 DOWN: remove the `audit_findings` table.
+--
+-- Faithful inverse of the forward migration, which only DEFINEs this one table
+-- (its fields/indexes are removed with it). REMOVE ... IF EXISTS so the rollback
+-- is idempotent and safe on a DB where 75 never applied. The findings rows are
+-- discarded with the table — acceptable: audit findings are a regenerable
+-- snapshot (re-run the audit), nothing downstream depends on their persistence.
+-- ============================================================================
+
+REMOVE TABLE IF EXISTS audit_findings;
+
+RETURN NONE;
