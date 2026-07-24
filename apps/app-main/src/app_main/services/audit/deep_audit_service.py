@@ -25,6 +25,7 @@ returns cheap + deep together (distinguishable by ``check_id``).
 
 from __future__ import annotations
 
+import json
 from typing import List, Optional
 
 from loguru import logger
@@ -37,6 +38,11 @@ from app_main.services.audit.audit_service import AuditService
 #: check_ids for the two deep checks.
 CHECK_CONFLICTING_FACTS = "conflicting_facts"
 CHECK_PROVENANCE_GAPS = "provenance_gaps"
+
+#: The deep check_ids whose rows a re-run must CLEAR before re-appending (so a
+#: repeat POST …/audit/deep replaces rather than duplicates). Includes the
+#: deep checks + the shared check_error marker.
+_DEEP_CHECK_IDS = [CHECK_CONFLICTING_FACTS, CHECK_PROVENANCE_GAPS, "check_error"]
 
 #: Bound the number of findings per check so one pathological notebook can't
 #: write thousands of rows.
@@ -80,6 +86,25 @@ class DeepAuditService:
                     )
                 )
 
+        # Clear any deep findings already attached to this run before appending,
+        # so a repeat POST …/audit/deep REPLACES rather than duplicates (append is
+        # a bare CREATE loop with no dedup). Scoped to the deep check_ids only, so
+        # the cheap findings on the same run are untouched. Best-effort: a clear
+        # failure must not break the run (worst case is a re-appearing duplicate,
+        # not a 500).
+        try:
+            await execute_query(
+                "DELETE audit_findings WHERE notebook = $nb AND run_id = $run "
+                "AND check_id IN $ids",
+                {
+                    "nb": ensure_record_id(notebook_id),
+                    "run": run_id,
+                    "ids": _DEEP_CHECK_IDS,
+                },
+                self.config,
+            )
+        except Exception as exc:  # noqa: BLE001 — clear is best-effort
+            logger.warning("deep audit clear-before-append failed: {e}", e=exc)
         await self.audit_service.append_findings(notebook_id, run_id, deep)
         # Return the full enriched snapshot (cheap + deep).
         return await self.audit_service.latest(notebook_id)
@@ -107,8 +132,11 @@ class DeepAuditService:
                     severity="warn",
                     title=f"Sources {src_a} and {src_b} were judged to contradict",
                     subject=src_a,
-                    detail=f'{{"other": "{src_b}", "confidence": '
-                    f'{r.get("confidence")}}}',
+                    # json.dumps → valid JSON even when confidence is None (→ null),
+                    # and safe against exotic ids (no manual quote interpolation).
+                    detail=json.dumps(
+                        {"other": src_b, "confidence": r.get("confidence")}
+                    ),
                 )
             )
         return out

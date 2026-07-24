@@ -352,16 +352,17 @@ async def set_failed_stage(source_id: str, stage: str) -> None:
     """Mark a source failed AND record which stage failed (F.7 failure provenance).
 
     Sets ``processing_stage = "failed"`` (the existing terminal-parked value,
-    unchanged — no new status value, no parallel field) and best-effort writes
-    ``source.metadata.failed_stage`` (+ ``failed_at``) so a resume knows where to
-    retry instead of restarting from ``ingested``. ``metadata`` is the source's
-    existing flexible bag, so this needs NO migration. Both writes are best-effort:
-    a status/metadata write must never mask the pipeline failure it records.
+    unchanged — no new status value, no parallel field) and best-effort RECORDS
+    ``source.metadata.failed_stage`` (+ ``failed_at``): which pipeline step failed.
+    ``metadata`` is the source's existing flexible bag, so this needs NO migration.
+    Both writes are best-effort: a status/metadata write must never mask the
+    pipeline failure it records.
 
-    Resumability is already provided by :func:`advance_source` (a source resumes
-    from its ``processing_stage``); this only adds the *which-stage-failed* record
-    the pre-F.7 bare ``failed`` lacked. ``stage`` is a :class:`StageName` value
-    (``"ingest"`` / ``"embed"`` / ``"extract"`` / ``"graph"``).
+    Scope (F.7): this is the *provenance* record only — it is written and readable
+    (:func:`read_failed_stage`) for diagnostics and a future targeted re-run, but
+    nothing auto-consumes it yet. ``advance_source`` still treats ``failed`` as
+    parked (an operator re-runs the failing stage's job). ``stage`` is a
+    :class:`StageName` value (``"ingest"`` / ``"embed"`` / ``"extract"`` / ``"graph"``).
     """
     await set_processing_stage(source_id, "failed")
     try:

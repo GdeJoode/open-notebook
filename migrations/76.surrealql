@@ -1,0 +1,19 @@
+-- ============================================================================
+-- Migration 76: define `notebook.librarian_enabled` (Track F.5/F.6 fix).
+--
+-- WHY. F.5/F.6 added a per-notebook librarian opt-in as a Notebook model field,
+-- but the `notebook` table is SCHEMAFULL (migration 1). On a SCHEMAFULL table an
+-- undefined field in an UPDATE/MERGE payload is dropped, so the F.6 toggle was
+-- never persisted and `list_librarian_notebook_ids` (WHERE librarian_enabled =
+-- true) always matched zero rows — the librarian never ran for any notebook.
+-- This mirrors exactly what migration 72 did for `auto_insights`, which was
+-- required for the same SCHEMAFULL reason and was overlooked for this flag.
+--
+-- DEFAULT false: opt-in is OFF, so a legacy notebook keeps the safe behaviour
+-- (no periodic audit) until an operator turns it on. Forward-only + idempotent
+-- (OVERWRITE); a healthy/backfilled row is unaffected.
+-- ============================================================================
+
+DEFINE FIELD OVERWRITE librarian_enabled ON TABLE notebook TYPE bool DEFAULT false;
+
+RETURN NONE;
