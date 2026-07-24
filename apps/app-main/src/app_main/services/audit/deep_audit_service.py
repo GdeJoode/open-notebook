@@ -39,10 +39,15 @@ from app_main.services.audit.audit_service import AuditService
 CHECK_CONFLICTING_FACTS = "conflicting_facts"
 CHECK_PROVENANCE_GAPS = "provenance_gaps"
 
-#: The deep check_ids whose rows a re-run must CLEAR before re-appending (so a
-#: repeat POST …/audit/deep replaces rather than duplicates). Includes the
-#: deep checks + the shared check_error marker.
-_DEEP_CHECK_IDS = [CHECK_CONFLICTING_FACTS, CHECK_PROVENANCE_GAPS, "check_error"]
+#: A DISTINCT error check_id for deep checks — must NOT collide with the cheap
+#: run's ``check_error`` (audit_service), or the deep clear-before-append would
+#: delete a legitimate cheap-check failure from the same run.
+CHECK_DEEP_ERROR = "deep_check_error"
+
+#: The deep check_ids whose rows a re-run CLEARs before re-appending (so a repeat
+#: POST …/audit/deep replaces rather than duplicates). ONLY deep ids — never the
+#: cheap ``check_error`` — so the clear can't erase a cheap-check failure.
+_DEEP_CHECK_IDS = [CHECK_CONFLICTING_FACTS, CHECK_PROVENANCE_GAPS, CHECK_DEEP_ERROR]
 
 #: Bound the number of findings per check so one pathological notebook can't
 #: write thousands of rows.
@@ -80,7 +85,7 @@ class DeepAuditService:
                 logger.warning("deep audit {c} failed: {e}", c=check_id, e=exc)
                 deep.append(
                     AuditFinding(
-                        check_id="check_error",
+                        check_id=CHECK_DEEP_ERROR,
                         severity="warn",
                         title=f"Deep check '{check_id}' could not run",
                     )

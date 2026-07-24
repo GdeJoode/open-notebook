@@ -12,8 +12,24 @@
 -- DEFAULT false: opt-in is OFF, so a legacy notebook keeps the safe behaviour
 -- (no periodic audit) until an operator turns it on. Forward-only + idempotent
 -- (OVERWRITE); a healthy/backfilled row is unaffected.
+--
+-- S.4 RULE (strict field on an EXISTING SCHEMAFULL table -> MUST backfill).
+-- ``librarian_enabled`` is a strict ``bool`` (not ``option<bool>``), so a
+-- pre-existing notebook row holds NONE for it after the DEFINE. Under SCHEMAFULL
+-- SurrealDB re-validates the WHOLE record on ANY subsequent write, so a NONE in a
+-- strict field would then 500 EVERY unrelated update to that notebook (rename,
+-- auto_insights toggle, any pipeline write) — not just writes to this field. So
+-- we backfill in the SAME migration (identical to migration 72's auto_insights),
+-- with a DRIFT-ONLY ``WHERE librarian_enabled = NONE`` so a healthy/fresh DB
+-- matches 0 rows (no rewrite) and re-runs are a true no-op.
 -- ============================================================================
 
 DEFINE FIELD OVERWRITE librarian_enabled ON TABLE notebook TYPE bool DEFAULT false;
+
+-- S.4 backfill — drift-only WHERE so a healthy DB matches 0 rows.
+UPDATE notebook SET
+    librarian_enabled = librarian_enabled ?? false
+    WHERE librarian_enabled = NONE
+    RETURN NONE;
 
 RETURN NONE;

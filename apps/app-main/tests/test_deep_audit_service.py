@@ -108,7 +108,7 @@ async def test_run_deep_is_fail_soft(monkeypatch):
     # Both checks failed → two check_error findings were appended.
     appended = audit.append_findings.await_args.args[2]
     assert len(appended) == 2
-    assert all(f.check_id == "check_error" for f in appended)
+    assert all(f.check_id == "deep_check_error" for f in appended)
 
 
 # -- light live path --------------------------------------------------------
@@ -129,7 +129,7 @@ async def test_run_deep_on_empty_notebook_is_clean(live_surrealdb):
     result = await svc.run_deep(nb)
     assert result.notebook_id == nb
     assert result.run_id  # a run was established
-    assert all(f.check_id != "check_error" for f in result.findings)
+    assert all(f.check_id not in ("check_error", "deep_check_error") for f in result.findings)
 
 
 @pytest.mark.requires_docker
