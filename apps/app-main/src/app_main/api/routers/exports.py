@@ -54,7 +54,10 @@ from app_main.dependencies import (
     get_obsidian_export_service,
     get_okf_export_service,
     get_okf_import_service,
+    get_settings_service,
 )
+from app_main.services.okf_export_service import okf_artifact_path
+from app_main.services.settings_service import SettingsService
 from app_main.services.command_service import CommandService
 from app_main.services.jsonl_export_service import JsonlExportService
 from app_main.services.networkx_export_service import NetworkxExportService
@@ -447,6 +450,11 @@ async def export_notebook_okf(
                 "status": "queued",
                 "entity_count": entity_count,
                 "threshold": OKF_ASYNC_ENTITY_THRESHOLD,
+                # Where to fetch the bundle once the job completes: poll the job
+                # status, then GET this until it returns 200 (OKF.2 async path).
+                "download_url": (
+                    f"/api/notebooks/{notebook_id}/export/okf/download"
+                ),
             },
         )
 
@@ -464,6 +472,74 @@ async def export_notebook_okf(
             "Content-Disposition": f'attachment; filename="{safe_name}"',
             "X-OKF-Export-Report": report_json,
         },
+    )
+
+
+@router.get(
+    "/export/okf/download",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {"application/zip": {}},
+            "description": (
+                "The persisted OKF bundle from a deferred (202) export, once "
+                "the job has completed."
+            ),
+        },
+        404: {
+            "description": (
+                "Notebook not found, no artifact store configured, or the "
+                "deferred export has not completed yet."
+            ),
+        },
+    },
+)
+async def download_okf_export(
+    notebook_id: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    settings_service: SettingsService = Depends(get_settings_service),
+) -> Response:
+    """Download the notebook's most recent deferred OKF bundle (OKF.2 async path).
+
+    The large-notebook export route returns ``202`` and runs the build on the job
+    queue; the handler persists the zip under ``<vault_path>/okf_exports/`` keyed
+    by notebook id. This endpoint serves that artifact once the job has finished.
+
+    ``404`` covers every not-available case uniformly (unknown notebook, no
+    ``vault_path`` configured, or the job still running / never run) so a polling
+    client simply retries until it gets ``200``. Auth is the same notebook-scoped
+    lookup as the export routes; the artifact path is derived (never taken from
+    the request), and :func:`okf_artifact_path` guards against traversal.
+    """
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    settings = await settings_service.get()
+    vault_path_raw = getattr(settings, "vault_path", None)
+    if not vault_path_raw:
+        raise HTTPException(
+            status_code=404,
+            detail="No artifact store configured (set a vault_path).",
+        )
+
+    try:
+        artifact_path = okf_artifact_path(vault_path_raw, notebook_id)
+    except ValueError:
+        # Misconfigured vault_path (not an absolute existing dir) — nothing to serve.
+        raise HTTPException(status_code=404, detail="OKF export not available")
+
+    if not artifact_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="OKF export not available yet (job pending or never run).",
+        )
+
+    safe_name = _safe_filename(notebook_id, "okf.zip")
+    return StreamingResponse(
+        io.BytesIO(artifact_path.read_bytes()),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
     )
 
 

@@ -165,3 +165,98 @@ def test_okf_invalid_filter_422():
 
     assert resp.status_code == 422
     export_svc.count_entities.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Deferred-export download endpoint (OKF.2 async artifact store)
+# ---------------------------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from app_main.dependencies import get_settings_service  # noqa: E402
+from app_main.services.okf_export_service import okf_artifact_path  # noqa: E402
+
+
+def _make_download_app(notebook_svc, settings_svc) -> TestClient:
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_notebook_service] = lambda: notebook_svc
+    app.dependency_overrides[get_settings_service] = lambda: settings_svc
+    return TestClient(app)
+
+
+def _settings_svc(vault_path):
+    svc = AsyncMock()
+    svc.get = AsyncMock(return_value=SimpleNamespace(vault_path=vault_path))
+    return svc
+
+
+def _notebook_svc(notebook):
+    svc = AsyncMock()
+    svc.get = AsyncMock(return_value=notebook)
+    return svc
+
+
+def test_okf_download_serves_persisted_artifact(tmp_path: Path):
+    # Persist an artifact where the async handler would write it.
+    artifact = okf_artifact_path(str(tmp_path), "notebook:abc")
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(_build_test_zip())
+
+    client = _make_download_app(
+        _notebook_svc(make_notebook(id="notebook:abc")), _settings_svc(str(tmp_path))
+    )
+    resp = client.get("/api/notebooks/notebook:abc/export/okf/download")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    assert "attachment" in resp.headers["content-disposition"]
+    # Body is the persisted zip, intact.
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+        assert "index.md" in z.namelist()
+
+
+def test_okf_download_404_when_not_ready(tmp_path: Path):
+    # vault configured, but the job has not written the artifact yet.
+    client = _make_download_app(
+        _notebook_svc(make_notebook(id="notebook:abc")), _settings_svc(str(tmp_path))
+    )
+    resp = client.get("/api/notebooks/notebook:abc/export/okf/download")
+    assert resp.status_code == 404
+
+
+def test_okf_download_404_when_no_vault():
+    client = _make_download_app(
+        _notebook_svc(make_notebook(id="notebook:abc")), _settings_svc(None)
+    )
+    resp = client.get("/api/notebooks/notebook:abc/export/okf/download")
+    assert resp.status_code == 404
+
+
+def test_okf_download_404_unknown_notebook(tmp_path: Path):
+    client = _make_download_app(_notebook_svc(None), _settings_svc(str(tmp_path)))
+    resp = client.get("/api/notebooks/notebook:nope/export/okf/download")
+    assert resp.status_code == 404
+
+
+def test_okf_202_body_carries_download_url():
+    notebook_svc = AsyncMock()
+    notebook_svc.get = AsyncMock(return_value=make_notebook(id="notebook:big"))
+    export_svc = AsyncMock()
+    export_svc.count_entities = AsyncMock(return_value=10_000_000)
+    client = _make_app(notebook_svc, export_svc)
+
+    with patch.object(
+        exports_router.CommandService,
+        "submit_command_job",
+        new=AsyncMock(return_value="job:xyz"),
+    ):
+        resp = client.post(
+            "/api/notebooks/notebook:big/export/okf", json={"filter": {}}
+        )
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["download_url"] == (
+        "/api/notebooks/notebook:big/export/okf/download"
+    )
