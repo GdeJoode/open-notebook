@@ -25,6 +25,7 @@ from app_main.services.command_service import get_registry
 # holds an ad-hoc next-stage enqueue any more (PL.1–PL.3 had them scattered).
 from app_main.services.source_pipeline import (
     advance_source,
+    set_failed_stage,
 )
 from app_main.services.source_pipeline import (
     set_processing_stage as _set_processing_stage,
@@ -206,8 +207,9 @@ async def handle_process_source(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     except Exception as e:
         # PL.2: a hard parse failure -> stage = failed (best-effort; never masks
-        # the original error). Resumable: a re-run retries the parse.
-        await _set_processing_stage(validated.source_id, "failed")
+        # the original error). Resumable: a re-run retries the parse. F.7: record
+        # WHICH stage failed for resume provenance.
+        await set_failed_stage(validated.source_id, "ingest")
         logger.error(f"Source extraction failed: {e}")
         raise
 
@@ -384,8 +386,9 @@ async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         # PL.2: a hard failure in extraction -> stage = failed (resumable: the
         # operator / a re-run can retry from here). Status write is best-effort
-        # and must not mask the original error, so it precedes the reraise.
-        await _set_processing_stage(validated.source_id, "failed")
+        # and must not mask the original error, so it precedes the reraise. F.7:
+        # record WHICH stage failed for resume provenance.
+        await set_failed_stage(validated.source_id, "extract")
         logger.error(f"Entity extraction failed for source {validated.source_id}: {e}")
         raise
 
@@ -426,8 +429,9 @@ async def _handle_embed_source(payload: Dict[str, Any]) -> Dict[str, Any]:
         result = await service.embed_source(source_id)
     except Exception as embed_err:
         # PL.2: a hard embed failure -> stage = failed (best-effort; never masks
-        # the original error). Resumable: a re-run / run-embed retries.
-        await _set_processing_stage(source_id, "failed")
+        # the original error). Resumable: a re-run / run-embed retries. F.7:
+        # record WHICH stage failed for resume provenance.
+        await set_failed_stage(source_id, "embed")
         logger.error(f"Embedding failed for source {source_id}: {embed_err}")
         raise
 

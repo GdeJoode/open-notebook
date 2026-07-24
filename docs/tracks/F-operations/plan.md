@@ -398,6 +398,19 @@ Assumes F.5 merged.
 
 ### Phase F.7 — Resumable pipeline: `chunked` sub-stage + failure provenance (Backend)
 
+> **Status (2026-07-24): failure-provenance SHIPPED; `chunked` split deferred to
+> F.7b.** On investigating `source_pipeline.py`: (a) resumability is ALREADY
+> provided — `advance_source` resumes a source from its `processing_stage`, and
+> `failed` is a parked value the operator re-runs; (b) parse+chunk is ONE atomic
+> INGEST handler, so `ingested` already means "parsed + chunked" — inserting a
+> distinct `chunked` stage requires splitting that core handler (a real
+> regression risk on the ingest path, marginal benefit since `ingested` ⊇
+> chunked). So F.7 ships the genuinely-missing half — **failure provenance**:
+> `set_failed_stage(source_id, stage)` records `metadata.failed_stage` (no
+> migration — the existing flexible bag) at all three failure sites (ingest /
+> embed / extract), and `read_failed_stage` surfaces it. The `chunked` split is
+> deferred as **F.7b** if a separate parse/chunk retry boundary is ever needed.
+
 **Goal**: Close the granularity gap in the shipped `processing_stage` so the
 pipeline resumes from the last *successful step* rather than restarting, and record
 *which* step failed instead of a bare `failed`. **Reconcile with `processing_stage`
