@@ -65,6 +65,8 @@ _COMMAND_TO_JOB_TYPE: Dict[str, JobType] = {
     "extract_references": JobType.REFERENCE_EXTRACT,
     # Track OKF.2: deferred OKF bundle export for large notebooks.
     "export_okf": JobType.EXPORT_OKF,
+    # Track F.5: opt-in periodic librarian audit, enqueued per opt-in notebook.
+    "run_librarian_audit": JobType.LIBRARIAN_AUDIT,
 }
 
 

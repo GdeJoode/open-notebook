@@ -136,6 +136,44 @@ class NotebookRepository(BaseRepository[Notebook]):
             )
             return True
 
+    async def get_librarian_enabled(self, notebook_id: str) -> bool:
+        """Read the per-notebook librarian opt-in flag (Track F.5).
+
+        Default OFF: a missing/legacy row, an unknown notebook, or a read error
+        returns ``False`` so the periodic audit never runs for a notebook that
+        never opted in.
+        """
+        try:
+            rows = await execute_query(
+                "SELECT VALUE librarian_enabled FROM $id;",
+                {"id": ensure_record_id(notebook_id)},
+                self.config,
+            )
+            if not rows or rows[0] is None:
+                return False
+            return bool(rows[0])
+        except Exception as e:
+            logger.error(
+                f"Failed to read librarian_enabled for {notebook_id} "
+                f"(defaulting OFF): {e}"
+            )
+            return False
+
+    async def list_librarian_notebook_ids(self) -> List[str]:
+        """Stringified ids of every non-archived notebook opted into the
+        librarian audit (Track F.5). Empty on none / read error."""
+        try:
+            rows = await execute_query(
+                "SELECT VALUE id FROM notebook "
+                "WHERE librarian_enabled = true AND archived != true;",
+                None,
+                self.config,
+            )
+            return [str(r) for r in (rows or []) if r is not None]
+        except Exception as e:
+            logger.error(f"Failed to list librarian-enabled notebooks: {e}")
+            return []
+
 
 class NoteRepository(BaseRepository[Note]):
     """Repository for Note operations."""
