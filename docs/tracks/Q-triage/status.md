@@ -1,5 +1,11 @@
 # Track Q — Status Ledger
 
+> ✅ **TRACK CLOSED (reconciled 2026-07-23)** — all phases Q.1–Q.5 are **merged
+> to `main`** via merge commits `fd0e13a` (Q.1) · `ddff1f5`/`fd748ca` (Q.2/Q.3) ·
+> `c18b355` (Q.2a) · `b496c6e` (Q.4) · `ad435f2` (Q.5). The "ready for review"
+> notes below predate the merges and are kept as an audit trail. No code is
+> pending. See [`../_status.md`](../_status.md).
+
 > Post-extraction triage & merge pipeline. Plan: `./plan.md` (draft, awaiting human approval).
 > REUSE-FIRST: matching (K.5), merge/provenance (B.8/O.1/K.3), review-queue precedent (K.5 CandidateReport) are MERGED. Track Q = triage layer + UI surface.
 

@@ -1,5 +1,11 @@
 # Track K — Entity resolution & deduplication — status
 
+> ✅ **TRACK CLOSED (reconciled 2026-07-23)** — all phases K.1–K.7a (+ kd2-tooi)
+> are **merged to `main`** via merge commits `7c9e117` · `e2ebb65` · `b05b2b5` ·
+> `4fcfdd1` · `d09032e` · `497763c` · `dd10eb0`. The "ready for review" cells
+> below predate the merges and are kept as an audit trail. No code is pending.
+> Roadmap Track K status updated from PLANNED → CLOSED. See [`../_status.md`](../_status.md).
+
 Append-only ledger. One row per phase attempt.
 
 | Phase | Title | PR | Branch | Date | Status |

@@ -1,5 +1,11 @@
 # Track M — Status Ledger
 
+> ✅ **TRACK CLOSED (reconciled 2026-07-23)** — the delivered slice (M core +
+> M.3) is **merged to `main`** via merge commits `d2d7e22` (model-aware
+> context-derived chunk packing + per-provider RPM) and `c3ecf03` (tunable
+> max-window cap). M.5 was explicitly out of scope. The "Done (review pending)"
+> cells below predate the merges. No code is pending. See [`../_status.md`](../_status.md).
+
 | Phase | Title | Status | Branch | Notes |
 |---|---|---|---|---|
 | M.1 | Per-model config: backfill context_window/max_output_tokens + pin factory threading | **Done (review pending)** | `track/m-interim-gemini-ratelimit` | `5fdc17c` |

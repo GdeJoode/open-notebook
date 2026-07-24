@@ -1,5 +1,11 @@
 # Track I — Docling Studio integration — status
 
+> ✅ **TRACK CLOSED (reconciled 2026-07-23)** — all phases are **merged to
+> `main`** (I.A design tokens, I.B inspect workspace, I.D layers/merge toolbar,
+> I.E overflow hardening, I.H1 upload guards). The per-phase "ready for review"
+> notes below predate the merges and are retained as an audit trail. No code is
+> pending. See [`../_status.md`](../_status.md).
+
 Append-only ledger. One row per phase attempt.
 
 | Phase | Title | PR | Branch | Date | Status |

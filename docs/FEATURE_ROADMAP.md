@@ -1198,7 +1198,14 @@ See [`docs/tracks/J-model-routing/plan.md`](./tracks/J-model-routing/plan.md).
 
 ## Track K — Entity resolution & deduplication (NEW)
 
-> **Status**: 📋 PLANNED (2026-06-22, user-request). Implements the resolution
+> **Status**: ✅ CLOSED (merged to `main`; reconciled 2026-07-23). All phases
+> K.1–K.7a shipped via merge commits `7c9e117` (K.1) · `e2ebb65` (K.2) ·
+> `b05b2b5` (K.3) · `4fcfdd1` (K.4) · `d09032e` (K.5) · `497763c` (K.6) ·
+> `dd10eb0` (K.7a), plus `kd2-tooi-source`. The label below was stale planning
+> text left from 2026-06-22; the code has been in `main` since late June. See
+> [`docs/tracks/_status.md`](./tracks/_status.md) for the merge-readiness audit.
+>
+> _Original planning note (2026-06-22, user-request)_: Implements the resolution
 > layer the B.8c assessment proved missing: the V1 `name_normalizer` resolves
 > identical surface forms across documents (107 cross-doc entities over the 4
 > Regio Deal docs) but **fragments variants** of the same real entity —
@@ -1255,7 +1262,13 @@ See [`docs/tracks/K-entity-resolution/plan.md`](./tracks/K-entity-resolution/pla
 
 ## Track L — Entity typing fidelity (NEW)
 
-> **Status**: 📋 PLANNED (2026-06-22). The KG holds 27% `other` + 44% generic
+> **Status**: ✅ CLOSED (merged to `main`; reconciled 2026-07-23). All phases
+> L.1–L.4 shipped via merge commits `5b7cb7f` (L.1) · `33f9400` (L.2) ·
+> `c83a83d` (L.3) · `9bcf0ee` (L.4). The label below was stale planning text
+> left from 2026-06-22; the code has been in `main` since late June. See
+> [`docs/tracks/_status.md`](./tracks/_status.md) for the merge-readiness audit.
+>
+> _Original planning note (2026-06-22)_: The KG holds 27% `other` + 44% generic
 > concept/topic because persistence FLATTENS the rich Dutch ontology types
 > (`Gemeente`/`Ministerie`/`RegioDeal`…) the LLM correctly extracts onto a 20-type
 > generic enum with no bridge + an English-only alias map, leaving

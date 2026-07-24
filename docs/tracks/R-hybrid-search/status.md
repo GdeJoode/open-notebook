@@ -1,5 +1,10 @@
 # Track R — status
 
+> ✅ **TRACK CLOSED (reconciled 2026-07-23)** — all phases R.0–R.6 are **merged
+> to `main`** (branch tips `r0…r6` are ancestors of `main`; R.0 was live-complete
+> at `119ecd3`). No formal RETRO was written; this banner records the close. No
+> code is pending. See [`../_status.md`](../_status.md).
+
 ## Phase R.5 — Search-function integration + UI — ✅ READY FOR REVIEW (2026-06-27)
 **Branch**: `track/r5-search-ui` (off `main`, has R.0–R.3, R.6, Track O/P/S/T).
 **Commits**: `f72fd8d` (API client + types + hook), `9fba73a` (Related tab + why-matched), `833a110` (E2E + region fix).
