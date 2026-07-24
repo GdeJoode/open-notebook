@@ -473,10 +473,14 @@ async def test_embed_source_writes_aggregate_equal_to_mean_pool(
         assert src.embedding == pytest.approx(mean_pool(chunk_vectors))
 
         # find_related: a second embedded source surfaces this one (the aggregate
-        # is what relatedness reads).
+        # is what relatedness reads). `k` is large on purpose: `live_surrealdb` is
+        # session-scoped, so sibling tests accumulate other embedded sources in the
+        # same DB — a small top-k would crowd this genuinely-related source out and
+        # make the assertion order-dependent (isolation leak). A `k` well above any
+        # per-session source count keeps it robust; we assert membership, not rank.
         other = await _make_source_with_chunks(live_surrealdb, 2)
         await svc.embed_source(other)
-        related = await repo.find_related_by_embedding(other, k=5)
+        related = await repo.find_related_by_embedding(other, k=100_000)
         assert any(str(r["id"]) == sid for r in related)
     finally:
         conn._pool = orig
