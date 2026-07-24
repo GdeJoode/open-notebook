@@ -76,6 +76,9 @@ class NotebookUpdate(BaseModel):
     auto_insights: Optional[bool] = Field(
         None, description="Auto-run INSIGHTS extraction after embed for this notebook"
     )
+    librarian_enabled: Optional[bool] = Field(
+        None, description="Opt-in: periodically re-run the quality audit (F.5)"
+    )
 
 
 class NotebookResponse(BaseModel):
@@ -91,6 +94,8 @@ class NotebookResponse(BaseModel):
     privacy_mode: Optional[str] = None
     # Track PL.3: per-notebook auto-INSIGHTS toggle (default True).
     auto_insights: bool = True
+    # Track F.5: per-notebook librarian opt-in (default False).
+    librarian_enabled: bool = False
 
 
 # Search schemas

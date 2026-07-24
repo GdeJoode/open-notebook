@@ -9,6 +9,7 @@ import { SchemaBrowser } from '@/components/notebooks/schema/SchemaBrowser'
 import { CoverageStatsTable } from '@/components/notebooks/schema/CoverageStatsTable'
 import { OrphansDashboard } from '@/components/notebooks/orphans/OrphansDashboard'
 import { AuditWidget } from '@/components/notebooks/audit/AuditWidget'
+import { LibrarianSettings } from '@/components/notebooks/audit/LibrarianSettings'
 import { PendingExtensionsPanel } from '@/components/notebooks/schema/PendingExtensionsPanel'
 import { TtlDownloadButton } from '@/components/notebooks/schema/TtlDownloadButton'
 import { NetworkxExportMenu } from '@/components/notebooks/exports/NetworkxExportMenu'
@@ -142,6 +143,9 @@ export default function NotebookSchemaPage() {
                 Quality audit
               </h2>
               <AuditWidget notebookId={notebookId} />
+              <div className="mt-3">
+                <LibrarianSettings notebookId={notebookId} />
+              </div>
             </section>
           </div>
         </div>
