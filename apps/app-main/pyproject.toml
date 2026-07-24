@@ -31,6 +31,10 @@ dependencies = [
 
 [project.optional-dependencies]
 ui = ["streamlit>=1.30.0"]
+# Optional lightweight (ML-free) parser engine (Track A.3). Kept out of the base
+# install so the image stays lean; enable with the `markitdown` extra to use
+# parser_engine="markitdown".
+markitdown = ["markitdown>=0.0.1a2"]
 
 [project.scripts]
 app-main = "app_main.api.app:main"

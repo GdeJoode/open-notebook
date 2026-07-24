@@ -55,7 +55,7 @@ class ReprocessRequest(BaseModel):
     """
     # Parser engine override (Phase A.1b, Q-A-6)
     # None means "use global ContentSettings.parser_engine".
-    parser_engine: Optional[Literal["simple", "docling", "mineru", "auto"]] = Field(
+    parser_engine: Optional[Literal["simple", "docling", "mineru", "markitdown", "auto"]] = Field(
         None,
         description="Override the global parser engine for this run (simple | docling | mineru | auto)",
     )

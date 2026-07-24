@@ -20,8 +20,8 @@ from typing import Iterable, Literal, Optional
 from loguru import logger
 
 
-ParserEngineSetting = Literal["simple", "docling", "mineru", "auto"]
-ResolvedEngine = Literal["simple", "docling", "mineru"]
+ParserEngineSetting = Literal["simple", "docling", "mineru", "markitdown", "auto"]
+ResolvedEngine = Literal["simple", "docling", "mineru", "markitdown"]
 
 
 # Default extensions when the caller has no ContentSettings handy (rare; the
@@ -57,9 +57,11 @@ def select_parser_engine(
     Rules:
     1. ``"simple"`` -> ``"simple"`` (text-only extraction, no parser service).
     2. ``"docling"`` -> ``"docling"`` (current behaviour; default).
-    3. ``"mineru"`` -> ``"mineru"`` when the extension is in the supported
+    3. ``"markitdown"`` -> ``"markitdown"`` (lightweight ML-free Markdown
+       extraction, no spatial data; Track A.3).
+    4. ``"mineru"`` -> ``"mineru"`` when the extension is in the supported
        set; otherwise fall back to ``"docling"`` with an INFO log.
-    4. ``"auto"`` -> ``"docling"`` for now. The confidence-driven fallback
+    5. ``"auto"`` -> ``"docling"`` for now. The confidence-driven fallback
        lands in Phase A.1c; routing it through the dispatcher means we can
        swap the implementation in one place. The dispatcher itself never
        returns ``"auto"`` — auto-mode resolves to an actual engine.
@@ -80,6 +82,12 @@ def select_parser_engine(
 
     if setting == "docling":
         return "docling"
+
+    if setting == "markitdown":
+        # Lightweight, ML-free Markdown extraction (Track A.3). No spatial data;
+        # only reached for docling-parseable extensions (resolve_parser_route
+        # gates non-document files out before calling this).
+        return "markitdown"
 
     if setting == "mineru":
         if extension in allowed:

@@ -474,7 +474,7 @@ class SettingsResponse(BaseModel):
     # Constrained to the same literal set as ContentSettings.parser_engine so
     # invalid values are rejected at the API boundary instead of being
     # MERGE-upserted into SurrealDB and only failing on response hydration.
-    parser_engine: Optional[Literal["simple", "docling", "mineru", "auto"]] = None
+    parser_engine: Optional[Literal["simple", "docling", "mineru", "markitdown", "auto"]] = None
     mineru_supported_extensions: Optional[List[str]] = None
     # Phase A.1c: auto-mode confidence threshold ([0, 1]).
     docling_min_confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
@@ -514,7 +514,7 @@ class SettingsUpdate(BaseModel):
     # Constrained to the same literal set as ContentSettings.parser_engine so
     # invalid values are rejected at the API boundary instead of being
     # MERGE-upserted into SurrealDB and only failing on response hydration.
-    parser_engine: Optional[Literal["simple", "docling", "mineru", "auto"]] = None
+    parser_engine: Optional[Literal["simple", "docling", "mineru", "markitdown", "auto"]] = None
     mineru_supported_extensions: Optional[List[str]] = None
     # Phase A.1c: auto-mode confidence threshold ([0, 1]).
     docling_min_confidence: Optional[float] = Field(None, ge=0.0, le=1.0)

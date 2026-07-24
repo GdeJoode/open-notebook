@@ -222,3 +222,25 @@ class TestResolveParserRoute:
                 path = Path(f"file{ext}")
                 route = resolve_parser_route(setting, path)  # type: ignore[arg-type]
                 assert route.engine == select_parser_engine(setting, path)  # type: ignore[arg-type]
+
+
+class TestMarkitdownSetting:
+    """Track A.3 — markitdown resolves to itself for document files."""
+
+    def test_returns_markitdown_for_pdf(self):
+        assert select_parser_engine("markitdown", Path("doc.pdf")) == "markitdown"
+
+    def test_returns_markitdown_for_docx(self):
+        assert select_parser_engine("markitdown", Path("report.docx")) == "markitdown"
+
+    def test_route_markitdown_no_auto_fallback(self):
+        route = resolve_parser_route("markitdown", Path("doc.pdf"))
+        assert route.engine == "markitdown"
+        assert route.use_auto_fallback is False
+        assert route.is_docling_extension is True
+
+    def test_route_markitdown_non_document_ext_falls_to_docling(self):
+        # Audio/video skip the document dispatch entirely (WhisperX handles them).
+        route = resolve_parser_route("markitdown", Path("clip.mp3"))
+        assert route.engine == "docling"
+        assert route.is_docling_extension is False
