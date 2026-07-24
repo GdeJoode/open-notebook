@@ -22,13 +22,16 @@ import httpx
 import pytest
 from shared.references.grobid_reference_service import (
     GrobidReferenceService,
+    parse_footnotes_tei,
     parse_grobid_tei,
 )
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "references"
 _ECON_TEI = _FIXTURES / "grobid_econ_response.xml"
 _CENTRIFUGAL_TEI = _FIXTURES / "grobid_centrifugal_response.xml"
+_NPVR_FULLTEXT_TEI = _FIXTURES / "npvr_fulltext_response.xml"
 _LIVE_PDF = _FIXTURES / "live_corpus" / "economics-without-equilibrium.pdf"
+_NPVR_PDF = _FIXTURES / "live_corpus" / "npvr-voortgangsbrief-2026-01.pdf"
 
 _GROBID_URL = os.getenv("GROBID_URL", "http://localhost:8070")
 
@@ -169,6 +172,35 @@ def test_biblstruct_without_title_or_doi_is_skipped() -> None:
 
 
 # --------------------------------------------------------------------------
+# GF.1 — footnote extraction from a fulltext TEI (offline, recorded NPVR)
+# --------------------------------------------------------------------------
+
+
+def test_npvr_fixture_extracts_seven_footnotes() -> None:
+    footnotes = parse_footnotes_tei(_NPVR_FULLTEXT_TEI.read_text(encoding="utf-8"))
+    assert len(footnotes) == 7
+
+
+def test_npvr_fixture_carries_the_government_identifiers() -> None:
+    footnotes = parse_footnotes_tei(_NPVR_FULLTEXT_TEI.read_text(encoding="utf-8"))
+    assert "Kamerstuk 31305-489" in footnotes
+    assert "Motie 36410-111" in footnotes
+
+
+def test_footnote_text_is_whitespace_collapsed() -> None:
+    # The recorded "Kamerstuk 31305-489   " (trailing spaces) collapses clean.
+    footnotes = parse_footnotes_tei(_NPVR_FULLTEXT_TEI.read_text(encoding="utf-8"))
+    assert all(fn == fn.strip() for fn in footnotes)
+    assert all("  " not in fn for fn in footnotes)
+
+
+def test_parse_footnotes_empty_and_garbage_yield_empty_list() -> None:
+    assert parse_footnotes_tei("") == []
+    assert parse_footnotes_tei("   ") == []
+    assert parse_footnotes_tei("<not-xml") == []
+
+
+# --------------------------------------------------------------------------
 # Best-effort HTTP wrapper (mocked transport — no network)
 # --------------------------------------------------------------------------
 
@@ -229,6 +261,91 @@ async def test_service_returns_empty_on_missing_pdf_path() -> None:
     assert refs == []
 
 
+async def test_fulltext_footnotes_posts_and_parses() -> None:
+    body = _NPVR_FULLTEXT_TEI.read_text(encoding="utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/processFulltextDocument"
+        return httpx.Response(200, text=body)
+
+    service = _service_with_transport(handler)
+    try:
+        footnotes = await service.fulltext_footnotes(b"%PDF-1.7 fake")
+    finally:
+        await service.aclose()
+    assert len(footnotes) == 7
+    assert "Kamerstuk 31305-489" in footnotes
+
+
+async def test_fulltext_footnotes_empty_on_http_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="unavailable")
+
+    service = _service_with_transport(handler)
+    try:
+        footnotes = await service.fulltext_footnotes(b"%PDF-1.7 fake")
+    finally:
+        await service.aclose()
+    assert footnotes == []
+
+
+async def test_fulltext_footnotes_empty_on_missing_pdf() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("should not POST for an unreadable file")
+
+    service = _service_with_transport(handler)
+    try:
+        footnotes = await service.fulltext_footnotes("/no/such/file.pdf")
+    finally:
+        await service.aclose()
+    assert footnotes == []
+
+
+async def test_parse_citation_posts_and_returns_reference() -> None:
+    # processCitation returns a single biblStruct, mapped like any entry.
+    tei = (
+        '<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><back>'
+        "<biblStruct><analytic>"
+        '<title level="a">A footnote citation</title>'
+        "</analytic></biblStruct></back></text></TEI>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/processCitation"
+        return httpx.Response(200, text=tei)
+
+    service = _service_with_transport(handler)
+    try:
+        ref = await service.parse_citation("A footnote citation (2012)")
+    finally:
+        await service.aclose()
+    assert ref is not None
+    assert ref.title == "A footnote citation"
+
+
+async def test_parse_citation_empty_text_skips_post() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("should not POST for empty text")
+
+    service = _service_with_transport(handler)
+    try:
+        assert await service.parse_citation("") is None
+        assert await service.parse_citation("   ") is None
+    finally:
+        await service.aclose()
+
+
+async def test_parse_citation_none_on_http_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    service = _service_with_transport(handler)
+    try:
+        assert await service.parse_citation("Card (2001)") is None
+    finally:
+        await service.aclose()
+
+
 def test_service_reads_base_url_from_env(monkeypatch) -> None:
     monkeypatch.setenv("GROBID_URL", "http://example:9999/")
     service = GrobidReferenceService()
@@ -263,3 +380,23 @@ async def test_live_grobid_extracts_references_from_pdf() -> None:
     for r in refs:
         assert r.year is None or isinstance(r.year, int)
         assert r.doi is None or r.doi == r.doi.lower()
+
+
+@pytest.mark.skipif(
+    not _grobid_alive() or not _NPVR_PDF.exists(),
+    reason=f"GROBID not reachable at {_GROBID_URL}/api/isalive (or NPVR PDF absent)",
+)
+async def test_live_grobid_extracts_npvr_footnotes() -> None:
+    """LIVE (GF.1): the NPVR letter's footnotes carry the government identifiers.
+
+    ``processReferences`` returns nothing for this policy letter (no scholarly
+    bibliography); the cross-references live in the footnotes.
+    """
+    service = GrobidReferenceService(base_url=_GROBID_URL)
+    try:
+        footnotes = await service.fulltext_footnotes(_NPVR_PDF)
+    finally:
+        await service.aclose()
+    blob = " || ".join(footnotes)
+    assert "Kamerstuk 31305-489" in blob
+    assert "Motie 36410-111" in blob

@@ -154,6 +154,42 @@ def _synthesize_raw_text(
     return text.strip()
 
 
+def parse_footnotes_tei(tei_xml: str) -> List[str]:
+    """Pull the text of every ``<note place="foot">`` from a fulltext TEI (GF.1).
+
+    PURE and offline-testable against a recorded ``/api/processFulltextDocument``
+    response. Policy documents (Kamerbrieven, convenanten) carry their
+    cross-references in footnotes, not a scholarly bibliography, so the footnote
+    texts are the raw material the GF.* path classifies and routes.
+
+    Each note's full text (including any nested ``<p>``) is flattened and
+    whitespace-collapsed; empty notes are skipped. Order is document order.
+
+    Args:
+        tei_xml: The raw TEI XML body returned by ``processFulltextDocument``.
+
+    Returns:
+        One string per non-empty footnote, in document order (``[]`` on empty or
+        unparseable input).
+    """
+    if not tei_xml or not tei_xml.strip():
+        return []
+    try:
+        root = ET.fromstring(tei_xml)
+    except ET.ParseError as exc:
+        logger.warning("GROBID fulltext TEI parse failed: {}", exc)
+        return []
+
+    footnotes: List[str] = []
+    for note in root.iter(f"{{{_TEI_NS}}}note"):
+        if note.get("place") != "foot":
+            continue
+        text = " ".join("".join(note.itertext()).split())
+        if text:
+            footnotes.append(text)
+    return footnotes
+
+
 def parse_grobid_tei(tei_xml: str) -> List[ParsedReference]:
     """Map a GROBID ``/api/processReferences`` TEI document to parsed references.
 
@@ -263,6 +299,73 @@ class GrobidReferenceService:
             return []
 
         return parse_grobid_tei(response.text)
+
+    async def fulltext_footnotes(self, pdf: bytes | str | Path) -> List[str]:
+        """Extract the footnote texts from a PDF via GROBID fulltext; ``[]`` on failure.
+
+        POSTs the PDF to ``/api/processFulltextDocument`` and returns the text of
+        each ``<note place="foot">`` (:func:`parse_footnotes_tei`). This is the GF.1
+        entry point for the policy-document footnote path — the cross-references
+        that GROBID's bibliography model (``/api/processReferences``) misses.
+
+        Best-effort like :meth:`extract_references`: an unreadable file, transport
+        error, non-200, or unparseable body yields ``[]`` (logged), NEVER raises.
+
+        Args:
+            pdf: The PDF as raw bytes, or a path (str/Path) to read them from.
+
+        Returns:
+            The footnote texts in document order, or ``[]`` on any failure.
+        """
+        try:
+            data = pdf if isinstance(pdf, bytes) else Path(pdf).read_bytes()
+        except OSError as exc:
+            logger.warning("GROBID fulltext: cannot read PDF {}: {}", pdf, exc)
+            return []
+
+        url = f"{self._base_url}/api/processFulltextDocument"
+        try:
+            response = await self._client.post(
+                url,
+                files={"input": ("document.pdf", data, "application/pdf")},
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.warning("GROBID processFulltextDocument failed ({}): {}", url, exc)
+            return []
+
+        return parse_footnotes_tei(response.text)
+
+    async def parse_citation(self, text: str) -> Optional[ParsedReference]:
+        """Parse a single raw citation string via GROBID; ``None`` on failure (GF.4).
+
+        A thin wrapper over ``/api/processCitation`` used by the footnote router for
+        the rare scholarly footnote (GF-D2): GROBID returns a single ``<biblStruct>``
+        which :func:`parse_grobid_tei` maps like any bibliography entry. Best-effort:
+        empty input, transport error, non-200, or no usable parse yields ``None``.
+
+        Args:
+            text: The raw citation string (one footnote's text).
+
+        Returns:
+            The parsed reference, or ``None`` when GROBID cannot structure it.
+        """
+        if not text or not text.strip():
+            return None
+
+        url = f"{self._base_url}/api/processCitation"
+        try:
+            response = await self._client.post(
+                url,
+                data={"citations": text, "consolidateCitations": "0"},
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.warning("GROBID processCitation failed ({}): {}", url, exc)
+            return None
+
+        refs = parse_grobid_tei(response.text)
+        return refs[0] if refs else None
 
     async def aclose(self) -> None:
         """Close the underlying client if this service created it."""
