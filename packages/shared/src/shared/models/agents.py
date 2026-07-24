@@ -83,6 +83,24 @@ class ExtractEntitiesResponse(BaseModel):
     entities: List[ExtractedEntity] = Field(default_factory=list)
 
 
+class GenerateSummaryRequest(BaseModel):
+    """`POST /api/v1/agents/generate-summary` — summarize raw text (write scope)."""
+
+    text: str = Field(description="Raw text to summarize.")
+    strategy: str = Field(
+        default="naive",
+        description='Summarization strategy: "naive" | "raptor" | "treekg".',
+    )
+    config: Optional[dict] = Field(
+        default=None, description="Optional strategy config overrides."
+    )
+
+
+class GenerateSummaryResponse(BaseModel):
+    summary: str = Field(default="")
+    strategy: str = Field(default="")
+
+
 __all__ = [
     "AGENT_PERMISSIONS",
     "AgentAuditEntry",
@@ -92,4 +110,6 @@ __all__ = [
     "ExtractEntitiesRequest",
     "ExtractEntitiesResponse",
     "ExtractedEntity",
+    "GenerateSummaryRequest",
+    "GenerateSummaryResponse",
 ]
