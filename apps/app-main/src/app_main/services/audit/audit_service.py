@@ -343,6 +343,34 @@ class AuditService:
             created=str(created) if created else None,
         )
 
+    async def append_findings(
+        self, notebook_id: str, run_id: str, findings: List[AuditFinding]
+    ) -> None:
+        """Append findings to an EXISTING run (no marker, no prune).
+
+        Used by the deep audit (F.3) to enrich the latest cheap run with the
+        on-demand checks, so ``latest`` returns the cheap + deep findings under
+        one ``run_id`` rather than a deep run superseding the cheap one.
+        """
+        nb = ensure_record_id(notebook_id)
+        for f in findings:
+            await execute_query(
+                "CREATE audit_findings CONTENT $data",
+                {
+                    "data": {
+                        "notebook": nb,
+                        "run_id": run_id,
+                        "check_id": f.check_id,
+                        "severity": f.severity,
+                        "title": f.title,
+                        "detail": f.detail,
+                        "subject": f.subject,
+                        "count": f.count,
+                    }
+                },
+                self.config,
+            )
+
     async def _persist(
         self, notebook_id: str, run_id: str, findings: List[AuditFinding]
     ) -> None:

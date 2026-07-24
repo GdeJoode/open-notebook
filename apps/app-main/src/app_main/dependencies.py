@@ -128,6 +128,12 @@ def get_audit_service() -> "AuditService":
     return AuditService()
 
 
+def get_deep_audit_service() -> "DeepAuditService":
+    from app_main.services.audit.deep_audit_service import DeepAuditService
+
+    return DeepAuditService()
+
+
 def get_chunk_mutator() -> ChunkMutator:
     # Wire the durable chunk_edit audit log (I.H2); mutations still work without it.
     return ChunkMutator(audit=ChunkAuditService())
