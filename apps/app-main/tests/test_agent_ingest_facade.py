@@ -125,6 +125,14 @@ def test_process_url_rejects_ssrf_target(monkeypatch):
             headers={"X-API-Key": "ak_w"},
         )
         assert resp.status_code == 422, bad
+    # Unicode-16 "outlined digits" (U+1CCF0–U+1CCF9) → 127.0.0.1 under UTS-46.
+    outlined_127 = "http://" + "".join(chr(0x1CCF0 + d) for d in (1, 2, 7)) + ".0.0.1/"
+    resp = client.post(
+        "/api/v1/agents/process-url",
+        json={"url": outlined_127, "notebook_id": "notebook:n"},
+        headers={"X-API-Key": "ak_w"},
+    )
+    assert resp.status_code == 422, outlined_127
     # The ingest chain was never entered for any blocked URL.
     create_impl.assert_not_awaited()
 

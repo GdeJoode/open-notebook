@@ -53,24 +53,29 @@ from app_main.services.summarization_service import SummarizationService
 
 _BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal"}
 
-#: The Unicode label separators UTS-46/IDNA treat as "." (which the downstream
-#: fetcher collapses before connecting). NFKC folds U+FF0E (fullwidth) and
-#: fullwidth digits to ASCII, but leaves the ideographic stops U+3002 / U+FF61,
-#: so we translate those explicitly — else http://169。254。169。254/ (ASCII
-#: digits, ideographic dots) slips past the numeric check and reaches metadata.
-_UNICODE_DOTS = {0x3002: ".", 0xFF61: "."}
+#: Codepoints the fetcher's UTS-46/IDNA transform collapses that NFKC does NOT,
+#: folded here so the guard classifies the SAME host the fetcher connects to. An
+#: exhaustive 0x110000 scan of UTS-46 vs NFKC found exactly two divergent classes:
+#:  - the ideographic dot separators U+3002 / U+FF61 (mapped to "."); NFKC already
+#:    handles U+FF0E + fullwidth digits. Else http://169。254。169。254/ (ASCII
+#:    digits, ideographic dots) slips past the numeric check to metadata.
+#:  - the Unicode-16 "outlined digits" U+1CCF0–U+1CCF9 (the ONLY codepoints UTS-46
+#:    maps to an ASCII digit that NFKC leaves alone); folded so an outlined-digit
+#:    IP can't dodge the numeric check on the Chromium fetch path.
+_HOST_FOLD = {0x3002: ".", 0xFF61: ".", **{0x1CCF0 + i: str(i) for i in range(10)}}
 
 
 def _normalize_host(raw: str) -> str:
     """Collapse a URL host to the ASCII form the OS resolver / fetcher will see.
 
-    NFKC-folds fullwidth variants + translates the ideographic dot separators,
-    so a homoglyph-obfuscated numeric IP (fullwidth digits, ideographic dots)
-    normalizes to the same dotted-quad the guard then classifies. A genuine IDN
-    hostname (e.g. ``münchen.de``) normalizes but stays non-numeric → allowed.
+    NFKC-folds fullwidth variants + translates the UTS-46/NFKC-divergent dot and
+    digit codepoints (:data:`_HOST_FOLD`), so a homoglyph-obfuscated numeric IP
+    (fullwidth/outlined digits, ideographic dots) normalizes to the same
+    dotted-quad the guard then classifies. A genuine IDN hostname (e.g.
+    ``münchen.de``) normalizes but stays non-numeric → allowed.
     """
     h = unicodedata.normalize("NFKC", (raw or "").strip())
-    return h.translate(_UNICODE_DOTS).lower().rstrip(".")
+    return h.translate(_HOST_FOLD).lower().rstrip(".")
 
 
 def _host_to_ip(host: str):
