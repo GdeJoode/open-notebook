@@ -101,6 +101,33 @@ class GenerateSummaryResponse(BaseModel):
     strategy: str = Field(default="")
 
 
+class ProcessUrlRequest(BaseModel):
+    """`POST /api/v1/agents/process-url` — ingest a URL headlessly (write scope)."""
+
+    url: str = Field(description="URL to ingest.")
+    notebook_id: str = Field(description="Notebook to attach the new source to.")
+    transformations: Optional[List[str]] = Field(
+        default=None, description="Optional transformation/insight names to run."
+    )
+
+
+class ProcessSourceResponse(BaseModel):
+    """The deferred-ingest handle: a job id to poll via GET /agents/jobs/{id}."""
+
+    job_id: str
+    source_id: str
+    status: str = "queued"
+
+
+class JobStatusResponse(BaseModel):
+    """`GET /api/v1/agents/jobs/{job_id}` — the CommandService status shape."""
+
+    job_id: str
+    status: str
+    result: Optional[dict] = None
+    error: Optional[str] = None
+
+
 __all__ = [
     "AGENT_PERMISSIONS",
     "AgentAuditEntry",
@@ -112,4 +139,7 @@ __all__ = [
     "ExtractedEntity",
     "GenerateSummaryRequest",
     "GenerateSummaryResponse",
+    "JobStatusResponse",
+    "ProcessSourceResponse",
+    "ProcessUrlRequest",
 ]
