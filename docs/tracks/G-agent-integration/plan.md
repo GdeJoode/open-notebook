@@ -140,8 +140,24 @@ slice** the roadmap sequencing calls for.
 > so no future route can be added ungated); `agent_audit_log.agent_key` is
 > `option<>` so failed-auth rows are recorded not dropped; `authenticate` uses
 > `revoked = false` (drift-safe, not `!= true`); `revoke` is table-scoped (no
-> cross-table write). Follow-up: the single-mode `extract_from_text` uses the
-> extractor's configured model, not the privacy-routed caller.
+> cross-table write). **Adversarial review round 2** then found the throttle fix
+> was partial and hardened it (round 3 verified clean): the audit write is skipped
+> on a 429 (else a throttled flood is write-amplification), the throttle prunes
+> window-expired IPs (its self-prune was dead code), and `revoke` honours its
+> idempotent bool contract on a malformed id.
+>
+> **Known trade-offs / follow-ups (from the review, accepted — not regressions):**
+> - The single-mode `extract_from_text` uses the extractor's configured model, not
+>   the privacy-routed caller (G-D5 raw-text path).
+> - ALL 429s are excluded from the audit trail, including a per-key-limit 429 on a
+>   *valid* key. Acceptable (a blocked request performs no action), but a future
+>   refinement could audit per-key-limit 429s (authenticated-abuse signal) while
+>   still skipping the pre-auth-throttle 429s (unauthenticated flood).
+> - The per-IP throttle state is per-process in-memory (`time.monotonic`), so under
+>   N uvicorn workers the effective cap is ~N× the configured RPM — same durability
+>   as the existing per-IP slowapi limiter; a shared store (redis) would tighten it.
+> - `run_deep` has a pre-existing superseded-run TOCTOU race (`latest()` → append);
+>   low severity, untouched by the review fixes.
 
 **Goal**: A versioned, API-key-authed agent surface that stands entirely on its own:
 mint/revoke keys, authenticate with `X-API-Key` (permission-scoped, rate-limited,
