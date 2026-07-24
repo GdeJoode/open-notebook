@@ -71,6 +71,7 @@ from app_main.services.note_service import NoteService
 from app_main.services.notebook_merge_service import NotebookMergeService
 from app_main.services.notebook_service import NotebookService
 from app_main.services.obsidian_export_service import ObsidianExportService
+from app_main.services.okf_export_service import OkfExportService
 from app_main.services.ontology_service import OntologyService
 from app_main.services.podcast_service import PodcastService
 from app_main.services.preprocessing_service import PreprocessingService
@@ -733,6 +734,21 @@ def get_obsidian_export_service() -> ObsidianExportService:
         entity_repository=entity_repo,
         relation_repository=entity_repo,
         settings_service=get_settings_service(),
+    )
+
+
+def get_okf_export_service() -> OkfExportService:
+    """FastAPI provider for the OKF v0.1 bundle export service (OKF.2).
+
+    ``entity_repo`` answers both ``list_entities_for_notebook`` and
+    ``list_relations_for_notebook`` (D.0); ``notebook_repo`` answers
+    ``get_notes`` / ``get_sources`` for the note + source concepts.
+    """
+    entity_repo = get_entity_repo()
+    return OkfExportService(
+        entity_repository=entity_repo,
+        notebook_repository=get_notebook_repo(),
+        relation_repository=entity_repo,
     )
 
 
