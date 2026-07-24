@@ -18,7 +18,9 @@ raw text, no DB) — proving the throttle + auth + per-key limit + audit path en
 end; later phases add the ingest façade and the other capabilities.
 """
 
+import ipaddress
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from shared.models.agents import (
@@ -46,6 +48,44 @@ from app_main.dependencies import (
     get_transformation_service,
 )
 from app_main.services.summarization_service import SummarizationService
+
+def _reject_ssrf_url(url: str) -> None:
+    """Reject obvious SSRF targets before the link fetcher runs (write surface).
+
+    Blocks non-http(s) schemes and literal loopback / private / link-local /
+    reserved / metadata IPs (127.*, ::1, 169.254.169.254, 10/172.16-31/192.168,
+    0.0.0.0, localhost, GCP metadata host). This is defense-in-depth on the AGENT
+    key surface — write keys are externally distributed, unlike the shared UI
+    password. It does NOT resolve hostnames, so a hostname that RESOLVES to a
+    private IP (DNS-rebinding) is out of scope here; the deeper fix belongs in the
+    shared link-fetch layer (which the password-gated UI shares) and is tracked as
+    a follow-up. Raises 422 on a disallowed URL.
+    """
+    try:
+        parsed = urlparse((url or "").strip())
+    except Exception:
+        raise HTTPException(status_code=422, detail="Invalid URL")
+    if (parsed.scheme or "").lower() not in ("http", "https"):
+        raise HTTPException(status_code=422, detail="URL scheme must be http or https")
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise HTTPException(status_code=422, detail="URL has no host")
+    if host in ("localhost", "metadata.google.internal"):
+        raise HTTPException(status_code=422, detail="URL host is not allowed")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None and (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    ):
+        raise HTTPException(status_code=422, detail="URL host is not allowed")
+
 
 router = APIRouter(
     prefix="/api/v1/agents",
@@ -131,11 +171,17 @@ async def process_url(
     from app_main.api.routers.sources_upload import _create_source_impl
     from app_main.api.schemas import SourceCreate
 
+    _reject_ssrf_url(body.url)  # block loopback / private / metadata targets
+
     source_create = SourceCreate(
         type="link",
         url=body.url,
         notebook_id=body.notebook_id,
         transformations=body.transformations,
+        # async: enqueue a process_source JOB (sets source.command) instead of
+        # parsing synchronously in-request. Without this the parse blocks the
+        # request for minutes and no pollable job id is produced.
+        async_processing=True,
     )
     result = await _create_source_impl(
         source_create, None, source_svc, notebook_svc, transformation_svc
@@ -143,22 +189,37 @@ async def process_url(
     # The enqueued process_source command id is stashed on the source as `command`.
     src = await source_svc.get(result.id)
     job_id = str(getattr(src, "command", "") or "")
+    # Record the (agent, job) ownership so GET /jobs/{id} can authorize the caller
+    # (jobs carry no owner column). The audit middleware reads request.state.job_id.
+    request.state.job_id = job_id
     return ProcessSourceResponse(
         job_id=job_id, source_id=str(result.id), status="queued"
     )
 
 
-@router.get("/jobs/{job_id:path}", response_model=JobStatusResponse)
+@router.get("/jobs/{job_id}", response_model=JobStatusResponse)
+@limiter.limit(agent_default_limit, key_func=agent_key_func)
 async def get_job_status(
     request: Request,
+    response: Response,
     job_id: str,
-    _key=Depends(require_agent_key("read")),
+    key: AgentKeyContext = Depends(require_agent_key("read")),
 ) -> JobStatusResponse:
-    """Poll a job's status — verbatim CommandService.get_command_status.
+    """Poll a job's status — but ONLY a job THIS agent enqueued.
 
-    An unknown id returns the ``status:"unknown"`` shape (200, not 500).
+    Jobs carry no owner column, so ownership is authorized via the agent's own
+    audit trail (process-url stamps the job_id there). A job the calling agent
+    did not enqueue → 404 (not the status), so this is neither an IDOR nor an
+    existence oracle. An admin key may poll any job. On a hit, the payload is
+    verbatim CommandService.get_command_status; an unknown id → status:"unknown".
     """
+    from app_main.services.agents.audit_service import AgentAuditService
     from app_main.services.command_service import CommandService
+
+    if key.permission != "admin":
+        owns = await AgentAuditService().agent_owns_job(key.agent_id, job_id)
+        if not owns:
+            raise HTTPException(status_code=404, detail="Job not found")
 
     status = await CommandService.get_command_status(job_id)
     return JobStatusResponse(
@@ -170,8 +231,10 @@ async def get_job_status(
 
 
 @router.get("/audit-log")
+@limiter.limit(agent_default_limit, key_func=agent_key_func)
 async def get_audit_log(
     request: Request,
+    response: Response,
     agent_id: Optional[str] = None,
     limit: int = 100,
     key: AgentKeyContext = Depends(require_agent_key("read")),

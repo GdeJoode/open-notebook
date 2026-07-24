@@ -136,6 +136,9 @@ class AgentAuditMiddleware(BaseHTTPMiddleware):
                 path=request.url.path,
                 status=response.status_code,
                 latency_ms=latency_ms,
+                # process-url stamps the enqueued job id here so GET /jobs/{id}
+                # can later authorize the caller against its own audit trail.
+                job_id=getattr(request.state, "job_id", None),
             )
         except Exception:  # noqa: BLE001 — audit must never affect the response
             pass

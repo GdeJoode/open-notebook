@@ -58,6 +58,29 @@ class AgentAuditService:
                 e=exc,
             )
 
+    async def agent_owns_job(self, agent_id: str, job_id: str) -> bool:
+        """True iff THIS agent enqueued ``job_id`` (per its own audit trail).
+
+        Jobs carry no owner column, so ownership is derived from the audit row
+        ``process-url`` stamps with the enqueued job id. Used to authorize
+        ``GET /jobs/{id}`` so an agent can only poll a job it created (else 404),
+        closing the IDOR / existence-oracle on the shared job table. Fail-soft:
+        any read error → False (deny), never raises into the request.
+        """
+        if not agent_id or not job_id:
+            return False
+        try:
+            rows = await execute_query(
+                "SELECT VALUE id FROM agent_audit_log "
+                "WHERE agent_id = $a AND job_id = $j LIMIT 1",
+                {"a": agent_id, "j": job_id},
+                self.config,
+            )
+            return bool(rows)
+        except Exception as exc:  # noqa: BLE001 — deny on error, never leak
+            logger.warning("agent_owns_job check failed ({j}): {e}", j=job_id, e=exc)
+            return False
+
     async def list_for_agent(
         self, agent_id: str, *, limit: int = 100
     ) -> List[Dict[str, Any]]:

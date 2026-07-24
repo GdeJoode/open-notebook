@@ -92,11 +92,43 @@ def test_process_url_read_key_is_403(monkeypatch):
     assert resp.status_code == 403
 
 
+def test_process_url_rejects_ssrf_target(monkeypatch):
+    """A write key cannot make the server fetch a loopback/metadata target."""
+    _auth(monkeypatch, "write")
+    create_impl = AsyncMock(return_value=SimpleNamespace(id="source:x"))
+    monkeypatch.setattr(sources_upload, "_create_source_impl", create_impl)
+
+    client = _make_client()
+    for bad in (
+        "http://169.254.169.254/latest/meta-data/",
+        "http://127.0.0.1:9000/admin",
+        "http://localhost/internal",
+        "file:///etc/passwd",
+    ):
+        resp = client.post(
+            "/api/v1/agents/process-url",
+            json={"url": bad, "notebook_id": "notebook:n"},
+            headers={"X-API-Key": "ak_w"},
+        )
+        assert resp.status_code == 422, bad
+    # The ingest chain was never entered for any blocked URL.
+    create_impl.assert_not_awaited()
+
+
 # -- jobs/{id} --------------------------------------------------------------
 
 
-def test_job_status_passthrough(monkeypatch):
+def _own_job(monkeypatch, owns: bool):
+    import app_main.services.agents.audit_service as aud
+
+    monkeypatch.setattr(
+        aud.AgentAuditService, "agent_owns_job", AsyncMock(return_value=owns)
+    )
+
+
+def test_job_status_passthrough_for_owned_job(monkeypatch):
     _auth(monkeypatch, "read")
+    _own_job(monkeypatch, True)  # the caller enqueued this job
     import app_main.services.command_service as cs
 
     monkeypatch.setattr(
@@ -110,8 +142,9 @@ def test_job_status_passthrough(monkeypatch):
     assert resp.json()["status"] == "running"
 
 
-def test_job_status_unknown_is_200(monkeypatch):
+def test_job_status_unknown_is_200_for_owned_job(monkeypatch):
     _auth(monkeypatch, "read")
+    _own_job(monkeypatch, True)
     import app_main.services.command_service as cs
 
     monkeypatch.setattr(
@@ -123,6 +156,45 @@ def test_job_status_unknown_is_200(monkeypatch):
     resp = client.get("/api/v1/agents/jobs/nope", headers={"X-API-Key": "ak_r"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "unknown"
+
+
+def test_job_status_foreign_job_is_404_and_does_not_leak(monkeypatch):
+    """IDOR guard: a job the caller did NOT enqueue → 404, status never read."""
+    _auth(monkeypatch, "read")
+    _own_job(monkeypatch, False)  # not the caller's job
+    import app_main.services.command_service as cs
+
+    status_fn = AsyncMock(
+        return_value={"job_id": "victim", "status": "running", "result": {"x": 1}}
+    )
+    monkeypatch.setattr(cs.CommandService, "get_command_status", status_fn)
+
+    client = _make_client()
+    resp = client.get("/api/v1/agents/jobs/victim", headers={"X-API-Key": "ak_r"})
+    assert resp.status_code == 404
+    # The job's status/result was never fetched — no existence oracle, no leak.
+    status_fn.assert_not_awaited()
+
+
+def test_job_status_admin_bypasses_ownership(monkeypatch):
+    """An admin key may poll any job (no ownership binding)."""
+    _auth(monkeypatch, "admin")
+    owns = AsyncMock(return_value=False)
+    import app_main.services.agents.audit_service as aud
+
+    monkeypatch.setattr(aud.AgentAuditService, "agent_owns_job", owns)
+    import app_main.services.command_service as cs
+
+    monkeypatch.setattr(
+        cs.CommandService,
+        "get_command_status",
+        AsyncMock(return_value={"job_id": "any", "status": "complete"}),
+    )
+    client = _make_client()
+    resp = client.get("/api/v1/agents/jobs/any", headers={"X-API-Key": "ak_admin"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "complete"
+    owns.assert_not_awaited()  # admin skips the ownership check entirely
 
 
 # -- audit-log --------------------------------------------------------------
