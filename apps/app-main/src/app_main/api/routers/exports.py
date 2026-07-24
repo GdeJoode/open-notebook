@@ -26,7 +26,15 @@ import io
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -45,6 +53,7 @@ from app_main.dependencies import (
     get_notebook_service,
     get_obsidian_export_service,
     get_okf_export_service,
+    get_okf_import_service,
 )
 from app_main.services.command_service import CommandService
 from app_main.services.jsonl_export_service import JsonlExportService
@@ -56,6 +65,7 @@ from app_main.services.obsidian_export_service import (
     VaultPathNotConfigured,
 )
 from app_main.services.okf_export_service import OkfExportService
+from app_main.services.okf_import_service import OkfImportService
 
 router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["exports"])
 
@@ -455,6 +465,95 @@ async def export_notebook_okf(
             "X-OKF-Export-Report": report_json,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# OKF (Open Knowledge Format) bundle import (OKF.4)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/import/okf",
+    responses={
+        200: {
+            "content": {"application/json": {}},
+            "description": (
+                "Import complete. Body is the ``OkfImportReport`` "
+                "(imported/matched/skipped counts + the non-silent "
+                "skip/dangling ledger)."
+            ),
+        },
+        404: {"description": "Notebook not found."},
+        422: {
+            "description": (
+                "Malformed bundle container (not a .zip / unreadable "
+                "archive). A malformed *concept* inside a valid bundle is "
+                "skipped non-silently and reported in the 200 body, never "
+                "a 422."
+            ),
+        },
+    },
+)
+async def import_notebook_okf(
+    notebook_id: str,
+    file: UploadFile = File(
+        ..., description="An OKF v0.1 Knowledge Bundle as a .zip archive."
+    ),
+    apply_dedup: bool = Query(
+        True,
+        description=(
+            "Run the K.5 propose + K.3 auto-merge dedup pass after "
+            "persistence so an imported entity is matched against the "
+            "existing graph, not duplicated. Idempotent."
+        ),
+    ),
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    import_service: OkfImportService = Depends(get_okf_import_service),
+) -> JSONResponse:
+    """Import an uploaded OKF v0.1 bundle into this notebook (the OKF.3 seam).
+
+    The inverse of ``POST /export/okf`` and the REST surface OKF.3 deferred to
+    this phase. The multipart-uploaded zip is handed to
+    :meth:`OkfImportService.import_bundle` (notebook-scoped), which parses the
+    concepts, upserts entities via the deterministic ``(name, type)`` dedup +
+    the injection-safe RELATE primitive, and creates notes/sources
+    idempotently — all provenance-tagged ``okf-import``.
+
+    Auth is the same notebook-scoped lookup every export route uses (G-Q1); no
+    new auth surface. A malformed *bundle container* (non-zip / unreadable
+    archive) is a 422; a malformed *concept* within a valid bundle is skipped
+    non-silently and surfaced in the report — never a half-written graph.
+    """
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    data = await file.read()
+
+    try:
+        report = await import_service.import_bundle(
+            data, notebook_id=notebook_id, apply_dedup=apply_dedup
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        # Malformed bundle CONTAINER (not a zip, unreadable archive). A bad
+        # concept never reaches here — it is skip-recorded inside the service.
+        logger.warning("okf import rejected bundle for {nb}: {e}", nb=notebook_id, e=exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    logger.info(
+        "okf import: notebook={nb} entities +{ec}/~{em} relations +{rc} "
+        "notes +{nc}/~{nm} sources +{sc}/~{sm} skipped={sk}",
+        nb=notebook_id,
+        ec=report.entities_created,
+        em=report.entities_matched,
+        rc=report.relations_created,
+        nc=report.notes_created,
+        nm=report.notes_matched,
+        sc=report.sources_created,
+        sm=report.sources_matched,
+        sk=len(report.skipped),
+    )
+    return JSONResponse(content=report.to_dict())
 
 
 # ---------------------------------------------------------------------------
