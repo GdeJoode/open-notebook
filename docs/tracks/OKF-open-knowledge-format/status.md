@@ -1,5 +1,73 @@
 # Track OKF — status
 
+## OKF.4 — Agent surface: MCP tools + REST import · READY FOR REVIEW
+
+**Branch**: `track/okf4-mcp` (off `track/okf3-import`).
+
+### What landed
+
+**1. REST import endpoint (the OKF.3 deferral)** —
+`apps/app-main/src/app_main/api/routers/exports.py`:
+- `POST /notebooks/{id}/import/okf` — accepts a multipart-uploaded OKF v0.1
+  bundle **zip** (`file`), a `?apply_dedup=` query flag, runs
+  `OkfImportService.import_bundle(bytes, notebook_id=…, apply_dedup=…)`, and
+  returns the `OkfImportReport` (imported/matched/skipped counts + skip/dangling
+  ledger) as JSON. Mirrors `/export/okf`'s notebook-scoped auth (404 on missing
+  notebook). A malformed bundle **container** (non-zip / unreadable archive) is
+  a `422`; a malformed **concept** inside a valid bundle is skip-recorded in the
+  `200` report (never a half-written graph). Inline only (no job-queue on the
+  import path).
+
+**2. MCP tools (the agent surface — Track W pattern)** —
+`packages/surrealdb-service/src/surrealdb_service/mcp/server.py` (the graph MCP
+server that already hosts `search` / `get_node` / `related` / `cite` /
+`add_note` / `auto_link_note`):
+- **`export_okf`** — args: `notebook_id` + the `ExportFilter` knobs
+  (`min_connections` / `min_confidence` / `min_relation_confidence` /
+  `entity_types` / `include_orphans` / `include_archived`). Returns JSON
+  `{status:"exported", notebook_id, bundle:{path:text}, report:{…}}` — the
+  bundle is the exporter's legible `{path: text}` mapping (unzipped from the
+  service's deterministic archive), and `report` carries the OKF-D3
+  omitted-field ledger.
+- **`import_okf`** — args: `bundle` (the `{path: text}` mapping `export_okf`
+  returns) **or** `zip_base64` (a base64 bundle zip), `notebook_id`,
+  `apply_dedup`. Returns `{status:"imported", …OkfImportReport}`.
+- Both **delegate to the existing app-main OKF services** (no reimplementation)
+  via a **lazy import inside the tool body**
+  (`app_main.dependencies.get_okf_export_service` / `get_okf_import_service`).
+  This is the one **deliberate, documented layering exception** to this
+  package's repo-direct / no-app-main rule (see the expanded module docstring):
+  the OKF services are app-main orchestrators over these same repos + the
+  K.5/K.3 dedup, module import stays app-main-free (the graph tools still load
+  with no app-main present), and the OKF tools degrade to a typed
+  `{status:"import_error"}` when app-main is absent. Precedent: this package's
+  tests already reach app-main over the shared workspace venv
+  (`test_entity_merge_roundtrip`, `test_relation_endpoint_resolution_roundtrip`).
+- Typed, best-effort error shapes consistent with the other tools:
+  `invalid_filter` / `bad_request` (neither/both inputs, bad base64) /
+  `malformed_bundle` / `import_error` — never a raw crash out of the tool.
+
+### Tests
+- `apps/app-main/tests/test_okf_import_router.py` — 4 stubbed-service contract
+  tests (happy path, dedup flag forwarded, 404, 422) + 1 `@requires_docker`
+  exporter-bundle → HTTP (ASGITransport) → real-DB round-trip. **5 passed.**
+- `packages/surrealdb-service/tests/test_mcp_okf_tools_roundtrip.py` — 6
+  `@requires_docker` tests mirroring the W.3 `mcp_global_db` +
+  independent-connection precedent: `export_okf` bundle/report shape, invalid
+  filter, export→import round-trip (matched, not duplicated, asserted over an
+  independent connection), base64-zip input, and the `bad_request` /
+  `malformed_bundle` error shapes. **6 passed.**
+- Regression: `test_okf_exports_router` + `test_exports_router` +
+  `test_export_preview` + `test_okf_import_router` (offline) — **31 passed**;
+  `test_mcp_graph_tools_roundtrip` (docker) — **11 passed**. No regressions.
+- ruff: clean. mypy: no new errors (only the repo-wide baseline `import-untyped`
+  notes for `shared.models.export`, unchanged from the OKF.1–OKF.3 modules and
+  the pre-existing `exports.py` import).
+
+### Not in scope (per plan)
+- UI export-dialog option + ARCHITECTURE/roadmap/RETRO close-out → **OKF.5**.
+- No `# TODO`s / deferrals left in the code.
+
 ## OKF.3 — OKF import as a source type (Backend) · READY FOR REVIEW
 
 **Branch**: `track/okf3-import` (off `track/okf1-export`).
