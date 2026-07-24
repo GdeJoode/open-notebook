@@ -24,7 +24,16 @@ import unicodedata
 from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from shared.models.agents import (
     ExtractEntitiesRequest,
     ExtractEntitiesResponse,
@@ -222,9 +231,8 @@ async def process_url(
     """Ingest a URL headlessly via the SAME process_source chain as the UI.
 
     A thin façade over `_create_source_impl` (type="link") — no parallel pipeline.
-    Returns the enqueued job id to poll via GET /agents/jobs/{id}.
-    (process-document / process-audio, which take a multipart upload + reuse
-    enforce_upload_guards, are deferred to G.3b.)
+    Returns the enqueued job id to poll via GET /agents/jobs/{id}. The multipart
+    upload siblings are `POST /process-document` and `POST /process-audio` (G.3b).
     """
     from app_main.api.routers.sources_upload import _create_source_impl
     from app_main.api.schemas import SourceCreate
@@ -256,6 +264,123 @@ async def process_url(
     request.state.job_id = job_id
     return ProcessSourceResponse(
         job_id=job_id, source_id=str(result.id), status="queued"
+    )
+
+
+def _parse_transformations(raw: Optional[str]) -> Optional[list]:
+    """A multipart ``transformations`` form field → a list of names.
+
+    Accepts a JSON array (``["t1","t2"]``) or a comma-separated string; empty →
+    None (run the notebook default). The chain validates each name exists (404).
+    """
+    if not raw or not raw.strip():
+        return None
+    import json
+
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(t) for t in parsed]
+    except (ValueError, TypeError):
+        pass
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+async def _ingest_upload(
+    request: Request,
+    file: UploadFile,
+    notebook_id: str,
+    transformations: Optional[str],
+    source_svc,
+    notebook_svc,
+    transformation_svc,
+) -> ProcessSourceResponse:
+    """Shared multipart-upload ingest for process-document / process-audio.
+
+    A thin façade over the SAME ``_create_source_impl`` (``type="upload"``) the UI
+    uses — it runs the size + page-count upload guards, saves the file, and
+    enqueues the ``process_source`` job (async → a real pollable ``job_id``). The
+    ``process_source`` pipeline routes by file type, so documents and audio share
+    this path (the two routes differ only in their documented intent).
+    """
+    from app_main.api.routers.sources_upload import _create_source_impl
+    from app_main.api.schemas import SourceCreate
+
+    source_create = SourceCreate(
+        type="upload",
+        notebook_id=notebook_id,
+        transformations=_parse_transformations(transformations),
+        async_processing=True,
+    )
+    result = await _create_source_impl(
+        source_create, file, source_svc, notebook_svc, transformation_svc
+    )
+    src = await source_svc.get(result.id)
+    job_id = str(getattr(src, "command", "") or "")
+    # Stamp the enqueued job so GET /jobs/{id} can authorize this caller (same
+    # ownership binding as process-url — jobs carry no owner column).
+    request.state.job_id = job_id
+    return ProcessSourceResponse(
+        job_id=job_id, source_id=str(result.id), status="queued"
+    )
+
+
+@router.post("/process-document", response_model=ProcessSourceResponse)
+@limiter.limit(agent_default_limit, key_func=agent_key_func)
+async def process_document(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),
+    notebook_id: str = Form(...),
+    transformations: Optional[str] = Form(None),
+    _key=Depends(require_agent_key("write")),
+    source_svc=Depends(get_source_service),
+    notebook_svc=Depends(get_notebook_service),
+    transformation_svc=Depends(get_transformation_service),
+) -> ProcessSourceResponse:
+    """Ingest an uploaded document headlessly (multipart) via process_source.
+
+    WRITE scope. Reuses the shipped upload path incl. `enforce_upload_guards`
+    (413 oversized / 422 over-paged); returns a pollable `job_id`. Audio files
+    are accepted here too, but `POST /process-audio` documents that intent.
+    """
+    return await _ingest_upload(
+        request,
+        file,
+        notebook_id,
+        transformations,
+        source_svc,
+        notebook_svc,
+        transformation_svc,
+    )
+
+
+@router.post("/process-audio", response_model=ProcessSourceResponse)
+@limiter.limit(agent_default_limit, key_func=agent_key_func)
+async def process_audio(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),
+    notebook_id: str = Form(...),
+    transformations: Optional[str] = Form(None),
+    _key=Depends(require_agent_key("write")),
+    source_svc=Depends(get_source_service),
+    notebook_svc=Depends(get_notebook_service),
+    transformation_svc=Depends(get_transformation_service),
+) -> ProcessSourceResponse:
+    """Ingest an uploaded audio file headlessly (multipart) via process_source.
+
+    WRITE scope. Same upload chain as process-document (the process_source
+    pipeline transcribes/parses by file type); returns a pollable `job_id`.
+    """
+    return await _ingest_upload(
+        request,
+        file,
+        notebook_id,
+        transformations,
+        source_svc,
+        notebook_svc,
+        transformation_svc,
     )
 
 
