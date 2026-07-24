@@ -44,6 +44,10 @@ class Notebook(ObjectModel):
         default=True,
         description="Auto-run INSIGHTS extraction after embed for this notebook's sources",
     )
+    librarian_enabled: bool = Field(
+        default=False,
+        description="Opt-in: periodically re-run the F.1 quality audit for this notebook",
+    )
 
     @field_validator("name")
     @classmethod

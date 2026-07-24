@@ -107,6 +107,17 @@ class ReferenceExtractPayload(BaseModel):
     resolve_external: bool = False
 
 
+class LibrarianAuditPayload(BaseModel):
+    """Payload for the Track F.5 opt-in periodic librarian audit job.
+
+    Enqueued per opt-in notebook by ``LibrarianService.enqueue_due``; the consumer
+    re-runs the F.1 quality audit for ``notebook_id``.
+    """
+
+    command_name: str = "run_librarian_audit"
+    notebook_id: str
+
+
 class ExportObsidianPayload(BaseModel):
     """Payload schema for the auto-pipeline ``EXPORT_OBSIDIAN`` job (D.1b).
 
@@ -656,12 +667,49 @@ async def handle_reference_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
             "processing_time": processing_time,
         }
 
+
     except Exception as e:
         logger.error(
             f"Reference extraction pass failed "
             f"(triggered by source={validated.source_id}): {e}"
         )
         raise
+
+
+# ---------------------------------------------------------------------------
+# LIBRARIAN_AUDIT — opt-in periodic quality audit per notebook (F.5)
+# ---------------------------------------------------------------------------
+
+
+@registry.register(JobType.LIBRARIAN_AUDIT)
+async def handle_librarian_audit(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Track F.5 handler: re-run the F.1 quality audit for one notebook.
+
+    Enqueued per opt-in notebook by ``LibrarianService.enqueue_due``. Runs the
+    always-on (LLM-free) checks and writes a fresh ``audit_findings`` snapshot.
+    One notebook's audit is isolated from the others (each is its own job), so a
+    failure here fails only this notebook's job, not the librarian sweep.
+    """
+    validated = LibrarianAuditPayload(**payload)
+    start_time = time.time()
+
+    from app_main.services.audit.audit_service import AuditService
+
+    logger.info(f"Librarian audit starting for notebook {validated.notebook_id}")
+    result = await AuditService().run_all(validated.notebook_id)
+    processing_time = time.time() - start_time
+    logger.info(
+        f"Librarian audit for {validated.notebook_id} complete: "
+        f"run={result.run_id} findings={len(result.findings)} "
+        f"in {processing_time:.2f}s"
+    )
+    return {
+        "success": True,
+        "notebook_id": validated.notebook_id,
+        "run_id": result.run_id,
+        "findings": len(result.findings),
+        "processing_time": processing_time,
+    }
 
 
 # ---------------------------------------------------------------------------

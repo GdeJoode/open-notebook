@@ -172,6 +172,10 @@ class JobType(str, Enum):
     # materialization. A separate job from DOCUMENT_PARSE so a reference/matching
     # failure stays isolated from the (already-persisted) source + chunks.
     REFERENCE_EXTRACT = "reference_extract"
+    # Track F.5: opt-in librarian audit. Enqueued per opt-in notebook by the
+    # librarian scheduler entry point; the consumer re-runs the F.1 quality
+    # audit and writes a fresh audit_findings snapshot. Default-off per notebook.
+    LIBRARIAN_AUDIT = "librarian_audit"
 
 
 class JobStatus(str, Enum):
