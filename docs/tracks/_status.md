@@ -51,7 +51,7 @@ phase merge.
 | **T** — extraction-rescope | Extraction-economy rescope | ⏸ PARKED | n/a | 2026-06-27 | Decision gate: "stop thin" — R.6 owns search cleanup, exports stay rich |
 | **U** — document-graph | Documents as first-class graph nodes (`mentions`) | ✅ CLOSED | yes | 2026-06-28 | |
 | **UX** — pipeline-alignment | Frontend `processing_stage` spine + lean create flow | ✅ CLOSED | yes | 2026-07-01 | Latest closed track; ARCHITECTURE §14 |
-| **V** — reference-extraction | Reference/citation extraction | 📋 PLANNED | no | — | `plan.md` only; was the Track V→U.3 boundary |
+| **V** — reference-extraction | Reference/citation extraction (GROBID engine + GF footnote/Kamerstuk path) | ✅ CLOSED | yes | 2026-07-24 | Shipped via #42 (resolvers + GROBID) + #44 (GF policy footnotes). Style-independent; heuristic evaluated then dropped. Live: 198 academic refs + Kamerstuk footnotes |
 | **W** — mcp-graph-memory | MCP graph tools + hybrid search + reranker | ✅ CLOSED | yes | 2026-06-29 | Shared substrate proven over independent connection |
 | **X** — citations-to-source | Exact chunk/page provenance in answers | ✅ CLOSED | yes | 2026-06-29 | |
 | **Y** — auto-link | New note → related notes → RELATE | ✅ CLOSED | yes | 2026-06-29 | ARCHITECTURE §12 |
@@ -106,11 +106,13 @@ The only refs NOT in `main` are outside the track workflow:
 The merge-readiness audit proves no *branch* is unmerged. That is NOT the same as
 "every planned feature is done". Real open work, evidence-based (2026-07-23):
 
-### A. Genuinely open small track
-- **Track V — reference-extraction** — `docs/tracks/V-reference-extraction/` has
-  **only `plan.md`**, no status, no implementation. Track U.3 defined just the
-  `ParsedReference` interface/stub it would feed; the actual citation parsing was
-  never built. Nearest "forgotten small feature".
+### A. ~~Genuinely open small track~~ — DONE (2026-07-24)
+- ~~**Track V — reference-extraction**~~ — **SHIPPED**. Built end-to-end: a
+  style-agnostic **GROBID** CRF service parses academic bibliographies from source
+  PDFs (a hand-rolled heuristic was evaluated first, proven citation-style-dependent
+  on real docling output, and dropped); the **GF footnote/Kamerstuk path** covers
+  policy-document cross-references (Kamerbrieven/convenanten). Merged via #42 + #44.
+  See `V-reference-extraction/{grobid-integration-plan,footnote-kamerstuk-plan,live-smoke-results}.md`.
 
 ### B. Deferred follow-ups inside CLOSED tracks
 | Item | What | Size |
