@@ -100,10 +100,18 @@ def test_process_url_rejects_ssrf_target(monkeypatch):
 
     client = _make_client()
     for bad in (
-        "http://169.254.169.254/latest/meta-data/",
-        "http://127.0.0.1:9000/admin",
-        "http://localhost/internal",
-        "file:///etc/passwd",
+        "http://169.254.169.254/latest/meta-data/",  # canonical metadata IP
+        "http://127.0.0.1:9000/admin",  # canonical loopback
+        "http://localhost/internal",  # loopback hostname
+        "file:///etc/passwd",  # non-http(s) scheme
+        # Non-canonical IP encodings that the round-1 guard let through —
+        # glibc resolves each to the SAME blocked address (127.0.0.1 / metadata).
+        "http://2130706433/",  # decimal loopback
+        "http://0177.0.0.1/",  # octal loopback
+        "http://0x7f.0.0.1/",  # hex loopback
+        "http://127.0.0.1./admin",  # trailing-dot loopback
+        "http://2852039166/latest/meta-data/",  # decimal cloud-metadata IP
+        "http://127.1/",  # short-form loopback
     ):
         resp = client.post(
             "/api/v1/agents/process-url",

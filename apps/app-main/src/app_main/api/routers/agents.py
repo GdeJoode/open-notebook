@@ -19,6 +19,7 @@ end; later phases add the ingest façade and the other capabilities.
 """
 
 import ipaddress
+import socket
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -49,17 +50,45 @@ from app_main.dependencies import (
 )
 from app_main.services.summarization_service import SummarizationService
 
-def _reject_ssrf_url(url: str) -> None:
-    """Reject obvious SSRF targets before the link fetcher runs (write surface).
+_BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal"}
 
-    Blocks non-http(s) schemes and literal loopback / private / link-local /
-    reserved / metadata IPs (127.*, ::1, 169.254.169.254, 10/172.16-31/192.168,
-    0.0.0.0, localhost, GCP metadata host). This is defense-in-depth on the AGENT
-    key surface — write keys are externally distributed, unlike the shared UI
-    password. It does NOT resolve hostnames, so a hostname that RESOLVES to a
-    private IP (DNS-rebinding) is out of scope here; the deeper fix belongs in the
-    shared link-fetch layer (which the password-gated UI shares) and is tracked as
-    a follow-up. Raises 422 on a disallowed URL.
+
+def _host_to_ip(host: str):
+    """Coerce a URL host to a canonical IP the way the OS resolver would for a
+    NUMERIC host — including the non-canonical IPv4 encodings that
+    ``ipaddress.ip_address`` REJECTS but glibc ``getaddrinfo`` accepts and
+    resolves to the same address: decimal (``2130706433`` → 127.0.0.1), octal
+    (``0177.0.0.1``), hex (``0x7f.0.0.1``), and short forms (``127.1``). Those
+    encodings were the SSRF bypass in the round-1 guard.
+
+    Returns an ``ipaddress`` address, or ``None`` for a real (non-numeric)
+    hostname — DNS resolution is deliberately NOT performed here, so a hostname
+    that RESOLVES to a private IP (DNS-rebinding) stays out of scope; that deeper
+    fix belongs in the shared link-fetch layer the password-gated UI also uses.
+    """
+    try:
+        return ipaddress.ip_address(host)  # canonical IPv4 / IPv6
+    except ValueError:
+        pass
+    try:
+        # inet_aton parses the SAME lenient numeric-IPv4 forms getaddrinfo does
+        # (decimal / octal / hex / short) → 4 packed bytes → canonical IPv4.
+        return ipaddress.ip_address(socket.inet_aton(host))
+    except (OSError, ValueError):
+        return None
+
+
+def _reject_ssrf_url(url: str) -> None:
+    """Reject SSRF targets before the link fetcher runs (write-key surface).
+
+    Blocks non-http(s) schemes and any host that normalizes to a loopback /
+    private / link-local / reserved / multicast / unspecified IP — INCLUDING the
+    decimal/octal/hex/short-form and trailing-dot encodings of those IPs (see
+    :func:`_host_to_ip`), which the round-1 guard let through to the cloud
+    metadata endpoint. Defense-in-depth on the AGENT key surface (externally
+    distributed, unlike the shared UI password). Hostname→private-IP
+    (DNS-rebinding) is out of scope here — a shared fetch-layer follow-up. Raises
+    422 on a disallowed URL.
     """
     try:
         parsed = urlparse((url or "").strip())
@@ -67,15 +96,14 @@ def _reject_ssrf_url(url: str) -> None:
         raise HTTPException(status_code=422, detail="Invalid URL")
     if (parsed.scheme or "").lower() not in ("http", "https"):
         raise HTTPException(status_code=422, detail="URL scheme must be http or https")
-    host = (parsed.hostname or "").lower()
+    # Strip a trailing FQDN dot (127.0.0.1. → 127.0.0.1) so it can't dodge the
+    # numeric check while still resolving to the same address downstream.
+    host = (parsed.hostname or "").strip().lower().rstrip(".")
     if not host:
         raise HTTPException(status_code=422, detail="URL has no host")
-    if host in ("localhost", "metadata.google.internal"):
+    if host in _BLOCKED_HOSTNAMES:
         raise HTTPException(status_code=422, detail="URL host is not allowed")
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        ip = None
+    ip = _host_to_ip(host)
     if ip is not None and (
         ip.is_loopback
         or ip.is_private
@@ -191,6 +219,10 @@ async def process_url(
     job_id = str(getattr(src, "command", "") or "")
     # Record the (agent, job) ownership so GET /jobs/{id} can authorize the caller
     # (jobs carry no owner column). The audit middleware reads request.state.job_id.
+    # Caveat: this couples poll-authz to the best-effort audit write — if that
+    # CREATE fails (the failure the middleware's try/except swallows), the caller
+    # gets a valid job_id but 404s on their own poll. That is FAIL-SAFE (deny, not
+    # leak); a dedicated ownership store would decouple it (deployment follow-up).
     request.state.job_id = job_id
     return ProcessSourceResponse(
         job_id=job_id, source_id=str(result.id), status="queued"
@@ -226,7 +258,9 @@ async def get_job_status(
         job_id=str(status.get("job_id", job_id)),
         status=str(status.get("status", "unknown")),
         result=status.get("result"),
-        error=status.get("error"),
+        # CommandService returns the failure text under `error_message`; a failed
+        # job would otherwise always surface error=null.
+        error=status.get("error_message") or status.get("error"),
     )
 
 

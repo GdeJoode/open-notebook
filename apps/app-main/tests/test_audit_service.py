@@ -236,3 +236,39 @@ async def test_prune_keeps_only_recent_runs(live_surrealdb):
         live_surrealdb,
     )
     assert len(markers or []) <= _KEEP_RUNS
+
+
+# ---------------------------------------------------------------------------
+# G.3 IDOR guard — the ACTUAL ownership derivation against a testcontainer
+# (migration 77 agent_audit_log). The router tests mock agent_owns_job to a
+# boolean; this drives the real record() → SurrealQL round-trip, so a schema
+# drift on agent_audit_log.job_id or a WHERE-clause mismatch is caught here
+# instead of silently 404-ing every legitimate owner.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_docker
+async def test_agent_owns_job_derives_from_audit_trail(live_surrealdb):
+    from app_main.services.agents.audit_service import AgentAuditService
+
+    svc = AgentAuditService(config=live_surrealdb)
+    owner = _uid("owner")
+    other = _uid("other")
+    job = f"command:{_uid('job')}"
+
+    # process-url's middleware records this (agent, job) row on the ingest call.
+    await svc.record(
+        agent_id=owner,
+        method="POST",
+        path="/api/v1/agents/process-url",
+        status=200,
+        job_id=job,
+    )
+
+    # The enqueuing agent owns the job; a different agent does not; and an
+    # unknown job / blank id is never owned. This is the exact authorization
+    # GET /jobs/{id} enforces — real SurrealQL, real schema, no mock.
+    assert await svc.agent_owns_job(owner, job) is True
+    assert await svc.agent_owns_job(other, job) is False
+    assert await svc.agent_owns_job(owner, f"command:{_uid('nope')}") is False
+    assert await svc.agent_owns_job(owner, "") is False
