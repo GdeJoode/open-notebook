@@ -56,7 +56,7 @@ phase merge.
 | **X** — citations-to-source | Exact chunk/page provenance in answers | ✅ CLOSED | yes | 2026-06-29 | |
 | **Y** — auto-link | New note → related notes → RELATE | ✅ CLOSED | yes | 2026-06-29 | ARCHITECTURE §12 |
 | **Z** — contradiction | LLM judges related pairs → verdict edges | ✅ CLOSED | yes | 2026-06-29 | |
-| **OKF** — open-knowledge-format | OKF v0.1 export/import + MCP + UI (interchange adapter) | 🔍 REVIEW | no | 2026-07-24 | Full stack OKF.1–OKF.5 on branch chain `track/okf1-export`→`track/okf5-ui-docs`, ready for review; RETRO present. Flips to ✅ CLOSED on merge. Docs under `OKF-open-knowledge-format/`. Lossy-by-design ledger surfaced via REST header + MCP report + UI |
+| **OKF** — open-knowledge-format | OKF v0.1 export/import + MCP + UI (interchange adapter) | ✅ CLOSED | no | 2026-07-24 | Shipped via #48 (squash of OKF.1–OKF.5). Docs under `OKF-open-knowledge-format/`; RETRO present. Lossy-by-design ledger surfaced via REST header + MCP report + UI. Open follow-ups: async artifact store for large bundles, frontend import dialog |
 
 ## Merge-readiness finding (2026-07-23)
 
@@ -126,18 +126,33 @@ The merge-readiness audit proves no *branch* is unmerged. That is NOT the same a
 | **D.0 #1** | SurrealQL promotion of a filter | tiny |
 | **A e2e workflow** | `.github/workflows/e2e.yml` still parked as `.pending` | orchestrator task |
 
-### C. Live-verification gaps (the biggest honest caveat)
-**~54 acceptance criteria** across the ledgers are marked "deferred to a live run"
-because the sandbox had no Docker/SurrealDB — migration apply/revert, live counts,
-latency, visual checks. The code is **merged but never verified against a live
-database**. Not an open *feature*, but an open *risk*: "shipped" is here partly
-"shipped, live-unproven". A single live-DB validation pass would close most.
+### C. Live-verification gaps (largely closed 2026-07-24)
+**~54 acceptance criteria** across the ledgers were marked "deferred to a live run"
+because the original sandbox had no Docker/SurrealDB — migration apply/revert, live
+counts, latency, visual checks.
+
+**Live-validation pass (2026-07-24)** — with Docker/SurrealDB available, the
+Docker-gated suite now runs green end-to-end:
+- **277/277 `@requires_docker` tests pass** against an isolated testcontainer
+  (session-scoped `open_notebook_test` DB spun per run — real staging untouched).
+  One cross-file isolation flake was fixed (#49: a `find_related` top-k assertion
+  that assumed a clean DB).
+- The read-only `requires_staging` hybrid-ranker sanity (`test_source_related_hybrid_staging`)
+  **passes against real staging** (0 write-ops, 5 read-ops).
+- Migration roundtrip (apply/revert) is green in CI (testcontainers job).
+
+What remains genuinely unproven is the *visual* layer: the Playwright e2e suite has
+~13 pre-existing failures in tracks I / UX-pipeline-spine (console-error + disabled-state
+assertions), and the `test-build-*` CI jobs reference a missing `Dockerfile.single`
+(a workflow bug, also red on `main`). These are infra/e2e debt, not track-code
+regressions — see item A (e2e workflow) and the CI-hygiene follow-up.
 
 ### D. Not-started / parked / deferred (known, larger)
 - **Not started**: C (content quality), E (research workflows), F (operations),
   G (agent integration). **Deferred**: H (vision parser, after G).
-  **Parked**: T.2b (prompt change). **Proposed**: OKF (see
-  `OKF-open-knowledge-format/plan.md`).
+  **Parked**: T.2b (prompt change), RePEc resolver-leg (config-gated, deliberately
+  not enabled). **Shipped**: OKF (was proposed; merged via #48 — see
+  `OKF-open-knowledge-format/`).
 
 ## Next up (per roadmap dependency order)
 
