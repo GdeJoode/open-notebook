@@ -57,6 +57,18 @@ def require_agent_key(min_permission: str = "read"):
         request: Request,
         x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     ) -> AgentKeyContext:
+        # Reuse a key already resolved by a broader gate this request (the
+        # router-level read gate), so a route that additionally requires a higher
+        # scope (e.g. write) re-checks the SCOPE without a second DB lookup +
+        # last_used_at write. Fixes the round-1 N4 double-authenticate.
+        cached = getattr(request.state, "agent_key", None)
+        if cached is not None:
+            if _level(cached.permission) < required:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"API key lacks '{min_permission}' scope",
+                )
+            return cached
         if not x_api_key:
             raise HTTPException(
                 status_code=401,

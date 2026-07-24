@@ -226,3 +226,45 @@ class SummarizationService:
         }
         saved = await self.summary_repo.create_summary(record)
         return saved
+
+    async def summarize_text(
+        self,
+        text: str,
+        strategy: str = "naive",
+        config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Summarize RAW TEXT with NO DB writes (Track G.2, G-D5).
+
+        Runs the existing :class:`SummarizationWorkflow` over one synthetic
+        ``ChunkInput`` and returns ``{"summary", "strategy"}`` WITHOUT loading
+        source chunks or persisting a ``summary`` row — the stateless capability
+        behind the agent API's ``POST /generate-summary``. Validates ``strategy``
+        against the implemented set (unknown → ``ValueError`` → 422 upstream).
+        Empty/whitespace text yields an empty summary. Privacy routing degrades to
+        the global default (no source to resolve a per-notebook mode from).
+        """
+        from summarization.config import SummarizationConfig
+        from summarization.models.result import ChunkInput, SummarizationStrategy
+        from summarization.workflow import SummarizationWorkflow
+
+        try:
+            SummarizationStrategy(strategy)
+        except ValueError:
+            raise ValueError(f"Unknown strategy: {strategy}")
+        if strategy not in _IMPLEMENTED:
+            raise ValueError(f"Strategy '{strategy}' is not yet implemented")
+
+        if not (text or "").strip():
+            return {"summary": "", "strategy": strategy}
+
+        chunks = [ChunkInput(text=text, chunk_id="agent:0", order=0)]
+        cfg = SummarizationConfig(strategy=strategy, **(config or {}))
+        # No source_id → _build_routed_model resolves the GLOBAL default privacy
+        # mode (best-effort; None on hiccup falls back to the legacy env model).
+        cfg.language_model = await self._build_routed_model(None)
+        workflow = SummarizationWorkflow(config=cfg)
+        result = await workflow.process(chunks)
+        return {
+            "summary": result.document_summary or "",
+            "strategy": result.strategy.value,
+        }

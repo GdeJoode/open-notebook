@@ -18,11 +18,13 @@ raw text, no DB) — proving the throttle + auth + per-key limit + audit path en
 end; later phases add the ingest façade and the other capabilities.
 """
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from shared.models.agents import (
     ExtractEntitiesRequest,
     ExtractEntitiesResponse,
     ExtractedEntity,
+    GenerateSummaryRequest,
+    GenerateSummaryResponse,
 )
 
 from app_main.api.agent_auth import require_agent_key
@@ -32,6 +34,8 @@ from app_main.api.agent_rate_limit import (
     agent_key_func,
 )
 from app_main.api.rate_limit import limiter
+from app_main.dependencies import get_summarization_service
+from app_main.services.summarization_service import SummarizationService
 
 router = APIRouter(
     prefix="/api/v1/agents",
@@ -67,6 +71,32 @@ async def extract_entities(
             )
             for e in entities
         ]
+    )
+
+
+@router.post("/generate-summary", response_model=GenerateSummaryResponse)
+@limiter.limit(agent_default_limit, key_func=agent_key_func)
+async def generate_summary(
+    request: Request,
+    response: Response,
+    body: GenerateSummaryRequest,
+    _key=Depends(require_agent_key("write")),
+    service: SummarizationService = Depends(get_summarization_service),
+) -> GenerateSummaryResponse:
+    """Summarize raw text (stateless — no source/summary is persisted).
+
+    WRITE scope: the router-level read gate resolves the key; this adds the
+    write-scope check (reusing the cached key — no second lookup). An unknown /
+    unimplemented strategy is a 422.
+    """
+    try:
+        result = await service.summarize_text(
+            body.text, strategy=body.strategy, config=body.config
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return GenerateSummaryResponse(
+        summary=result.get("summary", ""), strategy=result.get("strategy", "")
     )
 
 
