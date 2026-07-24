@@ -46,6 +46,7 @@ from surrealdb_service.repositories.notebook_schema import (
 )
 
 from app_main.services.chat_service import ChatService
+from app_main.services.audit.chunk_audit import ChunkAuditService
 from app_main.services.chunking.chunk_mutator import ChunkMutator
 from app_main.services.cites_materialization_service import (
     CitesMaterializationService,
@@ -117,8 +118,13 @@ def get_chunk_repo() -> ChunkRepository:
     return ChunkRepository()
 
 
+def get_chunk_audit() -> ChunkAuditService:
+    return ChunkAuditService()
+
+
 def get_chunk_mutator() -> ChunkMutator:
-    return ChunkMutator()
+    # Wire the durable chunk_edit audit log (I.H2); mutations still work without it.
+    return ChunkMutator(audit=ChunkAuditService())
 
 
 def get_insight_repo() -> SourceInsightRepository:

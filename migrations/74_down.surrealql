@@ -1,0 +1,13 @@
+-- ============================================================================
+-- Migration 74 DOWN: remove the `chunk_edit` audit table.
+--
+-- Faithful inverse of the forward migration, which only DEFINEs this one table
+-- (and its fields/indexes, all removed with the table). REMOVE ... IF EXISTS so
+-- the rollback is idempotent and safe on a DB where the table was never applied.
+-- The audit rows are discarded with the table — acceptable: an append-only log
+-- has no downstream schema depending on it.
+-- ============================================================================
+
+REMOVE TABLE IF EXISTS chunk_edit;
+
+RETURN NONE;

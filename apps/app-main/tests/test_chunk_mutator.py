@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import copy
 from typing import Any, Dict, List, Optional
+from unittest.mock import AsyncMock
 
 import app_main.services.chunking.chunk_mutator as mutator_mod
 import pytest
@@ -431,3 +432,66 @@ async def test_split_rollback_leaves_state_intact(patch_execute):
         await mut.split(SOURCE_ID, "chunk:c1", 5)
 
     assert db.rows == before
+
+
+# ---------------------------------------------------------------------------
+# Audit wiring (Track I.H2) — an injected ChunkAuditService is invoked after
+# a successful mutation with the before/after chunk state.
+# ---------------------------------------------------------------------------
+
+
+async def test_merge_records_audit_row(patch_execute):
+    patch_execute([_chunk_row(1, 0, "Alpha"), _chunk_row(2, 1, "Beta")])
+    audit = AsyncMock()
+    mut = ChunkMutator(audit=audit)
+
+    merged = await mut.merge(SOURCE_ID, "chunk:c1")
+
+    audit.record.assert_awaited_once()
+    kwargs = audit.record.await_args.kwargs
+    assert kwargs["op"] == "merge"
+    assert kwargs["source_id"] == SOURCE_ID
+    assert kwargs["chunk_id"] == "chunk:c1"
+    # before = the two pre-merge chunks; after = the survivor
+    assert [str(c.id) for c in kwargs["before"]] == ["chunk:c1", "chunk:c2"]
+    assert [str(c.id) for c in kwargs["after"]] == [str(merged.id)]
+
+
+async def test_split_records_audit_row(patch_execute):
+    patch_execute(
+        [
+            _chunk_row(1, 0, "HelloWorld", [[1, 0.0, 1.0, 0.0, 1.0]]),
+            _chunk_row(2, 1, "Next", [[1, 0.0, 1.0, 0.0, 0.1]]),
+        ]
+    )
+    audit = AsyncMock()
+    mut = ChunkMutator(audit=audit)
+
+    result = await mut.split(SOURCE_ID, "chunk:c1", 5)
+
+    audit.record.assert_awaited_once()
+    kwargs = audit.record.await_args.kwargs
+    assert kwargs["op"] == "split"
+    assert kwargs["source_id"] == SOURCE_ID
+    # before = the single original chunk; after = [original, new]
+    assert [str(c.id) for c in kwargs["before"]] == ["chunk:c1"]
+    assert [str(c.id) for c in kwargs["after"]] == [str(c.id) for c in result]
+
+
+async def test_mutator_without_audit_still_mutates(patch_execute):
+    # No audit injected → the mutation must still complete (loguru-only path).
+    db = patch_execute([_chunk_row(1, 0, "One"), _chunk_row(2, 1, "Two")])
+    mut = ChunkMutator()  # audit defaults to None
+    merged = await mut.merge(SOURCE_ID, "chunk:c1")
+    assert merged.text == f"One{MERGE_SEPARATOR}Two"
+    assert "chunk:c2" not in db.rows
+
+
+async def test_failed_merge_records_no_audit(patch_execute):
+    # A rejected mutation (no successor) must not append an audit row.
+    patch_execute([_chunk_row(1, 0, "Only")])
+    audit = AsyncMock()
+    mut = ChunkMutator(audit=audit)
+    with pytest.raises(ChunkMutationError):
+        await mut.merge(SOURCE_ID, "chunk:c1")
+    audit.record.assert_not_awaited()

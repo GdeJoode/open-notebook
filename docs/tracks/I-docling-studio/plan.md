@@ -352,6 +352,17 @@ Confirmed sequence: **A → H1 → C → B → D → E → G → F → H2 → H3
 
 ### Phase I.H2 — Chunk/version audit + frozen snapshots
 
+> **Status (2026-07-24): audit half SHIPPED; snapshot half deferred to I.H2b.**
+> The durable `chunk_edit` log is built — migration **74** (not the stale "51"
+> above; migrations reached 73 meanwhile), `services/audit/chunk_audit.py`
+> (`ChunkAuditService`, fail-soft append + per-source read), wired into
+> `ChunkMutator` so every merge/split appends a before/after row, and surfaced via
+> `GET /api/sources/{id}/chunk-history`. Covers AC1 (migration up/down green) + AC2
+> (every op writes a row). **Deferred to I.H2b**: `document_snapshot` table,
+> snapshot-on-ingest, restore round-trip, retention-cron, and the HistoryPanel UI
+> (AC3–AC6). `actor` is recorded but always `None` until the chunk endpoints carry
+> an auth identity.
+
 **Goal**: Append-only audit log for chunk mutations + on-demand or ingest-completion frozen snapshots of the source state. Mirrors DS's `chunk_edits` / `chunk_pushes` / `document_versions`.
 
 **Files to create**:
