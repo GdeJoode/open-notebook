@@ -61,6 +61,31 @@ async def test_list_never_exposes_secrets(live_surrealdb):
 
 
 @pytest.mark.requires_docker
+async def test_get_returns_public_row_and_none_for_missing(live_surrealdb):
+    # get() powers the G.4 audit-log drawer's key→agent_id resolution.
+    svc = AgentKeyService(config=live_surrealdb)
+    public, plaintext = await svc.mint(agent_id="agent-get", permission="read")
+
+    got = await svc.get(public["id"])
+    assert got is not None
+    assert got["agent_id"] == "agent-get"
+    # secret-free projection (no plaintext, no hash)
+    assert "key_hash" not in got and "key" not in got
+    assert plaintext not in got.values()
+
+    # A missing / malformed / cross-table id → None (never another table's row).
+    assert await svc.get("agent_keys:doesnotexist") is None
+    assert await svc.get("not-a-record-id") is None
+    # A real, EXISTING id on another table must not leak that row (table-scoped).
+    from surrealdb_service.connection import execute_query
+
+    nb = await execute_query(
+        "CREATE notebook SET name = 'not-a-key'", None, live_surrealdb
+    )
+    assert await svc.get(str(nb[0]["id"])) is None
+
+
+@pytest.mark.requires_docker
 async def test_revoke_is_table_scoped(live_surrealdb):
     # revoke() must never flip `revoked` on a non-agent_keys row (cross-table).
     from surrealdb_service.connection import execute_query
