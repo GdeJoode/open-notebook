@@ -82,16 +82,26 @@ class VocabularyHTTPClient:
         return self._client
 
     async def get_json(
-        self, url: str, params: Optional[Dict[str, str]] = None
+        self,
+        url: str,
+        params: Optional[Dict[str, str]] = None,
+        *,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Optional[Any]:
         """GET ``url`` and return parsed JSON, or ``None`` on any failure.
 
-        Cached by ``(url, sorted(params))`` for ``cache_ttl`` seconds. Rate-limited
-        to ``min_interval`` between live requests. NEVER raises — a transport/HTTP/
-        parse error is logged and returns ``None`` so callers treat it as a
-        no-match.
+        Cached by ``(url, sorted(params), sorted(extra_headers))`` for ``cache_ttl``
+        seconds. Rate-limited to ``min_interval`` between live requests. NEVER raises
+        — a transport/HTTP/parse error is logged and returns ``None`` so callers
+        treat it as a no-match. ``extra_headers`` are merged over the default
+        ``User-Agent`` (e.g. ``Accept: application/json`` for an authority like ORCID
+        that content-negotiates to XML by default).
         """
-        cache_key = (url, tuple(sorted((params or {}).items())))
+        cache_key = (
+            url,
+            tuple(sorted((params or {}).items())),
+            tuple(sorted((extra_headers or {}).items())),
+        )
         async with self._lock:
             cached = self._cache.get(cache_key)
             now = time.monotonic()
@@ -105,7 +115,7 @@ class VocabularyHTTPClient:
                 response = await client.get(
                     url,
                     params=params,
-                    headers={"User-Agent": self._user_agent},
+                    headers={"User-Agent": self._user_agent, **(extra_headers or {})},
                 )
                 self._last_request_at = time.monotonic()
                 response.raise_for_status()
@@ -113,6 +123,49 @@ class VocabularyHTTPClient:
             except Exception as exc:  # transport, HTTP status, or JSON decode
                 # Fail soft: the authority being unreachable must not break the
                 # reconcile/ingest path. Log + return no-match.
+                logger.warning(
+                    "vocabulary HTTP GET failed (treated as no-match): {url} — {exc}",
+                    url=url,
+                    exc=exc,
+                )
+                return None
+
+            self._cache[cache_key] = _CacheEntry(
+                value=value, expires_at=time.monotonic() + self._cache_ttl
+            )
+            return value
+
+    async def get_text(
+        self, url: str, params: Optional[Dict[str, str]] = None
+    ) -> Optional[str]:
+        """GET ``url`` and return the raw response body as text, or ``None``.
+
+        The text counterpart of :meth:`get_json` for authorities that answer with
+        XML rather than JSON (arXiv's Atom feed, overheid.nl's SRU endpoint). Same
+        discipline — cached by ``(url, sorted(params))``, rate-limited, and
+        fail-soft: any transport/HTTP error is logged and returns ``None`` so an
+        unreachable authority degrades to a no-match instead of raising.
+        """
+        cache_key = ("text::" + url, tuple(sorted((params or {}).items())))
+        async with self._lock:
+            cached = self._cache.get(cache_key)
+            now = time.monotonic()
+            if cached is not None and cached.expires_at > now:
+                return str(cached.value)
+
+            await self._respect_rate_limit()
+
+            try:
+                client = await self._ensure_client()
+                response = await client.get(
+                    url,
+                    params=params,
+                    headers={"User-Agent": self._user_agent},
+                )
+                self._last_request_at = time.monotonic()
+                response.raise_for_status()
+                value: str = response.text
+            except Exception as exc:  # transport or HTTP status
                 logger.warning(
                     "vocabulary HTTP GET failed (treated as no-match): {url} — {exc}",
                     url=url,

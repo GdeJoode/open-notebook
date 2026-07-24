@@ -1,0 +1,323 @@
+# Track V — status
+
+## Phase V.5 — reference-extraction ORCHESTRATION + post-ingest hook — READY FOR REVIEW
+
+**Branch**: `track/v5-reference-orchestration` (off `track/v123-reference-producer` @ `764f28f`; stacked)
+**Date**: 2026-07-24
+**Scope**: the integration that makes Track V functional end-to-end — connect the
+V.1–V.3 producer to Track U.3's already-built `cites` materialization, behind a
+GUARDED, config-gated post-ingest hook. No change to U.3's matcher, the `cites`
+schema, `ParsedReference`, or any V.1–V.4 file (import-only reuse).
+
+### What was built
+
+1. **`ReferenceExtractionService`** —
+   `apps/app-main/src/app_main/services/references/reference_extraction_service.py`
+   (sibling to `cites_materialization_service.py`, `*Service` naming).
+   - `extract_source_references(source_id) -> List[ParsedReference]` — reads the
+     source's persisted chunks via the EXISTING repo layer
+     (`SourceRepository.get_chunks` + `.get()` for `full_text`), projects each
+     `Chunk` to the producer's DB-free `ReferenceChunk`, runs `extract_references`
+     (V.1–V.3). Returns `[]` for a source with no bibliography; never raises.
+   - `materialize_corpus(*, resolve_external=False) -> ReferenceMaterializationSummary`
+     — the public entry point: enumerate sources (`load_source_records`), extract
+     each one's references, assemble the `{source_id: [ParsedReference]}` map, then
+     call U.3's EXISTING `CitesMaterializationService.materialize(map)` **once**.
+   - Summary shape: `sources_scanned`, `sources_with_references`, `refs_extracted`,
+     `edges_materialized` (U.3's `created`), `external_resolved`.
+   - **Why whole-corpus, not per-source**: U.3's `materialize` is a clear-before-
+     relate regenerator — `SourceRepository.clear_cites()` is a bare
+     `DELETE cites` over the WHOLE table. Handing it a single source's references
+     would wipe every OTHER source's edges. References are not persisted (the
+     producer is pure), so re-assembling the full map is the only correct,
+     non-destructive way to drive U.3's existing entry point. Idempotency comes
+     from U.3's clear-before-relate — no second dedup was added (per constraint).
+   - **Optional external resolution**: `resolve_external=True` routes each
+     extracted reference through the V.4 `ResolverCascade` BEFORE materialization
+     and counts confident resolutions; per-reference guarded (a raising leg = a
+     no-match). Default OFF keeps the core path offline + fast. RePEc stays
+     config-gated as built (self-gates on `REPEC_API_KEY`).
+
+2. **The guarded post-ingest hook** — `services/source_pipeline.py` (the Track PL
+   seam).
+   - New `StageName.REFERENCES` + a `SOURCE_PIPELINE` entry: a **PARALLEL** branch
+     `depends_on=INGEST` (it needs chunks, not embeddings), `gate="references"`,
+     `enqueue_command="extract_references"`, `produces=None` — enrichment, so it
+     never sets `processing_stage` and never gates `complete`. Mirrors the
+     existing INSIGHTS parallel-branch pattern exactly.
+   - `_maybe_chain_references(source_id)` mirrors `_maybe_chain_insights`: reads
+     the config gate, and when ON delegates to the existing
+     `_best_effort_enqueue` (try/except, logs, returns `None` on failure — never
+     propagates). A queue hiccup or a no-reference source is a clean no-op.
+   - **Config flag**: `ENABLE_REFERENCE_EXTRACTION` (new
+     `config.get_reference_extraction_enabled()`, read at call time like the
+     existing upload guards), **DEFAULT OFF** — the safe value. With the flag off
+     `advance_source` off `ingested` enqueues exactly what it did pre-V.5
+     (`embed_source` only); the only addition is the guarded, config-gated no-op.
+     Pinned by `test_ingested_flag_off_enqueues_only_embed`.
+
+3. **Job-queue path** (long work off the ingest thread) — new
+   `JobType.REFERENCE_EXTRACT`, command `extract_references` registered in
+   `_COMMAND_TO_JOB_TYPE`, and `handle_reference_extract` in `handlers.py`. The
+   pass runs in its OWN job, so a reference/matching failure is isolated from the
+   already-persisted source + chunks.
+
+4. **DI** — `get_reference_extraction_service(*, resolve_external=False)` and
+   `get_reference_resolver_cascade()` in `dependencies.py`. The V.4 cascade is
+   built ONLY when resolution is requested, so the default offline pass never
+   constructs a network client.
+
+### Tests / checks
+- `uv run pytest apps/app-main/tests/test_reference_extraction_service.py
+  apps/app-main/tests/test_reference_pipeline_hook.py
+  apps/app-main/tests/test_handle_reference_extract.py
+  apps/app-main/tests/test_reference_extraction_flag.py
+  apps/app-main/tests/test_source_pipeline.py
+  apps/app-main/tests/test_handle_process_source_autoembed.py
+  apps/app-main/tests/test_handle_embed_source_insights_chain.py
+  apps/app-main/tests/test_handlers.py -q`
+  → **56 passed, 1 skipped** (25 new; adjacent pipeline/handler suites show no
+  regressions). All offline — no DB, no network.
+- New files: `test_reference_extraction_service.py` (service unit — extraction →
+  mocked U.3 hand-off + payload assertion, idempotent re-run, no-refs/empty clean
+  no-op, `full_text` fallback, `resolve_external` cascade invocation + soft
+  failure), `test_reference_pipeline_hook.py` (stage shape, flag OFF/ON dispatch,
+  best-effort enqueue, failing hook does not fail ingest),
+  `test_handle_reference_extract.py` (command→JobType routing asserted at the
+  submit seam per the job-queue-singleton pattern, handler summary,
+  `resolve_external` threading, reraise on hard failure),
+  `test_reference_extraction_flag.py` (gate default + lenient parsing).
+- `uv run ruff check` on all changed files → clean.
+- `uv run mypy` on the new service → clean; the only remaining diagnostics are the
+  pre-existing cross-package `import-untyped` baseline (identical on the sibling
+  `cites_materialization_service.py`) plus the known `mypy.ini` duplicate-option
+  warning.
+
+### `# TODO(V-live)` — deferred to the live smoke
+- **True end-to-end `cites` edge count on real documents** — the headline
+  acceptance criterion. Deliberately NOT required in CI: covered offline at the
+  seam, with the live assertion parked as the skipped
+  `test_end_to_end_cites_edge_count` in `test_reference_extraction_service.py`
+  (`# TODO(V-live)`). Needs a live DB + real ingested documents with
+  bibliographies; note U.1 measured 0 intra-corpus citations on the current
+  corpus, so a non-zero edge count needs a corpus that actually cites itself.
+- Inherited V.1–V.3 / V.4 live TODOs below still stand (segmentation robustness,
+  author parsing, region bounds, and the V.4 provider contracts).
+
+---
+
+## Phases V.1 + V.2 + V.3 — reference-EXTRACTION producer (Backend) — READY FOR REVIEW
+
+**Branch**: `track/v123-reference-producer` (off `track/v4-work-resolver` @ `ebfc64d`; stacked PR)
+**Date**: 2026-07-24
+**Scope**: pure text processing only — the producer side that turns a source's
+document structure into a `List[ParsedReference]` (the V → U.3/V.4 boundary type,
+unchanged). NO DB, NO external APIs, NO LLM, NO U.3 / `cites` materialization
+wiring (that is V.5). Complements V.4 (the resolver side) in the same
+`packages/shared/src/shared/references/` subpackage.
+
+### What was built
+The three pure producer stages + a thin chain, sibling to the V.4 resolver files.
+
+1. **V.1 — `references/region_locator.py`** — locate the bibliography region.
+   - `ReferenceChunk`: DB-free projection of a persisted `chunk`
+     (`text`/`section_path`/`element_type`/`order`/`page`), mirroring the fields
+     V needs (docling_document_json is transient — structure is the chunks).
+   - `locate_reference_region(chunks, full_text="") -> LocatedRegion`:
+     structure-first (a chunk whose `section_path` tail / heading matches an
+     EN+NL reference vocabulary — References/Referenties/Bibliography/Literatuur/
+     Bronnen/Works Cited/…), else a `full_text` heading-only regex fallback with
+     an appendix/acknowledgements terminator so a trailing appendix is not
+     swallowed. `located_via` ∈ {`structure`,`full_text`,`none`}; span is the
+     char offset into `full_text` when known. Absent region → empty, never raises.
+2. **V.2 — `references/segmenter.py`** — split the region into entries.
+   - `segment_region(region_text, *, ambiguity_resolver=None) -> List[str]`:
+     cheap-first deterministic heuristics — numbered lists (`[1]`/`1.`/`(1)`),
+     blank-line paragraph blocks, or author-year start-detection. Continuation
+     lines are merged so a wrapped multi-line entry stays ONE entry (bounded
+     over-segmentation). `ambiguity_resolver` is the LLM-on-the-margin seam
+     (per `design-thematic-classification`); the default path never calls it.
+3. **V.3 — `references/reference_parser.py`** — parse one entry.
+   - `parse_reference(entry) -> ParsedReference`: DOI (regex + shared
+     `normalize_doi`), year (parenthesized-slot-first; Dutch vergaderjaar
+     `2023/24`→2023), authors (APA `Surname, I.` comma-form AND IEEE
+     initials-first `I. Surname`; matcher normalizes to surnames), best-effort
+     quoted/APA title+venue. `raw_text` ALWAYS set → a partially-parseable entry
+     still yields a valid `ParsedReference`.
+4. **Chain — `references/reference_extractor.py`** —
+   `extract_references(chunks, full_text="", *, ambiguity_resolver=None) ->
+   List[ParsedReference]`: locate → segment → parse; empty region → `[]`. Pure;
+   V.5 orchestration/U.3/DB wiring is deliberately NOT here.
+
+New producer surface is exported from `references/__init__.py` (extends the V.4
+exports cleanly; V.4 resolver files untouched).
+
+### Tests / checks
+- `uv run pytest packages/shared/tests/ -q` → **602 passed** (42 new; 560 prior,
+  no regressions). New files: `test_reference_region_locator.py` (V.1),
+  `test_reference_segmenter.py` (V.2), `test_reference_parser.py` (V.3),
+  `test_reference_extractor.py` (chain). All offline/deterministic — no DB, no
+  network, no LLM. Fixtures: `tests/fixtures/references/*.txt` (synthetic,
+  committed; mimic APA/IEEE/Dutch bibliographies + Kamerstuk, not the gitignored
+  real corpus).
+- `uv run ruff check` on changed files → clean.
+- `uv run mypy` on the 4 new source modules → clean (the `mypy.ini`
+  duplicate-option warning is pre-existing/unrelated, as in V.4).
+
+### `# TODO(V-live)` — confirm against the real corpus (tomorrow's manual smoke)
+- **Segmentation robustness** (`segmenter.py`): the numbered/blank-line/
+  author-year strategy selection is validated on synthetic fixtures; confirm the
+  author-year start-detection opener + continuation-cue behave on real wrapped,
+  no-blank-line paper bibliographies (economics PDFs) and the Regio Deal
+  convenanten.
+- **Author parsing** (`reference_parser.py`): APA vs IEEE routing is heuristic;
+  confirm coverage on real mixed-style bibliographies (particle surnames,
+  "et al.", corporate authors).
+- **Full-text region bounds** (`region_locator.py`): the fallback takes the LAST
+  heading-only "References" line to end / next terminator; confirm on real
+  `full_text` that no in-body "references" prose false-triggers and the terminator
+  set covers the real tail sections.
+- **Footnotes/endnotes**: v1 intentionally handles only bibliography-section
+  references (Docling emits no footnote element type; layout/superscript recovery
+  is deferred to a later phase — noted in the region_locator docstring).
+
+---
+
+## Phase V.4 — external work-resolution cascade (Backend) — READY FOR REVIEW
+
+**Branch**: `track/v4-work-resolver` (off `main` @ `5735deb`)
+**Date**: 2026-07-23
+**Scope**: pure resolution only — no live DB, no U.3 / cites_materialization
+wiring (a later phase), no change to `ParsedReference` or the `cites` schema.
+
+### What was built
+The outward-looking half of the Track V boundary. Given a `ParsedReference`
+(the V → U.3 contract), resolve it to a canonical external `ResolvedWork`,
+routed by reference *shape*, behind a single-high-confidence precision guard
+(unresolved is always preferred over a wrong match). New workspace subpackage
+`packages/shared/src/shared/references/`, sibling to `vocabulary/` and
+`retrieval/`.
+
+1. **Core** — `references/work_resolver.py`
+   - `ResolvedWork`: DB-free dataclass (mirrors `vocabulary.VocabMatch`).
+   - `WorkResolver` / `WorkEnricher` protocols (`name` + `async resolve`).
+   - `ResolverCascade`: shape-first routing, stop at first confident hit, fall
+     through on network-failure/below-guard, `None` if nothing clears the guard.
+     Skips an `available == False` resolver silently (the RePEc gate seam).
+   - Precision guard mirrors K.4 `crossref_provider`: token-Jaccard title
+     overlap floor (`MIN_TITLE_OVERLAP = 0.5`) + author-surname confirmer +
+     blended `MIN_MATCH_CONFIDENCE = 0.5`; DOI/id-exact = certain (1.0).
+   - Pure shape detectors: `extract_arxiv_id`, `looks_like_nl_policy`,
+     `looks_like_econ_wp`.
+2. **Providers** (each ends in `Resolver`, DB-free, HTTP via the shared
+   fail-soft `VocabularyHTTPClient`):
+   - **ACTIVE** — `OpenAlexResolver` (DOI + title/author fallback, broadest
+     recall), `CrossrefResolver` (DOI-exact + title+author query; the K.4
+     entity `CrossrefProvider` is untouched), `DataCiteResolver` (DOI path for
+     datasets/theses/preprints/software), `ArxivResolver` (Atom API, id-exact),
+     `OverheidResolver` (overheid.nl KOOP SRU, dossier-id or title-overlap).
+   - **GATED** — `RePEcResolver`: reads `REPEC_API_KEY`; unset → `available =
+     False` → cascade skips silently; `resolve()` returns `None` without raising.
+     Configured → real guarded title/author lookup. The ONLY inert leg, and it
+     is a clean tested skip (not a stub).
+   - **ENRICHMENT (opt-in)** — `ReferenceEnricher` attaches ORCID / ROR ids to
+     an already-resolved work, best-effort + precision-guarded (ORCID only when
+     the returned family name matches; ROR only when its matcher flags
+     `chosen`). Never required.
+3. **Infra** — added `VocabularyHTTPClient.get_text` (the text counterpart of
+   `get_json`) so the XML authorities (arXiv Atom, KOOP SRU) keep the same
+   caching / rate-limit / timeout / fail-soft discipline.
+
+### Tests / checks
+- `uv run pytest packages/shared/tests/` → **560 passed** (52 new for V.4; no
+  regressions). New files: `test_work_resolver.py`, `test_openalex_resolver.py`,
+  `test_crossref_resolver.py`, `test_datacite_resolver.py`,
+  `test_arxiv_resolver.py`, `test_overheid_resolver.py`,
+  `test_repec_resolver.py`, `test_reference_enrichment.py`. All HTTP mocked via
+  `httpx.MockTransport` — no live network.
+- `uv run ruff check` on all changed files → clean.
+- `uv run mypy` on `references/` + `http_client.py` → clean (the `mypy.ini`
+  duplicate-option warning is pre-existing, unrelated).
+
+### `# TODO(V.4-live)` — assumptions to confirm on the live smoke
+- `extract_arxiv_id` id-form coverage vs real bibliographies (work_resolver.py).
+- arXiv Atom element/namespace mapping — title / author name / published year /
+  `arxiv:doi` (arxiv_resolver.py).
+- KOOP SRU record structure — dcterms nesting (title / identifier / type /
+  issued) + enriched `preferredUrl`, and the dossier-identifier format
+  (overheid_resolver.py).
+- CitEc request contract (endpoint path, access-code param name) + JSON
+  response shape, to confirm once the emailed RePEc code arrives
+  (repec_resolver.py).
+- ORCID public API needs `Accept: application/json` to return JSON; the shared
+  client currently sends only `User-Agent`, so the live ORCID leg would need
+  that header added or it degrades to XML → no-match (enrichment.py).
+
+---
+
+## Phase G.3 — wire GROBID as the SOLE reference engine; remove V.1/V.2/V.3 — READY FOR REVIEW
+
+**Branch**: `track/g3-grobid-wire` (off `track/g2-grobid-service` @ `620c76d`; stacked)
+**Date**: 2026-07-24
+**Scope**: make GROBID (G.2) the only reference engine (decision G-D2) and drop
+the style-dependent V.1/V.2/V.3 chunk heuristic entirely. `ReferenceExtractionService`
+now feeds GROBID the source PDF (decision G-D1); everything downstream (U.3
+`cites`, the whole-corpus `materialize_corpus`, the guarded post-ingest hook, the
+job seam, `ENABLE_REFERENCE_EXTRACTION`, `ParsedReference`, the V.4 cascade) is
+unchanged.
+
+### PDF-retrieval approach
+`extract_source_references(source_id)` loads the source row and reads
+`source.asset.file_path`. If absent or not a `.pdf` (URL/note sources, missing
+row) → `[]`, logged, never raises. Otherwise the path is passed **verbatim** to
+`GrobidReferenceService.extract_references(file_path)` → `List[ParsedReference]`.
+The path is repo-root-relative in local runs; resolution is the caller's/env's
+concern. In the container the app reaches GROBID at `GROBID_URL=http://grobid:8070`
+(the service reads `GROBID_URL`, default `http://localhost:8070`). The chunk-read
++ V.1→V.3 chain is gone.
+
+### How V.5 now calls GROBID
+`get_reference_extraction_service()` injects a new
+`get_grobid_reference_service()` factory (constructs `GrobidReferenceService()`,
+env-driven URL) alongside U.3's cites materializer and the (opt-in) V.4 cascade.
+`materialize_corpus` still assembles the whole-corpus `{source_id: [ParsedReference]}`
+map and hands it to U.3 once — unchanged.
+
+### Files changed
+- `apps/app-main/src/app_main/services/references/reference_extraction_service.py`
+  — GROBID engine, `asset.file_path` retrieval, constructor takes `grobid_service`.
+- `apps/app-main/src/app_main/services/references/__init__.py` — docstring.
+- `apps/app-main/src/app_main/dependencies.py` — `get_grobid_reference_service()`
+  + wired into `get_reference_extraction_service()`.
+- `packages/shared/src/shared/references/__init__.py` — dropped the removed
+  producer exports (`ReferenceChunk`, `LocatedRegion`, `locate_reference_region`,
+  `segment_region`, `AmbiguityResolver`, `parse_reference`, `extract_references`).
+- `apps/app-main/tests/test_reference_extraction_service.py` — reworked for the
+  GROBID seam + live `@requires_grobid` end-to-end test.
+
+### Files removed (G-D2; also cleans up commit `94a8948`)
+- `packages/shared/src/shared/references/{region_locator,segmenter,reference_parser,reference_extractor}.py`
+- `packages/shared/tests/{test_reference_region_locator,test_reference_segmenter,test_reference_parser,test_reference_extractor,test_reference_real_docling}.py`
+- `packages/shared/tests/fixtures/references/{econ_two_sections_chunks,centrifugal_noparens_chunks}.json`
+
+### Tests / checks
+- `uv run --no-sync pytest apps/app-main/tests/test_reference_extraction_service.py`
+  → **15 passed** (incl. the live GROBID end-to-end, which ran locally and
+  returned ≥25 refs from the fixture PDF).
+- `uv run --no-sync pytest apps/app-main/tests/test_reference_pipeline_hook.py
+  apps/app-main/tests/test_handle_reference_extract.py
+  apps/app-main/tests/test_reference_extraction_flag.py packages/shared/tests/`
+  → **604 passed** (guarded hook + job seam + flag + full shared suite; no
+  regressions).
+- `ruff check` on all changed files → clean.
+- `mypy` on changed files → no genuine type errors (only the pre-existing
+  workspace `import-untyped` / missing-`py.typed` noise for `surrealdb_service`,
+  `llm_manager`, `shared.references`, `embeddings` that affects every file
+  equally).
+- Grep gate: no dead imports of the removed modules anywhere; no citation-style
+  code remains.
+
+### `# TODO(V-live)`
+None added in G.3. The V.4-live confirmations above still stand; the G.3 live
+end-to-end (real PDF source → GROBID → ≥25 refs) is exercised by
+`test_live_grobid_source_extracts_references` when GROBID is reachable.

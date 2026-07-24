@@ -8,6 +8,8 @@ from functools import lru_cache
 
 from esperanto import EmbeddingModel
 from llm_manager import ModelManager, get_model_manager
+from shared.references.grobid_reference_service import GrobidReferenceService
+from shared.references.work_resolver import ResolverCascade
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories import (
     ChatMessageRepository,
@@ -70,6 +72,7 @@ from app_main.services.ontology_service import OntologyService
 from app_main.services.podcast_service import PodcastService
 from app_main.services.preprocessing_service import PreprocessingService
 from app_main.services.reextract_service import ReextractService
+from app_main.services.references import ReferenceExtractionService
 from app_main.services.schema_edit_service import SchemaEditService
 from app_main.services.search_service import SearchService
 from app_main.services.settings_service import SettingsService
@@ -528,6 +531,63 @@ def get_mentions_projection_service() -> MentionsProjectionService:
 def get_cites_materialization_service() -> CitesMaterializationService:
     return CitesMaterializationService(
         source_repo=get_source_repo(),
+    )
+
+
+def get_reference_resolver_cascade() -> ResolverCascade:
+    """Build the V.4 external work-resolution cascade (Track V.5, opt-in).
+
+    Wires the active V.4 provider resolvers into the shape-routing cascade. Each
+    provider fails soft (a network error is a no-match, never a raise) and RePEc
+    self-gates on ``REPEC_API_KEY`` (unavailable + silently skipped when unset).
+    Constructed only when a reference pass runs with ``resolve_external`` on — the
+    default offline path never builds a network client.
+    """
+    from shared.references import (
+        ArxivResolver,
+        CrossrefResolver,
+        DataCiteResolver,
+        OpenAlexResolver,
+        OverheidResolver,
+        RePEcResolver,
+    )
+
+    return ResolverCascade(
+        openalex=OpenAlexResolver(),
+        crossref=CrossrefResolver(),
+        datacite=DataCiteResolver(),
+        arxiv=ArxivResolver(),
+        overheid=OverheidResolver(),
+        repec=RePEcResolver(),
+    )
+
+
+def get_grobid_reference_service() -> GrobidReferenceService:
+    """Provide the G.2 GROBID reference producer (the sole reference engine).
+
+    Reads ``GROBID_URL`` from the environment (default ``http://localhost:8070``;
+    ``http://grobid:8070`` in the compose ``docker-web`` network). Best-effort: a
+    down/unreachable GROBID yields ``[]`` per source, never breaking ingest.
+    """
+    return GrobidReferenceService()
+
+
+def get_reference_extraction_service(
+    *, resolve_external: bool = False
+) -> ReferenceExtractionService:
+    """Provide the G.3 reference-extraction orchestration service.
+
+    Wires the GROBID producer (sole engine) and U.3's ``cites`` materializer. The
+    V.4 cascade is only built when ``resolve_external`` is requested so the default
+    reference pass never constructs an external-authority network client.
+    """
+    return ReferenceExtractionService(
+        source_repo=get_source_repo(),
+        cites_service=get_cites_materialization_service(),
+        grobid_service=get_grobid_reference_service(),
+        resolver_cascade=(
+            get_reference_resolver_cascade() if resolve_external else None
+        ),
     )
 
 
