@@ -148,3 +148,22 @@ class AuditThresholds:
 def get_audit_thresholds() -> "AuditThresholds":
     """A fresh :class:`AuditThresholds` snapshot (env overrides applied)."""
     return AuditThresholds()
+
+
+# ---------------------------------------------------------------------------
+# Agent integration (Track G.1)
+# ---------------------------------------------------------------------------
+
+
+def get_agent_rate_limit_rpm() -> int:
+    """Default per-key requests-per-minute for the agent API (default 60).
+
+    A key's own ``rate_limit_rpm`` overrides this; the config value is the
+    fallback when a key has none. Read at call time so ops can retune via env.
+    """
+    return _int_env("AGENT_RATE_LIMIT_RPM", 60)
+
+
+def get_agent_audit_retention_days() -> int:
+    """How long to keep agent_audit_log rows (default 90 days)."""
+    return _int_env("AGENT_AUDIT_RETENTION_DAYS", 90)

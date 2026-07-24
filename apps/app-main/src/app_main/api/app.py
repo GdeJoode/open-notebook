@@ -16,6 +16,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from surrealdb_service.migrations import AsyncMigrationManager
 
+from app_main.api.agent_auth import AgentAuditMiddleware
 from app_main.api.auth import PasswordAuthMiddleware
 from app_main.api.rate_limit import limiter
 from app_main.exceptions import (
@@ -157,8 +158,12 @@ def create_app() -> FastAPI:
             "/redoc",
             "/api/auth/status",
             "/api/config",
+            # Track G.1 (G-D1): the agent API is key-authed by require_agent_key
+            # (fail-closed), NOT the shared password. Trailing "/" = prefix exclude.
+            "/api/v1/agents/",
         ],
     )
+    application.add_middleware(AgentAuditMiddleware)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -169,6 +174,8 @@ def create_app() -> FastAPI:
 
     # --- Routers ---
     from app_main.api.routers import (
+        agent_keys,
+        agents,
         audit,
         auth,
         chat,
@@ -249,6 +256,11 @@ def create_app() -> FastAPI:
     application.include_router(ontologies.router, prefix="/api", tags=["ontologies"])
     application.include_router(orphans.router, prefix="/api", tags=["orphans"])
     application.include_router(audit.router, prefix="/api", tags=["audit"])
+    # Agent integration (G.1): key management under /api (password-gated) + the
+    # versioned agent capability router (already carries its /api/v1/agents prefix,
+    # key-authed by require_agent_key).
+    application.include_router(agent_keys.router, prefix="/api", tags=["agent-keys"])
+    application.include_router(agents.router, tags=["agents"])
     application.include_router(
         knowledge_graph.router, prefix="/api", tags=["knowledge-graph"]
     )

@@ -362,6 +362,31 @@ async def make_default_llm_caller(
     )
 
 
+async def extract_from_text(text: str, ontology_name: Optional[str] = None):
+    """Extract typed entities from RAW TEXT with NO DB writes (Track G.1, G-D5).
+
+    Runs the existing single-ontology :class:`ExtractionWorkflow` over one
+    synthetic in-memory chunk and returns its ``ExtractionResult.entities``
+    (``shared.models.extraction.ExtractedEntity`` — name / entity_type /
+    confidence). ``mode="single"`` needs no ``notebook_id`` / ``pass1_repo``, so
+    nothing is persisted — this is the stateless capability behind the agent API's
+    ``POST /extract-entities``. Empty/whitespace text yields ``[]``.
+    """
+    from ontology_extraction.config import ExtractionConfig
+    from ontology_extraction.workflow import ExtractionWorkflow
+
+    if not (text or "").strip():
+        return []
+
+    config = ExtractionConfig(ontology_name=ontology_name or "general")
+    workflow = ExtractionWorkflow(config=config)
+    llm_caller = await make_default_llm_caller()
+    result = await workflow.extract(
+        [{"text": text, "id": "agent:0"}], mode="single", llm_caller=llm_caller
+    )
+    return list(result.entities)
+
+
 class SchemaReviewPendingError(JobPausedForReviewError):
     """Raised when extraction blocks on user review of pending schema extensions.
 
