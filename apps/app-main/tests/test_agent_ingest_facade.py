@@ -112,6 +112,12 @@ def test_process_url_rejects_ssrf_target(monkeypatch):
         "http://127.0.0.1./admin",  # trailing-dot loopback
         "http://2852039166/latest/meta-data/",  # decimal cloud-metadata IP
         "http://127.1/",  # short-form loopback
+        # Unicode homoglyph-dot / fullwidth encodings: the fetcher IDNA/NFKC-
+        # collapses these to the same blocked address before connecting.
+        "http://169。254。169。254/latest/meta-data/",  # ideographic dots
+        "http://127｡0｡0｡1/",  # halfwidth ideographic dots
+        "http://127．0．0．1/",  # fullwidth full stops
+        "http://１２７．0．0．1/",  # fullwidth digits 127.0.0.1
     ):
         resp = client.post(
             "/api/v1/agents/process-url",

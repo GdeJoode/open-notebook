@@ -20,6 +20,7 @@ end; later phases add the ingest façade and the other capabilities.
 
 import ipaddress
 import socket
+import unicodedata
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -52,6 +53,25 @@ from app_main.services.summarization_service import SummarizationService
 
 _BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal"}
 
+#: The Unicode label separators UTS-46/IDNA treat as "." (which the downstream
+#: fetcher collapses before connecting). NFKC folds U+FF0E (fullwidth) and
+#: fullwidth digits to ASCII, but leaves the ideographic stops U+3002 / U+FF61,
+#: so we translate those explicitly — else http://169。254。169。254/ (ASCII
+#: digits, ideographic dots) slips past the numeric check and reaches metadata.
+_UNICODE_DOTS = {0x3002: ".", 0xFF61: "."}
+
+
+def _normalize_host(raw: str) -> str:
+    """Collapse a URL host to the ASCII form the OS resolver / fetcher will see.
+
+    NFKC-folds fullwidth variants + translates the ideographic dot separators,
+    so a homoglyph-obfuscated numeric IP (fullwidth digits, ideographic dots)
+    normalizes to the same dotted-quad the guard then classifies. A genuine IDN
+    hostname (e.g. ``münchen.de``) normalizes but stays non-numeric → allowed.
+    """
+    h = unicodedata.normalize("NFKC", (raw or "").strip())
+    return h.translate(_UNICODE_DOTS).lower().rstrip(".")
+
 
 def _host_to_ip(host: str):
     """Coerce a URL host to a canonical IP the way the OS resolver would for a
@@ -83,12 +103,16 @@ def _reject_ssrf_url(url: str) -> None:
 
     Blocks non-http(s) schemes and any host that normalizes to a loopback /
     private / link-local / reserved / multicast / unspecified IP — INCLUDING the
-    decimal/octal/hex/short-form and trailing-dot encodings of those IPs (see
-    :func:`_host_to_ip`), which the round-1 guard let through to the cloud
-    metadata endpoint. Defense-in-depth on the AGENT key surface (externally
-    distributed, unlike the shared UI password). Hostname→private-IP
-    (DNS-rebinding) is out of scope here — a shared fetch-layer follow-up. Raises
-    422 on a disallowed URL.
+    decimal/octal/hex/short-form and trailing-dot encodings (see
+    :func:`_host_to_ip`) AND the Unicode homoglyph-dot / fullwidth encodings (see
+    :func:`_normalize_host`), both of which earlier guards let through to the
+    cloud metadata endpoint. Defense-in-depth on the AGENT key surface
+    (externally distributed, unlike the shared UI password).
+
+    Out of scope here (shared fetch-layer follow-ups, since the password-gated UI
+    shares that layer): hostname→private-IP DNS-rebinding, and a public URL that
+    30x-REDIRECTS to a private target (the fetcher follows redirects; a pre-flight
+    guard can't see the hop). Raises 422 on a disallowed URL.
     """
     try:
         parsed = urlparse((url or "").strip())
@@ -96,9 +120,10 @@ def _reject_ssrf_url(url: str) -> None:
         raise HTTPException(status_code=422, detail="Invalid URL")
     if (parsed.scheme or "").lower() not in ("http", "https"):
         raise HTTPException(status_code=422, detail="URL scheme must be http or https")
-    # Strip a trailing FQDN dot (127.0.0.1. → 127.0.0.1) so it can't dodge the
-    # numeric check while still resolving to the same address downstream.
-    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    # Normalize Unicode homoglyph dots / fullwidth forms AND strip a trailing
+    # FQDN dot (127.0.0.1. → 127.0.0.1) so the host can't dodge the numeric check
+    # while still resolving to the same address downstream.
+    host = _normalize_host(parsed.hostname or "")
     if not host:
         raise HTTPException(status_code=422, detail="URL has no host")
     if host in _BLOCKED_HOSTNAMES:
