@@ -98,6 +98,21 @@ class AgentKeyService:
         )
         return [_to_public(r) for r in (rows or [])]
 
+    async def get(self, key_id: str) -> Optional[Dict[str, Any]]:
+        """One key as a public row (no secrets), or ``None``.
+
+        Table-SCOPED select by id: a non-``agent_keys`` id (or a malformed one)
+        matches nothing and returns ``None`` rather than reaching another table.
+        """
+        try:
+            rid = ensure_record_id(key_id)
+        except Exception:
+            return None
+        rows = await execute_query(
+            "SELECT * FROM agent_keys WHERE id = $id LIMIT 1", {"id": rid}, self.config
+        )
+        return _to_public(rows[0]) if rows else None
+
     async def revoke(self, key_id: str) -> bool:
         """Revoke a key by id. Idempotent; returns whether a row was updated.
 
