@@ -58,3 +58,29 @@ async def test_list_never_exposes_secrets(live_surrealdb):
         assert "key_hash" not in r
         assert "key" not in r
         assert plaintext not in r.values()
+
+
+@pytest.mark.requires_docker
+async def test_revoke_is_table_scoped(live_surrealdb):
+    # revoke() must never flip `revoked` on a non-agent_keys row (cross-table).
+    from surrealdb_service.connection import execute_query
+
+    svc = AgentKeyService(config=live_surrealdb)
+    created = await execute_query(
+        "CREATE notebook SET name = 'not-a-key'", None, live_surrealdb
+    )
+    nb_id = str(created[0]["id"])
+
+    updated = await svc.revoke(nb_id)  # a notebook id, not an agent key
+    assert updated is False  # matched nothing on agent_keys
+
+    from surrealdb_service.connection import ensure_record_id
+
+    rows = await execute_query(
+        "SELECT revoked FROM $id",
+        {"id": ensure_record_id(nb_id)},
+        live_surrealdb,
+    )
+    # The cross-table write did NOT happen: the notebook's revoked stays unset
+    # (SurrealDB projects a missing field back as None), never flipped to True.
+    assert rows[0].get("revoked") is not True

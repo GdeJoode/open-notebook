@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 76 DOWN: remove the agent-integration tables.
+-- Migration 77 DOWN: remove the agent-integration tables.
 --
 -- Faithful inverse of the forward migration (both tables brand new). REMOVE ...
 -- IF EXISTS so the rollback is idempotent and safe on a DB where 76 never

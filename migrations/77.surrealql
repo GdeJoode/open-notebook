@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 76: agent API keys + agent audit log (Track G.1 — agent integration).
+-- Migration 77: agent API keys + agent audit log (Track G.1 — agent integration).
 --
 -- WHY. G.1 opens a versioned, API-key-authed agent surface (`/api/v1/agents`).
 -- `agent_keys` holds the minted keys (hashed at rest, never plaintext) with a
@@ -32,7 +32,10 @@ DEFINE INDEX OVERWRITE ak_hash  ON agent_keys FIELDS key_hash UNIQUE;
 DEFINE INDEX OVERWRITE ak_agent ON agent_keys FIELDS agent_id;
 
 DEFINE TABLE OVERWRITE agent_audit_log SCHEMAFULL;
-DEFINE FIELD OVERWRITE agent_key  ON agent_audit_log TYPE record<agent_keys>;
+-- option<>: a failed-auth call (no resolved key) still records a row. A required
+-- record<agent_keys> would make SCHEMAFULL reject the keyless row, silently
+-- dropping exactly the brute-force/401 events the audit log exists to capture.
+DEFINE FIELD OVERWRITE agent_key  ON agent_audit_log TYPE option<record<agent_keys>>;
 DEFINE FIELD OVERWRITE agent_id   ON agent_audit_log TYPE string;
 DEFINE FIELD OVERWRITE method     ON agent_audit_log TYPE string;
 DEFINE FIELD OVERWRITE path       ON agent_audit_log TYPE string;

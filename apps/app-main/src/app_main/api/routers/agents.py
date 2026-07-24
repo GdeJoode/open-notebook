@@ -1,11 +1,20 @@
 """Versioned agent capability API (Track G.1).
 
-The ``/api/v1/agents`` surface external agents call with an ``X-API-Key``. Every
-route is gated by :func:`require_agent_key` (the SOLE authenticator — these paths
-are excluded from the shared-password middleware, G-D1) and rate-limited per key.
+The ``/api/v1/agents`` surface external agents call with an ``X-API-Key``. The
+whole router is gated at the ROUTER level by two dependencies, so EVERY current
+and future route is protected without opting in per-route (the exclusion from the
+shared-password middleware is subtree-wide — a route that forgot the gate would
+be fully open):
+
+  1. :func:`agent_ip_throttle` — a per-IP requests/min cap that runs BEFORE auth,
+     so a flood of invalid keys from one host is bounded (each such request
+     otherwise costs a DB read + an audit write);
+  2. :func:`require_agent_key` (``read`` baseline) — the SOLE authenticator, fail-
+     closed and password-independent. A route needing a higher scope adds its own
+     ``Depends(require_agent_key("write"|"admin"))``.
 
 G.1 ships one real capability — ``POST /extract-entities`` (typed entities from
-raw text, ``read`` scope, no DB) — proving the auth + limit + audit path end to
+raw text, no DB) — proving the throttle + auth + per-key limit + audit path end to
 end; later phases add the ingest façade and the other capabilities.
 """
 
@@ -16,11 +25,24 @@ from shared.models.agents import (
     ExtractedEntity,
 )
 
-from app_main.api.agent_auth import AgentKeyContext, require_agent_key
-from app_main.api.agent_rate_limit import agent_default_limit, agent_key_func
+from app_main.api.agent_auth import require_agent_key
+from app_main.api.agent_rate_limit import (
+    agent_default_limit,
+    agent_ip_throttle,
+    agent_key_func,
+)
 from app_main.api.rate_limit import limiter
 
-router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
+router = APIRouter(
+    prefix="/api/v1/agents",
+    tags=["agents"],
+    # Router-level gate: per-IP pre-auth throttle THEN the read-scope key check,
+    # applied to every route on this router (in order).
+    dependencies=[
+        Depends(agent_ip_throttle()),
+        Depends(require_agent_key("read")),
+    ],
+)
 
 
 @router.post("/extract-entities", response_model=ExtractEntitiesResponse)
@@ -29,9 +51,12 @@ async def extract_entities(
     request: Request,
     response: Response,
     body: ExtractEntitiesRequest,
-    key: AgentKeyContext = Depends(require_agent_key("read")),
 ) -> ExtractEntitiesResponse:
-    """Extract typed entities from raw text (stateless — no source is created)."""
+    """Extract typed entities from raw text (stateless — no source is created).
+
+    Gated by the router-level read-scope dependency; the per-key slowapi limit
+    below bounds authenticated abuse (the pre-auth throttle bounds floods).
+    """
     from app_main.services.entity_extraction_service import extract_from_text
 
     entities = await extract_from_text(body.text, body.ontology_name)
@@ -46,10 +71,7 @@ async def extract_entities(
 
 
 @router.get("/openapi.json")
-async def agent_openapi(
-    request: Request,
-    key: AgentKeyContext = Depends(require_agent_key("read")),
-) -> dict:
+async def agent_openapi(request: Request) -> dict:
     """The OpenAPI spec filtered to just the agent surface (auto-generated)."""
     full = request.app.openapi()
     agent_paths = {

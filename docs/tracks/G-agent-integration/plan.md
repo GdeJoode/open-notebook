@@ -131,10 +131,17 @@ slice** the roadmap sequencing calls for.
 > audit middleware** instead of a mounted FastAPI sub-app — same security model,
 > less wiring, no sub-app slowapi/middleware duplication. The per-key
 > `rate_limit_rpm` OVERRIDE is deferred (slowapi evaluates before auth resolves
-> the key); G.1 buckets per key at the config default. Migration 76 shipped both
-> tables. A security bug caught in review — a naive prefix match treating the root
-> `/` as a prefix would have disabled the whole password gate — is fixed (prefix
-> exclusion requires a multi-char entry).
+> the key); G.1 buckets per key at the config default. **Migration 77** (was 76;
+> renumbered so it applies cleanly after the librarian-fix migration 76) ships
+> both tables. A security bug caught in the first review — a naive prefix match
+> treating the root `/` as a prefix would have disabled the whole password gate —
+> is fixed. **Adversarial review round 1** then hardened it further: agent routes
+> are gated at the ROUTER level (per-IP pre-auth throttle → read-scope key check,
+> so no future route can be added ungated); `agent_audit_log.agent_key` is
+> `option<>` so failed-auth rows are recorded not dropped; `authenticate` uses
+> `revoked = false` (drift-safe, not `!= true`); `revoke` is table-scoped (no
+> cross-table write). Follow-up: the single-mode `extract_from_text` uses the
+> extractor's configured model, not the privacy-routed caller.
 
 **Goal**: A versioned, API-key-authed agent surface that stands entirely on its own:
 mint/revoke keys, authenticate with `X-API-Key` (permission-scoped, rate-limited,

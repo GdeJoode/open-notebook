@@ -85,3 +85,23 @@ async def test_read_scope_route_accepts_read_key(monkeypatch):
     dep = agent_auth.require_agent_key("read")
     ctx = await dep(request=_request(), x_api_key="ak_good")
     assert ctx.permission == "read"
+
+
+# -- per-IP pre-auth throttle (round-1 review fix #1) ------------------------
+
+
+async def test_agent_ip_throttle_429s_after_limit(monkeypatch):
+    import app_main.api.agent_rate_limit as arl
+
+    monkeypatch.setenv("AGENT_RATE_LIMIT_RPM", "2")
+    arl._ip_hits.clear()  # isolate from other tests (module-level state)
+
+    dep = arl.agent_ip_throttle()
+    req = SimpleNamespace(client=SimpleNamespace(host="9.9.9.9"), headers={})
+
+    await dep(req)  # 1
+    await dep(req)  # 2
+    with pytest.raises(HTTPException) as exc:
+        await dep(req)  # 3 → over the cap
+    assert exc.value.status_code == 429
+    assert exc.value.headers.get("Retry-After") == "60"

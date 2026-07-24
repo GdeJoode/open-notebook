@@ -13,6 +13,11 @@ per key at the uniform default; G-follow-up adds the per-key override.
 
 from __future__ import annotations
 
+import time
+from collections import defaultdict
+from typing import Dict, List
+
+from fastapi import HTTPException
 from starlette.requests import Request
 
 from app_main.config import get_agent_rate_limit_rpm
@@ -33,4 +38,44 @@ def agent_default_limit() -> str:
     return f"{get_agent_rate_limit_rpm()}/minute"
 
 
-__all__ = ["agent_default_limit", "agent_key_func"]
+# --- Per-IP PRE-AUTH throttle (fixes the auth-failure-flood gap) -------------
+#
+# The per-key slowapi limit is a decorator on the endpoint BODY, so it runs only
+# AFTER `require_agent_key` resolves — an invalid-key request 401s before it, and
+# each such request costs a DB read + an audit write. This dependency runs at the
+# ROUTER level (before the auth dependency) and buckets by client IP, so a flood
+# of bad keys from one host is bounded regardless of auth outcome. In-memory
+# sliding window (same durability as the existing per-IP slowapi limiter);
+# self-pruning so memory stays bounded.
+
+_WINDOW_SEC = 60.0
+_ip_hits: Dict[str, List[float]] = defaultdict(list)
+_PRUNE_ABOVE = 10_000
+
+
+def agent_ip_throttle():
+    """Router dependency: per-IP requests/min cap that runs BEFORE agent auth."""
+
+    async def _dep(request: Request) -> None:
+        limit = get_agent_rate_limit_rpm()
+        from slowapi.util import get_remote_address
+
+        ip = get_remote_address(request)
+        now = time.monotonic()
+        hits = [t for t in _ip_hits.get(ip, []) if now - t < _WINDOW_SEC]
+        if len(hits) >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded",
+                headers={"Retry-After": "60"},
+            )
+        hits.append(now)
+        _ip_hits[ip] = hits
+        if len(_ip_hits) > _PRUNE_ABOVE:
+            for k in [k for k, v in list(_ip_hits.items()) if not v]:
+                _ip_hits.pop(k, None)
+
+    return _dep
+
+
+__all__ = ["agent_default_limit", "agent_ip_throttle", "agent_key_func"]

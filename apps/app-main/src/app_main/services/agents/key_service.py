@@ -99,9 +99,14 @@ class AgentKeyService:
         return [_to_public(r) for r in (rows or [])]
 
     async def revoke(self, key_id: str) -> bool:
-        """Revoke a key by id. Idempotent; returns whether a row was updated."""
+        """Revoke a key by id. Idempotent; returns whether a row was updated.
+
+        Table-SCOPED (``UPDATE agent_keys … WHERE id = $id``) so a caller passing a
+        non-agent_keys id (e.g. ``notebook:abc``) can never flip ``revoked`` on an
+        unrelated table's row — it simply matches nothing.
+        """
         rows = await execute_query(
-            "UPDATE $id SET revoked = true RETURN AFTER",
+            "UPDATE agent_keys SET revoked = true WHERE id = $id RETURN AFTER",
             {"id": ensure_record_id(key_id)},
             self.config,
         )
@@ -115,8 +120,11 @@ class AgentKeyService:
         """
         if not plaintext:
             return None
+        # `revoked = false` (not `!= true`): a drift row with revoked = NONE would
+        # satisfy `!= true` and authenticate — fail-open. Explicit `= false` is
+        # drift-safe (the DEFAULT false on a clean schema makes this exact).
         rows = await execute_query(
-            "SELECT * FROM agent_keys WHERE key_hash = $h AND revoked != true LIMIT 1",
+            "SELECT * FROM agent_keys WHERE key_hash = $h AND revoked = false LIMIT 1",
             {"h": hash_key(plaintext)},
             self.config,
         )
