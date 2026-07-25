@@ -40,7 +40,7 @@ phase merge.
 | **J** — model-routing | Cloud/local routing (privacy + failover) | ✅ CLOSED | yes | 2026-06-22 | All 6 phases (J.1–J.6) |
 | **K** — entity-resolution | NL normalizer + alias tables + fuzzy dedup + UI | 🚢 SHIPPED ⚠ | yes | 2026-06-22 | K.1–K.7a **merged to `main`** (merge commits `7c9e117`…`dd10eb0`); **roadmap still says PLANNED** — docs drift, no code pending |
 | **L** — entity-typing | Ontology bridge + NL aliases + schema application | 🚢 SHIPPED ⚠ | yes | 2026-06-23 | L.1–L.4 **merged to `main`** (`5b7cb7f`…`9bcf0ee`); **roadmap still says PLANNED** — docs drift, no code pending |
-| **M** — extraction-params | Model-aware chunk packing + RPM caps | 🚢 SHIPPED | yes | 2026-06-23 | M core + M.3 merged (`d2d7e22`, `c3ecf03`); M.5 out of scope; `status.md` says "review pending" — docs stale |
+| **M** — extraction-params | Model-aware chunk packing + RPM caps | 🚢 SHIPPED | yes | 2026-06-23 | M core + M.3 merged (`d2d7e22`, `c3ecf03`); **M.5 shipped 2026-07-25** (hetero-chain regression gate + `chunking_metrics`). Only M.4(a) full re-architecture deferred |
 | **NS** — note-source-autolink | Note→source auto-link (extends Y) | ✅ CLOSED | yes | 2026-06-29 | ARCHITECTURE §12a |
 | **O** — relation-persist | Relation endpoint resolution + self-heal migration | ✅ CLOSED | yes | 2026-06-23 | Staging healthy @ v62; old live re-verify block resolved |
 | **P** — entity-embeddings | Per-entity embeddings + live backfill | ✅ CLOSED | yes | 2026-06-25 | Unblocks K.5 semantic dedup |
@@ -125,14 +125,14 @@ parser engine (#53); **reference polish** (#51: GROBID container URL, footnote
 whitespace, and **3 live-verified KOOP-resolver bugs** — phrase-vs-`all` query
 recall, `issued`→`date` year, dedicated `<dossiernummer>`); a **flaky-test
 isolation** fix (#49) and the **live-validation** dashboard update (#50). Still
-open: **F**, **G** (next sprints), **M.5** (deferred), **I.H2b**, A.3 live smoke,
+open: **I.H2b**, A.3 live smoke,
 OKF download-polling UI.
 
 ### B. Deferred follow-ups inside CLOSED tracks
 | Item | What | Size |
 |---|---|---|
 | ~~**A.3**~~ | ~~markitdown~~ — **SHIPPED** #53 (`parser_engine="markitdown"` + markdown→Document adapter). Follow-up: live corpus smoke vs docling |
-| **M.5** | heterogeneous-chain integration test + metrics + ARCHITECTURE docs | ~~small~~ **1.5–2d** (deferred: regression gate over shipped M.1–M.4, blocks nothing) |
+| **M.5** | heterogeneous-chain integration test + metrics + docs | ✅ **SHIPPED (2026-07-25)** — `chunking_metrics` + 3-candidate packing gate (no-overflow + call-count divergence + M.4 guard). M.4(a) full re-architecture still deferred |
 | ~~**I.H2**~~ | ~~`chunk_edit` table~~ — **audit core SHIPPED** #52 (migration 74 + `ChunkAuditService` + history endpoint). **I.H2b** (snapshots/restore/UI) deferred |
 | **I.H1 AC5** | multi-worker shared state (currently in-memory backend) | small |
 | **J FU-J4-2** | error-mapping edge: a 400 error with a 5xx number in its body can misclassify as failover-eligible | tiny |

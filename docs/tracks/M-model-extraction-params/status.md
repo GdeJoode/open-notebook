@@ -1,10 +1,14 @@
 # Track M — Status Ledger
 
-> ✅ **TRACK CLOSED (reconciled 2026-07-23)** — the delivered slice (M core +
-> M.3) is **merged to `main`** via merge commits `d2d7e22` (model-aware
+> ✅ **TRACK CLOSED (M core + M.3 reconciled 2026-07-23; M.5 shipped 2026-07-25).**
+> The delivered slice (M core + M.3) merged to `main` via `d2d7e22` (model-aware
 > context-derived chunk packing + per-provider RPM) and `c3ecf03` (tunable
-> max-window cap). M.5 was explicitly out of scope. The "Done (review pending)"
-> cells below predate the merges. No code is pending. See [`../_status.md`](../_status.md).
+> max-window cap). **M.5 (the heterogeneous-chain regression gate) is now also
+> merged**: `chunking_metrics.py` (`est_calls`/`overflow_count`) +
+> `test_heterogeneous_chain_extraction.py` (a 3-candidate Gemini→Ollama→llama
+> packing gate asserting no-overflow + call-count divergence + the M.4 oversized
+> guard) + docs. The full M.4 per-document failover re-architecture (M-D3 (a))
+> remains the one deferred item. See [`../_status.md`](../_status.md).
 
 | Phase | Title | Status | Branch | Notes |
 |---|---|---|---|---|
@@ -12,7 +16,7 @@
 | M.2 | Per-provider RPM caps (google/nvidia/ollama) + pace-vs-skip | **Done (review pending)** | same | `3883cd3` |
 | M.3 | Chunk packing derived from the active model's context_window | **Done (review pending)** | same | `6a884d6`, `bb53b27` |
 | M.4 | Oversized-chunk guard for the small-context fallback (interim V1, Decision M-D3 (b)) | **Done (review pending)** | same | `7c71f31` |
-| M.5 | Heterogeneous-chain integration test + metrics + ARCHITECTURE docs | **Not in this slice** | — | Out of the requested core scope |
+| M.5 | Heterogeneous-chain integration test + metrics + docs | ✅ **Shipped (2026-07-25)** | `feat/hetero-chain-test-m5` | `chunking_metrics.py` + `test_heterogeneous_chain_extraction.py` (3 tests) |
 
 ## Slice delivered (2026-06-23)
 
@@ -129,10 +133,23 @@ message-based `default_is_rate_limit` fix (catches esperanto-wrapped 429 /
 - `pipelines/ontology-extraction/src/ontology_extraction/{pass2_typed_extraction,workflow,multi_schema_orchestrator}.py` (token_budget thread)
 - Tests: `test_context_packer.py`, `test_per_provider_rate_cap.py`, `test_chain_model_params.py`, `test_oversized_chunk_guard.py` (new) + two fakes updated in `test_multi_schema_orchestrator.py`, one test added in `test_pass2.py`.
 
-### Deferred (not in this slice)
-- **M.5**: `chunking_metrics.py` (overflow_count / est_calls CI gate), the
-  `test_heterogeneous_chain_extraction.py` 3-candidate integration test, `ARCHITECTURE.md`
-  + `FEATURE_ROADMAP.md` edits.
+### M.5 — shipped (2026-07-25)
+- `apps/app-main/src/app_main/services/extraction_chunking/chunking_metrics.py` —
+  `measure_packing` → `ChunkingMetrics(est_calls, overflow_count, max_window_tokens,
+  total_input_tokens)`. `overflow_count` uses the TRUE input space
+  (`context_window - max_output - prompt_overhead`) as the ceiling.
+- `apps/app-main/tests/test_heterogeneous_chain_extraction.py` (3 tests) — the same
+  document packed for the Gemini(1M)→Ollama(32K)→llama(8K) chain, asserting
+  `overflow_count == 0` for every candidate (incl. an oversized table chunk that the
+  M.4 guard re-splits), `est_calls` strictly decreasing as context grows (Gemini=1,
+  llama≥5), and the default M.3 window cap trading a big model's one giant call for
+  several moderate (recall-preserving) ones.
+- Docs: this ledger + `FEATURE_ROADMAP.md`. (No `ARCHITECTURE.md` exists to edit; the
+  re-pack mechanism is documented in this ledger's "How chunks-per-call now derive"
+  section + the `context_packer.py` module docstring.)
+
+### Deferred (the one remaining item)
 - **M.4 (a)**: the full per-document failover re-architecture (each candidate re-chunks
-  inside the attempt). The interim guard closes the live overflow bug; the full
-  re-architecture is the follow-up.
+  inside the attempt). The interim guard + the M.5 gate prove the no-overflow invariant
+  across the chain; the full re-architecture (folding packing INTO the failover attempt
+  rather than per-candidate up-front) is the follow-up.
