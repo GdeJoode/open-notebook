@@ -27,6 +27,10 @@ dependencies = [
     "pyyaml>=6.0",
     "networkx>=3.0",
     "slowapi>=0.1.9",
+    # G.5 inbox file-watcher. Marker matches how watchdog is already resolved in
+    # the lock (non-darwin); the deployment target is Linux/Docker and the import
+    # is lazy + config-gated, so a darwin dev without it degrades to "not started".
+    "watchdog>=4; sys_platform != 'darwin'",
 ]
 
 [project.optional-dependencies]

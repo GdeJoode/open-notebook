@@ -167,3 +167,52 @@ def get_agent_rate_limit_rpm() -> int:
 def get_agent_audit_retention_days() -> int:
     """How long to keep agent_audit_log rows (default 90 days)."""
     return _int_env("AGENT_AUDIT_RETENTION_DAYS", 90)
+
+
+# ---------------------------------------------------------------------------
+# Inbox file-watcher (Track G.5)
+# ---------------------------------------------------------------------------
+# An opt-in watcher on conventional inbox folders that auto-ingests dropped
+# files through the SAME process_source chain as the API. OFF by default, so an
+# existing deployment sees zero behaviour change until it is explicitly enabled.
+
+
+def get_file_watcher_enabled() -> bool:
+    """Whether the inbox file-watcher runs (default False — opt-in).
+
+    When False the watcher never starts from the lifespan, so there is no new
+    background thread / observer and behaviour is identical to pre-G.5.
+    """
+    return _bool_env("FILE_WATCHER_ENABLED", False)
+
+
+def get_inbox_paths() -> list[str]:
+    """Watched inbox folders (default: ``<DATA_FOLDER>/inbox``).
+
+    ``INBOX_PATHS`` is an OS-pathsep-separated (``:`` on POSIX) list so ops can
+    watch several roots. Blank entries are dropped. The default lives under
+    DATA_FOLDER so it shares the volume the uploads/sqlite folders already use.
+    """
+    raw = os.environ.get("INBOX_PATHS")
+    if not raw or not raw.strip():
+        return [os.path.join(DATA_FOLDER, "inbox")]
+    return [p.strip() for p in raw.split(os.pathsep) if p.strip()]
+
+
+def get_inbox_default_notebook_id() -> "str | None":
+    """Notebook a GLOBAL-inbox file is attached to (``INBOX_DEFAULT_NOTEBOOK_ID``).
+
+    None → files dropped in a global inbox are ingested without a notebook (a
+    per-notebook inbox ``.../notebook:<id>/inbox/`` still routes to its own).
+    """
+    raw = os.environ.get("INBOX_DEFAULT_NOTEBOOK_ID")
+    return raw.strip() if raw and raw.strip() else None
+
+
+def get_inbox_debounce_seconds() -> int:
+    """Seconds to coalesce a burst of writes to one file (default 3).
+
+    A slow copy fires many modify events; the watcher waits this long after the
+    LAST event before ingesting, so a file is enqueued once, fully written.
+    """
+    return _int_env("INBOX_DEBOUNCE_SECONDS", 3)

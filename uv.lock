@@ -310,6 +310,7 @@ dependencies = [
     { name = "summarization" },
     { name = "surrealdb-service" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "watchdog", marker = "sys_platform != 'darwin'" },
     { name = "zotero-integration" },
 ]
 
@@ -343,6 +344,7 @@ requires-dist = [
     { name = "summarization", editable = "pipelines/summarization" },
     { name = "surrealdb-service", editable = "packages/surrealdb-service" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
+    { name = "watchdog", marker = "sys_platform != 'darwin'", specifier = ">=4" },
     { name = "zotero-integration", editable = "packages/zotero-integration" },
 ]
 provides-extras = ["ui"]

@@ -114,9 +114,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Vault dictionary load skipped: {e}")
 
+    # Track G.5: opt-in inbox file-watcher. Returns None (no thread/observer)
+    # unless FILE_WATCHER_ENABLED — zero behaviour change for existing deploys.
+    inbox_watcher = None
+    try:
+        from app_main.services.agents.file_watcher import build_watcher_from_config
+
+        inbox_watcher = build_watcher_from_config()
+        if inbox_watcher is not None:
+            inbox_watcher.start()
+    except Exception as e:  # noqa: BLE001 — a watcher failure must not block startup
+        logger.warning(f"Inbox file-watcher not started: {e}")
+        inbox_watcher = None
+
     logger.success("API initialization completed successfully")
 
     yield
+
+    if inbox_watcher is not None:
+        try:
+            inbox_watcher.stop()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Inbox file-watcher stop failed: {e}")
 
     await stop_worker()
 
