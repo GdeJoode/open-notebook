@@ -462,6 +462,13 @@ Assumes G.1 (+ G.3 for the audit-log drawer) merged.
 
 ### Phase G.5 — File-watcher service (Backend)
 
+> **Status (2026-07-25): SHIPPED (PR #73).** Opt-in (`FILE_WATCHER_ENABLED`,
+> default OFF) `InboxWatcher` on watchdog, bridged onto the app loop; debounce +
+> backlog scan + extension routing + copy-to-uploads + `process_source` enqueue +
+> move to `_processed`/`_errors`. Converged over 2 review rounds (a MAJOR
+> exactly-once hole — terminal-wait/move outside the guard → duplicate source on
+> rescan — was found and fixed). 17 tests incl. a real-Observer integration test.
+
 **Goal**: An always-on (opt-in) watcher on the conventional inbox paths that
 debounces bursts, scans a startup backlog, routes by file-type, ingests via the
 **same** `process_source` chain the API façade uses, and moves files to
