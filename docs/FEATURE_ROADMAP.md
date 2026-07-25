@@ -521,6 +521,14 @@ Source.status fine-grained: `extracted`, `chunked`, `embedded`, `entities_extrac
 
 ## Track G — Agent Integration & Headless Mode (NEW)
 
+> **Status (2026-07-25): headless core SHIPPED (G.1–G.7, PRs #68–#74 + security
+> fix #72).** The versioned `X-API-Key`-authed agent API (extract-entities,
+> generate-summary, process-url/document/audio, jobs/{id}, audit-log, openapi.json),
+> the "API Keys" settings tab, and the opt-in inbox file-watcher (+ its read-only
+> settings panel) are all merged. See `docs/tracks/G-agent-integration/status.md`
+> + `RETRO.md`. **Deferred to a follow-up sprint** (§ below): G3/G4 Obsidian sync,
+> G5 webhooks, G6 summary templates.
+
 **Vision**: open-notebook als headless backend dat externe agents (hermes, claude-code, cursor, custom) via API kunnen aanroepen voor document-processing, summary-generation, en KG-extractie. Bidirectionele sync met Obsidian-vaults voor cross-front edit-flow.
 
 Zie Sectie 3.3 voor architectuur-deep-dive.

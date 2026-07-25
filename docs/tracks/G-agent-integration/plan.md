@@ -530,6 +530,14 @@ oversize files are rejected the same way as the API.
 
 ### Phase G.6 — File-watcher config UI (UI)
 
+> **Status (2026-07-25): SHIPPED (PR #74).** A read-only "Watcher" settings tab:
+> enabled badge, watched paths, default notebook, debounce, and a recent-activity
+> readout (`GET /api/watcher/status`, scanning `_processed`/`_errors` recursively).
+> Deviation from AC2 (persist toggle/select): shipped read-only ON PURPOSE — config
+> is env-managed + read at startup, so an editable control would be a misleading
+> no-op until restart. Review APPROVED; a per-notebook-activity scan gap it found
+> was fixed in the same PR.
+
 **Goal**: Surface the watcher in settings — enable toggle, inbox path(s), default
 notebook, and a simple last-activity/status readout.
 
@@ -564,6 +572,15 @@ Assumes G.5 merged.
 ---
 
 ### Phase G.7 — Integration: e2e + OpenAPI client + docs + RETRO (Integration)
+
+> **Status (2026-07-25): SHIPPED.** OpenAPI spec-validity test (the published
+> `/api/v1/agents/openapi.json` is well-formed 3.x, covers the surface, and emits
+> resolvable component schemas — the properties an external generator needs);
+> `status.md` + `RETRO.md`; `FEATURE_ROADMAP` Track G marked shipped. The live
+> mint→extract→summarize→process→poll→audit + inbox-drop flows are authored as
+> Playwright specs (`frontend/e2e/track-g/`) but not executed in this dev env
+> (need a live stack + models) — noted in status.md. No `ARCHITECTURE.md` existed
+> to extend; the architecture summary lives in status.md + FEATURE_ROADMAP.
 
 **Goal**: End-to-end validation of the headless core and documentation close-out.
 
