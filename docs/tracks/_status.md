@@ -33,9 +33,9 @@ phase merge.
 | **C** — content-quality | Writer-Evaluator-Editor + markdown lint | 🕗 NOT STARTED | no | — | Roadmap entry only |
 | **D** — output-richness | Obsidian / TTL / JSONL / NetworkX export | ✅ CLOSED | yes | 2026-06-16 | RETRO present |
 | **E** — research-workflows | E1 single-agent + E3 thesis-mode | 🕗 NOT STARTED | no | — | Roadmap entry only |
-| **F** — operations | Audit, librarian, resumable jobs | 🕗 NOT STARTED | no | — | Roadmap entry only |
-| **G** — agent-integration | Headless mode + REST agent API | 🕗 NOT STARTED | no | — | Gates Track H |
-| **H** — vision-parser | Vision-model parser tier | ⏸ DEFERRED | no | 2026-06-05 | Do not start before G is complete |
+| **F** — operations | Audit, librarian, resumable jobs | 🚢 SHIPPED | yes | 2026-07-24 | F.1–F.8 merged (`#58`–`#64` + docs); see `F-operations/{status,RETRO}.md`. F.7b (`chunked` split) deferred |
+| **G** — agent-integration | Headless mode + REST agent API | 🚢 SHIPPED | yes | 2026-07-25 | G.1–G.7 merged (`#67`–`#75`) + security fix `#72`; see `G-agent-integration/{status,RETRO}.md`. Unblocks Track H |
+| **H** — vision-parser | Vision-model parser tier | 📋 PLANNED (unblocked) | no | 2026-06-05 | **G is now complete → H is unblocked.** Prereq: per-chunk/per-element confidence (`A-mineru/CONFIDENCE_GRANULARITY_NOTE.md`, Optie A) |
 | **I** — docling-studio | Upload guards + inspect workspace + coord canon | 🚢 SHIPPED | yes | 2026-06-19 | Merged to `main` (I.A/I.B/I.D/I.E/I.H1); `status.md` still says "ready for review" — **docs stale**, no formal close |
 | **J** — model-routing | Cloud/local routing (privacy + failover) | ✅ CLOSED | yes | 2026-06-22 | All 6 phases (J.1–J.6) |
 | **K** — entity-resolution | NL normalizer + alias tables + fuzzy dedup + UI | 🚢 SHIPPED ⚠ | yes | 2026-06-22 | K.1–K.7a **merged to `main`** (merge commits `7c9e117`…`dd10eb0`); **roadmap still says PLANNED** — docs drift, no code pending |
@@ -83,9 +83,9 @@ The only refs NOT in `main` are outside the track workflow:
 - **Merged to `main` (22)**: A, B, D, I, J, K, L, M, NS, O, P, PL, Q, R, S, U, UX,
   W, X, Y, Z — plus C/E/F/G still to come.
 - **Formally CLOSED (roadmap/RETRO)**: A, B, D, J, NS, O, P, PL, S, U, UX, W, X, Y, Z.
-- **Merged but docs not closed** ⚠: I, K, L, M, Q, R (code landed; ledgers/roadmap stale).
+- **Merged but docs not closed** ⚠: I, K, L, Q, R (code landed; roadmap stale). F, G, M now reconciled here.
 - **Parked (1)**: T.
-- **Planned / not started (6)**: C, E, F, G, H (deferred), V.
+- **Planned / not started (4)**: C, E, V, and **H** (unblocked now G is complete; prereq = confidence granularity).
 
 ## Reconciliation items (docs-only; no code pending)
 
