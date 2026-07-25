@@ -156,6 +156,44 @@ async def test_move_to_errors_on_failure(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_status_error_routes_to_errors_not_stranded(tmp_path):
+    # MAJOR-1: a raise inside _await_terminal must still route to _errors, else
+    # the file is left re-ingestable → a later scan makes a duplicate source.
+    inbox = tmp_path / "inbox"
+    inbox.mkdir(parents=True)
+    f = inbox / "doc.pdf"
+    f.write_bytes(b"%PDF x")
+    w = _watcher(tmp_path, status=AsyncMock(side_effect=RuntimeError("db blip")))
+
+    await w._ingest_and_move(f)  # must not raise
+
+    assert not f.exists()
+    assert (inbox / "_errors" / "doc.pdf").exists()
+    assert str(f.resolve()) not in w._inflight  # guard released
+
+
+@pytest.mark.asyncio
+async def test_move_failure_is_swallowed(tmp_path, monkeypatch):
+    # A raising shutil.move must be swallowed (logged), never propagate as an
+    # unretrieved task exception, and the in-flight guard must be released.
+    import app_main.services.agents.file_watcher as fw
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir(parents=True)
+    f = inbox / "doc.pdf"
+    f.write_bytes(b"%PDF x")
+    w = _watcher(tmp_path)
+
+    def _boom(*a, **k):
+        raise OSError("cross-device move")
+
+    monkeypatch.setattr(fw.shutil, "move", _boom)
+
+    await w._ingest_and_move(f)  # must not raise
+    assert str(f.resolve()) not in w._inflight
+
+
+@pytest.mark.asyncio
 async def test_unsupported_file_left_in_place(tmp_path):
     inbox = tmp_path / "inbox"
     inbox.mkdir(parents=True)
@@ -248,6 +286,49 @@ async def test_debounce_coalesces_burst_to_single_ingest(tmp_path):
 
     await asyncio.sleep(0.05)
     assert calls == [str(f)]  # coalesced to a single ingest
+
+
+# -- real Observer integration (thread→loop bridge + no re-ingest) ----------
+
+
+@pytest.mark.asyncio
+async def test_real_observer_ingests_and_does_not_reingest_moved_file(tmp_path):
+    """Start a REAL watchdog Observer: a dropped file is ingested + moved, and
+    the move into _processed does NOT fire a re-ingest. Covers the thread→loop
+    bridge + Observer wiring + the skip-dir re-ingest guard (the riskiest code).
+    """
+    import asyncio
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir(parents=True)
+    submit = AsyncMock(return_value="job:1")
+    w = InboxWatcher(
+        inbox_paths=[str(inbox)],
+        debounce_seconds=0,
+        uploads_folder=str(tmp_path / "uploads"),
+        loop=asyncio.get_running_loop(),
+        source_service_factory=_svc,
+        submit_job=submit,
+        get_status=AsyncMock(return_value={"status": "completed"}),
+        poll_interval=0.001,
+        terminal_timeout=1.0,
+    )
+    w.start()
+    try:
+        (inbox / "drop.pdf").write_bytes(b"%PDF-1.4 x")
+        for _ in range(50):  # up to ~5s for the event → ingest → move
+            await asyncio.sleep(0.1)
+            if (inbox / "_processed" / "drop.pdf").exists():
+                break
+        assert (inbox / "_processed" / "drop.pdf").exists()
+        assert not (inbox / "drop.pdf").exists()
+        # The move into _processed must NOT re-enqueue (skip-dir guard).
+        enqueued = submit.await_count
+        assert enqueued == 1
+        await asyncio.sleep(0.3)
+        assert submit.await_count == enqueued  # no re-ingest of the moved file
+    finally:
+        w.stop()
 
 
 # -- disabled (default) -----------------------------------------------------

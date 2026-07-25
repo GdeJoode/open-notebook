@@ -64,6 +64,7 @@ class InboxWatcher:
         get_status: Optional[Callable[..., Awaitable[dict]]] = None,
         poll_interval: float = 2.0,
         terminal_timeout: float = 1800.0,
+        max_concurrent_ingest: int = 4,
     ) -> None:
         self._roots = [Path(p) for p in inbox_paths]
         self._default_notebook_id = default_notebook_id
@@ -71,6 +72,10 @@ class InboxWatcher:
         self._loop = loop
         self._poll_interval = poll_interval
         self._terminal_timeout = terminal_timeout
+        # Bound the backlog-scan fan-out so a large inbox doesn't stampede the
+        # job queue/DB with create()+enqueue+pollers all at once (MINOR-1).
+        self._max_concurrent = max(1, int(max_concurrent_ingest))
+        self._scan_sem: Optional[asyncio.Semaphore] = None
 
         # Injected seams (default to the real services/commands).
         self._source_service_factory = source_service_factory
@@ -173,6 +178,12 @@ class InboxWatcher:
         Reuses the hardened ``generate_unique_filename`` (basename sanitize +
         containment) so the source's stored ``file_path`` is stable in uploads,
         independent of the later inbox move to ``_processed``/``_errors``.
+
+        Config constraint (MINOR-2): an inbox root must NOT contain the uploads
+        folder. The default layout (``<DATA>/inbox`` + ``<DATA>/uploads``) is
+        safe (siblings); but setting ``INBOX_PATHS=<DATA>`` would make each staged
+        copy land inside the watched tree and be re-ingested. Keep inboxes and
+        uploads disjoint.
         """
         from app_main.api.routers.sources_upload import generate_unique_filename
 
@@ -253,22 +264,36 @@ class InboxWatcher:
         return False
 
     def _move(self, path, subdir: str) -> None:
-        """Move the inbox original into ``<inbox-dir>/<subdir>/`` (unique name)."""
+        """Move the inbox original into ``<inbox-dir>/<subdir>/`` (unique name).
+
+        Best-effort: a move failure (dest on another filesystem, permissions) is
+        logged but never raised — a raise here would escape ``_ingest_and_move``
+        as an unretrieved task exception AND strand the file re-ingestable.
+        """
         p = Path(path)
         if not p.exists():
             return
-        dest_dir = p.parent / subdir
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / p.name
-        i = 1
-        while dest.exists():
-            dest = dest_dir / f"{p.stem} ({i}){p.suffix}"
-            i += 1
-        shutil.move(str(p), str(dest))
-        logger.info("inbox: moved {p} -> {d}", p=str(p), d=str(dest))
+        try:
+            dest_dir = p.parent / subdir
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / p.name
+            i = 1
+            while dest.exists():
+                dest = dest_dir / f"{p.stem} ({i}){p.suffix}"
+                i += 1
+            shutil.move(str(p), str(dest))
+            logger.info("inbox: moved {p} -> {d}", p=str(p), d=str(dest))
+        except Exception as e:  # noqa: BLE001 — never strand via a raising move
+            logger.error("inbox: could not move {p} to {s}: {e}", p=str(p), s=subdir, e=e)
 
     async def _ingest_and_move(self, path) -> None:
-        """Full lifecycle for one file: ingest → await terminal → move."""
+        """Full lifecycle for one file: ingest → await terminal → move.
+
+        The ingest AND the terminal-wait are both inside the guard: a transient
+        error in ``_await_terminal`` (e.g. get_command_status raises) must still
+        route the file to ``_errors`` — otherwise it is left re-ingestable and a
+        later scan creates a DUPLICATE source (the enqueue already happened).
+        """
         p = Path(path)
         key = str(p.resolve())
         if key in self._inflight:
@@ -279,13 +304,13 @@ class InboxWatcher:
         try:
             try:
                 command_id = await self._ingest(p)
+                if command_id is None:
+                    return  # unsupported extension — leave in place (AC2)
+                ok = await self._await_terminal(command_id)
             except Exception as e:  # noqa: BLE001 — a bad file must not kill the watcher
                 logger.error("inbox: ingest failed for {p}: {e}", p=str(p), e=e)
                 self._move(p, _ERRORS_DIR)
                 return
-            if command_id is None:
-                return  # unsupported extension — leave in place (AC2)
-            ok = await self._await_terminal(command_id)
             self._move(p, _PROCESSED_DIR if ok else _ERRORS_DIR)
         finally:
             self._inflight.discard(key)
@@ -298,12 +323,20 @@ class InboxWatcher:
         Skips ``_processed``/``_errors`` so an already-ingested file is never
         re-processed (idempotent, AC4). Must be called on the event loop.
         """
+        if self._scan_sem is None:
+            self._scan_sem = asyncio.Semaphore(self._max_concurrent)
         for root in self._roots:
             if not root.exists():
                 continue
             for f in root.rglob("*"):
                 if f.is_file() and not self._is_in_skip_dir(f):
-                    asyncio.ensure_future(self._ingest_and_move(f))
+                    asyncio.ensure_future(self._bounded_ingest(f))
+
+    async def _bounded_ingest(self, path) -> None:
+        """Backlog ingest bounded by the scan semaphore (MINOR-1)."""
+        assert self._scan_sem is not None
+        async with self._scan_sem:
+            await self._ingest_and_move(path)
 
     def _schedule(self, path) -> None:
         """(loop thread) Debounce: (re)arm a one-shot timer for this path."""
