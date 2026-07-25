@@ -67,6 +67,7 @@ class FakePage:
     elements: list[Any] = field(default_factory=list)
     tables: list[Any] = field(default_factory=list)
     images: list[Any] = field(default_factory=list)
+    text_content: str = ""  # real PageContent has this; empty → _page_text falls back
 
 
 @dataclass
@@ -475,3 +476,29 @@ class TestPerPageConfidence:
         p = FakePage(page_number=0, elements=[FakeElement(content="word " * 500)])
         pages = score_docling_pages(_mixed_result([p]))
         assert pages[0].page_number == 1  # 0/unset → 1-based position
+
+    def test_page_text_prefers_text_content_over_element_join(self):
+        # A page whose elements carry NO content but whose text_content is dense:
+        # density must come from text_content (the real PageContent path), proving
+        # the primary branch of _page_text — not the empty element-join fallback.
+        page = FakePage(
+            page_number=1,
+            elements=[FakeElement(content="", element_type="paragraph")],
+            text_content="word " * 500,
+        )
+        pages = score_docling_pages(FakeIngestionResult(document=FakeDocument(
+            full_text="", page_count=1, pages=[page])))
+        assert pages[0].signals["text_density"] == pytest.approx(1.0)
+
+    def test_single_page_matches_doc_level(self):
+        # For a uniform single-page doc, per-page and doc-level score identically —
+        # nails the "same 6 signals" claim end-to-end (not just by inspection).
+        page = _clean_page(1)
+        text = " ".join(str(getattr(e, "content", "")) for e in page.elements)
+        res = FakeIngestionResult(document=FakeDocument(
+            full_text=text, page_count=1, pages=[page]))
+        doc_score = score_docling_extraction(res)
+        page_scores = score_docling_pages(res)
+        assert len(page_scores) == 1
+        assert page_scores[0].overall == pytest.approx(doc_score.overall)
+        assert page_scores[0].signals == doc_score.signals
