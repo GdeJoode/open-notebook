@@ -383,3 +383,95 @@ class TestReturnShape:
         # Trying to mutate a frozen dataclass raises FrozenInstanceError.
         with pytest.raises(Exception):
             score.overall = 0.0  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Per-page confidence (Track H0.1 — Optie A)
+# ---------------------------------------------------------------------------
+
+from app_main.services.parsing.confidence import (  # noqa: E402
+    PageConfidence,
+    score_docling_pages,
+)
+
+
+def _clean_page(n: int) -> FakePage:
+    """A clean native page: two headings + a long dense paragraph, no images.
+
+    Two heading-type elements (heading + title) so heading_rate saturates
+    (>=2/page), mirroring the perfect-document fixture — the page scores ~1.0.
+    """
+    elements = [
+        FakeElement(content="Chapter Heading", element_type="heading", page=n),
+        FakeElement(content="Section Title", element_type="title", page=n, section_level=1),
+        FakeElement(
+            content="word " * 500,  # ~2500 chars → text_density saturates
+            element_type="paragraph",
+            page=n,
+            section_level=1,
+        ),
+    ]
+    return FakePage(page_number=n, elements=elements)
+
+
+def _scanned_page(n: int) -> FakePage:
+    """A scanned page: one short low-confidence OCR block + 3 images."""
+    elements = [
+        FakeElement(
+            content="garbled",
+            element_type="text",
+            page=n,
+            bbox=None,
+            confidence=0.4,
+            source="ocr",
+            section_level=0,
+        ),
+    ]
+    return FakePage(page_number=n, elements=elements, images=[FakeImage(page=n) for _ in range(3)])
+
+
+def _mixed_result(pages: list[FakePage]) -> FakeIngestionResult:
+    doc = FakeDocument(
+        full_text=" ".join(
+            str(getattr(e, "content", "")) for p in pages for e in p.elements
+        ),
+        page_count=len(pages),
+        pages=pages,
+    )
+    return FakeIngestionResult(document=doc)
+
+
+class TestPerPageConfidence:
+    def test_none_document_yields_no_pages(self):
+        assert score_docling_pages(FakeIngestionResult()) == []
+
+    def test_one_score_per_page_in_order(self):
+        res = _mixed_result([_clean_page(1), _clean_page(2), _clean_page(3)])
+        pages = score_docling_pages(res)
+        assert len(pages) == 3
+        assert [p.page_number for p in pages] == [1, 2, 3]
+        assert all(isinstance(p, PageConfidence) for p in pages)
+        assert all(0.0 <= p.overall <= 1.0 for p in pages)
+        assert all(set(p.signals) == set(SIGNAL_WEIGHTS) for p in pages)
+
+    def test_per_page_granularity_isolates_the_bad_page(self):
+        # 2 clean pages + 1 scanned page: only the scanned page is a fallback
+        # candidate — the whole point of Optie A (docling keeps the clean pages).
+        res = _mixed_result([_clean_page(1), _clean_page(2), _scanned_page(3)])
+        pages = score_docling_pages(res, threshold=DEFAULT_THRESHOLD)
+        by_num = {p.page_number: p for p in pages}
+        assert by_num[1].decision == "accept"
+        assert by_num[2].decision == "accept"
+        assert by_num[3].decision == "fallback"
+        # the scanned page scores strictly lower than the clean ones
+        assert by_num[3].overall < by_num[1].overall
+
+    def test_threshold_is_echoed_per_page(self):
+        res = _mixed_result([_clean_page(1)])
+        pages = score_docling_pages(res, threshold=0.5)
+        assert pages[0].threshold == 0.5
+
+    def test_page_number_falls_back_to_position_when_unset(self):
+        p = FakePage(page_number=0, elements=[FakeElement(content="word " * 500)])
+        pages = score_docling_pages(_mixed_result([p]))
+        assert pages[0].page_number == 1  # 0/unset → 1-based position
