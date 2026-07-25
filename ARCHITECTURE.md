@@ -171,6 +171,37 @@ invariant); the merge step uses confidence-max semantics so the highest-
 confidence pass wins. Multi-schema is **on by default** when `notebook_id`
 is provided; flip `multi_schema_enabled=false` per-request to fall back.
 
+### Model-aware context packing (Track M)
+
+The extraction failover chain is **heterogeneous** — each candidate model has a
+different context window (Gemini ~1M, Ollama Cloud ~32K, llama3.1:8b ~8K). Rather
+than hand the model the fixed ~2000-char ingestion chunks one call at a time,
+`apps/app-main/src/app_main/services/extraction_chunking/context_packer.py`
+(`pack_chunks_for_model`) RE-PACKS the persisted ingestion chunks into windows
+sized to the ACTIVE candidate's `context_window`:
+
+```
+input_budget = (context_window − max_output_tokens − prompt_overhead) × 0.85
+window_budget = min(input_budget, EXTRACTION_MAX_WINDOW_TOKENS)   # M.3 cap, default 6000
+```
+
+- **M.3** derives the window from the model's context (a big-context model packs
+  a document into a few calls instead of ~28) and adds a tunable window-size CAP
+  (`EXTRACTION_MAX_WINDOW_TOKENS`, default 6000) — measured to preserve exhaustive
+  recall (one full-context call collapses recall to a few themes) while still
+  cutting call count.
+- **M.4** re-splits any single chunk that alone exceeds the budget
+  (`_split_oversized_text`) so no window ever overflows the smallest candidate —
+  the no-overflow invariant. Provenance becomes a `constituent_chunk_ids`
+  window-of-chunks list (Decision M-D4), not a single id.
+
+The M.5 regression gate (`test_heterogeneous_chain_extraction.py` +
+`chunking_metrics.py`) packs the same document for the whole chain and asserts
+`overflow_count == 0` per candidate plus `est_calls` shrinking as context grows.
+The full per-document failover re-architecture (packing folded INTO the failover
+attempt, M-D3 (a)) is a deferred follow-up; the shipped path packs per-candidate
+up-front with the M.4 oversized guard.
+
 ## 7. Knowledge graph export surfaces (Track D — output richness)
 
 Track D (closed 2026-06-16) added three HTTP export surfaces over the

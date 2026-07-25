@@ -113,10 +113,12 @@ def test_oversized_chunk_is_split_for_the_narrow_candidate():
     assert g.est_calls == 1  # whole doc + big chunk in one window
 
 
-def test_default_window_cap_trades_calls_for_recall():
+def test_default_window_cap_trades_calls_for_recall(monkeypatch):
     # Under the default M.3 cap (~6000), a big-context candidate uses MORE,
     # moderate windows than uncapped — no single recall-collapsing giant call —
-    # while still never overflowing.
+    # while still never overflowing. Pin the env so the DEFAULT (6000) is what
+    # resolves, independent of any ambient EXTRACTION_MAX_WINDOW_TOKENS.
+    monkeypatch.delenv("EXTRACTION_MAX_WINDOW_TOKENS", raising=False)
     doc = _doc(60)
     name, ctx, out = CHAIN[0]  # gemini
 

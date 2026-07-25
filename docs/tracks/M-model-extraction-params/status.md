@@ -144,9 +144,10 @@ message-based `default_is_rate_limit` fix (catches esperanto-wrapped 429 /
   M.4 guard re-splits), `est_calls` strictly decreasing as context grows (Gemini=1,
   llama≥5), and the default M.3 window cap trading a big model's one giant call for
   several moderate (recall-preserving) ones.
-- Docs: this ledger + `FEATURE_ROADMAP.md`. (No `ARCHITECTURE.md` exists to edit; the
-  re-pack mechanism is documented in this ledger's "How chunks-per-call now derive"
-  section + the `context_packer.py` module docstring.)
+- Docs: `ARCHITECTURE.md` — a "Model-aware context packing (Track M)" subsection
+  under the extraction pipeline (the M.3 budget formula + cap, the M.4 oversized
+  guard, the M-D4 window-of-chunks provenance, and the M.5 gate) — plus this ledger
+  and the `context_packer.py` module docstring.
 
 ### Deferred (the one remaining item)
 - **M.4 (a)**: the full per-document failover re-architecture (each candidate re-chunks
