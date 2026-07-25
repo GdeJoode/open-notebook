@@ -35,7 +35,7 @@ phase merge.
 | **E** — research-workflows | E1 single-agent + E3 thesis-mode | 🕗 NOT STARTED | no | — | Roadmap entry only |
 | **F** — operations | Audit, librarian, resumable jobs | 🚢 SHIPPED | yes | 2026-07-24 | F.1–F.8 merged (`#58`–`#64` + docs); see `F-operations/{status,RETRO}.md`. F.7b (`chunked` split) deferred |
 | **G** — agent-integration | Headless mode + REST agent API | 🚢 SHIPPED | yes | 2026-07-25 | G.1–G.7 merged (`#67`–`#75`) + security fix `#72`; see `G-agent-integration/{status,RETRO}.md`. Unblocks Track H |
-| **H** — vision-parser | Vision-model parser tier | 📋 PLANNED (unblocked) | no | 2026-06-05 | **G is now complete → H is unblocked.** Prereq: per-chunk/per-element confidence (`A-mineru/CONFIDENCE_GRANULARITY_NOTE.md`, Optie A) |
+| **H** — vision-parser | Vision-model parser tier | 🔨 IN PROGRESS (prereq) | partial | 2026-07-25 | Prereq "per-segment confidence" started: **H0.1 per-page scoring SHIPPED (#77)**. **Resume at H0.2** (hybrid page-merge) — see `H-vision-parser/confidence-granularity-plan.md` ▶ RESUME HERE. Vision tier (H1–H3) still gated on 2 user decisions (YAGNI + model choice) |
 | **I** — docling-studio | Upload guards + inspect workspace + coord canon | 🚢 SHIPPED | yes | 2026-06-19 | Merged to `main` (I.A/I.B/I.D/I.E/I.H1); `status.md` still says "ready for review" — **docs stale**, no formal close |
 | **J** — model-routing | Cloud/local routing (privacy + failover) | ✅ CLOSED | yes | 2026-06-22 | All 6 phases (J.1–J.6) |
 | **K** — entity-resolution | NL normalizer + alias tables + fuzzy dedup + UI | 🚢 SHIPPED ⚠ | yes | 2026-06-22 | K.1–K.7a **merged to `main`** (merge commits `7c9e117`…`dd10eb0`); **roadmap still says PLANNED** — docs drift, no code pending |
