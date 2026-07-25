@@ -67,6 +67,24 @@ class DoclingConfidenceScore:
     threshold: float = DEFAULT_THRESHOLD
 
 
+@dataclass(frozen=True)
+class PageConfidence:
+    """Per-page confidence — the H0.1 granularity the doc-level score aggregates.
+
+    Same 6 signals as :class:`DoclingConfidenceScore`, but scoped to ONE page's
+    elements/tables/images/text (``page_count`` = 1). ``page_number`` is docling's
+    1-indexed page number (or the 1-based position when unset). This is the input
+    the H0.2 hybrid merge routes on — a page whose ``decision == "fallback"`` is a
+    candidate for MinerU re-parse while its ``accept`` neighbours keep docling.
+    """
+
+    page_number: int
+    overall: float
+    signals: Dict[str, float] = field(default_factory=dict)
+    decision: Literal["accept", "fallback"] = "accept"
+    threshold: float = DEFAULT_THRESHOLD
+
+
 def score_docling_extraction(
     result: Any,
     *,
@@ -100,14 +118,13 @@ def score_docling_extraction(
 
     page_count = max(1, int(getattr(document, "page_count", 0) or 0) or _infer_page_count(document))
 
-    signals = {
-        "ocr_confidence": _ocr_confidence(elements),
-        "text_density": _text_density(document, page_count),
-        "heading_rate": _heading_rate(elements, page_count),
-        "table_success": _table_success(tables),
-        "image_text_ratio": _image_text_ratio(elements, images),
-        "unknown_element_ratio": _unknown_element_ratio(elements),
-    }
+    signals = _signals(
+        elements=elements,
+        tables=tables,
+        images=images,
+        text=getattr(document, "full_text", "") or "",
+        page_count=page_count,
+    )
 
     overall = _weighted_sum(signals)
     decision: Literal["accept", "fallback"] = (
@@ -120,6 +137,53 @@ def score_docling_extraction(
         decision=decision,
         threshold=threshold,
     )
+
+
+def score_docling_pages(
+    result: Any,
+    *,
+    threshold: float = DEFAULT_THRESHOLD,
+) -> list[PageConfidence]:
+    """Score each page of a Docling result INDEPENDENTLY (Track H0.1, Optie A).
+
+    Returns one :class:`PageConfidence` per page (in page order), each scored with
+    the same 6 weighted signals as :func:`score_docling_extraction` but over only
+    that page's elements/tables/images/text. A page with no elements still scores
+    (its signals default to the neutral 1.0s, same as the doc-level empty case).
+
+    Additive to the doc-level score, which is intentionally left byte-identical so
+    the A.3-tuned threshold and the existing accept/fallback behaviour are
+    unchanged. A ``None`` document (audio / failed extraction) → ``[]``: there are
+    no pages to route per-segment.
+    """
+    document = getattr(result, "document", None)
+    if document is None:
+        return []
+    pages = getattr(document, "pages", None) or []
+    out: list[PageConfidence] = []
+    for idx, page in enumerate(pages):
+        p_elements = list(_iter_page_elements(page))
+        p_tables = list(getattr(page, "tables", []) or [])
+        p_images = list(getattr(page, "images", []) or [])
+        signals = _signals(
+            elements=p_elements,
+            tables=p_tables,
+            images=p_images,
+            text=_page_text(page),
+            page_count=1,
+        )
+        overall = _weighted_sum(signals)
+        page_number = int(getattr(page, "page_number", 0) or 0) or (idx + 1)
+        out.append(
+            PageConfidence(
+                page_number=page_number,
+                overall=overall,
+                signals=signals,
+                decision="accept" if overall >= threshold else "fallback",
+                threshold=threshold,
+            )
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -193,14 +257,66 @@ def _ocr_confidence(elements: list[Any]) -> float:
     return _clamp01(sum(ocr_confs) / len(ocr_confs))
 
 
-def _text_density(document: Any, page_count: int) -> float:
-    """``len(full_text) / pages`` normalised by 1500 chars/page baseline.
+def _signals(
+    *,
+    elements: list[Any],
+    tables: list[Any],
+    images: list[Any],
+    text: str,
+    page_count: int,
+) -> Dict[str, float]:
+    """Compute the 6 weighted signals over a scope (whole doc OR one page).
 
-    Scanned/image-only documents have near-zero density; clean academic
-    papers comfortably exceed 1500 chars/page and saturate to 1.0.
+    Shared by :func:`score_docling_extraction` (doc scope: all elements +
+    ``document.full_text``) and :func:`score_docling_pages` (page scope: one
+    page's elements + its joined text, ``page_count=1``). Keeping the doc path
+    routed through this helper with the same inputs preserves its output exactly.
     """
-    full_text = getattr(document, "full_text", "") or ""
-    chars_per_page = len(full_text) / max(1, page_count)
+    return {
+        "ocr_confidence": _ocr_confidence(elements),
+        "text_density": _text_density_value(text, page_count),
+        "heading_rate": _heading_rate(elements, page_count),
+        "table_success": _table_success(tables),
+        "image_text_ratio": _image_text_ratio(elements, images),
+        "unknown_element_ratio": _unknown_element_ratio(elements),
+    }
+
+
+def _iter_page_elements(page: Any) -> Iterable[Any]:
+    """Yield one page's elements + tables + images (single-page ``_iter_elements``)."""
+    for elem in getattr(page, "elements", []) or []:
+        yield elem
+    for tbl in getattr(page, "tables", []) or []:
+        yield tbl
+    for img in getattr(page, "images", []) or []:
+        yield img
+
+
+def _page_text(page: Any) -> str:
+    """A page's prose text for text_density.
+
+    Prefers the real ``PageContent.text_content`` (the combined per-page text);
+    falls back to joining each element's ``content`` (what ``ExtractedElement``
+    stores its text under, and what the test fakes provide).
+    """
+    tc = getattr(page, "text_content", None)
+    if tc:
+        return str(tc)
+    parts = [
+        str(getattr(elem, "content", "") or "")
+        for elem in getattr(page, "elements", []) or []
+        if getattr(elem, "content", None)
+    ]
+    return " ".join(parts)
+
+
+def _text_density_value(text: str, page_count: int) -> float:
+    """``len(text) / pages`` normalised by 1500 chars/page baseline.
+
+    Scanned/image-only documents (or pages) have near-zero density; clean
+    academic text comfortably exceeds 1500 chars/page and saturates to 1.0.
+    """
+    chars_per_page = len(text or "") / max(1, page_count)
     return _clamp01(chars_per_page / 1500.0)
 
 
@@ -290,6 +406,8 @@ def _clamp01(value: float) -> float:
 __all__ = [
     "DEFAULT_THRESHOLD",
     "DoclingConfidenceScore",
+    "PageConfidence",
     "SIGNAL_WEIGHTS",
     "score_docling_extraction",
+    "score_docling_pages",
 ]
