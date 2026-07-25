@@ -56,6 +56,35 @@ def test_status_disabled_and_empty(monkeypatch, tmp_path):
     assert body["recent"] == []
 
 
+def test_status_recent_includes_per_notebook_inboxes_newest_first(monkeypatch, tmp_path):
+    # Per-notebook inbox files land in <root>/notebook:x/inbox/_processed/ — the
+    # scan must descend to find them, and order newest-first.
+    import os
+
+    inbox = tmp_path / "inbox"
+    top_proc = inbox / "_processed"
+    nb_proc = inbox / "notebook:x" / "inbox" / "_processed"
+    top_proc.mkdir(parents=True)
+    nb_proc.mkdir(parents=True)
+
+    older = top_proc / "old.pdf"
+    older.write_bytes(b"x")
+    os.utime(older, (1000, 1000))  # ancient mtime
+    newer = nb_proc / "new.pdf"
+    newer.write_bytes(b"x")
+    os.utime(newer, (2_000_000_000, 2_000_000_000))  # far-future mtime
+
+    monkeypatch.setenv("INBOX_PATHS", str(inbox))
+    resp = _client().get("/api/watcher/status")
+    assert resp.status_code == 200
+    recent = resp.json()["recent"]
+    names = [e["name"] for e in recent]
+    assert "new.pdf" in names  # the nested per-notebook file is found
+    assert "old.pdf" in names
+    # newest-first ordering
+    assert names.index("new.pdf") < names.index("old.pdf")
+
+
 def test_status_never_500s_on_bad_path(monkeypatch):
     monkeypatch.setenv("INBOX_PATHS", "/nonexistent/definitely/not/here")
     resp = _client().get("/api/watcher/status")

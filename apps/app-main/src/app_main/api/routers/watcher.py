@@ -25,16 +25,26 @@ _RECENT_LIMIT = 25
 def _scan_recent(paths, limit: int = _RECENT_LIMIT) -> list[dict]:
     """Most-recent processed/errored files across the watched inboxes.
 
-    Reads the mtime of each file in every inbox's ``_processed``/``_errors``
-    folder, newest first. Best-effort: an unreadable folder is skipped, never
-    raised — a status read must never 500.
+    Reads the mtime of each file in every ``_processed``/``_errors`` folder under
+    each inbox root, newest first. The scan is RECURSIVE: a per-notebook inbox
+    (``<root>/notebook:<id>/inbox/``) has its own ``_processed``/``_errors``
+    (the watcher moves into ``p.parent/<subdir>``), so a top-level-only scan
+    would under-report per-notebook activity. Best-effort: an unreadable folder
+    is skipped, never raised — a status read must never 500.
     """
     entries: list[dict] = []
     for root in paths:
-        for sub, status in ((_PROCESSED, "processed"), (_ERRORS, "errored")):
-            d = Path(root) / sub
+        rp = Path(root)
+        if not rp.is_dir():
+            continue
+        try:
+            term_dirs = list(rp.rglob(_PROCESSED)) + list(rp.rglob(_ERRORS))
+        except OSError:
+            continue
+        for d in term_dirs:
             if not d.is_dir():
                 continue
+            status = "processed" if d.name == _PROCESSED else "errored"
             try:
                 for f in d.iterdir():
                     if not f.is_file():
