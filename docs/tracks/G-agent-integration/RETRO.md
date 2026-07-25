@@ -1,8 +1,9 @@
 # Track G — Agent Integration & Headless Mode — Retrospective
 
-Shipped 2026-07-24/25 across eight PRs (#68–#74 + the #72 security fix). Track G
-turns open-notebook into a headless agent platform: a versioned, API-key-authed
-REST surface over the existing pipeline, plus an opt-in inbox file-watcher.
+Shipped 2026-07-24/25 across eight PRs (#67–#74, which includes the #72 security
+fix). Track G turns open-notebook into a headless agent platform: a versioned,
+API-key-authed REST surface over the existing pipeline, plus an opt-in inbox
+file-watcher.
 
 ## What shipped
 

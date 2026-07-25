@@ -7,7 +7,7 @@ API-key-authed REST surface, plus an opt-in inbox file-watcher.
 
 | Phase | Status | PR |
 |---|---|---|
-| G.1 — Agent auth foundation + `extract-entities` | ✅ | (G.1 stack) |
+| G.1 — Agent auth foundation + `extract-entities` | ✅ | #67 |
 | G.2 — `generate-summary` over raw text | ✅ | #68 |
 | G.3 — Ingest façade: `process-url` + `jobs/{id}` + `audit-log` | ✅ | #69 |
 | G.3b — Multipart upload: `process-document` + `process-audio` | ✅ | #71 |
