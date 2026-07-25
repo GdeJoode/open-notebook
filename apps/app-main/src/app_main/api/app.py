@@ -232,6 +232,7 @@ def create_app() -> FastAPI:
         triage,
         vault,
         vocabulary,
+        watcher,
         zotero,
     )
 
@@ -275,6 +276,7 @@ def create_app() -> FastAPI:
     application.include_router(ontologies.router, prefix="/api", tags=["ontologies"])
     application.include_router(orphans.router, prefix="/api", tags=["orphans"])
     application.include_router(audit.router, prefix="/api", tags=["audit"])
+    application.include_router(watcher.router, prefix="/api", tags=["watcher"])
     # Agent integration (G.1): key management under /api (password-gated) + the
     # versioned agent capability router (already carries its /api/v1/agents prefix,
     # key-authed by require_agent_key).
