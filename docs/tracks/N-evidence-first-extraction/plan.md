@@ -1,7 +1,11 @@
 # Track N — Evidence-first extraction & abstention — Sprint Plan
 
-> Status: 📝 PROPOSED (2026-08-31), three design decisions resolved with the user —
-> awaiting approval to start.
+> Status: 🔨 IN PROGRESS (2026-08-31). **N.1 SHIPPED (PR #78)** — pre-LLM
+> candidate anchors (TF-IDF + spaCy-noun-chunks-lazy + regex fallback + EntityRuler
+> domain-NER stub + budget-safe prompt threading); review APPROVED. **Resume at
+> N.1-deps** (add `spacy` + `en_core_web_sm` to the ontology-extraction deps +
+> container build — isolated from the N.1 code review) **then N.2** (Hearst is-a
+> miner). N.3–N.5 follow.
 > Origin: assessment of a Medium article ("Which parts of ontology discovery
 > actually need an LLM?") against open-notebook's KG stack.
 > Scope: the two applicable, high-value wins the article surfaces — a **pre-LLM
