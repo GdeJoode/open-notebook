@@ -58,3 +58,56 @@ def test_blank_anchors_are_dropped():
     )
     assert "- Real Term" in p
     assert "- \n" not in p
+
+
+# -- run_pass2 budget safety: anchors must never break the run ---------------
+
+import asyncio  # noqa: E402
+
+from ontology_extraction.pass2_typed_extraction import (  # noqa: E402
+    _estimate_tokens,
+    run_pass2,
+)
+
+
+def test_anchors_dropped_when_they_would_breach_budget():
+    """Anchors are best-effort: a chunk that fits WITHOUT them must not be turned
+    into a Pass2TokenBudgetExceeded by adding them — they get dropped instead."""
+    ont = _ontology()
+    chunk_text = "Regio Deal Ministerie van Economische Zaken " * 20
+    chunks = [
+        {"text": chunk_text, "id": "c1"},
+        {"text": chunk_text + " Extra Term", "id": "c2"},
+    ]
+    base = _estimate_tokens(build_pass2_prompt(ont, chunk_text, []))
+    budget = base + 5  # base fits; base + the ~150-token anchor block does not
+
+    captured: dict = {}
+
+    def caller(system: str, user: str, model: str) -> str:
+        captured["prompt"] = user
+        return '{"entities": [], "relations": []}'
+
+    # Must NOT raise Pass2TokenBudgetExceeded — anchors are dropped to fit.
+    result = asyncio.run(
+        run_pass2(chunks, ont, llm_caller=caller, token_budget=budget)
+    )
+    assert result is not None
+    assert "Candidate anchors" not in captured["prompt"]
+
+
+def test_anchors_present_when_budget_allows():
+    ont = _ontology()
+    chunk_text = "Regio Deal and the Backup Service handle records."
+    chunks = [
+        {"text": chunk_text, "id": "c1"},
+        {"text": "An unrelated Ministerie chunk about Beleid.", "id": "c2"},
+    ]
+    captured: dict = {}
+
+    def caller(system: str, user: str, model: str) -> str:
+        captured["prompt"] = user
+        return '{"entities": [], "relations": []}'
+
+    asyncio.run(run_pass2(chunks, ont, llm_caller=caller, token_budget=100_000))
+    assert "Candidate anchors" in captured["prompt"]  # generous budget → kept

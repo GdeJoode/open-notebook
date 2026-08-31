@@ -519,6 +519,21 @@ async def run_pass2(
             ontology, chunk_text, extensions, candidate_anchors=anchors
         )
         estimated = _estimate_tokens(user_prompt)
+        if estimated > budget and anchors:
+            # Anchors are a best-effort recall nudge — they must NEVER turn a chunk
+            # that would otherwise fit into a budget failure that stops the whole
+            # run. Drop them and re-check before raising (N.1 safety).
+            user_prompt = build_pass2_prompt(
+                ontology, chunk_text, extensions, candidate_anchors=None
+            )
+            estimated = _estimate_tokens(user_prompt)
+            if estimated <= budget:
+                logger.info(
+                    "pass2: dropped candidate anchors for chunk {cid} to stay "
+                    "within the {b}-token budget",
+                    cid=chunk_id,
+                    b=budget,
+                )
         if estimated > budget:
             # Per Q-B-6 telemetry policy, log before raising so the
             # ledger captures the breach even if a higher-level
