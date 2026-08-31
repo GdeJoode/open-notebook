@@ -10,6 +10,13 @@ dependencies = [
     "ontology-manager",
     "httpx>=0.27.0",
     "loguru>=0.7.2",
+    # Track N.1: spaCy noun-chunks for the pre-LLM candidate layer. The model is
+    # URL-pinned so `uv sync --frozen` (the container build) installs it from the
+    # lock — no separate `spacy download` build step, and CI/tests get the real
+    # spaCy path too. candidates.py lazy-loads + falls back to regex, so a resolve
+    # hiccup never hard-fails extraction.
+    "spacy>=3.8,<3.9",
+    "en_core_web_sm",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +38,9 @@ shared = { workspace = true }
 surrealdb-service = { workspace = true }
 llm-manager = { workspace = true }
 ontology-manager = { workspace = true }
+# Track N.1: the spaCy model as a URL-pinned wheel so it locks + installs with
+# `uv sync --frozen` (no separate `spacy download` step).
+en_core_web_sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
