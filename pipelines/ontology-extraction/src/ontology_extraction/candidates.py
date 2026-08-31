@@ -56,7 +56,10 @@ _TITLECASE_RUN_RE = re.compile(
     r"\b[A-ZÀ-Ý][a-zà-ÿ]+"
     r"(?:\s+(?:van|de|der|den|voor|en|of|the|het|[A-ZÀ-Ý][a-zà-ÿ]+)){0,5}"
 )
-_QUOTED_RE = re.compile(r"[\"“”']([^\"“”']{2,60})[\"“”']")
+# Only DOUBLE quotes (straight + curly) — the straight single quote is
+# overwhelmingly a contraction/possessive apostrophe in prose ("don't", "it's"),
+# so matching it as a quote delimiter over-captured spurious spans.
+_QUOTED_RE = re.compile(r"[\"“”]([^\"“”]{2,60})[\"“”]")
 
 
 @dataclass(frozen=True)
@@ -130,7 +133,11 @@ def _load_spacy() -> Optional[Any]:
 
     Guarded so a missing library OR model degrades to the regex fallback — the
     extraction path must never crash on a parsing dependency (Decision N-D2).
-    Cached so the model loads once per process.
+    Cached so the model loads once per process. NOTE: the cache also pins a
+    transient load FAILURE for the process lifetime — acceptable because spaCy
+    availability (library + model installed) does not change mid-process; a deploy
+    that installs the model takes effect on the next process, which is the intended
+    granularity.
     """
     try:
         import spacy  # type: ignore

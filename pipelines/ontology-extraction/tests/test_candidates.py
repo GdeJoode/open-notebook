@@ -133,3 +133,14 @@ def test_top_k_cap_and_empty_input():
     cands = extract_candidates("x", corpus_chunks=["a", "b"], top_k=7, nlp=nlp)
     assert len(cands) <= 7
     assert extract_candidates("") == []
+
+
+def test_contractions_do_not_produce_spurious_quoted_anchors():
+    # Straight apostrophes in contractions must NOT be read as quote delimiters
+    # (the N.1-review MINOR): only double-quoted spans are candidates.
+    got = noun_phrase_candidates("They don't like it's style but \"Audit Trail\" is real.")
+    joined = " | ".join(got)
+    assert "Audit Trail" in joined  # the real double-quoted span survives
+    assert not any("'" in g and len(g.split()) > 1 and g[0].islower() for g in got)
+    # no spurious lowercase apostrophe-run like "t like it"
+    assert "t like it" not in joined
