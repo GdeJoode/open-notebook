@@ -188,3 +188,31 @@ def test_extract_candidates_edge_stripped_on_real_shape():
     # no candidate starts with a capitalized article or ends with a connector
     assert not any(t.split()[0].lower() in {"de", "het", "een"} for t in texts if t)
     assert not any(t.split()[-1].lower() in {"de", "en", "van"} for t in texts if t)
+
+
+def test_detect_lang_nl_vs_en():
+    from ontology_extraction.candidates import _detect_lang
+    assert _detect_lang("de gemeente en het rijk van de minister tekent") == "nl"
+    assert _detect_lang("the city and the state of the minister signs it") == "en"
+    assert _detect_lang("") == "en"  # no signal → default en
+
+
+def test_noun_phrase_merges_spacy_and_regex_complementary():
+    # spaCy (stub) yields a generic grammatical phrase; the regex catches the long
+    # compound proper name spaCy fragments — BOTH survive (they are complementary).
+    nlp = _FakeNlp(["de gemeente"])
+    got = noun_phrase_candidates(
+        "De gemeente tekent met Regio Deal Het Hogeland.", nlp=nlp
+    )
+    assert "de gemeente" in got  # spaCy contribution
+    assert any("Regio Deal Het Hogeland" in g for g in got)  # regex contribution
+
+
+def test_load_spacy_is_language_keyed():
+    # Cache is keyed per language (maxsize=2) so nl + en can coexist; a missing
+    # library still returns None for both without crashing.
+    from ontology_extraction.candidates import _load_spacy
+    _load_spacy.cache_clear()
+    # Does not raise for either language (returns a pipeline or None).
+    _load_spacy("nl")
+    _load_spacy("en")

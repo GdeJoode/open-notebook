@@ -17,6 +17,7 @@ dependencies = [
     # hiccup never hard-fails extraction.
     "spacy>=3.8,<3.9",
     "en_core_web_sm",
+    "nl_core_news_sm",
 ]
 
 [project.optional-dependencies]
@@ -38,9 +39,11 @@ shared = { workspace = true }
 surrealdb-service = { workspace = true }
 llm-manager = { workspace = true }
 ontology-manager = { workspace = true }
-# Track N.1: the spaCy model as a URL-pinned wheel so it locks + installs with
-# `uv sync --frozen` (no separate `spacy download` step).
+# Track N.1: the spaCy models as URL-pinned wheels so they lock + install with
+# `uv sync --frozen` (no separate `spacy download` step). Both EN + NL — the
+# candidate layer picks the model per document language (Dutch policy corpus).
 en_core_web_sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
+nl_core_news_sm = { url = "https://github.com/explosion/spacy-models/releases/download/nl_core_news_sm-3.8.0/nl_core_news_sm-3.8.0-py3-none-any.whl" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

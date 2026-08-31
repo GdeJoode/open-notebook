@@ -33,16 +33,23 @@ from typing import Any, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
-# Compact NL+EN stopword set — the corpus is Dutch/English mixed (Gemeente,
-# Ministerie, …), so TF-IDF salience must not be dominated by function words.
-_STOPWORDS = frozenset(
+# Language-split stopword sets — kept separate so a cheap NL-vs-EN language guess
+# (:func:`_detect_lang`) can pick the right spaCy model per document, while their
+# union still guards TF-IDF salience against function words (the corpus is
+# Dutch/English mixed: Gemeente, Ministerie, …).
+_NL_STOPWORDS = frozenset(
     """
     de het een van en in op te dat die deze der den des aan met voor is was zijn
     er om ook naar bij uit als maar of dan door over onder tussen tot per wij zij
+    """.split()
+)
+_EN_STOPWORDS = frozenset(
+    """
     the a an of and in on to that this these for is are was were be by with from at
     as but or than then it its their your our we they he she his her not no yes
     """.split()
 )
+_STOPWORDS = _NL_STOPWORDS | _EN_STOPWORDS
 
 # A candidate must be 2..60 chars and not a pure number / single stopword.
 _MIN_LEN = 2
@@ -130,31 +137,50 @@ def tfidf_salient_terms(
 # ---------------------------------------------------------------------------
 
 
-@lru_cache(maxsize=1)
-def _load_spacy() -> Optional[Any]:
-    """Lazy-load spaCy ``en_core_web_sm``; return None if unavailable.
+# spaCy model per detected language. Both are URL-pinned deps + lazy-loaded.
+_SPACY_MODEL = {"nl": "nl_core_news_sm", "en": "en_core_web_sm"}
 
-    Guarded so a missing library OR model degrades to the regex fallback — the
-    extraction path must never crash on a parsing dependency (Decision N-D2).
-    Cached so the model loads once per process. NOTE: the cache also pins a
-    transient load FAILURE for the process lifetime — acceptable because spaCy
-    availability (library + model installed) does not change mid-process; a deploy
-    that installs the model takes effect on the next process, which is the intended
-    granularity.
+
+def _detect_lang(text: str) -> str:
+    """Cheap NL-vs-EN language guess by stopword ratio (dependency-free).
+
+    Picks the spaCy model for the document. Ties / no signal → ``"en"``. Robust
+    enough for a whole document/chunk; the regex source (which runs alongside
+    spaCy regardless) doesn't care about language.
     """
+    tokens = _tokenize(text)
+    if not tokens:
+        return "en"
+    nl = sum(1 for t in tokens if t in _NL_STOPWORDS)
+    en = sum(1 for t in tokens if t in _EN_STOPWORDS)
+    return "nl" if nl > en else "en"
+
+
+@lru_cache(maxsize=2)
+def _load_spacy(lang: str = "en") -> Optional[Any]:
+    """Lazy-load the spaCy model for ``lang`` (nl/en); return None if unavailable.
+
+    Guarded so a missing library OR model degrades to the regex source — the
+    extraction path must never crash on a parsing dependency (Decision N-D2).
+    Cached per language (maxsize=2 → both models load once per process). NOTE: the
+    cache also pins a transient load FAILURE for the process lifetime — acceptable
+    because spaCy availability doesn't change mid-process; a deploy that installs a
+    model takes effect on the next process.
+    """
+    model = _SPACY_MODEL.get(lang, "en_core_web_sm")
     try:
         import spacy  # type: ignore
     except Exception as exc:  # noqa: BLE001 — library not installed → fallback
-        logger.debug("candidates: spaCy not importable ({e}); using regex fallback", e=exc)
+        logger.debug("candidates: spaCy not importable ({e}); using regex source", e=exc)
         return None
     try:
-        # Disable NER by default — we only want the parser's noun-chunks; the
+        # Disable NER + lemmatizer — we only want the parser's noun-chunks; the
         # EntityRuler (domain NER) is added explicitly when enabled.
-        return spacy.load("en_core_web_sm", disable=["ner", "lemmatizer"])
+        return spacy.load(model, disable=["ner", "lemmatizer"])
     except Exception as exc:  # noqa: BLE001 — model not downloaded → fallback
         logger.info(
-            "candidates: spaCy model 'en_core_web_sm' unavailable ({e}); "
-            "using regex noun-phrase fallback",
+            "candidates: spaCy model {m!r} unavailable ({e}); using regex source",
+            m=model,
             e=exc,
         )
         return None
@@ -170,21 +196,31 @@ def _regex_noun_phrases(text: str) -> List[str]:
     return out
 
 
-def noun_phrase_candidates(text: str, *, nlp: Optional[Any] = None) -> List[str]:
-    """Noun-phrase candidates via spaCy noun-chunks, else the regex fallback.
+def noun_phrase_candidates(
+    text: str, *, nlp: Optional[Any] = None, lang: Optional[str] = None
+) -> List[str]:
+    """Noun-phrase candidates: spaCy noun-chunks + regex Title-Case runs, MERGED.
 
-    ``nlp`` may be injected (tests pass a stub); when omitted the module lazy-
-    loads spaCy and falls back to regex if the model is absent.
+    The two sources are COMPLEMENTARY (live-validated on Dutch policy docs): the
+    per-language spaCy model reads grammar (generic phrases like "de gemeente")
+    but FRAGMENTS long compound proper names, while the regex captures the long
+    Title-Case runs ("Minister van Volkshuisvesting en Ruimtelijke Ordening")
+    spaCy splits. Running BOTH (dedup'd downstream) gives the union. spaCy loads
+    the model for ``lang`` (nl/en; auto-detected when None). ``nlp`` may be
+    injected (tests). When spaCy is unavailable the regex source stands alone.
+    Deterministic, order-stable.
     """
-    engine = nlp if nlp is not None else _load_spacy()
-    if engine is None:
-        return _regex_noun_phrases(text)
-    try:
-        doc = engine(text or "")
-        return [nc.text for nc in doc.noun_chunks]
-    except Exception as exc:  # noqa: BLE001 — any spaCy hiccup → regex fallback
-        logger.warning("candidates: spaCy noun_chunks failed ({e}); regex fallback", e=exc)
-        return _regex_noun_phrases(text)
+    phrases: List[str] = []
+    engine = nlp if nlp is not None else _load_spacy(lang or _detect_lang(text))
+    if engine is not None:
+        try:
+            phrases.extend(nc.text for nc in engine(text or "").noun_chunks)
+        except Exception as exc:  # noqa: BLE001 — spaCy hiccup → regex source only
+            logger.warning(
+                "candidates: spaCy noun_chunks failed ({e}); regex source only", e=exc
+            )
+    phrases.extend(_regex_noun_phrases(text))
+    return phrases
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +234,7 @@ def domain_ner_candidates(
     patterns: Optional[List[dict]] = None,
     enabled: bool = False,
     nlp: Optional[Any] = None,
+    lang: Optional[str] = None,
 ) -> List[str]:
     """Domain entities via a rule-based spaCy ``EntityRuler`` gazetteer (stub).
 
@@ -209,7 +246,7 @@ def domain_ner_candidates(
     """
     if not enabled or not patterns:
         return []
-    engine = nlp if nlp is not None else _load_spacy()
+    engine = nlp if nlp is not None else _load_spacy(lang or _detect_lang(text))
     if engine is None:
         return []
     try:
@@ -279,6 +316,9 @@ def extract_candidates(
     stronger anchor). Returns at most ``top_k`` candidates.
     """
     corpus = list(corpus_chunks) if corpus_chunks is not None else [chunk_text]
+    # Detect the document language ONCE (over the whole corpus for stability) so
+    # spaCy picks the nl/en model consistently across the source's chunks.
+    lang = _detect_lang(" ".join(corpus)[:20000]) if corpus else "en"
 
     merged: dict[str, Candidate] = {}
 
@@ -294,11 +334,15 @@ def extract_candidates(
 
     # Noun-phrases first (strongest anchors) — a small length bonus favours
     # specific multi-word terms over single tokens.
-    for phrase in noun_phrase_candidates(chunk_text, nlp=nlp):
+    for phrase in noun_phrase_candidates(chunk_text, nlp=nlp, lang=lang):
         merged_len = len(_normalize(phrase).split())
         _add(phrase, "noun_chunk", 1.0 + 0.1 * min(merged_len, 5))
     for hit in domain_ner_candidates(
-        chunk_text, patterns=domain_patterns, enabled=domain_ner_enabled, nlp=nlp
+        chunk_text,
+        patterns=domain_patterns,
+        enabled=domain_ner_enabled,
+        nlp=nlp,
+        lang=lang,
     ):
         _add(hit, "domain_ner", 2.0)  # a gazetteer hit is the strongest signal
     for term, score in tfidf_salient_terms(chunk_text, corpus):
