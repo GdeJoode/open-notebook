@@ -65,6 +65,7 @@ budget-exceeded path explicitly.
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
@@ -76,6 +77,7 @@ from shared.models.extraction import (
     ExtractionResult,
 )
 
+from ontology_extraction.candidates import extract_candidates
 from ontology_extraction.prompts.pass2 import (
     PASS2_SYSTEM_PROMPT,
     build_pass2_prompt,
@@ -91,6 +93,31 @@ from ontology_extraction.prompts.pass2 import (
 # single-chunk default-path call still fits without falsely tripping
 # the guard. Headroom remains against the 3000-token plan cap.
 TOKEN_BUDGET_TARGET = 2800
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _candidate_anchors_enabled() -> bool:
+    """Track N.1: thread pre-LLM candidate anchors into the prompt (default ON)."""
+    return _env_bool("EXTRACTION_CANDIDATE_ANCHORS", True)
+
+
+def _candidate_top_k() -> int:
+    raw = os.getenv("EXTRACTION_CANDIDATE_TOP_K")
+    try:
+        return max(0, int(raw)) if raw else 20
+    except ValueError:
+        return 20
+
+
+def _domain_ner_enabled() -> bool:
+    """Track N.1 stub gate: the EntityRuler domain gazetteer (default OFF)."""
+    return _env_bool("EXTRACTION_DOMAIN_NER_ENABLED", False)
 
 # How many characters of a malformed LLM response to include in the
 # WARNING log. Long enough to diagnose, short enough not to swamp the
@@ -366,6 +393,7 @@ async def run_pass2(
     llm_caller: Optional[LLMCaller] = None,
     model: str = "default",
     token_budget: Optional[int] = None,
+    candidate_anchors_enabled: Optional[bool] = None,
 ) -> ExtractionResult:
     """Run Pass-2 typed extraction across a batch of chunks.
 
@@ -417,6 +445,17 @@ async def run_pass2(
     caller = llm_caller if llm_caller is not None else _default_llm_caller()
     budget = token_budget if token_budget is not None else TOKEN_BUDGET_TARGET
 
+    # Track N.1: pre-LLM candidate anchors. Enabled by default (env-overridable);
+    # the corpus for TF-IDF salience is the source's own chunk texts, computed once.
+    anchors_on = (
+        candidate_anchors_enabled
+        if candidate_anchors_enabled is not None
+        else _candidate_anchors_enabled()
+    )
+    corpus_texts = (
+        [str(c.get("text", "") or "") for c in chunks] if anchors_on else []
+    )
+
     # Empty chunks list short-circuits — no LLM calls, no errors,
     # empty result. AC #6.
     if not chunks:
@@ -457,7 +496,28 @@ async def run_pass2(
             # current workflow.py behaviour.
             continue
 
-        user_prompt = build_pass2_prompt(ontology, chunk_text, extensions)
+        anchors: Optional[List[str]] = None
+        if anchors_on:
+            try:
+                cands = extract_candidates(
+                    chunk_text,
+                    corpus_chunks=corpus_texts,
+                    top_k=_candidate_top_k(),
+                    domain_ner_enabled=_domain_ner_enabled(),
+                )
+                anchors = [c.text for c in cands]
+            except Exception as exc:  # noqa: BLE001 — candidates are best-effort
+                logger.warning(
+                    "pass2: candidate extraction failed for chunk {cid} ({e}); "
+                    "proceeding without anchors",
+                    cid=chunk_id,
+                    e=exc,
+                )
+                anchors = None
+
+        user_prompt = build_pass2_prompt(
+            ontology, chunk_text, extensions, candidate_anchors=anchors
+        )
         estimated = _estimate_tokens(user_prompt)
         if estimated > budget:
             # Per Q-B-6 telemetry policy, log before raising so the

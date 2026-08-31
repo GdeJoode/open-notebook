@@ -226,10 +226,51 @@ Rules:
 """
 
 
+# Budget cap for the N.1 candidate-anchor block (chars). ~600 chars ≈ ~150
+# tokens — a small precision nudge that cannot crowd out the chunk/ontology under
+# the ~2800-token prompt budget. Anchors past the cap are dropped, not truncated
+# mid-term.
+_MAX_ANCHOR_CHARS = 600
+
+
+def _format_candidate_anchors(anchors: List[str]) -> List[str]:
+    """Render the N.1 candidate-anchor block (budget-capped).
+
+    A PRECISION aid, explicitly NOT a shortlist — the surrounding prompt still
+    demands exhaustive recall. Empty / all-blank → no section (prompt is
+    byte-identical to the pre-N.1 output, preserving back-compat).
+    """
+    cleaned: List[str] = []
+    used = 0
+    for a in anchors:
+        a = (a or "").strip()
+        if not a:
+            continue
+        if used + len(a) + 3 > _MAX_ANCHOR_CHARS:
+            break
+        cleaned.append(a)
+        used += len(a) + 3
+    if not cleaned:
+        return []
+    return [
+        "",
+        "## Candidate anchors (precision aid — NOT a shortlist)",
+        (
+            "These salient terms were detected in the text below by lightweight "
+            "NLP. Make sure you did NOT miss any real entity among them — but still "
+            "extract EVERY other entity too, and IGNORE any anchor that is spurious "
+            "or not a genuine entity. This list is neither exhaustive nor a filter."
+        ),
+        "",
+        *[f"- {a}" for a in cleaned],
+    ]
+
+
 def build_pass2_prompt(
     ontology: Ontology,
     chunk_text: str,
     accepted_extensions: Optional[List[Dict[str, Any]]] = None,
+    candidate_anchors: Optional[List[str]] = None,
 ) -> str:
     """Assemble the Pass-2 user prompt for one chunk.
 
@@ -243,6 +284,9 @@ def build_pass2_prompt(
             (B.3c, conceptually) approved. Empty list / ``None`` is
             equivalent — preserves back-compat with callers that only
             pass an ontology.
+        candidate_anchors: Optional pre-LLM salient terms (Track N.1) rendered
+            as a budget-capped PRECISION-aid block. ``None`` / empty omits the
+            section entirely (byte-identical to the pre-N.1 prompt).
 
     Returns:
         A multi-section prompt string.
@@ -291,6 +335,9 @@ def build_pass2_prompt(
     parts.extend(_format_relationship_types(ontology))
 
     parts.extend(_format_accepted_extensions(extensions))
+
+    if candidate_anchors:
+        parts.extend(_format_candidate_anchors(candidate_anchors))
 
     parts.extend(
         [
