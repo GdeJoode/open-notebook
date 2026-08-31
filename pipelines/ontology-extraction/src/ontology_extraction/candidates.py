@@ -54,7 +54,10 @@ _WORD_RE = re.compile(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9'’-]+")
 # Economische Zaken"; a leading article ("The") is harmless noise dropped later.
 _TITLECASE_RUN_RE = re.compile(
     r"\b[A-ZÀ-Ý][a-zà-ÿ]+"
-    r"(?:\s+(?:van|de|der|den|voor|en|of|the|het|[A-ZÀ-Ý][a-zà-ÿ]+)){0,5}"
+    # {0,7} (not {0,5}) so a long article-led title like "De Minister van
+    # Volkshuisvesting en Ruimtelijke Ordening" is captured whole — a leading
+    # article consumes a slot, and _strip_edge_words trims it back afterwards.
+    r"(?:\s+(?:van|de|der|den|voor|en|of|the|het|[A-ZÀ-Ý][a-zà-ÿ]+)){0,7}"
 )
 # Only DOUBLE quotes (straight + curly) — the straight single quote is
 # overwhelmingly a contraction/possessive apostrophe in prose ("don't", "it's"),
@@ -225,8 +228,28 @@ def domain_ner_candidates(
 # ---------------------------------------------------------------------------
 
 
+# Articles/connectors that are noise at the START or END of a candidate phrase
+# (a leading "De Minister…" or a trailing "…Regio Deal de"). Stripped so the
+# anchor is the entity itself. Live-validated on the Regio Deal convenants where
+# the regex fallback otherwise emitted "De Partners en de" / "Regio Deal de".
+_EDGE_WORDS = frozenset(
+    {"de", "het", "een", "the", "a", "an", "van", "der", "den", "en", "of",
+     "voor", "in", "op", "and", "or"}
+)
+
+
+def _strip_edge_words(text: str) -> str:
+    """Drop leading/trailing articles + connectors from a phrase (case-insensitive)."""
+    words = text.split()
+    while words and words[0].lower() in _EDGE_WORDS:
+        words.pop(0)
+    while words and words[-1].lower() in _EDGE_WORDS:
+        words.pop()
+    return " ".join(words)
+
+
 def _normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").strip())
+    return _strip_edge_words(re.sub(r"\s+", " ", (text or "").strip()))
 
 
 def _acceptable(text: str) -> bool:

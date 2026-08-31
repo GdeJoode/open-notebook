@@ -162,3 +162,29 @@ def test_real_spacy_noun_chunks_when_available():
     )
     # spaCy noun-chunks should surface at least one multi-word phrase.
     assert any(len(g.split()) >= 2 for g in got)
+
+
+def test_strips_leading_and_trailing_articles_connectors():
+    # Live-validated on the Regio Deal convenants: the regex fallback emitted
+    # "De Minister … Ruimtelijke" (article-led + truncated) and "Regio Deal de"
+    # (trailing connector). Edge-word stripping + the wider run fix both.
+    from ontology_extraction.candidates import _strip_edge_words
+
+    assert _strip_edge_words("De Minister van Zaken") == "Minister van Zaken"
+    assert _strip_edge_words("Regio Deal de") == "Regio Deal"
+    assert _strip_edge_words("De Partners en de") == "Partners"
+    assert _strip_edge_words("Het Hogeland") == "Hogeland"
+    # a phrase that is all edge-words collapses to empty (dropped downstream)
+    assert _strip_edge_words("de en van") == ""
+
+
+def test_extract_candidates_edge_stripped_on_real_shape():
+    text = (
+        "De Minister van Volkshuisvesting en Ruimtelijke Ordening en de Regio Deal "
+        "de Partners tekenen het Convenant."
+    )
+    cands = extract_candidates(text, corpus_chunks=[text, "unrelated Ministerie chunk"], top_k=15)
+    texts = [c.text for c in cands]
+    # no candidate starts with a capitalized article or ends with a connector
+    assert not any(t.split()[0].lower() in {"de", "het", "een"} for t in texts if t)
+    assert not any(t.split()[-1].lower() in {"de", "en", "van"} for t in texts if t)
