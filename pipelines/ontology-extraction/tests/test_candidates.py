@@ -144,3 +144,21 @@ def test_contractions_do_not_produce_spurious_quoted_anchors():
     assert not any("'" in g and len(g.split()) > 1 and g[0].islower() for g in got)
     # no spurious lowercase apostrophe-run like "t like it"
     assert "t like it" not in joined
+
+
+def test_real_spacy_noun_chunks_when_available():
+    # Runs the REAL spaCy path where the model is installed (CI/container); skips
+    # where it isn't (local WSL: compiled-extension install blocked by /mnt I/O).
+    import pytest
+
+    from ontology_extraction.candidates import _load_spacy
+
+    _load_spacy.cache_clear()
+    nlp = _load_spacy()
+    if nlp is None:
+        pytest.skip("spaCy/en_core_web_sm not functional in this env")
+    got = noun_phrase_candidates(
+        "The Regio Deal is a policy instrument for the Ministry.", nlp=nlp
+    )
+    # spaCy noun-chunks should surface at least one multi-word phrase.
+    assert any(len(g.split()) >= 2 for g in got)
