@@ -11,7 +11,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-
 from app_main.services.type_placement_service import TypePlacementService
 from shared.models.notebook_schema import NotebookSchema
 
