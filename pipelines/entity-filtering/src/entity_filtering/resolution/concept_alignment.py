@@ -22,6 +22,17 @@ Scope: N.4a established the verdicts and their evidence; N.4b added
 descendant sweep are N.4c. See ``docs/tracks/N-evidence-first-extraction/plan.md``
 §N.4 (v2).
 
+What actually fires under the shipped defaults
+=============================================
+Be aware, before reading the seeding machinery below, that with
+``ConceptAlignmentConfig()`` as shipped it produces **nothing**: the type-chain
+tier is the only producer of ``NARROWER_THAN``, and it is OFF by default because
+it cannot verify that a name-matched node really is that type. So the stage
+currently classifies (RELATED/NOVEL, with evidence) but seeds no edges unless an
+operator opts into a tier the module itself documents as unverifiable. That is
+deliberate — D-N4-10 assigns the verifiable replacement to N.4c — but it means
+the seeding path below is exercised today only by that opt-in.
+
 Where the stage runs, and why it matters (D-N4-4)
 =================================================
 The stage is placed AFTER ontology validation and AFTER graph centrality. That is
@@ -250,6 +261,7 @@ def type_chain_subsumption(
     candidates: List[Dict[str, Any]],
     *,
     canonical_type: Optional[str] = None,
+    self_text: str = "",
 ) -> Optional[Alignment]:
     """NARROWER_THAN when an ancestor TYPE is MATERIALISED as a graph node.
 
@@ -271,11 +283,23 @@ def type_chain_subsumption(
     """
     if not ancestors or not candidates:
         return None
-    by_name = {_normalize(_candidate_name(c)): c for c in candidates}
+    # A concept is never narrower than itself. An entity whose surface form
+    # happens to equal an ancestor TYPE name ("Deal", "Gemeente", "Provincie" are
+    # all plausible Dutch surface forms) would otherwise match its own row and
+    # produce a self-referential verdict — a 1-cycle in the subsumption hierarchy
+    # that N.4c's descendant sweep would then traverse.
+    own = _normalize(self_text)
+    by_name = {
+        _normalize(_candidate_name(c)): c
+        for c in candidates
+        if _normalize(_candidate_name(c)) != own or not own
+    }
     for ancestor in ancestors:  # nearest ancestor first
         cand = by_name.get(_normalize(ancestor))
         if cand is None:
             continue
+        if own and _normalize(ancestor) == own:
+            continue  # the ancestor name IS this concept's own name
         return Alignment(
             verdict=NARROWER_THAN,
             method=METHOD_TYPE_CHAIN,
@@ -590,7 +614,8 @@ def build_is_a_seeds(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     seeding stays a pure function of the recorded verdict — an operator can audit
     the verdict and the edge separately, and re-running produces the same set.
 
-    Three deliberate restrictions:
+    Five deliberate restrictions, each of which drops a seed rather than emitting
+    a doubtful edge:
 
     * **Only NARROWER_THAN.** ``RELATED_TO`` is a link, not a subsumption, and
       must never become an ``is_a``. ``BROADER_THAN`` cannot occur yet (D-N4-10),
@@ -599,26 +624,57 @@ def build_is_a_seeds(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     * **Only a materialised target.** A verdict whose broader concept is just a
       TYPE name (``target_id is None``) is recorded in properties but not seeded;
       an edge to a node that does not exist is a dangling edge.
+    * **Never self-referential.** A concept is not narrower than itself. An entity
+      whose surface form equals its own broader concept's name would otherwise
+      produce ``X is_a X`` — and because persistence resolves both endpoints by
+      ``(canonical_name, entity_type)``, both sides land on the SAME record,
+      writing a 1-cycle into the subsumption hierarchy that N.4c's descendant
+      sweep would then traverse. The tier that produces the verdict already
+      refuses to match an entity against itself; this is the second line.
     * **Both endpoint types stamped** (D-N4-5). The target was fetched BY the
-      entity's canonical type, so that one value types both ends. Without it the
-      persist path falls back to name-only resolution — the cross-type homograph
+      entity's canonical type, so that one value types both ends. A seed WITHOUT
+      it is dropped rather than emitted untyped: an untyped edge falls back to
+      name-only resolution at persist, which is exactly the cross-type homograph
       mis-binding Track O.1 exists to prevent.
+    * **De-duplicated** on ``(source, target)``. Mirrors the intra-batch guard
+      N.2's Hearst miner applies, and protects the reversibility claim on
+      :data:`RELATION_SOURCE`: at persist, two rows collapse onto
+      ``(in, out, relation_type)`` and the later write clobbers
+      ``relation_source``, so a duplicate could orphan a seed from its provenance.
     """
     seeds: List[Dict[str, Any]] = []
+    seen: set = set()
     for entity in entities:
         props = _props(entity)
         if props.get("concept_alignment") != NARROWER_THAN:
             continue
-        target_name = props.get("alignment_target_name")
+        target_name = str(props.get("alignment_target_name") or "").strip()
         target_id = props.get("alignment_target_id")
         source = str(entity.get("text", "") or "").strip()
+        canonical = props.get("alignment_canonical_type")
         if not target_name or not target_id or not source:
             continue
-        canonical = props.get("alignment_canonical_type")
+        if _normalize(source) == _normalize(target_name):
+            logger.debug(
+                "concept_alignment: skipping self-referential is_a for {t!r}",
+                t=source,
+            )
+            continue
+        if not canonical:
+            logger.warning(
+                "concept_alignment: skipping is_a seed for {t!r} — no canonical "
+                "type, so the edge could not be typed (D-N4-5)",
+                t=source,
+            )
+            continue
+        key = (_normalize(source), _normalize(target_name))
+        if key in seen:
+            continue
+        seen.add(key)
         seeds.append(
             {
                 "source_entity": source,
-                "target_entity": str(target_name),
+                "target_entity": target_name,
                 "relation_type": IS_A,
                 "confidence": float(props.get("alignment_confidence") or 0.0),
                 "source_type": canonical,
@@ -779,12 +835,12 @@ class ConceptAligner:
         self, entity: Dict[str, Any], cache: Dict[str, _Fetch]
     ) -> Tuple[
         Optional[Alignment],
-        Optional[Tuple[Dict[str, Any], float, str]],
+        Optional[Tuple[Dict[str, Any], float, str, str]],
         List[AliasCandidate],
     ]:
         """Tiers 1-2. ``(alignment, ambiguous_band, alias_candidates)`` — exactly
         one of the first two is set. The band tuple is
-        ``(nearest, score, canonical_type)``."""
+        ``(nearest, score, canonical_type, sampling_note)``."""
         text = str(entity.get("text", "") or "").strip()
         if not text:
             return self._novel("the entity has no surface form", EV_EMPTY_TEXT), None, []
@@ -846,7 +902,7 @@ class ConceptAligner:
 
         if self._type_chain_enabled:
             hit = type_chain_subsumption(
-                ancestors, candidates, canonical_type=canonical
+                ancestors, candidates, canonical_type=canonical, self_text=text
             )
             if hit is not None:
                 return hit, None, aliases

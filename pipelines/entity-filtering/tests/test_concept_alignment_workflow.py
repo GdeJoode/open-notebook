@@ -84,13 +84,15 @@ def _repo():
 
 def _config(*, alignment: bool, ontology_validation: bool = True,
             centrality: bool = False, kg_resolution: bool = True,
-            seed_is_a: bool = True) -> FilteringConfig:
+            seed_is_a: bool = True,
+            centrality_min_score: float = 0.01) -> FilteringConfig:
     return FilteringConfig(
         kg_resolution=KGResolutionConfig(enabled=kg_resolution,
                                          register_aliases=False),
         ontology_validation=OntologyValidationConfig(
             enabled=ontology_validation,
             graph_centrality_enabled=centrality,
+            centrality_min_score=centrality_min_score,
         ),
         concept_alignment=ConceptAlignmentConfig(
             enabled=alignment,
@@ -171,8 +173,19 @@ async def test_centrality_is_identical_with_the_stage_on_and_off():
 
 
 async def test_stage_does_not_change_which_entities_survive_centrality():
-    off = await _run(_config(alignment=False, centrality=True))
-    on = await _run(_config(alignment=True, centrality=True))
+    """Discriminating by construction: the floor sits BETWEEN the two scores.
+
+    Measured on this fixture, the two entities score 0.5 each without a seed and
+    0.25974 each once a seed's phantom node joins the graph. A floor of 0.4
+    therefore keeps both in the correct placement and would remove BOTH if the
+    stage ran before centrality — so unlike an equality-of-scores assertion, this
+    one fails loudly on a misplacement rather than merely differing.
+    """
+    cfg = dict(centrality=True, centrality_min_score=0.4)
+    off = await _run(_config(alignment=False, **cfg))
+    on = await _run(_config(alignment=True, **cfg))
+    assert {e.text for e in off.entities} == {"Regio Deal Midden-Limburg",
+                                              "Provincie Limburg"}
     assert {e.text for e in on.entities} == {e.text for e in off.entities}
 
 
@@ -241,3 +254,81 @@ async def test_enabled_without_a_repository_does_not_crash():
     )
     result = await workflow.process(_extraction())
     assert result.concept_alignment_report["seeded_is_a"] == 0
+
+
+# ---------------------------------------------------------------------------
+# The misconfiguration WARNING (review M2/M3)
+# ---------------------------------------------------------------------------
+# loguru does not propagate into pytest's caplog by itself, so a bare `caplog`
+# argument silently asserts nothing. This suite already solved that once for the
+# orphan-connector (test_workflow.py) — same bridge here, otherwise the warning
+# is untested while looking tested.
+
+
+def _loguru_to_caplog():
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    class _PropagateHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            logging.getLogger(record.name).handle(record)
+
+    return loguru_logger.add(_PropagateHandler(), level="WARNING", format="{message}")
+
+
+async def test_warns_that_nothing_is_classified_when_kg_resolution_is_off(caplog):
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    sink = _loguru_to_caplog()
+    try:
+        with caplog.at_level(logging.WARNING):
+            await _run(_config(alignment=True, kg_resolution=False))
+    finally:
+        loguru_logger.remove(sink)
+    messages = " | ".join(r.message for r in caplog.records)
+    assert "nothing will be classified" in messages
+    assert "kg_resolution is disabled" in messages
+
+
+async def test_warns_that_the_stage_is_degraded_not_silent_without_a_repo(caplog):
+    # M3: with no repo the stage still RUNS and records NOVEL verdicts, so the
+    # log must not claim it classifies nothing.
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    sink = _loguru_to_caplog()
+    try:
+        with caplog.at_level(logging.WARNING):
+            workflow = FilteringWorkflow(
+                config=_config(alignment=True), entity_repo=None,
+                ontology=_ontology(),
+            )
+            result = await workflow.process(_extraction())
+    finally:
+        loguru_logger.remove(sink)
+    messages = " | ".join(r.message for r in caplog.records)
+    assert "DEGRADED" in messages and "entity_repo" in messages
+    assert "nothing will be classified" not in messages
+    # and the claim is true: verdicts WERE recorded
+    assert result.concept_alignment_report["aligned_count"] == 2
+    assert result.concept_alignment_report["reason_counts"] == {"no_repo": 2}
+
+
+async def test_warns_when_the_judge_is_enabled_but_has_no_caller(caplog):
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    sink = _loguru_to_caplog()
+    try:
+        cfg = _config(alignment=True)
+        cfg.concept_alignment.judge_enabled = True
+        with caplog.at_level(logging.WARNING):
+            await _run(cfg)
+    finally:
+        loguru_logger.remove(sink)
+    assert "alignment_llm_caller" in " | ".join(r.message for r in caplog.records)

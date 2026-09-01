@@ -674,9 +674,15 @@ class FilteringWorkflow:
         #     running before it discarded 100% of the seeds silently while the
         #     report still counted them. Same bypass decision as Stage 14, with
         #     the same trade-off: a seeded ``relation_type`` is not re-validated.
-        #     Here the risk is far smaller than for the orphan-connector, because
-        #     the type is the fixed constant ``is_a`` (the same one N.2's Hearst
-        #     miner seeds) rather than an LLM-chosen string.
+        #     Here the exposure is far smaller than for the orphan-connector,
+        #     because the type is the fixed constant ``is_a`` (the same one N.2's
+        #     Hearst miner seeds) rather than an LLM-chosen string. It is not
+        #     ZERO, though: the filter also checks the predicate's declaration
+        #     and its domain/range, so under ``strict_mode=True`` a Hearst-mined
+        #     ``is_a`` (which enters BEFORE Stage 11) can be dropped while an
+        #     alignment-seeded one survives — the same predicate, a different
+        #     fate. Harmless at the shipped default (``strict_mode=False``, which
+        #     only warns), but worth knowing before that default changes.
         #   * AFTER Stage 12 (graph centrality). ``_build_graph`` auto-creates a
         #     node for an unknown edge endpoint, and PageRank is normalised over
         #     all nodes — so an edge added earlier would shift every entity's
@@ -687,20 +693,29 @@ class FilteringWorkflow:
         concept_alignment_report: Optional[dict[str, Any]] = None
         align_cfg = self._config.concept_alignment
         if align_cfg.enabled:
-            # Mirror Stage 14's misconfiguration WARNING: the stage skips or
-            # no-ops silently otherwise, which hides a wiring mistake.
-            missing_align: list[str] = []
-            if self._entity_repo is None:
-                missing_align.append("entity_repo")
-            if self._ontology is None:
-                missing_align.append("ontology")
+            # Mirror Stage 14's misconfiguration WARNING, but say what ACTUALLY
+            # happens per branch. "Will not classify anything" is only true when
+            # KG resolution is off (nothing is marked ``is_new``); with a missing
+            # repo or ontology the stage still RUNS and writes NOVEL verdicts —
+            # which N.4c turns into ontology gaps. Over-claiming in the log is the
+            # same defect class this track keeps having to fix in its evidence.
             if not self._config.kg_resolution.enabled:
-                missing_align.append("kg_resolution.enabled")
-            if missing_align:
                 logger.warning(
-                    "Concept alignment enabled but will not classify anything: "
-                    "missing {missing}",
-                    missing=missing_align,
+                    "Concept alignment enabled but nothing will be classified: "
+                    "kg_resolution is disabled, so no entity is marked is_new."
+                )
+            degraded: list[str] = []
+            if self._entity_repo is None:
+                degraded.append("entity_repo (the graph is never queried)")
+            if self._ontology is None:
+                degraded.append("ontology (no canonical type resolves)")
+            if align_cfg.judge_enabled and alignment_llm_caller is None:
+                degraded.append("alignment_llm_caller (the judge tier cannot run)")
+            if degraded:
+                logger.warning(
+                    "Concept alignment enabled but DEGRADED — it will still run "
+                    "and record NOVEL verdicts. Missing: {missing}",
+                    missing=degraded,
                 )
 
             aligner = ConceptAligner(

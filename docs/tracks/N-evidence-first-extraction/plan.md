@@ -380,6 +380,13 @@ will touch. They are line items, not "nice to have":
 | **C5** | `assert nearest is not None` is a production-path control guard that vanishes under `python -O`. Invariant is sound; convert to an explicit branch. | N.4b |
 | **C6** | ~~Plan drift: the D-N4-7 row named retired constants~~ — **fixed** in this commit. | done |
 
+> **Standing consequence of D-N4-10, recorded so it is not discovered again:**
+> under the shipped `ConceptAlignmentConfig()` defaults the pipeline seeds **zero**
+> `is_a` edges. `type_chain_enabled` is OFF (it cannot verify a name-matched node's
+> type), and it is the only producer of `NARROWER_THAN` — so N.4b's seeding path is
+> exercised today only by explicitly opting into a tier the module documents as
+> unverifiable. N.4c's verifiable subsumption is what turns seeding on for real.
+
 **N.4c — Gap loop + reachability + BROADER_THAN + descendant sweep** — ~1.5–2d
 - **Wire** `OntologyEvolutionAgent.record_gap` on every NOVEL verdict (D-N4-6),
   carrying the entity text, the rich label as `entity_type_guess`, and the chunk
