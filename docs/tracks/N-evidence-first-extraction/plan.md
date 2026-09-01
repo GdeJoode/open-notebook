@@ -516,6 +516,14 @@ a live DB. Shipping an untested widening of a shared package for a caller that n
 longer exists is dead weight; it can be recovered from `68c544f` if a real consumer
 appears.
 
+> **N.4d.0 SHIPPED** (merge `d347474`). The tier is gone: ~400 net lines removed,
+> the taxonomy here is two-valued, and a test asserts the retired symbols are
+> absent so a fifth attempt has to change that test rather than slip past it.
+> Review APPROVED at attempt 2 — the removal was mechanically clean throughout;
+> every finding was a claim the commit made about itself, including a placement
+> guarantee the reviewer **disproved by mutation** and which was withdrawn rather
+> than defended. Report: `reviews/phase-N.4d0-attempts-1-2.md`.
+
 **N.4d.1 — Type placement, verdicts only** — ~1d
 - **New** `packages/ontology-manager/.../type_placement.py`: pure functions over
   `(proposed type, applied ontologies)` → a placement with evidence.
