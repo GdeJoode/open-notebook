@@ -30,10 +30,7 @@ from entity_filtering.filters.noise_filter import NoiseFilter
 from entity_filtering.filters.normalizer import EntityNormalizer
 from entity_filtering.filters.reclassifier import EntityReclassifier
 from entity_filtering.resolution import orphan_connector as _orphan_connector
-from entity_filtering.resolution.concept_alignment import (
-    ConceptAligner,
-    build_is_a_seeds,
-)
+from entity_filtering.resolution.concept_alignment import ConceptAligner
 from entity_filtering.resolution.contextual_clusterer import ContextualClusterer
 from entity_filtering.resolution.embedding_resolver import EmbeddingResolver
 from entity_filtering.resolution.entity_linker import (
@@ -658,38 +655,27 @@ class FilteringWorkflow:
         # ------------------------------------------------------------------
         # Stage 15: Concept alignment (Track N.4)
         # ------------------------------------------------------------------
-        # Places the entities Stage 10 marked ``is_new`` relative to the graph
-        # (NARROWER_THAN / BROADER_THAN / RELATED_TO / NOVEL) instead of leaving
-        # them floating, and seeds an ``is_a`` edge for a NARROWER verdict that
-        # has a materialised target. Like Stage 14 this is strictly ADD-ONLY: it
-        # enriches ``properties`` and appends relations, and never merges,
-        # re-types or removes an entity.
+        # Separates the entities Stage 10 marked ``is_new`` into RELATED_TO
+        # (near something the graph already holds) and NOVEL (nothing comparable
+        # found), each with falsifiable evidence, instead of leaving them all
+        # looking alike. Also surfaces long-form/short-form ALIAS candidates for
+        # review. Subsumption is deliberately absent: it relates TYPES while this
+        # table stores MENTIONS, so it is planned to move to the type boundary
+        # in N.4d — and is currently handled nowhere
+        # (D-N4-12). The stage emits NO relations and is strictly
+        # non-destructive — it writes to ``properties`` and nothing else.
         #
-        # Placement (D-N4-4) — this is the fix for the two blockers that sank the
-        # first attempt at this phase, so the ordering is load-bearing:
-        #
-        #   * AFTER Stage 11 (ontology constraint filter). That filter drops any
-        #     relation whose endpoints are not among the batch's entities, and a
-        #     seeded edge points at an EXISTING graph node by construction — so
-        #     running before it discarded 100% of the seeds silently while the
-        #     report still counted them. Same bypass decision as Stage 14, with
-        #     the same trade-off: a seeded ``relation_type`` is not re-validated.
-        #     Here the exposure is far smaller than for the orphan-connector,
-        #     because the type is the fixed constant ``is_a`` (the same one N.2's
-        #     Hearst miner seeds) rather than an LLM-chosen string. It is not
-        #     ZERO, though: the filter also checks the predicate's declaration
-        #     and its domain/range, so under ``strict_mode=True`` a Hearst-mined
-        #     ``is_a`` (which enters BEFORE Stage 11) can be dropped while an
-        #     alignment-seeded one survives — the same predicate, a different
-        #     fate. Harmless at the shipped default (``strict_mode=False``, which
-        #     only warns), but worth knowing before that default changes.
-        #   * AFTER Stage 12 (graph centrality). ``_build_graph`` auto-creates a
-        #     node for an unknown edge endpoint, and PageRank is normalised over
-        #     all nodes — so an edge added earlier would shift every entity's
-        #     ``centrality_score`` and could change which entities Stage 12
-        #     REMOVES. That would make this non-destructive pass destructive.
-        #   * AFTER Stages 13-14 as well, purely so their inputs stay identical
-        #     whether or not alignment runs.
+        # Position: after ontology validation and graph centrality, where N.4b
+        # put it. Since the stage no longer emits relations the constraints that
+        # motivated that position are inert — and the N.4d.0 review showed by
+        # mutation that these workflow tests do NOT catch a misplaced producer of
+        # the shape that mattered (an edge into an existing, off-batch node). The
+        # position is kept to avoid churn, NOT because it is guarded. Anyone
+        # reintroducing a producer must re-establish the guarantee with a test
+        # using an OFF-BATCH endpoint, because both N.4b blockers are still real:
+        # the ontology constraint filter drops a relation whose endpoints are not
+        # in the batch, and the graph analyser turns an unknown endpoint into a
+        # phantom node that shifts every PageRank score.
         concept_alignment_report: Optional[dict[str, Any]] = None
         align_cfg = self._config.concept_alignment
         if align_cfg.enabled:
@@ -697,7 +683,7 @@ class FilteringWorkflow:
             # happens per branch. "Will not classify anything" is only true when
             # KG resolution is off (nothing is marked ``is_new``); with a missing
             # repo or ontology the stage still RUNS and writes NOVEL verdicts —
-            # which N.4c turns into ontology gaps. Over-claiming in the log is the
+            # which N.4d.4 will turn into ontology gaps. Over-claiming in the log is the
             # same defect class this track keeps having to fix in its evidence.
             nothing_to_classify = not self._config.kg_resolution.enabled
             if nothing_to_classify:
@@ -728,7 +714,6 @@ class FilteringWorkflow:
                 schemas=[self._ontology] if self._ontology is not None else None,
                 llm_caller=alignment_llm_caller,
                 judge_enabled=align_cfg.judge_enabled,
-                type_chain_enabled=align_cfg.type_chain_enabled,
                 related_floor=align_cfg.related_floor,
                 match_ceiling=align_cfg.match_ceiling,
                 max_candidates=align_cfg.max_candidates,
@@ -737,17 +722,9 @@ class FilteringWorkflow:
             deduped_entities, concept_alignment_report = await aligner.align(
                 deduped_entities
             )
-            seeded = (
-                build_is_a_seeds(deduped_entities) if align_cfg.seed_is_a else []
-            )
-            filtered_relations.extend(seeded)
-            # Report what SURVIVES, not what was produced: the count must not
-            # outlive the edges it describes (the attempt-1 report lied here).
-            concept_alignment_report["seeded_is_a"] = len(seeded)
             logger.debug(
-                "After concept alignment: {} aligned, {} is_a seeded",
+                "After concept alignment: {} aligned",
                 concept_alignment_report.get("aligned_count", 0),
-                len(seeded),
             )
 
         # ------------------------------------------------------------------

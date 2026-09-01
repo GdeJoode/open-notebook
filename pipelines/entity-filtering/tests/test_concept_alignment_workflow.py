@@ -9,10 +9,16 @@ POSITION in the pipeline rather than of the classifier.
 
 So the load-bearing assertions here are:
 
-* a seeded ``is_a`` reaches ``result.relations`` WITH ontology validation enabled;
+* the stage emits NO relations (the subsumption tier was retired in N.4d.0), and
+  ``result.relations`` is identical with the stage on and off;
 * centrality scores are identical with the stage on and off;
-* the reported ``seeded_is_a`` equals what actually survived;
-* the stage is add-only — no entity is removed, merged or re-typed by it.
+* the stage is non-destructive — no entity is removed, merged or re-typed by it.
+
+The placement assertions are kept even though nothing is emitted today, but NOT
+as a guard: the N.4d.0 review showed by mutation that a producer emitting the
+shape that actually mattered — an edge into an existing, OFF-BATCH node — passes
+all of them. They assert the stage is inert, nothing more. Whoever reintroduces a
+producer must add a test with an off-batch endpoint.
 """
 
 from __future__ import annotations
@@ -26,7 +32,6 @@ from entity_filtering.config import (
     KGResolutionConfig,
     OntologyValidationConfig,
 )
-from entity_filtering.resolution.concept_alignment import IS_A, RELATION_SOURCE
 from entity_filtering.workflow import FilteringWorkflow
 from shared.models.extraction import ExtractedEntity, ExtractionResult
 
@@ -84,7 +89,6 @@ def _repo():
 
 def _config(*, alignment: bool, ontology_validation: bool = True,
             centrality: bool = False, kg_resolution: bool = True,
-            seed_is_a: bool = True,
             centrality_min_score: float = 0.01) -> FilteringConfig:
     return FilteringConfig(
         kg_resolution=KGResolutionConfig(enabled=kg_resolution,
@@ -96,9 +100,7 @@ def _config(*, alignment: bool, ontology_validation: bool = True,
         ),
         concept_alignment=ConceptAlignmentConfig(
             enabled=alignment,
-            type_chain_enabled=True,  # the tier that yields NARROWER_THAN
             judge_enabled=False,      # deterministic: no LLM in this test
-            seed_is_a=seed_is_a,
         ),
     )
 
@@ -125,36 +127,31 @@ async def _run(config, *, repo=None):
 
 
 # ---------------------------------------------------------------------------
-# Blocker 2 of the parked attempt: seeds must survive ontology validation
+# D-N4-12 / N.4d.0 — the stage emits no relations at all
 # ---------------------------------------------------------------------------
 
 
-async def test_seeded_is_a_survives_ontology_validation():
-    result = await _run(_config(alignment=True, ontology_validation=True))
-    seeds = [r for r in result.relations
-             if r.properties.get("relation_source") == RELATION_SOURCE]
-    assert seeds, "the seeded is_a was discarded before reaching the result"
-    assert seeds[0].relation_type == IS_A
-    assert seeds[0].target_entity == "Deal"
+async def test_stage_emits_no_relations():
+    """The subsumption tier that seeded ``is_a`` was retired in N.4d.0.
+
+    Asserted at workflow level rather than only on the module, because the seed
+    used to be added here — this is the test that would notice a reintroduction.
+    """
+    off = await _run(_config(alignment=False))
+    on = await _run(_config(alignment=True))
+    assert [r.model_dump() for r in on.relations] == [
+        r.model_dump() for r in off.relations
+    ]
+    assert not any(
+        r.properties.get("relation_source") == "concept_alignment"
+        for r in on.relations
+    )
 
 
-async def test_report_counts_only_what_survived():
-    result = await _run(_config(alignment=True, ontology_validation=True))
-    surviving = [r for r in result.relations
-                 if r.properties.get("relation_source") == RELATION_SOURCE]
-    assert result.concept_alignment_report["seeded_is_a"] == len(surviving)
-
-
-async def test_seeded_edge_carries_both_endpoint_types():
-    # D-N4-5: without these the persist path falls back to name-only resolution,
-    # which is the cross-type homograph mis-binding Track O.1 prevents.
+async def test_report_has_no_seeding_counter():
     result = await _run(_config(alignment=True))
-    seed = next(r for r in result.relations
-                if r.properties.get("relation_source") == RELATION_SOURCE)
-    assert seed.source_type == "programme"
-    assert seed.target_type == "programme"
-    assert seed.properties["alignment_target_id"] == "entity:deal"
-    assert seed.properties["alignment_evidence"]
+    assert "seeded_is_a" not in result.concept_alignment_report
+    assert result.concept_alignment_report["aligned_count"] > 0
 
 
 # ---------------------------------------------------------------------------
@@ -173,13 +170,13 @@ async def test_centrality_is_identical_with_the_stage_on_and_off():
 
 
 async def test_stage_does_not_change_which_entities_survive_centrality():
-    """Discriminating by construction: the floor sits BETWEEN the two scores.
+    """The stage must not change the surviving set.
 
-    Measured on this fixture, the two entities score 0.5 each without a seed and
-    0.25974 each once a seed's phantom node joins the graph. A floor of 0.4
-    therefore keeps both in the correct placement and would remove BOTH if the
-    stage ran before centrality — so unlike an equality-of-scores assertion, this
-    one fails loudly on a misplacement rather than merely differing.
+    The floor sits at 0.4 while both entities score 0.5, which was chosen in N.4b
+    to be discriminating against a seed's phantom node. With no producer left
+    there is no phantom node, so this now asserts only that the stage is inert
+    here — it does NOT prove a misplacement would be caught (the N.4d.0 review
+    disproved that by mutation).
     """
     cfg = dict(centrality=True, centrality_min_score=0.4)
     off = await _run(_config(alignment=False, **cfg))
@@ -202,23 +199,6 @@ async def test_stage_is_add_only_for_entities():
     assert len(on.removed_entities) == len(off.removed_entities)
 
 
-async def test_stage_only_adds_relations_it_tagged():
-    off = await _run(_config(alignment=False))
-    on = await _run(_config(alignment=True))
-    added = len(on.relations) - len(off.relations)
-    tagged = [r for r in on.relations
-              if r.properties.get("relation_source") == RELATION_SOURCE]
-    assert added == len(tagged)
-
-
-async def test_seeding_can_be_disabled_while_verdicts_still_run():
-    result = await _run(_config(alignment=True, seed_is_a=False))
-    assert not [r for r in result.relations
-                if r.properties.get("relation_source") == RELATION_SOURCE]
-    assert result.concept_alignment_report["aligned_count"] > 0
-    assert result.concept_alignment_report["seeded_is_a"] == 0
-
-
 # ---------------------------------------------------------------------------
 # D-N4-3 end-to-end, and the disabled / misconfigured paths
 # ---------------------------------------------------------------------------
@@ -234,8 +214,6 @@ async def test_alignment_queries_the_canonical_type_not_the_rich_label():
 async def test_stage_absent_when_disabled():
     result = await _run(_config(alignment=False))
     assert result.concept_alignment_report is None
-    assert not [r for r in result.relations
-                if r.properties.get("relation_source") == RELATION_SOURCE]
 
 
 async def test_enabled_without_kg_resolution_is_a_safe_no_op(caplog):
@@ -243,9 +221,6 @@ async def test_enabled_without_kg_resolution_is_a_safe_no_op(caplog):
     # no-op in the DATA and a loud one in the LOG (the Stage-14 house pattern).
     result = await _run(_config(alignment=True, kg_resolution=False))
     assert result.concept_alignment_report["aligned_count"] == 0
-    assert result.concept_alignment_report["seeded_is_a"] == 0
-    assert not [r for r in result.relations
-                if r.properties.get("relation_source") == RELATION_SOURCE]
 
 
 async def test_enabled_without_a_repository_does_not_crash():
@@ -253,7 +228,7 @@ async def test_enabled_without_a_repository_does_not_crash():
         config=_config(alignment=True), entity_repo=None, ontology=_ontology()
     )
     result = await workflow.process(_extraction())
-    assert result.concept_alignment_report["seeded_is_a"] == 0
+    assert result.concept_alignment_report["aligned_count"] == 2
 
 
 # ---------------------------------------------------------------------------

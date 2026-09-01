@@ -1,49 +1,59 @@
-"""Concept-level alignment taxonomy — verdicts (Track N.4a).
+"""Concept alignment — is a NEW concept related to the graph, or unprecedented?
 
 ``KGResolver`` answers a binary question — does this entity already EXIST in the
 graph, or is it NEW? That leaves every unmatched entity floating: a concept that
 sits near a whole family of known ones and a genuinely unprecedented one look
-identical (both just ``is_new=True``).
+identical (both just ``is_new=True``). This module separates them:
 
-This module classifies a NOVEL concept RELATIVE to the existing graph:
+* ``RELATED_TO`` — near in meaning to something the graph already holds (the
+  common case: a sibling under the same type).
+* ``NOVEL``      — nothing comparable was found. This is what N.4d.4's gap loop
+  is planned to record as an ontology gap, which is why the ``reason_code`` below
+  has to be trustworthy.
 
-* ``NARROWER_THAN`` — a specialisation of an existing concept.
-* ``BROADER_THAN``  — a generalisation of one. **Unreachable in N.4a** — see
-  "Why BROADER_THAN cannot fire yet" below; D-N4-10 makes it reachable in N.4c.
-* ``RELATED_TO``    — near in meaning, not a subsumption (the common case: a
-  sibling under the same type).
-* ``NOVEL``         — nothing comparable was found. In N.4c this becomes an
-  ontology GAP for ``OntologyEvolutionAgent``, which is exactly why the
-  ``reason_code`` below has to be trustworthy.
+Why there is no subsumption here (D-N4-12)
+==========================================
+Earlier versions of this module also emitted ``NARROWER_THAN`` and seeded ``is_a``
+edges from it. (``BROADER_THAN`` was declared in the taxonomy but never
+producible — the declared ``parent_type`` chain only walks upward — and under the
+shipped defaults the seeding produced zero edges.) That is gone, and the reason is
+worth keeping: three attempts failed identically — lexical containment, then name
+matching, then the candidate's declared type — because **subsumption is a relation
+between TYPES, while this table stores MENTIONS.**
 
-Scope: N.4a established the verdicts and their evidence; N.4b added
-:func:`build_is_a_seeds` and the workflow stage that places them. The gap loop
-(a NOVEL verdict becoming an ontology gap), ``BROADER_THAN`` reachability and its
-descendant sweep are N.4c. See ``docs/tracks/N-evidence-first-extraction/plan.md``
-§N.4 (v2).
+The observation that settles it: **no writer in this codebase creates an entity
+row denoting an ontology TYPE.** Rows come from text mentions —
+``EntityPersistenceService`` for the extraction path, and ``vault_sync_service``
+writing note-derived rows directly. So "this entity is narrower than that entity"
+is not a claim the data can support, however it is dressed up.
 
-What actually fires under the shipped defaults
-=============================================
-Be aware, before reading the seeding machinery below, that with
-``ConceptAlignmentConfig()`` as shipped it produces **nothing**: the type-chain
-tier is the only producer of ``NARROWER_THAN``, and it is OFF by default because
-it cannot verify that a name-matched node really is that type. So the stage
-currently classifies (RELATED/NOVEL, with evidence) but seeds no edges unless an
-operator opts into a tier the module itself documents as unverifiable. That is
-deliberate — D-N4-10 assigns the verifiable replacement to N.4c — but it means
-the seeding path below is exercised today only by that opt-in.
+Subsumption is therefore PLANNED to move to where a TYPE enters the system — an
+extension proposal, an evolution ``SchemaProposal``, or the curator accepting one
+— where both sides of the question are types and the parent slot is currently an
+unvalidated guess. In that design an accepted placement is applied as a SCHEMA
+re-parent, so entities inherit the new ancestor through ``canonical_bridge``
+instead of needing an edge each. **None of that exists yet**: it is N.4d.1–.3, and
+today this system decides subsumption nowhere. See
+``docs/tracks/N-evidence-first-extraction/plan.md`` §N.4d.
 
-Where the stage runs, and why it matters (D-N4-4)
-=================================================
-The stage is placed AFTER ontology validation and AFTER graph centrality. That is
-not a detail — it is the fix for the two blockers that sank the first attempt at
-this phase. The ontology constraint filter drops any relation whose endpoints are
-not among the batch's entities, and a seeded edge points at an EXISTING graph node
-by construction, so running before it discarded 100% of the output silently while
-the report still counted it. And the graph analyser auto-creates a node for an
-unknown edge endpoint, so an edge added before centrality shifts every entity's
-PageRank and can change which entities get REMOVED below the centrality floor —
-which would make this "non-destructive" pass destructive at workflow level.
+The tier was REMOVED rather than disabled: there is no story in which it becomes
+correct, and dead machinery invites a fourth attempt. If a path ever marks concept
+nodes explicitly (``vault_sync_service`` creates rows from notes and could flag a
+concept page), the identification problem would be solved there and the tier
+rebuilt against that flag — not resurrected from here.
+
+Where the stage runs
+====================
+After ontology validation and graph centrality, where N.4b placed it. It no longer
+emits relations, so the constraints that motivated that position are currently
+inert — and, as the N.4d.0 review demonstrated by mutation, the workflow tests do
+NOT catch a misplaced producer of the shape that actually mattered (an edge into
+an existing, off-batch graph node). The position is kept because moving it would
+be churn, NOT because it is currently guarded. Anyone reintroducing a producer
+must re-establish the guarantee with a test using an OFF-BATCH endpoint, because
+the two blockers N.4b fixed are still real: the ontology constraint filter drops a
+relation whose endpoints are not in the batch, and the graph analyser turns an
+unknown endpoint into a phantom node that shifts every PageRank score.
 
 Evidence discipline (D-N4-7)
 ============================
@@ -70,33 +80,16 @@ cause:
   the floor. The only code that licenses a claim about similarity.
 * ``EV_ERROR``                 — classification raised; nothing was established.
 
-Why BROADER_THAN cannot fire yet
-================================
-Subsumption is derived from the ontology's declared ``parent_type`` chain
-(D-N4-2), and that chain only walks UPWARD. It can say "this concept is narrower
-than an ancestor"; it can never say "this concept is broader than an existing
-one", because that needs the CANDIDATE's declared chain — and a ``find_by_type``
-row carries ``id``/``name``/``embedding``/``weight`` and **no type column**. This
-is an honest consequence of D-N4-2, not an oversight: D-N4-10 records the two
-sound routes (inverse chain lookup driven from the ontology side, or type-level
-alignment of the evolution agent's ``SchemaProposal``s) and assigns them to N.4c.
-``verdict_counts["BROADER_THAN"]`` is therefore always 0 here, and a test pins it.
+The lexical signal (D-N4-1 / D-N4-9)
+====================================
+Name containment means *alias* / *part_of* / *named_after* at least as often as
+*subtype* — on real Dutch names ``Tweede Kamer der Staten-Generaal`` ⊃ ``Tweede
+Kamer`` is an alias. It survives as ``lexical_alias_candidates``: review
+candidates in the report, never a verdict and never auto-registered.
 
-What attempt 1 got wrong, and what this module does instead
-==========================================================
-
-* **Lexical containment is NOT subsumption** (D-N4-1). "A contains B" means
-  *alias* / *part_of* / *named_after* at least as often as *subtype* — on real
-  Dutch names ``Tweede Kamer der Staten-Generaal`` ⊃ ``Tweede Kamer`` is an alias,
-  ``Den Haag Zuidwest`` ⊃ ``Den Haag`` is part-of. Worse, ``KGResolver``'s fuzzy
-  tier *rejects* long/short alias pairs (the length delta tanks Levenshtein), so
-  aliases are exactly what reaches this module. The signal survives as
-  ``lexical_alias_candidates`` — review candidates only (D-N4-9).
-* **Subsumption comes only from the ontology** (D-N4-2). Embeddings inform
-  RELATED/NOVEL ONLY — cosine measures similarity, never direction.
-* **Candidates are fetched by CANONICAL type** (D-N4-3). ``find_by_type`` filters
-  the canonical ``entity_type`` column; passing the rich Track-L label returns
-  ``[]`` by construction, which silently turned attempt 1 into a no-op.
+Candidates are fetched by CANONICAL type (D-N4-3): ``find_by_type`` filters the
+canonical ``entity_type`` column, so passing the rich Track-L label returns ``[]``
+by construction.
 """
 
 from __future__ import annotations
@@ -111,21 +104,18 @@ from loguru import logger
 
 # -- verdicts ---------------------------------------------------------------
 
-NARROWER_THAN = "NARROWER_THAN"
-BROADER_THAN = "BROADER_THAN"
 RELATED_TO = "RELATED_TO"
 NOVEL = "NOVEL"
 
-VERDICTS = (NARROWER_THAN, BROADER_THAN, RELATED_TO, NOVEL)
+VERDICTS = (RELATED_TO, NOVEL)
 
 # -- methods (provenance for the verdict) -----------------------------------
 
-METHOD_TYPE_CHAIN = "type_chain"
 METHOD_EMBEDDING = "embedding"
 METHOD_JUDGE = "llm_judge"
 METHOD_NONE = "none"
 
-METHODS = (METHOD_TYPE_CHAIN, METHOD_EMBEDDING, METHOD_JUDGE, METHOD_NONE)
+METHODS = (METHOD_EMBEDDING, METHOD_JUDGE, METHOD_NONE)
 
 # -- evidence codes: each names an OBSERVATION with exactly one cause -------
 
@@ -157,7 +147,6 @@ REASON_CODES = (
 # similarity score with an ontological confidence makes the two incomparable (and
 # would let the embedding tier outrank the ontology tier). The cosine is reported
 # separately in ``Alignment.similarity`` and in the evidence text.
-_CONF_TYPE_CHAIN = 0.80
 _CONF_EMBEDDING = 0.55
 _CONF_JUDGE = 0.60
 _CONF_NOVEL = 0.50
@@ -170,10 +159,11 @@ class Alignment:
     ``reason_code`` is the machine-checkable half of the evidence (see the module
     docstring); ``evidence`` is its human-readable expansion. Both are always
     populated — an operator must be able to audit and reverse any verdict, and
-    N.4c filters gap-recording on ``reason_code`` so it must never be a guess.
+    N.4d.4 will filter gap-recording on ``reason_code`` so it must never be a guess.
 
-    ``canonical_type`` is carried so N.4b can stamp ``source_type``/``target_type``
-    on a seeded edge (D-N4-5) without re-resolving the ontology.
+    ``canonical_type`` records WHICH type bucket was queried, as audit provenance:
+    it explains what population the verdict was reached against. It has no consumer
+    in this module — the seeded edge that used to read it was retired in N.4d.0.
     """
 
     verdict: str
@@ -212,111 +202,39 @@ def _props(entity: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Ontology type resolution (canonical fetch type + rich ancestor chain)
+# Ontology type resolution (the canonical fetch type)
 # ---------------------------------------------------------------------------
 
 
-def resolve_types(
-    label: str, schemas: Optional[List[Any]]
-) -> Tuple[Optional[str], List[str]]:
-    """``(canonical_type, rich_ancestors)`` for an extraction ``label``.
+def resolve_canonical_type(label: str, schemas: Optional[List[Any]]) -> Optional[str]:
+    """The coarse ``entity_type`` enum value the graph is indexed on, for a rich
+    extraction ``label`` — or ``None`` when it cannot be determined.
 
-    * ``canonical_type`` — the coarse ``entity_type`` enum value the graph is
-      indexed on; this is what ``find_by_type`` must be given (D-N4-3).
-    * ``rich_ancestors`` — the declared ancestor TYPE names above ``label``
-      (nearest first), the only sound deterministic subsumption evidence (D-N4-2).
+    This is what ``find_by_type`` must be given (D-N4-3): the column holds the
+    canonical enum, so querying it with the rich Track-L label returns nothing.
 
     ontology-manager is an OPTIONAL extra of this pipeline, so the import is lazy
     and guarded: without it (or without applied schemas, or for an unresolvable
-    label) this returns ``(None, [])`` and the caller degrades honestly.
-
-    The ancestor list is filtered against the RESOLVED type name rather than the
-    input ``label``, so a label that matched an ontology *alias* does not leave the
-    entity's own type sitting in ``ancestors`` (which would let the tier "prove"
-    that a concept is narrower than itself).
+    label) this returns ``None`` and the caller reports that honestly rather than
+    querying with a value the column does not hold.
     """
     if not label or not schemas:
-        return None, []
+        return None
     try:
         from ontology_manager.canonical_bridge import (  # type: ignore[import-not-found]
             resolve_ontology_type,
         )
     except Exception as exc:  # noqa: BLE001 — optional extra not installed
         logger.debug("concept_alignment: ontology-manager unavailable ({e})", e=exc)
-        return None, []
+        return None
     try:
         resolution = resolve_ontology_type(label, schemas)
     except Exception as exc:  # noqa: BLE001 — malformed ontology → degrade
         logger.debug("concept_alignment: type resolution failed ({e})", e=exc)
-        return None, []
-    if resolution is None:
-        return None, []
-    own = {_normalize(resolution.ontology_type), _normalize(label)}
-    ancestors = [t for t in resolution.type_tags if _normalize(t) not in own]
-    return resolution.canonical, ancestors
-
-
-def type_chain_subsumption(
-    ancestors: Sequence[str],
-    candidates: List[Dict[str, Any]],
-    *,
-    canonical_type: Optional[str] = None,
-    self_text: str = "",
-) -> Optional[Alignment]:
-    """NARROWER_THAN when an ancestor TYPE is MATERIALISED as a graph node.
-
-    **Unverifiable by construction, and OFF by default** (see
-    ``ConceptAligner(type_chain_enabled=...)``). A ``find_by_type`` row carries no
-    type column, so the only available match is ancestor-type-name == candidate
-    *instance* name. That cannot distinguish a materialised type node from an
-    ordinary entity that merely happens to share the name, and in N.4b a false hit
-    would seed a false ``is_a`` — the exact damage class that sank attempt 1.
-
-    It is also near-inert on this project's ontologies: ``canonical_bridge``
-    terminates the walk at the first mapped schema.org base, so ``ancestors`` is
-    typically a single English identifier (``Deal``, ``AdministrativeArea``) that
-    will not appear as a node name in a Dutch graph.
-
-    Kept, disabled, and disclosed rather than deleted because D-N4-10 assigns the
-    real fix to N.4c: widen the projection (or drive the lookup from the ontology
-    side) so the candidate's type can actually be verified.
-    """
-    if not ancestors or not candidates:
         return None
-    # A concept is never narrower than itself. An entity whose surface form
-    # happens to equal an ancestor TYPE name ("Deal", "Gemeente", "Provincie" are
-    # all plausible Dutch surface forms) would otherwise match its own row and
-    # produce a self-referential verdict — a 1-cycle in the subsumption hierarchy
-    # that N.4c's descendant sweep would then traverse.
-    own = _normalize(self_text)
-    by_name = {
-        _normalize(_candidate_name(c)): c
-        for c in candidates
-        if _normalize(_candidate_name(c)) != own or not own
-    }
-    for ancestor in ancestors:  # nearest ancestor first
-        cand = by_name.get(_normalize(ancestor))
-        if cand is None:
-            continue
-        if own and _normalize(ancestor) == own:
-            continue  # the ancestor name IS this concept's own name
-        return Alignment(
-            verdict=NARROWER_THAN,
-            method=METHOD_TYPE_CHAIN,
-            confidence=_CONF_TYPE_CHAIN,
-            evidence=(
-                f"the ontology declares this type under {ancestor!r}, and a node "
-                f"named {_candidate_name(cand)!r} exists — NOTE the node's type "
-                "could not be verified (the candidate row carries no type column)"
-            ),
-            target_id=str(cand.get("id", "") or "") or None,
-            target_name=_candidate_name(cand),
-            # C3: NARROWER_THAN is the one verdict N.4b seeds, so it must carry
-            # the canonical type that D-N4-5 stamps on both endpoints. The target
-            # was fetched BY this type, so it holds for both sides.
-            canonical_type=canonical_type,
-        )
-    return None
+    if resolution is None:
+        return None
+    return resolution.canonical
 
 
 # ---------------------------------------------------------------------------
@@ -594,110 +512,8 @@ def lexical_alias_candidates(
     return out
 
 
-# ---------------------------------------------------------------------------
-# Seeding (Track N.4b) — turn an accepted NARROWER_THAN into an is_a edge
-# ---------------------------------------------------------------------------
-
-#: Provenance tag on every seeded edge. One `WHERE relation_source = ...` drops
-#: the entire pass, which is what makes the alignment reversible.
-RELATION_SOURCE = "concept_alignment"
-
-#: The relation type a NARROWER_THAN verdict materialises. Matches the type N.2's
-#: Hearst miner seeds, so downstream consumers see one `is_a` vocabulary.
-IS_A = "is_a"
-
-
-def build_is_a_seeds(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Relation dicts for every ``NARROWER_THAN`` with a MATERIALISED target.
-
-    Reads the ``alignment_*`` properties :meth:`ConceptAligner._enrich` wrote, so
-    seeding stays a pure function of the recorded verdict — an operator can audit
-    the verdict and the edge separately, and re-running produces the same set.
-
-    Five deliberate restrictions, each of which drops a seed rather than emitting
-    a doubtful edge:
-
-    * **Only NARROWER_THAN.** ``RELATED_TO`` is a link, not a subsumption, and
-      must never become an ``is_a``. ``BROADER_THAN`` cannot occur yet (D-N4-10),
-      and when it does it needs the descendant sweep of D-N4-11 rather than a
-      single edge — so it is explicitly not seeded here.
-    * **Only a materialised target.** A verdict whose broader concept is just a
-      TYPE name (``target_id is None``) is recorded in properties but not seeded;
-      an edge to a node that does not exist is a dangling edge.
-    * **Never self-referential.** A concept is not narrower than itself. An entity
-      whose surface form equals its own broader concept's name would otherwise
-      produce ``X is_a X`` — and because persistence resolves both endpoints by
-      ``(canonical_name, entity_type)``, both sides land on the SAME record,
-      writing a 1-cycle into the subsumption hierarchy that N.4c's descendant
-      sweep would then traverse. The tier that produces the verdict already
-      refuses to match an entity against itself; this is the second line.
-    * **Both endpoint types stamped** (D-N4-5). The target was fetched BY the
-      entity's canonical type, so that one value types both ends. A seed WITHOUT
-      it is dropped rather than emitted untyped: an untyped edge falls back to
-      name-only resolution at persist, which is exactly the cross-type homograph
-      mis-binding Track O.1 exists to prevent.
-    * **De-duplicated** on ``(source, target)``. Mirrors the intra-batch guard
-      N.2's Hearst miner applies, and protects the reversibility claim on
-      :data:`RELATION_SOURCE`: at persist, two rows collapse onto
-      ``(in, out, relation_type)`` and the later write clobbers
-      ``relation_source``, so a duplicate could orphan a seed from its provenance.
-    """
-    seeds: List[Dict[str, Any]] = []
-    seen: set = set()
-    for entity in entities:
-        props = _props(entity)
-        if props.get("concept_alignment") != NARROWER_THAN:
-            continue
-        target_name = str(props.get("alignment_target_name") or "").strip()
-        target_id = props.get("alignment_target_id")
-        source = str(entity.get("text", "") or "").strip()
-        canonical = props.get("alignment_canonical_type")
-        if not target_name or not target_id or not source:
-            continue
-        if _normalize(source) == _normalize(target_name):
-            logger.debug(
-                "concept_alignment: skipping self-referential is_a for {t!r}",
-                t=source,
-            )
-            continue
-        if not canonical:
-            logger.warning(
-                "concept_alignment: skipping is_a seed for {t!r} — no canonical "
-                "type, so the edge could not be typed (D-N4-5)",
-                t=source,
-            )
-            continue
-        key = (_normalize(source), _normalize(target_name))
-        if key in seen:
-            continue
-        seen.add(key)
-        seeds.append(
-            {
-                "source_entity": source,
-                "target_entity": target_name,
-                "relation_type": IS_A,
-                "confidence": float(props.get("alignment_confidence") or 0.0),
-                "source_type": canonical,
-                "target_type": canonical,
-                "properties": {
-                    "relation_source": RELATION_SOURCE,
-                    "alignment_method": props.get("alignment_method"),
-                    "alignment_evidence": props.get("alignment_evidence"),
-                    # Carried as the AUDIT ANCHOR, deliberately: it binds the
-                    # edge to the exact node the verdict was about, and survives
-                    # into the persisted relation. Persistence resolves endpoints
-                    # by (canonical_name, entity_type) and does not read this —
-                    # that is not dead weight, it is provenance. An id-based
-                    # endpoint path would be Track O.1 surface.
-                    "alignment_target_id": target_id,
-                },
-            }
-        )
-    return seeds
-
-
-# ---------------------------------------------------------------------------
-# Orchestrator (verdicts + evidence; seeding is the caller's step, above)
+# --------------------------------------------------------------------------
+# Orchestrator (verdicts + evidence)
 # ---------------------------------------------------------------------------
 
 
@@ -710,24 +526,20 @@ class _Fetch:
 
 
 class ConceptAligner:
-    """Classify the concepts KG resolution marked ``is_new`` (Track N.4a).
+    """Classify the concepts KG resolution marked ``is_new`` (Track N.4).
 
     Runs after ``KGResolver`` and only on entities it flagged ``is_new``.
     Enrichment is NON-destructive (``properties`` only): nothing is merged,
-    removed, or re-typed, and N.4a emits no relations at all.
+    removed, or re-typed, and the stage emits no relations at all.
 
     Args:
         entity_repo: object exposing ``find_by_type`` (the ONLY repo method used —
             no new repository surface, no migration). ``None`` → every concept is
             NOVEL with the honest ``no_repo`` reason.
-        schemas: applied ontologies, for the canonical fetch type and the ancestor
-            chain. ``None`` → no type resolves, so nothing is queried.
+        schemas: applied ontologies, for the canonical fetch type. ``None`` → no
+            type resolves, so nothing is queried.
         llm_caller: ``(system, user, model) -> str`` (sync or async) for the judge.
         judge_enabled: master switch for the judge tier (default ON, D4).
-        type_chain_enabled: the ancestor-name subsumption tier. **Default OFF** —
-            it cannot verify that the matched node is that type (see
-            :func:`type_chain_subsumption`), and N.4b would seed an ``is_a`` from
-            it. D-N4-10 assigns the verifiable version to N.4c.
         related_floor / match_ceiling: the embedding band bounds.
         max_candidates: rows per type fetch. The underlying query is ``LIMIT n``
             with no ordering, so this is an ARBITRARY sample — every NOVEL verdict
@@ -743,7 +555,6 @@ class ConceptAligner:
         llm_caller: Optional[Any] = None,
         model: str = "",
         judge_enabled: bool = True,
-        type_chain_enabled: bool = False,
         related_floor: float = 0.75,
         match_ceiling: float = 0.90,
         max_candidates: int = 100,
@@ -754,7 +565,6 @@ class ConceptAligner:
         self._llm_caller = llm_caller
         self._model = model
         self._judge_enabled = judge_enabled
-        self._type_chain_enabled = type_chain_enabled
         self._related_floor = related_floor
         self._match_ceiling = match_ceiling
         self._max_candidates = max_candidates
@@ -823,11 +633,9 @@ class ConceptAligner:
                 )
 
         logger.info(
-            "ConceptAligner: {} aligned ({} narrower, {} broader, {} related, "
-            "{} novel), {} judged, {} alias candidates",
+            "ConceptAligner: {} aligned ({} related, {} novel), {} judged, "
+            "{} alias candidates",
             report["aligned_count"],
-            report["verdict_counts"][NARROWER_THAN],
-            report["verdict_counts"][BROADER_THAN],
             report["verdict_counts"][RELATED_TO],
             report["verdict_counts"][NOVEL],
             report["judged_count"],
@@ -852,7 +660,7 @@ class ConceptAligner:
             return self._novel("the entity has no surface form", EV_EMPTY_TEXT), None, []
 
         label = str(entity.get("label", "") or "")
-        canonical, ancestors = resolve_types(label, self._schemas)
+        canonical = resolve_canonical_type(label, self._schemas)
 
         if self._repo is None:
             return (
@@ -905,13 +713,6 @@ class ConceptAligner:
         aliases = lexical_alias_candidates(
             text, candidates, min_inner_tokens=self._min_inner_tokens
         )
-
-        if self._type_chain_enabled:
-            hit = type_chain_subsumption(
-                ancestors, candidates, canonical_type=canonical, self_text=text
-            )
-            if hit is not None:
-                return hit, None, aliases
 
         probe = probe_neighbours(_props(entity).get("embedding"), candidates)
         sampled = self._sample_note(canonical, len(candidates))
@@ -1156,17 +957,11 @@ __all__ = [
     "Alignment",
     "AliasCandidate",
     "ConceptAligner",
-    "build_is_a_seeds",
-    "RELATION_SOURCE",
-    "IS_A",
     "JudgeItem",
     "NeighbourProbe",
-    "NARROWER_THAN",
-    "BROADER_THAN",
     "RELATED_TO",
     "NOVEL",
     "VERDICTS",
-    "METHOD_TYPE_CHAIN",
     "METHOD_EMBEDDING",
     "METHOD_JUDGE",
     "METHOD_NONE",
@@ -1182,8 +977,7 @@ __all__ = [
     "EV_NONE_CLOSE",
     "EV_ERROR",
     "REASON_CODES",
-    "resolve_types",
-    "type_chain_subsumption",
+    "resolve_canonical_type",
     "probe_neighbours",
     "lexical_alias_candidates",
     "build_judge_prompt",
