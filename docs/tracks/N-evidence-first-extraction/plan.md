@@ -310,12 +310,15 @@ approve/reject/implement, plus `list_gaps` / `get_gap_statistics`), wired into
 | **D-N4-7** | Evidence must be **falsifiable**: never assert "nothing comparable exists" when no candidates were *fetched*. Distinguish `no_candidates_fetched` from `candidates_fetched_none_close`. | An evidence-first track cannot stamp confident falsehoods (M5). |
 | **D-N4-8** | Reachability is part of the phase, not a follow-up: an env flag **and** DI wiring in `entity_extraction_service`, with a WARNING on enabled-but-unwired (the orphan-connector pattern). | v1's judge was unreachable in every real run (M7). |
 
-**Open decision for the user** — what to do with the lexical signal, now that it
-cannot mean `is_a`: (a) drop it entirely; (b) emit it as an **alias candidate** into
-the existing alias table / a report for review; (c) emit a weak `RELATED_TO` that
-never seeds an edge. *Recommendation: (b)* — it is genuinely useful evidence, and
-the alias table is exactly where a long-form/short-form pair belongs (it is also
-what `KGResolver`'s fuzzy tier structurally misses).
+**D-N4-9 (RESOLVED 2026-09-01, user)** — the lexical signal becomes an **alias
+candidate**, not `is_a` and not a verdict. `lexical_alias_candidates` emits
+direction-agnostic long-form/short-form pairs into the alignment report for
+review; they never influence the verdict and are **never auto-registered** —
+writing an alias merges two identities in the graph, which must be an explicit
+decision, not a side effect of classification. This recovers real value: those
+pairs are exactly what `KGResolver`'s fuzzy tier structurally misses (a large
+length delta tanks Levenshtein). Auto-registration behind an explicit opt-in
+remains possible later.
 
 #### Sub-phases
 
