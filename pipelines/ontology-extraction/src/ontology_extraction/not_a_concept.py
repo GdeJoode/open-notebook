@@ -38,31 +38,40 @@ _GENERIC_LABELS = frozenset(
     {"", "other", "others", "unknown", "misc", "miscellaneous", "none", "n/a", "concept"}
 )
 
-# Exact (whole-string, lowercased) UI / navigation / boilerplate labels — never a
-# domain concept. EN + NL. Tunable via ``extra_reject_exact``.
-_REJECT_EXACT = frozenset(
+# UNCONDITIONAL reject — UI/nav/boilerplate that is never a domain concept no
+# matter what label the LLM guessed (a mis-typed "Click here" is still furniture).
+# These are multi-word phrases or UI action verbs with no plausible entity reading.
+# EN + NL. Tunable via ``extra_reject_exact``.
+_REJECT_ALWAYS = frozenset(
     {
-        # navigation / UI
+        # navigation / UI phrases + actions
         "click here", "read more", "learn more", "see more", "show more",
-        "back to top", "next", "previous", "prev", "home", "menu", "search",
-        "login", "log in", "logout", "log out", "sign up", "sign in",
-        "download", "downloads", "print", "share", "subscribe", "submit",
-        "contact", "contact us", "about", "about us", "overview", "index",
-        "table of contents", "continue reading", "view all", "see all",
-        "lees meer", "meer informatie", "inhoudsopgave", "vorige", "volgende",
-        "downloaden", "afdrukken", "delen", "zoeken", "inloggen", "aanmelden",
+        "back to top", "continue reading", "view all", "see all",
+        "table of contents", "log in", "log out", "sign up", "sign in",
+        "download", "downloads", "print", "share", "subscribe",
+        "lees meer", "meer informatie", "inhoudsopgave",
+        "downloaden", "afdrukken", "delen", "inloggen", "aanmelden",
         # boilerplate / legal
-        "all rights reserved", "copyright", "confidential", "draft",
+        "all rights reserved", "copyright", "confidential",
         "terms of service", "terms and conditions", "privacy policy",
-        "cookie policy", "disclaimer", "colophon", "colofon", "voorwoord",
+        "cookie policy", "disclaimer", "colophon", "colofon",
         "alle rechten voorbehouden", "auteursrecht", "privacybeleid",
-        # generic table / form furniture
-        "total", "subtotal", "totaal", "subtotaal", "sum", "average", "n/a",
-        "tbd", "tba", "yes", "no", "ja", "nee", "true", "false",
-        "date", "datum", "name", "naam", "amount", "bedrag", "number", "nummer",
-        "description", "omschrijving", "type", "category", "categorie", "status",
-        "page", "pagina", "figure", "figuur", "table", "tabel", "chapter",
-        "hoofdstuk", "section", "sectie", "appendix", "bijlage", "note", "noot",
+    }
+)
+
+# Generic table / form / reference FIELD words. Each is a HOMOGRAPH of a possible
+# real entity ("Total" = TotalEnergies, "Page" a surname, "Index" a stock index),
+# so — unlike ``_REJECT_ALWAYS`` — these reject ONLY under a GENERIC label. A
+# SPECIFIC schema label is trusted and keeps them (the fast-accept fires first),
+# honouring the AC that a specifically-typed real entity is never dropped. EN + NL.
+_FIELD_WORDS = frozenset(
+    {
+        "total", "subtotal", "sum", "average", "totaal", "subtotaal",
+        "date", "name", "amount", "number", "description", "type", "category",
+        "status", "datum", "naam", "bedrag", "nummer", "omschrijving", "categorie",
+        "yes", "no", "ja", "nee", "true", "false", "n/a", "tbd", "tba",
+        "page", "figure", "table", "chapter", "section", "appendix", "note",
+        "pagina", "figuur", "tabel", "hoofdstuk", "sectie", "bijlage", "noot",
     }
 )
 
@@ -111,28 +120,36 @@ def classify_deterministic(
     t = _norm(text)
     low = t.lower()
 
-    # -- high-precision REJECT (obvious non-concepts) -----------------------
+    # -- UNCONDITIONAL reject (structural non-concepts + unambiguous furniture).
+    # These fire regardless of label — a specific label cannot rescue "12345" or
+    # "Click here" (the LLM mis-typed furniture).
     if len(t) < _MIN_LEN or _PUNCT_ONLY_RE.match(t):
         return True
     if _NUMERIC_RE.match(t):  # pure number / date / percentage / amount
         return True
     if _REF_RE.match(t):  # "Figure 3", "Hoofdstuk 4"
         return True
-    if low in _REJECT_EXACT:
+    if low in _REJECT_ALWAYS:
         return True
     if extra_reject_exact and low in extra_reject_exact:
         return True
 
-    # -- fast ACCEPT (clearly a concept) ------------------------------------
+    # -- fast ACCEPT: a SPECIFIC schema label is trusted, BEFORE the homograph
+    # field-word reject — so a specifically-typed "Total"/"Index"/"Page" is KEPT
+    # (the AC: a real, specifically-typed entity is never dropped).
     if label.strip().lower() not in _GENERIC_LABELS:
-        # The LLM committed to a specific schema type — trust it (do not spend a
-        # judge call second-guessing an aggressively-mapped entity).
         return False
+
+    # -- generic label from here on --------------------------------------------
+    if low in _FIELD_WORDS:
+        # A bare table/form field word under a generic label → furniture.
+        return True
     if _is_titlecase_proper(t):
         # Multi-word proper name even under a generic label → a real entity.
         return False
 
-    # -- AMBIGUOUS: generic label + a plain word/phrase ---------------------
+    # -- AMBIGUOUS: generic label + a plain word/phrase (incl. UI homographs
+    # like "Next"/"Home"/"Index") → defer to the judge, never a hard guess.
     return None
 
 
@@ -204,12 +221,16 @@ def build_judge_prompt(items: List[Tuple[str, str]]) -> str:
 def parse_judge_response(
     raw: str, items: List[Tuple[str, str]]
 ) -> Dict[str, bool]:
-    """Parse the judge response into ``{text: is_concept}``.
+    """Parse the judge response into ``{text: is_concept}`` for the items the judge
+    EXPLICITLY ruled on (restricted to known candidate texts).
 
-    Robust to markdown fences and junk. Any candidate the judge did not rule on
-    defaults to ``True`` (KEEP — never drop on a missing/garbled verdict).
+    Robust to markdown fences and junk. A candidate the judge stayed silent on is
+    simply absent from the result — the CALLER defaults missing candidates to KEEP
+    (never drop on a missing/garbled verdict), and can count the explicit verdicts
+    as the number actually arbitrated. Garbage / empty ``raw`` → ``{}``.
     """
-    verdicts: Dict[str, bool] = {text: True for text, _ in items}
+    known = {text for text, _ in items}
+    verdicts: Dict[str, bool] = {}
     if not raw:
         return verdicts
     try:
@@ -226,7 +247,7 @@ def parse_judge_response(
         if not isinstance(v, dict):
             continue
         text = str(v.get("text", "") or "")
-        if text in verdicts:
+        if text in known:
             verdicts[text] = bool(v.get("is_concept", True))
     return verdicts
 

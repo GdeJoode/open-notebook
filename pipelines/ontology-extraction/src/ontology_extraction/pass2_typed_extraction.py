@@ -234,12 +234,14 @@ async def _apply_not_a_concept(
                     caller, JUDGE_SYSTEM_PROMPT, build_judge_prompt(items), model
                 )
                 verdicts = parse_judge_response(raw, items)
-                judged = len(items)
             except Exception as exc:  # noqa: BLE001 — judge is best-effort; keep all
                 logger.warning(
                     "pass2: not-a-concept judge failed ({e}); keeping ambiguous", e=exc
                 )
                 verdicts = {}
+        # judged = entities the judge EXPLICITLY ruled on (not the batch size — a
+        # partial/garbled response leaves the silent ones defaulted to keep below).
+        judged = len(verdicts)
         for e in ambiguous:
             # default True → keep (no judge, or judge silent on this item)
             if verdicts.get(e.text, True):
@@ -249,11 +251,13 @@ async def _apply_not_a_concept(
     # Drop only relations that reference an entity the gate REMOVED — a relation
     # whose endpoint was never an extracted entity (the LLM sometimes emits those)
     # is out of this gate's scope and passes through unchanged (pre-N.3 behaviour).
-    removed_texts = {e.text for e in rejected}
+    # Compare on stripped text so a whitespace variant can't leave a dangling edge.
+    removed_texts = {e.text.strip() for e in rejected}
     kept_relations = [
         r
         for r in relations
-        if r.source_entity not in removed_texts and r.target_entity not in removed_texts
+        if r.source_entity.strip() not in removed_texts
+        and r.target_entity.strip() not in removed_texts
     ]
     return kept, kept_relations, len(rejected), judged
 

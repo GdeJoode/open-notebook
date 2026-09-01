@@ -18,10 +18,28 @@ from ontology_extraction.not_a_concept import (
 
 
 def test_rejects_ui_and_boilerplate_labels():
+    # unconditional furniture — rejected regardless of label
     for junk in ["Click here", "Read more", "Back to top", "Download",
                  "All rights reserved", "Privacy Policy", "Lees meer",
-                 "Inhoudsopgave", "Volgende"]:
+                 "Inhoudsopgave"]:
         assert classify_deterministic(junk, "other") is True, junk
+        assert classify_deterministic(junk, "Ministerie") is True, junk  # even specific
+
+
+def test_field_word_rejected_under_generic_but_kept_under_specific_label():
+    # N.3 review MAJOR: a homograph field word is furniture under a generic label
+    # but a KEPT real entity when the LLM committed to a specific type.
+    for word in ["Total", "Page", "Note", "Datum", "Tabel"]:
+        assert classify_deterministic(word, "other") is True, word
+        assert classify_deterministic(word, "Organisatie") is False, word
+
+
+def test_ui_homograph_under_generic_label_defers_to_judge():
+    # "Next"/"Home"/"Index" could be a real entity (the retailer Next, a stock
+    # Index) — never hard-rejected; they defer to the judge under a generic label.
+    for word in ["Next", "Home", "Volgende", "Menu", "Index"]:
+        assert classify_deterministic(word, "other") is None, word
+        assert classify_deterministic(word, "Organisatie") is False, word
 
 
 def test_rejects_references_and_numbers():
@@ -109,15 +127,17 @@ def test_parse_judge_response_maps_verdicts():
     assert got == {"governance": False, "challenges": True}
 
 
-def test_parse_judge_tolerates_fences_and_defaults_missing_to_keep():
+def test_parse_judge_tolerates_fences_and_omits_silent_items():
+    # Only EXPLICIT verdicts are returned; a silent candidate is absent (the caller
+    # defaults it to keep). This lets the caller count what was truly arbitrated.
     items = [("governance", "other"), ("challenges", "other")]
     raw = "```json\n{\"verdicts\": [{\"text\": \"governance\", \"is_concept\": false}]}\n```"
     got = parse_judge_response(raw, items)
-    assert got["governance"] is False
-    assert got["challenges"] is True  # missing → keep
+    assert got == {"governance": False}
+    assert got.get("challenges", True) is True  # missing → caller keeps
 
 
-def test_parse_judge_garbage_keeps_all():
+def test_parse_judge_garbage_returns_empty():
     items = [("governance", "other")]
-    assert parse_judge_response("not json at all", items) == {"governance": True}
-    assert parse_judge_response("", items) == {"governance": True}
+    assert parse_judge_response("not json at all", items) == {}
+    assert parse_judge_response("", items) == {}
