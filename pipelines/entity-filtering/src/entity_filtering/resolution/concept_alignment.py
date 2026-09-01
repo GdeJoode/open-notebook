@@ -8,15 +8,54 @@ identical (both just ``is_new=True``).
 This module classifies a NOVEL concept RELATIVE to the existing graph:
 
 * ``NARROWER_THAN`` — a specialisation of an existing concept.
-* ``BROADER_THAN``  — a generalisation of one.
+* ``BROADER_THAN``  — a generalisation of one. **Unreachable in N.4a** — see
+  "Why BROADER_THAN cannot fire yet" below; D-N4-10 makes it reachable in N.4c.
 * ``RELATED_TO``    — near in meaning, not a subsumption (the common case: a
   sibling under the same type).
-* ``NOVEL``         — nothing comparable in the graph. In N.4c this becomes an
-  ontology GAP for ``OntologyEvolutionAgent``.
+* ``NOVEL``         — nothing comparable was found. In N.4c this becomes an
+  ontology GAP for ``OntologyEvolutionAgent``, which is exactly why the
+  ``reason_code`` below has to be trustworthy.
 
 Scope of N.4a: **verdicts + evidence only**. No relation seeding and no workflow
-stage — placement and seeding are N.4b, the gap loop and DI/env reachability are
-N.4c. See ``docs/tracks/N-evidence-first-extraction/plan.md`` §N.4 (v2).
+stage — placement is N.4b, the gap loop and DI/env reachability are N.4c. See
+``docs/tracks/N-evidence-first-extraction/plan.md`` §N.4 (v2).
+
+Evidence discipline (D-N4-7)
+============================
+Every negative verdict states **what was observed**, never what that observation
+would imply. "The type query returned no rows" is a fact; "the graph holds no such
+concepts" is an inference that can be false — the repository reports a *failed*
+query as an empty result, so the two are genuinely indistinguishable from here.
+The ``EV_*`` reason codes therefore name observations, and each has exactly one
+cause:
+
+* ``EV_NO_REPO``               — no repository was supplied; nothing was queried.
+* ``EV_EMPTY_TEXT``            — the entity has no surface form.
+* ``EV_NO_TYPE``               — the label did not resolve to a canonical type, so
+  no query could be formed.
+* ``EV_FETCH_FAILED``          — the fetch call itself raised.
+* ``EV_NO_ROWS``               — the query returned zero rows (which does NOT
+  prove the graph is empty: see above).
+* ``EV_NO_QUERY_VECTOR``       — THIS entity carries no embedding, so nothing
+  could be compared. A fact about the input, never about the graph.
+* ``EV_NO_CANDIDATE_VECTORS``  — rows exist but none carry an embedding.
+* ``EV_INCOMPARABLE_VECTORS``  — vectors exist on both sides but none could be
+  compared (dimension mismatch or zero norm).
+* ``EV_NONE_CLOSE``            — vectors were genuinely compared and none reached
+  the floor. The only code that licenses a claim about similarity.
+* ``EV_ERROR``                 — classification raised; nothing was established.
+
+Why BROADER_THAN cannot fire yet
+================================
+Subsumption is derived from the ontology's declared ``parent_type`` chain
+(D-N4-2), and that chain only walks UPWARD. It can say "this concept is narrower
+than an ancestor"; it can never say "this concept is broader than an existing
+one", because that needs the CANDIDATE's declared chain — and a ``find_by_type``
+row carries ``id``/``name``/``embedding``/``weight`` and **no type column**. This
+is an honest consequence of D-N4-2, not an oversight: D-N4-10 records the two
+sound routes (inverse chain lookup driven from the ontology side, or type-level
+alignment of the evolution agent's ``SchemaProposal``s) and assigns them to N.4c.
+``verdict_counts["BROADER_THAN"]`` is therefore always 0 here, and a test pins it.
 
 What attempt 1 got wrong, and what this module does instead
 ==========================================================
@@ -26,40 +65,13 @@ What attempt 1 got wrong, and what this module does instead
   Dutch names ``Tweede Kamer der Staten-Generaal`` ⊃ ``Tweede Kamer`` is an alias,
   ``Den Haag Zuidwest`` ⊃ ``Den Haag`` is part-of. Worse, ``KGResolver``'s fuzzy
   tier *rejects* long/short alias pairs (the length delta tanks Levenshtein), so
-  aliases are exactly what reaches this module. There is therefore NO lexical tier
-  here; what that signal should become instead is an open plan decision.
-* **Subsumption comes only from the ontology** (D-N4-2): the label's own declared
-  ``parent_type`` chain via ``canonical_bridge``. Embeddings inform RELATED/NOVEL
-  ONLY — cosine measures similarity, never direction.
+  aliases are exactly what reaches this module. The signal survives as
+  ``lexical_alias_candidates`` — review candidates only (D-N4-9).
+* **Subsumption comes only from the ontology** (D-N4-2). Embeddings inform
+  RELATED/NOVEL ONLY — cosine measures similarity, never direction.
 * **Candidates are fetched by CANONICAL type** (D-N4-3). ``find_by_type`` filters
-  the canonical ``entity_type`` column; passing the rich Track-L label
-  (``Gemeente``, ``RegioDeal``) returns ``[]`` by construction, which silently
-  turned the whole stage into a no-op in attempt 1.
-* **Evidence must be falsifiable** (D-N4-7): the module distinguishes "no
-  candidates were fetched" (a fact about the query) from "candidates were fetched
-  and none were close" (a fact about the graph). It never asserts the second when
-  only the first is known.
-
-The tiers, deterministic-first (the Track-N house style — the LLM proposes, the
-system decides):
-
-1. **Type-chain subsumption** (pure, via ``canonical_bridge``). NOTE this fires
-   only when an ancestor TYPE is materialised as a graph node — a candidate row
-   from ``find_by_type`` carries ``id``/``name``/``embedding``/``weight`` and no
-   type column, so the ancestor is matched on NAME. For an ordinary instance whose
-   ancestor type is not a node, the chain restates the entity's own type and adds
-   nothing, so no verdict is emitted.
-2. **Embedding band**: at/above the match ceiling similarity alone implies
-   ``RELATED_TO``; below the related floor nothing is close → ``NOVEL``
-   deterministically. Only the band between them is genuinely ambiguous.
-3. **Batched LLM-judge** (default ON, D4) arbitrates exactly that band:
-   ``RELATED_TO`` (to which neighbour) vs ``NOVEL``. It may NOT answer subsumption,
-   and a ``RELATED_TO`` whose target is not in that concept's OWN neighbour list is
-   downgraded to ``NOVEL`` — the judge cannot invent a link. No judge / failure /
-   silence → ``NOVEL``, with the embedding evidence retained.
-
-Enrichment is NON-destructive: verdicts are written to the entity's ``properties``
-and nothing is merged, removed, or re-typed.
+  the canonical ``entity_type`` column; passing the rich Track-L label returns
+  ``[]`` by construction, which silently turned attempt 1 into a no-op.
 """
 
 from __future__ import annotations
@@ -71,8 +83,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
-
-from entity_filtering.resolution.embedding_resolver import EmbeddingResolver
 
 # -- verdicts ---------------------------------------------------------------
 
@@ -92,20 +102,38 @@ METHOD_NONE = "none"
 
 METHODS = (METHOD_TYPE_CHAIN, METHOD_EMBEDDING, METHOD_JUDGE, METHOD_NONE)
 
-# -- evidence codes (D-N4-7: falsifiable, machine-checkable reasons) ---------
+# -- evidence codes: each names an OBSERVATION with exactly one cause -------
 
-#: no repository was supplied — nothing about the graph is known
 EV_NO_REPO = "no_repo"
-#: the label could not be resolved to a canonical type, so nothing was queried
+EV_EMPTY_TEXT = "empty_surface_form"
 EV_NO_TYPE = "no_resolvable_type"
-#: a query ran and returned no rows of a comparable type
-EV_NO_CANDIDATES = "no_candidates_fetched"
-#: candidates exist but none carried an embedding to compare against
-EV_NO_VECTORS = "no_comparable_vectors"
-#: candidates were compared and none were close enough
-EV_NONE_CLOSE = "candidates_fetched_none_close"
+EV_FETCH_FAILED = "candidate_fetch_failed"
+EV_NO_ROWS = "type_query_returned_no_rows"
+EV_NO_QUERY_VECTOR = "entity_has_no_embedding"
+EV_NO_CANDIDATE_VECTORS = "no_candidate_embeddings"
+EV_INCOMPARABLE_VECTORS = "vectors_incomparable"
+EV_NONE_CLOSE = "compared_none_close"
+EV_ERROR = "classification_error"
 
+REASON_CODES = (
+    EV_NO_REPO,
+    EV_EMPTY_TEXT,
+    EV_NO_TYPE,
+    EV_FETCH_FAILED,
+    EV_NO_ROWS,
+    EV_NO_QUERY_VECTOR,
+    EV_NO_CANDIDATE_VECTORS,
+    EV_INCOMPARABLE_VECTORS,
+    EV_NONE_CLOSE,
+    EV_ERROR,
+)
+
+# Fixed per-method confidences. A raw cosine is NEVER written here: mixing a
+# similarity score with an ontological confidence makes the two incomparable (and
+# would let the embedding tier outrank the ontology tier). The cosine is reported
+# separately in ``Alignment.similarity`` and in the evidence text.
 _CONF_TYPE_CHAIN = 0.80
+_CONF_EMBEDDING = 0.55
 _CONF_JUDGE = 0.60
 _CONF_NOVEL = 0.50
 
@@ -114,10 +142,13 @@ _CONF_NOVEL = 0.50
 class Alignment:
     """One concept's placement relative to the existing graph.
 
-    ``reason_code`` is the machine-checkable half of the evidence (one of the
-    ``EV_*`` constants for the negative paths); ``evidence`` is its human-readable
-    expansion. Both are always populated — an operator must be able to audit and
-    reverse any verdict.
+    ``reason_code`` is the machine-checkable half of the evidence (see the module
+    docstring); ``evidence`` is its human-readable expansion. Both are always
+    populated — an operator must be able to audit and reverse any verdict, and
+    N.4c filters gap-recording on ``reason_code`` so it must never be a guess.
+
+    ``canonical_type`` is carried so N.4b can stamp ``source_type``/``target_type``
+    on a seeded edge (D-N4-5) without re-resolving the ontology.
     """
 
     verdict: str
@@ -127,6 +158,8 @@ class Alignment:
     reason_code: Optional[str] = None
     target_id: Optional[str] = None
     target_name: Optional[str] = None
+    canonical_type: Optional[str] = None
+    similarity: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -148,11 +181,7 @@ def _candidate_name(candidate: Dict[str, Any]) -> str:
 
 
 def _props(entity: Dict[str, Any]) -> Dict[str, Any]:
-    """Entity properties, tolerating a missing OR explicitly-null ``properties``.
-
-    A DB/LLM row can carry ``properties: None``; ``.get("properties", {})`` returns
-    that ``None`` and every downstream ``.get`` would raise.
-    """
+    """Entity properties, tolerating a missing OR explicitly-null ``properties``."""
     value = entity.get("properties")
     return value if isinstance(value, dict) else {}
 
@@ -168,14 +197,18 @@ def resolve_types(
     """``(canonical_type, rich_ancestors)`` for an extraction ``label``.
 
     * ``canonical_type`` — the coarse ``entity_type`` enum value the graph is
-      actually indexed on; this is what ``find_by_type`` must be given (D-N4-3).
+      indexed on; this is what ``find_by_type`` must be given (D-N4-3).
     * ``rich_ancestors`` — the declared ancestor TYPE names above ``label``
       (nearest first), the only sound deterministic subsumption evidence (D-N4-2).
 
     ontology-manager is an OPTIONAL extra of this pipeline, so the import is lazy
     and guarded: without it (or without applied schemas, or for an unresolvable
-    label) this returns ``(None, [])`` and the caller degrades honestly rather than
-    querying with a label the column does not hold.
+    label) this returns ``(None, [])`` and the caller degrades honestly.
+
+    The ancestor list is filtered against the RESOLVED type name rather than the
+    input ``label``, so a label that matched an ontology *alias* does not leave the
+    entity's own type sitting in ``ancestors`` (which would let the tier "prove"
+    that a concept is narrower than itself).
     """
     if not label or not schemas:
         return None, []
@@ -193,9 +226,8 @@ def resolve_types(
         return None, []
     if resolution is None:
         return None, []
-    ancestors = [
-        t for t in resolution.type_tags if _normalize(t) != _normalize(label)
-    ]
+    own = {_normalize(resolution.ontology_type), _normalize(label)}
+    ancestors = [t for t in resolution.type_tags if _normalize(t) not in own]
     return resolution.canonical, ancestors
 
 
@@ -204,11 +236,21 @@ def type_chain_subsumption(
 ) -> Optional[Alignment]:
     """NARROWER_THAN when an ancestor TYPE is MATERIALISED as a graph node.
 
-    A ``find_by_type`` row has no type column, so the ancestor is matched on the
-    candidate's NAME. When no ancestor is materialised this returns ``None``
-    DELIBERATELY rather than a type-level verdict: for an ordinary instance the
-    chain merely restates the entity's own declared type, which the label already
-    carries — asserting it as an alignment would be an empty claim.
+    **Unverifiable by construction, and OFF by default** (see
+    ``ConceptAligner(type_chain_enabled=...)``). A ``find_by_type`` row carries no
+    type column, so the only available match is ancestor-type-name == candidate
+    *instance* name. That cannot distinguish a materialised type node from an
+    ordinary entity that merely happens to share the name, and in N.4b a false hit
+    would seed a false ``is_a`` — the exact damage class that sank attempt 1.
+
+    It is also near-inert on this project's ontologies: ``canonical_bridge``
+    terminates the walk at the first mapped schema.org base, so ``ancestors`` is
+    typically a single English identifier (``Deal``, ``AdministrativeArea``) that
+    will not appear as a node name in a Dutch graph.
+
+    Kept, disabled, and disclosed rather than deleted because D-N4-10 assigns the
+    real fix to N.4c: widen the projection (or drive the lookup from the ontology
+    side) so the candidate's type can actually be verified.
     """
     if not ancestors or not candidates:
         return None
@@ -222,8 +264,9 @@ def type_chain_subsumption(
             method=METHOD_TYPE_CHAIN,
             confidence=_CONF_TYPE_CHAIN,
             evidence=(
-                f"the ontology declares this type under {ancestor!r}, which exists "
-                f"in the graph as {_candidate_name(cand)!r}"
+                f"the ontology declares this type under {ancestor!r}, and a node "
+                f"named {_candidate_name(cand)!r} exists — NOTE the node's type "
+                "could not be verified (the candidate row carries no type column)"
             ),
             target_id=str(cand.get("id", "") or "") or None,
             target_name=_candidate_name(cand),
@@ -236,31 +279,98 @@ def type_chain_subsumption(
 # ---------------------------------------------------------------------------
 
 
-def nearest_by_embedding(
-    embedding: Optional[Sequence[float]], candidates: List[Dict[str, Any]]
-) -> Tuple[Optional[Dict[str, Any]], float]:
-    """``(nearest candidate, cosine)``; ``(None, 0.0)`` when nothing is comparable.
+@dataclass(frozen=True)
+class NeighbourProbe:
+    """Outcome of comparing one entity against its candidate rows.
 
-    The first comparable candidate is taken unconditionally, and only then is the
-    score compared — NOT via a numeric sentinel. Any sentinel inside the cosine
-    range silently drops a boundary case (0.0 seeds lose to an orthogonal pair,
-    -1.0 seeds lose to an opposed pair), and the caller would then report "no
-    comparable vectors" — a falsehood about the graph (D-N4-7). ``best is None``
-    must mean exactly one thing: no candidate carried a vector.
+    Separating the causes is the whole point: ``nearest is None`` is ambiguous on
+    its own (no query vector? no candidate vectors? all incomparable?), and
+    collapsing them is how a confident falsehood gets written. Each counter below
+    is an observation, and :meth:`reason_code` maps them to exactly one code.
+    """
+
+    nearest: Optional[Dict[str, Any]]
+    score: float
+    compared: int
+    skipped_no_vector: int
+    skipped_incomparable: int
+    has_query_vector: bool
+
+    def reason_code(self) -> Optional[str]:
+        """The single code explaining why nothing was compared (None if it was)."""
+        if not self.has_query_vector:
+            return EV_NO_QUERY_VECTOR
+        if self.compared:
+            return None
+        if self.skipped_incomparable:
+            return EV_INCOMPARABLE_VECTORS
+        return EV_NO_CANDIDATE_VECTORS
+
+
+def _cosine(vec1: Sequence[float], vec2: Sequence[float]) -> Optional[float]:
+    """Cosine similarity, or ``None`` when the pair is INCOMPARABLE.
+
+    Deliberately not ``EmbeddingResolver._cosine_similarity``: that returns ``0.0``
+    for mismatched lengths and zero-norm vectors, an out-of-band sentinel
+    indistinguishable from a genuinely orthogonal pair. This repo has documented
+    768/1024 embedding-dimension drift, so treating a dimension mismatch as
+    "compared, not similar" would report a comparison that never happened.
+    """
+    if not vec1 or not vec2 or len(vec1) != len(vec2):
+        return None
+    dot = 0.0
+    n1 = 0.0
+    n2 = 0.0
+    for a, b in zip(vec1, vec2):
+        dot += a * b
+        n1 += a * a
+        n2 += b * b
+    if n1 <= 0.0 or n2 <= 0.0:
+        return None
+    return dot / ((n1 ** 0.5) * (n2 ** 0.5))
+
+
+def probe_neighbours(
+    embedding: Optional[Sequence[float]], candidates: List[Dict[str, Any]]
+) -> NeighbourProbe:
+    """Compare ``embedding`` against every candidate, counting WHY each was skipped.
+
+    The first genuinely comparable candidate is taken unconditionally and only then
+    is the score compared — never via a numeric sentinel, which would silently drop
+    a boundary case (a 0.0 seed loses to an orthogonal pair, a -1.0 seed to an
+    opposed one).
     """
     if not embedding:
-        return None, 0.0
+        return NeighbourProbe(None, 0.0, 0, 0, 0, has_query_vector=False)
     best: Optional[Dict[str, Any]] = None
     best_score = 0.0
+    compared = 0
+    no_vector = 0
+    incomparable = 0
     for cand in candidates:
         cand_emb = cand.get("embedding") or _props(cand).get("embedding")
         if not cand_emb:
+            no_vector += 1
             continue
-        score = EmbeddingResolver._cosine_similarity(list(embedding), list(cand_emb))
+        try:
+            score = _cosine(list(embedding), list(cand_emb))
+        except (TypeError, ValueError):  # non-numeric vector contents
+            score = None
+        if score is None:
+            incomparable += 1
+            continue
+        compared += 1
         if best is None or score > best_score:
             best_score = score
             best = cand
-    return (best, best_score) if best is not None else (None, 0.0)
+    return NeighbourProbe(
+        nearest=best,
+        score=best_score if best is not None else 0.0,
+        compared=compared,
+        skipped_no_vector=no_vector,
+        skipped_incomparable=incomparable,
+        has_query_vector=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -277,40 +387,48 @@ JUDGE_SYSTEM_PROMPT = (
     "link is worse than a missing one."
 )
 
+#: A judge item: ``(item_id, text, neighbour names)``. The id — not the text — is
+#: the key. Two novel entities can share a surface form ("Den Haag" as a Gemeente
+#: and as a Locatie) with DIFFERENT neighbours; keying on text let one ruling
+#: satisfy both items and let item A borrow item B's link target.
+JudgeItem = Tuple[str, str, List[str]]
 
-def build_judge_prompt(items: List[Tuple[str, List[str]]]) -> str:
-    """Render the batched judge prompt for ``(novel_text, [neighbour names])``."""
+
+def build_judge_prompt(items: Sequence[JudgeItem]) -> str:
+    """Render the batched judge prompt; each concept carries its own id."""
     lines = [
         "Classify each NEW concept. Return ONLY this JSON (no prose):",
         "",
-        '{"alignments": [{"text": "<verbatim>", "verdict": "RELATED_TO", '
+        '{"alignments": [{"id": "<id>", "verdict": "RELATED_TO", '
         '"target": "<one neighbour, or null>"}]}',
         "",
         f'verdict must be "{RELATED_TO}" or "{NOVEL}". '
         f'"target" is required for {RELATED_TO} and must be copied verbatim from '
-        "that concept's own neighbour list; use null for NOVEL.",
+        "THAT id's own neighbour list; use null for NOVEL. Echo the id exactly.",
         "",
         "New concepts:",
     ]
-    for text, neighbours in items:
+    for item_id, text, neighbours in items:
         shown = ", ".join(f'"{n}"' for n in neighbours) if neighbours else "(none)"
-        lines.append(f'- "{text}" — nearest existing: {shown}')
+        lines.append(f'- id={item_id}: "{text}" — nearest existing: {shown}')
     return "\n".join(lines)
 
 
 def parse_judge_response(
-    raw: str, items: List[Tuple[str, List[str]]]
+    raw: str, items: Sequence[JudgeItem]
 ) -> Dict[str, Tuple[str, Optional[str]]]:
-    """Parse the judge reply into ``{text: (verdict, target)}`` for EXPLICIT rulings.
+    """Parse the judge reply into ``{item_id: (verdict, target)}`` for EXPLICIT
+    rulings.
 
-    Fences the judge three ways: only ``RELATED_TO``/``NOVEL`` are accepted
-    (subsumption is not its call); a ``RELATED_TO`` whose target is not in that
-    concept's OWN neighbour list is downgraded to ``NOVEL`` (it may not invent a
-    link target, nor borrow another item's); and anything it stayed silent on is
-    ABSENT from the result so the caller can both default it to ``NOVEL`` and count
-    only what was truly arbitrated. Garbage/empty → ``{}``.
+    Fences the judge four ways: an unknown id is ignored; only
+    ``RELATED_TO``/``NOVEL`` are accepted (subsumption is not its call); a
+    ``RELATED_TO`` whose target is not in THAT id's own neighbour list is
+    downgraded to ``NOVEL`` (it may neither invent a target nor borrow another
+    item's); and anything it stayed silent on is ABSENT, so the caller can both
+    default it to ``NOVEL`` and count only what was truly arbitrated.
+    Garbage/empty → ``{}``.
     """
-    allowed = {text: set(neighbours) for text, neighbours in items}
+    allowed = {item_id: set(neighbours) for item_id, _, neighbours in items}
     out: Dict[str, Tuple[str, Optional[str]]] = {}
     if not raw:
         return out
@@ -326,23 +444,23 @@ def parse_judge_response(
     for item in data.get("alignments", []) or []:
         if not isinstance(item, dict):
             continue
-        text = str(item.get("text", "") or "")
-        if text not in allowed:
+        item_id = str(item.get("id", "") or "")
+        if item_id not in allowed:
             continue
         verdict = str(item.get("verdict", "") or "").strip().upper()
         if verdict not in (RELATED_TO, NOVEL):
             continue
         target = item.get("target")
         target = str(target) if target else None
-        if verdict == RELATED_TO and (not target or target not in allowed[text]):
-            out[text] = (NOVEL, None)  # fabricated / borrowed target is not a link
+        if verdict == RELATED_TO and (not target or target not in allowed[item_id]):
+            out[item_id] = (NOVEL, None)  # invented or borrowed target is not a link
             continue
-        out[text] = (verdict, target if verdict == RELATED_TO else None)
+        out[item_id] = (verdict, target if verdict == RELATED_TO else None)
     return out
 
 
 # ---------------------------------------------------------------------------
-# Lexical signal — ALIAS candidates, never subsumption (D-N4-1, resolved)
+# Lexical signal — ALIAS candidates, never subsumption (D-N4-1 / D-N4-9)
 # ---------------------------------------------------------------------------
 
 
@@ -351,12 +469,11 @@ class AliasCandidate:
     """A long-form/short-form name pair worth reviewing as an alias.
 
     Attempt 1 read name containment as ``is_a``; on real data it means *alias*,
-    *part_of* or *named_after* far more often. The signal itself is genuinely
-    useful though — ``KGResolver``'s fuzzy tier STRUCTURALLY misses these pairs
-    because a large length delta tanks Levenshtein similarity — so it is surfaced
-    here as a REVIEW candidate. It never becomes a relation and is never
-    auto-registered: writing an alias merges two identities in the graph, which is
-    an explicit decision, not a side effect of classification.
+    *part_of* or *named_after* far more often. The signal is genuinely useful
+    though — ``KGResolver``'s fuzzy tier STRUCTURALLY misses these pairs because a
+    large length delta tanks Levenshtein — so it is surfaced as a REVIEW candidate.
+    It never becomes a relation and is never auto-registered: writing an alias
+    merges two identities, which must be an explicit decision.
     """
 
     text: str
@@ -378,7 +495,7 @@ def _tokens(text: str) -> List[str]:
 
 
 def _is_token_subsequence(outer: Sequence[str], inner: Sequence[str]) -> bool:
-    """True when ``inner`` appears as a CONTIGUOUS token run inside ``outer``.
+    """True when ``inner`` is a CONTIGUOUS token run inside ``outer``.
 
     Token-boundary matching (not substring), so "deal" never matches "dealer".
     """
@@ -397,9 +514,8 @@ def lexical_alias_candidates(
     """Name-containment pairs, in EITHER direction, as alias review candidates.
 
     ``min_inner_tokens`` keeps a single shared common word from pairing unrelated
-    entities ("Gemeente Den Haag" vs "Gemeente Den Bosch" yields nothing — neither
-    contains the other). Direction is deliberately NOT interpreted: which of the
-    two is canonical is exactly what a reviewer decides.
+    entities. Direction is deliberately NOT interpreted: which of the two is
+    canonical is exactly what a reviewer decides.
     """
     tokens = _tokens(text)
     if not tokens:
@@ -438,13 +554,20 @@ def lexical_alias_candidates(
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class _Fetch:
+    """A candidate fetch outcome: the rows, and whether the call itself succeeded."""
+
+    rows: List[Dict[str, Any]]
+    ok: bool
+
+
 class ConceptAligner:
     """Classify the concepts KG resolution marked ``is_new`` (Track N.4a).
 
-    Runs after ``KGResolver`` and only on entities it flagged ``is_new`` — an
-    entity that already matched a KG node needs no placement. Enrichment is
-    NON-destructive (properties only): nothing is merged, removed, or re-typed, and
-    N.4a emits no relations at all.
+    Runs after ``KGResolver`` and only on entities it flagged ``is_new``.
+    Enrichment is NON-destructive (``properties`` only): nothing is merged,
+    removed, or re-typed, and N.4a emits no relations at all.
 
     Args:
         entity_repo: object exposing ``find_by_type`` (the ONLY repo method used —
@@ -454,8 +577,14 @@ class ConceptAligner:
             chain. ``None`` → no type resolves, so nothing is queried.
         llm_caller: ``(system, user, model) -> str`` (sync or async) for the judge.
         judge_enabled: master switch for the judge tier (default ON, D4).
+        type_chain_enabled: the ancestor-name subsumption tier. **Default OFF** —
+            it cannot verify that the matched node is that type (see
+            :func:`type_chain_subsumption`), and N.4b would seed an ``is_a`` from
+            it. D-N4-10 assigns the verifiable version to N.4c.
         related_floor / match_ceiling: the embedding band bounds.
-        max_candidates: upper bound per type fetch.
+        max_candidates: rows per type fetch. The underlying query is ``LIMIT n``
+            with no ordering, so this is an ARBITRARY sample — every NOVEL verdict
+            discloses the cap rather than implying it saw the whole graph.
         min_inner_tokens: precision guard for the alias-candidate signal.
     """
 
@@ -467,6 +596,7 @@ class ConceptAligner:
         llm_caller: Optional[Any] = None,
         model: str = "",
         judge_enabled: bool = True,
+        type_chain_enabled: bool = False,
         related_floor: float = 0.75,
         match_ceiling: float = 0.90,
         max_candidates: int = 100,
@@ -477,6 +607,7 @@ class ConceptAligner:
         self._llm_caller = llm_caller
         self._model = model
         self._judge_enabled = judge_enabled
+        self._type_chain_enabled = type_chain_enabled
         self._related_floor = related_floor
         self._match_ceiling = match_ceiling
         self._max_candidates = max_candidates
@@ -493,14 +624,16 @@ class ConceptAligner:
             "method_counts": {m: 0 for m in METHODS},
             "reason_counts": {},
             "alias_candidates": [],
+            "candidate_cap": self._max_candidates,
+            "capped_type_fetches": [],
         }
         novel = [e for e in entities if _props(e).get("is_new")]
         if not novel:
             return entities, report
 
-        cache: Dict[str, List[Dict[str, Any]]] = {}
+        cache: Dict[str, _Fetch] = {}
         decided: List[Tuple[Dict[str, Any], Alignment]] = []
-        pending: List[Tuple[Dict[str, Any], Dict[str, Any], float]] = []
+        pending: List[Tuple[Dict[str, Any], Dict[str, Any], float, str]] = []
 
         for entity in novel:
             try:
@@ -512,7 +645,11 @@ class ConceptAligner:
                     exc_info=True,
                 )
                 alignment, ambiguous, aliases = (
-                    self._novel("classification raised", EV_NO_CANDIDATES),
+                    self._novel(
+                        "classification raised before anything could be "
+                        "established about the graph",
+                        EV_ERROR,
+                    ),
                     None,
                     [],
                 )
@@ -520,11 +657,14 @@ class ConceptAligner:
             if alignment is not None:
                 decided.append((entity, alignment))
             elif ambiguous is not None:
-                pending.append((entity, ambiguous[0], ambiguous[1]))
+                pending.append((entity, *ambiguous))
 
         if pending:
             decided.extend(await self._judge(pending, report))
 
+        report["capped_type_fetches"] = sorted(
+            t for t, f in cache.items() if len(f.rows) >= self._max_candidates
+        )
         for entity, alignment in decided:
             self._enrich(entity, alignment)
             report["aligned_count"] += 1
@@ -551,17 +691,18 @@ class ConceptAligner:
     # -- deterministic tiers -------------------------------------------------
 
     async def _classify(
-        self, entity: Dict[str, Any], cache: Dict[str, List[Dict[str, Any]]]
+        self, entity: Dict[str, Any], cache: Dict[str, _Fetch]
     ) -> Tuple[
         Optional[Alignment],
-        Optional[Tuple[Dict[str, Any], float]],
+        Optional[Tuple[Dict[str, Any], float, str]],
         List[AliasCandidate],
     ]:
         """Tiers 1-2. ``(alignment, ambiguous_band, alias_candidates)`` — exactly
-        one of the first two is set."""
+        one of the first two is set. The band tuple is
+        ``(nearest, score, canonical_type)``."""
         text = str(entity.get("text", "") or "").strip()
         if not text:
-            return self._novel("empty surface form", EV_NO_TYPE), None, []
+            return self._novel("the entity has no surface form", EV_EMPTY_TEXT), None, []
 
         label = str(entity.get("label", "") or "")
         canonical, ancestors = resolve_types(label, self._schemas)
@@ -569,7 +710,7 @@ class ConceptAligner:
         if self._repo is None:
             return (
                 self._novel(
-                    "no repository available — the graph was never queried",
+                    "no repository was supplied — the graph was never queried",
                     EV_NO_REPO,
                 ),
                 None,
@@ -578,20 +719,35 @@ class ConceptAligner:
         if not canonical:
             return (
                 self._novel(
-                    f"label {label!r} does not resolve to a canonical type, so no "
-                    "comparable concepts could be queried",
+                    f"label {label!r} did not resolve to a canonical type, so no "
+                    "query could be formed",
                     EV_NO_TYPE,
                 ),
                 None,
                 [],
             )
 
-        candidates = await self._candidates(canonical, cache)
+        fetch = await self._candidates(canonical, cache)
+        if not fetch.ok:
+            return (
+                self._novel(
+                    f"the candidate fetch for canonical type {canonical!r} raised; "
+                    "nothing was established about the graph",
+                    EV_FETCH_FAILED,
+                    canonical_type=canonical,
+                ),
+                None,
+                [],
+            )
+        candidates = fetch.rows
         if not candidates:
             return (
                 self._novel(
-                    f"the graph holds no concepts of canonical type {canonical!r}",
-                    EV_NO_CANDIDATES,
+                    f"the type query for {canonical!r} returned no rows (note: the "
+                    "repository reports a failed query as an empty result, so this "
+                    "does not by itself prove the graph holds none)",
+                    EV_NO_ROWS,
+                    canonical_type=canonical,
                 ),
                 None,
                 [],
@@ -601,82 +757,137 @@ class ConceptAligner:
             text, candidates, min_inner_tokens=self._min_inner_tokens
         )
 
-        hit = type_chain_subsumption(ancestors, candidates)
-        if hit is not None:
-            return hit, None, aliases
+        if self._type_chain_enabled:
+            hit = type_chain_subsumption(ancestors, candidates)
+            if hit is not None:
+                return hit, None, aliases
 
-        embedding = _props(entity).get("embedding")
-        nearest, score = nearest_by_embedding(embedding, candidates)
-        if nearest is None:
+        probe = probe_neighbours(_props(entity).get("embedding"), candidates)
+        sampled = self._sample_note(canonical, len(candidates))
+        reason = probe.reason_code()
+        if reason is not None:
             return (
                 self._novel(
-                    f"{len(candidates)} concepts of type {canonical!r} exist but "
-                    "none could be compared (no embedding)",
-                    EV_NO_VECTORS,
+                    self._probe_evidence(reason, probe, canonical, len(candidates)),
+                    reason,
+                    canonical_type=canonical,
                 ),
                 None,
                 aliases,
             )
+
+        nearest, score = probe.nearest, probe.score
+        assert nearest is not None  # reason_code() is None ⇒ something was compared
         if score >= self._match_ceiling:
             return (
                 Alignment(
                     verdict=RELATED_TO,
                     method=METHOD_EMBEDDING,
-                    confidence=round(score, 6),
+                    confidence=_CONF_EMBEDDING,
+                    similarity=round(score, 6),
                     evidence=(
                         f"cosine {score:.3f} ≥ {self._match_ceiling} to "
-                        f"{_candidate_name(nearest)!r}"
+                        f"{_candidate_name(nearest)!r}{sampled}"
                     ),
                     target_id=str(nearest.get("id", "") or "") or None,
                     target_name=_candidate_name(nearest),
+                    canonical_type=canonical,
                 ),
                 None,
                 aliases,
             )
         if score < self._related_floor:
             return (
-                self._novel(
-                    f"nearest of {len(candidates)} compared concepts is "
-                    f"{_candidate_name(nearest)!r} at cosine {score:.3f} < "
-                    f"{self._related_floor}",
-                    EV_NONE_CLOSE,
+                Alignment(
+                    verdict=NOVEL,
+                    method=METHOD_NONE,
+                    confidence=_CONF_NOVEL,
+                    similarity=round(score, 6),
+                    evidence=(
+                        f"nearest of {probe.compared} compared concepts is "
+                        f"{_candidate_name(nearest)!r} at cosine {score:.3f} < "
+                        f"{self._related_floor}{sampled}"
+                    ),
+                    reason_code=EV_NONE_CLOSE,
+                    canonical_type=canonical,
                 ),
                 None,
                 aliases,
             )
-        return None, (nearest, score), aliases
+        return None, (nearest, score, canonical), aliases
+
+    def _sample_note(self, canonical: str, fetched: int) -> str:
+        """Disclose that the candidate set is a capped, unordered sample (M4)."""
+        if fetched < self._max_candidates:
+            return ""
+        return (
+            f" — NOTE this compared an arbitrary sample of {self._max_candidates} "
+            f"{canonical!r} rows (the query is LIMIT-capped and unordered), so the "
+            "graph may hold closer concepts that were not fetched"
+        )
+
+    def _probe_evidence(
+        self, reason: str, probe: NeighbourProbe, canonical: str, fetched: int
+    ) -> str:
+        """Human-readable expansion for a probe that compared nothing."""
+        if reason == EV_NO_QUERY_VECTOR:
+            return (
+                "this entity carries no embedding, so nothing could be compared — "
+                "this says nothing about the graph"
+            )
+        if reason == EV_INCOMPARABLE_VECTORS:
+            return (
+                f"{probe.skipped_incomparable} of {fetched} {canonical!r} rows "
+                "carried an embedding that could not be compared (dimension "
+                "mismatch or zero norm); no comparison was performed"
+            )
+        return (
+            f"{fetched} {canonical!r} rows were fetched but none carried an "
+            "embedding, so no comparison was performed"
+        )
 
     async def _candidates(
-        self, canonical: str, cache: Dict[str, List[Dict[str, Any]]]
-    ) -> List[Dict[str, Any]]:
-        """Fetch by CANONICAL type (D-N4-3), cached per batch."""
+        self, canonical: str, cache: Dict[str, _Fetch]
+    ) -> _Fetch:
+        """Fetch by CANONICAL type (D-N4-3), cached per batch.
+
+        A raised fetch is cached as ``ok=False`` so the batch stays consistent, and
+        the caller reports ``EV_FETCH_FAILED`` rather than claiming the graph is
+        empty.
+        """
         if canonical in cache:
             return cache[canonical]
         try:
             found = await self._repo.find_by_type(
                 canonical, limit=self._max_candidates
             )
+            fetch = _Fetch(rows=list(found or []), ok=True)
         except Exception:
             logger.debug(
                 "ConceptAligner: candidate fetch failed for type '{}'",
                 canonical,
                 exc_info=True,
             )
-            found = []
-        cache[canonical] = list(found or [])
-        return cache[canonical]
+            fetch = _Fetch(rows=[], ok=False)
+        cache[canonical] = fetch
+        return fetch
 
     # -- judge ---------------------------------------------------------------
 
     async def _judge(
         self,
-        pending: List[Tuple[Dict[str, Any], Dict[str, Any], float]],
+        pending: List[Tuple[Dict[str, Any], Dict[str, Any], float, str]],
         report: Dict[str, Any],
     ) -> List[Tuple[Dict[str, Any], Alignment]]:
-        """One batched call over the ambiguous band; silence/failure → NOVEL."""
-        items = [
-            (str(e.get("text", "") or ""), [_candidate_name(near)])
-            for e, near, _ in pending
+        """One batched call over the ambiguous band; silence/failure → NOVEL.
+
+        Items are keyed by INDEX, not surface form: two novel entities can share a
+        name with different neighbours, and a text key would let one ruling satisfy
+        both and let one borrow the other's link target.
+        """
+        items: List[JudgeItem] = [
+            (str(i), str(e.get("text", "") or ""), [_candidate_name(near)])
+            for i, (e, near, _, _) in enumerate(pending)
         ]
         verdicts: Dict[str, Tuple[str, Optional[str]]] = {}
         if self._judge_enabled and self._llm_caller is not None:
@@ -695,67 +906,72 @@ class ConceptAligner:
         report["judged_count"] = len(verdicts)
 
         out: List[Tuple[Dict[str, Any], Alignment]] = []
-        for entity, nearest, score in pending:
-            text = str(entity.get("text", "") or "")
-            ruled = text in verdicts  # only THIS item's own ruling counts
-            verdict, target = verdicts.get(text, (NOVEL, None))
+        for i, (entity, nearest, score, canonical) in enumerate(pending):
+            item_id = str(i)
+            ruled = item_id in verdicts  # only THIS item's own ruling counts
+            verdict, target = verdicts.get(item_id, (NOVEL, None))
             if ruled and verdict == RELATED_TO:
                 out.append((entity, Alignment(
                     verdict=RELATED_TO,
                     method=METHOD_JUDGE,
                     confidence=_CONF_JUDGE,
+                    similarity=round(score, 6),
                     evidence=(
                         f"judge linked it to {target!r} (nearest cosine {score:.3f})"
                     ),
                     target_id=str(nearest.get("id", "") or "") or None,
                     target_name=target or _candidate_name(nearest),
+                    canonical_type=canonical,
                 )))
             elif ruled:
                 out.append((entity, Alignment(
                     verdict=NOVEL,
                     method=METHOD_JUDGE,
                     confidence=_CONF_NOVEL,
+                    similarity=round(score, 6),
                     evidence=(
                         f"judge found no link (nearest cosine {score:.3f} to "
                         f"{_candidate_name(nearest)!r})"
                     ),
                     reason_code=EV_NONE_CLOSE,
+                    canonical_type=canonical,
                 )))
             else:
-                # NOT judged: no caller, judge disabled, or it stayed silent on
-                # THIS item. Never claim a judge verdict we did not get.
+                # NOT judged: no caller, judge disabled, or silent on THIS item.
                 out.append((entity, Alignment(
                     verdict=NOVEL,
                     method=METHOD_NONE,
                     confidence=_CONF_NOVEL,
+                    similarity=round(score, 6),
                     evidence=(
                         f"nearest cosine {score:.3f} to "
                         f"{_candidate_name(nearest)!r} is inconclusive and no judge "
-                        "verdict was obtained"
+                        "verdict was obtained for this concept"
                     ),
                     reason_code=EV_NONE_CLOSE,
+                    canonical_type=canonical,
                 )))
         return out
 
     # -- enrichment ----------------------------------------------------------
 
     @staticmethod
-    def _novel(evidence: str, reason_code: str) -> Alignment:
+    def _novel(
+        evidence: str, reason_code: str, *, canonical_type: Optional[str] = None
+    ) -> Alignment:
         return Alignment(
             verdict=NOVEL,
             method=METHOD_NONE,
             confidence=_CONF_NOVEL,
             evidence=evidence,
             reason_code=reason_code,
+            canonical_type=canonical_type,
         )
 
     @staticmethod
     def _enrich(entity: Dict[str, Any], alignment: Alignment) -> None:
         """Write the verdict + evidence into properties (non-destructive)."""
         props = entity.setdefault("properties", {})
-        if not isinstance(props, dict):  # properties: None on the incoming row
-            props = {}
-            entity["properties"] = props
         props["concept_alignment"] = alignment.verdict
         props["alignment_method"] = alignment.method
         props["alignment_confidence"] = alignment.confidence
@@ -763,13 +979,16 @@ class ConceptAligner:
         props["alignment_reason_code"] = alignment.reason_code
         props["alignment_target_id"] = alignment.target_id
         props["alignment_target_name"] = alignment.target_name
+        props["alignment_canonical_type"] = alignment.canonical_type
+        props["alignment_similarity"] = alignment.similarity
 
 
 __all__ = [
     "Alignment",
     "AliasCandidate",
     "ConceptAligner",
-    "lexical_alias_candidates",
+    "JudgeItem",
+    "NeighbourProbe",
     "NARROWER_THAN",
     "BROADER_THAN",
     "RELATED_TO",
@@ -781,13 +1000,20 @@ __all__ = [
     "METHOD_NONE",
     "METHODS",
     "EV_NO_REPO",
+    "EV_EMPTY_TEXT",
     "EV_NO_TYPE",
-    "EV_NO_CANDIDATES",
-    "EV_NO_VECTORS",
+    "EV_FETCH_FAILED",
+    "EV_NO_ROWS",
+    "EV_NO_QUERY_VECTOR",
+    "EV_NO_CANDIDATE_VECTORS",
+    "EV_INCOMPARABLE_VECTORS",
     "EV_NONE_CLOSE",
+    "EV_ERROR",
+    "REASON_CODES",
     "resolve_types",
     "type_chain_subsumption",
-    "nearest_by_embedding",
+    "probe_neighbours",
+    "lexical_alias_candidates",
     "build_judge_prompt",
     "parse_judge_response",
     "JUDGE_SYSTEM_PROMPT",
