@@ -98,10 +98,31 @@
 > MUTATION TESTING: disabling each new guard makes a specific test fail.
 > Report: `reviews/phase-N.4b-attempts-1-2.md`; residuals R2–R5 carried to N.4c.
 >
-> **▶ THEN N.4c** (gap loop + `BROADER_THAN` reachability + the descendant sweep).
-> All N.4 decisions are resolved: D-N4-9 (the lexical signal becomes an alias candidate), D-N4-10
-> (BROADER_THAN must be reachable), D-N4-11 (an accepted BROADER_THAN sweeps for
-> all its other descendants). Then N.5 (regression gate + docs; also lands the N.2 +
+> **N.4c NOT MERGED — the instance-level premise is abandoned (D-N4-12).** Branch
+> `feature/track-n4c-verifiable-subsumption` @ `68c544f` widened `find_by_type`'s
+> projection to return the rich type, then used it to make the subsumption tier
+> "checkable" and enable it. Review returned REVISIONS_NEEDED (3 blockers, 6
+> majors) and the decisive finding was structural, not a defect list: **nothing in
+> this codebase ever creates a node representing an ontology type** — every
+> `entity` row is written from a text mention — so "this entity is narrower than
+> that entity" is not a claim the data can support. Two supporting measurements:
+> `type_tags` is NOT an ancestor trail (the no-schemas persist path writes
+> `[raw_label]`, and the repository unions it across upserts), so the veto that was
+> meant to reject siblings does not; and `ConceptAlignmentConfig.enabled` is still
+> `False`, so the commit's claim that the pipeline now "seeds under the shipped
+> configuration" was itself an over-claim — the track's recurring failure mode, this
+> time in a commit message.
+>
+> That was the THIRD instance-level attempt to fail identically (lexical
+> containment → name matching → declared type). **D-N4-12** moves subsumption to
+> the TYPE boundary, where both sides of the question are types and the parent slot
+> is currently filled with an unvalidated guess; D-N4-11's descendant sweep is
+> superseded, because an accepted BROADER_THAN becomes a SCHEMA re-parent whose
+> descendants are inherited rather than enumerated.
+>
+> **▶ RESUME AT N.4d** (see its chapter): N.4d.1 type placement verdicts → N.4d.2
+> the judge over the sibling set → N.4d.3 apply as a schema edit → N.4d.4 gap loop +
+> reachability (C1 first). Then N.5 (regression gate + docs; also lands the N.2 +
 > N.3 follow-ups above). The **evidence-packet clustering stays DEFERRED — measure
 > first** (user decision, §5).
 >
@@ -337,7 +358,8 @@ approve/reject/implement, plus `list_gaps` / `get_gap_statistics`), wired into
 | **D-N4-7** | Evidence must be **falsifiable**: state what was OBSERVED, never the inference it would license. Each reason code names an observation with exactly **one** cause. As shipped in N.4a: `no_repo`, `empty_surface_form`, `no_resolvable_type`, `candidate_fetch_failed`, `type_query_returned_no_rows`, `entity_has_no_embedding`, `no_candidate_embeddings`, `vectors_incomparable`, `compared_none_close`, `classification_error`. | An evidence-first track cannot stamp confident falsehoods (attempt-1 M5; attempt-2 B1–B4). N.4c filters gap-recording on these codes, so they must never be a guess. |
 | **D-N4-8** | Reachability is part of the phase, not a follow-up: an env flag **and** DI wiring in `entity_extraction_service`, with a WARNING on enabled-but-unwired (the orphan-connector pattern). | v1's judge was unreachable in every real run (M7). |
 | **D-N4-10** | **`BROADER_THAN` must be reachable**, delivered in N.4c via inverse chain lookup and/or type-level alignment of `SchemaProposal`s — still ontological evidence only, never lexical or cosine. | N.4a leaves it unreachable (the chain only walks upward), which would silently reduce the taxonomy to three values. Full statement in the N.4c section. |
-| **D-N4-11** | An **accepted `BROADER_THAN` triggers a descendant sweep**: every other concept already in the graph that falls under the new broader concept is attached too. Exhaustive-or-declared-partial, idempotent, reversible, and sharing one rule with the per-entity path. | BROADER_THAN is one-to-many; attaching only the triggering child leaves a half-built hierarchy whose shape depends on extraction order. Full statement in the N.4c section. |
+| **D-N4-12** | **Subsumption is decided where a TYPE enters the system** (extension proposal / evolution proposal / curator acceptance), never per entity — the entity table stores mentions, and no node ever represents a type. An accepted BROADER_THAN is applied as a SCHEMA re-parent, so descendants are inherited rather than enumerated. | Three attempts failed identically at instance level (N.4 parked, N.4a/b, N.4c). Full statement in the N.4d chapter. |
+| **D-N4-11** ↩ | *Superseded by D-N4-12*: an accepted `BROADER_THAN` triggers a descendant sweep: every other concept already in the graph that falls under the new broader concept is attached too. Exhaustive-or-declared-partial, idempotent, reversible, and sharing one rule with the per-entity path. | BROADER_THAN is one-to-many; attaching only the triggering child leaves a half-built hierarchy whose shape depends on extraction order. Full statement in the N.4c section. |
 
 **D-N4-9 (RESOLVED 2026-09-01, user)** — the lexical signal becomes an **alias
 candidate**, not `is_a` and not a verdict. `lexical_alias_candidates` emits
@@ -398,6 +420,108 @@ will touch. They are line items, not "nice to have":
 > type), and it is the only producer of `NARROWER_THAN` — so N.4b's seeding path is
 > exercised today only by explicitly opting into a tier the module documents as
 > unverifiable. N.4c's verifiable subsumption is what turns seeding on for real.
+
+### N.4d — Subsumption at the TYPE boundary (re-scoped after N.4c)
+
+> **Why this chapter exists.** Three times now the subsumption premise has failed
+> — lexical containment (parked attempt), name matching (N.4a/b), and the declared
+> type (N.4c). Each failure had the same shape, and the N.4c review finally made it
+> unmistakable: **subsumption is a relation between TYPES, and the entity table
+> only stores MENTIONS.** Nothing in this codebase ever creates a node representing
+> an ontology type — every `entity` row is written from a text mention by
+> `EntityPersistenceService`. So "this entity is narrower than that entity" is not
+> a claim the data can support, however it is dressed up. The answer is not a
+> better heuristic in the same place; it is a different place.
+
+#### D-N4-12 — subsumption is decided where a TYPE enters the system, not per entity
+
+There are exactly three such moments, and **all three currently fill the parent
+slot with an unvalidated guess**:
+
+| # | Moment | Who sets the parent today |
+|---|---|---|
+| 1 | `pass1_schema_validation` proposes an extension | the extraction LLM guesses `parent_type` |
+| 2 | `OntologyEvolutionAgent.create_proposal_from_gap` | `definition["parent_type"] = gap.entity_type_guess` — the gap's raw type guess |
+| 3 | `SchemaEditService.accept_extension` | carries whichever guess arrived, unchecked, into `accepted_extensions` |
+
+That unchecked guess IS the gap this work should fill. At this boundary both sides
+of the question are types, so the question is well-posed for the first time.
+
+#### The deterministic constraint that makes BROADER_THAN tractable
+
+For a proposed type `P` with (guessed or known) parent `G`:
+
+* **NARROWER_THAN is a declaration, not an inference.** If `G` resolves to an
+  existing type, `P is_a G` is simply what the proposal says. The job is to
+  VALIDATE it (does `G` exist? is the chain acyclic? does `P` duplicate an
+  existing type or alias?), not to derive it.
+* **BROADER_THAN has a bounded, sound candidate set: `P`'s SIBLINGS.** `P` can
+  only become the parent of an existing type `T` by being inserted between `T` and
+  `T`'s current parent. That is structurally valid only when `T` currently hangs
+  from `G` too — i.e. `T` is a sibling of `P`. Any `T` whose chain already passes
+  through something narrower than `P` cannot be re-parented under it.
+
+  This is what was missing at instance level: a bounded candidate set derived from
+  declarations rather than guessed from names or vectors. The LLM-judge then
+  decides WHICH siblings actually fall under `P`, over a handful of type
+  definitions rather than a graph-sized set of mentions.
+
+#### D-N4-11 dissolves: express subsumption in the SCHEMA, not as N edges
+
+An accepted `BROADER_THAN` re-parents the affected types: `T.parent_type := P`.
+Because `canonical_bridge` walks the declared chain, **every existing and future
+entity of type `T` inherits `P` automatically.** The descendant sweep D-N4-11
+demanded — find every other concept beneath the new broader concept and attach it
+— is therefore not implemented at all; it is obtained. One schema edit does what
+N per-entity `is_a` edges would have done, stays correct for entities ingested
+afterwards, and is reversible as a single op with an event trail.
+
+This also retires the instance-level seeding question: there is nothing to seed.
+
+#### Sub-phases
+
+**N.4d.1 — Type placement, verdicts only** — ~1d
+- **New** `packages/ontology-manager/.../type_placement.py`: pure functions over
+  `(proposed type, applied ontologies)` → a placement with evidence.
+  Deterministic layer: name/alias collision against existing types (a "new" type
+  that already exists is a DUPLICATE, not a placement); parent existence; cycle
+  detection; sibling enumeration via the declared chains.
+- **AC**: every verdict carries falsifiable evidence with a reason code, following
+  the N.4a discipline verbatim — state what was observed, never the inference it
+  would license. A proposal whose parent does not resolve reports exactly that,
+  and never "it is top-level".
+- **Tests**: against the REAL shipped ontologies, not a stub of the bridge — the
+  N.4a M2 lesson.
+
+**N.4d.2 — The judge over the sibling set** — ~0.5d
+- The batched LLM-judge decides which of `P`'s siblings belong under `P`. Fenced
+  as in N.4a: it may only choose from the sibling list it was given, a fabricated
+  or borrowed name is refused, and silence means "leave where it is".
+- **AC**: the judge can never widen the candidate set, only select within it.
+
+**N.4d.3 — Apply as a schema edit** — ~1d
+- **New** `SchemaEditService.reparent_type`, alongside the existing
+  `rename/merge/split/delete` ops, with the same persist + event plumbing.
+- Placement runs at `accept_extension` time and surfaces its verdict to the
+  curator; the re-parent is applied on the curator's decision, never silently.
+- **AC**: accepting a `BROADER_THAN` over N qualifying siblings re-parents all N;
+  re-running changes nothing; an entity of a re-parented type resolves through the
+  new ancestor via `canonical_bridge` with no per-entity write.
+
+**N.4d.4 — Gap loop + reachability** (unchanged from the previous N.4c scope) — ~1d
+- `record_gap` on a NOVEL verdict (D-N4-6), gated on the reason code — which is
+  why **C1 must be closed first**: a concept nobody adjudicated must not be
+  recorded as a confirmed gap.
+- Env flag + DI wiring (D-N4-8), with the honest DEGRADED warning N.4b landed on.
+- Note `record_gap` swallows its own exceptions and returns a gap with `id=None`
+  on failure; treat a null id as "not recorded", never as success.
+
+#### What happens to the entity-level tier
+
+`concept_alignment` keeps `RELATED_TO` / `NOVEL` — which is where its value always
+was, and what feeds the gap loop. The subsumption tier is **removed**, not merely
+disabled: with D-N4-12 there is no longer a story in which it becomes correct, and
+leaving dead machinery behind invites a fourth attempt at it.
 
 #### Residuals carried from the N.4b review (binding)
 
