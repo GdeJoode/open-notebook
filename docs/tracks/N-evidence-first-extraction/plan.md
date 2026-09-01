@@ -70,13 +70,19 @@
 > Attempt 1 searched only `apps/`+`pipelines/` for a *directory* and wrongly recorded
 > it as missing. v2 wires it: a NOVEL verdict records an ontology gap.
 >
-> **N.4a IN REVIEW** on `feature/track-n4a-ontology-subsumption` — ontology-grounded
-> verdicts + evidence, no seeding and no workflow stage. Attempt 1 of N.4a returned
-> REVISIONS_NEEDED (4 blockers + 4 majors, all one class: evidence that reported an
-> OBSERVATION as the inference it would license); revised in `27e5c64` — reason
-> codes now name observations with exactly one cause each, judge items are keyed by
-> index rather than surface form, and `resolve_types` is finally asserted against
-> the REAL `canonical_bridge` instead of a stub of itself.
+> **N.4a SHIPPED** (merge `fad6833`, branch `feature/track-n4a-ontology-subsumption`)
+> — ontology-grounded verdicts + falsifiable evidence, no seeding and no workflow
+> stage. Attempt 1 of N.4a returned REVISIONS_NEEDED (4 blockers + 4 majors, all one
+> class: evidence that reported an OBSERVATION as the inference it would license);
+> attempt 2 APPROVED after a restructure — `_Fetch.ok` separates a raised fetch from
+> an empty result, `NeighbourProbe` separates the three "nothing was compared"
+> causes, a local `_cosine` returns `None` for incomparable vectors instead of
+> inheriting `_cosine_similarity`'s out-of-band `0.0`, judge items are keyed by index
+> rather than surface form, and `resolve_types` is asserted against the REAL
+> `canonical_bridge` instead of a stub of itself. Six non-blocking minors are carried
+> forward as binding line items C1–C6 (see the N.4 chapter); **C1 must be closed
+> before N.4c filters gap-recording on `reason_code`.**
+> Report: `reviews/phase-N.4a-attempts-1-2.md`.
 >
 > **▶ THEN N.4b** (placement + seeding that survives ontology validation and
 > centrality, with the mandatory workflow-level integration test) → **N.4c** (gap
@@ -316,7 +322,7 @@ approve/reject/implement, plus `list_gaps` / `get_gap_statistics`), wired into
 | **D-N4-4** | The stage runs **after** ontology validation **and** after graph centrality. | Otherwise seeds are stripped (B2) or perturb PageRank and can cause entity REMOVAL (M4). |
 | **D-N4-5** | A seeded edge carries `source_type`, `target_type` and the target record id. | Restores the Track-O.1 endpoint disambiguation the v1 seed threw away (M3). |
 | **D-N4-6** | A `NOVEL` verdict **records an ontology gap** via `OntologyEvolutionAgent.record_gap`. | Closes the loop the chapter always intended: novel concept → gap → frequency → `SchemaProposal`. |
-| **D-N4-7** | Evidence must be **falsifiable**: never assert "nothing comparable exists" when no candidates were *fetched*. Distinguish `no_candidates_fetched` from `candidates_fetched_none_close`. | An evidence-first track cannot stamp confident falsehoods (M5). |
+| **D-N4-7** | Evidence must be **falsifiable**: state what was OBSERVED, never the inference it would license. Each reason code names an observation with exactly **one** cause. As shipped in N.4a: `no_repo`, `empty_surface_form`, `no_resolvable_type`, `candidate_fetch_failed`, `type_query_returned_no_rows`, `entity_has_no_embedding`, `no_candidate_embeddings`, `vectors_incomparable`, `compared_none_close`, `classification_error`. | An evidence-first track cannot stamp confident falsehoods (attempt-1 M5; attempt-2 B1–B4). N.4c filters gap-recording on these codes, so they must never be a guess. |
 | **D-N4-8** | Reachability is part of the phase, not a follow-up: an env flag **and** DI wiring in `entity_extraction_service`, with a WARNING on enabled-but-unwired (the orphan-connector pattern). | v1's judge was unreachable in every real run (M7). |
 | **D-N4-10** | **`BROADER_THAN` must be reachable**, delivered in N.4c via inverse chain lookup and/or type-level alignment of `SchemaProposal`s — still ontological evidence only, never lexical or cosine. | N.4a leaves it unreachable (the chain only walks upward), which would silently reduce the taxonomy to three values. Full statement in the N.4c section. |
 | **D-N4-11** | An **accepted `BROADER_THAN` triggers a descendant sweep**: every other concept already in the graph that falls under the new broader concept is attached too. Exhaustive-or-declared-partial, idempotent, reversible, and sharing one rule with the per-entity path. | BROADER_THAN is one-to-many; attaching only the triggering child leaves a half-built hierarchy whose shape depends on extraction order. Full statement in the N.4c section. |
@@ -359,6 +365,20 @@ remains possible later.
 - **Tests**: **workflow-level integration** (mandatory — its absence hid both
   blockers): seeds survive validation, do not shift centrality, do not change which
   entities stage 12 removes, and `ExtractedRelation(**seed)` validates.
+
+#### Carried-forward line items from the N.4a review (binding, not optional)
+
+The N.4a approval listed six non-blocking minors, all landing on code N.4b/N.4c
+will touch. They are line items, not "nice to have":
+
+| # | Item | Owner |
+|---|---|---|
+| **C1** | `EV_NONE_CLOSE` currently has THREE causes (below-floor; judged-and-rejected; unadjudicated band), violating D-N4-7's own "exactly one cause" contract. The below-floor and *unadjudicated band* cases share both the code AND `method=none`, separable only by comparing `similarity` to a floor the consumer must know out of band. **Split out an unadjudicated-band code (or correct the definition) BEFORE N.4c filters gap-recording on it** — otherwise a concept nobody actually adjudicated is recorded as a confirmed ontology gap. | **N.4c** (its consumer) |
+| **C2** | The LIMIT-cap disclosure (`_sample_note`) is appended in 2 of 5 negative paths — missing from `_probe_evidence` ("100 rows fetched, none had an embedding" has the same "may not have seen the closer ones" problem) and from all three judge-path evidences. | N.4b |
+| **C3** | `type_chain_subsumption` builds its `Alignment` **without** `canonical_type` — and `NARROWER_THAN` is the one verdict N.4b actually seeds, so the field added for D-N4-5 is missing exactly where it is needed. Latent only while the tier is off. | N.4b (fix when D-N4-10 rebuilds the tier) |
+| **C4** | `EV_NO_REPO` drops `canonical_type` although `resolve_types` already ran successfully. | N.4b |
+| **C5** | `assert nearest is not None` is a production-path control guard that vanishes under `python -O`. Invariant is sound; convert to an explicit branch. | N.4b |
+| **C6** | ~~Plan drift: the D-N4-7 row named retired constants~~ — **fixed** in this commit. | done |
 
 **N.4c — Gap loop + reachability + BROADER_THAN + descendant sweep** — ~1.5–2d
 - **Wire** `OntologyEvolutionAgent.record_gap` on every NOVEL verdict (D-N4-6),
