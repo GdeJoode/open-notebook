@@ -344,8 +344,11 @@ def test_same_named_types_are_separated_by_their_parents():
     `entity_types` is a name-keyed dict and the property therefore holds by the
     dict rather than by the mechanism: deleting `sibling_types`' de-duplication
     left every test green. It now runs over the whole applied vocabulary, where
-    the de-duplication genuinely fires (42 times across a production-shaped set
-    of three), so removing it fails here.
+    the de-duplication genuinely fires — 250 duplicate NAMES collapsed across the
+    swept applied sets — so removing it fails here. (A looser reading of 260 also
+    counts the 10 self-rooting types excluded by `sibling_types`' own
+    `type_name == target` guard, which is a different mechanism; 250 is the number
+    this test is about.)
 
     What it establishes: no candidate set ever contains two types with the same
     normalised name. Where two ontologies do define one — `Person`,

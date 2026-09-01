@@ -173,7 +173,11 @@ def parse_judge_response(
         # element that happens to be first is not a verdict the model addressed.
         # Tested by which STRUCTURAL character comes first rather than by
         # `startswith`, so a ```json fence or a prose preamble cannot smuggle the
-        # same reply past — all three spellings are one shape.
+        # same reply past — all three spellings are one shape. Known consequence:
+        # a preamble that itself contains a bracket (`Based on [1]: {...}`) is
+        # also refused. That is fail-closed and matches the precedent's trade-off;
+        # an object whose own reasoning contains a `[` still parses, because its
+        # `{` comes first.
         return _nothing("the judge's reply was a top-level array; nothing is moved")
     if start_brace == -1 or end_brace == -1 or end_brace <= start_brace:
         return _nothing("the judge's reply contained no JSON object; nothing is moved")
