@@ -443,8 +443,16 @@ def test_no_candidate_can_close_a_cycle():
         schemas = _load(name)
         parents = {roots_at(d) for d in schemas[0].entity_types.values() if roots_at(d)}
         for parent in parents:
+            ancestors = {a.lower() for a in ancestors_of(parent, schemas)}
             for candidate in sibling_types(parent, schemas):
+                # The literal exclusion...
                 assert candidate.lower() != parent.lower(), (name, parent, candidate)
+                # ...and the property it stands for. The two coincide only while
+                # the hierarchy is acyclic: with `C.parent = G, G.parent = C` a
+                # candidate C differs from G yet still closes C -> P -> G -> C.
+                # No shipped ontology is cyclic, but asserting the property costs
+                # nothing and does not rely on that staying true.
+                assert candidate.lower() not in ancestors, (name, parent, candidate)
                 checked += 1
     assert checked > 200, f"expected a substantial sample, enumerated {checked}"
 
@@ -461,3 +469,20 @@ def test_a_self_rooting_type_is_not_its_own_sibling(general):
         assert name not in place_proposed_type(
             "Nieuw" + name, name, general
         ).descendant_candidates
+
+
+def test_an_explicit_parent_wins_over_a_schema_org_base():
+    """A type declaring BOTH stays in its declared parent's sibling set.
+
+    The only mutant to survive the final review round: the precedence was
+    documented and true, but nothing would have noticed a revert. No shipped type
+    declares both fields; `create_proposal_from_gap` definitions could.
+    """
+    schemas = [_ont(
+        Twee=EntityTypeDefinition(
+            name="Twee", parent_type="Deal", schema_org_type="schema:CreativeWork"
+        ),
+    )]
+    assert roots_at(schemas[0].entity_types["Twee"]) == "Deal"
+    assert sibling_types("Deal", schemas) == ("Twee",)
+    assert sibling_types("CreativeWork", schemas) == ()

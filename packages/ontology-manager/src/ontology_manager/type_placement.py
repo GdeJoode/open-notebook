@@ -186,10 +186,13 @@ def known_schema_org_base(name: str) -> bool:
 
 
 def roots_at(definition: Any) -> Optional[str]:
-    """What a type hangs from: its ``schema_org_type`` base, else ``parent_type``.
+    """What a type hangs from: its ``parent_type``, else its ``schema_org_type`` base.
 
-    Ordered the way ``canonical_bridge.resolve_ontology_type`` orders it — an
-    explicit ``schema_org_type`` wins over the parent walk. Reading only
+    An explicit ``parent_type`` wins here, which is deliberately NOT the bridge's
+    order — the bridge prefers ``schema_org_type`` when CANONICALISING, but for
+    PLACEMENT the declared parent is the stronger statement about where the author
+    put the type, and deferring to the base would make a type that declares both
+    vanish from its own parent's sibling set. Reading only
     ``parent_type`` would have missed the entire default vocabulary: ``general``
     and ``base`` declare **zero** ``parent_type`` and root all their types by
     ``schema_org_type``, so a sibling enumeration blind to it returns nothing on
