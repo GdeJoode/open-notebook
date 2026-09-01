@@ -111,3 +111,62 @@ def test_anchors_present_when_budget_allows():
 
     asyncio.run(run_pass2(chunks, ont, llm_caller=caller, token_budget=100_000))
     assert "Candidate anchors" in captured["prompt"]  # generous budget → kept
+
+
+# -- N.2 Hearst is-a seeding (precision gate) --------------------------------
+
+
+def _caller_returning(entities_json: str):
+    def caller(system: str, user: str, model: str) -> str:
+        return '{"entities": %s, "relations": []}' % entities_json
+    return caller
+
+
+def test_hearst_seeds_isa_only_between_extracted_entities():
+    ont = _ontology()
+    chunks = [{"text": "Fasteners such as bolts and screws are used.", "id": "c1"}]
+    # LLM extracts all three entities but NO is_a relation.
+    caller = _caller_returning(
+        '[{"text":"bolts","label":"other","confidence":0.9},'
+        '{"text":"screws","label":"other","confidence":0.9},'
+        '{"text":"Fasteners","label":"other","confidence":0.9}]'
+    )
+    res = asyncio.run(
+        run_pass2(chunks, ont, llm_caller=caller, token_budget=100_000,
+                  candidate_anchors_enabled=False)
+    )
+    isa = [r for r in res.relations if r.relation_type == "is_a"]
+    pairs = {(r.source_entity.lower(), r.target_entity.lower()) for r in isa}
+    assert ("bolts", "fasteners") in pairs
+    assert ("screws", "fasteners") in pairs
+    # provenance + conservative confidence
+    assert all(r.properties.get("relation_source") == "hearst" for r in isa)
+    assert all(r.confidence == 0.5 for r in isa)
+    assert all(r.source_chunk_id == "c1" for r in isa)
+
+
+def test_hearst_not_seeded_when_an_endpoint_is_not_an_entity():
+    ont = _ontology()
+    chunks = [{"text": "Fasteners such as bolts and screws.", "id": "c1"}]
+    # 'Fasteners' (the broad type) is NOT among the extracted entities.
+    caller = _caller_returning('[{"text":"bolts","label":"other","confidence":0.9}]')
+    res = asyncio.run(
+        run_pass2(chunks, ont, llm_caller=caller, token_budget=100_000,
+                  candidate_anchors_enabled=False)
+    )
+    assert [r for r in res.relations if r.relation_type == "is_a"] == []
+
+
+def test_hearst_seeding_disabled_by_env(monkeypatch):
+    monkeypatch.setenv("EXTRACTION_HEARST_ISA", "false")
+    ont = _ontology()
+    chunks = [{"text": "Fasteners such as bolts.", "id": "c1"}]
+    caller = _caller_returning(
+        '[{"text":"bolts","label":"other","confidence":0.9},'
+        '{"text":"Fasteners","label":"other","confidence":0.9}]'
+    )
+    res = asyncio.run(
+        run_pass2(chunks, ont, llm_caller=caller, token_budget=100_000,
+                  candidate_anchors_enabled=False)
+    )
+    assert [r for r in res.relations if r.relation_type == "is_a"] == []

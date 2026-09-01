@@ -147,8 +147,8 @@ def test_contractions_do_not_produce_spurious_quoted_anchors():
 
 
 def test_real_spacy_noun_chunks_when_available():
-    # Runs the REAL spaCy path where the model is installed (CI/container); skips
-    # where it isn't (local WSL: compiled-extension install blocked by /mnt I/O).
+    # Runs the REAL spaCy path wherever the model is installed (this repo's WSL
+    # /mnt venv included); skips only where the model is genuinely absent.
     import pytest
 
     from ontology_extraction.candidates import _load_spacy

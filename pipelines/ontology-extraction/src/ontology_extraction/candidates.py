@@ -352,10 +352,158 @@ def extract_candidates(
     return ranked[:top_k]
 
 
+# ---------------------------------------------------------------------------
+# Hearst is-a — hypernymy over spaCy NOUN-CHUNK boundaries (Track N.2)
+# ---------------------------------------------------------------------------
+# Regex cannot tell a noun phrase from surrounding prose, so a regex Hearst miner
+# grabs garbage ("further underscoring the need to --is_a--> public sector"). Now
+# that spaCy is a first-class dep, the miner works on REAL noun-chunk boundaries
+# and uses POS to bound the coordination list — no NP-guessing, no verb-truncation
+# band-aid. Requires spaCy → returns [] when unavailable (no garbage fallback).
+
+# Cue phrases (EN + NL). broad-FIRST: "<broad> such as <hyponyms…>".
+# broad-LAST: "<hyponyms…> and other <broad>".
+_HEARST_CUES_BROAD_FIRST = (
+    "such as", "zoals", "including", "inclusief", "waaronder",
+    "especially", "particularly", "met name", "in het bijzonder",
+)
+_HEARST_CUES_BROAD_LAST = ("and other", "or other", "en andere", "of andere")
+# Determiner-ish leads on the broad-LAST hypernym chunk ("...and OTHER fasteners").
+_HEARST_LEAD_DROP = ("other ", "andere ")
+# POS tags allowed in the GAP between consecutive hyponym noun-chunks (a
+# coordination list): conjunctions, commas, determiners. Anything else — a VERB,
+# ADP, etc. — ends the list, so the miner never crosses into a new clause.
+_HEARST_LIST_GAP_POS = {"CCONJ", "CONJ", "PUNCT", "DET"}
+
+
+def _find_cue_token_spans(doc: Any, cue: str) -> List[Tuple[int, int]]:
+    """Token-index spans (start, end) where the lowercased tokens equal ``cue``."""
+    words = cue.split()
+    n = len(words)
+    toks = [t.text.lower() for t in doc]
+    return [
+        (i, i + n) for i in range(len(toks) - n + 1) if toks[i : i + n] == words
+    ]
+
+
+def _hearst_list_chunks(
+    doc: Any, chunks: list, *, after: Optional[int] = None, before: Optional[int] = None
+) -> list:
+    """Consecutive noun-chunks forming a coordination list from a boundary token.
+
+    Stops as soon as the gap between adjacent chunks contains a non-list token
+    (e.g. a VERB) — so "bolts and screws are cheap" yields [bolts, screws], never
+    "screws are cheap". ``after``: forward from a token index; ``before``:
+    backward to a token index.
+    """
+    out: list = []
+    if after is not None:
+        prev = after
+        for ch in chunks:
+            if ch.start < after:
+                continue
+            gap = doc[prev : ch.start]
+            if any(t.pos_ not in _HEARST_LIST_GAP_POS and not t.is_space for t in gap):
+                break
+            out.append(ch)
+            prev = ch.end
+    else:
+        prev = before
+        for ch in reversed(chunks):
+            if ch.end > before:
+                continue
+            gap = doc[ch.end : prev]
+            if any(t.pos_ not in _HEARST_LIST_GAP_POS and not t.is_space for t in gap):
+                break
+            out.append(ch)
+            prev = ch.start
+    return out
+
+
+def _hearst_broad_text(chunk: Any, *, drop_lead: bool = False) -> str:
+    text = _normalize(chunk.text)
+    if drop_lead:
+        low = text.lower()
+        for lead in _HEARST_LEAD_DROP:
+            if low.startswith(lead):
+                text = _normalize(text[len(lead):])
+                break
+    return text
+
+
+def mine_hearst_isa(
+    text: str, *, nlp: Optional[Any] = None, lang: Optional[str] = None
+) -> List[Tuple[str, str]]:
+    """Mine ``(narrow, broad)`` is-a pairs via Hearst patterns over spaCy chunks.
+
+    "components such as bolts and screws" → ``[("bolts","components"),
+    ("screws","components")]``. Uses spaCy noun-chunk boundaries + POS to bound the
+    coordination list, so it never grabs surrounding prose. PRECISION-FIRST (no
+    cue → nothing) and SPACY-REQUIRED (returns ``[]`` when the model is
+    unavailable — no garbage regex fallback). EN + NL cues.
+    """
+    engine = nlp if nlp is not None else _load_spacy(lang or _detect_lang(text))
+    if engine is None:
+        return []
+    try:
+        doc = engine(text or "")
+        chunks = list(doc.noun_chunks)
+    except Exception as exc:  # noqa: BLE001 — spaCy hiccup → no pairs, never crash
+        logger.warning("candidates: Hearst spaCy parse failed ({e})", e=exc)
+        return []
+    if not chunks:
+        return []
+
+    pairs: List[Tuple[str, str]] = []
+
+    def _emit(narrow_chunk: Any, broad_text: str) -> None:
+        narrow = _normalize(narrow_chunk.text)
+        if (
+            _acceptable(narrow)
+            and _acceptable(broad_text)
+            and narrow.lower() != broad_text.lower()
+        ):
+            pairs.append((narrow, broad_text))
+
+    for cue in _HEARST_CUES_BROAD_FIRST:
+        for cstart, cend in _find_cue_token_spans(doc, cue):
+            broad_chunk = next(
+                (c for c in reversed(chunks) if c.end <= cstart), None
+            )
+            if broad_chunk is None:
+                continue
+            broad = _hearst_broad_text(broad_chunk)
+            for narrow in _hearst_list_chunks(doc, chunks, after=cend):
+                _emit(narrow, broad)
+
+    for cue in _HEARST_CUES_BROAD_LAST:
+        for cstart, cend in _find_cue_token_spans(doc, cue):
+            # broad hypernym is the chunk spanning the token right after the cue
+            # ("...and other FASTENERS"); it may lead with "other/andere".
+            broad_chunk = next(
+                (c for c in chunks if c.start <= cend < c.end or c.start >= cend), None
+            )
+            if broad_chunk is None:
+                continue
+            broad = _hearst_broad_text(broad_chunk, drop_lead=True)
+            for narrow in _hearst_list_chunks(doc, chunks, before=cstart):
+                _emit(narrow, broad)
+
+    seen: set = set()
+    out: List[Tuple[str, str]] = []
+    for narrow, broad in pairs:
+        key = (narrow.lower(), broad.lower())
+        if key not in seen:
+            seen.add(key)
+            out.append((narrow, broad))
+    return out
+
+
 __all__ = [
     "Candidate",
     "extract_candidates",
     "tfidf_salient_terms",
     "noun_phrase_candidates",
     "domain_ner_candidates",
+    "mine_hearst_isa",
 ]

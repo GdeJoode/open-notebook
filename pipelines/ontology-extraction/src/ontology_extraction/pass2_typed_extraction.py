@@ -77,7 +77,12 @@ from shared.models.extraction import (
     ExtractionResult,
 )
 
-from ontology_extraction.candidates import extract_candidates
+from ontology_extraction.candidates import (
+    _detect_lang,
+    _load_spacy,
+    extract_candidates,
+    mine_hearst_isa,
+)
 from ontology_extraction.prompts.pass2 import (
     PASS2_SYSTEM_PROMPT,
     build_pass2_prompt,
@@ -118,6 +123,63 @@ def _candidate_top_k() -> int:
 def _domain_ner_enabled() -> bool:
     """Track N.1 stub gate: the EntityRuler domain gazetteer (default OFF)."""
     return _env_bool("EXTRACTION_DOMAIN_NER_ENABLED", False)
+
+
+def _hearst_isa_enabled() -> bool:
+    """Track N.2: seed deterministic Hearst is-a relations (default ON)."""
+    return _env_bool("EXTRACTION_HEARST_ISA", True)
+
+
+# Conservative confidence for a Hearst-seeded relation — below a typical LLM
+# extraction so downstream max-confidence merges prefer the LLM's own judgement
+# where it also found the relation, and the audit's low-confidence checks can see it.
+_HEARST_CONFIDENCE = 0.5
+
+
+def _seed_hearst_relations(
+    chunk_text: str,
+    chunk_id: Any,
+    entities: List[ExtractedEntity],
+    existing: List[ExtractedRelation],
+    *,
+    nlp: Optional[Any] = None,
+) -> List[ExtractedRelation]:
+    """Return Hearst-mined ``is_a`` relations between ALREADY-extracted entities.
+
+    Precision gate (N.2): a mined ``(narrow, broad)`` pair only becomes a relation
+    when BOTH endpoints match an entity the LLM extracted for this chunk (exact
+    normalized-lowercase). Skips pairs already present (any relation between the
+    same endpoints). Each carries ``relation_source="hearst"`` provenance + a
+    conservative confidence, so the post-filter/audit still govern it.
+    """
+    from ontology_extraction.candidates import _normalize
+
+    ent_by_norm = {_normalize(e.text).lower(): e.text for e in entities if e.text}
+    if not ent_by_norm:
+        return []
+    have = {
+        (r.source_entity.strip().lower(), r.target_entity.strip().lower())
+        for r in existing
+    }
+    seeded: List[ExtractedRelation] = []
+    for narrow, broad in mine_hearst_isa(chunk_text, nlp=nlp):
+        nk, bk = narrow.lower(), broad.lower()
+        if nk not in ent_by_norm or bk not in ent_by_norm:
+            continue  # precision gate: both endpoints must be extracted entities
+        src, tgt = ent_by_norm[nk], ent_by_norm[bk]
+        if (src.strip().lower(), tgt.strip().lower()) in have:
+            continue
+        rel = ExtractedRelation(
+            source_entity=src,
+            target_entity=tgt,
+            relation_type="is_a",
+            confidence=_HEARST_CONFIDENCE,
+            properties={"relation_source": "hearst"},
+        )
+        rel.source_chunk_id = chunk_id
+        seeded.append(rel)
+        have.add((src.strip().lower(), tgt.strip().lower()))
+    return seeded
 
 # How many characters of a malformed LLM response to include in the
 # WARNING log. Long enough to diagnose, short enough not to swamp the
@@ -481,6 +543,20 @@ async def run_pass2(
     all_relations: List[ExtractedRelation] = []
     parse_failures = 0
 
+    # Track N.1/N.2: detect the corpus language ONCE and load the spaCy model
+    # once, so every chunk's candidate extraction (N.1) and Hearst is-a mining
+    # (N.2) share the SAME model — consistent noun-chunk boundaries + a single
+    # load, not a per-chunk detect/lookup. None when spaCy or the model is
+    # unavailable; both layers degrade gracefully (candidates → regex fallback,
+    # Hearst → no pairs).
+    hearst_on = _hearst_isa_enabled()
+    shared_nlp: Optional[Any] = None
+    if anchors_on or hearst_on:
+        lang_sample = " ".join(
+            str(c.get("text", "") or "") for c in chunks[:10]
+        )
+        shared_nlp = _load_spacy(_detect_lang(lang_sample))
+
     logger.info(
         "Pass-2 run start: chunks={n}, ontology={o}, extensions={e}",
         n=len(chunks),
@@ -504,6 +580,7 @@ async def run_pass2(
                     corpus_chunks=corpus_texts,
                     top_k=_candidate_top_k(),
                     domain_ner_enabled=_domain_ner_enabled(),
+                    nlp=shared_nlp,
                 )
                 anchors = [c.text for c in cands]
             except Exception as exc:  # noqa: BLE001 — candidates are best-effort
@@ -571,6 +648,25 @@ async def run_pass2(
         for relation in chunk_result.relations:
             relation.source_chunk_id = chunk_id
             all_relations.append(relation)
+
+        # Track N.2: seed deterministic Hearst is-a relations between entities the
+        # LLM already extracted (precision gate + provenance inside the helper).
+        if hearst_on:
+            try:
+                seeded = _seed_hearst_relations(
+                    chunk_text,
+                    chunk_id,
+                    chunk_result.entities,
+                    chunk_result.relations,
+                    nlp=shared_nlp,
+                )
+                all_relations.extend(seeded)
+            except Exception as exc:  # noqa: BLE001 — best-effort, never fail the run
+                logger.warning(
+                    "pass2: Hearst is-a seeding failed for chunk {c} ({e})",
+                    c=chunk_id,
+                    e=exc,
+                )
 
         logger.info(
             "pass2_chunk_complete chunk_id={chunk_id} entities={ne} relations={nr}",
