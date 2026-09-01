@@ -480,6 +480,33 @@ This also retires the instance-level seeding question: there is nothing to seed.
 
 #### Sub-phases
 
+**N.4d.0 — Retire the instance-level subsumption tier** — ~0.5d
+The tier is already ON MAIN (shipped in N.4a/N.4b with `type_chain_enabled=False`),
+so D-N4-12 leaves dead machinery in place unless it is removed. Remove
+`type_chain_subsumption`, the `NARROWER_THAN`/`BROADER_THAN` producers, and — since
+`NARROWER_THAN` was its only trigger — `build_is_a_seeds`, the `seed_is_a` config
+and Stage 15's relation output. `concept_alignment` keeps `RELATED_TO`/`NOVEL`,
+the alias candidates, and the report, which is what N.4d.4's gap loop consumes.
+
+- **AC**: the alignment stage emits no relations at all; `FilteredResult.relations`
+  is byte-identical with the stage on and off; the N.4b placement guarantees stay
+  asserted for as long as the stage exists, so a future producer cannot silently
+  reintroduce the two blockers that phase fixed.
+- **Removal, not deprecation**, deliberately: with D-N4-12 there is no story in
+  which the tier becomes correct, and a disabled-but-present tier invites a fourth
+  attempt. If a future path ever marks concept nodes explicitly (the vault-sync
+  importer creates `entity` rows from notes and could flag a concept page), the
+  identification problem this tier could never solve would be solved *there* — and
+  the tier would be rebuilt against that flag, not resurrected.
+
+**The N.4c branch is PARKED, not partially merged.** Its one reusable piece — the
+widened `find_by_type` projection returning `primary_type`/`type_tags` — existed
+solely to make the instance tier verifiable. With the tier retired it has no
+consumer, and the review noted it has no test and has never been executed against
+a live DB. Shipping an untested widening of a shared package for a caller that no
+longer exists is dead weight; it can be recovered from `68c544f` if a real consumer
+appears.
+
 **N.4d.1 — Type placement, verdicts only** — ~1d
 - **New** `packages/ontology-manager/.../type_placement.py`: pure functions over
   `(proposed type, applied ontologies)` → a placement with evidence.
