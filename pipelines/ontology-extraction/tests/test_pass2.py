@@ -829,7 +829,7 @@ class TestRunPass2:
                 {
                     "entities": [
                         {
-                            "text": "X",
+                            "text": "Xavier Chen",
                             "label": "EarlyCareerResearcher",
                             "confidence": 0.85,
                             "properties": {},
@@ -840,7 +840,7 @@ class TestRunPass2:
             )
 
         result = await run_pass2(
-            [_make_chunk("X is a junior researcher.", "c-ext")],
+            [_make_chunk("Xavier Chen is a junior researcher.", "c-ext")],
             _small_ontology(),
             accepted_extensions=extensions,
             llm_caller=fake_llm,
@@ -861,13 +861,13 @@ class TestRunPass2:
             json.dumps(
                 {
                     "entities": [
-                        {"text": "A", "label": "Researcher", "confidence": 0.9},
-                        {"text": "B", "label": "Paper", "confidence": 0.7},
+                        {"text": "Alice", "label": "Researcher", "confidence": 0.9},
+                        {"text": "Attention Paper", "label": "Paper", "confidence": 0.7},
                     ],
                     "relations": [
                         {
-                            "source": "A",
-                            "target": "B",
+                            "source": "Alice",
+                            "target": "Attention Paper",
                             "type": "AUTHORED",
                             "confidence": 0.85,
                         }
@@ -877,11 +877,11 @@ class TestRunPass2:
             json.dumps(
                 {
                     "entities": [
-                        {"text": "C", "label": "Researcher", "confidence": 0.6},
+                        {"text": "Carol", "label": "Researcher", "confidence": 0.6},
                     ],
                     "relations": [
                         {
-                            "source": "C",
+                            "source": "Carol",
                             "target": "MIT",
                             "type": "AFFILIATED_WITH",
                             "confidence": 0.5,

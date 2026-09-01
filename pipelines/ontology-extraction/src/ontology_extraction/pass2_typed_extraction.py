@@ -83,6 +83,12 @@ from ontology_extraction.candidates import (
     extract_candidates,
     mine_hearst_isa,
 )
+from ontology_extraction.not_a_concept import (
+    JUDGE_SYSTEM_PROMPT,
+    build_judge_prompt,
+    parse_judge_response,
+    partition_deterministic,
+)
 from ontology_extraction.prompts.pass2 import (
     PASS2_SYSTEM_PROMPT,
     build_pass2_prompt,
@@ -128,6 +134,16 @@ def _domain_ner_enabled() -> bool:
 def _hearst_isa_enabled() -> bool:
     """Track N.2: seed deterministic Hearst is-a relations (default ON)."""
     return _env_bool("EXTRACTION_HEARST_ISA", True)
+
+
+def _not_a_concept_enabled() -> bool:
+    """Track N.3: drop LLM-emitted page-furniture before the graph (default ON)."""
+    return _env_bool("EXTRACTION_NOT_A_CONCEPT", True)
+
+
+def _not_a_concept_judge_enabled() -> bool:
+    """Track N.3: LLM-judge arbitrates the ambiguous not-a-concept middle (D4, ON)."""
+    return _env_bool("EXTRACTION_NOT_A_CONCEPT_JUDGE", True)
 
 
 # Conservative confidence for a Hearst-seeded relation — below a typical LLM
@@ -185,8 +201,61 @@ def _seed_hearst_relations(
         )
         rel.source_chunk_id = chunk_id
         seeded.append(rel)
-        have.add((src.strip().lower(), tgt.strip().lower()))
+        have.add((src.strip().lower(), tgt.strip().lower(), "is_a"))
     return seeded
+
+
+async def _apply_not_a_concept(
+    entities: List[ExtractedEntity],
+    relations: List[ExtractedRelation],
+    *,
+    caller: "LLMCaller",
+    model: str,
+    judge_enabled: bool,
+) -> tuple[List[ExtractedEntity], List[ExtractedRelation], int, int]:
+    """Track N.3: drop page-furniture entities (+ their relations) from a chunk.
+
+    Deterministic tier first (high-precision reject / fast accept); the ambiguous
+    middle goes to a single BATCHED LLM-judge call when ``judge_enabled`` and a
+    caller is available, else it is KEPT (never dropped on a guess). A judge
+    transport/parse failure also keeps the ambiguous set. Relations whose endpoints
+    reference a removed entity are dropped (mirrors ``noise_filter``).
+
+    Returns ``(kept_entities, kept_relations, removed_count, judged_count)``.
+    """
+    kept, rejected, ambiguous = partition_deterministic(entities)
+    judged = 0
+    if ambiguous:
+        verdicts: Dict[str, bool] = {}
+        if judge_enabled and caller is not None:
+            items = [(e.text, e.label) for e in ambiguous]
+            try:
+                raw = await _invoke_llm(
+                    caller, JUDGE_SYSTEM_PROMPT, build_judge_prompt(items), model
+                )
+                verdicts = parse_judge_response(raw, items)
+                judged = len(items)
+            except Exception as exc:  # noqa: BLE001 — judge is best-effort; keep all
+                logger.warning(
+                    "pass2: not-a-concept judge failed ({e}); keeping ambiguous", e=exc
+                )
+                verdicts = {}
+        for e in ambiguous:
+            # default True → keep (no judge, or judge silent on this item)
+            if verdicts.get(e.text, True):
+                kept.append(e)
+            else:
+                rejected.append(e)
+    # Drop only relations that reference an entity the gate REMOVED — a relation
+    # whose endpoint was never an extracted entity (the LLM sometimes emits those)
+    # is out of this gate's scope and passes through unchanged (pre-N.3 behaviour).
+    removed_texts = {e.text for e in rejected}
+    kept_relations = [
+        r
+        for r in relations
+        if r.source_entity not in removed_texts and r.target_entity not in removed_texts
+    ]
+    return kept, kept_relations, len(rejected), judged
 
 # How many characters of a malformed LLM response to include in the
 # WARNING log. Long enough to diagnose, short enough not to swamp the
@@ -550,6 +619,16 @@ async def run_pass2(
     all_relations: List[ExtractedRelation] = []
     parse_failures = 0
 
+    # Track N.3 telemetry counters (feed extraction_metrics): entities the LLM
+    # emitted before the not-a-concept gate, how many it rejected, how many the
+    # judge arbitrated, and chunks the LLM abstained on (returned no entity).
+    nac_on = _not_a_concept_enabled()
+    nac_judge = _not_a_concept_judge_enabled()
+    entities_extracted = 0
+    not_a_concept_removed = 0
+    not_a_concept_judged = 0
+    abstained_chunks = 0
+
     # Track N.1/N.2: detect the corpus language ONCE and load the spaCy model
     # once, so every chunk's candidate extraction (N.1) and Hearst is-a mining
     # (N.2) share the SAME model — consistent noun-chunk boundaries + a single
@@ -647,8 +726,41 @@ async def run_pass2(
         )
         chunk_result = _parse_chunk_response(raw_response)
 
-        if chunk_result.metadata.get("parse_error"):
+        parse_error = bool(chunk_result.metadata.get("parse_error"))
+        if parse_error:
             parse_failures += 1
+
+        # Track N.3: abstention — a non-error chunk the LLM returned NO entity for
+        # is a genuine abstention (page-furniture / no domain content), not a
+        # failure. Count it on the RAW (pre-filter) result.
+        entities_extracted += len(chunk_result.entities)
+        if not parse_error and not chunk_result.entities:
+            abstained_chunks += 1
+
+        # Track N.3: the not-a-concept gate — drop page-furniture entities (+ the
+        # relations referencing them) BEFORE they are appended or Hearst-seeded, so
+        # only survivors reach the graph and the precision gate. Best-effort: a
+        # failure here must never lose a chunk's real entities.
+        if nac_on and chunk_result.entities:
+            try:
+                kept_e, kept_r, removed_ct, judged_ct = await _apply_not_a_concept(
+                    chunk_result.entities,
+                    chunk_result.relations,
+                    caller=caller,
+                    model=model,
+                    judge_enabled=nac_judge,
+                )
+                chunk_result.entities = kept_e
+                chunk_result.relations = kept_r
+                not_a_concept_removed += removed_ct
+                not_a_concept_judged += judged_ct
+            except Exception as exc:  # noqa: BLE001 — gate is best-effort
+                logger.warning(
+                    "pass2: not-a-concept gate failed for chunk {cid} ({e}); "
+                    "keeping all entities",
+                    cid=chunk_id,
+                    e=exc,
+                )
 
         # Tag with chunk_id so downstream pipelines can group entities
         # back to their originating chunk. Matches the convention in
@@ -705,5 +817,13 @@ async def run_pass2(
             "total_entities": len(all_entities),
             "total_relations": len(all_relations),
             "parse_failures": parse_failures,
+            # Track N.3: raw counts for extraction_metrics (over-generation +
+            # abstain rate). entities_kept mirrors total_entities — kept for a
+            # self-describing metadata contract the metric module reads directly.
+            "entities_extracted": entities_extracted,
+            "entities_kept": len(all_entities),
+            "not_a_concept_removed": not_a_concept_removed,
+            "not_a_concept_judged": not_a_concept_judged,
+            "abstained_chunks": abstained_chunks,
         },
     )
