@@ -325,6 +325,18 @@ def build_pass2_prompt(
             "type to \"other\" — never drop it and never force it into a wrong type."
         ),
         "",
+        "## Abstention — when the chunk has NO domain content (INSUFFICIENT_EVIDENCE)",
+        (
+            "The recall demand above applies to REAL domain entities. If — and only if — "
+            "the WHOLE chunk is page-furniture with no genuine domain content (a navigation "
+            "menu, a table-of-contents line, a running header/footer, a page number, a "
+            "figure/table caption reference, or pure boilerplate), return an EMPTY "
+            "\"entities\" array. Do NOT manufacture vague or generic \"concepts\" to fill the "
+            "response — an empty result for a furniture-only chunk is CORRECT, not a "
+            "failure. This is the single exception to exhaustive recall; when in doubt about "
+            "whether content is real, extract it (recall wins ties)."
+        ),
+        "",
         "## Entity Types",
         "",
     ]
