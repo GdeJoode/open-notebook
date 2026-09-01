@@ -64,13 +64,13 @@ def _ont(**types):
 # ---------------------------------------------------------------------------
 
 
-def test_siblings_bound_the_candidate_set_on_the_real_ontology(deals):
+def test_siblings_bound_the_candidates(deals):
     # deals.yaml declares RegioDeal, Woondeal and CityDeal under Deal. A type
     # proposed under Deal can only be inserted between those and Deal.
     assert set(sibling_types("Deal", deals)) == {"RegioDeal", "Woondeal", "CityDeal"}
 
 
-def test_a_proposal_under_deal_gets_exactly_those_candidates(deals):
+def test_candidates_are_the_shared_parents_children(deals):
     placement = place_proposed_type("Stadsdeal", "Deal", deals)
     assert placement.verdict == PLACED
     assert placement.reason_code == EV_PARENT_RESOLVED
@@ -78,18 +78,18 @@ def test_a_proposal_under_deal_gets_exactly_those_candidates(deals):
     assert set(placement.descendant_candidates) == {"RegioDeal", "Woondeal", "CityDeal"}
 
 
-def test_the_proposal_never_lists_itself_as_its_own_candidate(deals):
+def test_proposal_excludes_itself(deals):
     # Re-proposing an existing sibling name would be a DUPLICATE, but the
     # exclusion is asserted directly so the guard cannot rot behind that check.
     assert "Woondeal" not in sibling_types("Deal", deals, exclude="Woondeal")
 
 
-def test_ancestors_follow_the_real_declared_chain(deals):
+def test_ancestors_follow_declared_chain(deals):
     assert ancestors_of("RegioDeal", deals) == ["Deal", "GovernmentService"]
     assert ancestors_of("Deal", deals) == ["GovernmentService"]
 
 
-def test_find_type_is_case_insensitive_on_real_types(deals):
+def test_find_type_is_case_insensitive(deals):
     assert find_type("regiodeal", deals) is not None
     assert find_type("Onbekend Type", deals) is None
 
@@ -99,7 +99,7 @@ def test_find_type_is_case_insensitive_on_real_types(deals):
 # ---------------------------------------------------------------------------
 
 
-def test_an_existing_name_is_a_duplicate_not_a_placement(deals):
+def test_existing_name_is_a_duplicate(deals):
     placement = place_proposed_type("RegioDeal", "Deal", deals)
     assert placement.verdict == DUPLICATE
     assert placement.reason_code == EV_NAME_TAKEN
@@ -108,7 +108,7 @@ def test_an_existing_name_is_a_duplicate_not_a_placement(deals):
     assert placement.descendant_candidates == ()
 
 
-def test_an_existing_alias_is_a_duplicate_and_says_whose():
+def test_existing_alias_is_a_duplicate():
     schemas = [_ont(
         Deal=EntityTypeDefinition(name="Deal", parent_type="GovernmentService"),
         Akkoord=EntityTypeDefinition(name="Akkoord", parent_type="GovernmentService",
@@ -121,7 +121,7 @@ def test_an_existing_alias_is_a_duplicate_and_says_whose():
     assert placement.duplicate_of == "Akkoord"
 
 
-def test_name_taken_and_alias_taken_are_distinguishable():
+def test_name_and_alias_have_distinct_codes():
     # Different observations, so different codes: a curator merges a duplicate
     # name but may want to keep an alias distinct.
     schemas = [_ont(
@@ -136,7 +136,7 @@ def test_name_taken_and_alias_taken_are_distinguishable():
 # ---------------------------------------------------------------------------
 
 
-def test_an_unknown_parent_is_reported_as_unchecked_not_as_top_level(deals):
+def test_unknown_parent_is_unchecked(deals):
     placement = place_proposed_type("Stadsdeal", "Verzonnen", deals)
     assert placement.verdict == PARENT_UNKNOWN
     assert placement.reason_code == EV_PARENT_UNKNOWN
@@ -144,26 +144,26 @@ def test_an_unknown_parent_is_reported_as_unchecked_not_as_top_level(deals):
     assert placement.descendant_candidates == ()
 
 
-def test_no_declared_parent_is_undecided_not_top_level(deals):
+def test_no_declared_parent_is_undecided(deals):
     placement = place_proposed_type("Stadsdeal", None, deals)
     assert placement.verdict == UNPARENTED
     assert placement.reason_code == EV_NO_PARENT_DECLARED
     assert "undecided, not top-level" in placement.evidence
 
 
-def test_without_applied_ontologies_nothing_is_claimed():
+def test_no_ontologies_claims_nothing():
     placement = place_proposed_type("Stadsdeal", "Deal", [])
     assert placement.reason_code == EV_NO_SCHEMAS
     assert "never compared against anything" in placement.evidence
     assert "says nothing about whether it is new" in placement.evidence
 
 
-def test_a_nameless_proposal_says_so(deals):
+def test_nameless_proposal_says_so(deals):
     placement = place_proposed_type("   ", "Deal", deals)
     assert placement.reason_code == EV_NO_NAME
 
 
-def test_every_verdict_carries_both_halves_of_its_evidence(deals):
+def test_every_verdict_carries_evidence(deals):
     for name, parent in [("Stadsdeal", "Deal"), ("RegioDeal", "Deal"),
                          ("Stadsdeal", "Verzonnen"), ("Stadsdeal", None),
                          ("   ", "Deal")]:
@@ -177,7 +177,7 @@ def test_every_verdict_carries_both_halves_of_its_evidence(deals):
 # ---------------------------------------------------------------------------
 
 
-def test_a_cycle_is_refused():
+def test_cycle_is_refused():
     # Reachable for N.4d.3's re-parent of an EXISTING type, not for a new one.
     schemas = [_ont(
         A=EntityTypeDefinition(name="A", parent_type="B"),
@@ -188,14 +188,16 @@ def test_a_cycle_is_refused():
     assert would_cycle("A", "B", schemas) is False
 
 
-def test_a_self_declared_parent_is_cyclic():
+def test_duplicate_is_reported_before_cycle():
+    """Precedence, not an oversight: proposing "Deal" under "Deal" is caught as a
+    DUPLICATE rather than CYCLIC. "This type already exists" is the more specific
+    and more actionable observation — a curator merges or rejects it, and the
+    cycle is moot because the proposal never becomes a new type."""
     schemas = [_ont(Deal=EntityTypeDefinition(name="Deal"))]
-    placement = place_proposed_type("Deal", "Deal", schemas)
-    # caught as a duplicate first — the earlier, more specific observation
-    assert placement.verdict == DUPLICATE
+    assert place_proposed_type("Deal", "Deal", schemas).verdict == DUPLICATE
 
 
-def test_a_hand_authored_loop_cannot_hang_the_walk():
+def test_authored_loop_cannot_hang():
     schemas = [_ont(
         A=EntityTypeDefinition(name="A", parent_type="B"),
         B=EntityTypeDefinition(name="B", parent_type="A"),
@@ -203,14 +205,14 @@ def test_a_hand_authored_loop_cannot_hang_the_walk():
     assert ancestors_of("A", schemas) == ["B"]
 
 
-def test_a_chain_leaving_the_applied_set_is_reported_not_raised(deals):
+def test_chain_may_leave_applied_set(deals):
     # GovernmentService is declared as a parent in deals.yaml but defined
     # elsewhere; the walk stops there instead of erroring.
     assert ancestors_of("Deal", deals) == ["GovernmentService"]
     assert find_type("GovernmentService", deals) is None
 
 
-def test_malformed_members_are_skipped_not_raised():
+def test_malformed_members_are_skipped():
     class _Broken:
         entity_types = "not a dict"
 
@@ -223,7 +225,7 @@ def test_malformed_members_are_skipped_not_raised():
 # ---------------------------------------------------------------------------
 
 
-def test_a_schema_org_base_is_a_valid_parent(deals):
+def test_schema_org_base_is_valid_parent(deals):
     """`deals.yaml` roots half its types at bases no ontology DEFINES.
 
     `canonical_bridge` terminates its walk on the base name itself, so treating
@@ -245,14 +247,14 @@ def test_a_schema_org_base_is_a_valid_parent(deals):
     assert "RegioDeal" not in placement.descendant_candidates
 
 
-def test_the_evidence_distinguishes_the_two_kinds_of_parent(deals):
+def test_evidence_names_the_parent_kind(deals):
     defined = place_proposed_type("Stadsdeal", "Deal", deals)
     base = place_proposed_type("Bestuursakkoord", "GovernmentService", deals)
     assert "defined in an applied ontology" in defined.evidence
     assert "schema.org base" in base.evidence
 
 
-def test_an_invented_parent_is_neither(deals):
+def test_invented_parent_is_neither(deals):
     placement = place_proposed_type("Stadsdeal", "Verzonnen", deals)
     assert placement.verdict == PARENT_UNKNOWN
     assert known_schema_org_base("Verzonnen") is False
