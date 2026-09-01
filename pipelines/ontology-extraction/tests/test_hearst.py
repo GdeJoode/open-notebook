@@ -192,17 +192,21 @@ def test_broad_last_anchor_not_crossing_sentence():
 
 
 def test_within_sentence_verb_blocks_anchor():
-    # "Governance matters, such as subsidies." — a VERB between the noun and the
-    # cue blocks the anchor even within one sentence (gap discipline). No .sents
-    # here → the whole-doc fallback still applies the gap check.
+    # "Revenues declined, such as subsidies and grants." — a VERB between the noun
+    # and the cue blocks the anchor even within one sentence (gap discipline). No
+    # .sents here → the whole-doc fallback still applies the gap check. The layout
+    # + POS mirror the REAL en model (verified in the gated test below: "declined"
+    # is unambiguously a VERB there, unlike the earlier "matters" example spaCy
+    # actually tags NOUN).
     nlp = _nlp(
         [
-            ("Governance", "NOUN"), ("matters", "VERB"), (",", "PUNCT"),
-            ("such", "ADJ"), ("as", "SCONJ"), ("subsidies", "NOUN"), (".", "PUNCT"),
+            ("Revenues", "NOUN"), ("declined", "VERB"), (",", "PUNCT"),
+            ("such", "ADJ"), ("as", "SCONJ"), ("subsidies", "NOUN"),
+            ("and", "CCONJ"), ("grants", "NOUN"), (".", "PUNCT"),
         ],
-        [(0, 1), (5, 6)],
+        [(0, 1), (5, 6), (7, 8)],
     )
-    assert mine_hearst_isa("Governance matters, such as subsidies.", nlp=nlp) == []
+    assert mine_hearst_isa("Revenues declined, such as subsidies and grants.", nlp=nlp) == []
 
 
 def test_comma_before_cue_still_anchors():
@@ -232,6 +236,10 @@ def test_real_spacy_does_not_cross_sentences():
     assert ("grants", "Governance") not in got1
     got2 = mine_hearst_isa("screws and other. Fasteners are common in industry.")
     assert ("screws", "Fasteners") not in got2
+    # within-sentence VERB block, on the real model ("declined" is a true VERB
+    # between the noun and the cue → no anchor → no pair).
+    got3 = mine_hearst_isa("Revenues declined, such as subsidies and grants.")
+    assert got3 == []
 
 
 # --- precision / hygiene ---------------------------------------------------
