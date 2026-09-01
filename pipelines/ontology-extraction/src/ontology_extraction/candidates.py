@@ -420,6 +420,59 @@ def _hearst_list_chunks(
     return out
 
 
+def _sentence_span(doc: Any, tok_idx: int) -> Tuple[int, int]:
+    """(start, end) token indices of the sentence containing ``tok_idx``.
+
+    Bounds the hypernym anchor to the cue's OWN sentence, so it can never reach a
+    neighbouring sentence ("Governance matters here. Such as subsidies…" must not
+    seed subsidies→Governance). Falls back to the whole doc when the model has no
+    sentence segmentation (e.g. the unit-test stub) — the anchor stays gap-bounded
+    regardless.
+    """
+    try:
+        for sent in doc.sents:
+            if sent.start <= tok_idx < sent.end:
+                return sent.start, sent.end
+    except (AttributeError, ValueError):
+        pass
+    return 0, sum(1 for _ in doc)
+
+
+def _gap_is_clean(doc: Any, start: int, end: int) -> bool:
+    """True when tokens in ``[start, end)`` are only list-gap POS (no VERB/ADP/…).
+
+    The SAME discipline ``_hearst_list_chunks`` uses between hyponyms, reused for
+    the hypernym→cue adjacency so a clause boundary ("Governance matters, such
+    as…") blocks the anchor instead of grabbing a stray subject.
+    """
+    return not any(
+        t.pos_ not in _HEARST_LIST_GAP_POS and not t.is_space
+        for t in doc[start:end]
+    )
+
+
+def _hearst_anchor_before(doc: Any, chunks: list, cstart: int) -> Optional[Any]:
+    """The broad-FIRST hypernym: the nearest preceding noun-chunk that is adjacent
+    to the cue (clean gap). None when the nearest chunk is blocked by a VERB or a
+    sentence break — anything farther is behind the same boundary."""
+    for ch in reversed(chunks):
+        if ch.end <= cstart:
+            return ch if _gap_is_clean(doc, ch.end, cstart) else None
+    return None
+
+
+def _hearst_anchor_after(doc: Any, chunks: list, cend: int) -> Optional[Any]:
+    """The broad-LAST hypernym: the chunk spanning the cue's tail token ("...and
+    other FASTENERS"), else the first following chunk with a clean gap. None when
+    blocked by a clause boundary."""
+    for ch in chunks:
+        if ch.start <= cend < ch.end:
+            return ch
+        if ch.start >= cend:
+            return ch if _gap_is_clean(doc, cend, ch.start) else None
+    return None
+
+
 def _hearst_broad_text(chunk: Any, *, drop_lead: bool = False) -> str:
     text = _normalize(chunk.text)
     if drop_lead:
@@ -465,28 +518,32 @@ def mine_hearst_isa(
         ):
             pairs.append((narrow, broad_text))
 
+    def _local_chunks(cstart: int) -> list:
+        # Only chunks inside the cue's own sentence — both the hypernym anchor and
+        # the hyponym list stay within one sentence (never cross a full stop).
+        s0, s1 = _sentence_span(doc, cstart)
+        return [c for c in chunks if s0 <= c.start and c.end <= s1]
+
     for cue in _HEARST_CUES_BROAD_FIRST:
         for cstart, cend in _find_cue_token_spans(doc, cue):
-            broad_chunk = next(
-                (c for c in reversed(chunks) if c.end <= cstart), None
-            )
+            local = _local_chunks(cstart)
+            broad_chunk = _hearst_anchor_before(doc, local, cstart)
             if broad_chunk is None:
                 continue
             broad = _hearst_broad_text(broad_chunk)
-            for narrow in _hearst_list_chunks(doc, chunks, after=cend):
+            for narrow in _hearst_list_chunks(doc, local, after=cend):
                 _emit(narrow, broad)
 
     for cue in _HEARST_CUES_BROAD_LAST:
         for cstart, cend in _find_cue_token_spans(doc, cue):
+            local = _local_chunks(cstart)
             # broad hypernym is the chunk spanning the token right after the cue
             # ("...and other FASTENERS"); it may lead with "other/andere".
-            broad_chunk = next(
-                (c for c in chunks if c.start <= cend < c.end or c.start >= cend), None
-            )
+            broad_chunk = _hearst_anchor_after(doc, local, cend)
             if broad_chunk is None:
                 continue
             broad = _hearst_broad_text(broad_chunk, drop_lead=True)
-            for narrow in _hearst_list_chunks(doc, chunks, before=cstart):
+            for narrow in _hearst_list_chunks(doc, local, before=cstart):
                 _emit(narrow, broad)
 
     seen: set = set()

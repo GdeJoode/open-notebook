@@ -157,8 +157,15 @@ def _seed_hearst_relations(
     ent_by_norm = {_normalize(e.text).lower(): e.text for e in entities if e.text}
     if not ent_by_norm:
         return []
+    # Suppress only a DUPLICATE is_a on the same ordered pair — a pre-existing
+    # relation of a DIFFERENT type between the endpoints must not block a
+    # legitimate Hearst is_a (dedup key includes relation_type).
     have = {
-        (r.source_entity.strip().lower(), r.target_entity.strip().lower())
+        (
+            r.source_entity.strip().lower(),
+            r.target_entity.strip().lower(),
+            (r.relation_type or "").strip().lower(),
+        )
         for r in existing
     }
     seeded: List[ExtractedRelation] = []
@@ -167,7 +174,7 @@ def _seed_hearst_relations(
         if nk not in ent_by_norm or bk not in ent_by_norm:
             continue  # precision gate: both endpoints must be extracted entities
         src, tgt = ent_by_norm[nk], ent_by_norm[bk]
-        if (src.strip().lower(), tgt.strip().lower()) in have:
+        if (src.strip().lower(), tgt.strip().lower(), "is_a") in have:
             continue
         rel = ExtractedRelation(
             source_entity=src,
@@ -552,10 +559,14 @@ async def run_pass2(
     hearst_on = _hearst_isa_enabled()
     shared_nlp: Optional[Any] = None
     if anchors_on or hearst_on:
-        lang_sample = " ".join(
-            str(c.get("text", "") or "") for c in chunks[:10]
-        )
-        shared_nlp = _load_spacy(_detect_lang(lang_sample))
+        # Detect over the SAME scope extract_candidates uses (whole corpus, capped
+        # at 20k chars) so the injected model never disagrees with the model that
+        # layer would have picked itself. corpus_texts is only populated when
+        # anchors are on; fall back to the chunk texts for a Hearst-only run.
+        lang_source = corpus_texts or [
+            str(c.get("text", "") or "") for c in chunks
+        ]
+        shared_nlp = _load_spacy(_detect_lang(" ".join(lang_source)[:20000]))
 
     logger.info(
         "Pass-2 run start: chunks={n}, ontology={o}, extensions={e}",

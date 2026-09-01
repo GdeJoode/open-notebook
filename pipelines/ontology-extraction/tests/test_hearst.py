@@ -36,9 +36,10 @@ class _Span:
 
 
 class _Doc:
-    def __init__(self, toks, chunks) -> None:
+    def __init__(self, toks, chunks, sents=None) -> None:
         self._toks = toks
         self._chunks = chunks
+        self._sents = sents
 
     def __iter__(self):
         return iter(self._toks)
@@ -50,10 +51,18 @@ class _Doc:
     def noun_chunks(self):
         return [_Span(self, a, b) for a, b in self._chunks]
 
+    @property
+    def sents(self):
+        # Raise like a spaCy Doc with no sentence boundaries when unset, so the
+        # miner exercises its whole-doc fallback; expose spans when provided.
+        if self._sents is None:
+            raise ValueError("sentence boundaries unset")
+        return [_Span(self, a, b) for a, b in self._sents]
 
-def _nlp(spec, chunks):
-    """spec = [(text, pos), …]; chunks = [(start, end), …] → callable stub nlp."""
-    doc = _Doc([_Tok(t, p) for t, p in spec], chunks)
+
+def _nlp(spec, chunks, sents=None):
+    """spec = [(text, pos), …]; chunks/sents = [(start, end), …] → callable stub."""
+    doc = _Doc([_Tok(t, p) for t, p in spec], chunks, sents)
     return lambda _text="": doc
 
 
@@ -147,6 +156,82 @@ def test_en_andere_nl():
     assert ("gemeenten", "overheden") in mine_hearst_isa(
         "gemeenten en andere overheden", nlp=nlp
     )
+
+
+# --- clause / sentence bounding (N.2 review MAJOR) -------------------------
+
+
+def test_broad_first_anchor_not_crossing_sentence():
+    # "Governance matters here. Such as subsidies and grants were used." — the
+    # hypernym must NOT be pulled from the previous sentence.
+    nlp = _nlp(
+        [
+            ("Governance", "NOUN"), ("matters", "VERB"), ("here", "ADV"),
+            (".", "PUNCT"), ("Such", "ADJ"), ("as", "SCONJ"),
+            ("subsidies", "NOUN"), ("and", "CCONJ"), ("grants", "NOUN"),
+            ("were", "AUX"), ("used", "VERB"), (".", "PUNCT"),
+        ],
+        [(0, 1), (6, 7), (8, 9)],
+        sents=[(0, 4), (4, 12)],
+    )
+    assert mine_hearst_isa("Governance matters here. Such as subsidies…", nlp=nlp) == []
+
+
+def test_broad_last_anchor_not_crossing_sentence():
+    # "screws and other. Fasteners are common." — the hypernym must NOT be pulled
+    # from the next sentence via the following-chunk fallback.
+    nlp = _nlp(
+        [
+            ("screws", "NOUN"), ("and", "CCONJ"), ("other", "ADJ"), (".", "PUNCT"),
+            ("Fasteners", "NOUN"), ("are", "AUX"), ("common", "ADJ"), (".", "PUNCT"),
+        ],
+        [(0, 1), (4, 5)],
+        sents=[(0, 4), (4, 8)],
+    )
+    assert mine_hearst_isa("screws and other. Fasteners are common.", nlp=nlp) == []
+
+
+def test_within_sentence_verb_blocks_anchor():
+    # "Governance matters, such as subsidies." — a VERB between the noun and the
+    # cue blocks the anchor even within one sentence (gap discipline). No .sents
+    # here → the whole-doc fallback still applies the gap check.
+    nlp = _nlp(
+        [
+            ("Governance", "NOUN"), ("matters", "VERB"), (",", "PUNCT"),
+            ("such", "ADJ"), ("as", "SCONJ"), ("subsidies", "NOUN"), (".", "PUNCT"),
+        ],
+        [(0, 1), (5, 6)],
+    )
+    assert mine_hearst_isa("Governance matters, such as subsidies.", nlp=nlp) == []
+
+
+def test_comma_before_cue_still_anchors():
+    # "metals, such as iron" — a bare comma (PUNCT) between noun and cue is a clean
+    # gap, so the anchor is still found (guards against over-blocking).
+    nlp = _nlp(
+        [
+            ("metals", "NOUN"), (",", "PUNCT"), ("such", "ADJ"), ("as", "SCONJ"),
+            ("iron", "NOUN"),
+        ],
+        [(0, 1), (4, 5)],
+    )
+    assert ("iron", "metals") in mine_hearst_isa("metals, such as iron", nlp=nlp)
+
+
+def test_real_spacy_does_not_cross_sentences():
+    # REAL model: the two cross-sentence layouts the N.2 review reproduced must
+    # seed NO pair pulling a hypernym from a neighbouring sentence.
+    import pytest
+    from ontology_extraction.candidates import _load_spacy
+
+    _load_spacy.cache_clear()
+    if _load_spacy("en") is None:
+        pytest.skip("spaCy/en_core_web_sm not functional in this env")
+    got1 = mine_hearst_isa("Governance matters here. Such as subsidies and grants were used.")
+    assert ("subsidies", "Governance") not in got1
+    assert ("grants", "Governance") not in got1
+    got2 = mine_hearst_isa("screws and other. Fasteners are common in industry.")
+    assert ("screws", "Fasteners") not in got2
 
 
 # --- precision / hygiene ---------------------------------------------------
