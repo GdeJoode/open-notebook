@@ -537,6 +537,19 @@ appears.
 - **Tests**: against the REAL shipped ontologies, not a stub of the bridge — the
   N.4a M2 lesson.
 
+> **N.4d.1 SHIPPED** (merge `ab526fc`). `type_placement.py` validates a proposal's
+> DECLARED parent and enumerates the bounded candidate set. APPROVED at attempt 3;
+> the two intermediate rejections were both fixes that introduced a new instance of
+> the track's failure mode, because the defect was measured on the real vocabulary
+> and the fix was not. The guard that closed it asserts a safety property over all
+> eleven shipped ontologies (262 candidates, zero violations) rather than pinning a
+> case. Report: `reviews/phase-N.4d1-attempts-1-3.md`.
+>
+> Two facts N.4d.2 inherits: a parent is valid either as a defined type OR as a
+> mapped schema.org base, and `roots_at` gives an explicit `parent_type` precedence
+> over `schema_org_type` (the opposite of the bridge's canonicalisation order, for
+> placement-specific reasons documented in the function).
+
 **N.4d.2 — The judge over the sibling set** — ~0.5d
 - The batched LLM-judge decides which of `P`'s siblings belong under `P`. Fenced
   as in N.4a: it may only choose from the sibling list it was given, a fabricated
