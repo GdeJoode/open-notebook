@@ -30,12 +30,31 @@
 > (2) Hearst seeds have no live precision/recall number yet — fold a small
 > Hearst-precision sample into the N.5 regression metrics.
 >
-> **▶ RESUME AT N.3 — Abstention gate** (the English-paper test showed the
-> candidate layer over-generates generic phrases on academic prose, so N.3's
-> `INSUFFICIENT_EVIDENCE` + not-a-concept gate is the measured next win). Then N.4
-> (concept alignment), N.5 (regression gate + docs; also lands the two N.2
-> follow-ups above). The **evidence-packet clustering stays DEFERRED — measure
-> first** (user decision, §5).
+> **N.3 SHIPPED** (merge 6132110, branch `feature/track-n3-abstention`) — the
+> article's core lesson (selection/abstention over generation) at extraction time:
+> (1) an `INSUFFICIENT_EVIDENCE` abstention clause in the Pass-2 prompt (a
+> furniture-only chunk returns empty entities, framed as the single exception to
+> exhaustive recall); (2) `not_a_concept.py`, a stricter extraction-time cousin of
+> entity-filtering's `noise_filter` — a deterministic pre-pass (high-precision
+> reject of UI/nav/reference/boilerplate; fast-accept of specific-label or proper-
+> name entities) + a BATCHED LLM-judge (default ON, D4) for the ambiguous middle,
+> KEEP-on-doubt everywhere; (3) `extraction_metrics.py` (app-main, mirrors M.5)
+> deriving `over_generation_rate` + `abstain_rate` from raw counts run_pass2 now
+> records in metadata. Env flags `EXTRACTION_NOT_A_CONCEPT` / `_JUDGE` (both ON).
+> Adversarial-review APPROVED after a MAJOR fix (a SPECIFIC schema label must
+> override the homograph field-word reject so a specifically-typed "Total"/"Page"
+> is never dropped) + two minors (explicit-only judge verdicts; stripped relation
+> drop-set).
+>
+> N.3 follow-up (non-blocking, from review): `_REJECT_ALWAYS` hard-rejects the
+> single-token action verbs `download`/`print`/`share`/`subscribe` regardless of
+> label — marginal real-entity readings ("Share", "Print"); revisit only if a live
+> corpus surfaces them.
+>
+> **▶ RESUME AT N.4 — Concept-level alignment taxonomy** (BROADER/NARROWER/
+> RELATED/NOVEL over `kg_resolver` + `evolution`; the harder phase). Then N.5
+> (regression gate + docs; also lands the N.2 + N.3 follow-ups above). The
+> **evidence-packet clustering stays DEFERRED — measure first** (user decision, §5).
 >
 > Live-testing lessons folded in: en_core_web_sm on Dutch produced verbal-phrase
 > junk → per-document model selection; both spaCy models fragment long compound
@@ -130,7 +149,7 @@ generation; the model over-produces) argues for moving some of that governance
 |---|---|---|---|
 | **N.1** | Pre-LLM candidate layer (TF-IDF salience + noun-phrase candidates) threaded into the Pass-2 prompt | 2–3d | — |
 | **N.2** ✅ | Deterministic Hearst is-a miner (spaCy noun-chunk based) → high-precision `is_a` relation seeds | 1.5–2d | N.1 |
-| **N.3** | Abstention gate: `INSUFFICIENT_EVIDENCE` + not-a-concept pre-filter + over-generation metric | 2–2.5d | — |
+| **N.3** ✅ | Abstention gate: `INSUFFICIENT_EVIDENCE` + not-a-concept pre-filter (determin. + LLM-judge) + over-generation metric | 2–2.5d | — |
 | **N.4** | Concept-level alignment taxonomy (BROADER/NARROWER/RELATED/NOVEL) over `kg_resolver` + `evolution` | 2.5–3d | N.1–N.3 |
 | **N.5** | Integration: regression gate (call-count / recall / over-generation) + docs + RETRO | 1.5–2d | N.1–N.4 |
 
@@ -182,24 +201,41 @@ generation; the model over-produces) argues for moving some of that governance
   + gated real-model regressions. Adversarial-review APPROVED after the
   anchor-sentence-bounding MAJOR fix. Live-validated on real EN/NL PDFs.
 
-### N.3 — Abstention gate + over-generation metric
-- **Modify** `prompts/pass2.py`: an explicit instruction that a chunk with no
-  genuine domain entity returns an empty result WITH a reason (`INSUFFICIENT_EVIDENCE`),
-  not a plausible-but-empty concept — the article's core lesson.
-- **New** `pipelines/ontology-extraction/.../not_a_concept.py`: a two-tier filter —
-  a deterministic pre-pass ("obvious UI label / table field / boilerplate") fast-
-  paths accept/reject, and the **LLM-judge (default ON, reusing `llm_matcher`)**
-  arbitrates the ambiguous middle (D4). A stricter, extraction-time cousin of
-  `noise_filter`.
-- **New** `apps/app-main/src/app_main/services/.../extraction_metrics.py` (mirrors
-  M.5's `chunking_metrics`): `over_generation_rate = 1 − survivors/extracted` +
-  `abstain_rate` — a falsifiable gate (does the pre-filter reduce downstream
-  noise-filter workload without dropping real entities?).
-- **AC**: abstain path emits a reason + metric; the not-a-concept filter is
-  deterministic + config-tunable; no real domain entity in the golden fixtures is
-  dropped.
-- **Tests**: `test_abstention.py` (empty-on-junk with reason), `test_not_a_concept.py`
-  (UI/table artifacts rejected, real concepts kept), `test_extraction_metrics.py`.
+### N.3 — Abstention gate + over-generation metric ✅ SHIPPED (merge 6132110)
+- `prompts/pass2.py`: an `INSUFFICIENT_EVIDENCE` abstention clause — a
+  furniture-only chunk (nav, TOC line, header/footer, page number, caption
+  reference, boilerplate) returns an empty entities array instead of manufacturing
+  vague concepts. Scoped as the SINGLE exception to exhaustive recall (recall wins
+  ties). Abstention is OBSERVED as a non-parse-error chunk with zero entities and
+  counted (`abstained_chunks`) — no machine-readable reason token added to the
+  JSON contract.
+- `not_a_concept.py`: two-tier gate. `classify_deterministic(text, label)` →
+  `True` (reject) / `False` (keep) / `None` (ambiguous). Precedence:
+  structural + `_REJECT_ALWAYS` (UI/nav/boilerplate, any label) → SPECIFIC-label
+  fast-accept → `_FIELD_WORDS` reject (generic label only — homographs like
+  "Total"/"Page" kept when specifically typed) → proper-name accept → ambiguous.
+  Plausible homographs (Next/Home/Index/…) defer to the judge, never hard-drop.
+  The **batched LLM-judge (default ON, D4)** arbitrates the ambiguous middle in one
+  call per chunk; no judge / judge failure / silent verdict → KEEP. Pure classify +
+  judge prompt/parse (unit-tested without an LLM).
+- `pass2_typed_extraction.py`: the gate runs per chunk BEFORE append + Hearst
+  seeding, so only survivors reach the graph + precision gate. Relations
+  referencing a REMOVED entity are dropped (stripped compare); a relation to a
+  never-extracted endpoint passes through (pre-N.3 behaviour). Counts land in
+  metadata. Env flags `EXTRACTION_NOT_A_CONCEPT` / `_JUDGE` (both ON).
+- `apps/app-main/.../extraction_chunking/extraction_metrics.py` (mirrors M.5's
+  `chunking_metrics`): pure `over_generation_rate = 1 − survivors/extracted` +
+  `abstain_rate = abstained_chunks/total_chunks`, derived from the metadata counts.
+- **AC** (met): abstain counted; not-a-concept filter deterministic +
+  config-tunable (`extra_reject_exact`); a specifically-typed real entity is never
+  dropped (review MAJOR fix). **NOTE**: the deterministic tier drops a REAL entity
+  only when its whole surface form is a generic field word UNDER a generic label —
+  the accepted precision/recall trade; the golden-corpus recall floor is the N.5
+  gate's job (no golden fixtures exist yet).
+- **Tests**: `test_not_a_concept.py` (13→ classify/partition/judge, incl.
+  specific-vs-generic homograph + UI-homograph→judge), `test_abstention.py` (8→
+  prompt clause + run_pass2 filter/judge/abstain counts), `test_extraction_metrics.py`
+  (6→ pure rates). Adversarial-review APPROVED.
 
 ### N.4 — Concept-level alignment taxonomy (harder)
 - **Extend** `kg_resolver` beyond exists/new to classify a NOVEL concept relative
