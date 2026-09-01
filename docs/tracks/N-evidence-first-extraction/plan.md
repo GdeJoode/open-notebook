@@ -578,6 +578,23 @@ appears.
   re-running changes nothing; an entity of a re-parented type resolves through the
   new ancestor via `canonical_bridge` with no per-entity write.
 
+> **D-N4-13 — which vocabulary a placement is judged against (N.4d.3).**
+> A placement is only meaningful relative to an applied set, and at
+> `accept_extension` time the per-document set does not exist: `detect_applicable_schemas`
+> scores a document, and no document is in hand. The first attempt used that to
+> argue the whole AC bullet away; the review was right that this proves less than
+> it claims. What DOES exist at acceptance is the notebook-level FORCED set —
+> `base_ontology` + its affinity bundle + the schemas named on accepted extensions
+> — which `_apply_notebook_schema_default` applies to every extraction in the
+> notebook regardless of document. That is the set `TypePlacementService` uses,
+> and the report names it in `vocabulary`.
+>
+> The runtime set is a SUPERSET, so the consequence is stated rather than hidden:
+> a placement can report `PARENT_UNKNOWN` for a parent that a document-specific
+> schema would have defined, and can miss siblings that appear only once such a
+> schema is applied. It never reports a placement the runtime set contradicts,
+> because everything in the forced set is in the runtime set.
+
 **N.4d.4 — Gap loop + reachability** (unchanged from the previous N.4c scope) — ~1d
 - `record_gap` on a NOVEL verdict (D-N4-6), gated on the reason code — which is
   why **C1 must be closed first**: a concept nobody adjudicated must not be

@@ -883,6 +883,28 @@ class TestExportWithAReparent:
             baseline.subjects(RDF.type, OWL.Class)
         )
 
+    def test_a_reparent_of_a_class_the_base_never_declared_is_skipped(self):
+        """Minting a class here would assert something the exported ontology
+        cannot support, from a row the projection refuses for the same reason.
+        """
+        from ontology_manager.rdf_owl_shacl import ON
+
+        graph = self._graph_for(
+            [
+                {
+                    "reparent_id": "reparent::NotInTheBase->Thesis",
+                    "op": "reparent",
+                    "type_name": "NotInTheBase",
+                    "new_parent": "Thesis",
+                    "parent_type": "Thesis",
+                }
+            ]
+        )
+        assert (ON["NotInTheBase"], RDF.type, OWL.Class) not in graph
+        assert set(graph.subjects(RDF.type, OWL.Class)) == set(
+            self._graph_for([]).subjects(RDF.type, OWL.Class)
+        )
+
     def test_a_normal_extension_still_keeps_its_parent(self):
         """The removal must be scoped to re-parents — a plain accepted extension
         that declares a parent still gets one.
@@ -899,3 +921,110 @@ class TestExportWithAReparent:
         assert self._parents_of(graph, "PreprintServer") == {
             "https://open-notebook.dev/ontology/Organization"
         }
+
+
+# ---------------------------------------------------------------------------
+# The schema JSON reports the EFFECTIVE parent (Track N.4d.3)
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaJsonWithAReparent:
+    """A re-parent is not an extension, and the browser shows one row per type.
+
+    Rendered as an extension, a re-parented base type appears TWICE — once with
+    the parent it was declared with, once with the new one — and two moves of the
+    same type collide on the browser's `ext:${type_name}` key, because a
+    re-parent carries no `extension_id`.
+    """
+
+    @staticmethod
+    def _body_for(accepted):
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+        schema_repo = AsyncMock(spec=NotebookSchemaRepository)
+        schema_repo.get_by_notebook.return_value = NotebookSchema(
+            notebook="notebook:test1",
+            base_ontology="scholarly",
+            accepted_extensions=accepted,
+            pending_extensions=[],
+        )
+        client = _make_app(notebook_svc, schema_repo)
+        resp = client.get("/api/notebooks/notebook:test1/schema")
+        assert resp.status_code == 200
+        return resp.json()
+
+    @staticmethod
+    def _move(type_name, new_parent):
+        return {
+            "reparent_id": f"reparent::{type_name}->{new_parent}",
+            "op": "reparent",
+            "type_name": type_name,
+            "new_parent": new_parent,
+            "parent_type": new_parent,
+        }
+
+    def test_the_declared_parent_is_the_baseline(self):
+        """Vacuity guard: the type really does hang from `Article` unmoved."""
+        body = self._body_for([])
+        node = next(
+            t for t in body["base_ontology_types"] if t["name"] == "ScholarlyArticle"
+        )
+        assert node["parent_type"] == "Article"
+
+    def test_the_row_reports_the_new_parent(self):
+        body = self._body_for([self._move("ScholarlyArticle", "Thesis")])
+        node = next(
+            t for t in body["base_ontology_types"] if t["name"] == "ScholarlyArticle"
+        )
+        assert node["parent_type"] == "Thesis"
+
+    def test_the_type_is_not_also_listed_as_an_extension(self):
+        body = self._body_for([self._move("ScholarlyArticle", "Thesis")])
+        assert [e["type_name"] for e in body["accepted_extensions"]] == []
+
+    def test_two_moves_of_one_type_report_the_latest(self):
+        """Last wins, matching what the projection does with the same rows — and
+        the two entries cannot collide, because neither is rendered as a row.
+        """
+        body = self._body_for(
+            [
+                self._move("ScholarlyArticle", "Thesis"),
+                self._move("ScholarlyArticle", "Periodical"),
+            ]
+        )
+        node = next(
+            t for t in body["base_ontology_types"] if t["name"] == "ScholarlyArticle"
+        )
+        assert node["parent_type"] == "Periodical"
+        assert body["accepted_extensions"] == []
+
+    def test_a_moved_accepted_extension_reports_the_new_parent(self):
+        body = self._body_for(
+            [
+                {
+                    "extension_id": "ext-1",
+                    "type_name": "PreprintServer",
+                    "parent_type": "Organization",
+                },
+                self._move("PreprintServer", "Periodical"),
+            ]
+        )
+        ext = next(
+            e for e in body["accepted_extensions"] if e["type_name"] == "PreprintServer"
+        )
+        assert ext["parent_type"] == "Periodical"
+
+    def test_a_normal_extension_is_untouched(self):
+        body = self._body_for(
+            [
+                {
+                    "extension_id": "ext-1",
+                    "type_name": "PreprintServer",
+                    "parent_type": "Organization",
+                }
+            ]
+        )
+        ext = next(
+            e for e in body["accepted_extensions"] if e["type_name"] == "PreprintServer"
+        )
+        assert ext["parent_type"] == "Organization"

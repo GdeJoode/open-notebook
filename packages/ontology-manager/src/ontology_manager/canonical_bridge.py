@@ -202,10 +202,12 @@ def resolve_ontology_type(
             # mapped. Measured before changing it: on the shipped vocabulary this
             # moves ZERO of 277 applied type entries, because no shipped chain
             # ends that way — it is reachable only through a curator's re-parent,
-            # where it decided 90 of 92 outcomes (every move under `Location` was
-            # refused as orphaning, while a move under `Person` applied, purely
-            # because `Person` happens to be a mapped base NAME and `Location` is
-            # spelled differently from `Place`).
+            # where it decided 90 of 92 outcomes: on the `(general, deals,
+            # government)` set a move under `Location` was refused 90 times (85
+            # of them as orphaning) and applied twice, while a move under
+            # `Person` applied 89 times — purely because `Person` happens to be
+            # spelled like a mapped base NAME and `Location` is spelled
+            # differently from `Place`.
             base = (
                 _strip_schema_prefix(current.schema_org_type)
                 if current.schema_org_type

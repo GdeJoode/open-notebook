@@ -62,6 +62,25 @@ NOTEBOOK_DEFAULT_BUNDLE: Dict[str, List[str]] = {
 _REPARENT_OP = "reparent"
 
 
+def _counts_toward_review(extension: Dict[str, Any]) -> bool:
+    """Whether an ``accepted_extensions`` entry satisfies the B.1f review gate.
+
+    The gate is ``review_required AND accepted_extensions is empty``, and it
+    means "the curator has reviewed the schema this notebook proposes". B.3c
+    appends a sentinel row precisely to trip it, so the predicate is known and
+    load-bearing.
+
+    N.4d.3 — a re-parent does NOT count. Moving a type that already exists says
+    nothing about the pending extensions awaiting review, and letting it count
+    would resume a paused extraction for a notebook with forty unreviewed
+    proposals because the curator adjusted one parent. The sentinel is excluded
+    for the mirror-image reason: it carries no ontology content, and it exists to
+    trip the gate DELIBERATELY, so it is handled at its own call site rather than
+    here.
+    """
+    return extension.get("op") != _REPARENT_OP
+
+
 def _is_resume_sentinel(extension: Dict[str, Any]) -> bool:
     """Return ``True`` for a B.3c resume-sentinel extension entry.
 
@@ -927,7 +946,10 @@ class EntityExtractionService:
         if (
             notebook_schema is not None
             and notebook_schema.review_required
-            and not notebook_schema.accepted_extensions
+            and not any(
+                _counts_toward_review(ext)
+                for ext in notebook_schema.accepted_extensions
+            )
         ):
             raise SchemaReviewPendingError(
                 notebook_id=notebook_id,

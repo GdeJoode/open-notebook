@@ -204,7 +204,14 @@ async def run_entities(
                 if (
                     nb_schema is not None
                     and nb_schema.review_required
-                    and not nb_schema.accepted_extensions
+                    and not any(
+                        # N.4d.3: a re-parent moves an EXISTING type and says
+                        # nothing about the pending extensions awaiting review,
+                        # so it must not lift the gate. Mirrors
+                        # `entity_extraction_service._counts_toward_review`.
+                        ext.get("op") != "reparent"
+                        for ext in nb_schema.accepted_extensions
+                    )
                 ):
                     raise HTTPException(
                         status_code=409,

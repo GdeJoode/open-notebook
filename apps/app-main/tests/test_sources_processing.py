@@ -159,6 +159,59 @@ class TestRunEntitiesSchemaReviewGate:
         assert body["command_id"] == "job:queued1"
         assert body["status"] == "queued"
 
+    def test_a_reparent_alone_still_returns_409(self):
+        """N.4d.3 — the router-side half of the same gate.
+
+        A re-parent moves a type that already exists; it is not a review of the
+        pending proposals. Counting it would resume extraction for a notebook
+        whose extensions nobody has looked at.
+        """
+        source = make_source(id="source:abc")
+        svc = _source_svc_returning(source)
+
+        nb_schema = NotebookSchema(
+            notebook="notebook:xyz",
+            base_ontology="scholarly",
+            review_required=True,
+            accepted_extensions=[
+                {
+                    "reparent_id": "reparent::Researcher->Institution",
+                    "op": "reparent",
+                    "type_name": "Researcher",
+                    "new_parent": "Institution",
+                }
+            ],
+            pending_extensions=[
+                {"type_name": "EarlyCareerResearcher", "schema_name": "scholarly"}
+            ],
+        )
+
+        mock_source_repo = MagicMock()
+        mock_source_repo.get_notebook_id = AsyncMock(return_value="notebook:xyz")
+
+        nb_schema_repo_instance = MagicMock()
+        nb_schema_repo_instance.get_by_notebook = AsyncMock(return_value=nb_schema)
+
+        with patch(
+            "app_main.dependencies.get_source_repo",
+            return_value=mock_source_repo,
+        ), patch(
+            "surrealdb_service.repositories.NotebookSchemaRepository",
+            return_value=nb_schema_repo_instance,
+        ):
+            client = _make_app(svc)
+            resp = client.post(
+                "/api/sources/source:abc/run-entities",
+                json={
+                    "ontology_name": "scholarly",
+                    "extractor_type": "llm",
+                    "multi_schema_enabled": True,
+                },
+            )
+
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["code"] == "schema_review_pending"
+
     def test_404_when_source_not_found(self):
         """Pre-flight 404 happens before the schema-review check."""
         svc = _source_svc_returning(None)

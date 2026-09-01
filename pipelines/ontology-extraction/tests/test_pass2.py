@@ -272,6 +272,57 @@ class TestBuildPass2Prompt:
         assert "RealType" in prompt
         assert "## Accepted Extension Types" in prompt
 
+    def test_format_accepted_extensions_filters_reparents(self):
+        """N.4d.3 — the same defence, for the other entry kind.
+
+        A re-parent records that an EXISTING type moved under a different parent.
+        Rendered here it would appear under "Accepted Extension Types" with the
+        instruction to treat it as a first-class ADDITION to the schema — telling
+        the LLM a base-ontology type is a curator's new type. The move itself is
+        applied to the ontology this prompt already renders its vocabulary from
+        (``ontology_manager.schema_projection``), so nothing is lost by skipping
+        it.
+
+        Real extensions in the same list must survive — the filter is
+        reparent-specific.
+        """
+        extensions = [
+            {
+                "type_name": "RealType",
+                # Deliberately NOT parented on the re-parented type: the two
+                # names must be independent, or "the moved type is absent" would
+                # hold for a reason unrelated to the filter.
+                "parent_type": "Institution",
+                "rationale": "Legitimate extension.",
+            },
+            {
+                "reparent_id": "reparent::Researcher->Institution",
+                "op": "reparent",
+                "type_name": "Researcher",
+                "new_parent": "Institution",
+                "parent_type": "Institution",
+            },
+        ]
+        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
+        section = prompt.split("## Accepted Extension Types", 1)[1]
+        assert "RealType" in section
+        assert "Researcher" not in section, (
+            "a re-parent was rendered as an accepted extension type"
+        )
+
+    def test_format_accepted_extensions_omits_section_when_only_reparents(self):
+        """The empty-section guard has to see through the new filter too."""
+        extensions = [
+            {
+                "reparent_id": "reparent::Researcher->Organization",
+                "op": "reparent",
+                "type_name": "Researcher",
+                "new_parent": "Organization",
+            },
+        ]
+        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
+        assert "Accepted Extension Types" not in prompt
+
     def test_format_accepted_extensions_omits_section_when_all_sentinels(self):
         """When the only extensions in the list are sentinels, the
         ``Accepted Extension Types`` section is omitted entirely —

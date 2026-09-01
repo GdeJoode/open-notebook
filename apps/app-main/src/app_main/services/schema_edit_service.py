@@ -58,6 +58,10 @@ from surrealdb_service.repositories.notebook_schema import (
 
 SCHEMA_CHANGED_EVENT_TYPE = "schema_changed"
 
+# The discriminator on an ``accepted_extensions`` entry that records a re-parent
+# rather than a new type (N.4d.3).
+REPARENT_OP = "reparent"
+
 
 class NotebookSchemaNotFoundError(Exception):
     """Raised when an edit op targets a notebook that has no schema row.
@@ -176,6 +180,11 @@ class SchemaEditService:
 
         already_accepted = any(
             ext.get("type_name") == type_name
+            # N.4d.3: a re-parent carries the moved type's name in `type_name`
+            # too, so an unguarded scan would read "Article was re-parented" as
+            # "Article was already accepted" and turn a genuinely unknown
+            # extension into a silent no-op instead of an UnknownExtensionError.
+            and ext.get("op") != REPARENT_OP
             for ext in schema.accepted_extensions
         )
         matched: Optional[Dict[str, Any]] = None
@@ -515,7 +524,7 @@ class SchemaEditService:
             schema.accepted_extensions.append(
                 {
                     "reparent_id": reparent_id,
-                    "op": "reparent",
+                    "op": REPARENT_OP,
                     "type_name": name,
                     "new_parent": parent,
                     "parent_type": parent,

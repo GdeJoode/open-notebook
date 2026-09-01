@@ -660,9 +660,57 @@ class TestReparentType:
             await service.reparent_type(NOTEBOOK_ID, ["", "  "], "Publication")
 
     @pytest.mark.asyncio
+    async def test_a_reparent_does_not_make_an_unknown_extension_look_accepted(
+        self, service: SchemaEditService, schema_repo: AsyncMock
+    ):
+        """A re-parent carries the moved type's name in `type_name` too, so an
+        unguarded scan in `accept_extension` reads it as "already accepted" and
+        turns a genuinely unknown extension into a silent no-op.
+        """
+        _bind_state(schema_repo, _make_schema())
+        await service.reparent_type(NOTEBOOK_ID, ["Article"], "Publication")
+
+        with pytest.raises(UnknownExtensionError):
+            await service.accept_extension(NOTEBOOK_ID, "Article")
+
+    @pytest.mark.asyncio
     async def test_a_missing_schema_row_raises(
         self, service: SchemaEditService, schema_repo: AsyncMock
     ):
         schema_repo.get_by_notebook = AsyncMock(return_value=None)
         with pytest.raises(NotebookSchemaNotFoundError):
             await service.reparent_type(NOTEBOOK_ID, ["Article"], "Publication")
+
+
+def test_every_module_spells_the_reparent_discriminator_the_same_way():
+    """N.4d.3 — six places decide what a re-parent entry is.
+
+    Each spells the discriminator locally, on purpose: the router must not import
+    a service symbol, and `ontology_manager` / `ontology_extraction` cannot import
+    from `app_main` at all. The cost of that is silent divergence — a filter that
+    quietly stops filtering, with every test still green because each side agrees
+    with itself. This pins them together.
+    """
+    from ontology_manager.schema_projection import REPARENT_OP as projection_op
+
+    from app_main.api.routers.schemas import _REPARENT_OP as router_op
+    from app_main.services.entity_extraction_service import (
+        _REPARENT_OP as extraction_op,
+    )
+    from app_main.services.schema_edit_service import REPARENT_OP as service_op
+
+    assert service_op == router_op == extraction_op == projection_op == "reparent"
+
+    # The two remaining sites use a bare literal because they filter a raw dict
+    # in a comprehension; assert the literal is present in each source rather
+    # than leaving them out of the pin entirely.
+    from pathlib import Path
+
+    import app_main.api.routers.sources_processing as sources_processing
+    import ontology_extraction.prompts.pass2 as pass2
+
+    for module in (pass2, sources_processing):
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert f'"{service_op}"' in source, (
+            f"{module.__name__} no longer mentions the reparent discriminator"
+        )

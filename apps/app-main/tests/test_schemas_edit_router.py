@@ -367,6 +367,101 @@ class TestDeleteEndpoint:
 # ---------------------------------------------------------------------------
 
 
+class TestAcceptSurfacesThePlacement:
+    """N.4d.3 — accepting an extension shows the curator where it landed.
+
+    A report, never an applied change: the endpoint re-parents nothing, and the
+    curator applies a move by posting it to `/schema/reparent`.
+    """
+
+    @staticmethod
+    def _app(edit_service, placement_service):
+        from app_main.dependencies import get_type_placement_service
+
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+        client = _make_app(notebook_svc, edit_service)
+        client.app.dependency_overrides[get_type_placement_service] = (
+            lambda: placement_service
+        )
+        return client
+
+    def test_the_response_carries_the_placement(self):
+        from app_main.services.type_placement_service import PlacementReport
+
+        edit_service = AsyncMock(spec=SchemaEditService)
+        edit_service.accept_extension.return_value = _make_schema(
+            accepted=[
+                {"extension_id": "e1", "type_name": "Tranche", "parent_type": "Deal"}
+            ]
+        )
+        placement_service = AsyncMock()
+        placement_service.placement_for.return_value = PlacementReport(
+            type_name="Tranche",
+            verdict="PLACED",
+            reason_code="declared_parent_resolves",
+            evidence="the declared parent resolves",
+            parent="Deal",
+            candidates=("RegioDeal", "Woondeal"),
+            selected=("RegioDeal",),
+            judged=True,
+            vocabulary=("deals",),
+        )
+
+        client = self._app(edit_service, placement_service)
+        resp = client.post(
+            f"/api/notebooks/{NOTEBOOK_ID}/schema/extensions/Tranche/accept"
+        )
+
+        assert resp.status_code == 200
+        placement = resp.json()["placement"]
+        assert placement["verdict"] == "PLACED"
+        assert placement["candidates"] == ["RegioDeal", "Woondeal"]
+        assert placement["selected"] == ["RegioDeal"]
+        assert placement["judged"] is True
+        # The declared parent from the accepted entry is what gets validated —
+        # the service validates a claim, it does not invent one.
+        assert placement_service.placement_for.await_args.args[1:3] == (
+            "Tranche",
+            "Deal",
+        )
+
+    def test_a_placement_failure_does_not_fail_the_accept(self):
+        edit_service = AsyncMock(spec=SchemaEditService)
+        edit_service.accept_extension.return_value = _make_schema(
+            accepted=[
+                {"extension_id": "e1", "type_name": "Tranche", "parent_type": "Deal"}
+            ]
+        )
+        placement_service = AsyncMock()
+        placement_service.placement_for.side_effect = RuntimeError("no ontology dir")
+
+        client = self._app(edit_service, placement_service)
+        resp = client.post(
+            f"/api/notebooks/{NOTEBOOK_ID}/schema/extensions/Tranche/accept"
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["placement"] is None
+
+    def test_the_other_edit_endpoints_carry_no_placement(self):
+        """The field is populated by accept and nowhere else, so a client cannot
+        read a stale verdict off an unrelated edit.
+        """
+        edit_service = AsyncMock(spec=SchemaEditService)
+        edit_service.reparent_type.return_value = _make_schema()
+        placement_service = AsyncMock()
+
+        client = self._app(edit_service, placement_service)
+        resp = client.post(
+            f"/api/notebooks/{NOTEBOOK_ID}/schema/reparent",
+            json={"type_names": ["Article"], "new_parent": "Publication"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["placement"] is None
+        placement_service.placement_for.assert_not_awaited()
+
+
 class TestReparentEndpoint:
     def test_returns_200_and_forwards_the_payload(self):
         notebook_svc = AsyncMock(spec=NotebookService)

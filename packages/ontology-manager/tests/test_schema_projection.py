@@ -27,6 +27,7 @@ from ontology_manager.schema_projection import (
     EV_CYCLE,
     EV_DEFINED,
     EV_NAME_ALREADY_DEFINED,
+    EV_NAME_IS_AN_ALIAS,
     EV_NO_SCHEMAS,
     EV_NO_TYPE_NAME,
     EV_PARENT_NOT_FOUND,
@@ -383,6 +384,62 @@ def test_a_shipped_definition_is_never_overwritten(applied):
     assert resolve_ontology_type("Person", result.schemas).canonical == "person"
 
 
+def test_an_extension_named_after_an_existing_alias_is_refused():
+    """The review found this by measurement, not by reading: `_find_definition`
+    matches names AND aliases, so a definition materialised onto `schemas[0]`
+    outranks an alias owner in a later applied ontology, and every entity
+    carrying that label silently changes canonical.
+
+    Swept over the applied set the module's own safety sweep starts from, so the
+    guard is asserted against real aliases rather than a constructed one.
+    """
+    schemas = _load("base", "deals", "general")
+    aliases = [
+        (alias, name)
+        for ontology in schemas
+        for name, d in ontology.entity_types.items()
+        for alias in (d.aliases or [])
+    ]
+    assert aliases, "no shipped type in this set declares an alias"
+
+    for alias, owner in aliases:
+        before = resolve_ontology_type(alias, schemas)
+        if before is None:
+            continue
+        result = project_accepted_edits(schemas, [_extension(alias, parent_type="Deal")])
+        outcome, = result.outcomes
+        assert (outcome.action, outcome.reason_code) == (REFUSED, EV_NAME_IS_AN_ALIAS), (
+            f"accepting an extension named {alias!r} shadowed {owner}"
+        )
+        after = resolve_ontology_type(alias, result.schemas)
+        assert after is not None and after.canonical == before.canonical
+
+
+def test_the_shadowing_this_refuses_is_real():
+    """Vacuity guard for the test above. Without the refusal the shadowing
+    genuinely happens — asserted here by materialising past the guard, so a
+    vocabulary that stopped declaring aliases cannot leave the sweep green and
+    meaningless.
+    """
+    from ontology_manager.schema import EntityTypeDefinition
+
+    schemas = _load("base", "deals", "general")
+    alias = next(
+        alias
+        for ontology in schemas
+        for _name, d in ontology.entity_types.items()
+        for alias in (d.aliases or [])
+        if resolve_ontology_type(alias, schemas) is not None
+    )
+    before = resolve_ontology_type(alias, schemas)
+
+    shadowed = [o.model_copy(deep=True) for o in schemas]
+    shadowed[0].entity_types[alias] = EntityTypeDefinition(name=alias, parent_type="Deal")
+    after = resolve_ontology_type(alias, shadowed)
+
+    assert after is not None and after.canonical != before.canonical
+
+
 def test_an_entry_without_a_type_name_is_refused(applied):
     result = project_accepted_edits(applied, [{"extension_id": "ext:1"}])
     outcome, = result.outcomes
@@ -498,34 +555,83 @@ def test_projecting_the_projection_is_a_fixed_point(applied):
 # ---------------------------------------------------------------------------
 
 
-def test_no_reparent_of_any_shipped_type_can_silently_lose_its_canonical():
-    """The safety property, swept over every shipped ontology in production-shaped
-    applied sets of three: after projecting a re-parent, a type that resolved to a
-    canonical before still resolves to one — or the edit was REFUSED and named
-    why. No type may resolve before and quietly stop resolving after.
+def test_every_branch_of_the_projection_holds_across_the_whole_vocabulary():
+    """The safety sweep, rewritten after the review measured that its first form
+    killed ZERO mutants.
+
+    It re-parented every type under `Person` and asserted only "resolved before →
+    resolves after". `Person` is a mapped base NAME, so that was true by
+    construction and the dangerous branch was unreachable: the orphan check, the
+    cycle check, the `schema_org_type` clear and the overwrite refusal all passed
+    it unchanged. The N.4d.2 lesson in its exact words — ask which direction the
+    danger is in, and do not assert a property in a configuration where it cannot
+    fail.
+
+    So each branch now gets a move CONSTRUCTED to exercise it, and each carries a
+    floor, because a projection that refused everything would satisfy any
+    "nothing broke" phrasing while delivering nothing.
     """
-    sets = [ALL[i : i + 3] for i in range(0, len(ALL), 3)]
-    checked = applied_count = refused = 0
-    for names in sets:
+    moved = orphaned = cycled = 0
+    for names in [ALL[i : i + 3] for i in range(0, len(ALL), 3)]:
         schemas = _load(*names)
+        # `Deal` is the destination throughout: a mapped base the walk
+        # terminates on by NAME, so it is a legal parent in every set even where
+        # no ontology defines it (`resolve_ontology_type` would return None for
+        # it — it resolves DEFINITIONS, and a bare mapped base has none).
+        from ontology_manager.type_placement import known_schema_org_base
+
+        assert known_schema_org_base("Deal")
+
         for ontology in schemas:
             for type_name in list(ontology.entity_types):
-                before = resolve_ontology_type(type_name, schemas)
-                if before is None:
+                if resolve_ontology_type(type_name, schemas) is None:
                     continue
-                result = project_accepted_edits(schemas, _reparent("Person", type_name))
+
+                # (1) A legal move APPLIES and lands on the destination's
+                # canonical — including for a type that roots at a schema.org
+                # base, which is what the `schema_org_type` clear is for.
+                result = project_accepted_edits(schemas, _reparent("Deal", type_name))
                 outcome, = result.outcomes
-                checked += 1
-                if outcome.action == REFUSED:
-                    refused += 1
-                    continue
-                applied_count += 1
-                assert resolve_ontology_type(type_name, result.schemas) is not None, (
-                    f"{type_name} resolved before the re-parent and not after"
+                if outcome.action != REFUSED:
+                    moved += 1
+                    after = resolve_ontology_type(type_name, result.schemas)
+                    assert after is not None and after.canonical == "programme", (
+                        f"{type_name} moved under Deal but resolves to "
+                        f"{after.canonical if after else None}"
+                    )
+
+                # (2) A move under a type that reaches no mapped base is REFUSED
+                # and rolled back — the branch that stops a curator's edit from
+                # dropping every entity of a type onto the alias fallback.
+                result = project_accepted_edits(
+                    schemas,
+                    [_extension("LooseDestination")] + _reparent("LooseDestination", type_name),
                 )
-    assert checked > 200, f"the sweep only reached {checked} types"
-    # Same floor, same reason: a projection that refused everything would satisfy
-    # the safety property above and deliver nothing.
-    assert applied_count > checked * 0.8, (
-        f"{applied_count} applied vs {refused} refused of {checked}"
-    )
+                assert [o.action for o in result.outcomes] == [MATERIALISED, REFUSED]
+                assert result.outcomes[1].reason_code == EV_CHAIN_ORPHANS
+                assert resolve_ontology_type(type_name, result.schemas) is not None
+                orphaned += 1
+
+                # (3) A move under one of its own descendants is REFUSED.
+                child = next(
+                    (
+                        other
+                        for o in schemas
+                        for other, d in o.entity_types.items()
+                        if d.parent_type and _norm(d.parent_type) == _norm(type_name)
+                    ),
+                    None,
+                )
+                if child is not None:
+                    result = project_accepted_edits(schemas, _reparent(child, type_name))
+                    outcome, = result.outcomes
+                    assert (outcome.action, outcome.reason_code) == (REFUSED, EV_CYCLE)
+                    cycled += 1
+
+    assert moved > 200, f"only {moved} legal moves applied"
+    assert orphaned > 200, f"only {orphaned} orphaning moves were exercised"
+    assert cycled > 20, f"only {cycled} cyclic moves were exercised"
+
+
+def _norm(text):
+    return (text or "").strip().lower()

@@ -54,7 +54,12 @@ from loguru import logger
 
 from .canonical_bridge import resolve_ontology_type
 from .schema import EntityTypeDefinition
-from .type_placement import find_type, known_schema_org_base, would_cycle
+from .type_placement import (
+    alias_owner,
+    find_type,
+    known_schema_org_base,
+    would_cycle,
+)
 
 # Actions an entry can produce.
 MATERIALISED = "materialised"
@@ -69,6 +74,7 @@ EV_PARENT_REWRITTEN = "parent_type_rewritten"
 EV_NO_SCHEMAS = "no_applied_schemas"
 EV_NO_TYPE_NAME = "entry_declares_no_type_name"
 EV_NAME_ALREADY_DEFINED = "name_already_defined_in_applied_schemas"
+EV_NAME_IS_AN_ALIAS = "name_already_declared_as_an_alias"
 EV_TYPE_NOT_FOUND = "type_not_defined_in_applied_schemas"
 EV_PARENT_NOT_FOUND = "new_parent_neither_defined_nor_a_mapped_base"
 EV_CYCLE = "new_parent_descends_from_this_type"
@@ -80,6 +86,7 @@ REASON_CODES = (
     EV_NO_SCHEMAS,
     EV_NO_TYPE_NAME,
     EV_NAME_ALREADY_DEFINED,
+    EV_NAME_IS_AN_ALIAS,
     EV_TYPE_NOT_FOUND,
     EV_PARENT_NOT_FOUND,
     EV_CYCLE,
@@ -179,6 +186,23 @@ def _materialise(
         # collides with it is a naming clash for a curator to resolve, not a
         # licence to redefine the type underneath every other notebook.
         return ProjectionOutcome(name, REFUSED, EV_NAME_ALREADY_DEFINED)
+
+    owner = alias_owner(name, schemas)
+    if owner is not None:
+        # An ALIAS collision is as harmful as a name collision and less visible.
+        # `canonical_bridge._find_definition` matches names AND aliases, in
+        # ontology-then-insertion order, so a definition materialised onto
+        # `schemas[0]` outranks an alias owner living in a later applied
+        # ontology. Measured on the shipped vocabulary: accepting an extension
+        # named `Subject`, `Theme` or `Category` would shadow `general.Topic`,
+        # and `Framework`, `Protocol` or `Standard` would shadow
+        # `general.Technology` — every entity carrying that label would silently
+        # stop resolving to the canonical it resolved to yesterday. That is the
+        # same harm `_reparent_one`'s orphan check refuses, so it is refused the
+        # same way, naming the type that already owns the alias.
+        return ProjectionOutcome(
+            name, REFUSED, EV_NAME_IS_AN_ALIAS, f"alias_of={owner}"
+        )
 
     parent = entry.get("parent_type")
     definition = EntityTypeDefinition(
