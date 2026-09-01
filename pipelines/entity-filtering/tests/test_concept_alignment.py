@@ -386,6 +386,18 @@ def test_only_related_and_novel_are_producible():
     assert not hasattr(ca, "build_is_a_seeds")
 
 
+async def test_align_returns_only_entities_and_a_report(monkeypatch):
+    # Module-level counterpart to the workflow's no-relations assertion: align()
+    # has no relation channel at all, so nothing can be emitted by accident.
+    aligner = ConceptAligner(_Repo({}), schemas=["s"])
+    result = await _align(aligner, [_entity("X", "L")],
+                          canonical="programme", monkeypatch=monkeypatch)
+    assert len(result) == 2
+    entities, report = result
+    assert isinstance(entities, list) and isinstance(report, dict)
+    assert not any("relation" in k for k in report)
+
+
 # ===========================================================================
 # Judge — fencing and accounting
 # ===========================================================================

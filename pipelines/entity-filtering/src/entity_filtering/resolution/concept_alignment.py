@@ -7,42 +7,52 @@ identical (both just ``is_new=True``). This module separates them:
 
 * ``RELATED_TO`` — near in meaning to something the graph already holds (the
   common case: a sibling under the same type).
-* ``NOVEL``      — nothing comparable was found. This is what N.4d's gap loop
-  records as an ontology gap, which is why the ``reason_code`` below has to be
-  trustworthy.
+* ``NOVEL``      — nothing comparable was found. This is what N.4d.4's gap loop
+  is planned to record as an ontology gap, which is why the ``reason_code`` below
+  has to be trustworthy.
 
 Why there is no subsumption here (D-N4-12)
 ==========================================
-Earlier versions of this module also produced ``NARROWER_THAN``/``BROADER_THAN``
-and seeded ``is_a`` edges. That is gone, and the reason is worth keeping: three
-attempts failed identically — lexical containment, then name matching, then the
-candidate's declared type — because **subsumption is a relation between TYPES,
-while this table stores MENTIONS.** Nothing in this codebase creates a node
-representing an ontology type; every ``entity`` row is written from a text mention
-by ``EntityPersistenceService``. So "this entity is narrower than that entity" is
-not a claim the data can support, however it is dressed up.
+Earlier versions of this module also emitted ``NARROWER_THAN`` and seeded ``is_a``
+edges from it. (``BROADER_THAN`` was declared in the taxonomy but never
+producible — the declared ``parent_type`` chain only walks upward — and under the
+shipped defaults the seeding produced zero edges.) That is gone, and the reason is
+worth keeping: three attempts failed identically — lexical containment, then name
+matching, then the candidate's declared type — because **subsumption is a relation
+between TYPES, while this table stores MENTIONS.**
 
-Subsumption now lives where a TYPE enters the system — an extension proposal, an
-evolution ``SchemaProposal``, or the curator accepting one — where both sides of
-the question are types and the parent slot is currently an unvalidated guess. An
-accepted placement is applied as a SCHEMA re-parent, so every existing and future
-entity of the re-parented type inherits the new ancestor through
-``canonical_bridge`` instead of needing an edge each. See
+The observation that settles it: **no writer in this codebase creates an entity
+row denoting an ontology TYPE.** Rows come from text mentions —
+``EntityPersistenceService`` for the extraction path, and ``vault_sync_service``
+writing note-derived rows directly. So "this entity is narrower than that entity"
+is not a claim the data can support, however it is dressed up.
+
+Subsumption is therefore PLANNED to move to where a TYPE enters the system — an
+extension proposal, an evolution ``SchemaProposal``, or the curator accepting one
+— where both sides of the question are types and the parent slot is currently an
+unvalidated guess. In that design an accepted placement is applied as a SCHEMA
+re-parent, so entities inherit the new ancestor through ``canonical_bridge``
+instead of needing an edge each. **None of that exists yet**: it is N.4d.1–.3, and
+today this system decides subsumption nowhere. See
 ``docs/tracks/N-evidence-first-extraction/plan.md`` §N.4d.
 
 The tier was REMOVED rather than disabled: there is no story in which it becomes
 correct, and dead machinery invites a fourth attempt. If a path ever marks concept
-nodes explicitly (the vault-sync importer creates ``entity`` rows from notes and
-could flag a concept page), the identification problem would be solved there and
-the tier rebuilt against that flag — not resurrected from here.
+nodes explicitly (``vault_sync_service`` creates rows from notes and could flag a
+concept page), the identification problem would be solved there and the tier
+rebuilt against that flag — not resurrected from here.
 
-Where the stage runs (D-N4-4)
-=============================
-Still AFTER ontology validation and graph centrality. It no longer emits relations
-at all, so those constraints are currently moot — but they are what the N.4b
-review established and the workflow tests still assert them, so a future producer
-cannot silently reintroduce the two blockers that phase fixed: the ontology filter
-discards a relation whose endpoint is off-batch, and the graph analyser turns an
+Where the stage runs
+====================
+After ontology validation and graph centrality, where N.4b placed it. It no longer
+emits relations, so the constraints that motivated that position are currently
+inert — and, as the N.4d.0 review demonstrated by mutation, the workflow tests do
+NOT catch a misplaced producer of the shape that actually mattered (an edge into
+an existing, off-batch graph node). The position is kept because moving it would
+be churn, NOT because it is currently guarded. Anyone reintroducing a producer
+must re-establish the guarantee with a test using an OFF-BATCH endpoint, because
+the two blockers N.4b fixed are still real: the ontology constraint filter drops a
+relation whose endpoints are not in the batch, and the graph analyser turns an
 unknown endpoint into a phantom node that shifts every PageRank score.
 
 Evidence discipline (D-N4-7)
@@ -149,10 +159,11 @@ class Alignment:
     ``reason_code`` is the machine-checkable half of the evidence (see the module
     docstring); ``evidence`` is its human-readable expansion. Both are always
     populated — an operator must be able to audit and reverse any verdict, and
-    N.4c filters gap-recording on ``reason_code`` so it must never be a guess.
+    N.4d.4 will filter gap-recording on ``reason_code`` so it must never be a guess.
 
-    ``canonical_type`` is carried so N.4b can stamp ``source_type``/``target_type``
-    on a seeded edge (D-N4-5) without re-resolving the ontology.
+    ``canonical_type`` records WHICH type bucket was queried, as audit provenance:
+    it explains what population the verdict was reached against. It has no consumer
+    in this module — the seeded edge that used to read it was retired in N.4d.0.
     """
 
     verdict: str
@@ -191,26 +202,21 @@ def _props(entity: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Ontology type resolution (canonical fetch type + rich ancestor chain)
+# Ontology type resolution (the canonical fetch type)
 # ---------------------------------------------------------------------------
 
 
 def resolve_canonical_type(label: str, schemas: Optional[List[Any]]) -> Optional[str]:
-    """``(canonical_type, rich_ancestors)`` for an extraction ``label``.
+    """The coarse ``entity_type`` enum value the graph is indexed on, for a rich
+    extraction ``label`` — or ``None`` when it cannot be determined.
 
-    * ``canonical_type`` — the coarse ``entity_type`` enum value the graph is
-      indexed on; this is what ``find_by_type`` must be given (D-N4-3).
-    * ``rich_ancestors`` — the declared ancestor TYPE names above ``label``
-      (nearest first), the only sound deterministic subsumption evidence (D-N4-2).
+    This is what ``find_by_type`` must be given (D-N4-3): the column holds the
+    canonical enum, so querying it with the rich Track-L label returns nothing.
 
     ontology-manager is an OPTIONAL extra of this pipeline, so the import is lazy
     and guarded: without it (or without applied schemas, or for an unresolvable
-    label) this returns ``(None, [])`` and the caller degrades honestly.
-
-    The ancestor list is filtered against the RESOLVED type name rather than the
-    input ``label``, so a label that matched an ontology *alias* does not leave the
-    entity's own type sitting in ``ancestors`` (which would let the tier "prove"
-    that a concept is narrower than itself).
+    label) this returns ``None`` and the caller reports that honestly rather than
+    querying with a value the column does not hold.
     """
     if not label or not schemas:
         return None
@@ -506,9 +512,8 @@ def lexical_alias_candidates(
     return out
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Orchestrator (verdicts + evidence; seeding is the caller's step, above)
+# --------------------------------------------------------------------------
+# Orchestrator (verdicts + evidence)
 # ---------------------------------------------------------------------------
 
 
@@ -521,18 +526,18 @@ class _Fetch:
 
 
 class ConceptAligner:
-    """Classify the concepts KG resolution marked ``is_new`` (Track N.4a).
+    """Classify the concepts KG resolution marked ``is_new`` (Track N.4).
 
     Runs after ``KGResolver`` and only on entities it flagged ``is_new``.
     Enrichment is NON-destructive (``properties`` only): nothing is merged,
-    removed, or re-typed, and N.4a emits no relations at all.
+    removed, or re-typed, and the stage emits no relations at all.
 
     Args:
         entity_repo: object exposing ``find_by_type`` (the ONLY repo method used —
             no new repository surface, no migration). ``None`` → every concept is
             NOVEL with the honest ``no_repo`` reason.
-        schemas: applied ontologies, for the canonical fetch type and the ancestor
-            chain. ``None`` → no type resolves, so nothing is queried.
+        schemas: applied ontologies, for the canonical fetch type. ``None`` → no
+            type resolves, so nothing is queried.
         llm_caller: ``(system, user, model) -> str`` (sync or async) for the judge.
         judge_enabled: master switch for the judge tier (default ON, D4).
         related_floor / match_ceiling: the embedding band bounds.

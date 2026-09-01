@@ -489,9 +489,18 @@ and Stage 15's relation output. `concept_alignment` keeps `RELATED_TO`/`NOVEL`,
 the alias candidates, and the report, which is what N.4d.4's gap loop consumes.
 
 - **AC**: the alignment stage emits no relations at all; `FilteredResult.relations`
-  is byte-identical with the stage on and off; the N.4b placement guarantees stay
-  asserted for as long as the stage exists, so a future producer cannot silently
-  reintroduce the two blockers that phase fixed.
+  is byte-identical with the stage on and off.
+- **AC CORRECTED after review**: the original AC also claimed "the N.4b placement
+  guarantees stay asserted … so a future producer cannot silently reintroduce the
+  two blockers that phase fixed". The reviewer **disproved that by mutation**: a
+  producer emitting the shape that actually mattered — an edge into an existing,
+  **off-batch** graph node, which is exactly what the retired tier seeded — placed
+  before Stages 11 and 12 leaves all thirteen workflow tests green. The tests only
+  fire for ON-batch endpoints, i.e. they catch the safe reintroduction and miss the
+  dangerous one. With no producer left there is nothing to place, so the claim was
+  DROPPED rather than propped up with an artificial guard. **Binding for whoever
+  reintroduces a producer**: re-establish the guarantee with a test whose target is
+  off-batch, because both blockers are still real.
 - **Removal, not deprecation**, deliberately: with D-N4-12 there is no story in
   which the tier becomes correct, and a disabled-but-present tier invites a fourth
   attempt. If a future path ever marks concept nodes explicitly (the vault-sync

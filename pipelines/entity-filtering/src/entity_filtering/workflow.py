@@ -664,27 +664,17 @@ class FilteringWorkflow:
         # (D-N4-12). The stage emits NO relations and is strictly
         # non-destructive — it writes to ``properties`` and nothing else.
         #
-        # Placement (D-N4-4). The stage no longer emits relations at all — the
-        # subsumption tier that seeded them was retired in N.4d.0 (D-N4-12), so
-        # these constraints are currently moot. They are kept, and the workflow
-        # tests keep asserting them, because they are what the N.4b review
-        # established and a future producer must not silently reintroduce the two
-        # blockers that phase fixed:
-        #
-        #   * AFTER Stage 11 (ontology constraint filter), which drops any
-        #     relation whose endpoints are not among the batch's entities — and an
-        #     edge into the existing graph is off-batch by construction, so
-        #     running earlier discarded 100% of the output silently.
-        #   * AFTER Stage 12 (graph centrality), because ``_build_graph``
-        #     auto-creates a node for an unknown endpoint and PageRank is
-        #     normalised over all nodes, so an edge added earlier shifts every
-        #     ``centrality_score`` and can change which entities Stage 12 REMOVES.
-        #   * AFTER Stages 13-14 too, purely so their inputs are unchanged.
-        #
-        # What the stage still does is classify (RELATED_TO / NOVEL, with
-        # falsifiable evidence) and surface alias review candidates — the report
-        # N.4d's gap loop consumes. It remains strictly non-destructive: it writes
-        # to ``properties`` and nothing else.
+        # Position: after ontology validation and graph centrality, where N.4b
+        # put it. Since the stage no longer emits relations the constraints that
+        # motivated that position are inert — and the N.4d.0 review showed by
+        # mutation that these workflow tests do NOT catch a misplaced producer of
+        # the shape that mattered (an edge into an existing, off-batch node). The
+        # position is kept to avoid churn, NOT because it is guarded. Anyone
+        # reintroducing a producer must re-establish the guarantee with a test
+        # using an OFF-BATCH endpoint, because both N.4b blockers are still real:
+        # the ontology constraint filter drops a relation whose endpoints are not
+        # in the batch, and the graph analyser turns an unknown endpoint into a
+        # phantom node that shifts every PageRank score.
         concept_alignment_report: Optional[dict[str, Any]] = None
         align_cfg = self._config.concept_alignment
         if align_cfg.enabled:
@@ -692,7 +682,7 @@ class FilteringWorkflow:
             # happens per branch. "Will not classify anything" is only true when
             # KG resolution is off (nothing is marked ``is_new``); with a missing
             # repo or ontology the stage still RUNS and writes NOVEL verdicts —
-            # which N.4c turns into ontology gaps. Over-claiming in the log is the
+            # which N.4d.4 will turn into ontology gaps. Over-claiming in the log is the
             # same defect class this track keeps having to fix in its evidence.
             nothing_to_classify = not self._config.kg_resolution.enabled
             if nothing_to_classify:

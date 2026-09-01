@@ -14,9 +14,11 @@ So the load-bearing assertions here are:
 * centrality scores are identical with the stage on and off;
 * the stage is non-destructive — no entity is removed, merged or re-typed by it.
 
-The placement assertions are kept even though nothing is emitted today: they are
-what the N.4b review established, and they are what would notice a future producer
-silently reintroducing either blocker.
+The placement assertions are kept even though nothing is emitted today, but NOT
+as a guard: the N.4d.0 review showed by mutation that a producer emitting the
+shape that actually mattered — an edge into an existing, OFF-BATCH node — passes
+all of them. They assert the stage is inert, nothing more. Whoever reintroduces a
+producer must add a test with an off-batch endpoint.
 """
 
 from __future__ import annotations
@@ -168,13 +170,13 @@ async def test_centrality_is_identical_with_the_stage_on_and_off():
 
 
 async def test_stage_does_not_change_which_entities_survive_centrality():
-    """Discriminating by construction: the floor sits BETWEEN the two scores.
+    """The stage must not change the surviving set.
 
-    Measured on this fixture, the two entities score 0.5 each without a seed and
-    0.25974 each once a seed's phantom node joins the graph. A floor of 0.4
-    therefore keeps both in the correct placement and would remove BOTH if the
-    stage ran before centrality — so unlike an equality-of-scores assertion, this
-    one fails loudly on a misplacement rather than merely differing.
+    The floor sits at 0.4 while both entities score 0.5, which was chosen in N.4b
+    to be discriminating against a seed's phantom node. With no producer left
+    there is no phantom node, so this now asserts only that the stage is inert
+    here — it does NOT prove a misplacement would be caught (the N.4d.0 review
+    disproved that by mutation).
     """
     cfg = dict(centrality=True, centrality_min_score=0.4)
     off = await _run(_config(alignment=False, **cfg))
@@ -195,9 +197,6 @@ async def test_stage_is_add_only_for_entities():
     assert {e.text for e in on.entities} == {e.text for e in off.entities}
     assert {e.label for e in on.entities} == {e.label for e in off.entities}
     assert len(on.removed_entities) == len(off.removed_entities)
-
-
-
 
 
 # ---------------------------------------------------------------------------
