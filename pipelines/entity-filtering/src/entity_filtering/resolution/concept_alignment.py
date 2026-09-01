@@ -16,9 +16,23 @@ This module classifies a NOVEL concept RELATIVE to the existing graph:
   ontology GAP for ``OntologyEvolutionAgent``, which is exactly why the
   ``reason_code`` below has to be trustworthy.
 
-Scope of N.4a: **verdicts + evidence only**. No relation seeding and no workflow
-stage — placement is N.4b, the gap loop and DI/env reachability are N.4c. See
-``docs/tracks/N-evidence-first-extraction/plan.md`` §N.4 (v2).
+Scope: N.4a established the verdicts and their evidence; N.4b added
+:func:`build_is_a_seeds` and the workflow stage that places them. The gap loop
+(a NOVEL verdict becoming an ontology gap), ``BROADER_THAN`` reachability and its
+descendant sweep are N.4c. See ``docs/tracks/N-evidence-first-extraction/plan.md``
+§N.4 (v2).
+
+Where the stage runs, and why it matters (D-N4-4)
+=================================================
+The stage is placed AFTER ontology validation and AFTER graph centrality. That is
+not a detail — it is the fix for the two blockers that sank the first attempt at
+this phase. The ontology constraint filter drops any relation whose endpoints are
+not among the batch's entities, and a seeded edge points at an EXISTING graph node
+by construction, so running before it discarded 100% of the output silently while
+the report still counted it. And the graph analyser auto-creates a node for an
+unknown edge endpoint, so an edge added before centrality shifts every entity's
+PageRank and can change which entities get REMOVED below the centrality floor —
+which would make this "non-destructive" pass destructive at workflow level.
 
 Evidence discipline (D-N4-7)
 ============================
@@ -232,7 +246,10 @@ def resolve_types(
 
 
 def type_chain_subsumption(
-    ancestors: Sequence[str], candidates: List[Dict[str, Any]]
+    ancestors: Sequence[str],
+    candidates: List[Dict[str, Any]],
+    *,
+    canonical_type: Optional[str] = None,
 ) -> Optional[Alignment]:
     """NARROWER_THAN when an ancestor TYPE is MATERIALISED as a graph node.
 
@@ -270,6 +287,10 @@ def type_chain_subsumption(
             ),
             target_id=str(cand.get("id", "") or "") or None,
             target_name=_candidate_name(cand),
+            # C3: NARROWER_THAN is the one verdict N.4b seeds, so it must carry
+            # the canonical type that D-N4-5 stamps on both endpoints. The target
+            # was fetched BY this type, so it holds for both sides.
+            canonical_type=canonical_type,
         )
     return None
 
@@ -550,7 +571,71 @@ def lexical_alias_candidates(
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator (N.4a: verdicts + evidence only — no seeding, no workflow stage)
+# Seeding (Track N.4b) — turn an accepted NARROWER_THAN into an is_a edge
+# ---------------------------------------------------------------------------
+
+#: Provenance tag on every seeded edge. One `WHERE relation_source = ...` drops
+#: the entire pass, which is what makes the alignment reversible.
+RELATION_SOURCE = "concept_alignment"
+
+#: The relation type a NARROWER_THAN verdict materialises. Matches the type N.2's
+#: Hearst miner seeds, so downstream consumers see one `is_a` vocabulary.
+IS_A = "is_a"
+
+
+def build_is_a_seeds(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Relation dicts for every ``NARROWER_THAN`` with a MATERIALISED target.
+
+    Reads the ``alignment_*`` properties :meth:`ConceptAligner._enrich` wrote, so
+    seeding stays a pure function of the recorded verdict — an operator can audit
+    the verdict and the edge separately, and re-running produces the same set.
+
+    Three deliberate restrictions:
+
+    * **Only NARROWER_THAN.** ``RELATED_TO`` is a link, not a subsumption, and
+      must never become an ``is_a``. ``BROADER_THAN`` cannot occur yet (D-N4-10),
+      and when it does it needs the descendant sweep of D-N4-11 rather than a
+      single edge — so it is explicitly not seeded here.
+    * **Only a materialised target.** A verdict whose broader concept is just a
+      TYPE name (``target_id is None``) is recorded in properties but not seeded;
+      an edge to a node that does not exist is a dangling edge.
+    * **Both endpoint types stamped** (D-N4-5). The target was fetched BY the
+      entity's canonical type, so that one value types both ends. Without it the
+      persist path falls back to name-only resolution — the cross-type homograph
+      mis-binding Track O.1 exists to prevent.
+    """
+    seeds: List[Dict[str, Any]] = []
+    for entity in entities:
+        props = _props(entity)
+        if props.get("concept_alignment") != NARROWER_THAN:
+            continue
+        target_name = props.get("alignment_target_name")
+        target_id = props.get("alignment_target_id")
+        source = str(entity.get("text", "") or "").strip()
+        if not target_name or not target_id or not source:
+            continue
+        canonical = props.get("alignment_canonical_type")
+        seeds.append(
+            {
+                "source_entity": source,
+                "target_entity": str(target_name),
+                "relation_type": IS_A,
+                "confidence": float(props.get("alignment_confidence") or 0.0),
+                "source_type": canonical,
+                "target_type": canonical,
+                "properties": {
+                    "relation_source": RELATION_SOURCE,
+                    "alignment_method": props.get("alignment_method"),
+                    "alignment_evidence": props.get("alignment_evidence"),
+                    "alignment_target_id": target_id,
+                },
+            }
+        )
+    return seeds
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator (verdicts + evidence; seeding is the caller's step, above)
 # ---------------------------------------------------------------------------
 
 
@@ -633,7 +718,7 @@ class ConceptAligner:
 
         cache: Dict[str, _Fetch] = {}
         decided: List[Tuple[Dict[str, Any], Alignment]] = []
-        pending: List[Tuple[Dict[str, Any], Dict[str, Any], float, str]] = []
+        pending: List[Tuple[Dict[str, Any], Dict[str, Any], float, str, str]] = []
 
         for entity in novel:
             try:
@@ -712,6 +797,8 @@ class ConceptAligner:
                 self._novel(
                     "no repository was supplied — the graph was never queried",
                     EV_NO_REPO,
+                    # C4: the type resolved fine; only the repo was absent. Keep it.
+                    canonical_type=canonical,
                 ),
                 None,
                 [],
@@ -758,7 +845,9 @@ class ConceptAligner:
         )
 
         if self._type_chain_enabled:
-            hit = type_chain_subsumption(ancestors, candidates)
+            hit = type_chain_subsumption(
+                ancestors, candidates, canonical_type=canonical
+            )
             if hit is not None:
                 return hit, None, aliases
 
@@ -768,7 +857,10 @@ class ConceptAligner:
         if reason is not None:
             return (
                 self._novel(
-                    self._probe_evidence(reason, probe, canonical, len(candidates)),
+                    # C2: a "nothing was compared" outcome is just as much a claim
+                    # about a capped sample as a distance is — disclose it here too.
+                    self._probe_evidence(reason, probe, canonical, len(candidates))
+                    + (sampled if reason != EV_NO_QUERY_VECTOR else ""),
                     reason,
                     canonical_type=canonical,
                 ),
@@ -777,7 +869,21 @@ class ConceptAligner:
             )
 
         nearest, score = probe.nearest, probe.score
-        assert nearest is not None  # reason_code() is None ⇒ something was compared
+        if nearest is None:
+            # C5: unreachable by construction (reason_code() is None ⇒ compared > 0
+            # ⇒ nearest is set), but expressed as a branch rather than an `assert`,
+            # which vanishes under `python -O` — a control guard must not be
+            # optimised away on a path that writes evidence.
+            return (
+                self._novel(
+                    "the neighbour probe reported a comparison but produced no "
+                    "candidate; nothing was established",
+                    EV_ERROR,
+                    canonical_type=canonical,
+                ),
+                None,
+                aliases,
+            )
         if score >= self._match_ceiling:
             return (
                 Alignment(
@@ -814,7 +920,7 @@ class ConceptAligner:
                 None,
                 aliases,
             )
-        return None, (nearest, score, canonical), aliases
+        return None, (nearest, score, canonical, sampled), aliases
 
     def _sample_note(self, canonical: str, fetched: int) -> str:
         """Disclose that the candidate set is a capped, unordered sample (M4)."""
@@ -876,7 +982,7 @@ class ConceptAligner:
 
     async def _judge(
         self,
-        pending: List[Tuple[Dict[str, Any], Dict[str, Any], float, str]],
+        pending: List[Tuple[Dict[str, Any], Dict[str, Any], float, str, str]],
         report: Dict[str, Any],
     ) -> List[Tuple[Dict[str, Any], Alignment]]:
         """One batched call over the ambiguous band; silence/failure → NOVEL.
@@ -887,7 +993,7 @@ class ConceptAligner:
         """
         items: List[JudgeItem] = [
             (str(i), str(e.get("text", "") or ""), [_candidate_name(near)])
-            for i, (e, near, _, _) in enumerate(pending)
+            for i, (e, near, _, _, _) in enumerate(pending)
         ]
         verdicts: Dict[str, Tuple[str, Optional[str]]] = {}
         if self._judge_enabled and self._llm_caller is not None:
@@ -906,7 +1012,7 @@ class ConceptAligner:
         report["judged_count"] = len(verdicts)
 
         out: List[Tuple[Dict[str, Any], Alignment]] = []
-        for i, (entity, nearest, score, canonical) in enumerate(pending):
+        for i, (entity, nearest, score, canonical, sampled) in enumerate(pending):
             item_id = str(i)
             ruled = item_id in verdicts  # only THIS item's own ruling counts
             verdict, target = verdicts.get(item_id, (NOVEL, None))
@@ -917,7 +1023,8 @@ class ConceptAligner:
                     confidence=_CONF_JUDGE,
                     similarity=round(score, 6),
                     evidence=(
-                        f"judge linked it to {target!r} (nearest cosine {score:.3f})"
+                        f"judge linked it to {target!r} (nearest cosine "
+                        f"{score:.3f}){sampled}"
                     ),
                     target_id=str(nearest.get("id", "") or "") or None,
                     target_name=target or _candidate_name(nearest),
@@ -931,7 +1038,7 @@ class ConceptAligner:
                     similarity=round(score, 6),
                     evidence=(
                         f"judge found no link (nearest cosine {score:.3f} to "
-                        f"{_candidate_name(nearest)!r})"
+                        f"{_candidate_name(nearest)!r}){sampled}"
                     ),
                     reason_code=EV_NONE_CLOSE,
                     canonical_type=canonical,
@@ -946,7 +1053,7 @@ class ConceptAligner:
                     evidence=(
                         f"nearest cosine {score:.3f} to "
                         f"{_candidate_name(nearest)!r} is inconclusive and no judge "
-                        "verdict was obtained for this concept"
+                        f"verdict was obtained for this concept{sampled}"
                     ),
                     reason_code=EV_NONE_CLOSE,
                     canonical_type=canonical,
@@ -987,6 +1094,9 @@ __all__ = [
     "Alignment",
     "AliasCandidate",
     "ConceptAligner",
+    "build_is_a_seeds",
+    "RELATION_SOURCE",
+    "IS_A",
     "JudgeItem",
     "NeighbourProbe",
     "NARROWER_THAN",

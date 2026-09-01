@@ -225,3 +225,11 @@ class FilteredResult(ExtractionResult):
         default=None,
         description="KG entity resolution statistics",
     )
+    concept_alignment_report: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Concept-alignment statistics (Track N.4): how the novel concepts "
+            "were placed relative to the graph — verdict/method/reason counts, "
+            "alias review candidates, and the seeded is_a edges."
+        ),
+    )

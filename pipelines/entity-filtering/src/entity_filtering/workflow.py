@@ -25,26 +25,30 @@ from entity_filtering.deduplication.embedding_deduplicator import (
 )
 from entity_filtering.deduplication.entity_deduplicator import EntityDeduplicator
 from entity_filtering.deduplication.fuzzy_resolver import FuzzyResolver
+from entity_filtering.deduplication.semantic_blocker import SemanticBlocker
 from entity_filtering.filters.noise_filter import NoiseFilter
 from entity_filtering.filters.normalizer import EntityNormalizer
 from entity_filtering.filters.reclassifier import EntityReclassifier
+from entity_filtering.resolution import orphan_connector as _orphan_connector
+from entity_filtering.resolution.concept_alignment import (
+    ConceptAligner,
+    build_is_a_seeds,
+)
 from entity_filtering.resolution.contextual_clusterer import ContextualClusterer
 from entity_filtering.resolution.embedding_resolver import EmbeddingResolver
 from entity_filtering.resolution.entity_linker import (
     DBpediaSpotlightLinker,
     EntityLinker,
 )
-from entity_filtering.resolution.kg_resolver import (
-    EntityRepositoryProtocol,
-    KGResolver,
-)
-from entity_filtering.deduplication.semantic_blocker import SemanticBlocker
 from entity_filtering.resolution.incremental_resolver import (
     EntityCluster,
     IncrementalResolver,
 )
+from entity_filtering.resolution.kg_resolver import (
+    EntityRepositoryProtocol,
+    KGResolver,
+)
 from entity_filtering.resolution.llm_matcher import LLMMatcher
-from entity_filtering.resolution import orphan_connector as _orphan_connector
 from entity_filtering.scoring.edge_predictor import EdgePredictor
 from entity_filtering.validation.graph_analyzer import GraphAnalyzer
 from entity_filtering.validation.ontology_constraint_filter import (
@@ -90,6 +94,11 @@ class FilteringWorkflow:
         ontology: Optional[Any] = None,
     ) -> None:
         self._config = config or FilteringConfig()
+        # Kept for Stage 15 (Track N.4 concept alignment), which needs the
+        # same repository Stage 10 uses plus the applied ontology for the
+        # canonical type resolution.
+        self._entity_repo = entity_repo
+        self._ontology = ontology
 
         self._noise_filter = NoiseFilter(
             custom_patterns=self._config.custom_noise_patterns,
@@ -289,6 +298,7 @@ class FilteringWorkflow:
             "_orphan_connector.OrphanEntityRepoProtocol"
         ] = None,
         orphan_llm_caller: Optional[Any] = None,
+        alignment_llm_caller: Optional[Any] = None,
     ) -> FilteredResult:
         """Run the full filtering pipeline.
 
@@ -646,6 +656,81 @@ class FilteringWorkflow:
             )
 
         # ------------------------------------------------------------------
+        # Stage 15: Concept alignment (Track N.4)
+        # ------------------------------------------------------------------
+        # Places the entities Stage 10 marked ``is_new`` relative to the graph
+        # (NARROWER_THAN / BROADER_THAN / RELATED_TO / NOVEL) instead of leaving
+        # them floating, and seeds an ``is_a`` edge for a NARROWER verdict that
+        # has a materialised target. Like Stage 14 this is strictly ADD-ONLY: it
+        # enriches ``properties`` and appends relations, and never merges,
+        # re-types or removes an entity.
+        #
+        # Placement (D-N4-4) — this is the fix for the two blockers that sank the
+        # first attempt at this phase, so the ordering is load-bearing:
+        #
+        #   * AFTER Stage 11 (ontology constraint filter). That filter drops any
+        #     relation whose endpoints are not among the batch's entities, and a
+        #     seeded edge points at an EXISTING graph node by construction — so
+        #     running before it discarded 100% of the seeds silently while the
+        #     report still counted them. Same bypass decision as Stage 14, with
+        #     the same trade-off: a seeded ``relation_type`` is not re-validated.
+        #     Here the risk is far smaller than for the orphan-connector, because
+        #     the type is the fixed constant ``is_a`` (the same one N.2's Hearst
+        #     miner seeds) rather than an LLM-chosen string.
+        #   * AFTER Stage 12 (graph centrality). ``_build_graph`` auto-creates a
+        #     node for an unknown edge endpoint, and PageRank is normalised over
+        #     all nodes — so an edge added earlier would shift every entity's
+        #     ``centrality_score`` and could change which entities Stage 12
+        #     REMOVES. That would make this non-destructive pass destructive.
+        #   * AFTER Stages 13-14 as well, purely so their inputs stay identical
+        #     whether or not alignment runs.
+        concept_alignment_report: Optional[dict[str, Any]] = None
+        align_cfg = self._config.concept_alignment
+        if align_cfg.enabled:
+            # Mirror Stage 14's misconfiguration WARNING: the stage skips or
+            # no-ops silently otherwise, which hides a wiring mistake.
+            missing_align: list[str] = []
+            if self._entity_repo is None:
+                missing_align.append("entity_repo")
+            if self._ontology is None:
+                missing_align.append("ontology")
+            if not self._config.kg_resolution.enabled:
+                missing_align.append("kg_resolution.enabled")
+            if missing_align:
+                logger.warning(
+                    "Concept alignment enabled but will not classify anything: "
+                    "missing {missing}",
+                    missing=missing_align,
+                )
+
+            aligner = ConceptAligner(
+                self._entity_repo,
+                schemas=[self._ontology] if self._ontology is not None else None,
+                llm_caller=alignment_llm_caller,
+                judge_enabled=align_cfg.judge_enabled,
+                type_chain_enabled=align_cfg.type_chain_enabled,
+                related_floor=align_cfg.related_floor,
+                match_ceiling=align_cfg.match_ceiling,
+                max_candidates=align_cfg.max_candidates,
+                min_inner_tokens=align_cfg.min_inner_tokens,
+            )
+            deduped_entities, concept_alignment_report = await aligner.align(
+                deduped_entities
+            )
+            seeded = (
+                build_is_a_seeds(deduped_entities) if align_cfg.seed_is_a else []
+            )
+            filtered_relations.extend(seeded)
+            # Report what SURVIVES, not what was produced: the count must not
+            # outlive the edges it describes (the attempt-1 report lied here).
+            concept_alignment_report["seeded_is_a"] = len(seeded)
+            logger.debug(
+                "After concept alignment: {} aligned, {} is_a seeded",
+                concept_alignment_report.get("aligned_count", 0),
+                len(seeded),
+            )
+
+        # ------------------------------------------------------------------
         # Build result
         # ------------------------------------------------------------------
         result_entities = [ExtractedEntity(**e) for e in deduped_entities]
@@ -664,6 +749,7 @@ class FilteringWorkflow:
             predicted_edges=predicted_relations,
             linked_entities=linked_entities,
             kg_resolution_report=kg_resolution_report,
+            concept_alignment_report=concept_alignment_report,
             validation_report=validation_report,
             metadata={
                 **extraction_result.metadata,
