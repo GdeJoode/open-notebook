@@ -1,11 +1,24 @@
 # Track N — Evidence-first extraction & abstention — Sprint Plan
 
-> Status: 🔨 IN PROGRESS (2026-08-31). **N.1 SHIPPED (PR #78)** — pre-LLM
-> candidate anchors (TF-IDF + spaCy-noun-chunks-lazy + regex fallback + EntityRuler
-> domain-NER stub + budget-safe prompt threading); review APPROVED. **Resume at
-> N.1-deps** (add `spacy` + `en_core_web_sm` to the ontology-extraction deps +
-> container build — isolated from the N.1 code review) **then N.2** (Hearst is-a
-> miner). N.3–N.5 follow.
+> Status: 🔨 IN PROGRESS (2026-09-01). **N.1 fully SHIPPED** across PRs #78
+> (candidate anchors: TF-IDF + noun-chunks + EntityRuler stub + budget-safe prompt
+> threading), #79 (N.1-deps: `spacy` + `en_core_web_sm` first-class), #80
+> (language-aware NL/EN model selection + complementary spaCy+regex merge +
+> edge-word cleanup) — all review-APPROVED and live-validated on real Dutch (Regio
+> Deal, lang→nl) AND English (academic paper, lang→en) PDFs. Model decision
+> resolved: **NL + EN side-by-side, picked per document.**
+>
+> **▶ RESUME AT N.2 — Hearst is-a miner** (deterministic high-precision `is_a`
+> relation seeds). Then N.3 (abstention gate — the English-paper test showed the
+> candidate layer over-generates generic phrases on academic prose, so N.3's
+> not-a-concept gate is the measured next win), N.4 (concept alignment), N.5
+> (regression gate + docs). The **evidence-packet clustering stays DEFERRED —
+> measure first** (user decision, §5).
+>
+> Live-testing lessons folded in: en_core_web_sm on Dutch produced verbal-phrase
+> junk → per-document model selection; both spaCy models fragment long compound
+> proper names → merge spaCy WITH the regex source; academic prose over-generates
+> generic noun-phrases → N.3 abstention matters.
 > Origin: assessment of a Medium article ("Which parts of ontology discovery
 > actually need an LLM?") against open-notebook's KG stack.
 > Scope: the two applicable, high-value wins the article surfaces — a **pre-LLM
