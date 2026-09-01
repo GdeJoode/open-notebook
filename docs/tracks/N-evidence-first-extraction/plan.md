@@ -70,13 +70,22 @@
 > Attempt 1 searched only `apps/`+`pipelines/` for a *directory* and wrongly recorded
 > it as missing. v2 wires it: a NOVEL verdict records an ontology gap.
 >
-> **▶ RESUME AT N.4a** (subsumption from the ontology's `parent_type` chain only,
-> verdicts without seeding) → N.4b (placement + seeding that survives the pipeline,
-> with the mandatory workflow-level integration test) → N.4c (gap loop +
-> reachability). One open decision for the user is recorded in the N.4 chapter (what
-> the lexical signal becomes now that it cannot mean `is_a`). Then N.5 (regression
-> gate + docs; also lands the N.2 + N.3 follow-ups above). The **evidence-packet
-> clustering stays DEFERRED — measure first** (user decision, §5).
+> **N.4a IN REVIEW** on `feature/track-n4a-ontology-subsumption` — ontology-grounded
+> verdicts + evidence, no seeding and no workflow stage. Attempt 1 of N.4a returned
+> REVISIONS_NEEDED (4 blockers + 4 majors, all one class: evidence that reported an
+> OBSERVATION as the inference it would license); revised in `27e5c64` — reason
+> codes now name observations with exactly one cause each, judge items are keyed by
+> index rather than surface form, and `resolve_types` is finally asserted against
+> the REAL `canonical_bridge` instead of a stub of itself.
+>
+> **▶ THEN N.4b** (placement + seeding that survives ontology validation and
+> centrality, with the mandatory workflow-level integration test) → **N.4c** (gap
+> loop + `BROADER_THAN` reachability + the descendant sweep). All N.4 decisions are
+> resolved: D-N4-9 (the lexical signal becomes an alias candidate), D-N4-10
+> (BROADER_THAN must be reachable), D-N4-11 (an accepted BROADER_THAN sweeps for
+> all its other descendants). Then N.5 (regression gate + docs; also lands the N.2 +
+> N.3 follow-ups above). The **evidence-packet clustering stays DEFERRED — measure
+> first** (user decision, §5).
 >
 > Unrelated pre-existing breakage noticed during N.4 review (NOT from Track N):
 > `pipelines/entity-filtering/tests/test_llm_matcher.py::TestMatchPair::
@@ -310,6 +319,7 @@ approve/reject/implement, plus `list_gaps` / `get_gap_statistics`), wired into
 | **D-N4-7** | Evidence must be **falsifiable**: never assert "nothing comparable exists" when no candidates were *fetched*. Distinguish `no_candidates_fetched` from `candidates_fetched_none_close`. | An evidence-first track cannot stamp confident falsehoods (M5). |
 | **D-N4-8** | Reachability is part of the phase, not a follow-up: an env flag **and** DI wiring in `entity_extraction_service`, with a WARNING on enabled-but-unwired (the orphan-connector pattern). | v1's judge was unreachable in every real run (M7). |
 | **D-N4-10** | **`BROADER_THAN` must be reachable**, delivered in N.4c via inverse chain lookup and/or type-level alignment of `SchemaProposal`s — still ontological evidence only, never lexical or cosine. | N.4a leaves it unreachable (the chain only walks upward), which would silently reduce the taxonomy to three values. Full statement in the N.4c section. |
+| **D-N4-11** | An **accepted `BROADER_THAN` triggers a descendant sweep**: every other concept already in the graph that falls under the new broader concept is attached too. Exhaustive-or-declared-partial, idempotent, reversible, and sharing one rule with the per-entity path. | BROADER_THAN is one-to-many; attaching only the triggering child leaves a half-built hierarchy whose shape depends on extraction order. Full statement in the N.4c section. |
 
 **D-N4-9 (RESOLVED 2026-09-01, user)** — the lexical signal becomes an **alias
 candidate**, not `is_a` and not a verdict. `lexical_alias_candidates` emits
@@ -350,7 +360,7 @@ remains possible later.
   blockers): seeds survive validation, do not shift centrality, do not change which
   entities stage 12 removes, and `ExtractedRelation(**seed)` validates.
 
-**N.4c — Gap loop + reachability + BROADER_THAN** — ~1–1.5d
+**N.4c — Gap loop + reachability + BROADER_THAN + descendant sweep** — ~1.5–2d
 - **Wire** `OntologyEvolutionAgent.record_gap` on every NOVEL verdict (D-N4-6),
   carrying the entity text, the rich label as `entity_type_guess`, and the chunk
   context; surface `get_gap_statistics` in the alignment report.
@@ -393,6 +403,45 @@ remains possible later.
 > ordinary novel INSTANCE, `NARROWER/BROADER` will remain rare and `RELATED/NOVEL`
 > will carry the phase's value — which is why the gap loop (D-N4-6) is the part
 > that pays off for instances, and BROADER_THAN pays off for proposed types.
+
+> **D-N4-11 — an accepted `BROADER_THAN` triggers a descendant SWEEP (user,
+> 2026-09-01).**
+> `BROADER_THAN` is inherently **one-to-many**, unlike the other three verdicts.
+> The existing concept that triggered the discovery is just the *first* child
+> found; the same new broader concept very likely subsumes others already in the
+> graph. Emitting only the triggering edge leaves a half-built hierarchy — one
+> sibling gets an `is_a`, its equals do not — which is both wrong and unstable
+> (the outcome would depend on which entity happened to be extracted first).
+>
+> So: **once a `BROADER_THAN` is ACCEPTED, the pipeline must sweep for every other
+> concept that falls under the new broader concept and attach them too.**
+> Requirements for that sweep:
+>
+> - **Trigger = acceptance, not classification.** A verdict is a proposal; the
+>   sweep is a graph-wide write, so it hangs off the acceptance step (an operator,
+>   or `OntologyEvolutionAgent.approve_proposal` when the broader concept arrives
+>   as a `SchemaProposal`), never off per-batch classification.
+> - **Same evidence rule (D-N4-2).** The sweep reuses the inverse chain lookup that
+>   established the verdict — enumerate every ontology type whose declared chain
+>   contains the new concept, then fetch those types' entities — simply without
+>   stopping at the first hit. No lexical or cosine expansion: a sweep multiplies
+>   whatever error the evidence rule allows.
+> - **Completeness must be honest.** The M4 sampling problem bites hardest here: a
+>   sweep that sees only a `LIMIT`-capped, unordered page builds a partial
+>   hierarchy and then looks complete. The sweep must paginate to exhaustion, or
+>   mark its result explicitly partial and re-runnable.
+> - **Idempotent + reversible.** Re-running must not duplicate edges; every edge
+>   carries the same `relation_source` provenance so the whole sweep can be
+>   dropped as one unit.
+> - **Also applies on later arrivals.** A concept extracted *after* the sweep that
+>   falls under the broader concept must still be attached — i.e. the normal
+>   per-entity NARROWER path must find it, so the sweep and the per-entity tier
+>   have to agree on the same rule rather than being two implementations.
+>
+> **AC additions**: accepting a BROADER_THAN over a graph holding N qualifying
+> concepts attaches all N (not just the trigger); re-running the sweep changes
+> nothing; a capped sweep reports itself partial; a qualifying concept extracted
+> after the sweep is still attached by the per-entity path.
 
 #### Salvage from attempt 1 (`da0bda6`)
 Carry forward, do not rebuild: the four-verdict taxonomy + `Alignment` record; the
