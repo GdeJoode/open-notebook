@@ -10,6 +10,9 @@ Pure business logic for the six edit ops the Schema-tab UI exposes:
   consult ``accepted_extensions`` and remap.
 * ``split_type`` — record a split of one type into N, with an LLM hint.
 * ``delete_type`` — soft-delete by adding the name to ``excluded_types``.
+* ``reparent_type`` — record that N types now hang under a different parent
+  (Track N.4d.3). This is how an accepted ``BROADER_THAN`` placement is applied:
+  as a schema edit, on the curator's decision, never silently.
 
 Design notes
 ============
@@ -426,6 +429,113 @@ class SchemaEditService:
             },
         )
 
+    async def reparent_type(
+        self,
+        notebook_id: str,
+        type_names: List[str],
+        new_parent: str,
+    ) -> NotebookSchema:
+        """Record that ``type_names`` now hang under ``new_parent``.
+
+        This is the write half of Track N.4d.3. ``type_placement`` decides where
+        a PROPOSED type may go and which of its siblings are candidates to move
+        under it; the judge selects among those candidates; this records the
+        curator's acceptance. Nothing here re-derives the placement — a service
+        that re-judged at write time could disagree with what the curator saw.
+
+        One entry per moved type::
+
+            {
+                "reparent_id": "reparent::Article->Report",
+                "op": "reparent",
+                "type_name": "Article",
+                "new_parent": "Report",
+                "parent_type": "Report",
+            }
+
+        N entries rather than one entry naming N types, deliberately: each is
+        separately visible in the schema browser, separately reversible, and
+        renders through the existing extension tooling without it having to learn
+        a list shape. ``parent_type`` mirrors ``new_parent`` for exactly that
+        reason (the same mirroring ``rename_type`` does with ``type_name``);
+        ``new_parent`` is the authoritative field.
+
+        The edit takes effect through
+        :func:`ontology_manager.schema_projection.project_accepted_edits`, which
+        applies these entries to COPIES of the applied ontologies. That is what
+        lets an entity of a re-parented type resolve through its new ancestor via
+        ``canonical_bridge`` with no per-entity write — the type moved, not the
+        rows.
+
+        Idempotent per (type, parent): a type already recorded as moving under
+        ``new_parent`` is skipped. Re-parenting the same type under a DIFFERENT
+        parent appends a second entry rather than rewriting the first, and the
+        projection applies entries in order, so the latest decision wins while the
+        earlier one stays in the audit trail.
+
+        Emits ONE event for the whole call, listing only the types this call
+        actually moved.
+
+        Raises ``ValueError`` when ``new_parent`` is blank, when no distinct type
+        name is given, or when a type is moved under itself.
+        """
+        parent = (new_parent or "").strip()
+        if not parent:
+            raise ValueError("reparent requires a non-empty new_parent")
+
+        wanted: List[str] = []
+        seen: set = set()
+        for name in type_names or []:
+            cleaned = (name or "").strip()
+            if not cleaned or cleaned.lower() in seen:
+                continue
+            if cleaned.lower() == parent.lower():
+                raise ValueError(
+                    f"cannot re-parent {cleaned!r} under itself"
+                )
+            seen.add(cleaned.lower())
+            wanted.append(cleaned)
+        if not wanted:
+            raise ValueError(
+                f"reparent requires at least one type name; got {type_names!r}"
+            )
+
+        schema = await self._load_or_raise(notebook_id)
+        # No isinstance guard: `NotebookSchema.accepted_extensions` is typed
+        # `List[Dict[str, Any]]` and Pydantic rejects a non-dict row at load, so
+        # a guard here could not be reached — and an unreachable fence reads as a
+        # demonstrated one.
+        existing = {ext.get("reparent_id") for ext in schema.accepted_extensions}
+
+        moved: List[str] = []
+        for name in wanted:
+            reparent_id = self._reparent_id(name, parent)
+            if reparent_id in existing:
+                continue  # already recorded — idempotent
+            schema.accepted_extensions.append(
+                {
+                    "reparent_id": reparent_id,
+                    "op": "reparent",
+                    "type_name": name,
+                    "new_parent": parent,
+                    "parent_type": parent,
+                }
+            )
+            moved.append(name)
+
+        if not moved:
+            return schema  # idempotent no-op
+
+        return await self._persist(
+            schema,
+            notebook_id,
+            {
+                "op": "reparent",
+                "type_names": moved,
+                "new_parent": parent,
+            },
+        )
+
     async def delete_type(
         self,
         notebook_id: str,
@@ -465,6 +575,13 @@ class SchemaEditService:
     def _merge_id(source_types: List[str], merged_name: str) -> str:
         joined = "+".join(t.replace("::", "_") for t in source_types)
         return f"merge::{joined}->{merged_name.replace('::', '_')}"
+
+    @staticmethod
+    def _reparent_id(type_name: str, new_parent: str) -> str:
+        return (
+            f"reparent::{type_name.replace('::', '_')}->"
+            f"{new_parent.replace('::', '_')}"
+        )
 
     @staticmethod
     def _split_id(type_name: str, into: List[str], criterion: str) -> str:

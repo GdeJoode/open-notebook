@@ -186,6 +186,12 @@ def _to_camel_case_uri_fragment(name: str) -> str:
     return fragment
 
 
+# N.4d.3: the discriminator on an ``accepted_extensions`` entry that records a
+# re-parent rather than a new type. Defined here (not imported from the service)
+# to keep the router free of a service-layer import for one string.
+_REPARENT_OP = "reparent"
+
+
 def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
     """Add accepted-extension classes (and their properties) to ``graph``.
 
@@ -209,6 +215,16 @@ def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
     ``_to_camel_case_uri_fragment``; the original human-readable string
     is written to ``rdfs:label``. The same transform is applied to
     ``parent_type`` so the ``rdfs:subClassOf`` URI also stays valid.
+
+    N.4d.3 — a ``reparent`` entry REPLACES the class's declared parent instead
+    of adding a second one. Without that the exported graph would give a
+    re-parented type two ``rdfs:subClassOf`` edges, which is a different
+    statement from the one the curator made: the base's parent and the new one
+    would both be true. It is not counted as a class added either — the class
+    already existed. The class URI is safe to target because the base emits
+    ``ON[name]`` while this function emits ``ON[camel_case(name)]``, and no
+    shipped ontology has a type name where those differ (measured: zero names
+    containing a space or a slash across all eleven).
 
     Returns the number of new ``owl:Class`` declarations actually added.
     Defensive of missing keys: an extension dict without ``type_name`` is
@@ -242,7 +258,13 @@ def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
         # Preserve the original human-readable name — this is the value
         # users see in Protégé / a KG browser regardless of URI mangling.
         graph.add((cls_uri, RDFS.label, Literal(type_name)))
-        classes_added += 1
+
+        if ext.get("op") == _REPARENT_OP:
+            # A re-parent moves an EXISTING class; drop the parent it was
+            # declared with so the new one replaces it rather than joining it.
+            graph.remove((cls_uri, RDFS.subClassOf, None))
+        else:
+            classes_added += 1
 
         parent = ext.get("parent_type")
         if isinstance(parent, str) and parent:
@@ -786,6 +808,18 @@ class MergeTypesRequest(BaseModel):
     merged_name: str = Field(min_length=1)
 
 
+class ReparentTypeRequest(BaseModel):
+    """Payload for ``POST /api/notebooks/{id}/schema/reparent`` (N.4d.3).
+
+    ``type_names`` are the types moving; ``new_parent`` is where they land. The
+    service raises ValueError — translated to 422 — for an empty list, a blank
+    parent, or a type moved under itself.
+    """
+
+    type_names: List[str] = Field(min_length=1)
+    new_parent: str = Field(min_length=1)
+
+
 class SplitTypeRequest(BaseModel):
     """Payload for ``POST /api/notebooks/{id}/schema/split``.
 
@@ -889,6 +923,9 @@ async def _ensure_notebook_exists(
 #  4. ``ontology_extraction.prompts.pass2._format_accepted_extensions``
 #     — strips sentinels at the prompt-render seam as a final guard
 #     against any consumer that forgets the upstream filter.
+#  4b. ``ontology_manager.schema_projection.project_accepted_edits`` (N.4d.3)
+#     — strips sentinels before projecting the notebook's accepted edits onto
+#     its ontologies, so the marker never becomes a defined entity type.
 #  5. ``SchemaBrowser.tsx`` — frontend belt-and-braces filter using
 #     ``is_resume_sentinel === true`` OR ``type_name.startsWith('_')``.
 #
@@ -1147,6 +1184,47 @@ async def split_type(
     try:
         updated = await edit_service.split_type(
             notebook_id, payload.type_name, payload.into, payload.criterion
+        )
+    except NotebookSchemaNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return _schema_to_response(notebook_id, updated)
+
+
+@router.post(
+    "/schema/reparent",
+    response_model=NotebookSchemaResponse,
+    responses={
+        404: {"description": "Notebook or schema row not found."},
+        422: {
+            "description": (
+                "reparent requires a non-empty new_parent, at least one type "
+                "name, and no type moved under itself."
+            )
+        },
+    },
+)
+async def reparent_type(
+    notebook_id: str,
+    payload: ReparentTypeRequest,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    edit_service: SchemaEditService = Depends(get_schema_edit_service),
+) -> NotebookSchemaResponse:
+    """Record that N types now hang under ``new_parent`` (Track N.4d.3).
+
+    This is how an accepted ``BROADER_THAN`` placement is applied: as a schema
+    edit, on the curator's decision. The base ontology YAML is never mutated —
+    the edit is projected onto COPIES of the applied ontologies at extraction
+    time, which is what lets entities of a moved type resolve through their new
+    ancestor without a single per-entity write.
+
+    Idempotent per (type, parent).
+    """
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        updated = await edit_service.reparent_type(
+            notebook_id, payload.type_names, payload.new_parent
         )
     except NotebookSchemaNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

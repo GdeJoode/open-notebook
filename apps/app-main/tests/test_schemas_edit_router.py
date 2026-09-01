@@ -360,3 +360,80 @@ class TestDeleteEndpoint:
         )
 
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Reparent endpoint (Track N.4d.3)
+# ---------------------------------------------------------------------------
+
+
+class TestReparentEndpoint:
+    def test_returns_200_and_forwards_the_payload(self):
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+
+        edit_service = AsyncMock(spec=SchemaEditService)
+        edit_service.reparent_type.return_value = _make_schema(
+            accepted=[
+                {
+                    "reparent_id": "reparent::Article->Publication",
+                    "op": "reparent",
+                    "type_name": "Article",
+                    "new_parent": "Publication",
+                    "parent_type": "Publication",
+                }
+            ]
+        )
+
+        client = _make_app(notebook_svc, edit_service)
+        resp = client.post(
+            f"/api/notebooks/{NOTEBOOK_ID}/schema/reparent",
+            json={"type_names": ["Article", "Report"], "new_parent": "Publication"},
+        )
+
+        assert resp.status_code == 200
+        edit_service.reparent_type.assert_awaited_once_with(
+            NOTEBOOK_ID, ["Article", "Report"], "Publication"
+        )
+
+    def test_returns_422_when_the_service_rejects_the_move(self):
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+
+        edit_service = AsyncMock(spec=SchemaEditService)
+        edit_service.reparent_type.side_effect = ValueError("under itself")
+
+        client = _make_app(notebook_svc, edit_service)
+        resp = client.post(
+            f"/api/notebooks/{NOTEBOOK_ID}/schema/reparent",
+            json={"type_names": ["Article"], "new_parent": "Article"},
+        )
+        assert resp.status_code == 422
+
+    def test_returns_422_when_no_type_is_named(self):
+        """Caught by the request model before the service is reached."""
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+        edit_service = AsyncMock(spec=SchemaEditService)
+
+        client = _make_app(notebook_svc, edit_service)
+        resp = client.post(
+            f"/api/notebooks/{NOTEBOOK_ID}/schema/reparent",
+            json={"type_names": [], "new_parent": "Publication"},
+        )
+        assert resp.status_code == 422
+        edit_service.reparent_type.assert_not_awaited()
+
+    def test_returns_404_when_the_schema_row_is_missing(self):
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+
+        edit_service = AsyncMock(spec=SchemaEditService)
+        edit_service.reparent_type.side_effect = NotebookSchemaNotFoundError("none")
+
+        client = _make_app(notebook_svc, edit_service)
+        resp = client.post(
+            f"/api/notebooks/{NOTEBOOK_ID}/schema/reparent",
+            json={"type_names": ["Article"], "new_parent": "Publication"},
+        )
+        assert resp.status_code == 404

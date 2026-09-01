@@ -146,6 +146,9 @@ def resolve_ontology_type(
        live in ``policy.yaml``; ``Deal`` / ``GovernmentService`` are declared
        only as parents). This is why the bridge stays correct whether or not
        every base ontology is in the applied set.
+    3. If the walk reaches a type that declares no ``parent_type`` but DOES
+       declare a ``schema_org_type``, terminate on that base — the same rule as
+       (1), applied to an ancestor instead of the starting type (N.4d.3).
 
     Args:
         label: The extracted ontology label (the rich domain type).
@@ -190,6 +193,32 @@ def resolve_ontology_type(
     while current is not None and depth < _MAX_WALK_DEPTH:
         parent_name = current.parent_type
         if not parent_name:
+            # N.4d.3: the chain may END on a type that roots by its schema.org
+            # base rather than by a parent_type — `general.Location`
+            # (``schema:Place``) and `general.Topic` (``schema:DefinedTerm``) are
+            # the shipped examples. Step (1) already honours that field for the
+            # type being resolved; not honouring it here made the walk asymmetric,
+            # so a chain ENDING at such a type orphaned even though its base is
+            # mapped. Measured before changing it: on the shipped vocabulary this
+            # moves ZERO of 277 applied type entries, because no shipped chain
+            # ends that way — it is reachable only through a curator's re-parent,
+            # where it decided 90 of 92 outcomes (every move under `Location` was
+            # refused as orphaning, while a move under `Person` applied, purely
+            # because `Person` happens to be a mapped base NAME and `Location` is
+            # spelled differently from `Place`).
+            base = (
+                _strip_schema_prefix(current.schema_org_type)
+                if current.schema_org_type
+                else None
+            )
+            canonical = _CANONICAL_BY_SCHEMA_ORG.get(base) if base else None
+            if canonical is not None:
+                type_tags.append(base)
+                return CanonicalResolution(
+                    canonical=canonical,
+                    ontology_type=original,
+                    type_tags=type_tags,
+                )
             break
 
         canonical = _CANONICAL_BY_SCHEMA_ORG.get(parent_name)

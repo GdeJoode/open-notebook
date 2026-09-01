@@ -27,6 +27,7 @@ from ontology_extraction.multi_schema_orchestrator import (
     detect_applicable_schemas,
 )
 from ontology_extraction.workflow import ExtractionWorkflow
+from ontology_manager.schema_projection import project_accepted_edits
 from shared.services.metrics import record_metric
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories import (
@@ -53,6 +54,12 @@ NOTEBOOK_DEFAULT_BUNDLE: Dict[str, List[str]] = {
     "deals": ["policy_themes"],
     "government": ["policy_themes"],
 }
+
+
+# N.4d.3: the discriminator on an ``accepted_extensions`` entry that records a
+# re-parent instead of a new type. Imported nowhere else in this module's import
+# graph, so it is spelled here rather than pulling in a service-layer symbol.
+_REPARENT_OP = "reparent"
 
 
 def _is_resume_sentinel(extension: Dict[str, Any]) -> bool:
@@ -824,6 +831,61 @@ class EntityExtractionService:
 
         return result
 
+    def _project_notebook_edits(
+        self,
+        applicable_schemas: List[Tuple["Ontology", float]],
+        notebook_schema: Optional["NotebookSchema"],
+        notebook_id: Optional[str],
+    ) -> List[Tuple["Ontology", float]]:
+        """Apply the notebook's ACCEPTED schema edits to the applied ontologies.
+
+        Track N.4d.3. Two consumers depend on this running before anything reads
+        the applied set: Pass 2 renders the vocabulary into its prompt, and the
+        persist step bridges extracted labels to canonical types through the very
+        same objects. So a curator's accepted extension becomes resolvable, and a
+        curator's re-parent moves every entity of that type under its new
+        ancestor — with no per-entity write, because the TYPE moved, not the rows.
+
+        Returns COPIES. The registry caches ontologies and hands out the SAME
+        object to every caller (measured: a second ``get`` returns an identical
+        instance, ``entity_types`` dict included), so editing in place would give
+        the next notebook in this process one notebook's vocabulary.
+
+        Pure — no I/O — so it can be exercised directly against the real
+        ontologies, the way ``_apply_notebook_schema_default`` is.
+        """
+        if notebook_schema is None or not notebook_schema.accepted_extensions:
+            return applicable_schemas
+
+        projection = project_accepted_edits(
+            [ontology for ontology, _conf in applicable_schemas],
+            notebook_schema.accepted_extensions,
+        )
+        if projection.applied:
+            logger.info(
+                "schema edits projected for notebook={nb}: {summary}",
+                nb=notebook_id,
+                summary=", ".join(
+                    f"{o.type_name}({o.action})" for o in projection.applied
+                ),
+            )
+        for refusal in projection.refused:
+            # A curator's edit that did NOT take is worth seeing: silence here
+            # would read as "applied" to anyone reading the log.
+            logger.warning(
+                "schema edit refused for notebook={nb}: {name} — {code} {detail}",
+                nb=notebook_id,
+                name=refusal.type_name or "(unnamed)",
+                code=refusal.reason_code,
+                detail=refusal.detail,
+            )
+        return [
+            (projected, conf)
+            for projected, (_original, conf) in zip(
+                projection.schemas, applicable_schemas
+            )
+        ]
+
     async def _run_multi_schema(
         self,
         workflow: "ExtractionWorkflow",
@@ -925,6 +987,10 @@ class EntityExtractionService:
                 notebook_schema,
             )
 
+        applicable_schemas = self._project_notebook_edits(
+            applicable_schemas, notebook_schema, notebook_id
+        )
+
         # L.1: stash the applied ontologies (without the confidence scores) so
         # the persist step can bridge ontology labels -> canonical types and
         # preserve the rich type. ``detect_applicable_schemas`` returns
@@ -969,6 +1035,14 @@ class EntityExtractionService:
         if notebook_schema is not None:
             for ext in notebook_schema.accepted_extensions:
                 if _is_resume_sentinel(ext):
+                    continue
+                if isinstance(ext, dict) and ext.get("op") == _REPARENT_OP:
+                    # N.4d.3: a re-parent is not a new type. Forwarded, Pass 2
+                    # would render an EXISTING base type under "Accepted
+                    # Extension Types" and be told to treat it as an addition to
+                    # the schema. The move itself has already been applied to the
+                    # ontologies above, which is where Pass 2 reads the
+                    # vocabulary from.
                     continue
                 schema_name = ext.get("schema_name")
                 if schema_name:

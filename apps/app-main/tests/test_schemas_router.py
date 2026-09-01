@@ -796,3 +796,106 @@ class TestPass1ResultsOrphanedSource:
         rows = resp.json()
         assert len(rows) == 1
         assert rows[0]["source_title"] is None
+
+
+# ---------------------------------------------------------------------------
+# A re-parent REPLACES the declared parent (Track N.4d.3)
+# ---------------------------------------------------------------------------
+
+
+class TestExportWithAReparent:
+    """A re-parented class must end up with ONE ``rdfs:subClassOf`` edge.
+
+    Adding the new parent without dropping the declared one exports a different
+    statement from the curator's: both parents would be asserted, and a consumer
+    reading the graph would see a multiple-inheritance claim nobody made.
+    """
+
+    @staticmethod
+    def _graph_for(accepted):
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+        schema_repo = AsyncMock(spec=NotebookSchemaRepository)
+        schema_repo.get_by_notebook.return_value = NotebookSchema(
+            notebook="notebook:test1",
+            base_ontology="scholarly",
+            accepted_extensions=accepted,
+            pending_extensions=[],
+        )
+        client = _make_app(notebook_svc, schema_repo)
+        resp = client.get("/api/notebooks/notebook:test1/schema.ttl")
+        assert resp.status_code == 200
+        graph = Graph()
+        graph.parse(data=resp.text, format="turtle")
+        return graph
+
+    @staticmethod
+    def _parents_of(graph, fragment):
+        from ontology_manager.rdf_owl_shacl import ON
+
+        return {str(o) for o in graph.objects(ON[fragment], RDFS.subClassOf)}
+
+    def test_the_declared_parent_is_shipped_as_the_baseline(self):
+        """Vacuity guard: without the edit `ScholarlyArticle` really does hang
+        from `Article`, so the assertion below is about the edit and not about a
+        type that had no parent to begin with.
+        """
+        graph = self._graph_for([])
+        assert self._parents_of(graph, "ScholarlyArticle") == {
+            "https://open-notebook.dev/ontology/Article"
+        }
+
+    def test_a_reparent_replaces_rather_than_adds(self):
+        graph = self._graph_for(
+            [
+                {
+                    "reparent_id": "reparent::ScholarlyArticle->Thesis",
+                    "op": "reparent",
+                    "type_name": "ScholarlyArticle",
+                    "new_parent": "Thesis",
+                    "parent_type": "Thesis",
+                }
+            ]
+        )
+        assert self._parents_of(graph, "ScholarlyArticle") == {
+            "https://open-notebook.dev/ontology/Thesis"
+        }
+
+    def test_a_reparent_does_not_count_as_a_class_added(self):
+        """The class already existed; only genuinely new declarations count.
+
+        Asserted through the exported graph rather than the return value: the
+        class set must be identical to the baseline's.
+        """
+        baseline = self._graph_for([])
+        moved = self._graph_for(
+            [
+                {
+                    "reparent_id": "reparent::ScholarlyArticle->Thesis",
+                    "op": "reparent",
+                    "type_name": "ScholarlyArticle",
+                    "new_parent": "Thesis",
+                    "parent_type": "Thesis",
+                }
+            ]
+        )
+        assert set(moved.subjects(RDF.type, OWL.Class)) == set(
+            baseline.subjects(RDF.type, OWL.Class)
+        )
+
+    def test_a_normal_extension_still_keeps_its_parent(self):
+        """The removal must be scoped to re-parents — a plain accepted extension
+        that declares a parent still gets one.
+        """
+        graph = self._graph_for(
+            [
+                {
+                    "extension_id": "ext-1",
+                    "type_name": "PreprintServer",
+                    "parent_type": "Organization",
+                }
+            ]
+        )
+        assert self._parents_of(graph, "PreprintServer") == {
+            "https://open-notebook.dev/ontology/Organization"
+        }
