@@ -51,10 +51,38 @@
 > label — marginal real-entity readings ("Share", "Print"); revisit only if a live
 > corpus surfaces them.
 >
-> **▶ RESUME AT N.4 — Concept-level alignment taxonomy** (BROADER/NARROWER/
-> RELATED/NOVEL over `kg_resolver` + `evolution`; the harder phase). Then N.5
-> (regression gate + docs; also lands the N.2 + N.3 follow-ups above). The
-> **evidence-packet clustering stays DEFERRED — measure first** (user decision, §5).
+> **N.4 attempt 1 PARKED — chapter RE-PLANNED (v2).** Branch
+> `feature/track-n4-concept-alignment` @ `da0bda6` is **not merged**. Adversarial
+> review returned REVISIONS_NEEDED with 2 blockers + 5 majors
+> (`reviews/phase-N.4-attempt-1.md`); both blockers are DESIGN errors, so the
+> chapter was rewritten instead of patched (user decision 2026-09-01: park and
+> re-plan). Headline causes: (1) lexical containment was treated as `is_a` — on real
+> Dutch names it means *alias / part_of / named_after* at least as often as
+> *subtype*, and `KGResolver`'s fuzzy tier feeds the aligner exactly those alias
+> pairs; (2) the output was structurally unreachable — seeded edges were emitted
+> before the ontology filter that drops off-batch endpoints, and the candidate fetch
+> queried the canonical `entity_type` column with a rich Track-L label, returning
+> `[]` by construction.
+>
+> **Planner correction**: the `evolution` agent DOES exist —
+> `packages/ontology-manager/src/ontology_manager/evolution.py`
+> (`OntologyEvolutionAgent`: `record_gap` → frequency threshold → `SchemaProposal`).
+> Attempt 1 searched only `apps/`+`pipelines/` for a *directory* and wrongly recorded
+> it as missing. v2 wires it: a NOVEL verdict records an ontology gap.
+>
+> **▶ RESUME AT N.4a** (subsumption from the ontology's `parent_type` chain only,
+> verdicts without seeding) → N.4b (placement + seeding that survives the pipeline,
+> with the mandatory workflow-level integration test) → N.4c (gap loop +
+> reachability). One open decision for the user is recorded in the N.4 chapter (what
+> the lexical signal becomes now that it cannot mean `is_a`). Then N.5 (regression
+> gate + docs; also lands the N.2 + N.3 follow-ups above). The **evidence-packet
+> clustering stays DEFERRED — measure first** (user decision, §5).
+>
+> Unrelated pre-existing breakage noticed during N.4 review (NOT from Track N):
+> `pipelines/entity-filtering/tests/test_llm_matcher.py::TestMatchPair::
+> test_calls_ollama_for_unknown_pair` fails on `main` with `'LLMMatcher' object has
+> no attribute '_agentic_enabled'` — `__init__` does set it, so the test's
+> construction path likely bypasses `__init__`. Needs its own fix.
 >
 > Live-testing lessons folded in: en_core_web_sm on Dutch produced verbal-phrase
 > junk → per-document model selection; both spaCy models fragment long compound
@@ -150,7 +178,7 @@ generation; the model over-produces) argues for moving some of that governance
 | **N.1** | Pre-LLM candidate layer (TF-IDF salience + noun-phrase candidates) threaded into the Pass-2 prompt | 2–3d | — |
 | **N.2** ✅ | Deterministic Hearst is-a miner (spaCy noun-chunk based) → high-precision `is_a` relation seeds | 1.5–2d | N.1 |
 | **N.3** ✅ | Abstention gate: `INSUFFICIENT_EVIDENCE` + not-a-concept pre-filter (determin. + LLM-judge) + over-generation metric | 2–2.5d | — |
-| **N.4** | Concept-level alignment taxonomy (BROADER/NARROWER/RELATED/NOVEL) over `kg_resolver` + `evolution` | 2.5–3d | N.1–N.3 |
+| **N.4** 🔁 | Concept-level alignment taxonomy (BROADER/NARROWER/RELATED/NOVEL). **Re-planned v2** after attempt 1 was parked: **N.4a** ontology-grounded subsumption (verdicts only) → **N.4b** placement + surviving seeds → **N.4c** evolution gap loop + reachability | 2.5–3d | N.1–N.3 |
 | **N.5** | Integration: regression gate (call-count / recall / over-generation) + docs + RETRO | 1.5–2d | N.1–N.4 |
 
 ### N.1 — Pre-LLM candidate layer
@@ -237,18 +265,108 @@ generation; the model over-produces) argues for moving some of that governance
   prompt clause + run_pass2 filter/judge/abstain counts), `test_extraction_metrics.py`
   (6→ pure rates). Adversarial-review APPROVED.
 
-### N.4 — Concept-level alignment taxonomy (harder)
-- **Extend** `kg_resolver` beyond exists/new to classify a NOVEL concept relative
-  to the existing graph: `BROADER_THAN` / `NARROWER_THAN` / `RELATED_TO` / `NOVEL`,
-  using the existing embedding + `parent_type` chain (`canonical_bridge`) + the
-  `evolution` agent's gap analysis. A NARROWER novel concept is attached under its
-  broader existing type (an is_a edge) instead of floating.
-- **AC**: subsumption is derived deterministically where possible (via `parent_type`
-  + embedding neighbourhood) as a cheap pre-pass; the **LLM-judge (default ON, D4)**
-  arbitrates the ambiguous RELATED/NOVEL split; every classification carries its
-  evidence + is reversible.
-- **Tests**: `test_concept_alignment.py` — a novel narrower concept lands under the
-  right broader type; a true-novel one stays NOVEL; a related one links, not merges.
+### N.4 — Concept-level alignment taxonomy — 🔁 RE-PLANNED v2 (attempt 1 PARKED)
+
+> Attempt 1 (`feature/track-n4-concept-alignment` @ `da0bda6`) is **parked, not
+> merged**. Adversarial review: **REVISIONS_NEEDED — 2 blockers, 5 majors**; full
+> report in `reviews/phase-N.4-attempt-1.md`. The blockers are DESIGN errors, not
+> code defects, so the chapter is rewritten rather than patched. The branch is kept
+> for the parts that survived (see "Salvage" below); do NOT resume from it blindly.
+
+**Why v1 failed** (the two design errors that drive this rewrite):
+
+1. **Lexical containment was treated as subsumption.** "A contains B" was emitted
+   as `NARROWER_THAN` at the highest confidence. On real Dutch names that is wrong
+   more often than right — `Tweede Kamer der Staten-Generaal` ⊃ `Tweede Kamer` is
+   *same_as*, `Den Haag Zuidwest` ⊃ `Den Haag` is *part_of*, `Van Gogh Museum` ⊃
+   `Van Gogh` is *named_after*. And the input population is biased toward exactly
+   that: `KGResolver`'s fuzzy tier rejects long/short ALIAS pairs (the length delta
+   tanks Levenshtein), so aliases and meronyms are the aligner's main diet.
+2. **The output was structurally unreachable.** Seeded `is_a` edges were emitted
+   before the ontology filter, which drops any relation with an off-batch endpoint —
+   and a seeded target is *by construction* an existing KG node. 100% of the output
+   was silently discarded while the report still counted it. Compounding: the
+   candidate fetch queried `find_by_type(entity["label"])`, but that repo method
+   filters the canonical `entity_type` column while `label` is the rich Track-L
+   extraction label — so under rich typing the fetch returns `[]` by construction.
+
+**Planner correction**: the original chapter cited the `evolution` agent's gap
+analysis and attempt 1 recorded that "no such agent exists". That was wrong —
+`packages/ontology-manager/src/ontology_manager/evolution.py` holds a working
+`OntologyEvolutionAgent` (`record_gap` → frequency threshold → `SchemaProposal` →
+approve/reject/implement, plus `list_gaps` / `get_gap_statistics`), wired into
+`ontology_manager/manager.py` but NOT into the filtering pipeline. v2 uses it.
+
+#### Decisions (binding for v2)
+
+| # | Decision | Rationale |
+|---|---|---|
+| **D-N4-1** | **Lexical containment is NOT subsumption evidence.** It may never seed an `is_a`. | It signals *alias / part-of / named-after* at least as often as *subtype* (review B1). |
+| **D-N4-2** | The **only** deterministic subsumption source is the ontology's declared `parent_type` chain (`canonical_bridge`). Embeddings inform RELATED/NOVEL **only**. | Subsumption is an ontological claim; only the ontology can ground it. |
+| **D-N4-3** | Candidate fetch queries the **canonical `entity_type`** (via `canonical_bridge`), never the raw rich label. | `find_by_type` filters the canonical column; passing a rich label returns `[]` (review M5a). |
+| **D-N4-4** | The stage runs **after** ontology validation **and** after graph centrality. | Otherwise seeds are stripped (B2) or perturb PageRank and can cause entity REMOVAL (M4). |
+| **D-N4-5** | A seeded edge carries `source_type`, `target_type` and the target record id. | Restores the Track-O.1 endpoint disambiguation the v1 seed threw away (M3). |
+| **D-N4-6** | A `NOVEL` verdict **records an ontology gap** via `OntologyEvolutionAgent.record_gap`. | Closes the loop the chapter always intended: novel concept → gap → frequency → `SchemaProposal`. |
+| **D-N4-7** | Evidence must be **falsifiable**: never assert "nothing comparable exists" when no candidates were *fetched*. Distinguish `no_candidates_fetched` from `candidates_fetched_none_close`. | An evidence-first track cannot stamp confident falsehoods (M5). |
+| **D-N4-8** | Reachability is part of the phase, not a follow-up: an env flag **and** DI wiring in `entity_extraction_service`, with a WARNING on enabled-but-unwired (the orphan-connector pattern). | v1's judge was unreachable in every real run (M7). |
+
+**Open decision for the user** — what to do with the lexical signal, now that it
+cannot mean `is_a`: (a) drop it entirely; (b) emit it as an **alias candidate** into
+the existing alias table / a report for review; (c) emit a weak `RELATED_TO` that
+never seeds an edge. *Recommendation: (b)* — it is genuinely useful evidence, and
+the alias table is exactly where a long-form/short-form pair belongs (it is also
+what `KGResolver`'s fuzzy tier structurally misses).
+
+#### Sub-phases
+
+**N.4a — Subsumption from the ontology (verdicts only, no seeding)** — ~1d
+- **New** `resolution/concept_alignment.py`: the four-verdict taxonomy +
+  `Alignment` evidence record (SALVAGE v1). Subsumption exclusively from the
+  `parent_type` chain (D-N4-2); embedding band decides RELATED vs NOVEL; the
+  batched LLM-judge arbitrates only the ambiguous band, with v1's fencing kept
+  verbatim (may not answer subsumption; a target outside the concept's own
+  neighbour list is downgraded to NOVEL; garbage/silence/failure → NOVEL).
+- Candidate fetch on the canonical type (D-N4-3), `properties: None` guarded,
+  per-batch candidate cache.
+- **AC**: every verdict carries falsifiable evidence (D-N4-7); `method_counts` and
+  `judged_count` are mutually consistent; no entity is mutated beyond `properties`;
+  a rich-label corpus actually fetches candidates (regression against M5a).
+- **Tests**: unit — all four verdicts; type-chain with and without a materialised
+  target; embedding band edges; judge fencing; evidence-string honesty for the
+  empty-fetch vs nothing-close paths.
+
+**N.4b — Placement + seeding that survives the pipeline** — ~1d
+- **Modify** `workflow.py`: run the stage after ontology validation AND centrality
+  (D-N4-4); seed `is_a` with `source_type`/`target_type` + target id (D-N4-5); only
+  for a NARROWER verdict with a materialised target (no dangling edges).
+- **AC**: a seeded edge is present in `result.relations` with
+  `ontology_validation.enabled=True`; centrality scores are byte-identical with the
+  stage on vs off; `seeded_is_a` in the report equals what actually survives.
+- **Tests**: **workflow-level integration** (mandatory — its absence hid both
+  blockers): seeds survive validation, do not shift centrality, do not change which
+  entities stage 12 removes, and `ExtractedRelation(**seed)` validates.
+
+**N.4c — Gap loop + reachability** — ~0.5–1d
+- **Wire** `OntologyEvolutionAgent.record_gap` on every NOVEL verdict (D-N4-6),
+  carrying the entity text, the rich label as `entity_type_guess`, and the chunk
+  context; surface `get_gap_statistics` in the alignment report.
+- **Wire** the env flag + DI (`entity_repo`, `ontology`, `alignment_llm_caller`) in
+  `entity_extraction_service`, with a WARNING when enabled but unwired (D-N4-8).
+- **AC**: a NOVEL concept produces a gap row; N occurrences cross the threshold and
+  produce a `SchemaProposal`; enabling the stage without a repo logs a WARNING and
+  is a no-op; the judge is exercised in a real run.
+- **Tests**: gap recorded once per novel concept; proposal appears at the threshold;
+  unwired-but-enabled warns and no-ops.
+
+#### Salvage from attempt 1 (`da0bda6`)
+Carry forward, do not rebuild: the four-verdict taxonomy + `Alignment` record; the
+judge fencing (`parse_judge_response` rejecting subsumption verdicts and fabricated
+targets, sync/async caller handling); the token-boundary matcher
+`_is_token_subsequence` (correct — only the inference from it was wrong);
+`find_by_type` as the ONLY repo method (no new repo surface, no migration); the
+three plan-mandated behavioural tests. Also carry the `ConceptAlignmentConfig` and
+the `FilteredResult.concept_alignment_report` field (both backward compatible and
+already regression-verified against ontology-extraction's 316 tests).
 
 ### N.5 — Integration + regression gate + docs
 - A heterogeneous regression gate (M.5-style): on a golden corpus, assert the
