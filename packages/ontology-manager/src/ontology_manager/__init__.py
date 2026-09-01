@@ -93,3 +93,15 @@ __all__ = [
     "get_supported_document_types",
     "get_document_types_for_ontology",
 ]
+
+from ontology_manager.type_placement import (  # noqa: E402
+    TypePlacement,
+    place_proposed_type,
+    sibling_types,
+)
+
+__all__ = list(globals().get("__all__", [])) + [
+    "TypePlacement",
+    "place_proposed_type",
+    "sibling_types",
+]

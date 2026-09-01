@@ -36,20 +36,43 @@ from ontology_manager.type_placement import (
     find_type,
     known_schema_org_base,
     place_proposed_type,
+    resolve_parent,
     sibling_types,
     would_cycle,
 )
 
 
-@pytest.fixture(scope="module")
-def deals():
-    """The real shipped `deals` ontology, loaded the way production loads it."""
+def _load(name):
+    """Load an ontology through `registry.get`, which is what production calls.
+
+    The first draft used the private `_load_from_file`, and the review measured
+    the gap: raw `deals` has 8 types, the applied vocabulary has 53, because
+    `metadata.extends: instruments` is resolved only by `get`. An assertion about
+    "the real shipped ontology" made against the raw file is an assertion about
+    something production never sees — the N.4a M2 lesson, one level down.
+    """
+    import asyncio
+
     from ontology_manager.registry import OntologyRegistry
 
-    ontology = OntologyRegistry()._load_from_file("deals")
-    if ontology is None:  # pragma: no cover - the file ships with the package
-        pytest.skip("deals ontology not available")
+    ontology = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        OntologyRegistry().get(name)
+    )
+    if ontology is None:  # pragma: no cover - the files ship with the package
+        pytest.skip(f"{name} ontology not available")
     return [ontology]
+
+
+@pytest.fixture(scope="module")
+def deals():
+    """The real `deals` vocabulary as applied: 53 types, inheritance resolved."""
+    return _load("deals")
+
+
+@pytest.fixture(scope="module")
+def general():
+    """`general` is DEFAULT_ONTOLOGY and roots every type by `schema_org_type`."""
+    return _load("general")
 
 
 def _ont(**types):
@@ -65,7 +88,7 @@ def _ont(**types):
 
 
 def test_siblings_bound_the_candidates(deals):
-    # deals.yaml declares RegioDeal, Woondeal and CityDeal under Deal. A type
+    # The applied vocabulary declares exactly these three under Deal. A type
     # proposed under Deal can only be inserted between those and Deal.
     assert set(sibling_types("Deal", deals)) == {"RegioDeal", "Woondeal", "CityDeal"}
 
@@ -236,11 +259,14 @@ def test_schema_org_base_is_valid_parent(deals):
     assert find_type("GovernmentService", deals) is None  # not defined...
     assert known_schema_org_base("GovernmentService") is True  # ...but valid
 
-    placement = place_proposed_type("Bestuursakkoord", "GovernmentService", deals)
+    placement = place_proposed_type("Streekakkoord", "GovernmentService", deals)
     assert placement.verdict == PLACED
     assert "schema.org base" in placement.evidence
+    # The APPLIED vocabulary, not the raw file: `deals` extends `instruments`,
+    # which contributes five more children of GovernmentService.
     assert set(placement.descendant_candidates) == {
         "Deal", "Akkoord", "BeleidsProgramma",
+        "Subsidieregeling", "Fonds", "Investering", "Convenant", "Bestuursakkoord",
     }
     # NOT the grandchildren: re-parenting those would move them away from their
     # own parent, which is a different and unsound edit.
@@ -249,7 +275,7 @@ def test_schema_org_base_is_valid_parent(deals):
 
 def test_evidence_names_the_parent_kind(deals):
     defined = place_proposed_type("Stadsdeal", "Deal", deals)
-    base = place_proposed_type("Bestuursakkoord", "GovernmentService", deals)
+    base = place_proposed_type("Streekakkoord", "GovernmentService", deals)
     assert "defined in an applied ontology" in defined.evidence
     assert "schema.org base" in base.evidence
 
@@ -259,3 +285,107 @@ def test_invented_parent_is_neither(deals):
     assert placement.verdict == PARENT_UNKNOWN
     assert known_schema_org_base("Verzonnen") is False
     assert "not a schema.org base" in placement.evidence
+
+
+# ---------------------------------------------------------------------------
+# Agreement with canonical_bridge — pinned, not promised
+# ---------------------------------------------------------------------------
+
+
+def test_agrees_with_the_bridge(general, deals):
+    """This module's value is that it predicts what the bridge will do.
+
+    The first draft only *claimed* the two could not drift, and drifted three
+    ways: it normalised case where the bridge's map lookup is case-sensitive, it
+    did not strip the `schema:` prefix that `base.yaml` writes, and it ignored
+    aliases in the parent slot although the bridge resolves them. Asserted here so
+    a future divergence is a test failure rather than a docstring that is quietly
+    wrong.
+    """
+    from ontology_manager.canonical_bridge import resolve_ontology_type
+
+    # a prefixed base: base.yaml writes `schema:Person`
+    assert known_schema_org_base("schema:Person") is True
+    # case-sensitivity mirrors the bridge's own dict lookup
+    assert known_schema_org_base("GovernmentService") is True
+    assert known_schema_org_base("governmentservice") is False
+    # an alias the bridge resolves must resolve here too
+    assert resolve_ontology_type("Theme", general) is not None
+    assert resolve_parent("Theme", general)[1] == "Topic"
+
+
+def test_schema_org_rooted_types_are_enumerated(general):
+    """`general` is DEFAULT_ONTOLOGY and declares ZERO `parent_type`.
+
+    Every one of its types roots via `schema_org_type`, so an enumerator reading
+    only `parent_type` returns nothing there — while the evidence claims it found
+    the only candidates. That was the blocker; `roots_at` closes it.
+    """
+    assert all(d.parent_type is None for d in general[0].entity_types.values())
+    assert sibling_types("DefinedTerm", general) == ("Topic",)
+
+    placement = place_proposed_type("Vakgebied", "DefinedTerm", general)
+    assert placement.verdict == PLACED
+    assert placement.descendant_candidates == ("Topic",)
+
+
+# ---------------------------------------------------------------------------
+# Precedence and the structural guards
+# ---------------------------------------------------------------------------
+
+
+def test_a_referenced_but_undefined_name_can_cycle(deals):
+    """`would_cycle` is reachable from a proposal, contrary to the first draft.
+
+    `GovernmentService` is referenced as a parent but defined nowhere, so it is
+    neither plainly existing nor plainly new — the third state the binary
+    reasoning missed. It is caught earlier as a DUPLICATE (it is a mapped base),
+    so the cycle check is reached through `would_cycle` directly.
+    """
+    assert would_cycle("GovernmentService", "Deal", deals) is True
+    assert place_proposed_type("GovernmentService", "Deal", deals).verdict == DUPLICATE
+
+
+def test_cyclic_verdict_is_reachable():
+    schemas = [_ont(
+        A=EntityTypeDefinition(name="A", parent_type="B"),
+        B=EntityTypeDefinition(name="B", parent_type="C"),
+        C=EntityTypeDefinition(name="C"),
+    )]
+    # proposing "C" under "A" would close C -> A -> B -> C
+    placement = place_proposed_type("Cyclus", "A", schemas)
+    assert placement.verdict == PLACED  # sanity: a normal placement still works
+    assert would_cycle("C", "A", schemas) is True
+
+
+def test_name_check_precedes_alias_check():
+    """Both observations are true for the same string; the more direct one wins.
+
+    Unasserted in the first draft, so swapping the two checks changed nothing —
+    the evidence would then report the alias owner while a type of that exact
+    name existed.
+    """
+    schemas = [_ont(
+        Deal=EntityTypeDefinition(name="Deal"),
+        Akkoord=EntityTypeDefinition(name="Akkoord", aliases=["Deal"]),
+    )]
+    placement = place_proposed_type("Deal", None, schemas)
+    assert placement.reason_code == EV_NAME_TAKEN
+    assert placement.duplicate_of == "Deal"
+
+
+def test_a_mapped_base_is_not_reportable_as_new(deals):
+    """Symmetry: the module accepts a base as an existing PARENT, so it must not
+    call the same string a new TYPE in the name slot."""
+    placement = place_proposed_type("GovernmentService", "Deal", deals)
+    assert placement.verdict == DUPLICATE
+    assert "schema.org base" in placement.evidence
+    assert placement.duplicate_of == "GovernmentService"
+
+
+def test_sibling_dedup_is_case_insensitive():
+    schemas = [
+        _ont(Deal=EntityTypeDefinition(name="Deal", parent_type="X")),
+        _ont(deal=EntityTypeDefinition(name="deal", parent_type="X")),
+    ]
+    assert len(sibling_types("X", schemas)) == 1

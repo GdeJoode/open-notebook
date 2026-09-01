@@ -27,8 +27,9 @@ The bounded candidate set that makes BROADER_THAN tractable
 A proposed type ``P`` with declared parent ``G`` can only become the parent of an
 existing type ``T`` by being inserted BETWEEN ``T`` and ``T``'s current parent.
 That is structurally valid only when ``T`` also hangs from ``G`` — i.e. ``T`` is a
-SIBLING of ``P``. Anything whose chain already passes through something narrower
-than ``P`` cannot be re-parented under it.
+SIBLING of ``P``. A grandchild is excluded not because of any breadth relation
+between it and ``P``, which nothing establishes, but because re-parenting it would
+move it away from ITS own parent, which is a different and unsound edit.
 
 So the candidate set is derived from DECLARATIONS, never guessed from names or
 vectors: :func:`sibling_types` enumerates it, and N.4d.2's judge then selects
@@ -150,36 +151,63 @@ def _iter_types(schemas: Optional[Sequence[Any]]) -> Iterable[Tuple[str, Any]]:
                 yield str(name), definition
 
 
+def _strip_schema_prefix(value: str) -> str:
+    """``"schema:Person"`` → ``"Person"``. Mirrors ``canonical_bridge``."""
+    v = (value or "").strip()
+    return v.split(":", 1)[1].strip() if ":" in v else v
+
+
 def known_schema_org_base(name: str) -> bool:
     """True when ``name`` is a schema.org base ``canonical_bridge`` maps.
 
-    A parent can be valid in two ways, and conflating them misreports half the
-    shipped vocabulary. ``deals.yaml`` roots ``Deal``/``Akkoord``/
-    ``BeleidsProgramma`` at ``GovernmentService``, which no ontology DEFINES —
-    the bridge terminates its walk on the base name itself. Treating that as an
-    unknown parent would call four of eight declarations broken when they are
-    exactly how the vocabulary is meant to be authored.
+    A parent is valid in two ways, and conflating them misreports much of the
+    shipped vocabulary: ``deals.yaml`` roots types at ``GovernmentService``, which
+    no ontology DEFINES — the bridge terminates its walk on the base name itself.
 
-    Reads the bridge's own map so the two cannot drift apart; a bridge that ever
-    stops exporting it degrades to "not a base" rather than raising.
+    The lookup mirrors the bridge EXACTLY: strip a ``schema:`` prefix (``base.yaml``
+    writes ``schema:Person``), then an exact-case map lookup, because the bridge's
+    own ``_CANONICAL_BY_SCHEMA_ORG.get(base)`` is case-sensitive. Being lenient
+    here would be worse than being strict: the value of this module is that it
+    predicts what the bridge will do, so accepting a spelling the bridge rejects
+    would make the placement a lie about the outcome. ``test_agrees_with_the_bridge``
+    pins that agreement so the two cannot drift.
     """
-    target = _norm(name)
-    if not target:
+    base = _strip_schema_prefix(name)
+    if not base:
         return False
     try:
         from ontology_manager.canonical_bridge import _CANONICAL_BY_SCHEMA_ORG
     except Exception as exc:  # noqa: BLE001 - degrade, never raise on curator input
         logger.debug("type_placement: schema.org base map unavailable ({e})", e=exc)
         return False
-    return any(_norm(base) == target for base in _CANONICAL_BY_SCHEMA_ORG)
+    return base in _CANONICAL_BY_SCHEMA_ORG
+
+
+def roots_at(definition: Any) -> Optional[str]:
+    """What a type hangs from: its ``schema_org_type`` base, else ``parent_type``.
+
+    Ordered the way ``canonical_bridge.resolve_ontology_type`` orders it — an
+    explicit ``schema_org_type`` wins over the parent walk. Reading only
+    ``parent_type`` would have missed the entire default vocabulary: ``general``
+    and ``base`` declare **zero** ``parent_type`` and root all their types by
+    ``schema_org_type``, so a sibling enumeration blind to it returns nothing on
+    the default ontology while claiming to have found the only candidates.
+    """
+    explicit = getattr(definition, "schema_org_type", None)
+    if explicit:
+        return _strip_schema_prefix(str(explicit))
+    parent = getattr(definition, "parent_type", None)
+    return str(parent) if parent else None
 
 
 def find_type(name: str, schemas: Optional[Sequence[Any]]) -> Optional[Any]:
-    """The definition whose name matches ``name``, case-insensitively.
+    """The definition whose NAME matches ``name``, case-insensitively.
 
-    Aliases are deliberately NOT matched here — :func:`alias_owner` reports those
-    separately, because "the name is taken" and "the name is somebody's alias" are
-    different observations and a curator needs to tell them apart.
+    Aliases are deliberately not matched here: in the NAME slot "this name is
+    taken" and "this name is somebody's alias" are different observations a
+    curator acts on differently, and :func:`alias_owner` reports the second. In
+    the PARENT slot that distinction has no force, so :func:`resolve_parent` does
+    match aliases — mirroring ``canonical_bridge._find_definition``.
     """
     target = _norm(name)
     if not target:
@@ -202,6 +230,28 @@ def alias_owner(name: str, schemas: Optional[Sequence[Any]]) -> Optional[str]:
     return None
 
 
+def resolve_parent(
+    name: str, schemas: Optional[Sequence[Any]]
+) -> Tuple[Optional[Any], Optional[str]]:
+    """``(definition, resolved_name)`` for a declared parent, as the bridge sees it.
+
+    Matches a type NAME or one of its ALIASES, case-insensitively — exactly
+    ``canonical_bridge._find_definition``. Aliases matter here because the parent
+    slot is filled from free text: ``evolution.create_proposal_from_gap`` writes
+    ``definition["parent_type"] = gap.entity_type_guess``, an LLM's words, and
+    ``general.Topic`` really does ship ``aliases: [Subject, Theme, Category]``.
+    Refusing "Theme" as unknown while the bridge resolves it to ``Topic`` would be
+    a false negative about the bridge's own behaviour.
+    """
+    definition = find_type(name, schemas)
+    if definition is not None:
+        return definition, str(getattr(definition, "name", None) or name)
+    owner = alias_owner(name, schemas)
+    if owner is not None:
+        return find_type(owner, schemas), owner
+    return None, None
+
+
 def ancestors_of(type_name: str, schemas: Optional[Sequence[Any]]) -> List[str]:
     """The declared ``parent_type`` chain above ``type_name``, nearest first.
 
@@ -213,7 +263,7 @@ def ancestors_of(type_name: str, schemas: Optional[Sequence[Any]]) -> List[str]:
     seen = {_norm(type_name)}
     current = find_type(type_name, schemas)
     for _ in range(_MAX_DEPTH):
-        parent = getattr(current, "parent_type", None) if current is not None else None
+        parent = roots_at(current) if current is not None else None
         if not parent or _norm(parent) in seen:
             break
         out.append(str(parent))
@@ -227,6 +277,8 @@ def sibling_types(
 ) -> Tuple[str, ...]:
     """Existing types that declare ``parent`` as their direct parent.
 
+    "Declare" here means :func:`roots_at` — an explicit ``schema_org_type`` base
+    or, failing that, ``parent_type`` — matching how the bridge resolves a type.
     This is the whole bounded candidate set for BROADER_THAN: a proposed type can
     only be inserted between these and their shared parent. Order follows the
     applied ontologies so the result is stable for a given input.
@@ -236,12 +288,13 @@ def sibling_types(
     if not target:
         return ()
     out: List[str] = []
+    seen: set = set()
     for type_name, definition in _iter_types(schemas):
         if _norm(type_name) == skip:
             continue
-        if _norm(getattr(definition, "parent_type", None)) == target:
-            if type_name not in out:
-                out.append(type_name)
+        if _norm(roots_at(definition)) == target and _norm(type_name) not in seen:
+            seen.add(_norm(type_name))
+            out.append(type_name)
     return tuple(out)
 
 
@@ -250,10 +303,13 @@ def would_cycle(
 ) -> bool:
     """True when making ``new_parent`` the parent of ``child`` closes a loop.
 
-    That happens when ``new_parent`` already descends from ``child``. Unreachable
-    for a genuinely new type — nothing can descend from what does not exist yet —
-    but N.4d.3 re-parents EXISTING types, where it is reachable, so the check
-    lives with the other structural rules rather than being invented later.
+    That happens when ``new_parent`` already descends from ``child``.
+
+    It is NOT unreachable for a proposal, which an earlier draft of this docstring
+    claimed, reasoning that nothing can descend from what does not exist yet. That
+    assumes a binary exists/does-not-exist, and this module's own model has a third
+    state: a name REFERENCED as a parent but DEFINED nowhere. N.4d.3's re-parent of
+    an existing type reaches this check too.
     """
     if _norm(child) == _norm(new_parent):
         return True
@@ -302,6 +358,21 @@ def place_proposed_type(
             evidence=f"an applied ontology already defines the type {owner!r}",
             duplicate_of=str(owner),
         )
+    if known_schema_org_base(name):
+        # Symmetry: this module accepts a schema.org base as an EXISTING type in
+        # the parent slot, so it must not report the same string as new in the
+        # name slot. GovernmentService is the live case — no ontology defines it,
+        # yet the bridge maps it to the `programme` canonical.
+        return TypePlacement(
+            verdict=DUPLICATE,
+            reason_code=EV_NAME_TAKEN,
+            evidence=(
+                f"{name!r} is a schema.org base the canonical bridge already maps, "
+                "so it is an existing type rather than a new one — even though no "
+                "applied ontology defines it"
+            ),
+            duplicate_of=_strip_schema_prefix(name),
+        )
     owner = alias_owner(name, schemas)
     if owner is not None:
         return TypePlacement(
@@ -323,7 +394,7 @@ def place_proposed_type(
                 "belongs is undecided, not top-level"
             ),
         )
-    parent_def = find_type(declared_parent, schemas)
+    parent_def, resolved = resolve_parent(declared_parent, schemas)
     is_base = parent_def is None and known_schema_org_base(declared_parent)
     if parent_def is None and not is_base:
         return TypePlacement(
@@ -335,9 +406,7 @@ def place_proposed_type(
                 "canonical bridge maps — the placement could not be checked"
             ),
         )
-    parent_name = str(
-        getattr(parent_def, "name", None) if parent_def is not None else declared_parent
-    )
+    parent_name = resolved or _strip_schema_prefix(str(declared_parent))
     if would_cycle(name, parent_name, schemas):
         return TypePlacement(
             verdict=CYCLIC,
@@ -390,6 +459,8 @@ __all__ = [
     "EV_CYCLE",
     "REASON_CODES",
     "known_schema_org_base",
+    "roots_at",
+    "resolve_parent",
     "find_type",
     "alias_owner",
     "ancestors_of",
