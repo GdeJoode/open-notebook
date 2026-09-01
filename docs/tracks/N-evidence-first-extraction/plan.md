@@ -556,6 +556,19 @@ appears.
   or borrowed name is refused, and silence means "leave where it is".
 - **AC**: the judge can never widen the candidate set, only select within it.
 
+> **N.4d.2 SHIPPED** (merge `3b02d76`). Pure prompt/parse; the judge selects
+> within the bounded set and cannot widen it, and silence leaves a type where it
+> is. APPROVED at attempt 3 — the three rejections were three shapes of one
+> failure: a fence claimed but removed, a guard measuring the direction that was
+> never at risk, and a guard asserted where it could not fail. Report:
+> `reviews/phase-N.4d2-attempts-1-3.md`.
+>
+> **Binding for N.4d.3 and every later sweep**: assert in the shape production
+> assembles. `detect_applicable_schemas(top_k=3)` means an applied set holds
+> THREE ontologies; on a single-ontology load `entity_types` is a name-keyed dict
+> and cross-ontology properties hold by the dict rather than by the mechanism.
+> `candidates_from_ontologies` is exported for N.4d.3, which owns the LLM call.
+
 **N.4d.3 — Apply as a schema edit** — ~1d
 - **New** `SchemaEditService.reparent_type`, alongside the existing
   `rename/merge/split/delete` ops, with the same persist + event plumbing.
