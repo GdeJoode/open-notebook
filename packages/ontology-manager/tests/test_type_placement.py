@@ -22,6 +22,7 @@ from ontology_manager.type_placement import (
     DUPLICATE,
     EV_ALIAS_TAKEN,
     EV_CYCLE,
+    EV_NAME_IS_BASE,
     EV_NAME_TAKEN,
     EV_NO_NAME,
     EV_NO_PARENT_DECLARED,
@@ -37,6 +38,7 @@ from ontology_manager.type_placement import (
     known_schema_org_base,
     place_proposed_type,
     resolve_parent,
+    roots_at,
     sibling_types,
     would_cycle,
 )
@@ -52,12 +54,20 @@ def _load(name):
     something production never sees — the N.4a M2 lesson, one level down.
     """
     import asyncio
+    from unittest.mock import AsyncMock, patch
 
     from ontology_manager.registry import OntologyRegistry
 
-    ontology = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
-        OntologyRegistry().get(name)
-    )
+    # `get` is the production path and resolves `extends`; its DB probe is
+    # stubbed out so the unit suite neither opens a socket per ontology (which
+    # BLOCKS rather than fails fast where the port is filtered) nor silently
+    # describes DB rows instead of the shipped vocabulary.
+    loop = asyncio.new_event_loop()
+    try:
+        with patch.object(OntologyRegistry, "_load_from_db", AsyncMock(return_value=None)):
+            ontology = loop.run_until_complete(OntologyRegistry().get(name))
+    finally:
+        loop.close()
     if ontology is None:  # pragma: no cover - the files ship with the package
         pytest.skip(f"{name} ontology not available")
     return [ontology]
@@ -347,15 +357,19 @@ def test_a_referenced_but_undefined_name_can_cycle(deals):
 
 
 def test_cyclic_verdict_is_reachable():
-    schemas = [_ont(
-        A=EntityTypeDefinition(name="A", parent_type="B"),
-        B=EntityTypeDefinition(name="B", parent_type="C"),
-        C=EntityTypeDefinition(name="C"),
-    )]
-    # proposing "C" under "A" would close C -> A -> B -> C
-    placement = place_proposed_type("Cyclus", "A", schemas)
-    assert placement.verdict == PLACED  # sanity: a normal placement still works
-    assert would_cycle("C", "A", schemas) is True
+    """Asserts the VERDICT, not just the helper.
+
+    The first version of this test asserted PLACED and `would_cycle(...) is True`,
+    so deleting the whole CYCLIC branch left it green — a test named for a verdict
+    it never produced, which is the same defect corrected one commit earlier in
+    this file. "Ghost" is referenced as A's parent and defined nowhere, and is not
+    a mapped base, so it survives the duplicate checks and reaches the cycle test.
+    """
+    schemas = [_ont(A=EntityTypeDefinition(name="A", parent_type="Ghost"))]
+    placement = place_proposed_type("Ghost", "A", schemas)
+    assert placement.verdict == CYCLIC
+    assert placement.reason_code == EV_CYCLE
+    assert placement.parent == "A"
 
 
 def test_name_check_precedes_alias_check():
@@ -379,13 +393,71 @@ def test_a_mapped_base_is_not_reportable_as_new(deals):
     call the same string a new TYPE in the name slot."""
     placement = place_proposed_type("GovernmentService", "Deal", deals)
     assert placement.verdict == DUPLICATE
-    assert "schema.org base" in placement.evidence
-    assert placement.duplicate_of == "GovernmentService"
+    # Its OWN code: "already defined" and "is a mapped base" are different
+    # observations, and gap recording will gate on these.
+    assert placement.reason_code == EV_NAME_IS_BASE
+    assert placement.reason_code != EV_NAME_TAKEN
+    # ...and no merge target, because nothing defines it
+    assert placement.duplicate_of is None
+    assert "no definition to merge into" in placement.evidence
 
 
 def test_sibling_dedup_is_case_insensitive():
+    # Spelled DEAL, not `deal`: with the lowercase spelling a case-SENSITIVE
+    # dedup coincidentally returns one entry too, so the test passed against the
+    # implementation it claims to exclude.
     schemas = [
         _ont(Deal=EntityTypeDefinition(name="Deal", parent_type="X")),
-        _ont(deal=EntityTypeDefinition(name="deal", parent_type="X")),
+        _ont(DEAL=EntityTypeDefinition(name="DEAL", parent_type="X")),
     ]
     assert len(sibling_types("X", schemas)) == 1
+
+
+# ---------------------------------------------------------------------------
+# The safety invariant, over every shipped ontology
+# ---------------------------------------------------------------------------
+
+
+ALL_ONTOLOGIES = [
+    "base", "deals", "general", "government", "instruments", "policy",
+    "policy_themes", "regiodeal", "schema_core", "scholarly", "social_profiles",
+]
+
+
+def test_no_candidate_can_close_a_cycle():
+    """The property the candidate set must have, measured on the real vocabulary.
+
+    A proposal P is new and therefore has no descendants, so the ONLY way that
+    accepting a candidate C as P's child can create a cycle is C == P's parent.
+    Excluding that is necessary and sufficient — so this asserts it for every
+    parent in every shipped ontology rather than for one hand-picked case.
+
+    It exists because the previous fix was measured on the DEFECT but not on the
+    FIX: stripping the `schema:` prefix made `Person` (which declares
+    `schema_org_type: schema:Person`) root at itself, so the declared parent was
+    offered as a candidate to become the proposal's child. Four of `general`'s
+    eight types were affected.
+    """
+    checked = 0
+    for name in ALL_ONTOLOGIES:
+        schemas = _load(name)
+        parents = {roots_at(d) for d in schemas[0].entity_types.values() if roots_at(d)}
+        for parent in parents:
+            for candidate in sibling_types(parent, schemas):
+                assert candidate.lower() != parent.lower(), (name, parent, candidate)
+                checked += 1
+    assert checked > 200, f"expected a substantial sample, enumerated {checked}"
+
+
+def test_a_self_rooting_type_is_not_its_own_sibling(general):
+    # `general` roots Person/Organization/Event/Product at themselves via
+    # schema_org_type, which is what made this reachable.
+    self_rooting = [
+        n for n, d in general[0].entity_types.items() if (roots_at(d) or "") == n
+    ]
+    assert self_rooting, "fixture no longer exercises the self-rooting case"
+    for name in self_rooting:
+        assert name not in sibling_types(name, general)
+        assert name not in place_proposed_type(
+            "Nieuw" + name, name, general
+        ).descendant_candidates

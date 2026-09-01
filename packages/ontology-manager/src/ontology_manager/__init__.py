@@ -40,6 +40,11 @@ from ontology_manager.schema import (
     RelationshipTypeDefinition,
     ValidationRules,
 )
+from ontology_manager.type_placement import (
+    TypePlacement,
+    place_proposed_type,
+    sibling_types,
+)
 from ontology_manager.validator import (
     OntologyValidator,
     ValidationIssue,
@@ -94,13 +99,7 @@ __all__ = [
     "get_document_types_for_ontology",
 ]
 
-from ontology_manager.type_placement import (  # noqa: E402
-    TypePlacement,
-    place_proposed_type,
-    sibling_types,
-)
-
-__all__ = list(globals().get("__all__", [])) + [
+__all__ += [
     "TypePlacement",
     "place_proposed_type",
     "sibling_types",

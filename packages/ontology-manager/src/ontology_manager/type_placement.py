@@ -80,6 +80,7 @@ VERDICTS = (DUPLICATE, PLACED, PARENT_UNKNOWN, UNPARENTED, CYCLIC)
 EV_NO_SCHEMAS = "no_applied_schemas"
 EV_NO_NAME = "proposal_has_no_name"
 EV_NAME_TAKEN = "name_already_defined"
+EV_NAME_IS_BASE = "name_is_a_schema_org_base"
 EV_ALIAS_TAKEN = "name_declared_as_alias"
 EV_PARENT_RESOLVED = "declared_parent_resolves"
 EV_PARENT_UNKNOWN = "declared_parent_not_defined"
@@ -90,6 +91,7 @@ REASON_CODES = (
     EV_NO_SCHEMAS,
     EV_NO_NAME,
     EV_NAME_TAKEN,
+    EV_NAME_IS_BASE,
     EV_ALIAS_TAKEN,
     EV_PARENT_RESOLVED,
     EV_PARENT_UNKNOWN,
@@ -194,10 +196,18 @@ def roots_at(definition: Any) -> Optional[str]:
     the default ontology while claiming to have found the only candidates.
     """
     explicit = getattr(definition, "schema_org_type", None)
-    if explicit:
-        return _strip_schema_prefix(str(explicit))
     parent = getattr(definition, "parent_type", None)
-    return str(parent) if parent else None
+    if explicit and not parent:
+        return _strip_schema_prefix(str(explicit))
+    if parent:
+        # A type declaring BOTH keeps its parent_type here. The bridge prefers
+        # schema_org_type when CANONICALISING, but for placement the explicit
+        # parent is the stronger statement about where the author put it, and
+        # dropping it would make such a type vanish from its own parent's sibling
+        # set. No shipped type declares both; `create_proposal_from_gap`
+        # definitions could.
+        return str(parent)
+    return _strip_schema_prefix(str(explicit)) if explicit else None
 
 
 def find_type(name: str, schemas: Optional[Sequence[Any]]) -> Optional[Any]:
@@ -253,7 +263,8 @@ def resolve_parent(
 
 
 def ancestors_of(type_name: str, schemas: Optional[Sequence[Any]]) -> List[str]:
-    """The declared ``parent_type`` chain above ``type_name``, nearest first.
+    """The declared chain above ``type_name``, nearest first, via :func:`roots_at`
+    — an explicit ``schema_org_type`` base where present, else ``parent_type``.
 
     Terminates on an unknown parent (returning what it walked) rather than
     raising: a chain that leaves the applied set is a real, reportable state, not
@@ -279,6 +290,13 @@ def sibling_types(
 
     "Declare" here means :func:`roots_at` — an explicit ``schema_org_type`` base
     or, failing that, ``parent_type`` — matching how the bridge resolves a type.
+    ``parent`` itself is never returned: see the note in the body.
+
+    The safety property this must hold, asserted over every shipped ontology in
+    ``test_no_candidate_can_close_a_cycle``: a proposal ``P`` is new and therefore
+    has no descendants, so the ONLY way accepting a candidate ``C`` as ``P``'s
+    child can create a cycle is ``C == parent``. Excluding that is necessary and
+    sufficient.
     This is the whole bounded candidate set for BROADER_THAN: a proposed type can
     only be inserted between these and their shared parent. Order follows the
     applied ontologies so the result is stable for a given input.
@@ -290,7 +308,14 @@ def sibling_types(
     out: List[str] = []
     seen: set = set()
     for type_name, definition in _iter_types(schemas):
-        if _norm(type_name) == skip:
+        if _norm(type_name) == skip or _norm(type_name) == target:
+            # A type is never its own sibling. Reachable because `roots_at`
+            # strips the `schema:` prefix, so `Person` declaring
+            # `schema_org_type: schema:Person` roots at ITSELF — four of
+            # `general`'s eight types do. Without this the declared PARENT is
+            # handed to the judge as a candidate to become the proposal's CHILD,
+            # and accepting it closes a two-cycle that `would_cycle` never sees,
+            # because nothing consults it on this path.
             continue
         if _norm(roots_at(definition)) == target and _norm(type_name) not in seen:
             seen.add(_norm(type_name))
@@ -308,8 +333,10 @@ def would_cycle(
     It is NOT unreachable for a proposal, which an earlier draft of this docstring
     claimed, reasoning that nothing can descend from what does not exist yet. That
     assumes a binary exists/does-not-exist, and this module's own model has a third
-    state: a name REFERENCED as a parent but DEFINED nowhere. N.4d.3's re-parent of
-    an existing type reaches this check too.
+    state: a name REFERENCED as a parent but DEFINED nowhere. Narrower than it
+    first appears, though — since a mapped schema.org base is intercepted upstream
+    as a DUPLICATE, the reachable case is "referenced, undefined, AND not a mapped
+    base". N.4d.3's re-parent of an existing type reaches this check too.
     """
     if _norm(child) == _norm(new_parent):
         return True
@@ -365,13 +392,13 @@ def place_proposed_type(
         # yet the bridge maps it to the `programme` canonical.
         return TypePlacement(
             verdict=DUPLICATE,
-            reason_code=EV_NAME_TAKEN,
+            reason_code=EV_NAME_IS_BASE,
             evidence=(
-                f"{name!r} is a schema.org base the canonical bridge already maps, "
-                "so it is an existing type rather than a new one — even though no "
-                "applied ontology defines it"
+                f"{name!r} is a schema.org base the canonical bridge maps, so it "
+                "is an existing type rather than a new one — note NO applied "
+                "ontology defines it, so there is no definition to merge into"
             ),
-            duplicate_of=_strip_schema_prefix(name),
+            duplicate_of=None,
         )
     owner = alias_owner(name, schemas)
     if owner is not None:
@@ -452,6 +479,7 @@ __all__ = [
     "EV_NO_SCHEMAS",
     "EV_NO_NAME",
     "EV_NAME_TAKEN",
+    "EV_NAME_IS_BASE",
     "EV_ALIAS_TAKEN",
     "EV_PARENT_RESOLVED",
     "EV_PARENT_UNKNOWN",
