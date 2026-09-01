@@ -8,12 +8,34 @@
 > Deal, lang→nl) AND English (academic paper, lang→en) PDFs. Model decision
 > resolved: **NL + EN side-by-side, picked per document.**
 >
-> **▶ RESUME AT N.2 — Hearst is-a miner** (deterministic high-precision `is_a`
-> relation seeds). Then N.3 (abstention gate — the English-paper test showed the
+> **N.2 SHIPPED** (merge 2d78953, branch `feature/track-n2-hearst-isa`) — the
+> Hearst is-a miner is **spaCy noun-chunk based**, NOT regex. A first regex draft
+> produced clause/verb garbage on live prose (`… need to --is_a--> public sector`)
+> and leaned on a `_clean_list_item` verb-truncation band-aid the user rejected as
+> a monkey-patch; rebuilt on `doc.noun_chunks` + POS-bounded coordination lists,
+> sentence-bounded hypernym anchor (`_sentence_span`/`_gap_is_clean`), EN+NL cues,
+> seeded only between already-extracted entities (precision gate, provenance
+> `relation_source="hearst"`, conf 0.5). Corpus language detected once + spaCy
+> model loaded once, shared by N.1 candidates and N.2 mining. Adversarial-review
+> APPROVED after a MAJOR fix (anchor was crossing sentence/clause boundaries) +
+> two minors (relation_type-aware dedup, lang-scope alignment). Live-validated on
+> real EN/NL PDFs (clean `→ policy areas` / `→ partners` clusters, zero verb
+> garbage). **spaCy runs fine on this repo's WSL /mnt venv** — the earlier
+> "/mnt blocks spaCy" note was disk-full, not WSL; corrected in the tests.
+>
+> N.2 follow-ups (non-blocking, from review — do in N.3/N.5, not now):
+> (1) residual spaCy chunk noise (`help`/`Governance matters` mis-chunked into a
+> list/hypernym) is inert through the precision gate but worth an **audit-side
+> note if Hearst precision is measured on live corpora**;
+> (2) Hearst seeds have no live precision/recall number yet — fold a small
+> Hearst-precision sample into the N.5 regression metrics.
+>
+> **▶ RESUME AT N.3 — Abstention gate** (the English-paper test showed the
 > candidate layer over-generates generic phrases on academic prose, so N.3's
-> not-a-concept gate is the measured next win), N.4 (concept alignment), N.5
-> (regression gate + docs). The **evidence-packet clustering stays DEFERRED —
-> measure first** (user decision, §5).
+> `INSUFFICIENT_EVIDENCE` + not-a-concept gate is the measured next win). Then N.4
+> (concept alignment), N.5 (regression gate + docs; also lands the two N.2
+> follow-ups above). The **evidence-packet clustering stays DEFERRED — measure
+> first** (user decision, §5).
 >
 > Live-testing lessons folded in: en_core_web_sm on Dutch produced verbal-phrase
 > junk → per-document model selection; both spaCy models fragment long compound
@@ -107,7 +129,7 @@ generation; the model over-produces) argues for moving some of that governance
 | Phase | Title | Effort | Depends |
 |---|---|---|---|
 | **N.1** | Pre-LLM candidate layer (TF-IDF salience + noun-phrase candidates) threaded into the Pass-2 prompt | 2–3d | — |
-| **N.2** | Deterministic Hearst is-a miner → high-precision `is_a` relation seeds | 1.5–2d | N.1 |
+| **N.2** ✅ | Deterministic Hearst is-a miner (spaCy noun-chunk based) → high-precision `is_a` relation seeds | 1.5–2d | N.1 |
 | **N.3** | Abstention gate: `INSUFFICIENT_EVIDENCE` + not-a-concept pre-filter + over-generation metric | 2–2.5d | — |
 | **N.4** | Concept-level alignment taxonomy (BROADER/NARROWER/RELATED/NOVEL) over `kg_resolver` + `evolution` | 2.5–3d | N.1–N.3 |
 | **N.5** | Integration: regression gate (call-count / recall / over-generation) + docs + RETRO | 1.5–2d | N.1–N.4 |
@@ -133,17 +155,32 @@ generation; the model over-produces) argues for moving some of that governance
 - **Tests**: `test_candidates.py` (TF-IDF ranking, noun-phrase heuristic, empty
   input); a prompt-assembly test that the anchor block is present + budget-capped.
 
-### N.2 — Hearst is-a miner
-- **New** `candidates.py::mine_hearst_isa(chunk_text) -> list[(narrow, broad)]`:
-  regex Hearst patterns ("X such as A, B", "A and other X", "X including A",
-  "X, especially A") → high-precision `is_a` candidate pairs.
-- **Modify** the extraction merge to SEED these as `is_a` relations with a
-  provenance tag `relation_source="hearst"` and a conservative confidence, so the
-  post-filter (`ontology_constraint_filter`, dedup) still governs them.
-- **AC**: precision-first (no pattern → no relation); every mined relation carries
-  its source pattern + chunk provenance; the LLM path is unchanged (additive).
-- **Tests**: `test_hearst.py` — each pattern fires on a positive, abstains on a
-  near-miss; mined relations carry provenance.
+### N.2 — Hearst is-a miner ✅ SHIPPED (merge 2d78953)
+- `candidates.py::mine_hearst_isa(text, *, nlp=None, lang=None) -> list[(narrow,
+  broad)]`: **spaCy noun-chunk based, NOT regex.** A regex draft grabbed
+  clause/verb garbage on live prose and needed a `_clean_list_item` band-aid the
+  user rejected as a monkey-patch — so the miner now finds the cue phrase
+  ("such as"/"zoals"/"including"/"waaronder"/… broad-first; "and other"/"en
+  andere" broad-last, EN+NL), takes the noun-chunk before/after the cue as the
+  hypernym, and collects the following/preceding noun-chunks as the hyponym list.
+  Both the anchor and the list are bounded to the cue's OWN sentence
+  (`_sentence_span` via `doc.sents`) and by POS gap discipline (`_gap_is_clean`:
+  a VERB/ADP between chunks ends the span) so it never crosses a clause. No spaCy
+  / model → `[]` (no garbage regex fallback).
+- `pass2_typed_extraction.py::_seed_hearst_relations` seeds mined pairs as `is_a`
+  relations ONLY between entities the LLM already extracted for the chunk
+  (precision gate, exact normalized-lowercase on both endpoints), tagged
+  `relation_source="hearst"` + conf 0.5, so `ontology_constraint_filter`/dedup
+  still govern them. dedup key includes `relation_type`. `run_pass2` detects the
+  corpus language once + loads the spaCy model once, shared by N.1 candidates and
+  N.2 mining.
+- **AC** (met): precision-first (no cue → no relation); provenance + chunk id on
+  every seed; LLM path unchanged (additive); degrades to `[]` without spaCy.
+- **Tests**: `test_hearst.py` — token-level spaCy STUB for the boundary/POS edge
+  cases (verb-gap stop, other-drop, dedup, edge-strip, no-cue, no-spacy,
+  cross-sentence both directions, within-sentence verb-block, comma-still-anchors)
+  + gated real-model regressions. Adversarial-review APPROVED after the
+  anchor-sentence-bounding MAJOR fix. Live-validated on real EN/NL PDFs.
 
 ### N.3 — Abstention gate + over-generation metric
 - **Modify** `prompts/pass2.py`: an explicit instruction that a chunk with no
