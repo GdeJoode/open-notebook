@@ -663,3 +663,140 @@ def test_alignment_is_immutable():
     a = ca.Alignment(verdict=NOVEL, method=METHOD_NONE, confidence=0.5, evidence="x")
     with pytest.raises(Exception):
         a.verdict = NARROWER_THAN  # type: ignore[misc]
+
+
+# ===========================================================================
+# build_is_a_seeds — the N.4b seeding boundary (review M1 + B1)
+# ===========================================================================
+
+
+def _aligned(text, verdict=NARROWER_THAN, *, target="Deal",
+             target_id="entity:deal", canonical="programme", confidence=0.8,
+             properties=...):
+    """An entity as ConceptAligner._enrich would have left it."""
+    if properties is not ...:
+        return {"text": text, "properties": properties}
+    return {
+        "text": text,
+        "properties": {
+            "concept_alignment": verdict,
+            "alignment_method": METHOD_TYPE_CHAIN,
+            "alignment_confidence": confidence,
+            "alignment_evidence": "because the ontology says so",
+            "alignment_target_id": target_id,
+            "alignment_target_name": target,
+            "alignment_canonical_type": canonical,
+        },
+    }
+
+
+def test_seeds_a_narrower_verdict_with_both_endpoint_types():
+    seeds = ca.build_is_a_seeds([_aligned("Regio Deal Noord")])
+    assert len(seeds) == 1
+    seed = seeds[0]
+    assert seed["relation_type"] == ca.IS_A
+    assert seed["source_entity"] == "Regio Deal Noord"
+    assert seed["target_entity"] == "Deal"
+    assert seed["source_type"] == seed["target_type"] == "programme"
+    assert seed["properties"]["relation_source"] == ca.RELATION_SOURCE
+    assert 0.0 <= seed["confidence"] <= 1.0
+
+
+def test_related_to_is_never_seeded():
+    # The safety-critical guard: "a related one links, not merges" (plan AC).
+    assert ca.build_is_a_seeds([_aligned("X", verdict=RELATED_TO)]) == []
+    assert ca.build_is_a_seeds([_aligned("X", verdict=NOVEL)]) == []
+    assert ca.build_is_a_seeds([_aligned("X", verdict=BROADER_THAN)]) == []
+
+
+def test_a_type_only_target_is_not_seeded():
+    assert ca.build_is_a_seeds([_aligned("X", target_id=None)]) == []
+
+
+def test_self_referential_seed_is_refused():
+    # Review B1: persistence resolves both endpoints to the SAME record, writing
+    # a 1-cycle into the subsumption hierarchy.
+    assert ca.build_is_a_seeds([_aligned("Deal", target="Deal")]) == []
+    assert ca.build_is_a_seeds([_aligned("  deal  ", target="Deal")]) == []
+
+
+def test_seed_without_a_canonical_type_is_refused():
+    # D-N4-5: an untyped edge falls back to name-only resolution at persist.
+    assert ca.build_is_a_seeds([_aligned("X", canonical=None)]) == []
+
+
+def test_blank_endpoints_are_refused():
+    assert ca.build_is_a_seeds([_aligned("   ")]) == []
+    assert ca.build_is_a_seeds([_aligned("X", target="   ")]) == []
+
+
+def test_duplicate_pairs_are_seeded_once():
+    seeds = ca.build_is_a_seeds([_aligned("Regio Deal"), _aligned("regio  deal")])
+    assert len(seeds) == 1
+
+
+def test_seeding_tolerates_null_and_missing_properties():
+    assert ca.build_is_a_seeds([_aligned("X", properties=None)]) == []
+    assert ca.build_is_a_seeds([{"text": "X"}]) == []
+
+
+def test_seeding_is_idempotent():
+    ents = [_aligned("Regio Deal Noord")]
+    assert ca.build_is_a_seeds(ents) == ca.build_is_a_seeds(ents)
+
+
+def test_type_chain_refuses_to_match_an_entity_against_itself():
+    # Review B1 at the root: the tier must not produce the verdict at all.
+    assert type_chain_subsumption(
+        ["Deal"], [_row("Deal", "entity:deal")], self_text="Deal"
+    ) is None
+    assert type_chain_subsumption(
+        ["Deal"], [_row("Deal", "entity:deal")], self_text="Regio Deal Noord"
+    ) is not None
+
+
+# ===========================================================================
+# Carried items C2 / C4 (review M4) — the disclosures added in N.4b
+# ===========================================================================
+
+
+async def test_cap_is_disclosed_when_no_candidate_had_a_vector(monkeypatch):
+    rows = [_row(f"E{i}", f"entity:{i}") for i in range(3)]
+    aligner = ConceptAligner(_Repo({"programme": rows}), schemas=["s"],
+                             max_candidates=3)
+    ents, _ = await _align(aligner, [_entity("X", "L", embedding=[1.0, 0.0])],
+                           canonical="programme", ancestors=[], monkeypatch=monkeypatch)
+    props = ents[0]["properties"]
+    assert props["alignment_reason_code"] == EV_NO_CANDIDATE_VECTORS
+    assert "arbitrary sample" in props["alignment_evidence"]
+
+
+async def test_cap_is_not_disclosed_when_the_entity_itself_lacks_a_vector(monkeypatch):
+    # A fact about the INPUT — the sample size is irrelevant to it.
+    rows = [_row(f"E{i}", f"entity:{i}", embedding=[1.0, 0.0]) for i in range(3)]
+    aligner = ConceptAligner(_Repo({"programme": rows}), schemas=["s"],
+                             max_candidates=3)
+    ents, _ = await _align(aligner, [_entity("X", "L")],
+                           canonical="programme", ancestors=[], monkeypatch=monkeypatch)
+    props = ents[0]["properties"]
+    assert props["alignment_reason_code"] == EV_NO_QUERY_VECTOR
+    assert "arbitrary sample" not in props["alignment_evidence"]
+
+
+async def test_cap_is_disclosed_on_the_judge_path(monkeypatch):
+    rows = [_row("Leefbaarheid", "entity:leef", embedding=[1.0, 0.6])]
+    aligner = ConceptAligner(_Repo({"programme": rows}), schemas=["s"],
+                             max_candidates=1, judge_enabled=False)
+    ents, _ = await _align(aligner, [_entity("X", "L", embedding=[1.0, 0.0])],
+                           canonical="programme", ancestors=[], monkeypatch=monkeypatch)
+    assert "arbitrary sample" in ents[0]["properties"]["alignment_evidence"]
+
+
+async def test_no_repo_verdict_still_carries_the_canonical_type(monkeypatch):
+    # C4: resolve_types succeeded; only the repository was absent.
+    aligner = ConceptAligner(None, schemas=["s"])
+    ents, _ = await _align(aligner, [_entity("X", "L")],
+                           canonical="programme", ancestors=[], monkeypatch=monkeypatch)
+    props = ents[0]["properties"]
+    assert props["alignment_reason_code"] == EV_NO_REPO
+    assert props["alignment_canonical_type"] == "programme"
