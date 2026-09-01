@@ -162,3 +162,57 @@ def test_real_spacy_noun_chunks_when_available():
     )
     # spaCy noun-chunks should surface at least one multi-word phrase.
     assert any(len(g.split()) >= 2 for g in got)
+
+
+def test_strips_leading_and_trailing_articles_connectors():
+    # Live-validated on the Regio Deal convenants: the regex fallback emitted
+    # "De Minister … Ruimtelijke" (article-led + truncated) and "Regio Deal de"
+    # (trailing connector). Edge-word stripping + the wider run fix both.
+    from ontology_extraction.candidates import _strip_edge_words
+
+    assert _strip_edge_words("De Minister van Zaken") == "Minister van Zaken"
+    assert _strip_edge_words("Regio Deal de") == "Regio Deal"
+    assert _strip_edge_words("De Partners en de") == "Partners"
+    assert _strip_edge_words("Het Hogeland") == "Hogeland"
+    # a phrase that is all edge-words collapses to empty (dropped downstream)
+    assert _strip_edge_words("de en van") == ""
+
+
+def test_extract_candidates_edge_stripped_on_real_shape():
+    text = (
+        "De Minister van Volkshuisvesting en Ruimtelijke Ordening en de Regio Deal "
+        "de Partners tekenen het Convenant."
+    )
+    cands = extract_candidates(text, corpus_chunks=[text, "unrelated Ministerie chunk"], top_k=15)
+    texts = [c.text for c in cands]
+    # no candidate starts with a capitalized article or ends with a connector
+    assert not any(t.split()[0].lower() in {"de", "het", "een"} for t in texts if t)
+    assert not any(t.split()[-1].lower() in {"de", "en", "van"} for t in texts if t)
+
+
+def test_detect_lang_nl_vs_en():
+    from ontology_extraction.candidates import _detect_lang
+    assert _detect_lang("de gemeente en het rijk van de minister tekent") == "nl"
+    assert _detect_lang("the city and the state of the minister signs it") == "en"
+    assert _detect_lang("") == "en"  # no signal → default en
+
+
+def test_noun_phrase_merges_spacy_and_regex_complementary():
+    # spaCy (stub) yields a generic grammatical phrase; the regex catches the long
+    # compound proper name spaCy fragments — BOTH survive (they are complementary).
+    nlp = _FakeNlp(["de gemeente"])
+    got = noun_phrase_candidates(
+        "De gemeente tekent met Regio Deal Het Hogeland.", nlp=nlp
+    )
+    assert "de gemeente" in got  # spaCy contribution
+    assert any("Regio Deal Het Hogeland" in g for g in got)  # regex contribution
+
+
+def test_load_spacy_is_language_keyed():
+    # Cache is keyed per language (maxsize=2) so nl + en can coexist; a missing
+    # library still returns None for both without crashing.
+    from ontology_extraction.candidates import _load_spacy
+    _load_spacy.cache_clear()
+    # Does not raise for either language (returns a pipeline or None).
+    _load_spacy("nl")
+    _load_spacy("en")
