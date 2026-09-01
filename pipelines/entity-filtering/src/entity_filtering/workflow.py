@@ -699,11 +699,16 @@ class FilteringWorkflow:
             # repo or ontology the stage still RUNS and writes NOVEL verdicts —
             # which N.4c turns into ontology gaps. Over-claiming in the log is the
             # same defect class this track keeps having to fix in its evidence.
-            if not self._config.kg_resolution.enabled:
+            nothing_to_classify = not self._config.kg_resolution.enabled
+            if nothing_to_classify:
                 logger.warning(
                     "Concept alignment enabled but nothing will be classified: "
                     "kg_resolution is disabled, so no entity is marked is_new."
                 )
+            # Only describe DEGRADED behaviour when there is behaviour to
+            # degrade. With nothing marked is_new the stage records no verdict at
+            # all, so claiming it "will still run and record NOVEL verdicts"
+            # would contradict the accurate line just above it.
             degraded: list[str] = []
             if self._entity_repo is None:
                 degraded.append("entity_repo (the graph is never queried)")
@@ -711,7 +716,7 @@ class FilteringWorkflow:
                 degraded.append("ontology (no canonical type resolves)")
             if align_cfg.judge_enabled and alignment_llm_caller is None:
                 degraded.append("alignment_llm_caller (the judge tier cannot run)")
-            if degraded:
+            if degraded and not nothing_to_classify:
                 logger.warning(
                     "Concept alignment enabled but DEGRADED — it will still run "
                     "and record NOVEL verdicts. Missing: {missing}",

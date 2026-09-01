@@ -332,3 +332,27 @@ async def test_warns_when_the_judge_is_enabled_but_has_no_caller(caplog):
     finally:
         loguru_logger.remove(sink)
     assert "alignment_llm_caller" in " | ".join(r.message for r in caplog.records)
+
+
+async def test_degraded_warning_is_silent_when_nothing_is_classified(caplog):
+    # Residual from the N.4b re-review: with kg_resolution OFF and a missing DI
+    # input, the accurate "nothing will be classified" line must not be
+    # contradicted by a DEGRADED line claiming verdicts are being recorded.
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    sink = _loguru_to_caplog()
+    try:
+        with caplog.at_level(logging.WARNING):
+            workflow = FilteringWorkflow(
+                config=_config(alignment=True, kg_resolution=False),
+                entity_repo=None, ontology=_ontology(),
+            )
+            result = await workflow.process(_extraction())
+    finally:
+        loguru_logger.remove(sink)
+    messages = " | ".join(r.message for r in caplog.records)
+    assert "nothing will be classified" in messages
+    assert "DEGRADED" not in messages
+    assert result.concept_alignment_report["aligned_count"] == 0

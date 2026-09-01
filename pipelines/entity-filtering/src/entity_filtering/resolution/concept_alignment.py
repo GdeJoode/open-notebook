@@ -683,6 +683,12 @@ def build_is_a_seeds(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "relation_source": RELATION_SOURCE,
                     "alignment_method": props.get("alignment_method"),
                     "alignment_evidence": props.get("alignment_evidence"),
+                    # Carried as the AUDIT ANCHOR, deliberately: it binds the
+                    # edge to the exact node the verdict was about, and survives
+                    # into the persisted relation. Persistence resolves endpoints
+                    # by (canonical_name, entity_type) and does not read this —
+                    # that is not dead weight, it is provenance. An id-based
+                    # endpoint path would be Track O.1 surface.
                     "alignment_target_id": target_id,
                 },
             }
