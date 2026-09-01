@@ -165,12 +165,16 @@ def parse_judge_response(
         return _nothing("the judge returned nothing, so no type is moved")
 
     blob = raw.strip()
-    if blob.startswith("["):
+    start_brace, end_brace = blob.find("{"), blob.rfind("}")
+    first_bracket = blob.find("[")
+    if first_bracket != -1 and (start_brace == -1 or first_bracket < start_brace):
         # A top-level array is refused rather than descended into: an earlier
         # review of this repo's judges forbade that shape by name, because the
         # element that happens to be first is not a verdict the model addressed.
+        # Tested by which STRUCTURAL character comes first rather than by
+        # `startswith`, so a ```json fence or a prose preamble cannot smuggle the
+        # same reply past — all three spellings are one shape.
         return _nothing("the judge's reply was a top-level array; nothing is moved")
-    start_brace, end_brace = blob.find("{"), blob.rfind("}")
     if start_brace == -1 or end_brace == -1 or end_brace <= start_brace:
         return _nothing("the judge's reply contained no JSON object; nothing is moved")
     try:

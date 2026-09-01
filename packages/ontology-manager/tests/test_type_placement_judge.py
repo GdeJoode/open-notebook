@@ -230,7 +230,16 @@ def _all_ontologies():
     return sorted(f.stem for f in directory.glob("*.yaml"))
 
 
-def _load(name):
+def _load(*names):
+    """Load an APPLIED SET — one or more ontologies, as production assembles it.
+
+    `detect_applicable_schemas(..., top_k=3)` means a real applied set normally
+    holds three ontologies. That matters here rather than being a detail: within
+    ONE `Ontology`, `entity_types` is a name-keyed dict, so a single-ontology load
+    makes same-name collisions impossible *by the dict* and any assertion about
+    them unfalsifiable. Measured on the combined set the de-duplication fires 42
+    times; on `deals` alone, never once.
+    """
     import asyncio
     from unittest.mock import AsyncMock, patch
 
@@ -239,7 +248,10 @@ def _load(name):
     loop = asyncio.new_event_loop()
     try:
         with patch.object(OntologyRegistry, "_load_from_db", AsyncMock(return_value=None)):
-            return [loop.run_until_complete(OntologyRegistry().get(name))]
+            registry = OntologyRegistry()
+            return [
+                loop.run_until_complete(registry.get(name)) for name in names
+            ]
     finally:
         loop.close()
 
@@ -276,13 +288,25 @@ def test_no_reply_can_widen_any_real_candidate_set():
         "",
     ]
 
+    # Applied SETS of three, the shape `detect_applicable_schemas(top_k=3)`
+    # produces, plus the whole vocabulary as one set. A single-ontology sweep
+    # never exercises cross-ontology de-duplication at all.
+    every = _all_ontologies()
+    applied_sets = [tuple(every[i : i + 3]) for i in range(0, len(every), 3)]
+    applied_sets.append(tuple(every))
+
     names_seen = 0
     parents = 0
     candidate_count = 0
-    for name in _all_ontologies():
-        schemas = _load(name)
-        names_seen += 1
-        roots = {tp.roots_at(d) for d in schemas[0].entity_types.values() if tp.roots_at(d)}
+    for combination in applied_sets:
+        schemas = _load(*combination)
+        names_seen += len(combination)
+        roots = {
+            tp.roots_at(d)
+            for ontology in schemas
+            for d in ontology.entity_types.values()
+            if tp.roots_at(d)
+        }
         for parent in roots:
             names = tp.sibling_types(parent, schemas)
             if not names:
@@ -292,46 +316,68 @@ def test_no_reply_can_widen_any_real_candidate_set():
             candidate_count += len(candidates)
             ids = [c[0] for c in candidates]
 
-            assert len(set(ids)) == len(ids), (name, parent)
-            assert tuple(c[1] for c in candidates) == tuple(names), (name, parent)
+            assert len(set(ids)) == len(ids), (combination, parent)
+            assert tuple(c[1] for c in candidates) == tuple(names), (combination, parent)
 
             # (a) cannot widen
             selection = parse_judge_response(
                 json.dumps({"move_under_proposal": ids + ["999", "Verzonnen"]}),
                 candidates,
             )
-            assert selection.widened is False, (name, parent)
-            assert set(selection.selected) == set(ids), (name, parent)
+            assert selection.widened is False, (combination, parent)
+            assert set(selection.selected) == set(ids), (combination, parent)
 
             # (b) cannot over-move — the direction the blocker lived in
             for reply in refuse:
                 got = parse_judge_response(reply, candidates)
-                assert got.selected == (), (name, parent, reply[:40])
+                assert got.selected == (), (combination, parent, reply[:40])
 
-    assert names_seen == len(_all_ontologies()) >= 11, names_seen
+    assert names_seen == 2 * len(every) >= 22, names_seen
     assert parents > 60, f"expected a substantial sweep, covered {parents} parents"
     assert candidate_count > 250, f"enumerated only {candidate_count} candidates"
 
 
-def test_same_named_types_are_separated_by_their_parents(deals):
-    """The fact that makes the id key harmless, measured rather than assumed.
+def test_same_named_types_are_separated_by_their_parents():
+    """The fact that makes the id key harmless — over a MULTI-ontology set.
 
-    The module fences by id "so two ontologies defining the same name cannot
-    collide". On the real vocabulary that collision cannot arise on the only path
-    that builds candidates: `sibling_types` de-duplicates by normalised name
-    first, and where two ontologies genuinely define the same name they root at
-    DIFFERENT parents, so they never share a candidate set. The fence is cheap
-    and stays; the justification is now the measured one.
+    The first version of this test loaded one ontology at a time, where
+    `entity_types` is a name-keyed dict and the property therefore holds by the
+    dict rather than by the mechanism: deleting `sibling_types`' de-duplication
+    left every test green. It now runs over the whole applied vocabulary, where
+    the de-duplication genuinely fires (42 times across a production-shaped set
+    of three), so removing it fails here.
+
+    What it establishes: no candidate set ever contains two types with the same
+    normalised name. Where two ontologies do define one — `Person`,
+    `Organization` and `Event` in `base` vs `general` — they root at DIFFERENT
+    parents and so never share a set.
     """
     from ontology_manager import type_placement as tp
 
-    for name in _all_ontologies():
-        schemas = _load(name)
-        roots = {tp.roots_at(d) for d in schemas[0].entity_types.values() if tp.roots_at(d)}
-        for parent in roots:
-            names = tp.sibling_types(parent, schemas)
-            lowered = [n.lower() for n in names]
-            assert len(set(lowered)) == len(lowered), (name, parent, names)
+    schemas = _load(*_all_ontologies())
+    checked = 0
+    for parent in {tp.roots_at(d) for o in schemas for d in o.entity_types.values()
+                   if tp.roots_at(d)}:
+        names = tp.sibling_types(parent, schemas)
+        lowered = [n.lower() for n in names]
+        assert len(set(lowered)) == len(lowered), (parent, names)
+        checked += len(names)
+    assert checked > 50, f"only {checked} candidates seen; the sweep lost coverage"
+
+
+def test_a_same_named_pair_really_exists_to_be_deduplicated():
+    """Guards the test above from becoming vacuous if the vocabulary changes.
+
+    If no two ontologies ever defined the same type name again, the property
+    would hold trivially and stop testing anything.
+    """
+    schemas = _load(*_all_ontologies())
+    seen: dict = {}
+    for ontology in schemas:
+        for name in ontology.entity_types:
+            seen.setdefault(name.lower(), set()).add(ontology.metadata.name)
+    shared = {n: o for n, o in seen.items() if len(o) > 1}
+    assert shared, "no type name is defined by two ontologies; dedup is untested"
 
 
 def test_duplicate_caller_ids_are_reported_not_resolved_silently():
@@ -347,3 +393,17 @@ def test_non_string_caller_ids_still_match():
     # identical to "the judge chose nothing".
     candidates = ((0, "A", ""), (1, "B", ""))
     assert parse_judge_response(_reply("1"), candidates).selected == ("1",)
+
+
+@pytest.mark.parametrize("spelling", [
+    '[{"move_under_proposal": ["0"]}]',
+    '```json\n[{"move_under_proposal": ["0"]}]\n```',
+    'Result: [{"move_under_proposal": ["0"]}]',
+])
+def test_a_top_level_array_is_refused_however_it_is_spelled(spelling):
+    """One shape, three spellings — a fence or preamble must not smuggle it past.
+
+    The first version tested `startswith("[")`, so only the bare form was
+    refused while the fenced and prose-wrapped forms were descended into.
+    """
+    assert parse_judge_response(spelling, _cands("A", "B")).selected == ()
