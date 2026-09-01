@@ -1,0 +1,278 @@
+"""Track N.4d.2 — the judge that selects among a proposal's siblings.
+
+Pure: this module builds a prompt and parses a reply, so every test here runs
+without a model. The fences are what matter, and each one exists because an
+entity-side judge failed that exact way earlier in this track — so they are
+asserted as properties rather than as single cases.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from ontology_manager.type_placement import place_proposed_type
+from ontology_manager.type_placement_judge import (
+    JUDGE_SYSTEM_PROMPT,
+    JudgeSelection,
+    build_judge_prompt,
+    candidates_from_ontologies,
+    parse_judge_response,
+)
+
+
+def _cands(*names):
+    return tuple((str(i), n, f"{n} description") for i, n in enumerate(names))
+
+
+def _reply(*ids):
+    return json.dumps({"move_under_proposal": list(ids)})
+
+
+# ---------------------------------------------------------------------------
+# The core AC: the judge selects within the set, and can never widen it
+# ---------------------------------------------------------------------------
+
+
+def test_selects_within_the_offered_set():
+    candidates = _cands("RegioDeal", "Woondeal", "CityDeal")
+    selection = parse_judge_response(_reply("0", "2"), candidates)
+    assert selection.selected == ("0", "2")
+    assert selection.considered == ("0", "1", "2")
+    assert selection.widened is False
+
+
+@pytest.mark.parametrize("reply", [
+    _reply("99"),                      # an id that was never offered
+    _reply("0", "99"),                 # one real, one invented
+    _reply("Woondeal"),                # a NAME rather than an id
+    json.dumps({"move_under_proposal": ["0"], "also_move": ["99"]}),
+    json.dumps({"move_under_proposal": [{"id": "99"}]}),
+])
+def test_the_judge_can_never_widen_the_set(reply):
+    """The property that makes delegating this decision safe.
+
+    Asserted over a range of shapes rather than one, because the failure it
+    guards against — an entity-side judge inventing a link target — arrived as a
+    plausible-looking reply, not a malformed one.
+    """
+    candidates = _cands("RegioDeal", "Woondeal")
+    selection = parse_judge_response(reply, candidates)
+    assert selection.widened is False
+    assert set(selection.selected).issubset({"0", "1"})
+
+
+def test_an_unoffered_id_is_reported_not_silently_dropped():
+    selection = parse_judge_response(_reply("0", "99"), _cands("A", "B"))
+    assert selection.selected == ("0",)
+    assert "ignored 1 id(s) that were not offered" in selection.evidence
+
+
+# ---------------------------------------------------------------------------
+# Silence is not a weak yes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("reply,why", [
+    ("", "empty reply"),
+    ("no json here", "prose only"),
+    ("{not valid json", "malformed"),
+    (json.dumps({"move_under_proposal": []}), "explicit empty list"),
+    (json.dumps({"something_else": ["0"]}), "wrong key"),
+])
+def test_nothing_is_moved_without_an_explicit_choice(reply, why):
+    selection = parse_judge_response(reply, _cands("A", "B"))
+    assert selection.selected == (), why
+    assert selection.considered == ("0", "1")
+
+
+def test_an_unmentioned_candidate_is_left_where_it_is():
+    selection = parse_judge_response(_reply("0"), _cands("A", "B", "C"))
+    assert selection.selected == ("0",)
+    assert "1" not in selection.selected and "2" not in selection.selected
+
+
+# ---------------------------------------------------------------------------
+# Distinguishable states, and other fences
+# ---------------------------------------------------------------------------
+
+
+def test_asked_nothing_differs_from_chose_nothing():
+    """An empty selection over five candidates is a decision; over zero it is not.
+
+    The entity-side work was rejected twice for collapsing exactly this kind of
+    pair, so the two carry different evidence.
+    """
+    nothing_asked = parse_judge_response(_reply(), ())
+    chose_nothing = parse_judge_response(_reply(), _cands("A", "B"))
+    assert nothing_asked.selected == chose_nothing.selected == ()
+    assert "nothing was asked" in nothing_asked.evidence
+    assert "nothing was asked" not in chose_nothing.evidence
+    assert nothing_asked.considered == ()
+    assert chose_nothing.considered == ("0", "1")
+
+
+def test_a_repeated_id_counts_once():
+    assert parse_judge_response(_reply("0", "0"), _cands("A")).selected == ("0",)
+
+
+def test_ids_not_names_are_the_key():
+    """Two ontologies may define the same type name; the id keeps them apart.
+
+    Descendant of the entity-side defect where a batch keyed by surface form let
+    one ruling satisfy two items and link one to the other's target.
+    """
+    candidates = (("0", "Deal", "from ontology A"), ("1", "Deal", "from ontology B"))
+    selection = parse_judge_response(_reply("1"), candidates)
+    assert selection.selected == ("1",)
+
+
+def test_selection_is_immutable():
+    selection = JudgeSelection(selected=("0",), considered=("0",))
+    with pytest.raises(Exception):
+        selection.selected = ("1",)  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# The prompt
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_carries_the_ids_and_the_parent():
+    prompt = build_judge_prompt(
+        "Stadsdeal", "een deal met een stad", "Deal", _cands("RegioDeal", "Woondeal")
+    )
+    assert "id=0: RegioDeal" in prompt and "id=1: Woondeal" in prompt
+    assert '"Stadsdeal"' in prompt and '"Deal"' in prompt
+    assert "een deal met een stad" in prompt
+
+
+def test_prompt_says_an_empty_answer_is_valid():
+    # The judge must not feel obliged to move something; over-moving is the
+    # damaging direction, since it changes everyone's vocabulary.
+    prompt = build_judge_prompt("P", "d", "G", _cands("A"))
+    assert "empty list is a valid" in prompt
+    assert "leave it where it is" in JUDGE_SYSTEM_PROMPT
+
+
+def test_prompt_handles_a_description_free_type():
+    prompt = build_judge_prompt("P", "", "G", (("0", "A", ""),))
+    assert "(none given)" in prompt and "(no description)" in prompt
+
+
+# ---------------------------------------------------------------------------
+# End to end with the real vocabulary
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def deals():
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from ontology_manager.registry import OntologyRegistry
+
+    loop = asyncio.new_event_loop()
+    try:
+        with patch.object(OntologyRegistry, "_load_from_db", AsyncMock(return_value=None)):
+            ontology = loop.run_until_complete(OntologyRegistry().get("deals"))
+    finally:
+        loop.close()
+    if ontology is None:  # pragma: no cover - ships with the package
+        pytest.skip("deals ontology not available")
+    return [ontology]
+
+
+def test_the_candidate_set_comes_from_the_deterministic_placement(deals):
+    """The judge is only ever offered what `type_placement` bounded.
+
+    This is the seam that keeps the delegation safe: the model chooses among a
+    handful of definitions that already share a parent, never a graph.
+    """
+    placement = place_proposed_type("Stadsdeal", "Deal", deals)
+    candidates = candidates_from_ontologies(placement.descendant_candidates, deals)
+    assert {c[1] for c in candidates} == {"RegioDeal", "Woondeal", "CityDeal"}
+    assert [c[0] for c in candidates] == ["0", "1", "2"]
+
+    # and a reply can only ever select within it
+    selection = parse_judge_response(_reply("0", "99"), candidates)
+    assert selection.widened is False
+    assert selection.selected == ("0",)
+
+
+def test_candidates_carry_real_descriptions(deals):
+    candidates = candidates_from_ontologies(("RegioDeal",), deals)
+    assert candidates[0][1] == "RegioDeal"
+    assert candidates[0][2], "the real ontology defines a description"
+
+
+def test_an_unknown_type_name_still_yields_a_candidate(deals):
+    # `type_placement` only ever passes names it found, but the helper must not
+    # raise if a caller passes something else.
+    candidates = candidates_from_ontologies(("Verzonnen",), deals)
+    assert candidates == (("0", "Verzonnen", ""),)
+
+
+# ---------------------------------------------------------------------------
+# The fences, swept over the whole shipped vocabulary
+# ---------------------------------------------------------------------------
+
+
+ALL_ONTOLOGIES = [
+    "base", "deals", "general", "government", "instruments", "policy",
+    "policy_themes", "regiodeal", "schema_core", "scholarly", "social_profiles",
+]
+
+
+def _load(name):
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from ontology_manager.registry import OntologyRegistry
+
+    loop = asyncio.new_event_loop()
+    try:
+        with patch.object(OntologyRegistry, "_load_from_db", AsyncMock(return_value=None)):
+            return [loop.run_until_complete(OntologyRegistry().get(name))]
+    finally:
+        loop.close()
+
+
+def test_no_reply_can_widen_any_real_candidate_set():
+    """Swept rather than sampled, and against an ADVERSARIAL reply.
+
+    N.4d.1 was rejected twice for fixes measured only on the case that failed, so
+    the guard here states a property over every parent in every shipped ontology:
+    a reply echoing all valid ids plus invented ones selects exactly the valid
+    ones and nothing more. Also asserts the ids are unique per set and that
+    building candidates preserves the deterministic set — an id collision would
+    silently merge two types in the judge's answer.
+    """
+    from ontology_manager import type_placement as tp
+
+    parents = 0
+    candidate_count = 0
+    for name in ALL_ONTOLOGIES:
+        schemas = _load(name)
+        roots = {tp.roots_at(d) for d in schemas[0].entity_types.values() if tp.roots_at(d)}
+        for parent in roots:
+            names = tp.sibling_types(parent, schemas)
+            if not names:
+                continue
+            parents += 1
+            candidates = candidates_from_ontologies(names, schemas)
+            candidate_count += len(candidates)
+            ids = [c[0] for c in candidates]
+
+            assert len(set(ids)) == len(ids), (name, parent)
+            assert tuple(c[1] for c in candidates) == tuple(names), (name, parent)
+
+            selection = parse_judge_response(
+                json.dumps({"move_under_proposal": ids + ["999", "Verzonnen"]}),
+                candidates,
+            )
+            assert selection.widened is False, (name, parent)
+            assert set(selection.selected) == set(ids), (name, parent)
+
+    assert parents > 50, f"expected a substantial sweep, covered {parents} parents"
+    assert candidate_count > 200, f"enumerated only {candidate_count} candidates"
