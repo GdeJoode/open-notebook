@@ -24,11 +24,14 @@ on the table:
 * silence on a candidate means LEAVE IT WHERE IT IS. A missing verdict is not a
   weak yes.
 
-Those fences are inherited from the entity-side judges (N.3 and N.4a), where each
-of them was added in response to a specific failure: a judge that invented a
-target, a judge whose ruling on one item silently satisfied another, and a batch
-keyed by surface form so two items with the same name collided. Keying by ID
-rather than by name is the direct descendant of that last one.
+Those fences descend from the entity-side judges (N.3 and N.4a). Stated as the
+review record actually has it, rather than more dramatically: no judge in this
+track was ever caught inventing a target — the reviews record that fencing as
+having WORKED. What did happen (N.4a M1) is that a batch keyed by surface form
+let one ruling satisfy a second item and link it to the FIRST item's target, a
+borrowed target rather than an invented one. Keying by ID descends from that.
+The list-shape guard descends from no failure at all: both ancestors carry an
+``isinstance`` check this module omitted, and a review caught the omission here.
 
 Why the decision is safe to delegate here
 =========================================
@@ -81,10 +84,12 @@ class JudgeSelection:
 
     @property
     def widened(self) -> bool:
-        """True if anything selected was not offered — always False by construction.
+        """True if anything selected was not offered — always False for parser output.
 
-        Kept as an assertable invariant rather than a comment: it is the one
-        property that makes delegating this decision safe.
+        A convenience for asserting that, not the guarantee itself: it is computed
+        from this object's own fields, so a hand-built ``JudgeSelection`` can
+        report ``False`` while lying. The actual guarantee is the membership
+        filter in :func:`parse_judge_response`, and no production code reads this.
         """
         return not set(self.selected).issubset(set(self.considered))
 
@@ -114,7 +119,7 @@ def build_judge_prompt(
         "",
         "Return ONLY this JSON (no prose):",
         "",
-        '{"move_under_proposal": ["<id>", "<id>"]}',
+        '{"move_under_proposal": ["<id>"]}   (or [] to move nothing)',
         "",
         "Use the ids exactly as given. Include an id only if that type is genuinely "
         f'a kind of "{proposal_name}". An empty list is a valid and often correct '
@@ -128,47 +133,69 @@ def parse_judge_response(
 ) -> JudgeSelection:
     """Parse the reply into the ids the judge chose, discarding anything else.
 
-    Fenced four ways, each one inherited from a specific earlier failure: an id
-    that was not offered is dropped (the judge cannot widen the set); a duplicate
-    id counts once; a malformed or empty reply selects NOTHING rather than
-    everything; and a candidate the judge did not mention is simply not selected,
-    because silence is not a weak yes.
-    """
-    offered = [c[0] for c in candidates]
-    offered_set = set(offered)
-    empty = JudgeSelection(selected=(), considered=tuple(offered))
+    Fenced five ways. Four are inherited from the entity-side judges; the fifth is
+    the one this module originally DROPPED and a review caught:
 
-    if not raw or not offered:
-        return JudgeSelection(
-            selected=(),
-            considered=tuple(offered),
-            evidence=(
-                "no candidates were offered, so nothing was asked"
-                if not offered
-                else "the judge returned nothing, so no type is moved"
-            ),
-        )
+    * an id that was not offered is ignored, so the set cannot be widened;
+    * ``move_under_proposal`` must be a LIST. Python iterates a ``str`` by
+      character and a ``dict`` by key, so without this a reply of ``"10"`` selects
+      candidates 1 and 0 — two the model never named — and ``{"0": false,
+      "1": true}`` turns an explicit NO into a yes. Both ancestors
+      (``not_a_concept``, ``concept_alignment``) begin their loop with an
+      ``isinstance`` guard for exactly this reason; omitting it here was a fence
+      removed, not inherited;
+    * each element must be a scalar id, so a nested object or list is skipped
+      rather than stringified into a match;
+    * a duplicate id counts once;
+    * a malformed, empty or wrongly-shaped reply selects NOTHING rather than
+      everything, because silence is not a weak yes.
+
+    Every refusal is fail-closed: the damaging direction here is moving a type
+    nobody asked to move, since that changes everyone's vocabulary.
+    """
+    offered = [str(c[0]) for c in candidates]
+    offered_set = set(offered)
+
+    def _nothing(evidence: str) -> JudgeSelection:
+        return JudgeSelection(selected=(), considered=tuple(offered), evidence=evidence)
+
+    if not offered:
+        return _nothing("no candidates were offered, so nothing was asked")
+    if not raw:
+        return _nothing("the judge returned nothing, so no type is moved")
+
+    blob = raw.strip()
+    if blob.startswith("["):
+        # A top-level array is refused rather than descended into: an earlier
+        # review of this repo's judges forbade that shape by name, because the
+        # element that happens to be first is not a verdict the model addressed.
+        return _nothing("the judge's reply was a top-level array; nothing is moved")
+    start_brace, end_brace = blob.find("{"), blob.rfind("}")
+    if start_brace == -1 or end_brace == -1 or end_brace <= start_brace:
+        return _nothing("the judge's reply contained no JSON object; nothing is moved")
     try:
-        blob = raw.strip()
-        start, end = blob.find("{"), blob.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return JudgeSelection(
-                selected=(), considered=tuple(offered),
-                evidence="the judge's reply contained no JSON object; nothing is moved",
-            )
-        data = json.loads(blob[start : end + 1])
+        data = json.loads(blob[start_brace : end_brace + 1])
     except (ValueError, TypeError) as exc:
         logger.warning("type_placement_judge: reply did not parse ({e})", e=exc)
-        return JudgeSelection(
-            selected=(), considered=tuple(offered),
-            evidence=f"the judge's reply did not parse ({exc}); nothing is moved",
-        )
+        return _nothing(f"the judge's reply did not parse ({exc}); nothing is moved")
     if not isinstance(data, dict):
-        return empty
+        return _nothing("the judge's reply was not a JSON object; nothing is moved")
+
+    raw_selection = data.get("move_under_proposal")
+    if raw_selection is None:
+        return _nothing("the judge named no types to move")
+    if not isinstance(raw_selection, list):
+        return _nothing(
+            "the judge's selection was not a list "
+            f"({type(raw_selection).__name__}); nothing is moved"
+        )
 
     chosen: List[str] = []
     ignored: List[str] = []
-    for item in data.get("move_under_proposal", []) or []:
+    for item in raw_selection:
+        if isinstance(item, (dict, list, bool)) or item is None:
+            ignored.append(repr(item))
+            continue
         item_id = str(item)
         if item_id not in offered_set:
             ignored.append(item_id)
@@ -176,20 +203,30 @@ def parse_judge_response(
         if item_id not in chosen:
             chosen.append(item_id)
 
-    by_id = {c[0]: c[1] for c in candidates}
+    by_id: Dict[str, str] = {}
+    duplicate_ids = False
+    for candidate_id, name, _ in candidates:
+        if str(candidate_id) in by_id:
+            duplicate_ids = True
+        by_id.setdefault(str(candidate_id), name)
     names = ", ".join(repr(by_id[i]) for i in chosen) if chosen else "none"
     evidence = (
         f"the judge was offered {len(offered)} sibling(s) of the proposal's parent "
         f"and selected {names}"
     )
     if ignored:
-        # Reported, not silently dropped: an id that was never offered means the
-        # model tried to widen the set, which is worth seeing.
-        evidence += f"; ignored {len(ignored)} id(s) that were not offered"
+        # Reported, not silently dropped: an entry that was never offered means
+        # the model tried to widen the set, which is worth seeing.
+        evidence += f"; ignored {len(ignored)} entr(y/ies) that were not offered"
         logger.warning(
-            "type_placement_judge: ignored {n} id(s) not in the offered set: {ids}",
-            n=len(ignored), ids=ignored,
+            "type_placement_judge: ignored {n} entr(y/ies) not in the offered set: {x}",
+            n=len(ignored), x=ignored,
         )
+    if duplicate_ids:
+        # The caller built an ambiguous set; say so rather than resolve it
+        # silently, because the reported NAME would then be arbitrary.
+        evidence += "; NOTE the caller supplied duplicate candidate ids"
+        logger.warning("type_placement_judge: caller supplied duplicate candidate ids")
     return JudgeSelection(
         selected=tuple(chosen), considered=tuple(offered), evidence=evidence
     )

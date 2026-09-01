@@ -65,7 +65,7 @@ def test_the_judge_can_never_widen_the_set(reply):
 def test_an_unoffered_id_is_reported_not_silently_dropped():
     selection = parse_judge_response(_reply("0", "99"), _cands("A", "B"))
     assert selection.selected == ("0",)
-    assert "ignored 1 id(s) that were not offered" in selection.evidence
+    assert "ignored 1 entr(y/ies) that were not offered" in selection.evidence
 
 
 # ---------------------------------------------------------------------------
@@ -218,10 +218,16 @@ def test_an_unknown_type_name_still_yields_a_candidate(deals):
 # ---------------------------------------------------------------------------
 
 
-ALL_ONTOLOGIES = [
-    "base", "deals", "general", "government", "instruments", "policy",
-    "policy_themes", "regiodeal", "schema_core", "scholarly", "social_profiles",
-]
+def _all_ontologies():
+    """Every shipped ontology, derived rather than hardcoded.
+
+    A hardcoded list silently loses coverage when an ontology is added, and
+    raises confusingly when one is renamed.
+    """
+    from ontology_manager.registry import OntologyRegistry
+
+    directory = OntologyRegistry()._find_ontology_dir()
+    return sorted(f.stem for f in directory.glob("*.yaml"))
 
 
 def _load(name):
@@ -239,21 +245,43 @@ def _load(name):
 
 
 def test_no_reply_can_widen_any_real_candidate_set():
-    """Swept rather than sampled, and against an ADVERSARIAL reply.
+    """Swept rather than sampled, and in BOTH directions.
 
-    N.4d.1 was rejected twice for fixes measured only on the case that failed, so
-    the guard here states a property over every parent in every shipped ontology:
-    a reply echoing all valid ids plus invented ones selects exactly the valid
-    ones and nothing more. Also asserts the ids are unique per set and that
-    building candidates preserves the deterministic set — an id collision would
-    silently merge two types in the judge's answer.
+    The first version fed only "every valid id plus invented ones", which can
+    detect widening — a direction that was never actually at risk. The blocker
+    review then mutated the parser to `chosen = list(offered)` (move everything,
+    regardless of the reply) and this test still passed, while the real defect
+    lived exactly there: a reply of `"10"` iterated as characters and moved two
+    types the model never named.
+
+    So the sweep now also asserts the OVER-MOVE direction: every reply shape that
+    should select nothing must select nothing, on every parent of every shipped
+    ontology.
     """
     from ontology_manager import type_placement as tp
 
+    # Shapes that must yield NOTHING. Each is a real model failure mode, and the
+    # first two are the blocker: a string iterates by character, a dict by key.
+    refuse = [
+        json.dumps({"move_under_proposal": "10"}),
+        json.dumps({"move_under_proposal": {"0": False, "1": True}}),
+        json.dumps({"move_under_proposal": 2}),
+        json.dumps({"move_under_proposal": True}),
+        json.dumps({"move_under_proposal": None}),
+        json.dumps({"move_under_proposal": [["0"]]}),
+        json.dumps({"move_under_proposal": [{"id": "0"}]}),
+        '[{"move_under_proposal": ["0"]}]',
+        json.dumps({"something_else": ["0"]}),
+        "no json at all",
+        "",
+    ]
+
+    names_seen = 0
     parents = 0
     candidate_count = 0
-    for name in ALL_ONTOLOGIES:
+    for name in _all_ontologies():
         schemas = _load(name)
+        names_seen += 1
         roots = {tp.roots_at(d) for d in schemas[0].entity_types.values() if tp.roots_at(d)}
         for parent in roots:
             names = tp.sibling_types(parent, schemas)
@@ -267,6 +295,7 @@ def test_no_reply_can_widen_any_real_candidate_set():
             assert len(set(ids)) == len(ids), (name, parent)
             assert tuple(c[1] for c in candidates) == tuple(names), (name, parent)
 
+            # (a) cannot widen
             selection = parse_judge_response(
                 json.dumps({"move_under_proposal": ids + ["999", "Verzonnen"]}),
                 candidates,
@@ -274,5 +303,47 @@ def test_no_reply_can_widen_any_real_candidate_set():
             assert selection.widened is False, (name, parent)
             assert set(selection.selected) == set(ids), (name, parent)
 
-    assert parents > 50, f"expected a substantial sweep, covered {parents} parents"
-    assert candidate_count > 200, f"enumerated only {candidate_count} candidates"
+            # (b) cannot over-move — the direction the blocker lived in
+            for reply in refuse:
+                got = parse_judge_response(reply, candidates)
+                assert got.selected == (), (name, parent, reply[:40])
+
+    assert names_seen == len(_all_ontologies()) >= 11, names_seen
+    assert parents > 60, f"expected a substantial sweep, covered {parents} parents"
+    assert candidate_count > 250, f"enumerated only {candidate_count} candidates"
+
+
+def test_same_named_types_are_separated_by_their_parents(deals):
+    """The fact that makes the id key harmless, measured rather than assumed.
+
+    The module fences by id "so two ontologies defining the same name cannot
+    collide". On the real vocabulary that collision cannot arise on the only path
+    that builds candidates: `sibling_types` de-duplicates by normalised name
+    first, and where two ontologies genuinely define the same name they root at
+    DIFFERENT parents, so they never share a candidate set. The fence is cheap
+    and stays; the justification is now the measured one.
+    """
+    from ontology_manager import type_placement as tp
+
+    for name in _all_ontologies():
+        schemas = _load(name)
+        roots = {tp.roots_at(d) for d in schemas[0].entity_types.values() if tp.roots_at(d)}
+        for parent in roots:
+            names = tp.sibling_types(parent, schemas)
+            lowered = [n.lower() for n in names]
+            assert len(set(lowered)) == len(lowered), (name, parent, names)
+
+
+def test_duplicate_caller_ids_are_reported_not_resolved_silently():
+    # Unreachable via `candidates_from_ontologies`, but a caller could build it,
+    # and the reported NAME would otherwise be arbitrary.
+    candidates = (("0", "A", ""), ("0", "B", ""))
+    selection = parse_judge_response(_reply("0"), candidates)
+    assert "duplicate candidate ids" in selection.evidence
+
+
+def test_non_string_caller_ids_still_match():
+    # A caller passing ints must not silently get a total refusal that reads
+    # identical to "the judge chose nothing".
+    candidates = ((0, "A", ""), (1, "B", ""))
+    assert parse_judge_response(_reply("1"), candidates).selected == ("1",)

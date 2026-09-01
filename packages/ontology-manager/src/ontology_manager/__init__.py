@@ -48,6 +48,7 @@ from ontology_manager.type_placement import (
 from ontology_manager.type_placement_judge import (
     JudgeSelection,
     build_judge_prompt,
+    candidates_from_ontologies,
     parse_judge_response,
 )
 from ontology_manager.validator import (
@@ -113,5 +114,6 @@ __all__ += [
 __all__ += [
     "JudgeSelection",
     "build_judge_prompt",
+    "candidates_from_ontologies",
     "parse_judge_response",
 ]
