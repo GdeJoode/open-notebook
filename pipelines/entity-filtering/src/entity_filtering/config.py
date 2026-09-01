@@ -155,37 +155,28 @@ class KGResolutionConfig:
 class ConceptAlignmentConfig:
     """Concept-level alignment settings (Track N.4).
 
-    Classifies the entities KG resolution marked ``is_new`` relative to the graph
-    (NARROWER_THAN / BROADER_THAN / RELATED_TO / NOVEL) instead of leaving them
-    floating, and seeds an ``is_a`` edge for a NARROWER verdict that has a
-    materialised target.
+    Classifies the entities KG resolution marked ``is_new`` as RELATED_TO
+    something the graph already holds, or NOVEL, instead of leaving them floating.
+    Emits no relations: subsumption moved to the type boundary in N.4d (D-N4-12).
 
     Attributes:
         enabled: Whether to classify novel concepts at all.
         judge_enabled: Let the LLM-judge arbitrate the ambiguous RELATED/NOVEL
             band (D4, default ON). Without it that band resolves to NOVEL.
-        type_chain_enabled: The ancestor-name subsumption tier. **Default OFF** —
-            it cannot verify that a name-matched node really is that type, and a
-            false hit would seed a false ``is_a``. D-N4-10 assigns the verifiable
-            version to N.4c.
         related_floor: Cosine below which nothing is close enough to relate.
         match_ceiling: Cosine at/above which similarity alone implies RELATED_TO
             (mirror of ``KGResolutionConfig.semantic_threshold``).
         max_candidates: Rows per type fetch. The query is ``LIMIT``-capped and
             unordered, so this is an arbitrary sample — the verdicts disclose it.
         min_inner_tokens: Precision guard for the alias-candidate signal.
-        seed_is_a: Emit provenance-tagged ``is_a`` relations for NARROWER_THAN
-            verdicts that have a materialised target entity.
     """
 
     enabled: bool = False
     judge_enabled: bool = True
-    type_chain_enabled: bool = False
     related_floor: float = 0.75
     match_ceiling: float = 0.90
     max_candidates: int = 100
     min_inner_tokens: int = 2
-    seed_is_a: bool = True
 
 
 @dataclass
