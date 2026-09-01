@@ -157,7 +157,8 @@ class ConceptAlignmentConfig:
 
     Classifies the entities KG resolution marked ``is_new`` as RELATED_TO
     something the graph already holds, or NOVEL, instead of leaving them floating.
-    Emits no relations: subsumption moved to the type boundary in N.4d (D-N4-12).
+    Emits no relations: subsumption is planned to move to the type boundary in
+    N.4d (D-N4-12), and is currently handled nowhere.
 
     Attributes:
         enabled: Whether to classify novel concepts at all.

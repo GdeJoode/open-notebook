@@ -660,7 +660,8 @@ class FilteringWorkflow:
         # found), each with falsifiable evidence, instead of leaving them all
         # looking alike. Also surfaces long-form/short-form ALIAS candidates for
         # review. Subsumption is deliberately absent: it relates TYPES while this
-        # table stores MENTIONS, so it moved to the type boundary in N.4d
+        # table stores MENTIONS, so it is planned to move to the type boundary
+        # in N.4d — and is currently handled nowhere
         # (D-N4-12). The stage emits NO relations and is strictly
         # non-destructive — it writes to ``properties`` and nothing else.
         #

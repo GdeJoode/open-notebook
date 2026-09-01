@@ -242,8 +242,8 @@ async def test_zero_norm_vector_is_incomparable(monkeypatch):
 
 
 async def test_internal_error_has_its_own_code(monkeypatch):
-    # Review B4: a crash must not be stamped "no rows"/"none close" — N.4c filters
-    # gap-recording on this code.
+    # Review B4: a crash must not be stamped "no rows"/"none close" — N.4d.4 will
+    # filter gap-recording on this code.
     repo = _Repo({"programme": [_row("A", "entity:a", embedding=[1.0, 0.0])]})
     aligner = ConceptAligner(repo, schemas=["s"])
     monkeypatch.setattr(ca, "resolve_canonical_type",
@@ -576,7 +576,7 @@ async def test_cosine_is_not_written_as_confidence(monkeypatch):
     assert props["alignment_confidence"] == ca._CONF_EMBEDDING
 
 
-async def test_canonical_type_is_carried_for_n4b(monkeypatch):
+async def test_canonical_type_is_carried_as_audit_provenance(monkeypatch):
     repo = _Repo({"programme": [_row("Twin", "entity:t", embedding=[1.0, 0.0])]})
     aligner = ConceptAligner(repo, schemas=["s"])
     ents, _ = await _align(aligner, [_entity("X", "L", embedding=[1.0, 0.0])],
