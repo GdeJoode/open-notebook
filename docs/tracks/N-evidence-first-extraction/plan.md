@@ -309,6 +309,7 @@ approve/reject/implement, plus `list_gaps` / `get_gap_statistics`), wired into
 | **D-N4-6** | A `NOVEL` verdict **records an ontology gap** via `OntologyEvolutionAgent.record_gap`. | Closes the loop the chapter always intended: novel concept → gap → frequency → `SchemaProposal`. |
 | **D-N4-7** | Evidence must be **falsifiable**: never assert "nothing comparable exists" when no candidates were *fetched*. Distinguish `no_candidates_fetched` from `candidates_fetched_none_close`. | An evidence-first track cannot stamp confident falsehoods (M5). |
 | **D-N4-8** | Reachability is part of the phase, not a follow-up: an env flag **and** DI wiring in `entity_extraction_service`, with a WARNING on enabled-but-unwired (the orphan-connector pattern). | v1's judge was unreachable in every real run (M7). |
+| **D-N4-10** | **`BROADER_THAN` must be reachable**, delivered in N.4c via inverse chain lookup and/or type-level alignment of `SchemaProposal`s — still ontological evidence only, never lexical or cosine. | N.4a leaves it unreachable (the chain only walks upward), which would silently reduce the taxonomy to three values. Full statement in the N.4c section. |
 
 **D-N4-9 (RESOLVED 2026-09-01, user)** — the lexical signal becomes an **alias
 candidate**, not `is_a` and not a verdict. `lexical_alias_candidates` emits
@@ -349,17 +350,49 @@ remains possible later.
   blockers): seeds survive validation, do not shift centrality, do not change which
   entities stage 12 removes, and `ExtractedRelation(**seed)` validates.
 
-**N.4c — Gap loop + reachability** — ~0.5–1d
+**N.4c — Gap loop + reachability + BROADER_THAN** — ~1–1.5d
 - **Wire** `OntologyEvolutionAgent.record_gap` on every NOVEL verdict (D-N4-6),
   carrying the entity text, the rich label as `entity_type_guess`, and the chunk
   context; surface `get_gap_statistics` in the alignment report.
+- **Make `BROADER_THAN` reachable (D-N4-10)** — see below. N.4a leaves it
+  unreachable as an honest consequence of D-N4-2 (the declared `parent_type` chain
+  only ever walks UPWARD, so it can say "novel is narrower than an ancestor" but
+  never "novel is broader than an existing concept"). N.4c must close that, so the
+  taxonomy is four-valued in practice and not three.
 - **Wire** the env flag + DI (`entity_repo`, `ontology`, `alignment_llm_caller`) in
   `entity_extraction_service`, with a WARNING when enabled but unwired (D-N4-8).
 - **AC**: a NOVEL concept produces a gap row; N occurrences cross the threshold and
   produce a `SchemaProposal`; enabling the stage without a repo logs a WARNING and
-  is a no-op; the judge is exercised in a real run.
+  is a no-op; the judge is exercised in a real run; **a concept that generalises
+  existing graph concepts is classified `BROADER_THAN` with ontological evidence,
+  never from a similarity or string signal**.
 - **Tests**: gap recorded once per novel concept; proposal appears at the threshold;
-  unwired-but-enabled warns and no-ops.
+  unwired-but-enabled warns and no-ops; an inverse-chain case yields BROADER_THAN
+  and its mirror yields NARROWER_THAN (the two must not both fire for one pair).
+
+> **D-N4-10 — `BROADER_THAN` must be reachable (user, 2026-09-01).**
+> It stays bound by D-N4-2: the evidence must be ontological, never lexical or
+> cosine-based. Two sound routes, to be chosen/combined during N.4c:
+>
+> 1. **Inverse chain lookup** — the mirror of the N.4a tier. For each entity type
+>    `T` in the applied ontology whose declared ancestor chain CONTAINS the novel
+>    concept's type/label `L`, every existing entity of type `T` is narrower than
+>    `L`, hence `L` is `BROADER_THAN` them. Pure ontology reasoning plus a fetch on
+>    `T`'s canonical type.
+>    *Enabling constraint*: `find_by_type` projects `id, name, embedding, weight`
+>    and **no type column**, so the direction cannot be recovered from a candidate
+>    row — the lookup must be driven from the ontology side (enumerate the types
+>    whose chain contains `L`, then fetch per type), or the repo projection must be
+>    widened. Decide this explicitly; do not infer a candidate's type from its name.
+> 2. **Type-level alignment of `SchemaProposal`s** — the evolution agent's natural
+>    unit. A proposed NEW TYPE can genuinely become the parent of existing types,
+>    which is exactly `BROADER_THAN`. This is the case where the verdict is most
+>    informative, and it feeds the proposal's own `parent_type` field back.
+>
+> Note the framing this exposes: subsumption is a TYPE-level notion. For an
+> ordinary novel INSTANCE, `NARROWER/BROADER` will remain rare and `RELATED/NOVEL`
+> will carry the phase's value — which is why the gap loop (D-N4-6) is the part
+> that pays off for instances, and BROADER_THAN pays off for proposed types.
 
 #### Salvage from attempt 1 (`da0bda6`)
 Carry forward, do not rebuild: the four-verdict taxonomy + `Alignment` record; the
