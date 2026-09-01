@@ -84,10 +84,22 @@
 > before N.4c filters gap-recording on `reason_code`.**
 > Report: `reviews/phase-N.4a-attempts-1-2.md`.
 >
-> **▶ THEN N.4b** (placement + seeding that survives ontology validation and
-> centrality, with the mandatory workflow-level integration test) → **N.4c** (gap
-> loop + `BROADER_THAN` reachability + the descendant sweep). All N.4 decisions are
-> resolved: D-N4-9 (the lexical signal becomes an alias candidate), D-N4-10
+> **N.4b SHIPPED** (merge `19add9c`, branch `feature/track-n4b-placement-seeding`)
+> — Stage 15 runs AFTER ontology validation and centrality, which is what makes the
+> alignment's output actually reach the graph without perturbing what came before.
+> Both failure modes were MEASURED rather than argued: the real ontology filter
+> yields `surviving relations: []` for such a seed, and the real graph analyser
+> scores the same entities 0.5 vs 0.25974 with and without one. Seeding is a pure
+> function of the recorded verdict and refuses self-referential, untyped, dangling
+> and duplicate edges while stamping both endpoint types (D-N4-5). Attempt 1 hit a
+> BLOCKER — a self-referential `is_a` (`Deal is_a Deal`), reachable because an
+> entity whose surface form equals an ancestor type name matched its own row;
+> fixed at the verdict AND the seeding level. Attempt 2 APPROVED, verified by
+> MUTATION TESTING: disabling each new guard makes a specific test fail.
+> Report: `reviews/phase-N.4b-attempts-1-2.md`; residuals R2–R5 carried to N.4c.
+>
+> **▶ THEN N.4c** (gap loop + `BROADER_THAN` reachability + the descendant sweep).
+> All N.4 decisions are resolved: D-N4-9 (the lexical signal becomes an alias candidate), D-N4-10
 > (BROADER_THAN must be reachable), D-N4-11 (an accepted BROADER_THAN sweeps for
 > all its other descendants). Then N.5 (regression gate + docs; also lands the N.2 +
 > N.3 follow-ups above). The **evidence-packet clustering stays DEFERRED — measure
@@ -386,6 +398,15 @@ will touch. They are line items, not "nice to have":
 > type), and it is the only producer of `NARROWER_THAN` — so N.4b's seeding path is
 > exercised today only by explicitly opting into a tier the module documents as
 > unverifiable. N.4c's verifiable subsumption is what turns seeding on for real.
+
+#### Residuals carried from the N.4b review (binding)
+
+| # | Item |
+|---|---|
+| **R2** | **Cross-pass duplicate `is_a`.** N.4b de-duplicates within its own pass only. An `is_a` on the same ordered pair already contributed by N.2's Hearst miner is not suppressed; at persist the two collapse on `(in, out, relation_type)` and the later write re-tags `relation_source`, weakening the "one `WHERE relation_source = …` drops the pass" reversibility claim. Fix alongside the sweep, which multiplies edges and so multiplies this. |
+| **R3** | C2's two ruled-judge evidence branches and `EV_INCOMPARABLE_VECTORS` are unasserted (all consume the identical `sampled` element — negligible). |
+| **R4** | `float(props.get("alignment_confidence") or 0.0)` raises on a non-numeric value and forwards an out-of-range one to Pydantic. Unreachable from `_enrich`; recorded so it is not rediscovered. |
+| **R5** | Under the SHIPPED defaults **zero** edges are seeded — `type_chain_enabled` is off and is the only `NARROWER_THAN` producer. D-N4-10's verifiable subsumption is what turns seeding on for real, so N.4c is where this phase starts producing anything by default. |
 
 **N.4c — Gap loop + reachability + BROADER_THAN + descendant sweep** — ~1.5–2d
 - **Wire** `OntologyEvolutionAgent.record_gap` on every NOVEL verdict (D-N4-6),
