@@ -887,19 +887,6 @@ class EntityExtractionService:
         proposals = metadata.get("proposed_extensions") or []
 
         try:
-            # The row that HOLDS the queue is created here, because nothing else
-            # creates it. Measured on the live corpus: 17 `pass1_results` rows
-            # with 111 proposals, and zero `notebook_schema` rows — so every
-            # writer below was correctly reporting "no row" and doing nothing.
-            # Without this the rest of PC.1 is inert on exactly the data that
-            # motivated it.
-            base = self._gap_ontology_name or self._top_applied_schema_name()
-            if base:
-                await notebook_schema_repo.ensure_row(notebook_id, base)
-        except Exception as e:
-            logger.warning(f"could not create notebook_schema for {notebook_id}: {e}")
-
-        try:
             if proposals:
                 added = await notebook_schema_repo.merge_pending_extensions(
                     notebook_id, proposals
@@ -927,22 +914,6 @@ class EntityExtractionService:
     # would silently start truncating at ~57 documents — and truncate a source
     # PARTIALLY, giving a wrong average rather than a stale one.
     _COVERAGE_WINDOW = 1000
-
-    def _top_applied_schema_name(self) -> Optional[str]:
-        """The schema this run actually extracted with, for a new schema row.
-
-        Only used when the notebook has no declared `base_ontology` — which is
-        the common case, since nothing creates the row. `detect_applicable_schemas`
-        ranks by content overlap, so the first entry is the best-fitting schema
-        for the document that triggered the creation. A starting value the
-        curator can change, not a verdict.
-        """
-        for ontology in self._applicable_schemas or []:
-            metadata = getattr(ontology, "metadata", None)
-            name = getattr(metadata, "name", None)
-            if isinstance(name, str) and name.strip():
-                return name.strip()
-        return None
 
     @staticmethod
     async def _rolling_coverage(
@@ -1162,6 +1133,33 @@ class EntityExtractionService:
         pass1_repo = self._pass1_repo or Pass1ResultRepository()
 
         notebook_schema = await notebook_schema_repo.get_by_notebook(notebook_id)
+
+        # PC.1: create the row HERE, before schema detection, because otherwise a
+        # notebook can never get one. Measured on the live corpus, the cycle is
+        # closed: no row -> no base ontology forced -> content scoring clears the
+        # floor for nothing -> the fallback below returns early -> Pass 1 never
+        # runs -> no proposals -> nothing creates the row. The comment on that
+        # fallback already calls this "the common case: a notebook with no
+        # configured schema"; what it did not say is that the case is permanent.
+        #
+        # Creating it before `_apply_notebook_schema_default` means the base is
+        # forced on THIS run, so the first document a notebook ever sees gets a
+        # Pass-1 pass instead of the legacy path. The base is the ontology this
+        # run was asked for — a starting value the curator changes from the
+        # Schema tab, not a verdict.
+        if notebook_schema is None:
+            try:
+                created = await notebook_schema_repo.ensure_row(
+                    notebook_id, config.ontology_name
+                )
+                if created:
+                    notebook_schema = await notebook_schema_repo.get_by_notebook(
+                        notebook_id
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"could not create notebook_schema for {notebook_id}: {e}"
+                )
 
         # Review gate — if the user has paused processing for this
         # notebook, do not run extraction. The caller (handler) treats

@@ -1890,7 +1890,10 @@ class TestPass1OutcomeReachesTheCurator:
         notebook_schema_repo_fixture.ensure_row.assert_awaited_once()
         nb, base = notebook_schema_repo_fixture.ensure_row.await_args.args
         assert nb == "notebook:abc"
-        assert base == "deals"
+        # The ontology this run was ASKED for. The row is created before schema
+        # detection — that ordering is what breaks the cycle, because the base is
+        # then forced on this same run instead of only helping the next one.
+        assert base == "general"
         # And the queue write still happens, on the row that now exists.
         notebook_schema_repo_fixture.merge_pending_extensions.assert_awaited_once()
 
