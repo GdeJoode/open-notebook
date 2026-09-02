@@ -254,3 +254,117 @@ def test_notebook_default_bundle_is_data_driven():
     # policy_themes on content with no bundle dependency.
     assert NOTEBOOK_DEFAULT_BUNDLE["deals"] == ["policy_themes"]
     assert NOTEBOOK_DEFAULT_BUNDLE["government"] == ["policy_themes"]
+
+
+class TestAcceptedSchemaEditsReachThePersistPath:
+    """Track N.4d.3 — the acceptance criterion, end to end on the real path.
+
+    An accepted re-parent must move every entity of that type under its new
+    ancestor with NO per-entity write: the type moved, so
+    ``_resolve_entity_type`` — the function the persist path actually calls —
+    returns the new canonical for a label it was never told anything about.
+
+    These call ``_project_notebook_edits`` directly, the way the tests above call
+    ``_apply_notebook_schema_default``: it is pure, and going through
+    ``_run_multi_schema`` would test the LLM plumbing around it rather than the
+    edit taking effect.
+    """
+
+    def _service(self) -> EntityExtractionService:
+        return EntityExtractionService.__new__(EntityExtractionService)
+
+    @staticmethod
+    def _schema(accepted):
+        return NotebookSchema(
+            notebook="notebook:regiodeal",
+            base_ontology="deals",
+            accepted_extensions=accepted,
+        )
+
+    @staticmethod
+    def _reparent(type_name, new_parent):
+        return {
+            "reparent_id": f"reparent::{type_name}->{new_parent}",
+            "op": "reparent",
+            "type_name": type_name,
+            "new_parent": new_parent,
+            "parent_type": new_parent,
+        }
+
+    async def _applied(self):
+        ontologies = await _load_real_ontologies()
+        wanted = ("policy_themes", "deals", "government")
+        return [
+            (o, 0.9) for o in ontologies if o.metadata.name in wanted
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_reparented_type_persists_under_its_new_canonical(self):
+        applied = await self._applied()
+        before = _resolve_entity_type("BeleidsThema", [o for o, _c in applied])
+        assert before.entity_type == "topic", "vacuity guard: the move must move something"
+
+        projected = self._service()._project_notebook_edits(
+            applied, self._schema([self._reparent("BeleidsThema", "Deal")]), "notebook:x"
+        )
+
+        after = _resolve_entity_type("BeleidsThema", [o for o, _c in projected])
+        assert after.entity_type == "programme"
+        # The rich label survives the move — the anti-flattening guarantee is not
+        # what a re-parent trades away.
+        assert after.primary_type == "BeleidsThema"
+
+    @pytest.mark.asyncio
+    async def test_the_confidences_and_order_survive_the_projection(self):
+        applied = await self._applied()
+        projected = self._service()._project_notebook_edits(
+            applied, self._schema([self._reparent("BeleidsThema", "Deal")]), "notebook:x"
+        )
+        assert [c for _o, c in projected] == [c for _o, c in applied]
+        assert [o.metadata.name for o, _c in projected] == [
+            o.metadata.name for o, _c in applied
+        ]
+
+    @pytest.mark.asyncio
+    async def test_the_next_notebook_gets_the_shipped_vocabulary_back(self):
+        """The registry caches ontologies and hands the SAME object to every
+        caller, so a projection that edited in place would leak this notebook's
+        edit into every other notebook in the process.
+        """
+        applied = await self._applied()
+        self._service()._project_notebook_edits(
+            applied, self._schema([self._reparent("BeleidsThema", "Deal")]), "notebook:x"
+        )
+
+        fresh = await self._applied()
+        assert _resolve_entity_type(
+            "BeleidsThema", [o for o, _c in fresh]
+        ).entity_type == "topic"
+
+    @pytest.mark.asyncio
+    async def test_a_notebook_without_accepted_edits_is_passed_through_untouched(self):
+        applied = await self._applied()
+        projected = self._service()._project_notebook_edits(
+            applied, self._schema([]), "notebook:x"
+        )
+        assert projected is applied
+
+    @pytest.mark.asyncio
+    async def test_no_notebook_schema_at_all_is_passed_through_untouched(self):
+        applied = await self._applied()
+        assert self._service()._project_notebook_edits(applied, None, None) is applied
+
+    @pytest.mark.asyncio
+    async def test_a_refused_edit_leaves_the_vocabulary_alone(self):
+        """A re-parent naming a type nothing defines changes nothing — and does
+        not take the rest of the applied set down with it.
+        """
+        applied = await self._applied()
+        projected = self._service()._project_notebook_edits(
+            applied,
+            self._schema([self._reparent("NoSuchTypeAnywhere", "Deal")]),
+            "notebook:x",
+        )
+        assert _resolve_entity_type(
+            "BeleidsThema", [o for o, _c in projected]
+        ).entity_type == "topic"

@@ -62,6 +62,7 @@ from app_main.dependencies import (
     get_reextract_service,
     get_schema_edit_service,
     get_source_repo,
+    get_type_placement_service,
 )
 from app_main.services.notebook_service import NotebookService
 from app_main.services.reextract_service import ReextractService
@@ -186,6 +187,12 @@ def _to_camel_case_uri_fragment(name: str) -> str:
     return fragment
 
 
+# N.4d.3: the discriminator on an ``accepted_extensions`` entry that records a
+# re-parent rather than a new type. Defined here (not imported from the service)
+# to keep the router free of a service-layer import for one string.
+_REPARENT_OP = "reparent"
+
+
 def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
     """Add accepted-extension classes (and their properties) to ``graph``.
 
@@ -209,6 +216,16 @@ def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
     ``_to_camel_case_uri_fragment``; the original human-readable string
     is written to ``rdfs:label``. The same transform is applied to
     ``parent_type`` so the ``rdfs:subClassOf`` URI also stays valid.
+
+    N.4d.3 — a ``reparent`` entry REPLACES the class's declared parent instead
+    of adding a second one. Without that the exported graph would give a
+    re-parented type two ``rdfs:subClassOf`` edges, which is a different
+    statement from the one the curator made: the base's parent and the new one
+    would both be true. It is not counted as a class added either — the class
+    already existed. The class URI is safe to target because the base emits
+    ``ON[name]`` while this function emits ``ON[camel_case(name)]``, and no
+    shipped ontology has a type name where those differ (measured: zero names
+    containing a space or a slash across all eleven).
 
     Returns the number of new ``owl:Class`` declarations actually added.
     Defensive of missing keys: an extension dict without ``type_name`` is
@@ -238,11 +255,29 @@ def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
             continue
 
         cls_uri: URIRef = ON[uri_fragment]
+
+        if ext.get("op") == _REPARENT_OP:
+            if (cls_uri, RDF.type, OWL.Class) not in graph:
+                # A re-parent moves an EXISTING class. Naming one the base graph
+                # does not declare would otherwise mint a phantom class here —
+                # an assertion the exported ontology cannot support, from a row
+                # the projection would refuse for the same reason.
+                logger.warning(
+                    "Skipping re-parent of a class absent from the base "
+                    "ontology: {!r}",
+                    type_name,
+                )
+                continue
+            # Drop the parent it was declared with so the new one REPLACES it
+            # rather than joining it.
+            graph.remove((cls_uri, RDFS.subClassOf, None))
+        else:
+            classes_added += 1
+
         graph.add((cls_uri, RDF.type, OWL.Class))
         # Preserve the original human-readable name — this is the value
         # users see in Protégé / a KG browser regardless of URI mangling.
         graph.add((cls_uri, RDFS.label, Literal(type_name)))
-        classes_added += 1
 
         parent = ext.get("parent_type")
         if isinstance(parent, str) and parent:
@@ -448,6 +483,47 @@ class _ExtensionView(BaseModel):
     properties: List[_PropertyDef] = Field(default_factory=list)
 
 
+class _PlacementView(BaseModel):
+    """Where an accepted type sits, and what a judge thinks belongs under it.
+
+    A REPORT, never an applied change: ``selected`` names the siblings the judge
+    would move under this type, and the curator applies them (or does not) via
+    ``POST /schema/reparent``.
+
+    ``candidates`` and ``selected`` are both present because an empty
+    ``selected`` over five candidates reads nothing like an empty ``selected``
+    over zero. ``judge_status`` says which of FOUR states produced it —
+    ``not_asked`` (no model wired, or no candidates), ``unavailable`` (the model
+    could not be reached), ``refused`` (a reply came back and the parser would
+    not use it — among them a top-level array, unparseable JSON, a non-list
+    selection, and an object omitting the key), ``decided`` (the judge answered;
+    an empty ``selected`` here is ordinarily its decision, the exception being a
+    reply that named only ids never offered). ``judged`` is ``judge_status == "decided"``, kept because
+    three of the four states carry an empty ``selected`` and a client must not
+    read emptiness as a verdict.
+
+    ``vocabulary`` names the schemas the placement was computed against: the
+    notebook-level forced set. See D-N4-13 — a verdict CAN differ from the one a
+    given document's applied set would give (adding a schema turns ``PLACED``
+    into ``DUPLICATE``), which is tolerable only because this is advisory: it
+    writes nothing, and a re-parent is applied by an explicit
+    ``POST /schema/reparent``.
+    """
+
+    type_name: str
+    verdict: str
+    reason_code: str
+    evidence: str
+    parent: Optional[str] = None
+    duplicate_of: Optional[str] = None
+    candidates: List[str] = Field(default_factory=list)
+    selected: List[str] = Field(default_factory=list)
+    judged: bool = False
+    judge_status: str = "not_asked"
+    judge_evidence: str = ""
+    vocabulary: List[str] = Field(default_factory=list)
+
+
 class NotebookSchemaResponse(BaseModel):
     """JSON contract for ``GET /api/notebooks/{id}/schema``.
 
@@ -462,6 +538,8 @@ class NotebookSchemaResponse(BaseModel):
     base_ontology: str
     base_ontology_types: List[_EntityTypeNode] = Field(default_factory=list)
     accepted_extensions: List[_ExtensionView] = Field(default_factory=list)
+    # N.4d.3 — populated only by the accept endpoint; null everywhere else.
+    placement: Optional[_PlacementView] = None
     pending_extensions: List[_ExtensionView] = Field(default_factory=list)
     excluded_types: List[str] = Field(default_factory=list)
     coverage_pct: float = 0.0
@@ -538,6 +616,52 @@ def _normalise_extension(ext: Dict[str, Any]) -> _ExtensionView:
         rationale=ext.get("rationale") if isinstance(ext.get("rationale"), str) else None,
         properties=props,
     )
+
+
+def _reparented_types(extensions: List[Dict[str, Any]]) -> Dict[str, str]:
+    """``{type_name: new_parent}`` from the recorded re-parents, last one wins.
+
+    Last-wins matches what ``ontology_manager.schema_projection`` does with the
+    same rows, so the browser shows the parent extraction will actually use. A
+    row missing either field is skipped rather than rendered half-applied.
+    """
+    moves: Dict[str, str] = {}
+    for ext in extensions:
+        if ext.get("op") != _REPARENT_OP:
+            continue
+        name = ext.get("type_name")
+        parent = ext.get("new_parent")
+        if isinstance(name, str) and name and isinstance(parent, str) and parent:
+            moves[name] = parent
+    return moves
+
+
+def _apply_reparents_to_views(
+    types: List[_EntityTypeNode], moves: Dict[str, str]
+) -> List[_EntityTypeNode]:
+    if not moves:
+        return types
+    return [
+        node.model_copy(update={"parent_type": moves[node.name]})
+        if node.name in moves
+        else node
+        for node in types
+    ]
+
+
+def _apply_reparents_to_extensions(
+    extensions: List[Dict[str, Any]], moves: Dict[str, str]
+) -> List[Dict[str, Any]]:
+    """A re-parent can also move a type the curator accepted as an extension."""
+    if not moves:
+        return extensions
+    out: List[Dict[str, Any]] = []
+    for ext in extensions:
+        name = ext.get("type_name")
+        if isinstance(name, str) and name in moves:
+            ext = {**ext, "parent_type": moves[name]}
+        out.append(ext)
+    return out
 
 
 def _load_base_ontology_types(base_ontology: str) -> List[_EntityTypeNode]:
@@ -644,14 +768,32 @@ async def get_notebook_schema_json(
 
     # B.3c: hide resume sentinels from the SchemaBrowser — they are
     # an implementation detail of the pause/resume flow.
+    #
+    # N.4d.3: re-parents are hidden from this list too, and APPLIED to the row
+    # of the type they move instead. They are not extensions: rendered as one, a
+    # re-parented base type appears TWICE — once under base types with the parent
+    # it was declared with, once as an "extension" with the new one — and two
+    # moves of the same type collide on the browser's `ext:${type_name}` key,
+    # since a re-parent carries no `extension_id`. This endpoint reports the
+    # notebook's effective schema, so the effective parent is what belongs on the
+    # row.
     visible_accepted = [
-        e for e in accepted_raw if e.get("is_resume_sentinel") is not True
+        e
+        for e in accepted_raw
+        if e.get("is_resume_sentinel") is not True
+        and e.get("op") != _REPARENT_OP
     ]
+    reparented = _reparented_types(accepted_raw)
     return NotebookSchemaResponse(
         notebook_id=notebook_id,
         base_ontology=base_ontology,
-        base_ontology_types=_load_base_ontology_types(base_ontology),
-        accepted_extensions=[_normalise_extension(e) for e in visible_accepted],
+        base_ontology_types=_apply_reparents_to_views(
+            _load_base_ontology_types(base_ontology), reparented
+        ),
+        accepted_extensions=[
+            _normalise_extension(e)
+            for e in _apply_reparents_to_extensions(visible_accepted, reparented)
+        ],
         pending_extensions=[_normalise_extension(e) for e in pending_raw],
         excluded_types=excluded_types,
         coverage_pct=coverage_pct,
@@ -786,6 +928,18 @@ class MergeTypesRequest(BaseModel):
     merged_name: str = Field(min_length=1)
 
 
+class ReparentTypeRequest(BaseModel):
+    """Payload for ``POST /api/notebooks/{id}/schema/reparent`` (N.4d.3).
+
+    ``type_names`` are the types moving; ``new_parent`` is where they land. The
+    service raises ValueError — translated to 422 — for an empty list, a blank
+    parent, or a type moved under itself.
+    """
+
+    type_names: List[str] = Field(min_length=1)
+    new_parent: str = Field(min_length=1)
+
+
 class SplitTypeRequest(BaseModel):
     """Payload for ``POST /api/notebooks/{id}/schema/split``.
 
@@ -808,12 +962,22 @@ def _schema_to_response(
     view from a single POST/DELETE.
     """
     base_ontology = schema.base_ontology or _DEFAULT_BASE_ONTOLOGY
+    accepted_raw = schema.accepted_extensions or []
+    # N.4d.3: the same effective-schema rendering the GET does. Diverging here
+    # would let a client that refreshes from a POST see a re-parented type twice
+    # while a client that refreshes from the GET sees it once.
+    reparented = _reparented_types(accepted_raw)
     return NotebookSchemaResponse(
         notebook_id=notebook_id,
         base_ontology=base_ontology,
-        base_ontology_types=_load_base_ontology_types(base_ontology),
+        base_ontology_types=_apply_reparents_to_views(
+            _load_base_ontology_types(base_ontology), reparented
+        ),
         accepted_extensions=[
-            _normalise_extension(e) for e in (schema.accepted_extensions or [])
+            _normalise_extension(e)
+            for e in _apply_reparents_to_extensions(
+                [e for e in accepted_raw if e.get("op") != _REPARENT_OP], reparented
+            )
         ],
         pending_extensions=[
             _normalise_extension(e) for e in (schema.pending_extensions or [])
@@ -822,6 +986,54 @@ def _schema_to_response(
         coverage_pct=float(schema.coverage_pct),
         review_required=bool(schema.review_required),
         soft_nudge_dismissed=bool(schema.soft_nudge_dismissed),
+    )
+
+
+async def _placement_for_accepted(
+    placement_service, schema: NotebookSchema, type_name: str
+) -> Optional[_PlacementView]:
+    """Report where the just-accepted type sits. Advisory — never fails the accept.
+
+    The declared parent comes from the accepted entry itself, because
+    ``place_proposed_type`` VALIDATES a proposer's claim rather than inventing
+    one. An entry with no ``parent_type`` therefore yields an honest
+    ``UNPARENTED`` verdict instead of a guessed placement.
+    """
+    entry = next(
+        (
+            e
+            for e in (schema.accepted_extensions or [])
+            if e.get("type_name") == type_name and e.get("op") is None
+        ),
+        None,
+    )
+    if entry is None:
+        return None
+    try:
+        report = await placement_service.placement_for(
+            schema,
+            type_name,
+            entry.get("parent_type"),
+            str(entry.get("description") or entry.get("rationale") or ""),
+        )
+    except Exception as e:
+        logger.warning(
+            "placement unavailable for {!r} in {}: {}", type_name, schema.notebook, e
+        )
+        return None
+    return _PlacementView(
+        type_name=report.type_name,
+        verdict=report.verdict,
+        reason_code=report.reason_code,
+        evidence=report.evidence,
+        parent=report.parent,
+        duplicate_of=report.duplicate_of,
+        candidates=list(report.candidates),
+        selected=list(report.selected),
+        judged=report.judged,
+        judge_status=report.judge_status,
+        judge_evidence=report.judge_evidence,
+        vocabulary=list(report.vocabulary),
     )
 
 
@@ -889,6 +1101,9 @@ async def _ensure_notebook_exists(
 #  4. ``ontology_extraction.prompts.pass2._format_accepted_extensions``
 #     — strips sentinels at the prompt-render seam as a final guard
 #     against any consumer that forgets the upstream filter.
+#  4b. ``ontology_manager.schema_projection.project_accepted_edits`` (N.4d.3)
+#     — strips sentinels before projecting the notebook's accepted edits onto
+#     its ontologies, so the marker never becomes a defined entity type.
 #  5. ``SchemaBrowser.tsx`` — frontend belt-and-braces filter using
 #     ``is_resume_sentinel === true`` OR ``type_name.startsWith('_')``.
 #
@@ -1018,6 +1233,7 @@ async def accept_pending_extension(
     type_name: str,
     notebook_service: NotebookService = Depends(get_notebook_service),
     edit_service: SchemaEditService = Depends(get_schema_edit_service),
+    placement_service=Depends(get_type_placement_service),
 ) -> NotebookSchemaResponse:
     """Move the matching pending extension into ``accepted_extensions``.
 
@@ -1025,6 +1241,13 @@ async def accept_pending_extension(
     current state with no new event. Returns 404 if the type_name does
     not exist in either list (no-op-but-state-mismatch is distinct
     from "name unknown").
+
+    N.4d.3 — the response carries a ``placement``: where the accepted type sits
+    in the notebook's vocabulary, and which of its siblings a judge thinks belong
+    under it. It is a REPORT. Nothing is re-parented here; the curator applies a
+    move by posting it to ``/schema/reparent``. A placement that cannot be
+    computed (no ontology, no model) comes back ``null`` rather than failing the
+    accept.
     """
     await _ensure_notebook_exists(notebook_id, notebook_service)
     try:
@@ -1033,7 +1256,12 @@ async def accept_pending_extension(
         raise HTTPException(status_code=404, detail=str(e)) from e
     except UnknownExtensionError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    return _schema_to_response(notebook_id, updated)
+
+    response = _schema_to_response(notebook_id, updated)
+    response.placement = await _placement_for_accepted(
+        placement_service, updated, type_name
+    )
+    return response
 
 
 @router.post(
@@ -1147,6 +1375,47 @@ async def split_type(
     try:
         updated = await edit_service.split_type(
             notebook_id, payload.type_name, payload.into, payload.criterion
+        )
+    except NotebookSchemaNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return _schema_to_response(notebook_id, updated)
+
+
+@router.post(
+    "/schema/reparent",
+    response_model=NotebookSchemaResponse,
+    responses={
+        404: {"description": "Notebook or schema row not found."},
+        422: {
+            "description": (
+                "reparent requires a non-empty new_parent, at least one type "
+                "name, and no type moved under itself."
+            )
+        },
+    },
+)
+async def reparent_type(
+    notebook_id: str,
+    payload: ReparentTypeRequest,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    edit_service: SchemaEditService = Depends(get_schema_edit_service),
+) -> NotebookSchemaResponse:
+    """Record that N types now hang under ``new_parent`` (Track N.4d.3).
+
+    This is how an accepted ``BROADER_THAN`` placement is applied: as a schema
+    edit, on the curator's decision. The base ontology YAML is never mutated —
+    the edit is projected onto COPIES of the applied ontologies at extraction
+    time, which is what lets entities of a moved type resolve through their new
+    ancestor without a single per-entity write.
+
+    Idempotent per (type, parent).
+    """
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        updated = await edit_service.reparent_type(
+            notebook_id, payload.type_names, payload.new_parent
         )
     except NotebookSchemaNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

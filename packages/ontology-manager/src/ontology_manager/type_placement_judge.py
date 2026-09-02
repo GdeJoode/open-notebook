@@ -76,11 +76,21 @@ class JudgeSelection:
     while an empty ``selected`` over zero candidates means nothing was ever asked.
     Those are different states and the entity-side work was rejected twice for
     reporting one as the other.
+
+    ``decided`` separates the THIRD state a review of N.4d.3 found collapsed into
+    the second: a reply the parser REFUSED — a top-level array, unparseable JSON,
+    a non-list selection — also yields an empty ``selected`` over a full
+    ``considered``, and is not the judge deciding to move nothing. It is False on
+    every refusal path and True only when the reply was usable, so
+    ``decided and not selected`` is "the judge looked and moved nothing" while
+    ``not decided`` is "no usable answer came back". A caller that gates anything
+    on adjudication must read this and not the emptiness of ``selected``.
     """
 
     selected: Tuple[str, ...] = ()
     considered: Tuple[str, ...] = ()
     evidence: str = ""
+    decided: bool = False
 
     @property
     def widened(self) -> bool:
@@ -236,7 +246,12 @@ def parse_judge_response(
         evidence += "; NOTE the caller supplied duplicate candidate ids"
         logger.warning("type_placement_judge: caller supplied duplicate candidate ids")
     return JudgeSelection(
-        selected=tuple(chosen), considered=tuple(offered), evidence=evidence
+        selected=tuple(chosen),
+        considered=tuple(offered),
+        evidence=evidence,
+        # The only path that reaches here parsed a usable reply, so this is the
+        # single place `decided` is ever True; `_nothing` keeps the default.
+        decided=True,
     )
 
 

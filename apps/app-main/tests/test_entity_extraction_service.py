@@ -271,6 +271,94 @@ class TestSchemaReviewPendingError:
             )
 
     @pytest.mark.asyncio
+    async def test_a_reparent_alone_does_not_lift_the_review_gate(
+        self,
+        base_source_repo,
+        notebook_schema_repo_fixture,
+        pass1_repo_fixture,
+    ):
+        """N.4d.3 — the new entry kind must not silently open a paused gate.
+
+        The predicate is "the curator has reviewed the schema this notebook
+        proposes". A re-parent moves a type that ALREADY exists and says nothing
+        about the pending proposals, so a curator who adjusts one parent while
+        leaving forty extensions unreviewed must still be paused.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(
+                notebook="notebook:abc",
+                base_ontology="scholarly",
+                review_required=True,
+                accepted_extensions=[
+                    {
+                        "reparent_id": "reparent::Researcher->Institution",
+                        "op": "reparent",
+                        "type_name": "Researcher",
+                        "new_parent": "Institution",
+                    }
+                ],
+                pending_extensions=[
+                    {"type_name": "EarlyCareerResearcher", "schema_name": "scholarly"}
+                ],
+            )
+        )
+
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        with pytest.raises(SchemaReviewPendingError):
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_reparent_beside_a_real_acceptance_still_opens_the_gate(
+        self,
+        base_source_repo,
+        notebook_schema_repo_fixture,
+        pass1_repo_fixture,
+    ):
+        """The exclusion is reparent-specific, not a wholesale re-close: a real
+        acceptance in the same list still satisfies the gate.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(
+                notebook="notebook:abc",
+                base_ontology="scholarly",
+                review_required=True,
+                accepted_extensions=[
+                    {
+                        "reparent_id": "reparent::Researcher->Institution",
+                        "op": "reparent",
+                        "type_name": "Researcher",
+                        "new_parent": "Institution",
+                    },
+                    {"type_name": "EarlyCareerResearcher", "schema_name": "scholarly"},
+                ],
+            )
+        )
+
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        with patch.object(
+            svc, "_run_multi_schema", AsyncMock(return_value=ExtractionResult())
+        ), patch.object(svc, "_save_result", AsyncMock()):
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+    @pytest.mark.asyncio
     async def test_paused_error_subclasses_job_paused(
         self,
         notebook_schema_repo_fixture,
@@ -986,6 +1074,273 @@ class TestRunMultiSchemaBody:
                     f"Sentinel type_name leaked into schema={schema_name!r}: "
                     f"{ext!r}"
                 )
+
+
+    @pytest.mark.asyncio
+    async def test_run_multi_schema_projects_the_notebooks_accepted_edits(
+        self, svc, notebook_schema_repo_fixture
+    ):
+        """N.4d.3 — the call site itself, not just the helper.
+
+        `_project_notebook_edits` is pure and tested against the real vocabulary
+        elsewhere, but the review measured that DELETING its one call left all
+        1632 app-main tests green: every guarantee in the phase flows through a
+        line nothing asserted. The workflow must receive the PROJECTED ontology,
+        so the same objects Pass 2 renders and the persist path bridges through
+        carry the curator's edit.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(
+                notebook="notebook:abc",
+                base_ontology="scholarly",
+                accepted_extensions=[
+                    {
+                        "extension_id": "ext-1",
+                        "type_name": "PreprintServer",
+                        "schema_name": "scholarly",
+                        "parent_type": "Organization",
+                    },
+                ],
+            )
+        )
+
+        scholarly = _make_ontology("scholarly")
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=["scholarly"])
+        mock_manager.get_ontology = AsyncMock(return_value=scholarly)
+        detect_spy = AsyncMock(return_value=[(scholarly, 0.92)])
+        mock_extract = AsyncMock(return_value=ExtractionResult())
+
+        with patch(
+            "ontology_manager.get_ontology_manager",
+            return_value=mock_manager,
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=detect_spy,
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as mock_workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()):
+            mock_workflow = MagicMock()
+            mock_workflow.extract = mock_extract
+            mock_workflow_cls.return_value = mock_workflow
+
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+        applied = mock_extract.await_args.kwargs["applicable_schemas"]
+        forwarded_types = applied[0][0].entity_types
+        assert "PreprintServer" in forwarded_types, (
+            "the accepted extension never reached the workflow's ontology — "
+            "the projection is not wired into _run_multi_schema"
+        )
+        # And the registry's own object is untouched, so the next notebook in
+        # this process does not inherit this one's vocabulary.
+        assert "PreprintServer" not in scholarly.entity_types
+        # The persist path reads the same stashed list.
+        assert "PreprintServer" in svc._applicable_schemas[0].entity_types
+
+    @pytest.mark.asyncio
+    async def test_an_empty_base_ontology_forces_no_schema(
+        self, svc, notebook_schema_repo_fixture
+    ):
+        """N.4d.3 / D-N4-13 point 2 — the gate this decision rests on.
+
+        `_apply_notebook_schema_default` runs only for a TRUTHY `base_ontology`,
+        which the Regio-Deal notebooks leave empty. That is why the forced set is
+        not always a subset of what the runtime applies, and it is what
+        `TypePlacementService` reports around.
+
+        The discriminator is an accepted extension naming a schema
+        auto-detection did NOT pick: with the gate, nothing is forced and the
+        applied set is exactly what `detect_applicable_schemas` returned; without
+        it, `scholarly` is forced in on the extension's `schema_name`. A review
+        measured that the placement-side test asserted this half in a form that
+        could not fail — `assert service._apply_notebook_schema_default is not
+        None` is true of any object with that attribute — so the gate is
+        exercised here instead.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(
+                notebook="notebook:abc",
+                base_ontology="",
+                accepted_extensions=[
+                    {"extension_id": "e1", "type_name": "X", "schema_name": "scholarly"}
+                ],
+            )
+        )
+
+        deals = _make_ontology("deals")
+        scholarly = _make_ontology("scholarly")
+        by_name = {"deals": deals, "scholarly": scholarly}
+
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=list(by_name))
+        mock_manager.get_ontology = AsyncMock(side_effect=lambda n: by_name.get(n))
+        detect_spy = AsyncMock(return_value=[(deals, 0.92)])
+        mock_extract = AsyncMock(return_value=ExtractionResult())
+
+        with patch(
+            "ontology_manager.get_ontology_manager",
+            return_value=mock_manager,
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=detect_spy,
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as mock_workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()):
+            mock_workflow = MagicMock()
+            mock_workflow.extract = mock_extract
+            mock_workflow_cls.return_value = mock_workflow
+
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+        applied = [
+            ontology.metadata.name
+            for ontology, _conf in mock_extract.await_args.kwargs["applicable_schemas"]
+        ]
+        assert applied == ["deals"], (
+            f"an empty base_ontology forced a schema in: {applied}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_configured_base_ontology_does_force_its_schemas(
+        self, svc, notebook_schema_repo_fixture
+    ):
+        """The vacuity guard for the test above: with a base set, the same
+        extension's schema IS forced, so "nothing was forced" is a statement
+        about the gate rather than about a mechanism that never fires.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(
+                notebook="notebook:abc",
+                base_ontology="deals",
+                accepted_extensions=[
+                    {"extension_id": "e1", "type_name": "X", "schema_name": "scholarly"}
+                ],
+            )
+        )
+
+        deals = _make_ontology("deals")
+        scholarly = _make_ontology("scholarly")
+        by_name = {"deals": deals, "scholarly": scholarly}
+
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=list(by_name))
+        mock_manager.get_ontology = AsyncMock(side_effect=lambda n: by_name.get(n))
+        detect_spy = AsyncMock(return_value=[(deals, 0.92)])
+        mock_extract = AsyncMock(return_value=ExtractionResult())
+
+        with patch(
+            "ontology_manager.get_ontology_manager",
+            return_value=mock_manager,
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=detect_spy,
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as mock_workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()):
+            mock_workflow = MagicMock()
+            mock_workflow.extract = mock_extract
+            mock_workflow_cls.return_value = mock_workflow
+
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+        applied = [
+            ontology.metadata.name
+            for ontology, _conf in mock_extract.await_args.kwargs["applicable_schemas"]
+        ]
+        assert "scholarly" in applied
+
+    @pytest.mark.asyncio
+    async def test_run_multi_schema_does_not_forward_a_reparent_as_a_type(
+        self, svc, notebook_schema_repo_fixture
+    ):
+        """N.4d.3 — the seam filter, guarded the way the sentinel's is.
+
+        A re-parent records that an EXISTING type moved, not that a new type
+        exists. Forwarded, `_format_accepted_extensions` renders it under
+        "Accepted Extension Types" and instructs the LLM to treat a base type as
+        a curator addition. Real extensions in the same list must still come
+        through — the filter is reparent-specific.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(
+                notebook="notebook:abc",
+                base_ontology="scholarly",
+                accepted_extensions=[
+                    {
+                        "extension_id": "ext-1",
+                        "type_name": "PreprintServer",
+                        "schema_name": "scholarly",
+                        "parent_type": "Organization",
+                    },
+                    {
+                        "reparent_id": "reparent::Researcher->Organization",
+                        "op": "reparent",
+                        "type_name": "Researcher",
+                        "new_parent": "Organization",
+                        "parent_type": "Organization",
+                        "schema_name": "scholarly",
+                    },
+                ],
+            )
+        )
+
+        scholarly = _make_ontology("scholarly")
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=["scholarly"])
+        mock_manager.get_ontology = AsyncMock(return_value=scholarly)
+        detect_spy = AsyncMock(return_value=[(scholarly, 0.92)])
+        mock_extract = AsyncMock(return_value=ExtractionResult())
+
+        with patch(
+            "ontology_manager.get_ontology_manager",
+            return_value=mock_manager,
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=detect_spy,
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as mock_workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()):
+            mock_workflow = MagicMock()
+            mock_workflow.extract = mock_extract
+            mock_workflow_cls.return_value = mock_workflow
+
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+        forwarded = mock_extract.await_args.kwargs["accepted_extensions_by_schema"]
+        names = [ext["type_name"] for ext in forwarded["scholarly"]]
+        assert "PreprintServer" in names
+        assert "Researcher" not in names, (
+            f"a re-parent reached the Pass-2 extension map: {forwarded!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

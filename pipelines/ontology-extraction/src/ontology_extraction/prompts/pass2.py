@@ -155,7 +155,20 @@ def _format_accepted_extensions(extensions: List[Dict[str, Any]]) -> List[str]:
 
     # Filter sentinels up-front so the empty-result branch below
     # behaves correctly when the entire list is sentinels.
-    visible = [ext for ext in extensions if not ext.get("is_resume_sentinel")]
+    #
+    # N.4d.3 — re-parent entries are filtered the same way and for the same
+    # reason. They record that an EXISTING type moved under a different parent,
+    # not that a new type exists; rendered here they would tell the LLM to treat
+    # a base-ontology type as a curator addition. The move is applied to the
+    # ontology objects this prompt already reads its vocabulary from
+    # (``ontology_manager.schema_projection``), so nothing is lost by skipping
+    # them. Filtered at the extraction-service seam too — this is the same
+    # defence-in-depth the sentinel gets.
+    visible = [
+        ext
+        for ext in extensions
+        if not ext.get("is_resume_sentinel") and ext.get("op") != "reparent"
+    ]
     if not visible:
         return []
 

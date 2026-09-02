@@ -364,3 +364,61 @@ class TestResolutionDataclass:
     def test_is_canonical_resolution(self):
         res = resolve_ontology_type("Gemeente", [_government()])
         assert isinstance(res, CanonicalResolution)
+
+
+class TestChainEndingOnASchemaOrgBase:
+    """N.4d.3 — the walk honours an ANCESTOR's ``schema_org_type``.
+
+    Step (1) always honoured that field for the type being resolved; the walk
+    did not, so a chain ending at a type like ``general.Location``
+    (``schema:Place``) orphaned even though its base is mapped. The asymmetry was
+    invisible on the shipped vocabulary — no authored chain ends that way, and
+    the fix moves ZERO of 277 applied type entries — and became reachable when
+    N.4d.3 let a curator re-parent a type under one of those roots.
+    """
+
+    @staticmethod
+    def _chain():
+        """`Narrow -> Wide`, where `Wide` roots at a mapped base by NAME mismatch.
+
+        ``schema:Place`` maps to ``location``, but the type is called ``Wide``,
+        so the parent-NAME rule in step (2) cannot fire — only reading the
+        ancestor's own ``schema_org_type`` resolves it.
+        """
+        return Ontology(
+            metadata=OntologyMetadata(name="t", version="1"),
+            entity_types={
+                "Narrow": EntityTypeDefinition(name="Narrow", parent_type="Wide"),
+                "Wide": EntityTypeDefinition(name="Wide", schema_org_type="schema:Place"),
+            },
+        )
+
+    def test_the_chain_resolves_through_the_ancestors_base(self):
+        resolved = resolve_ontology_type("Narrow", [self._chain()])
+        assert resolved is not None
+        assert resolved.canonical == "location"
+        assert resolved.ontology_type == "Narrow"
+        assert resolved.type_tags == ["Narrow", "Wide", "Place"]
+
+    def test_an_ancestor_with_an_unmapped_base_still_orphans(self):
+        """The rule terminates on a MAPPED base, not on any base — an unmapped
+        one is still an orphan for the L.6 audit to surface.
+        """
+        ontology = Ontology(
+            metadata=OntologyMetadata(name="t", version="1"),
+            entity_types={
+                "Narrow": EntityTypeDefinition(name="Narrow", parent_type="Wide"),
+                "Wide": EntityTypeDefinition(name="Wide", schema_org_type="schema:NotMapped"),
+            },
+        )
+        assert resolve_ontology_type("Narrow", [ontology]) is None
+
+    def test_an_ancestor_with_no_base_at_all_still_orphans(self):
+        ontology = Ontology(
+            metadata=OntologyMetadata(name="t", version="1"),
+            entity_types={
+                "Narrow": EntityTypeDefinition(name="Narrow", parent_type="Wide"),
+                "Wide": EntityTypeDefinition(name="Wide"),
+            },
+        )
+        assert resolve_ontology_type("Narrow", [ontology]) is None

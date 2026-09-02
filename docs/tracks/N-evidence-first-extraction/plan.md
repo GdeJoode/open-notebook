@@ -578,6 +578,45 @@ appears.
   re-running changes nothing; an entity of a re-parented type resolves through the
   new ancestor via `canonical_bridge` with no per-entity write.
 
+> **D-N4-13 — which vocabulary a placement is judged against (N.4d.3).**
+> A placement is only meaningful relative to an applied set, and at
+> `accept_extension` time the per-document set does not exist: `detect_applicable_schemas`
+> scores a document, and no document is in hand. The first attempt used that to
+> argue the whole AC bullet away; the review was right that this proves less than
+> it claims. What DOES exist at acceptance is the notebook-level FORCED set —
+> `base_ontology` + its affinity bundle + the schemas named on accepted extensions
+> — which `_apply_notebook_schema_default` applies to every extraction in the
+> notebook. That is the set `TypePlacementService` uses, and the report names it
+> in `vocabulary`.
+>
+> **A placement CAN disagree with the verdict the runtime set would give**, and
+> the second attempt's claim that it cannot was wrong twice over. Both were
+> measured on the shipped vocabulary:
+>
+> 1. **Verdicts are not monotone in the applied set.** Adding a schema can turn
+>    `PLACED` into `DUPLICATE`, which is the verdict N.4d.1 exists to produce.
+>    Proposing `ScholarlyArticle` under `Deal` in a `deals` notebook reports
+>    `PLACED` against `(deals, policy_themes)` and `DUPLICATE` once auto-detection
+>    adds `scholarly`. So "everything in the forced set is in the runtime set"
+>    licenses nothing: a superset premise only carries monotone conclusions, and
+>    `PARENT_UNKNOWN` and missing siblings — the two consequences the second
+>    attempt listed — happen to be the monotone ones.
+> 2. **The forced set is not always a subset.** `_apply_notebook_schema_default`
+>    is gated on a truthy `base_ontology`, and the Regio-Deal corpus's notebooks
+>    have it empty today. There the runtime forces NOTHING, while the report still
+>    composes a set from the schemas named on accepted extensions and places
+>    against it. Guarded on BOTH sides, after a review measured that the runtime
+>    half was first asserted in a form that could not fail: the gate itself in
+>    `test_an_empty_base_ontology_forces_no_schema` (with
+>    `test_a_configured_base_ontology_does_force_its_schemas` as its vacuity
+>    guard), and the report in `test_an_empty_base_ontology_still_produces_a_report`.
+>
+> The placement is therefore **advisory**: it is a report a curator reads, it
+> writes nothing, and the re-parent it may suggest is applied only by an explicit
+> `POST /schema/reparent`. That is what makes the disagreement tolerable rather
+> than a defect — and it is the reason the phase does not act on a placement
+> automatically.
+
 **N.4d.4 — Gap loop + reachability** (unchanged from the previous N.4c scope) — ~1d
 - `record_gap` on a NOVEL verdict (D-N4-6), gated on the reason code — which is
   why **C1 must be closed first**: a concept nobody adjudicated must not be

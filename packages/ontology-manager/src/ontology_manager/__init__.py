@@ -40,6 +40,11 @@ from ontology_manager.schema import (
     RelationshipTypeDefinition,
     ValidationRules,
 )
+from ontology_manager.schema_projection import (
+    Projection,
+    ProjectionOutcome,
+    project_accepted_edits,
+)
 from ontology_manager.type_placement import (
     TypePlacement,
     place_proposed_type,
@@ -87,6 +92,10 @@ __all__ = [
     "resolve_ontology_type",
     # Prompts
     "OntologyPromptGenerator",
+    # Schema projection (N.4d.3)
+    "Projection",
+    "ProjectionOutcome",
+    "project_accepted_edits",
     # Validator
     "OntologyValidator",
     "ValidationIssue",
