@@ -20,15 +20,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from app_main.services.entity_extraction_service import (
+    NO_DECLARED_BASE,
     EntityExtractionService,
     SchemaReviewPendingError,
 )
 from shared.models import Chunk
 from shared.models.extraction import ExtractedEntity, ExtractionResult, FilteredResult
-from shared.models.notebook_schema import (
-    DEFAULT_BASE_ONTOLOGY,
-    NotebookSchema,
-)
+from shared.models.notebook_schema import NotebookSchema
 
 
 def _make_chunk(text: str = "hello world", chunk_id: str = "chunk:1") -> Chunk:
@@ -1756,6 +1754,185 @@ class TestConceptAlignmentIsReachable:
         assert captured["init"]["gap_recorder"] is None
 
 
+class TestApplicabilitySample:
+    """PC.1 — what the schema detector is allowed to see.
+
+    The sample used to be the first chunk capped at 2000 characters. Measured on
+    the project's corpus, the first chunk of a parsed PDF is a title fragment
+    with a MEDIAN LENGTH OF 66 CHARACTERS, so detection fired for 2 of 14
+    sources; with a sample spread over the body it fires for 12 of 14. That was
+    not a scoring nicety: a document with no detected schema takes the legacy
+    path where Pass 1 never runs, so the curator queue stayed empty for reasons
+    that had nothing to do with the queue.
+    """
+
+    def test_the_sample_spans_the_document_not_just_its_first_chunk(self):
+        from app_main.services.entity_extraction_service import (
+            _applicability_sample,
+        )
+
+        # A title page, then a body whose vocabulary is what a scorer needs.
+        chunks = [{"text": "Convenant"}] + [
+            {"text": f"brede welvaart leefbaarheid paragraaf {i}"} for i in range(200)
+        ]
+        sample = _applicability_sample(chunks)
+
+        assert sample is not None
+        assert "Convenant" in sample, "the head is still represented"
+        assert "paragraaf 199" in sample, "and so is the tail"
+        # The old rule would have returned 9 characters for this document.
+        assert len(sample) > 200
+
+    def test_windows_are_spread_rather_than_taken_from_the_front(self):
+        from app_main.services.entity_extraction_service import (
+            _applicability_sample,
+            _SAMPLE_MAX_WINDOWS,
+        )
+
+        chunks = [{"text": f"chunk-{i}"} for i in range(500)]
+        sample = _applicability_sample(chunks)
+
+        # A prefix-taking implementation contains the head and nothing from the
+        # far end. A plain `range(0, n, step)` gets closer but still stops short:
+        # for 500 chunks it ends at 480, so the conclusions and annexes — where a
+        # policy document names what it is about — are never scored.
+        assert "chunk-0 " in sample
+        assert "chunk-499" in sample
+        assert sample.count("chunk-") <= _SAMPLE_MAX_WINDOWS
+
+    def test_no_text_returns_none_not_an_empty_string(self):
+        """`detect_applicable_schemas` treats None as "skip the content path".
+        An empty string would score every ontology at 0 and reach the same
+        outcome, but through a different branch; None is what it documents.
+        """
+        from app_main.services.entity_extraction_service import (
+            _applicability_sample,
+        )
+
+        assert _applicability_sample([]) is None
+        assert _applicability_sample([{"text": ""}, {"text": "   "}]) is None
+        assert _applicability_sample([{"no_text_key": 1}]) is None
+
+    def test_the_budget_is_respected(self):
+        from app_main.services.entity_extraction_service import (
+            _applicability_sample,
+            _SAMPLE_BUDGET_CHARS,
+        )
+
+        chunks = [{"text": "x" * 5000} for _ in range(200)]
+        assert len(_applicability_sample(chunks)) <= _SAMPLE_BUDGET_CHARS
+
+
+class TestNotebookHistoryFallback:
+    """PC.1 — what happens when a document detects nothing.
+
+    Per-document detection decides; only when it genuinely fails does the
+    notebook's own history get a vote. Measured on the project's corpus: 12 of 14
+    documents detect for themselves, and the two that do not sit in a notebook
+    whose 17 Pass-1 rows all name `policy_themes`.
+    """
+
+    @staticmethod
+    def _ont(name):
+        return _make_ontology(name)
+
+    @staticmethod
+    def _repo(rows):
+        repo = AsyncMock()
+        repo.list_by_notebook = AsyncMock(return_value=rows)
+        return repo
+
+    @pytest.mark.asyncio
+    async def test_the_most_attempted_schema_wins(self):
+        rows = [
+            _pass1_row("source:a", "policy_themes", 0.4),
+            _pass1_row("source:b", "policy_themes", 0.5),
+            _pass1_row("source:c", "scholarly", 0.9),
+        ]
+        got = await EntityExtractionService._notebook_fallback_schemas(
+            "notebook:abc",
+            self._repo(rows),
+            [self._ont("policy_themes"), self._ont("scholarly")],
+        )
+        # `scholarly` scored higher ONCE; `policy_themes` is what this notebook
+        # keeps turning out to be. Frequency is the notebook's verdict.
+        assert [o.metadata.name for o, _c in got] == ["policy_themes"]
+
+    @pytest.mark.asyncio
+    async def test_a_tie_is_broken_by_mean_coverage(self):
+        rows = [
+            _pass1_row("source:a", "deals", 0.2),
+            _pass1_row("source:b", "policy_themes", 0.8),
+        ]
+        got = await EntityExtractionService._notebook_fallback_schemas(
+            "notebook:abc",
+            self._repo(rows),
+            [self._ont("deals"), self._ont("policy_themes")],
+        )
+        assert [o.metadata.name for o, _c in got] == ["policy_themes"]
+
+    @pytest.mark.asyncio
+    async def test_only_one_schema_is_returned(self):
+        """Every extra schema is another Pass-1 and Pass-2 LLM call, and a
+        fallback that guessed three would assert more than the evidence carries.
+        """
+        rows = [
+            _pass1_row("source:a", "policy_themes", 0.5),
+            _pass1_row("source:b", "deals", 0.5),
+            _pass1_row("source:c", "scholarly", 0.5),
+        ]
+        got = await EntityExtractionService._notebook_fallback_schemas(
+            "notebook:abc",
+            self._repo(rows),
+            [self._ont("policy_themes"), self._ont("deals"), self._ont("scholarly")],
+        )
+        assert len(got) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_history_means_no_fallback(self):
+        """A brand-new notebook drops to the legacy path exactly as before."""
+        got = await EntityExtractionService._notebook_fallback_schemas(
+            "notebook:abc", self._repo([]), [self._ont("deals")]
+        )
+        assert got == []
+
+    @pytest.mark.asyncio
+    async def test_a_schema_no_longer_in_the_registry_is_skipped(self):
+        """History can name an ontology that has since been removed. The next
+        most attempted one is used rather than crashing or returning it.
+        """
+        rows = [
+            _pass1_row("source:a", "removed_schema", 0.9),
+            _pass1_row("source:b", "removed_schema", 0.9),
+            _pass1_row("source:c", "deals", 0.1),
+        ]
+        got = await EntityExtractionService._notebook_fallback_schemas(
+            "notebook:abc", self._repo(rows), [self._ont("deals")]
+        )
+        assert [o.metadata.name for o, _c in got] == ["deals"]
+
+    @pytest.mark.asyncio
+    async def test_a_failing_history_read_falls_through_quietly(self):
+        """Extraction must not fail because a fallback could not be computed."""
+        repo = AsyncMock()
+        repo.list_by_notebook = AsyncMock(side_effect=RuntimeError("db down"))
+        got = await EntityExtractionService._notebook_fallback_schemas(
+            "notebook:abc", repo, [self._ont("deals")]
+        )
+        assert got == []
+
+    @pytest.mark.asyncio
+    async def test_the_fallback_ranks_below_a_curators_declaration(self):
+        """A curator's `base_ontology` is forced at 0.85. History is weaker
+        evidence than a declaration and must sort below it, while still clearing
+        `MIN_APPLICABLE_CONFIDENCE` so it is applied at all.
+        """
+        from shared.config import MIN_APPLICABLE_CONFIDENCE
+
+        conf = EntityExtractionService._NOTEBOOK_FALLBACK_CONFIDENCE
+        assert MIN_APPLICABLE_CONFIDENCE <= conf < 0.85
+
+
 def _pass1_row(source, schema, coverage, run=None):
     """A `pass1_results` row as `list_by_notebook` returns it.
 
@@ -1898,8 +2075,7 @@ class TestPass1OutcomeReachesTheCurator:
         correctly reported "no row" and did nothing, so the fix was inert on
         exactly the data that motivated it.
 
-        The base ontology written is the SHARED default, not this run's
-        `ontology_name` — see the sibling test for why that distinction matters.
+        The row is created with NO declared base — see the sibling test.
         """
         notebook_schema_repo_fixture.get_by_notebook = AsyncMock(return_value=None)
         notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=True)
@@ -1919,45 +2095,32 @@ class TestPass1OutcomeReachesTheCurator:
         notebook_schema_repo_fixture.ensure_row.assert_awaited_once()
         nb, base = notebook_schema_repo_fixture.ensure_row.await_args.args
         assert nb == "notebook:abc"
-        # The row is created before schema detection — that ordering is what
-        # breaks the cycle, because the base is then forced on this same run
-        # instead of only helping the next one.
-        assert base == DEFAULT_BASE_ONTOLOGY
+        assert base == NO_DECLARED_BASE
         # And the queue write still happens, on the row that now exists.
         notebook_schema_repo_fixture.merge_pending_extensions.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_the_created_base_is_the_shared_default_not_the_request_param(
+    async def test_the_created_row_declares_no_base_ontology(
         self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
     ):
-        """The base written is per-NOTEBOOK state; `ontology_name` is per-REQUEST.
+        """Whatever lands in `base_ontology` is FORCED onto every later run.
 
-        A review measured what happens when the two are confused. The first
-        version of PC.1 passed `config.ontology_name`, whose own default is
-        "general" and which nothing in the product sets, so the first extraction
-        would have written "general" over the "scholarly" every read path falls
-        back to — and then:
+        Two attempts guessed a value here and both were wrong for the same
+        reason. `config.ontology_name` is a per-request parameter defaulting to
+        "general" that nothing sets; `DEFAULT_BASE_ONTOLOGY` is "scholarly", a
+        constant chosen for the TTL-export read path. Either one, once written,
+        is merged into the applied set of every subsequent extraction at
+        confidence 0.85, ahead of what the document itself detected — and
+        `scholarly` is detected for ZERO of the project's fourteen sources while
+        all 17 `pass1_results` rows ran against `policy_themes`.
 
-          * `_apply_notebook_schema_default` forces the base into every LATER
-            run's applied set at confidence 0.85, which measurably re-types
-            entities (Person: concept -> person). That may well be an
-            improvement, but it is PC.4's call to make and measure, not a side
-            effect of a job payload's default parameter.
-          * the schema TTL download 500s, because `general.yaml` uses a shape
-            `load_yaml_ontology` cannot parse (verified: AttributeError).
-
-        So this asserts the two are NOT equal, which is the property that would
-        have caught it. If a future change makes the request default "scholarly",
-        this test must be rewritten rather than deleted — the point is the
-        provenance of the value, not the string.
+        So the row declares nothing. The schema is established per document by
+        detection, with the notebook's own history as the fallback. This asserts
+        the negative — that neither candidate value was written — because that
+        is the property that would have caught both attempts.
         """
         from app_main.api.routers.schemas import _DEFAULT_BASE_ONTOLOGY
         from app_main.services.entity_extraction_service import ExtractionConfig
-
-        assert ExtractionConfig().ontology_name == "general"
-        assert DEFAULT_BASE_ONTOLOGY != "general"
-        # The read paths and the write path agree on one constant.
-        assert _DEFAULT_BASE_ONTOLOGY == DEFAULT_BASE_ONTOLOGY
 
         notebook_schema_repo_fixture.get_by_notebook = AsyncMock(return_value=None)
         notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=True)
@@ -1975,8 +2138,15 @@ class TestPass1OutcomeReachesTheCurator:
         )
 
         _nb, base = notebook_schema_repo_fixture.ensure_row.await_args.args
-        assert base != "general"
-        assert base == DEFAULT_BASE_ONTOLOGY
+        assert base == NO_DECLARED_BASE
+        assert base != ExtractionConfig().ontology_name  # the request parameter
+        assert base != _DEFAULT_BASE_ONTOLOGY  # the read-path constant
+        # And an empty base forces nothing: the rule that would have applied it
+        # skips a falsy name, so detection stays in charge.
+        svc_forced = EntityExtractionService(source_repo=base_source_repo)
+        assert svc_forced._apply_notebook_schema_default(
+            [], [], NotebookSchema(notebook="notebook:abc", base_ontology=base)
+        ) == []
 
     @pytest.mark.asyncio
     async def test_no_proposals_writes_nothing_to_the_queue(

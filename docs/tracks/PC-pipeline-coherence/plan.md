@@ -81,11 +81,26 @@ Everything downstream operates on `pending_extensions`: accept, reject, the
   best CURRENT coverage — `pass1_results` is append-only and one extraction
   writes one row per applied schema, so "current" means the rows sharing that
   source's newest `run_id`, and the best schema WITHIN that run.
-- **Also decided (review round 2)**: the base ontology written on row creation is
-  `DEFAULT_BASE_ONTOLOGY`, the constant every read path already falls back to —
-  never the extraction request's `ontology_name`. The two are different kinds of
-  state (per-notebook versus per-request) and confusing them was measured to
-  re-type entities across the graph and to 500 the schema TTL download.
+- **Decided by the user (round 3)**: the schema is established **per document**;
+  only when that genuinely fails does the notebook's own history decide. So the
+  row is created with NO declared base ontology, and nothing is forced onto any
+  extraction until a curator chooses one in the Schema tab.
+  - Two attempts guessed a value for that field and both were wrong the same
+    way: whatever it holds is merged into the applied set of every later run at
+    confidence 0.85, ahead of the document. `config.ontology_name` ("general")
+    would have broken the TTL download outright; `DEFAULT_BASE_ONTOLOGY`
+    ("scholarly") is detected for ZERO of the fourteen live sources while all 17
+    `pass1_results` rows ran against `policy_themes`.
+  - **The forced base was compensating for a blind detector.** Detection was
+    scored against the FIRST CHUNK capped at 2000 characters; in this corpus the
+    first chunk of a parsed PDF is a title fragment with a median length of 66
+    characters. Measured: detection fired for 2 of 14 sources. With a sample of
+    40 windows spread across the document — the knee of the curve, swept — it
+    fires for 13 of 14, at 3.7 ms for all eleven ontologies.
+  - The remaining document falls back to the notebook's most attempted schema
+    (ties broken by mean coverage), at most one, never overriding a document that
+    detected for itself, and returning nothing when the notebook has no history —
+    in which case the legacy path is taken exactly as before.
 - **Also decided (review round 2)**: the orchestrator stamps a `run_id` per
   extraction into the FLEXIBLE `pass1_metadata`. Two grouping rules were tried
   before it and both could only let coverage RISE; only a run boundary expresses
