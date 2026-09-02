@@ -37,6 +37,25 @@ from pydantic import Field, field_validator
 
 from shared.models.base import ObjectModel
 
+# The base ontology a notebook gets when nothing has chosen one for it.
+#
+# Track PC.1 moved this here from ``app_main.api.routers.schemas``, where it
+# lived as ``_DEFAULT_BASE_ONTOLOGY``, because the extraction service now
+# PERSISTS a row on a notebook's first document and the two layers must agree on
+# what "no choice yet" means. Before the move the service had no importable
+# constant to reach for, took the extraction request's ``ontology_name``
+# instead, and that parameter's own default is ``"general"`` — so the first
+# extraction would have written a base nobody chose, over the read paths'
+# ``"scholarly"``, permanently.
+#
+# ``"general"`` specifically is not a viable value here: ``general.yaml`` uses a
+# dict-of-dicts ``entity_types`` shape that ``load_yaml_ontology`` cannot parse
+# (verified: it raises ``AttributeError: 'str' object has no attribute 'get'``),
+# so a notebook carrying it would 500 the schema-TTL download. Keeping the
+# constant next to the model is what makes that single decision visible in one
+# place instead of implied by a request parameter.
+DEFAULT_BASE_ONTOLOGY = "scholarly"
+
 
 class NotebookSchema(ObjectModel):
     """

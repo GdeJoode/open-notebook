@@ -176,6 +176,179 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
         await self.upsert(existing)
         return True
 
+    async def ensure_row(self, notebook_id: str, base_ontology: str) -> bool:
+        """Create the notebook's schema row when it does not exist yet.
+
+        Track PC.1. Nothing in production ever created this row. The router's
+        ``_ensure_schema_row`` builds one IN MEMORY and returns it without
+        persisting — its docstring claims "we materialise the row eagerly so the
+        toggle persists across restarts", which is not what the code does — and
+        the only writers are the three toggle endpoints, so the row appears only
+        if a user happens to flip a switch in the Schema tab.
+
+        Measured on the live corpus: 17 `pass1_results` rows carrying 111
+        proposals across 79 distinct type names, and **zero** `notebook_schema`
+        rows. So the queue was not merely empty; the record that holds it did not
+        exist, and every writer — including this module's own
+        :meth:`merge_pending_extensions` — correctly returned "no row" and did
+        nothing.
+
+        ``base_ontology`` is a starting value, not a verdict: the curator changes
+        it from the Schema tab. Callers with no explicit curator choice should
+        pass ``shared.models.notebook_schema.DEFAULT_BASE_ONTOLOGY`` — the value
+        every read path already falls back to — and specifically NOT an
+        extraction request's ``ontology_name``, which is per-request state with a
+        different default; a review measured that writing it here changes
+        canonical typing across the graph and breaks the schema TTL download.
+
+        **Name collision, deliberate.** The router's ``_ensure_schema_row`` has
+        the opposite semantic: it builds the default row and does NOT persist it.
+        This method is the persisting one. Renaming that helper is PC.5's job (it
+        is called by the toggle endpoints); until then, the two live one grep
+        apart and this paragraph is the disambiguation.
+
+        **The check is not the protection.** ``idx_notebook_schema_notebook`` is
+        UNIQUE (migration 45), and that index — not this read-then-write — is
+        what actually prevents a duplicate: two concurrent first-extractions on
+        the same notebook can both read ``None`` and both attempt a create, and
+        the loser's constraint violation raises to the caller. That is safe (no
+        duplicate row, no clobbering) but not free: the losing run sees no row
+        and takes the legacy path for its document, so it produces no Pass-1
+        proposals. The next document recovers, since by then the row exists.
+
+        Returns ``True`` when a row was created, ``False`` when one already
+        existed (so a caller can log the transition without re-reading). A
+        ``False`` under a race means the same thing to the caller as a ``False``
+        without one: read the row again if you need it.
+        """
+        existing = await self.get_by_notebook(notebook_id)
+        if existing is not None:
+            return False
+        await self.upsert(
+            NotebookSchema(notebook=notebook_id, base_ontology=base_ontology)
+        )
+        logger.info(
+            "created notebook_schema for {nb} with base_ontology={base!r}",
+            nb=notebook_id,
+            base=base_ontology,
+        )
+        return True
+
+    async def merge_pending_extensions(
+        self, notebook_id: str, extensions: List[Dict[str, Any]]
+    ) -> int:
+        """Add proposals to ``pending_extensions``, skipping ones already known.
+
+        Track PC.1. :meth:`add_pending_extension` appends unconditionally and
+        rewrites the row per call, which is right for a single proposal and wrong
+        for a Pass-1 batch: proposals are per-DOCUMENT while this list is
+        per-NOTEBOOK, so the same type proposed by three documents would appear
+        three times, and each append would be its own read-modify-write.
+
+        A proposal is skipped when its ``type_name`` already appears in
+        ``pending_extensions``, in ``accepted_extensions``, or in
+        ``excluded_types``. The first two are duplicates; the third is the
+        curator having explicitly soft-deleted that type (B.3b), which is a "no"
+        that must survive the next document proposing it again. Matching is
+        case-insensitive on the trimmed name, because the LLM's capitalisation is
+        not stable across documents.
+
+        **A REJECTED proposal is NOT remembered.** ``reject_extension`` drops the
+        row and records nothing — there is no ``rejected_extensions`` field — so a
+        type the curator rejected returns the next time a document proposes it.
+        A durable "no" needs a new field and a migration, so it is recorded as a
+        follow-up rather than half-solved here. Two tests pin it, one per layer,
+        because the repository's own `reject_pending_extension` has no production
+        caller: `test_notebook_schema_queue.py` covers this module, and
+        `test_schema_edit_service.py` covers the path a curator's Reject button
+        actually takes.
+
+        The stored ``type_name`` is stripped, and a name that cannot survive the
+        accept/reject route is refused outright: those endpoints take the name as
+        a PATH SEGMENT (``/schema/extensions/{type_name}/accept``) with no
+        ``:path`` converter, so a model-authored ``"Grant/Funding Source"`` would
+        queue a row that can be neither accepted nor rejected — permanently stuck
+        on the one surface this exists to make actionable.
+
+        Each stored proposal gets a deterministic ``extension_id``
+        (``pass1::<lowercased type_name>``) so a replay is idempotent. The
+        production endpoints key on ``type_name``, not on this id; the id is the
+        frontend's list key and the key the older ``accept_pending_extension`` /
+        ``reject_pending_extension`` pair matches on.
+
+        Returns the number of proposals actually added. ``0`` means everything
+        was already known — a normal outcome, not a failure.
+
+        **Known race, inherited and now reachable.** This is a read-modify-write
+        over the whole array, and so is ``add_pending_extension`` before it — but
+        PC.1 is the first PRODUCTION caller, which is what makes the race
+        reachable. Two extractions ingesting different sources into one notebook
+        concurrently can lose one job's proposals. Not fixed here: the fix is a
+        server-side array append or an optimistic version check, which is a
+        change to the repository's write contract rather than to this method.
+        Recorded so it is a known limit rather than a surprise the first time a
+        bulk upload runs.
+        """
+        existing = await self.get_by_notebook(notebook_id)
+        if existing is None:
+            logger.warning(
+                f"merge_pending_extensions: no notebook_schema row for {notebook_id}"
+            )
+            return 0
+
+        def _key(value: Any) -> str:
+            return str(value or "").strip().lower()
+
+        known = {_key(e.get("type_name")) for e in existing.pending_extensions}
+        known |= {_key(e.get("type_name")) for e in existing.accepted_extensions}
+        known |= {_key(t) for t in existing.excluded_types}
+
+        added = 0
+        for proposal in extensions or []:
+            if not isinstance(proposal, dict):
+                continue
+            name = str(proposal.get("type_name", "") or "").strip()
+            key = _key(name)
+            if not key or key in known:
+                continue
+            if not _is_routable_type_name(name):
+                logger.warning(
+                    "merge_pending_extensions: refusing {name!r} - it cannot be "
+                    "used in the accept/reject route and would be unactionable",
+                    name=name,
+                )
+                continue
+            known.add(key)
+            existing.pending_extensions.append(
+                {**proposal, "type_name": name, "extension_id": f"pass1::{key}"}
+            )
+            added += 1
+
+        if added:
+            await self.upsert(existing)
+        return added
+
+    async def set_coverage_pct(self, notebook_id: str, value: float) -> bool:
+        """Store the notebook's rolling Pass-1 coverage.
+
+        Track PC.1. The field is documented as driving the B.3c soft-nudge and is
+        rendered by the Schema tab, but nothing in the extraction path wrote it —
+        after eight documents and fourteen Pass-1 measurements it was still 0.0.
+
+        Clamped to 0.0–1.0: the model constrains the field, and a Pass-1 run that
+        reports a percentage instead of a fraction should not make the write fail
+        after the extraction already succeeded.
+        """
+        existing = await self.get_by_notebook(notebook_id)
+        if existing is None:
+            logger.warning(
+                f"set_coverage_pct: no notebook_schema row for {notebook_id}"
+            )
+            return False
+        existing.coverage_pct = max(0.0, min(1.0, float(value)))
+        await self.upsert(existing)
+        return True
+
     async def accept_pending_extension(
         self, notebook_id: str, extension_id: str
     ) -> bool:
@@ -242,6 +415,21 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
         existing.pending_extensions = remaining
         await self.upsert(existing)
         return True
+
+
+def _is_routable_type_name(name: str) -> bool:
+    """Whether a proposed type name can survive the accept/reject endpoints.
+
+    Those routes take the name as a bare path segment, so a ``/`` splits the path
+    and the request 404s (measured). A backslash and control characters are
+    refused for the same class of reason. Everything else - spaces, accents,
+    ordinary punctuation - round-trips fine through ``encodeURIComponent``.
+    """
+    if not name:
+        return False
+    if "/" in name or "\\" in name:
+        return False
+    return not any(ord(ch) < 32 or ord(ch) == 127 for ch in name)
 
 
 class Pass1ResultRepository(BaseRepository[Pass1Result]):

@@ -1,0 +1,89 @@
+{
+  "document": "docling_input/Convenant_Oost-Groningen.pdf",
+  "chunks": 8,
+  "elapsed_s": 147.0,
+  "notebook": "notebook:fh8qnyx9zqrh0txt38xm",
+  "source": "source:zvrnlgonlv73hn1cfrw0",
+  "run_extraction": {
+    "source_id": "source:zvrnlgonlv73hn1cfrw0",
+    "entity_count": 16,
+    "relation_count": 12,
+    "entities_before": 16,
+    "entities_after": 16,
+    "entities_removed": 0,
+    "merge_groups": 0,
+    "predicted_edges": 0,
+    "concept_alignment": {
+      "aligned": 0,
+      "judged": 0,
+      "gap_eligible": 0,
+      "gaps_recorded": 0,
+      "gaps_unrecorded": 0,
+      "gap_duplicates_suppressed": 0,
+      "gap_recorder_wired": true,
+      "gap_statistics": null,
+      "gap_statistics_status": "not_recorded"
+    }
+  },
+  "stages": [
+    {
+      "stage": "1 noise filter",
+      "kind": "entities",
+      "before": 16,
+      "after": 16,
+      "delta": 0,
+      "note": ""
+    },
+    {
+      "stage": "1 noise filter",
+      "kind": "relations",
+      "before": 12,
+      "after": 12,
+      "delta": 0,
+      "note": ""
+    },
+    {
+      "stage": "2 normalize",
+      "kind": "entities",
+      "before": 16,
+      "after": 16,
+      "delta": 0,
+      "note": ""
+    },
+    {
+      "stage": "3 reclassify",
+      "kind": "entities",
+      "before": 16,
+      "after": 16,
+      "delta": 0,
+      "note": ""
+    },
+    {
+      "stage": "4 string dedup",
+      "kind": "entities",
+      "before": 16,
+      "after": 16,
+      "delta": 0,
+      "note": ""
+    },
+    {
+      "stage": "5 fuzzy dedup",
+      "kind": "entities",
+      "before": 16,
+      "after": 16,
+      "delta": 0,
+      "note": ""
+    },
+    {
+      "stage": "6 embedding dedup",
+      "kind": "entities",
+      "before": 16,
+      "after": 16,
+      "delta": 0,
+      "note": ""
+    }
+  ],
+  "persisted_entities": 16,
+  "persisted_relations": 12,
+  "ontology_gaps": []
+}

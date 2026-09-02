@@ -14,11 +14,13 @@ All paths are mocked at the workflow / orchestrator seam — no LLM,
 no SurrealDB, no esperanto model construction.
 """
 
+from types import SimpleNamespace
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from app_main.services.entity_extraction_service import (
+    NO_DECLARED_BASE,
     EntityExtractionService,
     SchemaReviewPendingError,
 )
@@ -1750,6 +1752,725 @@ class TestConceptAlignmentIsReachable:
 
         assert captured["init"]["config"].concept_alignment.enabled is False
         assert captured["init"]["gap_recorder"] is None
+
+
+class TestApplicabilitySample:
+    """PC.1 — what the schema detector is allowed to see.
+
+    The sample used to be the first chunk capped at 2000 characters. Measured on
+    the project's corpus, the first chunk of a parsed PDF is a title fragment
+    with a MEDIAN LENGTH OF 66 CHARACTERS, so detection fired for 2 of 14
+    sources; with a sample spread over the body it fires for 13 of 14. That was
+    not a scoring nicety: a document with no detected schema takes the legacy
+    path where Pass 1 never runs, so the curator queue stayed empty for reasons
+    that had nothing to do with the queue.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_extraction_path_actually_uses_the_spread_sample(self):
+        """The helper being right is worth nothing if production does not call it.
+
+        A mutation proved that: reverting `_run_multi_schema` to the old
+        first-chunk sample left every test in this class green, because they all
+        exercised `_applicability_sample` directly and nothing pinned the WIRING.
+        That is the same shape as the guards this track keeps having to fix — a
+        correct unit with no seam behind it.
+
+        So this drives `run_extraction` and inspects the text the detector was
+        actually handed.
+        """
+        source_repo = AsyncMock()
+        source_repo.get = AsyncMock(
+            return_value=MagicMock(id="source:test", metadata={})
+        )
+        # A title page, then a body. The old rule would hand over "Convenant".
+        source_repo.get_chunks = AsyncMock(
+            return_value=[_make_chunk("Convenant", "chunk:0")]
+            + [
+                _make_chunk(f"brede welvaart paragraaf {i}", f"chunk:{i + 1}")
+                for i in range(300)
+            ]
+        )
+
+        deals = _make_ontology("deals")
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=["deals"])
+        mock_manager.get_ontology = AsyncMock(return_value=deals)
+        detect = AsyncMock(return_value=[(deals, 0.9)])
+
+        schema_repo = AsyncMock()
+        schema_repo.get_by_notebook = AsyncMock(return_value=None)
+        schema_repo.ensure_row = AsyncMock(return_value=True)
+        schema_repo.merge_pending_extensions = AsyncMock(return_value=0)
+        schema_repo.set_coverage_pct = AsyncMock(return_value=True)
+        pass1_repo = AsyncMock()
+        pass1_repo.list_by_notebook = AsyncMock(return_value=[])
+        svc = EntityExtractionService(
+            source_repo=source_repo,
+            notebook_schema_repo=schema_repo,
+            pass1_repo=pass1_repo,
+        )
+
+        with patch(
+            "ontology_manager.get_ontology_manager", return_value=mock_manager
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=detect,
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(svc, "_persistence", AsyncMock()), patch.object(
+            EntityExtractionService,
+            "_resolve_privacy_mode",
+            AsyncMock(return_value=None),
+        ), patch.object(
+            EntityExtractionService,
+            "_pack_chunks_for_route_head",
+            AsyncMock(side_effect=lambda chunks: chunks),
+        ):
+            workflow = MagicMock()
+            workflow.extract = AsyncMock(
+                return_value=ExtractionResult(entities=[], relations=[], metadata={})
+            )
+            workflow_cls.return_value = workflow
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+        detect.assert_awaited()
+        scored = detect.await_args.kwargs["document_text"]
+        assert "Convenant" in scored, "the head is still scored"
+        assert "paragraaf 299" in scored, (
+            "the detector must see the end of the document, not only its cover"
+        )
+        # The old rule handed over the first chunk alone — the word "Convenant"
+        # and nothing else. Count how much of the document is actually
+        # represented rather than asserting a length, which would only be
+        # measuring this fixture's chunk size.
+        represented = sum(f"paragraaf {i} " in scored + " " for i in range(300))
+        assert represented >= 20, (
+            f"only {represented} of 300 body paragraphs reached the detector"
+        )
+
+    def test_the_sample_spans_the_document_not_just_its_first_chunk(self):
+        from app_main.services.entity_extraction_service import (
+            _applicability_sample,
+        )
+
+        # A title page, then a body whose vocabulary is what a scorer needs.
+        chunks = [{"text": "Convenant"}] + [
+            {"text": f"brede welvaart leefbaarheid paragraaf {i}"} for i in range(200)
+        ]
+        sample = _applicability_sample(chunks)
+
+        assert sample is not None
+        assert "Convenant" in sample, "the head is still represented"
+        assert "paragraaf 199" in sample, "and so is the tail"
+        # The old rule would have returned 9 characters for this document.
+        assert len(sample) > 200
+
+    def test_windows_are_spread_rather_than_taken_from_the_front(self):
+        from app_main.services.entity_extraction_service import (
+            _SAMPLE_MAX_WINDOWS,
+            _applicability_sample,
+        )
+
+        chunks = [{"text": f"chunk-{i}"} for i in range(500)]
+        sample = _applicability_sample(chunks)
+
+        # A prefix-taking implementation contains the head and nothing from the
+        # far end. A plain `range(0, n, step)` gets closer but still stops short:
+        # for 500 chunks it ends at 480, so the conclusions and annexes — where a
+        # policy document names what it is about — are never scored.
+        assert "chunk-0 " in sample
+        assert "chunk-499" in sample
+        assert sample.count("chunk-") <= _SAMPLE_MAX_WINDOWS
+
+    def test_no_text_returns_none_not_an_empty_string(self):
+        """`detect_applicable_schemas` treats None as "skip the content path".
+        An empty string would score every ontology at 0 and reach the same
+        outcome, but through a different branch; None is what it documents.
+        """
+        from app_main.services.entity_extraction_service import (
+            _applicability_sample,
+        )
+
+        assert _applicability_sample([]) is None
+        assert _applicability_sample([{"text": ""}, {"text": "   "}]) is None
+        assert _applicability_sample([{"no_text_key": 1}]) is None
+
+    def test_the_budget_is_respected(self):
+        from app_main.services.entity_extraction_service import (
+            _SAMPLE_BUDGET_CHARS,
+            _applicability_sample,
+        )
+
+        chunks = [{"text": "x" * 5000} for _ in range(200)]
+        assert len(_applicability_sample(chunks)) <= _SAMPLE_BUDGET_CHARS
+
+    @pytest.mark.parametrize("chunk_length", [60, 600, 1500, 3000, 8000])
+    def test_long_chunks_do_not_starve_the_tail_of_the_document(self, chunk_length):
+        """The budget must bound the WORK, not truncate the spread.
+
+        An earlier version capped each window at 1200 characters and stopped
+        once the running total reached the budget. That break fires in ascending
+        index order, so it re-introduced the exact head bias the spread exists to
+        remove — a review measured 17 of 40 windows surviving at 1500-character
+        chunks, scoring the document on its first 41%, one order of magnitude
+        worse than the cover-page problem this all started as.
+
+        The two tests around it could not see this. `test_windows_are_spread`
+        uses 9-character chunks, where the budget never binds; the budget test
+        used 5000-character chunks but asserted only the LENGTH of the result.
+        Between them they touched the failing input and the failing property and
+        never at the same time — which is why this one is parametrised over chunk
+        size and asserts coverage.
+        """
+        from app_main.services.entity_extraction_service import (
+            _SAMPLE_BUDGET_CHARS,
+            _SAMPLE_MAX_WINDOWS,
+            _applicability_sample,
+        )
+
+        n = 200
+        chunks = [{"text": f"MARK{i}-" + ("x" * chunk_length)} for i in range(n)]
+        sample = _applicability_sample(chunks)
+
+        kept = [i for i in range(n) if f"MARK{i}-" in sample]
+        assert len(kept) == _SAMPLE_MAX_WINDOWS, (
+            f"{len(kept)} of {_SAMPLE_MAX_WINDOWS} windows survived at "
+            f"chunk_length={chunk_length}"
+        )
+        assert kept[0] == 0 and kept[-1] == n - 1, (
+            "the spread must still reach both ends of the document"
+        )
+        assert len(sample) <= _SAMPLE_BUDGET_CHARS
+
+
+class TestNotebookHistoryFallback:
+    """PC.1 — what happens when a document detects nothing.
+
+    Per-document detection decides; only when it genuinely fails does the
+    notebook's own history get a vote. Measured on the project's corpus: 13 of 14
+    documents detect for themselves, and the one that does not sits in a notebook
+    whose 17 Pass-1 rows all name `policy_themes`.
+    """
+
+    @staticmethod
+    def _ont(name):
+        return _make_ontology(name)
+
+    @staticmethod
+    def _repo(rows):
+        repo = AsyncMock()
+        repo.list_by_notebook = AsyncMock(return_value=rows)
+        return repo
+
+    @pytest.mark.asyncio
+    async def test_the_most_attempted_schema_wins(self):
+        rows = [
+            _pass1_row("source:a", "policy_themes", 0.4),
+            _pass1_row("source:b", "policy_themes", 0.5),
+            _pass1_row("source:c", "scholarly", 0.9),
+        ]
+        got = await EntityExtractionService._notebook_fallback_schemas(
+            "notebook:abc",
+            self._repo(rows),
+            [self._ont("policy_themes"), self._ont("scholarly")],
+        )
+        # `scholarly` scored higher ONCE; `policy_themes` is what this notebook
+        # keeps turning out to be. Frequency is the notebook's verdict.
+        assert [o.metadata.name for o, _c in got] == ["policy_themes"]
+
+    @pytest.mark.asyncio
+    async def test_a_tie_is_broken_by_mean_coverage(self):
+        rows = [
+            _pass1_row("source:a", "deals", 0.2),
+            _pass1_row("source:b", "policy_themes", 0.8),
+        ]
+        got = await EntityExtractionService._notebook_fallback_schemas(
+            "notebook:abc",
+            self._repo(rows),
+            [self._ont("deals"), self._ont("policy_themes")],
+        )
+        assert [o.metadata.name for o, _c in got] == ["policy_themes"]
+
+    @pytest.mark.asyncio
+    async def test_only_one_schema_is_returned(self):
+        """Every extra schema is another Pass-1 and Pass-2 LLM call, and a
+        fallback that guessed three would assert more than the evidence carries.
+        """
+        rows = [
+            _pass1_row("source:a", "policy_themes", 0.5),
+            _pass1_row("source:b", "deals", 0.5),
+            _pass1_row("source:c", "scholarly", 0.5),
+        ]
+        got = await EntityExtractionService._notebook_fallback_schemas(
+            "notebook:abc",
+            self._repo(rows),
+            [self._ont("policy_themes"), self._ont("deals"), self._ont("scholarly")],
+        )
+        assert len(got) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_history_means_no_fallback(self):
+        """A brand-new notebook drops to the legacy path exactly as before."""
+        got = await EntityExtractionService._notebook_fallback_schemas(
+            "notebook:abc", self._repo([]), [self._ont("deals")]
+        )
+        assert got == []
+
+    @pytest.mark.asyncio
+    async def test_a_schema_no_longer_in_the_registry_is_skipped(self):
+        """History can name an ontology that has since been removed. The next
+        most attempted one is used rather than crashing or returning it.
+        """
+        rows = [
+            _pass1_row("source:a", "removed_schema", 0.9),
+            _pass1_row("source:b", "removed_schema", 0.9),
+            _pass1_row("source:c", "deals", 0.1),
+        ]
+        got = await EntityExtractionService._notebook_fallback_schemas(
+            "notebook:abc", self._repo(rows), [self._ont("deals")]
+        )
+        assert [o.metadata.name for o, _c in got] == ["deals"]
+
+    @pytest.mark.asyncio
+    async def test_a_failing_history_read_falls_through_quietly(self):
+        """Extraction must not fail because a fallback could not be computed."""
+        repo = AsyncMock()
+        repo.list_by_notebook = AsyncMock(side_effect=RuntimeError("db down"))
+        got = await EntityExtractionService._notebook_fallback_schemas(
+            "notebook:abc", repo, [self._ont("deals")]
+        )
+        assert got == []
+
+    @pytest.mark.asyncio
+    async def test_the_fallback_ranks_below_a_curators_declaration(self):
+        """A curator's `base_ontology` is forced at 0.85. History is weaker
+        evidence than a declaration and must sort below it, while still clearing
+        `MIN_APPLICABLE_CONFIDENCE` so it is applied at all.
+        """
+        from shared.config import MIN_APPLICABLE_CONFIDENCE
+
+        conf = EntityExtractionService._NOTEBOOK_FALLBACK_CONFIDENCE
+        assert MIN_APPLICABLE_CONFIDENCE <= conf < 0.85
+
+
+def _pass1_row(source, schema, coverage, run=None):
+    """A `pass1_results` row as `list_by_notebook` returns it.
+
+    `run` is the `pass1_metadata["run_id"]` the orchestrator stamps (PC.1). Rows
+    written before PC.1 have none, which is what `run=None` reproduces — so a
+    test that omits it is testing the legacy path, deliberately.
+    """
+    return SimpleNamespace(
+        source=source,
+        schema_attempted=schema,
+        coverage_pct=coverage,
+        pass1_metadata={"run_id": run} if run else {},
+    )
+
+
+class TestPass1OutcomeReachesTheCurator:
+    """Track PC.1 — the queue the whole review surface reads from.
+
+    A pipeline review measured that `notebook_schema.pending_extensions` had no
+    production writer at all: `add_pending_extension`'s only callers were in its
+    own roundtrip test, so after eight documents and fourteen `pass1_results`
+    rows the queue was empty and `coverage_pct` was 0.0. Everything downstream
+    reads those two fields — accept, reject, the panel, and through the accept
+    step the whole of N.4d.1-N.4d.3.
+
+    These drive `run_extraction`, not the repository. The repository method
+    already worked; nobody called it, and only a test at the seam can see that.
+    """
+
+    @staticmethod
+    def _ontologies():
+        deals = _make_ontology("deals")
+        return {"deals": deals}, deals
+
+    async def _run(
+        self, svc, schema_repo, pass1_rows, proposals, coverage=0.8, save_mock=None
+    ):
+        """Drive a full `run_extraction`.
+
+        `save_mock` exists because a review measured that a caller patching
+        `_save_result` from the OUTSIDE had its patch shadowed by the one below,
+        so the `await_count == 0` it asserted could not fail. A caller that wants
+        to inspect what was persisted passes its double in here instead.
+        """
+        by_name, deals = self._ontologies()
+        extracted = ExtractionResult(
+            entities=[ExtractedEntity(text="X", label="L")],
+            relations=[],
+            metadata={"proposed_extensions": proposals, "best_coverage": coverage},
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=list(by_name))
+        mock_manager.get_ontology = AsyncMock(side_effect=lambda n: by_name.get(n))
+        pass1_repo = AsyncMock()
+        pass1_repo.list_by_notebook = AsyncMock(return_value=pass1_rows)
+        svc._pass1_repo = pass1_repo
+
+        with patch(
+            "ontology_manager.get_ontology_manager", return_value=mock_manager
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=AsyncMock(return_value=[(deals, 0.9)]),
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(
+            svc, "_save_result", save_mock or AsyncMock()
+        ), patch.object(
+            # Both of these reach OUT of the process - `_embed_entities` to the
+            # embedding model and `_persistence` to the database. Left unpatched
+            # they made a single test take minutes instead of milliseconds, and
+            # the assertions here are about the Pass-1 queue, not about either.
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(svc, "_persistence", AsyncMock()), patch.object(
+            # `_resolve_privacy_mode` reads the database and swallows failure.
+            # With a reachable DB that is milliseconds; with an unreachable one
+            # it waits out the connection timeout — measured at 43.6s, which was
+            # the ENTIRE cost of each test here. A unit test about the Pass-1
+            # queue must not depend on a database being up to run quickly.
+            EntityExtractionService, "_resolve_privacy_mode", AsyncMock(return_value=None)
+        ), patch.object(
+            # Same shape, second call site: the context packer resolves a model
+            # route, and on failure logs a WARNING and falls back to un-packed
+            # chunks. Measured at 45.2s against an unreachable database. Neither
+            # of these two is what this class asserts.
+            EntityExtractionService,
+            "_pack_chunks_for_route_head",
+            AsyncMock(side_effect=lambda chunks: chunks),
+        ):
+            workflow = MagicMock()
+            workflow.extract = AsyncMock(return_value=extracted)
+            workflow_cls.return_value = workflow
+            await svc.run_extraction(
+                source_id="source:test", notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+        return schema_repo
+
+    @pytest.mark.asyncio
+    async def test_proposals_reach_the_pending_queue(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(
+                notebook="notebook:abc", base_ontology="deals"
+            )
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=2)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=False)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        proposals = [
+            {"type_name": "Method", "parent_type": "Concept"},
+            {"type_name": "GrantFundingSource", "parent_type": "Organization"},
+        ]
+        await self._run(svc, notebook_schema_repo_fixture, [], proposals)
+
+        notebook_schema_repo_fixture.merge_pending_extensions.assert_awaited_once()
+        args = notebook_schema_repo_fixture.merge_pending_extensions.await_args.args
+        assert args[0] == "notebook:abc"
+        assert [p["type_name"] for p in args[1]] == ["Method", "GrantFundingSource"]
+
+    @pytest.mark.asyncio
+    async def test_the_schema_row_is_created_when_it_does_not_exist(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """Nothing in production ever created this row.
+
+        Measured on the live corpus: 17 `pass1_results` rows carrying 111
+        proposals across 79 distinct type names, and ZERO `notebook_schema` rows.
+        Every writer — including PC.1's own `merge_pending_extensions` —
+        correctly reported "no row" and did nothing, so the fix was inert on
+        exactly the data that motivated it.
+
+        The row is created with NO declared base — see the sibling test.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(return_value=None)
+        notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=True)
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=1)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        await self._run(
+            svc, notebook_schema_repo_fixture, [],
+            [{"type_name": "Method", "parent_type": "Concept"}],
+        )
+
+        notebook_schema_repo_fixture.ensure_row.assert_awaited_once()
+        nb, base = notebook_schema_repo_fixture.ensure_row.await_args.args
+        assert nb == "notebook:abc"
+        assert base == NO_DECLARED_BASE
+        # And the queue write still happens, on the row that now exists.
+        notebook_schema_repo_fixture.merge_pending_extensions.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_the_created_row_declares_no_base_ontology(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """Whatever lands in `base_ontology` is FORCED onto every later run.
+
+        Two attempts guessed a value here and both were wrong for the same
+        reason. `config.ontology_name` is a per-request parameter defaulting to
+        "general" that nothing sets; `DEFAULT_BASE_ONTOLOGY` is "scholarly", a
+        constant chosen for the TTL-export read path. Either one, once written,
+        is merged into the applied set of every subsequent extraction at
+        confidence 0.85, ahead of what the document itself detected — and
+        `scholarly` is detected for ZERO of the project's fourteen sources while
+        all 17 `pass1_results` rows ran against `policy_themes`.
+
+        So the row declares nothing. The schema is established per document by
+        detection, with the notebook's own history as the fallback. This asserts
+        the negative — that neither candidate value was written — because that
+        is the property that would have caught both attempts.
+        """
+        from app_main.api.routers.schemas import _DEFAULT_BASE_ONTOLOGY
+        from app_main.services.entity_extraction_service import ExtractionConfig
+
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(return_value=None)
+        notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=True)
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=1)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        await self._run(
+            svc, notebook_schema_repo_fixture, [],
+            [{"type_name": "Method", "parent_type": "Concept"}],
+        )
+
+        _nb, base = notebook_schema_repo_fixture.ensure_row.await_args.args
+        assert base == NO_DECLARED_BASE
+        assert base != ExtractionConfig().ontology_name  # the request parameter
+        assert base != _DEFAULT_BASE_ONTOLOGY  # the read-path constant
+        # And an empty base forces nothing: the rule that would have applied it
+        # skips a falsy name, so detection stays in charge.
+        svc_forced = EntityExtractionService(source_repo=base_source_repo)
+        assert svc_forced._apply_notebook_schema_default(
+            [], [], NotebookSchema(notebook="notebook:abc", base_ontology=base)
+        ) == []
+
+    @pytest.mark.asyncio
+    async def test_no_proposals_writes_nothing_to_the_queue(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """Vacuity guard: the call happens because there were proposals, not on
+        every run.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=False)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        await self._run(svc, notebook_schema_repo_fixture, [], [])
+        notebook_schema_repo_fixture.merge_pending_extensions.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_coverage_is_the_mean_of_each_sources_best(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """Per source the MAX (Pass 1 runs once per applied schema, and the
+        notebook's coverage is how well its best-fitting schema did), then the
+        mean across sources.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=False)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        # `list_by_notebook` returns newest-first. `pass1_results` is append-only,
+        # so a re-extraction ADDS rows: the 0.9 below belongs to source:a's
+        # PREVIOUS run and must not count, or a coverage regression could never
+        # lower the number.
+        rows = [
+            _pass1_row("source:a", "deals", 0.8, run="r2"),
+            _pass1_row("source:a", "policy_themes", 0.5, run="r2"),
+            _pass1_row("source:b", "deals", 0.6, run="r2"),
+            _pass1_row("source:a", "deals", 0.9, run="r1"),
+        ]
+        await self._run(svc, notebook_schema_repo_fixture, rows, [])
+
+        notebook_schema_repo_fixture.set_coverage_pct.assert_awaited_once()
+        _nb, value = notebook_schema_repo_fixture.set_coverage_pct.await_args.args
+        # source:a -> max(0.8 deals, 0.5 policy_themes) within run r2 = 0.8;
+        # source:b -> 0.6. The superseded 0.9 is ignored, which is the point.
+        assert value == pytest.approx(0.7)
+
+    @pytest.mark.asyncio
+    async def test_coverage_falls_when_a_schema_edit_makes_it_worse(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """The flow the soft-nudge exists to drive, and the one two earlier
+        versions of this rule could not express.
+
+        Low coverage -> the curator edits the schema set -> re-extract -> the
+        number must be free to FALL. Grouping on the newest row per
+        `(source, schema_attempted)` cannot do that: a schema edit is exactly
+        when `schema_attempted` changes, so the abandoned schema's row is never
+        superseded, only aged, and a review measured it still reporting 0.9 while
+        the current run scored 0.30. Grouping on the newest RUN can.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=False)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        rows = [
+            # Newest run: the curator switched the notebook to `scholarly`.
+            _pass1_row("source:a", "scholarly", 0.3, run="r2"),
+            # History: the schemas that ran before the edit, both better.
+            _pass1_row("source:a", "deals", 0.9, run="r1"),
+            _pass1_row("source:a", "policy_themes", 0.4, run="r1"),
+        ]
+        await self._run(svc, notebook_schema_repo_fixture, rows, [])
+
+        _nb, value = notebook_schema_repo_fixture.set_coverage_pct.await_args.args
+        assert value == pytest.approx(0.3)
+
+    @pytest.mark.asyncio
+    async def test_rows_written_before_the_run_id_still_report_their_best(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """The 17 rows already in the live database carry no `run_id`.
+
+        They are grouped as ONE run per source rather than one run each, so a
+        legacy source reports its best schema instead of whichever row happens to
+        sort newest — and a single real run supersedes the whole legacy tail,
+        which is how a notebook leaves this state.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=False)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        legacy_only = [
+            _pass1_row("source:a", "policy_themes", 0.4),
+            _pass1_row("source:a", "deals", 0.9),
+        ]
+        await self._run(svc, notebook_schema_repo_fixture, legacy_only, [])
+        _nb, value = notebook_schema_repo_fixture.set_coverage_pct.await_args.args
+        assert value == pytest.approx(0.9)
+
+        notebook_schema_repo_fixture.set_coverage_pct.reset_mock()
+        stamped_then_legacy = [
+            _pass1_row("source:a", "scholarly", 0.3, run="r1"),
+            _pass1_row("source:a", "deals", 0.9),
+        ]
+        await self._run(svc, notebook_schema_repo_fixture, stamped_then_legacy, [])
+        _nb, value = notebook_schema_repo_fixture.set_coverage_pct.await_args.args
+        assert value == pytest.approx(0.3)
+
+    @pytest.mark.asyncio
+    async def test_no_pass1_rows_writes_no_coverage(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """Writing 0.0 would claim a measurement nobody made."""
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=False)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        await self._run(svc, notebook_schema_repo_fixture, [], [])
+        notebook_schema_repo_fixture.set_coverage_pct.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failing_queue_write_costs_no_entities(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """Extraction has already succeeded by the time this runs; surfacing a
+        proposal must never lose the entities.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(
+            side_effect=RuntimeError("db down")
+        )
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(
+            side_effect=RuntimeError("db down")
+        )
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        rows = [_pass1_row("source:a", "deals", 0.5, run="r1")]
+        saved = AsyncMock()
+        await self._run(
+            svc, notebook_schema_repo_fixture, rows,
+            [{"type_name": "Method", "parent_type": "Concept"}],
+            save_mock=saved,
+        )
+        # Both writes were attempted and both raised...
+        notebook_schema_repo_fixture.merge_pending_extensions.assert_awaited()
+        notebook_schema_repo_fixture.set_coverage_pct.assert_awaited()
+        # ...and the extraction still completed with its entity intact. Two
+        # earlier versions of this ending were weaker than they read: the first
+        # asserted nothing at all, the second asserted on a double that the
+        # helper had shadowed, so it could not fail. This one inspects what was
+        # actually handed to `_save_result`.
+        assert saved.await_count == 1
+        _source_id, persisted = saved.await_args.args
+        assert [e.text for e in persisted.entities] == ["X"]
 
 
 # ---------------------------------------------------------------------------

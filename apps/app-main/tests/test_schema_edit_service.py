@@ -23,14 +23,12 @@ from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock
 
 import pytest
-
-from shared.models import NotebookSchema
 from app_main.services.schema_edit_service import (
     NotebookSchemaNotFoundError,
     SchemaEditService,
     UnknownExtensionError,
 )
-
+from shared.models import NotebookSchema
 
 NOTEBOOK_ID = "notebook:edit-fixture"
 
@@ -691,13 +689,12 @@ def test_every_module_spells_the_reparent_discriminator_the_same_way():
     quietly stops filtering, with every test still green because each side agrees
     with itself. This pins them together.
     """
-    from ontology_manager.schema_projection import REPARENT_OP as projection_op
-
     from app_main.api.routers.schemas import _REPARENT_OP as router_op
     from app_main.services.entity_extraction_service import (
         _REPARENT_OP as extraction_op,
     )
     from app_main.services.schema_edit_service import REPARENT_OP as service_op
+    from ontology_manager.schema_projection import REPARENT_OP as projection_op
 
     assert service_op == router_op == extraction_op == projection_op == "reparent"
 
@@ -714,3 +711,78 @@ def test_every_module_spells_the_reparent_discriminator_the_same_way():
         assert f'"{service_op}"' in source, (
             f"{module.__name__} no longer mentions the reparent discriminator"
         )
+
+
+class TestARejectedTypeComesBackThroughTheCuratorsOwnPath:
+    """PC.1 — the rejection gap, asserted where a rejection actually happens.
+
+    A review found the first version of this guard living in
+    ``packages/surrealdb-service`` and rejecting through
+    ``NotebookSchemaRepository.reject_pending_extension``, which has no
+    production caller: the router rejects through
+    :meth:`SchemaEditService.reject_extension`, keyed on ``type_name`` rather
+    than ``extension_id``. So the guard's promise — that it fails the day a
+    durable "no" lands — held only if PC.5 happened to write the trace through
+    the dead method. Pinned here instead, on the path a curator's Reject button
+    actually takes.
+
+    The behaviour itself is the gap: rejection removes the row and records
+    nothing, so the next document proposing the same type re-queues it. Closing
+    that needs a ``rejected_extensions`` field and a migration, which is PC.5.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rejecting_leaves_no_trace_so_the_type_returns(self):
+        from surrealdb_service.repositories.notebook_schema import (
+            NotebookSchemaRepository,
+        )
+
+        schema = _make_schema(pending=[])
+        schema_repo = NotebookSchemaRepository()
+        schema_repo.get_by_notebook = AsyncMock(return_value=schema)
+        schema_repo.upsert = AsyncMock(return_value="notebook_schema:x")
+        service = SchemaEditService(schema_repo, AsyncMock())
+
+        # Pass 1 proposes it.
+        assert await schema_repo.merge_pending_extensions(
+            NOTEBOOK_ID, [{"type_name": "Method"}]
+        ) == 1
+        assert [e["type_name"] for e in schema.pending_extensions] == ["Method"]
+
+        # The curator rejects it, through the service the router calls.
+        after = await service.reject_extension(NOTEBOOK_ID, "Method")
+        assert after.pending_extensions == []
+
+        # Nowhere in the row is there a record that "Method" was refused...
+        assert "Method" not in schema.excluded_types
+        assert not any(
+            "method" in str(v).lower()
+            for k, v in schema.metadata.items()
+            if k != "pending_extensions"
+        )
+
+        # ...so the next document proposing it puts it straight back.
+        assert await schema_repo.merge_pending_extensions(
+            NOTEBOOK_ID, [{"type_name": "Method"}]
+        ) == 1
+        assert [e["type_name"] for e in schema.pending_extensions] == ["Method"]
+
+    @pytest.mark.asyncio
+    async def test_an_excluded_type_does_not_come_back(self):
+        """The contrast that makes the gap legible: a soft-DELETE (B.3b) is
+        remembered in ``excluded_types`` and survives a re-proposal. A rejection
+        has no such field, which is the whole of the difference.
+        """
+        from surrealdb_service.repositories.notebook_schema import (
+            NotebookSchemaRepository,
+        )
+
+        schema = _make_schema(pending=[], excluded=["Method"])
+        schema_repo = NotebookSchemaRepository()
+        schema_repo.get_by_notebook = AsyncMock(return_value=schema)
+        schema_repo.upsert = AsyncMock(return_value="notebook_schema:x")
+
+        assert await schema_repo.merge_pending_extensions(
+            NOTEBOOK_ID, [{"type_name": "Method"}]
+        ) == 0
+        assert schema.pending_extensions == []

@@ -1,0 +1,275 @@
+# Track PC — Pipeline coherence
+
+**Origin**: the pipeline review of 2026-09-02
+(`claudedocs/extraction-pipeline-review.md`), run after Track N.4d closed. The
+review measured a live corpus of eight documents through the production path and
+found that the individual stages are correct while the **chain** is not coherent.
+
+**Why a separate track rather than N.5.** Track N is "evidence-first extraction &
+abstention" — a closed narrative from candidate anchors through abstention to the
+type boundary, with its own decision log D-N4-1..14. The findings below sit in
+schema review (Track B), entity resolution (K), typing (L), and the default
+filtering configuration; none of them is N's to decide, and folding them into N.5
+would make that track unfinishable. N.5 keeps only N's own debts.
+
+**Baseline for every claim here**: the review's measured run — 8 documents, 70
+chunks, 124 entities extracted, 117 rows in the graph, 39 relations, 0 gaps.
+Raw data: `claudedocs/pipeline-review-corpus.json` (+ `-bennett`, `-achterhoek`).
+Harness: `scripts/n_pipeline_review_run.py`.
+
+---
+
+## The through-line
+
+Three sentences that explain every phase below.
+
+1. **Nothing looks at the graph that is already there.** 124 entities in, 117
+   rows out; every collapse happened inside one document's batch.
+2. **Nothing reaches the person who is supposed to decide.** The accept queue has
+   no writer; gaps and proposals have no reader; alias candidates are discarded.
+3. **The defaults do not express one intent.** Half the quality stages are off, so
+   the shipped pipeline is an LLM-to-graph pass-through, and each stage's flag was
+   set independently of the others.
+
+---
+
+## PC.1 — Give the curator queue a writer — ~1d
+
+**The finding (review G0).** Pass 1 works and persists: after eight documents
+`pass1_results` holds 14 rows with coverage 0.42–0.85 and 1–3 proposed types each.
+But `notebook_schema.pending_extensions` is empty, and
+`NotebookSchemaRepository.add_pending_extension` has **no production caller** —
+only its own roundtrip test. `notebook_schema.coverage_pct`, documented as driving
+the B.3c soft-nudge, is likewise never written and sits at `0.0`.
+
+Everything downstream operates on `pending_extensions`: accept, reject, the
+`PendingExtensionsPanel`, and — through the accept step — the whole of N.4d.1–3.
+**Four shipped sub-phases are unreachable from a real run because of this.**
+
+- Write the deduped Pass-1 proposals into `pending_extensions` at the end of
+  `run_multi_schema`, and roll `coverage_pct` from `best_coverage`.
+- **Decided**: proposals are per-document, `pending_extensions` is per-notebook,
+  so re-proposing the same type across documents must not create duplicates. Key
+  on the trimmed, lowercased `type_name`.
+- **Deviation from the first draft, recorded rather than silently dropped**: that
+  draft said "keep the highest-coverage rationale". Proposals do not carry a
+  coverage figure — coverage is per `pass1_results` ROW, across all of a pass's
+  proposals — so there is nothing to rank them by without inventing it.
+  First-seen wins instead. Attaching per-proposal coverage is a follow-up worth
+  doing only if a curator asks for the better rationale.
+- **Also decided**: `excluded_types` (the curator's explicit soft-delete) blocks
+  a re-proposal, and a name that cannot survive the accept/reject route as a path
+  segment is refused outright rather than queued unactionable.
+- **Known race, not closed here**: `merge_pending_extensions` and
+  `set_coverage_pct` are read-modify-writes over the whole row, inherited from
+  `add_pending_extension` — but PC.1 is the first production caller, so the race
+  becomes reachable the moment a bulk upload ingests two sources into one
+  notebook concurrently. The fix is a server-side append or an optimistic version
+  check, i.e. a change to the repository's write contract. Owned by **PC.6**
+  (configuration and robustness).
+- **Known gap, not closed here**: a REJECTED proposal returns.
+  `reject_extension` drops the row and records nothing, and there is no
+  `rejected_extensions` field — a durable "no" needs a new field and a migration.
+  Owned by **PC.5** (the curator-surface phase). Two tests pin it, one per layer,
+  because the repository's `reject_pending_extension` has no production caller —
+  a curator's Reject button goes through `SchemaEditService.reject_extension`,
+  keyed on `type_name`. Whichever layer PC.5 records the "no" in, one of the two
+  fails. (The first version of that guard contained no rejection at all and could
+  not fail; the second rejected through the dead method and would have stayed
+  green if PC.5 wrote the trace in the service. Both were review findings.)
+- **AC**: after two documents proposing overlapping types, the Schema tab shows
+  each type once; accepting one runs the N.4d.3 placement and returns a verdict;
+  `coverage_pct` is non-zero and matches the mean over sources of each source's
+  best CURRENT coverage — `pass1_results` is append-only and one extraction
+  writes one row per applied schema, so "current" means the rows sharing that
+  source's newest `run_id`, and the best schema WITHIN that run.
+- **Decided by the user (round 3)**: the schema is established **per document**;
+  only when that genuinely fails does the notebook's own history decide. So the
+  row is created with NO declared base ontology, and nothing is forced onto any
+  extraction until a curator chooses one in the Schema tab.
+  - Two attempts guessed a value for that field and both were wrong the same
+    way: whatever it holds is merged into the applied set of every later run at
+    confidence 0.85, ahead of the document. `config.ontology_name` ("general")
+    would have broken the TTL download outright; `DEFAULT_BASE_ONTOLOGY`
+    ("scholarly") is detected for ZERO of the fourteen live sources while all 17
+    `pass1_results` rows ran against `policy_themes`.
+  - **The forced base was compensating for a blind detector.** Detection was
+    scored against the FIRST CHUNK capped at 2000 characters; in this corpus the
+    first chunk of a parsed PDF is a title fragment with a median length of 66
+    characters. Measured: detection fired for 2 of 14 sources. With a sample of
+    40 windows spread across the document — the knee of the curve, swept — it
+    fires for 13 of 14, at 4 ms for all eleven ontologies. Budget and window
+    count are both swept rather than chosen; 13/14 is the ceiling. The budget is
+    SHARED across the windows rather than consumed in index order — a review
+    measured that the first shape stopped partway through the spread on
+    long-chunk documents and scored them on their first 41%, re-introducing the
+    head bias one order of magnitude larger than the cover page it replaced.
+  - **The cost, stated**: 11 of 14 sources move from the legacy single-schema
+    path to multi-schema. That is more LLM calls per document and a different
+    result shape (`type_tags` and `primary_type` are now set where they were
+    not). It is the point — the legacy path is where Pass 1 never runs — but it
+    is a real change in what every ingest does, not a free improvement.
+  - **Known consequence of the empty base**: on a notebook's FIRST accept, the
+    N.4d.3 placement composes an empty forced vocabulary (no base, no accepted
+    extensions yet) and so places against nothing. It still returns a verdict and
+    is advisory, so the AC holds, but the first accept is less informed than
+    later ones. Owned by PC.5 alongside the curator surface.
+  - The remaining document falls back to the notebook's most attempted schema
+    (ties broken by mean coverage), at most one, never overriding a document that
+    detected for itself, and returning nothing when the notebook has no history —
+    in which case the legacy path is taken exactly as before.
+- **Also decided (review round 2)**: the orchestrator stamps a `run_id` per
+  extraction into the FLEXIBLE `pass1_metadata`. Two grouping rules were tried
+  before it and both could only let coverage RISE; only a run boundary expresses
+  "these rows are the current measurement, those are history", which is what the
+  soft-nudge's own flow (low coverage -> edit the schema -> re-extract) needs.
+- **Guard**: the test drives `run_extraction`, not the repository — this whole
+  finding is that the repository method works and nobody calls it.
+
+> **PC.1 SHIPPED** — `ensure_row`, `merge_pending_extensions` and
+> `set_coverage_pct` on the repository; the extraction path creates the row
+> BEFORE schema detection and records the Pass-1 outcome after it. Verified
+> against the project's own database: row created, `coverage_pct` 0.0 -> 0.508,
+> 111 stranded proposals collapsed to 79 queued types, a repeat merge adding 0.
+>
+> **What the live run changed about the phase.** The first implementation was
+> fully tested, fully green and completely inert on real data: it created the row
+> in `_record_pass1_outcome`, which sits AFTER `_run_multi_schema`'s early return
+> to the legacy path — and that early return is exactly what happens when no
+> schema row exists. The cycle (no row -> nothing forced -> detection finds
+> nothing -> legacy path -> no Pass 1 -> no row) can only be broken before
+> detection. **Binding for the rest of this track**: a fix for a "nothing ever
+> writes X" finding must be proven on data where X is genuinely absent, not only
+> on a fixture that says it is.
+>
+> **Round 2 found the same class of thing one layer up.** The row was created,
+> but with `config.ontology_name` — a per-request parameter defaulting to
+> "general" that nothing sets — as the notebook's declared base ontology. The
+> live row proved it was not hypothetical: `base_ontology: general`, written by
+> PC.1's own verification run, and the schema TTL download for that notebook
+> raised `AttributeError` because `general.yaml` cannot be parsed by
+> `load_yaml_ontology`. Repaired in place (`scholarly`, queue of 79 and coverage
+> 0.508 intact) and re-verified on a notebook where the row was genuinely absent.
+> **Second binding lesson**: per-request state must not set per-notebook state.
+> The two look alike at a call site and diverge everywhere else.
+>
+> **Carried out of PC.1**: a durable "no" for rejected proposals (PC.5); the
+> read-modify-write race, now reachable because PC.1 is the first production
+> caller (PC.6); and the Ollama context truncation measured during verification
+> (PC.6, review finding R4b).
+
+## PC.2 — One identity — ~1.5d
+
+**The finding (review I2, R2, G2).** `KGResolver` registers an alias
+automatically on a fuzzy match (`register_aliases=True` by default) while concept
+alignment refuses to on the explicit grounds that merging identities must be a
+deliberate act (D-N4-9). One decision, two opposite policies, in one pass.
+Separately, the same six-line normalisation is copied four times
+(`EntityDeduplicator._normalize_key`, `FuzzyResolver._normalize`,
+`KGResolver._normalize`, `concept_alignment._normalize`), and `Brede Welvaart` /
+`brede welvaart` are two rows in the measured graph.
+
+- One shared normalisation, imported by all four call sites; the duplicates go.
+- One alias policy, stated once: decide whether a fuzzy match may auto-register,
+  and make both stages obey it.
+- Surface the long-form/short-form candidates the fuzzy tier structurally misses
+  (25 pairs in the measured graph, e.g. `Binnenlandse Zaken en Koninkrijksrelaties`
+  beside `Minister van Binnenlandse Zaken en Koninkrijksrelaties`).
+- **AC**: the normalisation exists once; a test fails if a fifth copy appears;
+  the measured 25 pairs are reachable by a curator.
+
+## PC.3 — Look at the graph that is already there — ~1.5d
+
+**The finding.** KG resolution (stage 10) is what matches a new mention against
+existing entities, and the app's default `FilteringConfig` does not enable it. So
+every document's entities are written fresh. Three convenanten naming the same
+ministers produced 58 entities with no consolidation.
+
+- Decide whether cross-document resolution belongs in the default path. If yes,
+  enable it and measure the cost; if no, say so in the config docstring and accept
+  that the graph is per-document.
+- **AC**: re-running the review corpus produces materially fewer than 117 rows,
+  with a named, measured figure; `M.C.G. Keijzer` is one entity.
+- **Watch**: stage 10 is also where the automatic alias registration lives, so
+  PC.2's policy decision lands before this is switched on.
+
+## PC.4 — Stable typing — ~1d
+
+**The finding (review I1).** `resolve_ontology_type("Person", …)` returns `person`
+under `general` and `concept` under `deals`/`government`. Which ontologies apply
+is decided by a content score over the document, so the same label lands in a
+different canonical bucket depending on the document. In the measured corpus,
+`Provincie Drenthe` is `programme/RegioDeal` while `Provincie Overijssel` is
+`administrative_area/Provincie`, and 38% of all entities are `concept` or `other`.
+
+- Make the canonical answer for a label independent of which applied set happens
+  to contain it — either by always including the base vocabulary in the applied
+  set, or by resolving against the union rather than the selection.
+- **AC**: a label's canonical type is identical across the eight review documents;
+  a sweep over the shipped ontologies shows no label with two canonical answers.
+
+## PC.5 — A door for the curator loop — ~1.5d
+
+**Also owned here (from PC.1's review)**: a durable "no". `reject_extension`
+records nothing, so a rejected proposal is re-queued by the next document that
+proposes it. Needs a `rejected_extensions` field, a migration, and the
+`merge_pending_extensions` check — at which point PC.1's
+`test_a_rejected_type_does_come_back` must be inverted.
+
+
+**The finding (review G1).** `ontology_gap` and `schema_proposal` are written by
+`OntologyEvolutionAgent`, whose only production caller is N.4d.4's recorder. No
+API route, MCP tool, CLI or frontend reads either table. Meanwhile
+`auto_propose=True` with `frequency_threshold=5` writes proposals unasked.
+
+- Either surface both tables (list, accept, reject) or turn `auto_propose` off
+  until something reads them. Writing into a room with no door is the one option
+  to rule out.
+- **AC**: a proposal created by the threshold is visible and actionable, or it is
+  not created.
+
+## PC.6 — Configuration that expresses one intent — ~1d
+
+**The finding (review R1, R4).** `ENABLE_CONCEPT_ALIGNMENT=true` did nothing in
+the measured run because alignment classifies only entities KG resolution marked
+`is_new`, and KG resolution is off by default — a feature reachable only by
+changing a second, unrelated default. Separately, with no `default_models` row the
+router falls back to Ollama `gemma2`, which is not installed, and the one
+configured model row returns HTTP 410; neither failure surfaces until an
+extraction dies.
+
+- One named profile per intent (e.g. "fast", "quality") rather than five
+  independent flags, or an explicit dependency check that refuses an incoherent
+  combination loudly.
+- A startup or first-use check that the routed extraction model actually answers.
+- **Ollama context (review R4b, measured)**: esperanto never sends `num_ctx`, so
+  Ollama truncates every prompt over its runtime default (measured: 4096 of a
+  5507-token prompt) without erroring, and the JSON instructions in the prompt's
+  tail are what get cut. The `context_window` column cannot fix this on its own —
+  and filling it in FIRST makes the packer build larger prompts, so it makes
+  truncation worse. Either send `num_ctx`, or document that Ollama models must be
+  registered as variants that bake it in.
+- **AC**: enabling a feature either works or says why it cannot; the measured
+  "flag on, zero effect, only a warning" state is unreachable.
+
+---
+
+## Sequence
+
+PC.1 first — it unblocks four already-shipped sub-phases and is the smallest.
+Then PC.2 (the policy decision PC.3 depends on), then PC.3 (the largest effect on
+the data), then PC.4, PC.5, PC.6 in any order.
+
+Rough total ~7 days. PC.1 alone is worth doing immediately regardless of the rest.
+
+## Standing rules inherited from Track N (D-N4-14)
+
+1. A test double reproduces the real method's failure **RETURN**, not a raise it
+   never performs.
+2. At least one fixture builds the **production** argument set, not a superset.
+3. A guard that reads a collaborator's value is exercised against the **real**
+   collaborator at least once.
+4. Every phase is gated by adversarial review before merge.
+
+These were paid for three times over in N.4d; both blockers there were findable by
+no other means.

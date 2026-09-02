@@ -1043,6 +1043,57 @@ class TestRunMultiSchema:
         assert all(r.notebook == "notebook:xyz" for r in repo.records)
 
     @pytest.mark.asyncio
+    async def test_one_run_stamps_one_run_id_on_all_its_rows(self):
+        """Track PC.1. `pass1_results` is append-only and one run writes one row
+        per applied schema, so without a shared id the rows of this run cannot be
+        told apart from the rows of the run before it.
+
+        The notebook's rolling coverage depends on exactly that: after a curator
+        edits the schema set and re-extracts, the abandoned schema's row must stop
+        counting. A review measured that grouping on `(source, schema_attempted)`
+        instead — the only alternative available without this id — still reported
+        0.9 while the current run scored 0.30, so coverage could never fall.
+
+        Losing the stamp is silent: `_rolling_coverage` treats an unstamped row as
+        legacy and keeps averaging, so nothing downstream raises. Hence a test.
+        """
+        applicable = [
+            (_scholarly_ontology(), 0.92),
+            (_policy_ontology(), 0.55),
+        ]
+        fake_llm = _make_dual_pass_callers(
+            pass1_responses={
+                "scholarly": _make_pass1_response("scholarly", 0.9),
+                "policy": _make_pass1_response("policy", 0.5),
+            },
+            pass2_responses={
+                "scholarly": _make_pass2_response([]),
+                "policy": _make_pass2_response([]),
+            },
+        )
+
+        async def _one_run(repo):
+            await run_multi_schema(
+                source_id="source:abc",
+                notebook_id="notebook:xyz",
+                chunks=_three_chunks(),
+                applicable_schemas=applicable,
+                llm_caller=fake_llm,
+                pass1_repo=repo,
+            )
+            return [r.pass1_metadata.get("run_id") for r in repo.records]
+
+        first = await _one_run(_FakePass1Repo())
+        assert len(first) == 2
+        assert all(first), "every row of a run must carry a run_id"
+        assert len(set(first)) == 1, "one run, one id across all its schemas"
+
+        # ...and a SECOND extraction of the same source is a different run, or
+        # the previous run's rows would never be superseded.
+        second = await _one_run(_FakePass1Repo())
+        assert set(second).isdisjoint(set(first))
+
+    @pytest.mark.asyncio
     async def test_multi_tagged_entity_from_three_passes(self):
         # AC #1: entity in ≥ 2 passes has type_tags length ≥ 2 and
         # primary_type from highest-confidence pass.

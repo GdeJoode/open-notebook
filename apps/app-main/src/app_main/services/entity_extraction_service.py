@@ -52,6 +52,83 @@ from app_main.services.entity_persistence_service import EntityPersistenceServic
 # auto-detection selects ``policy_themes`` purely on content overlap via
 # ``detect_applicable_schemas`` (no provenance gating). Keeping the bundle as
 # data here means the override is extensible without touching the override logic.
+# Applicability-sample shape (PC.1). `_score_content_overlap` counts distinct
+# vocabulary phrases appearing anywhere in the sample, so what it needs is
+# COVERAGE of the document, not contiguity: windows spread across the whole
+# document beat one long prefix of it. The budget is generous because the scorer
+# is substring matching over a lowercased string — measured in milliseconds for
+# every ontology in the registry at this size.
+# What `ensure_row` writes into `base_ontology`. Empty means "nobody has
+# declared one", which is the honest state for a notebook whose first document
+# has just arrived: the read paths resolve `base_ontology or
+# DEFAULT_BASE_ONTOLOGY`, and `_apply_notebook_schema_default` skips a falsy
+# name, so nothing is forced onto any extraction until a curator chooses.
+NO_DECLARED_BASE = ""
+
+_SAMPLE_BUDGET_CHARS = 40000
+# 40 windows sharing that budget: 1000 characters each. Both numbers are
+# measured on the project's 14 sources, sweeping each against how many documents
+# detect a schema at all:
+#
+#   budget 20000   w=25 10/14   w=40 12/14   w=60 13/14   w=120 13/14
+#   budget 40000   w=25 11/14   w=40 13/14   w=60 13/14   w=120 13/14
+#   budget 60000   w=25 11/14   w=40 13/14   w=60 13/14   w=120 13/14
+#
+# 13/14 is the ceiling. Two settings reach it equally cheaply and this is the one
+# with the WIDER windows (1000 characters against 333), because the scorer
+# matches multi-word phrases as substrings and every window boundary is a place
+# a phrase can be cut in half. Cost at this setting: 4 ms per document for all
+# eleven ontologies. The curve is not monotonic — 50 windows scores 12/14 —
+# which says the scorer is borderline for one document rather than that the
+# sample is short.
+#
+# The remaining document is a journal article ("J of Common Market Studies"),
+# and it is what the notebook-history fallback exists for.
+_SAMPLE_MAX_WINDOWS = 40
+
+
+def _applicability_sample(chunks: List[Dict[str, Any]]) -> Optional[str]:
+    """Build the text `detect_applicable_schemas` scores a document by.
+
+    Takes up to ``_SAMPLE_MAX_WINDOWS`` evenly spaced windows so a long document
+    is represented end to end rather than by its cover page. Returns ``None``
+    when there is no text at all, which is what the scorer expects for "skip the
+    content path".
+    """
+    texts = [
+        (chunk.get("text") or "") for chunk in chunks if (chunk.get("text") or "").strip()
+    ]
+    if not texts:
+        return None
+
+    # Indices spread across the WHOLE range, last one pinned to the final chunk.
+    # A plain `range(0, n, step)` stops short of the end — for a 500-chunk
+    # document it samples up to chunk 480 and never sees the conclusions or the
+    # annexes, which is where a policy document names what it is about.
+    n = len(texts)
+    if n <= _SAMPLE_MAX_WINDOWS:
+        indices = list(range(n))
+    else:
+        last = n - 1
+        indices = sorted(
+            {
+                round(i * last / (_SAMPLE_MAX_WINDOWS - 1))
+                for i in range(_SAMPLE_MAX_WINDOWS)
+            }
+        )
+
+    # Each window gets an equal share of the budget. The previous version capped
+    # every window at a fixed 1200 characters and stopped once the running total
+    # reached the budget — and that break fires in ascending index order, so it
+    # re-introduced the exact head bias the spread exists to remove. A review
+    # measured it: at 1500-character chunks only 17 of 40 windows survived and
+    # the document was scored on its first 41%, an order of magnitude worse than
+    # the cover-page problem this started as. Sharing the budget means all 40
+    # windows are always taken, whatever the chunk size.
+    per_window = max(1, _SAMPLE_BUDGET_CHARS // _SAMPLE_MAX_WINDOWS)
+    return " ".join(texts[i][:per_window] for i in indices)[:_SAMPLE_BUDGET_CHARS]
+
+
 NOTEBOOK_DEFAULT_BUNDLE: Dict[str, List[str]] = {
     "deals": ["policy_themes"],
     "government": ["policy_themes"],
@@ -856,6 +933,227 @@ class EntityExtractionService:
 
         return result
 
+    async def _record_pass1_outcome(
+        self,
+        result: Any,
+        notebook_id: str,
+        notebook_schema_repo: "NotebookSchemaRepository",
+        pass1_repo: "Pass1ResultRepository",
+    ) -> None:
+        """Move Pass 1's findings to where a curator can act on them (PC.1).
+
+        Pass 1 already worked and was already persisted to ``pass1_results``. What
+        did not happen is the step that makes it ACTIONABLE:
+        ``notebook_schema.pending_extensions`` had no writer anywhere in
+        production — `add_pending_extension`'s only callers were in its own
+        roundtrip test — and `coverage_pct`, documented as driving the B.3c
+        soft-nudge, was never written either.
+
+        Everything downstream reads those two fields: accept, reject, the
+        `PendingExtensionsPanel`, and through the accept step the whole of
+        N.4d.1-N.4d.3. A pipeline review measured the consequence: after eight
+        documents and fourteen `pass1_results` rows, `pending_extensions` was
+        empty and `coverage_pct` was 0.0.
+
+        Best-effort by design: extraction has already succeeded by the time this
+        runs, and a failure to surface a proposal must not lose the entities. The
+        failure is logged at WARNING rather than swallowed, because a queue that
+        silently stops filling is exactly the defect this method exists to fix.
+        """
+        metadata = getattr(result, "metadata", None) or {}
+        proposals = metadata.get("proposed_extensions") or []
+
+        try:
+            if proposals:
+                added = await notebook_schema_repo.merge_pending_extensions(
+                    notebook_id, proposals
+                )
+                logger.info(
+                    "pass1 proposals queued for {nb}: {added} new of {total} proposed",
+                    nb=notebook_id,
+                    added=added,
+                    total=len(proposals),
+                )
+        except Exception as e:
+            logger.warning(f"could not queue pass1 proposals for {notebook_id}: {e}")
+
+        try:
+            coverage = await self._rolling_coverage(notebook_id, pass1_repo)
+            if coverage is not None:
+                await notebook_schema_repo.set_coverage_pct(notebook_id, coverage)
+        except Exception as e:
+            logger.warning(f"could not update coverage for {notebook_id}: {e}")
+
+    # How many `pass1_results` rows the coverage average reads. Pass 1 writes one
+    # row per applied schema per extraction, so ~2-3 rows per document; 1000 is
+    # roughly 300-500 documents including re-extractions. Stated as a number
+    # rather than left at the repository default of 100, which a review measured
+    # would silently start truncating at ~57 documents — and truncate a source
+    # PARTIALLY, giving a wrong average rather than a stale one.
+    _COVERAGE_WINDOW = 1000
+
+    # Group key for `pass1_results` rows written before PC.1 stamped a run id.
+    # They are one run per source, not one run each, so a legacy source still
+    # reports its best schema rather than whichever schema happens to be newest.
+    _LEGACY_RUN = "__pre_pc1__"
+
+    # Confidence stamped on a schema recovered from the notebook's history.
+    # Above `MIN_APPLICABLE_CONFIDENCE` so it is actually applied, and below the
+    # 0.85 a curator's explicit `base_ontology` carries, because history is
+    # weaker evidence than a declaration. It never competes with a content match
+    # — this path runs only when detection returned nothing at all.
+    _NOTEBOOK_FALLBACK_CONFIDENCE = 0.5
+
+    @staticmethod
+    async def _notebook_fallback_schemas(
+        notebook_id: str,
+        pass1_repo: "Pass1ResultRepository",
+        candidates: List["Ontology"],
+    ) -> List[Tuple["Ontology", float]]:
+        """The schema this notebook's other documents turned out to be.
+
+        Consulted ONLY when per-document detection found nothing, so it can
+        never overrule a document that spoke for itself. Ranked by how often a
+        schema was attempted, ties broken by mean coverage — frequency is the
+        notebook's verdict, coverage is how well that verdict worked.
+
+        **Frequency dominates absolutely**, so a schema attempted eight times at
+        coverage 0.0 beats one attempted three times at 0.9 — and `coverage_pct`
+        is precisely the measurement of whether that schema fit. A review raised
+        it and it is a decision, not an oversight: a low-coverage schema a
+        notebook keeps landing on is still what that notebook is about, while the
+        alternative ranking lets one lucky document redefine it — which is what
+        the "per document, history only as fallback" rule exists to prevent.
+        Bounded by firing only when detection found nothing and by returning a
+        single schema. Revisit it if a notebook is seen converging on a schema
+        that measures near zero.
+
+        Note what the history is made of: rows written by the blind first-chunk
+        detector this same change replaces. It self-corrects as documents are
+        re-extracted.
+
+        Returns at most one schema. A fallback that guessed three would be
+        asserting more about the document than the evidence supports, and every
+        extra schema is another Pass-1 and Pass-2 LLM call.
+
+        Returns an empty list when the notebook has no history yet, when its
+        history names schemas no longer in the registry, or when the repository
+        read fails — in each case the caller drops to the legacy path exactly as
+        it did before this existed.
+        """
+        try:
+            rows = await pass1_repo.list_by_notebook(
+                notebook_id, limit=EntityExtractionService._COVERAGE_WINDOW
+            )
+        except Exception as e:
+            logger.warning(f"notebook fallback: could not read pass1 history ({e})")
+            return []
+        if not rows:
+            return []
+
+        counts: Dict[str, int] = {}
+        coverage: Dict[str, List[float]] = {}
+        for row in rows:
+            name = str(getattr(row, "schema_attempted", "") or "")
+            if not name:
+                continue
+            counts[name] = counts.get(name, 0) + 1
+            coverage.setdefault(name, []).append(
+                float(getattr(row, "coverage_pct", 0.0) or 0.0)
+            )
+        if not counts:
+            return []
+
+        by_name = {
+            (ont.metadata.name if ont.metadata else ""): ont for ont in candidates
+        }
+        ranked = sorted(
+            counts,
+            key=lambda n: (counts[n], sum(coverage[n]) / len(coverage[n])),
+            reverse=True,
+        )
+        for name in ranked:
+            ontology = by_name.get(name)
+            if ontology is not None:
+                return [
+                    (
+                        ontology,
+                        EntityExtractionService._NOTEBOOK_FALLBACK_CONFIDENCE,
+                    )
+                ]
+        return []
+
+    @staticmethod
+    async def _rolling_coverage(
+        notebook_id: str, pass1_repo: "Pass1ResultRepository"
+    ) -> Optional[float]:
+        """Mean over SOURCES of each source's best coverage IN ITS NEWEST RUN.
+
+        The field is documented as "rolling-average coverage across all sources
+        processed in this notebook", so it is recomputed from `pass1_results`
+        rather than accumulated incrementally.
+
+        `pass1_results` is append-only — re-extracting a source adds rows, it does
+        not replace them — and one extraction writes one row PER APPLIED SCHEMA.
+        So a source's current measurement is the set of rows sharing its newest
+        ``run_id``, and the summary per source is the max across the schemas in
+        that run: Pass 1 runs once per applied schema and a notebook's coverage is
+        how well its best-fitting schema did, not the average of a good fit and a
+        bad one.
+
+        Two earlier versions of this rule were wrong in the same direction, both
+        caught by review, so the reasoning is spelled out. A plain max over all of
+        a source's rows spans re-runs, so coverage could only ever rise. Grouping
+        on the newest row per ``(source, schema_attempted)`` fixes re-extraction
+        under an UNCHANGED schema set and still cannot fall when the set changes —
+        the abandoned schema's pair is never superseded, only aged — which is
+        precisely the flow the soft-nudge exists to drive: low coverage, curator
+        edits the schema, re-extract, number should move. Measured: after a run
+        under `scholarly` scoring 0.30, the pair rule still reported 0.90 from an
+        abandoned `deals` row. Only a run boundary expresses "these rows are the
+        current measurement and those are history", so PC.1 stamps one
+        (`pass1_metadata["run_id"]`, written by the orchestrator).
+
+        **Rows written before PC.1 carry no ``run_id``.** They are grouped under a
+        single synthetic per-source run so they behave as they did before rather
+        than each becoming a run of its own, and any real run supersedes them:
+        once a source has one stamped row, its unstamped history is dropped.
+
+        A source deleted from the notebook keeps contributing until its rows age
+        out of the window — `pass1_results` has no cascade and this method does
+        not check liveness. Recorded as a known limit rather than fixed here: the
+        fix is a delete-time cleanup or a liveness join, which is a change to
+        somebody else's write path.
+
+        Returns ``None`` when there is nothing to average, so the caller writes
+        nothing rather than writing 0.0 and claiming a measurement nobody made.
+        """
+        rows = await pass1_repo.list_by_notebook(
+            notebook_id, limit=EntityExtractionService._COVERAGE_WINDOW
+        )
+        if not rows:
+            return None
+
+        # Rows arrive newest-first, so the first run_id seen for a source is that
+        # source's current run. `_LEGACY_RUN` groups the pre-PC.1 tail.
+        current_run: Dict[str, str] = {}
+        best_per_source: Dict[str, float] = {}
+        for row in rows:
+            source = str(getattr(row, "source", "") or "")
+            if not source:
+                continue
+            meta = getattr(row, "pass1_metadata", None) or {}
+            run = str(meta.get("run_id") or "") or EntityExtractionService._LEGACY_RUN
+            seen = current_run.setdefault(source, run)
+            if run != seen:
+                continue  # an older run of this source
+            value = float(getattr(row, "coverage_pct", 0.0) or 0.0)
+            best_per_source[source] = max(best_per_source.get(source, 0.0), value)
+
+        if not best_per_source:
+            return None
+        return sum(best_per_source.values()) / len(best_per_source)
+
     async def _concept_alignment_deps(
         self, f_config: "FilteringConfig"
     ) -> Dict[str, Any]:
@@ -1026,6 +1324,54 @@ class EntityExtractionService:
 
         notebook_schema = await notebook_schema_repo.get_by_notebook(notebook_id)
 
+        # PC.1: create the row HERE, before schema detection, because otherwise a
+        # notebook can never get one. Measured on the live corpus, the cycle is
+        # closed: no row -> no base ontology forced -> content scoring clears the
+        # floor for nothing -> the fallback below returns early -> Pass 1 never
+        # runs -> no proposals -> nothing creates the row. The comment on that
+        # fallback already calls this "the common case: a notebook with no
+        # configured schema"; what it did not say is that the case is permanent.
+        #
+        # Creating it before `_apply_notebook_schema_default` means the base is
+        # forced on THIS run, so the first document a notebook ever sees gets a
+        # Pass-1 pass instead of the legacy path.
+        #
+        # The row is created with NO declared base ontology, and that is the
+        # whole point of it. Two attempts guessed a value here — first this
+        # run's `config.ontology_name` ("general", a per-request parameter
+        # nobody sets), then `DEFAULT_BASE_ONTOLOGY` ("scholarly", a constant
+        # chosen for the TTL-export READ path) — and both had the same defect:
+        # whatever lands in this field is forced into the applied set of every
+        # later extraction in the notebook, at confidence 0.85, ahead of what
+        # the document itself says. Measured on the project's corpus,
+        # `scholarly` is detected for ZERO of fourteen sources and all 17
+        # `pass1_results` rows ran against `policy_themes`, so forcing it would
+        # have extracted Dutch Regio-Deal convenanten against Article, Author
+        # and PreprintServer.
+        #
+        # The schema is established PER DOCUMENT — that is what detection is
+        # for — and only if that genuinely fails does the notebook's own history
+        # decide (see the fallback further down). An empty base is invisible to
+        # the read paths, which all resolve `base_ontology or
+        # DEFAULT_BASE_ONTOLOGY`, and is skipped by
+        # `_apply_notebook_schema_default`, so nothing is forced until a curator
+        # chooses one in the Schema tab. What the row buys is the queue and the
+        # coverage field: both writers refuse when no row exists, which is the
+        # cycle G0b described.
+        if notebook_schema is None:
+            try:
+                created = await notebook_schema_repo.ensure_row(
+                    notebook_id, NO_DECLARED_BASE
+                )
+                if created:
+                    notebook_schema = await notebook_schema_repo.get_by_notebook(
+                        notebook_id
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"could not create notebook_schema for {notebook_id}: {e}"
+                )
+
         # Review gate — if the user has paused processing for this
         # notebook, do not run extraction. The caller (handler) treats
         # this exception as "park the job in PAUSED_FOR_REVIEW".
@@ -1050,15 +1396,24 @@ class EntityExtractionService:
         if source is not None and getattr(source, "metadata", None):
             document_type = source.metadata.get("document_type")
 
-        # Sample text for the applicability scorer — first chunk's
-        # content is a cheap signal. The orchestrator's Pass-1 step
-        # builds a richer sample independently.
-        sample_text: Optional[str] = None
-        for chunk in chunks:
-            text = chunk.get("text", "")
-            if text:
-                sample_text = text[:2000]
-                break
+        # Sample text for the applicability scorer.
+        #
+        # This used to be the first chunk, capped at 2000 characters, described
+        # as "a cheap signal". Measured on the project's own corpus it is not a
+        # signal at all: the first chunk of a parsed PDF is a title or heading
+        # fragment with a MEDIAN LENGTH OF 66 CHARACTERS (shortest 15), so the
+        # scorer was matching a document's vocabulary against its cover page.
+        # Detection fired for 2 of 14 sources. Against a sample spread over the
+        # body it fires for 13 of 14, and the winner is `policy_themes` at the
+        # 0.90 cap for nine of them — which is what all 17 existing
+        # `pass1_results` rows actually ran against.
+        #
+        # That mattered far beyond the scorer. A document with no detected
+        # schema takes the legacy single-schema path below, where Pass 1 never
+        # runs, so the curator queue this phase exists to fill stayed empty for
+        # reasons that had nothing to do with the queue. The forced notebook
+        # base was papering over a blind detector.
+        sample_text = _applicability_sample(chunks)
 
         # Discover candidate ontologies. ``list_ontologies`` returns
         # names; we resolve them through the registry. Missing ontology
@@ -1119,6 +1474,34 @@ class EntityExtractionService:
             if notebook_schema is not None and notebook_schema.base_ontology
             else None
         )
+
+        if not applicable_schemas:
+            # Nothing cleared the floor for THIS document. Before dropping to
+            # the legacy path — where Pass 1 never runs and the curator queue
+            # gets nothing — ask the notebook what its other documents turned
+            # out to be. A notebook of Regio-Deal convenanten whose fifteenth
+            # document scores below the floor is still a notebook of Regio-Deal
+            # convenanten. On this corpus that is one document of fourteen, a
+            # journal article whose vocabulary overlaps no bundled ontology.
+            #
+            # This is a fallback, not a declaration: it is consulted only when
+            # per-document detection fails, it never overrides a document that
+            # detected something, and it reads evidence the notebook already
+            # produced rather than a constant somebody picked.
+            fallback = await self._notebook_fallback_schemas(
+                notebook_id, pass1_repo, candidate_ontologies
+            )
+            if fallback:
+                logger.info(
+                    "multi_schema: no detection for source={src}, falling back "
+                    "to the notebook's own history: {names}",
+                    src=source_id,
+                    names=[o.metadata.name for o, _c in fallback],
+                )
+                applicable_schemas = self._project_notebook_edits(
+                    fallback, notebook_schema, notebook_id
+                )
+                self._applicable_schemas = [o for o, _c in applicable_schemas]
 
         if not applicable_schemas:
             # No schema cleared the floor — fall back to the configured
@@ -1187,7 +1570,7 @@ class EntityExtractionService:
                 "Pass-1/Pass-2 will run with their lazy defaults."
             )
 
-        return await workflow.extract(
+        result = await workflow.extract(
             chunks=chunks,
             mode="multi",
             applicable_schemas=applicable_schemas,
@@ -1198,6 +1581,10 @@ class EntityExtractionService:
             llm_caller=llm_caller,
             pass2_token_budget=self._pass2_token_budget,
         )
+        await self._record_pass1_outcome(
+            result, notebook_id, notebook_schema_repo, pass1_repo
+        )
+        return result
 
     async def run_extraction(
         self,

@@ -23,7 +23,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-
 from shared.models import NotebookSchema, Pass1Result
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import execute_query
@@ -434,3 +433,102 @@ async def test_pass1_result_empty_lists_when_no_rows(
 
     assert await repo.list_by_source(source_id) == []
     assert await repo.list_by_notebook(notebook_id) == []
+
+
+async def test_merge_pending_extensions_dedupes_across_documents(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Track PC.1 — proposals are per-DOCUMENT, the queue is per-NOTEBOOK.
+
+    `add_pending_extension` appends unconditionally, which is right for one
+    proposal and wrong for a Pass-1 batch: the same type proposed by three
+    documents would be listed three times. A pipeline review measured the
+    surrounding defect — nothing wrote this field at all — so the merge that
+    replaces it has to survive the repeat.
+    """
+    notebook_id = await _create_notebook(live_surrealdb)
+    repo = NotebookSchemaRepository(config=live_surrealdb)
+    await repo.upsert(NotebookSchema(notebook=notebook_id, base_ontology="deals"))
+
+    first = await repo.merge_pending_extensions(
+        notebook_id,
+        [
+            {"type_name": "Method", "parent_type": "Concept"},
+            {"type_name": "GrantFundingSource", "parent_type": "Organization"},
+        ],
+    )
+    assert first == 2
+
+    # A second document proposes one of the same types plus a new one.
+    second = await repo.merge_pending_extensions(
+        notebook_id,
+        [
+            {"type_name": "method", "parent_type": "Concept"},  # different case
+            {"type_name": "Indicator", "parent_type": "Concept"},
+        ],
+    )
+    assert second == 1, "a type already queued must not be listed twice"
+
+    row = await repo.get_by_notebook(notebook_id)
+    assert row is not None
+    names = sorted(e["type_name"] for e in row.pending_extensions)
+    assert names == ["GrantFundingSource", "Indicator", "Method"]
+    # Deterministic ids, so a replay is idempotent and accept/reject have the id
+    # their contract documents.
+    assert {e["extension_id"] for e in row.pending_extensions} == {
+        "pass1::method",
+        "pass1::grantfundingsource",
+        "pass1::indicator",
+    }
+
+
+async def test_merge_pending_extensions_skips_already_accepted(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Re-proposing a type the curator already accepted is noise, not news."""
+    notebook_id = await _create_notebook(live_surrealdb)
+    repo = NotebookSchemaRepository(config=live_surrealdb)
+    await repo.upsert(
+        NotebookSchema(
+            notebook=notebook_id,
+            base_ontology="deals",
+            accepted_extensions=[{"type_name": "Method", "extension_id": "ext-A"}],
+        )
+    )
+
+    added = await repo.merge_pending_extensions(
+        notebook_id, [{"type_name": "Method"}, {"type_name": "Tranche"}]
+    )
+    assert added == 1
+    row = await repo.get_by_notebook(notebook_id)
+    assert [e["type_name"] for e in row.pending_extensions] == ["Tranche"]
+
+
+async def test_merge_pending_extensions_without_a_schema_row(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    notebook_id = await _create_notebook(live_surrealdb)
+    repo = NotebookSchemaRepository(config=live_surrealdb)
+    assert await repo.merge_pending_extensions(notebook_id, [{"type_name": "X"}]) == 0
+
+
+async def test_set_coverage_pct_roundtrips_and_clamps(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """The field the B.3c soft-nudge reads, which nothing used to write.
+
+    Clamped because the model constrains the range and a Pass-1 run that reports
+    a percentage instead of a fraction must not make the write fail after the
+    extraction already succeeded.
+    """
+    notebook_id = await _create_notebook(live_surrealdb)
+    repo = NotebookSchemaRepository(config=live_surrealdb)
+    await repo.upsert(NotebookSchema(notebook=notebook_id, base_ontology="deals"))
+
+    assert await repo.set_coverage_pct(notebook_id, 0.72) is True
+    row = await repo.get_by_notebook(notebook_id)
+    assert row is not None and row.coverage_pct == pytest.approx(0.72)
+
+    assert await repo.set_coverage_pct(notebook_id, 87.0) is True
+    row = await repo.get_by_notebook(notebook_id)
+    assert row.coverage_pct == 1.0
