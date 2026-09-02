@@ -36,6 +36,8 @@ from surrealdb_service.repositories import (
     SourceRepository,
 )
 
+from app_main.config import get_concept_alignment_enabled
+
 if TYPE_CHECKING:
     from ontology_manager.schema import Ontology
     from shared.models import NotebookSchema
@@ -475,6 +477,10 @@ class EntityExtractionService:
         # top of each ``run_extraction`` so a single-schema / no-schema run does
         # not inherit a prior run's schemas.
         self._applicable_schemas: Optional[List[Any]] = None
+        # N.4d.4: the notebook's declared vocabulary name, for gap rows. See the
+        # stash site in `_run_multi_schema` for why it is not read off the
+        # applied set.
+        self._gap_ontology_name: Optional[str] = None
         # The most-recently-built routed caller for this run. After extraction
         # its ``served_provider`` / ``served_model_id`` carry the provider that
         # actually answered (J-Q7) — read at provenance-stamp time so the KG
@@ -850,6 +856,86 @@ class EntityExtractionService:
 
         return result
 
+    async def _concept_alignment_deps(
+        self, f_config: "FilteringConfig"
+    ) -> Dict[str, Any]:
+        """Collaborators Stage 15 needs, or ``None`` for each that cannot be built.
+
+        Track N.4d.4 / D-N4-8. The stage is reachable only if something actually
+        hands it a graph to query, an ontology to resolve types against, a judge,
+        and a place to record gaps — the previous tier shipped behind a config
+        default nothing set and never ran in production.
+
+        Returns all four keys always, so the caller wires whatever is available
+        and the workflow's own DEGRADED warning reports the rest. Nothing here
+        raises: a failure to build one collaborator degrades that tier, it does
+        not fail the extraction.
+        """
+        deps: Dict[str, Any] = {
+            "entity_repo": None,
+            "schemas": None,
+            "gap_recorder": None,
+            "llm_caller": None,
+            "gap_ontology_name": None,
+        }
+        if not f_config.concept_alignment.enabled:
+            return deps
+
+        try:
+            from app_main.dependencies import get_entity_repo
+
+            deps["entity_repo"] = get_entity_repo()
+        except Exception as e:
+            logger.warning(f"concept alignment: no entity repo ({e})")
+
+        # ALL the ontologies this run applied, already projected with the
+        # notebook's accepted schema edits (N.4d.3) — not just the first.
+        # `detect_applicable_schemas(top_k=3)` means an applied set holds three,
+        # and a type declared in the second or third would otherwise fail
+        # `resolve_canonical_type`, produce a code that licenses no gap, and make
+        # the loop under-fire for two thirds of the applied vocabulary.
+        #
+        # None on the single-schema path and on `run_filtering_only`, where no
+        # set is detected at all: there no canonical type resolves, so every
+        # verdict carries a code that licenses no gap and the loop is inert.
+        # Stated rather than left to be rediscovered.
+        if self._applicable_schemas:
+            deps["schemas"] = list(self._applicable_schemas)
+        deps["gap_ontology_name"] = self._gap_ontology_name
+
+        try:
+            from ontology_manager import get_ontology_manager
+
+            deps["gap_recorder"] = get_ontology_manager().evolution
+        except Exception as e:
+            logger.warning(f"concept alignment: no gap recorder ({e})")
+
+        if f_config.concept_alignment.judge_enabled:
+            try:
+                deps["llm_caller"] = await self._make_routed_caller()
+            except Exception as e:
+                logger.warning(f"concept alignment: no judge caller ({e})")
+
+        # `gap_ontology_name` is absent for a notebook with no configured base
+        # ontology, which is the Regio-Deal corpus's state today. That is not a
+        # wiring failure — the aligner falls back to the applied schema's own
+        # name — so it is not reported as one.
+        missing = [
+            name
+            for name, value in deps.items()
+            if value is None and name != "gap_ontology_name"
+        ]
+        if missing:
+            # The workflow warns about its own DEGRADED tiers, but only about the
+            # ones it was handed. This says which could not be BUILT, which is a
+            # different fact and the one an operator can act on.
+            logger.warning(
+                "Concept alignment enabled but these collaborators could not be "
+                "wired: {missing}",
+                missing=missing,
+            )
+        return deps
+
     def _project_notebook_edits(
         self,
         applicable_schemas: List[Tuple["Ontology", float]],
@@ -1020,6 +1106,19 @@ class EntityExtractionService:
         self._applicable_schemas = [
             ontology for ontology, _conf in applicable_schemas
         ]
+        # N.4d.4 B1: the name every ontology GAP this run records is filed
+        # under. It must be the notebook's DECLARED vocabulary, never a member
+        # of the applied set: `detect_applicable_schemas` ranks by per-document
+        # content overlap, so `applicable_schemas[0]` changes with the document,
+        # and gaps are keyed on `(entity_text, ontology_name)`. Naming them after
+        # a per-document winner splits one concept across two rows at frequency
+        # 1 instead of accumulating one at frequency 2 — exactly the failure the
+        # cross-document `source_id` plumbing exists to make visible.
+        self._gap_ontology_name = (
+            notebook_schema.base_ontology
+            if notebook_schema is not None and notebook_schema.base_ontology
+            else None
+        )
 
         if not applicable_schemas:
             # No schema cleared the floor — fall back to the configured
@@ -1199,6 +1298,7 @@ class EntityExtractionService:
         # populates this (below). A single-schema run leaves it None so the
         # persist bridge degrades to the alias/enum path.
         self._applicable_schemas = None
+        self._gap_ontology_name = None
 
         # 3. Build config and workflow
         config_kwargs: Dict[str, Any] = {
@@ -1267,6 +1367,7 @@ class EntityExtractionService:
                 else:
                     # Default config: string dedup + fuzzy + embedding
                     from entity_filtering.config import (
+                        ConceptAlignmentConfig,
                         EmbeddingDedupConfig,
                         FuzzyDedupConfig,
                     )
@@ -1283,10 +1384,28 @@ class EntityExtractionService:
                             similarity_threshold=0.90,
                         ),
                         edge_prediction_enabled=True,
+                        # N.4d.4 / D-N4-8: the stage was otherwise unreachable in
+                        # every real run. An explicitly supplied filtering_config
+                        # is the caller's own choice and is never overridden.
+                        concept_alignment=ConceptAlignmentConfig(
+                            enabled=get_concept_alignment_enabled()
+                        ),
                     )
-                f_workflow = FilteringWorkflow(config=f_config)
 
-                filtered = await f_workflow.process(result)
+                align_deps = await self._concept_alignment_deps(f_config)
+                f_workflow = FilteringWorkflow(
+                    config=f_config,
+                    entity_repo=align_deps["entity_repo"],
+                    alignment_schemas=align_deps["schemas"],
+                    gap_recorder=align_deps["gap_recorder"],
+                    gap_ontology_name=align_deps["gap_ontology_name"],
+                )
+
+                filtered = await f_workflow.process(
+                    result,
+                    source_id=source_id,
+                    alignment_llm_caller=align_deps["llm_caller"],
+                )
 
                 merge_groups = filtered.merged_entity_groups
                 all_relations = [
@@ -1302,6 +1421,37 @@ class EntityExtractionService:
                     "merge_groups": len(merge_groups) if merge_groups else 0,
                     "predicted_edges": len(filtered.predicted_edges),
                 }
+                # N.4d.4: the gap counters are the phase's only operator-visible
+                # output. Left on `concept_alignment_report` alone they never
+                # reach anyone — this dict is what lands in
+                # `extraction_result.metadata["filtering"]`. `eligible` vs
+                # `recorded` is the distinction that matters: `record_gap`
+                # returns a gap with `id=None` when the write failed, so without
+                # both numbers a run where nothing was written reads exactly like
+                # one where everything was.
+                alignment_report = filtered.concept_alignment_report
+                if alignment_report:
+                    filtering_stats["concept_alignment"] = {
+                        "aligned": alignment_report.get("aligned_count", 0),
+                        "judged": alignment_report.get("judged_count", 0),
+                        "gap_eligible": alignment_report.get("gap_eligible", 0),
+                        "gaps_recorded": alignment_report.get("gaps_recorded", 0),
+                        "gaps_unrecorded": alignment_report.get("gaps_unrecorded", 0),
+                        "gap_duplicates_suppressed": alignment_report.get(
+                            "gap_duplicates_suppressed", 0
+                        ),
+                        "gap_recorder_wired": alignment_report.get(
+                            "gap_recorder_wired", False
+                        ),
+                        # The store's STANDING totals — this run's counters say
+                        # what happened, these say what has accumulated, which is
+                        # what a curator acts on. `status` travels with them
+                        # because three of its four values leave the totals null.
+                        "gap_statistics": alignment_report.get("gap_statistics"),
+                        "gap_statistics_status": alignment_report.get(
+                            "gap_statistics_status"
+                        ),
+                    }
                 result.metadata["filtering"] = filtering_stats
 
                 logger.info(
@@ -1479,6 +1629,17 @@ class EntityExtractionService:
         Fetches the raw extraction_result, runs FilteringWorkflow, and
         persists filtered entities to the KG tables.
         """
+        # N.4d.4: this path re-detects NO schemas, so anything left on the
+        # instance belongs to a previous run of a different source. Cleared
+        # FIRST, before any early return, for the same reason the L.1 comment
+        # below passes `applicable_schemas=None` to persist: "so a reused service
+        # instance can't leak a prior run's schemas onto a different source's
+        # re-filter". An earlier draft argued the leak was unreachable because
+        # the DI provider happens to build a fresh instance per call — the
+        # assumption that comment had already declined to rely on.
+        self._applicable_schemas = None
+        self._gap_ontology_name = None
+
         # Fetch existing extraction result
         rows = await execute_query(
             "SELECT * FROM extraction_result WHERE source_id = $source_id LIMIT 1",
@@ -1523,8 +1684,24 @@ class EntityExtractionService:
 
         # Run filtering
         f_config = filtering_config or FilteringConfig()
-        f_workflow = FilteringWorkflow(config=f_config)
-        filtered = await f_workflow.process(extraction)
+        # The same collaborators the main path wires, so a re-filter is not
+        # silently a different pipeline. With no schemas detected the stage is
+        # inert here regardless (no canonical type resolves, so no verdict
+        # licenses a gap); wiring it costs nothing and means a caller who DOES
+        # enable it gets the same behaviour rather than a quietly degraded one.
+        align_deps = await self._concept_alignment_deps(f_config)
+        f_workflow = FilteringWorkflow(
+            config=f_config,
+            entity_repo=align_deps["entity_repo"],
+            alignment_schemas=align_deps["schemas"],
+            gap_recorder=align_deps["gap_recorder"],
+            gap_ontology_name=align_deps["gap_ontology_name"],
+        )
+        filtered = await f_workflow.process(
+            extraction,
+            source_id=source_id,
+            alignment_llm_caller=align_deps["llm_caller"],
+        )
 
         # Persist to KG
         all_relations = [

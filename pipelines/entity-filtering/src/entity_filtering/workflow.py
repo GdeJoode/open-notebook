@@ -81,6 +81,21 @@ class FilteringWorkflow:
             and entity linking is enabled, a ``DBpediaSpotlightLinker``
             is created with config defaults.
         ontology: Optional ontology definition for constraint validation.
+        gap_recorder: Optional ``OntologyEvolutionAgent`` for Stage 15's gap loop
+            (Track N.4d.4). Absent, alignment still classifies and the report
+            says no recorder was wired — an eligible gap nobody could record is
+            counted, never silently dropped.
+        alignment_schemas: ALL the ontologies applied to this run, for Stage 15's
+            canonical-type resolution. ``detect_applicable_schemas`` returns up
+            to three; passing only one makes every type declared in the other two
+            fail to resolve, which produces a reason code that licenses no gap and
+            silently halves the loop's reach. Defaults to ``[ontology]`` so the
+            existing single-ontology callers are unaffected.
+        gap_ontology_name: the name gap rows are filed under. The notebook's
+            DECLARED vocabulary, not a member of the applied set — the applied
+            set is ranked by per-document content overlap, and gaps are keyed on
+            ``(entity_text, ontology_name)``, so a per-document name splits one
+            concept's frequency across rows.
     """
 
     def __init__(
@@ -89,6 +104,9 @@ class FilteringWorkflow:
         entity_repo: Optional[EntityRepositoryProtocol] = None,
         entity_linker: Optional[EntityLinker] = None,
         ontology: Optional[Any] = None,
+        gap_recorder: Optional[Any] = None,
+        alignment_schemas: Optional[list[Any]] = None,
+        gap_ontology_name: Optional[str] = None,
     ) -> None:
         self._config = config or FilteringConfig()
         # Kept for Stage 15 (Track N.4 concept alignment), which needs the
@@ -96,6 +114,9 @@ class FilteringWorkflow:
         # canonical type resolution.
         self._entity_repo = entity_repo
         self._ontology = ontology
+        self._gap_recorder = gap_recorder
+        self._alignment_schemas = alignment_schemas
+        self._gap_ontology_name = gap_ontology_name
 
         self._noise_filter = NoiseFilter(
             custom_patterns=self._config.custom_noise_patterns,
@@ -695,13 +716,30 @@ class FilteringWorkflow:
             # degrade. With nothing marked is_new the stage records no verdict at
             # all, so claiming it "will still run and record NOVEL verdicts"
             # would contradict the accurate line just above it.
+            # ALL applied schemas when the caller supplied them; the single
+            # `ontology` is the back-compat fallback for callers that predate
+            # N.4d.4 and pass one. Resolved before the DEGRADED block, which
+            # reports on what alignment will actually receive.
+            alignment_schemas = self._alignment_schemas
+            if alignment_schemas is None:
+                alignment_schemas = (
+                    [self._ontology] if self._ontology is not None else None
+                )
+
             degraded: list[str] = []
             if self._entity_repo is None:
                 degraded.append("entity_repo (the graph is never queried)")
-            if self._ontology is None:
+            if not alignment_schemas:
                 degraded.append("ontology (no canonical type resolves)")
             if align_cfg.judge_enabled and alignment_llm_caller is None:
                 degraded.append("alignment_llm_caller (the judge tier cannot run)")
+            if self._gap_recorder is None:
+                # N.4d.4: worth naming separately. Without a recorder the stage
+                # still classifies and still reports which verdicts WOULD have
+                # been gaps, so this degrades the loop, not the verdicts.
+                degraded.append(
+                    "gap_recorder (eligible gaps are counted but not recorded)"
+                )
             if degraded and not nothing_to_classify:
                 logger.warning(
                     "Concept alignment enabled but DEGRADED — it will still run "
@@ -711,20 +749,25 @@ class FilteringWorkflow:
 
             aligner = ConceptAligner(
                 self._entity_repo,
-                schemas=[self._ontology] if self._ontology is not None else None,
+                schemas=alignment_schemas,
                 llm_caller=alignment_llm_caller,
                 judge_enabled=align_cfg.judge_enabled,
                 related_floor=align_cfg.related_floor,
                 match_ceiling=align_cfg.match_ceiling,
                 max_candidates=align_cfg.max_candidates,
                 min_inner_tokens=align_cfg.min_inner_tokens,
+                gap_recorder=self._gap_recorder,
+                ontology_name=self._gap_ontology_name,
             )
             deduped_entities, concept_alignment_report = await aligner.align(
-                deduped_entities
+                deduped_entities, source_id=source_id
             )
             logger.debug(
-                "After concept alignment: {} aligned",
+                "After concept alignment: {} aligned, {} of {} eligible gaps "
+                "recorded",
                 concept_alignment_report.get("aligned_count", 0),
+                concept_alignment_report.get("gaps_recorded", 0),
+                concept_alignment_report.get("gap_eligible", 0),
             )
 
         # ------------------------------------------------------------------

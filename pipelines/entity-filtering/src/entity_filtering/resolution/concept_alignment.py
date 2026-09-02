@@ -76,9 +76,23 @@ cause:
 * ``EV_NO_CANDIDATE_VECTORS``  — rows exist but none carry an embedding.
 * ``EV_INCOMPARABLE_VECTORS``  — vectors exist on both sides but none could be
   compared (dimension mismatch or zero norm).
-* ``EV_NONE_CLOSE``            — vectors were genuinely compared and none reached
-  the floor. The only code that licenses a claim about similarity.
+* ``EV_NONE_CLOSE``            — vectors were genuinely compared and the nearest
+  fell BELOW the related floor. The only code that licenses a claim about
+  similarity.
+* ``EV_JUDGE_NO_LINK``         — the nearest landed in the ambiguous band and the
+  judge ruled on THIS item, finding no link. Adjudicated.
+* ``EV_BAND_UNADJUDICATED``    — the nearest landed in the ambiguous band and NO
+  verdict was obtained for this item (no caller, judge disabled, or the judge was
+  silent about it). Nobody decided; the NOVEL verdict is a default, not a finding.
 * ``EV_ERROR``                 — classification raised; nothing was established.
+
+C1 (N.4d.4): the last three were ONE code until this phase, which violated the
+"exactly one cause" contract above in the place it mattered most. Two of them
+(below-floor and unadjudicated-band) also shared ``method=none``, so a consumer
+could separate them only by comparing ``similarity`` against a floor it had to
+know out of band. The gap loop is that consumer: recording an unadjudicated
+concept as a confirmed ontology gap is precisely the overclaim this discipline
+exists to prevent. See :data:`GAP_LICENSING_CODES`.
 
 The lexical signal (D-N4-1 / D-N4-9)
 ====================================
@@ -128,6 +142,8 @@ EV_NO_QUERY_VECTOR = "entity_has_no_embedding"
 EV_NO_CANDIDATE_VECTORS = "no_candidate_embeddings"
 EV_INCOMPARABLE_VECTORS = "vectors_incomparable"
 EV_NONE_CLOSE = "compared_none_close"
+EV_JUDGE_NO_LINK = "judge_ruled_no_link"
+EV_BAND_UNADJUDICATED = "ambiguous_band_unadjudicated"
 EV_ERROR = "classification_error"
 
 REASON_CODES = (
@@ -140,7 +156,40 @@ REASON_CODES = (
     EV_NO_CANDIDATE_VECTORS,
     EV_INCOMPARABLE_VECTORS,
     EV_NONE_CLOSE,
+    EV_JUDGE_NO_LINK,
+    EV_BAND_UNADJUDICATED,
     EV_ERROR,
+)
+
+# The reason codes that license recording an ontology GAP (D-N4-6 / C1).
+#
+# A gap says "the ontology has no concept for this". Only a NOVEL verdict that
+# actually ESTABLISHED something about the graph can support that: the vectors
+# were compared and the nearest fell below the floor, or a judge looked at the
+# ambiguous band and ruled there is no link.
+#
+# Every other code names a reason nothing was established — no repo, no type, a
+# failed fetch, no rows, a missing embedding on either side, incomparable vectors,
+# a raised classification, or an ambiguous band nobody adjudicated. Each of those
+# produces a NOVEL verdict because NOVEL is the safe default, not because the
+# concept is new. Recording them would inflate frequency counts that
+# `OntologyEvolutionAgent` turns into schema proposals at a threshold, so the
+# error compounds into a curator-visible artefact rather than staying local.
+GAP_LICENSING_CODES = (EV_NONE_CLOSE, EV_JUDGE_NO_LINK)
+
+# What became of the standing-totals lookup. Four states, because three of them
+# leave ``gap_statistics`` at ``None`` and a reader cannot otherwise tell "this
+# run wrote nothing" from "the store could not answer".
+STATS_NOT_RECORDED = "not_recorded"
+STATS_UNSUPPORTED = "unsupported"
+STATS_UNAVAILABLE = "unavailable"
+STATS_OK = "ok"
+
+STATS_STATUSES = (
+    STATS_NOT_RECORDED,
+    STATS_UNSUPPORTED,
+    STATS_UNAVAILABLE,
+    STATS_OK,
 )
 
 # Fixed per-method confidences. A raw cosine is NEVER written here: mixing a
@@ -193,6 +242,38 @@ def _normalize(text: str) -> str:
 def _candidate_name(candidate: Dict[str, Any]) -> str:
     """A ``find_by_type`` row exposes ``name``; in-batch dicts use ``text``."""
     return str(candidate.get("name") or candidate.get("text", "") or "")
+
+
+def _schema_name(schemas: Optional[List[Any]]) -> str:
+    """The applied ontology's own name, for the gap rows this run writes.
+
+    Falls back to ``"general"`` — the same default `OntologyEvolutionAgent`
+    itself uses — when no schema is applied or one carries no metadata. Gaps are
+    keyed on ``(entity_text, ontology_name)``, so guessing a different name here
+    would split one concept's frequency count across two rows and delay the
+    proposal threshold rather than reach it sooner.
+    """
+    for ontology in schemas or ():
+        metadata = getattr(ontology, "metadata", None)
+        name = getattr(metadata, "name", None)
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return "general"
+
+
+def _gap_context(entity: Dict[str, Any]) -> Optional[str]:
+    """The text around the mention, for a curator reading the gap later.
+
+    Reads the chunking pipeline's ``extraction_context.surrounding_text``. Absent
+    (a re-ingest, or an extractor that does not carry context) the gap is still
+    recorded — the context is provenance, not evidence.
+    """
+    context = entity.get("extraction_context")
+    if isinstance(context, dict):
+        text = context.get("surrounding_text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return None
 
 
 def _props(entity: Dict[str, Any]) -> Dict[str, Any]:
@@ -545,6 +626,13 @@ class ConceptAligner:
             with no ordering, so this is an ARBITRARY sample — every NOVEL verdict
             discloses the cap rather than implying it saw the whole graph.
         min_inner_tokens: precision guard for the alias-candidate signal.
+        gap_recorder: object with ``record_gap(entity_text, entity_type_guess,
+            context, source_id, ontology_name)`` — normally an
+            ``OntologyEvolutionAgent``. Optional: absent, no gap is recorded and
+            the report says so. A gap is recorded ONLY for a NOVEL verdict whose
+            reason code is in :data:`GAP_LICENSING_CODES` (D-N4-6 / C1).
+        ontology_name: which ontology the gaps belong to. Defaults to the applied
+            schema's own metadata name where one is available.
     """
 
     def __init__(
@@ -559,11 +647,15 @@ class ConceptAligner:
         match_ceiling: float = 0.90,
         max_candidates: int = 100,
         min_inner_tokens: int = 2,
+        gap_recorder: Optional[Any] = None,
+        ontology_name: Optional[str] = None,
     ) -> None:
         self._repo = entity_repo
         self._schemas = schemas
         self._llm_caller = llm_caller
         self._model = model
+        self._gap_recorder = gap_recorder
+        self._ontology_name = ontology_name or _schema_name(schemas)
         self._judge_enabled = judge_enabled
         self._related_floor = related_floor
         self._match_ceiling = match_ceiling
@@ -571,9 +663,17 @@ class ConceptAligner:
         self._min_inner_tokens = min_inner_tokens
 
     async def align(
-        self, entities: List[Dict[str, Any]]
+        self,
+        entities: List[Dict[str, Any]],
+        *,
+        source_id: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-        """Classify every ``is_new`` entity. Returns ``(entities, report)``."""
+        """Classify every ``is_new`` entity. Returns ``(entities, report)``.
+
+        ``source_id`` is provenance for the gap rows: `record_gap` appends it to
+        the gap's source list, which is how a curator sees a concept recurring
+        across documents rather than within one.
+        """
         report: Dict[str, Any] = {
             "aligned_count": 0,
             "judged_count": 0,
@@ -583,6 +683,26 @@ class ConceptAligner:
             "alias_candidates": [],
             "candidate_cap": self._max_candidates,
             "capped_type_fetches": [],
+            # D-N4-6 / C1. `eligible` counts the NOVEL verdicts whose reason code
+            # licenses a gap; `recorded` those that came back with an id. They are
+            # separate numbers because `record_gap` swallows its own exceptions
+            # and returns a gap with `id=None` on failure — a null id is NOT
+            # success, and reporting it as one would be the same overclaim this
+            # module's evidence discipline exists to prevent.
+            "gap_eligible": 0,
+            "gaps_recorded": 0,
+            "gaps_unrecorded": 0,
+            "gap_recorder_wired": self._gap_recorder is not None,
+            # Eligible mentions of a concept already recorded in THIS run. Kept
+            # out of `gap_eligible`, which counts concepts, so the two never
+            # disagree about what a gap is.
+            "gap_duplicates_suppressed": 0,
+            # The gap store's standing totals, filled in after recording. Never
+            # an empty dict, so "not queried" cannot read as "zero gaps" — and
+            # `gap_statistics_status` says WHICH of the four happened, because
+            # three of them produce the same ``None``.
+            "gap_statistics": None,
+            "gap_statistics_status": STATS_NOT_RECORDED,
         }
         novel = [e for e in entities if _props(e).get("is_new")]
         if not novel:
@@ -622,6 +742,7 @@ class ConceptAligner:
         report["capped_type_fetches"] = sorted(
             t for t, f in cache.items() if len(f.rows) >= self._max_candidates
         )
+        gap_texts: set = set()
         for entity, alignment in decided:
             self._enrich(entity, alignment)
             report["aligned_count"] += 1
@@ -631,17 +752,189 @@ class ConceptAligner:
                 report["reason_counts"][alignment.reason_code] = (
                     report["reason_counts"].get(alignment.reason_code, 0) + 1
                 )
+            await self._maybe_record_gap(
+                entity, alignment, source_id, report, gap_texts
+            )
 
         logger.info(
             "ConceptAligner: {} aligned ({} related, {} novel), {} judged, "
-            "{} alias candidates",
+            "{} alias candidates, {} of {} eligible gaps recorded",
             report["aligned_count"],
             report["verdict_counts"][RELATED_TO],
             report["verdict_counts"][NOVEL],
             report["judged_count"],
             len(report["alias_candidates"]),
+            report["gaps_recorded"],
+            report["gap_eligible"],
         )
+        report["gap_statistics"], report["gap_statistics_status"] = (
+            await self._gap_statistics(report)
+        )
+        if report["gaps_unrecorded"]:
+            # `record_gap` logs its own failure at ERROR and then returns a gap
+            # object anyway, so a caller reading only the return value cannot
+            # tell. The INFO line above carries both numbers; this raises the
+            # level, because "some eligible gaps were not written" is an
+            # operational fault and not a run statistic.
+            logger.warning(
+                "ConceptAligner: {n} eligible gap(s) were NOT recorded (the "
+                "recorder returned no id)",
+                n=report["gaps_unrecorded"],
+            )
         return entities, report
+
+    async def _gap_statistics(
+        self, report: Dict[str, Any]
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        """The gap store's standing totals, for the alignment report (N.4c scope).
+
+        Queried only when this run actually recorded something: the counters
+        above describe THIS run, while these describe the accumulation a curator
+        acts on — how many gaps stand open for this vocabulary, and how far the
+        recurring ones are from the auto-proposal threshold. Skipped otherwise so
+        a run that recorded nothing pays no query.
+
+        Returns ``(totals, status)``. The totals are ``None`` rather than an empty
+        dict when unavailable, so a reader cannot mistake "not queried" for "zero
+        gaps"; the status says which of the four cases produced it, because three
+        of them are ``None``.
+
+        A store that is DOWN reaches ``unavailable`` through the returned payload,
+        not through an exception: the real agent swallows its own failure and
+        returns ``{"ontology_name": ..., "error": ...}``. Reading only the
+        exception path made this report ``ok`` with that payload as the totals.
+        """
+        if not report["gaps_recorded"] or self._gap_recorder is None:
+            return None, STATS_NOT_RECORDED
+        getter = getattr(self._gap_recorder, "get_gap_statistics", None)
+        if getter is None:
+            return None, STATS_UNSUPPORTED
+        try:
+            totals = await getter(ontology_name=self._ontology_name)
+        except Exception:
+            logger.warning(
+                "ConceptAligner: gap statistics unavailable", exc_info=True
+            )
+            return None, STATS_UNAVAILABLE
+
+        # `OntologyEvolutionAgent.get_gap_statistics` catches its own exceptions
+        # and returns a dict carrying an ``error`` key
+        # (`ontology_manager/evolution.py`, the final `except` of that method) —
+        # the same shape as `record_gap` returning a gap with `id=None`. So the
+        # `except` above never fires for the collaborator production actually
+        # wires, and without this branch a store that is down reports `ok` with
+        # an error payload presented as the standing totals. This phase's own
+        # plan bullet states the rule for `record_gap`; it holds for its sibling.
+        #
+        # MEMBERSHIP, not truthiness: the payload is `{"error": str(e)}`, and
+        # `str(e)` is `""` for any exception raised without arguments. Measured
+        # against the real agent — a bare `TimeoutError`, `KeyError`, or
+        # `Exception` all produced `{"error": ""}` and were reported `ok`, and a
+        # timeout on a slow gap store is exactly the condition this status exists
+        # to surface. The `isinstance` half is load-bearing too: `.get` runs
+        # outside the `try`, so a getter returning None would raise out of
+        # `align()` and cost the caller its whole filtering result — the same
+        # invariant `_maybe_record_gap` holds for `record_gap`.
+        if not isinstance(totals, dict) or "error" in totals:
+            logger.warning(
+                "ConceptAligner: gap statistics reported an error: {e}",
+                e=(totals.get("error") if isinstance(totals, dict) else totals),
+            )
+            return None, STATS_UNAVAILABLE
+        return totals, STATS_OK
+
+    async def _maybe_record_gap(
+        self,
+        entity: Dict[str, Any],
+        alignment: Alignment,
+        source_id: Optional[str],
+        report: Dict[str, Any],
+        seen: set,
+    ) -> None:
+        """Record an ontology gap for a NOVEL verdict that established something.
+
+        Gated on the reason code, not on the verdict (C1): most NOVEL verdicts
+        exist because NOVEL is the safe default when nothing could be compared,
+        and recording those would inflate the frequency counts that
+        `OntologyEvolutionAgent` turns into schema proposals at a threshold.
+
+        Never raises. Alignment is a classification pass; a gap store that is
+        down must not cost the caller its verdicts.
+
+        **What recording a gap sets in motion.** `OntologyEvolutionAgent` ships
+        with ``frequency_threshold=5`` and ``auto_propose=True``, so the fifth
+        recording of one concept creates a ``schema_proposal`` row without anyone
+        asking. That is why the gate is on the reason code and why the per-run
+        de-duplication exists: both bound what reaches a curator's queue. The
+        proposal's ``parent_type`` comes from ``entity_type_guess``, i.e. the
+        rich extraction label passed below — an unvalidated guess that N.4d.3's
+        placement is what actually checks.
+        """
+        if alignment.verdict != NOVEL:
+            # Belt-and-braces. No RELATED_TO alignment carries a reason code
+            # today, so the code gate below would catch this anyway — but a gap
+            # is a claim about a concept the graph does NOT hold, and that must
+            # not depend on a second condition happening to hold. Exercised
+            # directly rather than through `align`, which cannot produce the
+            # combination.
+            return
+        if alignment.reason_code not in GAP_LICENSING_CODES:
+            return
+
+        text = str(entity.get("text", "") or "").strip()
+        if _normalize(text) in seen:
+            # One gap per novel CONCEPT per run: `record_gap` increments
+            # frequency on every call, and that threshold is meant to count
+            # DOCUMENTS.
+            #
+            # Belt-and-braces under the SHIPPED pipeline, and said so rather than
+            # overstated: Stage 4's `EntityDeduplicator._normalize_key` is
+            # character-for-character the same normalisation and runs eleven
+            # stages earlier whenever `dedup_enabled` is set, which it is on both
+            # the app default config and the re-filter router. So the duplicate
+            # reaches here only when the aligner is driven directly or dedup is
+            # off. Kept because a gap is a claim about the graph and must not
+            # depend on an unrelated stage's configuration.
+            #
+            # Note the two keys differ: this suppresses on the NORMALISED form
+            # while `record_gap` matches `entity_text` exactly, so "Brede
+            # Welvaart" and "brede welvaart" collapse here and would be two rows
+            # in the store. Counted rather than dropped silently.
+            report["gap_duplicates_suppressed"] += 1
+            return
+        seen.add(_normalize(text))
+        report["gap_eligible"] += 1
+        if self._gap_recorder is None:
+            report["gaps_unrecorded"] += 1
+            return
+
+        try:
+            gap = await self._gap_recorder.record_gap(
+                entity_text=text,
+                # The RICH label, not the canonical type: a curator proposing a
+                # new type needs the domain word the extractor used, and
+                # `create_proposal_from_gap` reads this field straight into the
+                # proposal's `parent_type`. It reads ONLY the gap row, so the
+                # canonical is not recoverable there — which is the reason this
+                # has to be the useful value rather than the safe one.
+                entity_type_guess=str(entity.get("label", "") or "") or None,
+                context=_gap_context(entity),
+                source_id=source_id,
+                ontology_name=self._ontology_name,
+            )
+        except Exception:
+            logger.warning(
+                "ConceptAligner: gap recording raised for '{}'", text, exc_info=True
+            )
+            report["gaps_unrecorded"] += 1
+            return
+
+        if getattr(gap, "id", None):
+            report["gaps_recorded"] += 1
+        else:
+            # `record_gap` catches its own exceptions and returns a gap with
+            # `id=None`. Treat that as "not recorded", never as success.
+            report["gaps_unrecorded"] += 1
 
     # -- deterministic tiers -------------------------------------------------
 
@@ -903,7 +1196,7 @@ class ConceptAligner:
                         f"judge found no link (nearest cosine {score:.3f} to "
                         f"{_candidate_name(nearest)!r}){sampled}"
                     ),
-                    reason_code=EV_NONE_CLOSE,
+                    reason_code=EV_JUDGE_NO_LINK,
                     canonical_type=canonical,
                 )))
             else:
@@ -918,7 +1211,7 @@ class ConceptAligner:
                         f"{_candidate_name(nearest)!r} is inconclusive and no judge "
                         f"verdict was obtained for this concept{sampled}"
                     ),
-                    reason_code=EV_NONE_CLOSE,
+                    reason_code=EV_BAND_UNADJUDICATED,
                     canonical_type=canonical,
                 )))
         return out
@@ -975,6 +1268,14 @@ __all__ = [
     "EV_NO_CANDIDATE_VECTORS",
     "EV_INCOMPARABLE_VECTORS",
     "EV_NONE_CLOSE",
+    "EV_JUDGE_NO_LINK",
+    "EV_BAND_UNADJUDICATED",
+    "GAP_LICENSING_CODES",
+    "STATS_STATUSES",
+    "STATS_NOT_RECORDED",
+    "STATS_UNSUPPORTED",
+    "STATS_UNAVAILABLE",
+    "STATS_OK",
     "EV_ERROR",
     "REASON_CODES",
     "resolve_canonical_type",

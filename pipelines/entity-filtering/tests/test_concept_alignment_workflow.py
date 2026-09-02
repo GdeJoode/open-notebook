@@ -119,11 +119,14 @@ def _extraction():
     )
 
 
-async def _run(config, *, repo=None):
+async def _run(config, *, repo=None, source_id=None, **workflow_kwargs):
     workflow = FilteringWorkflow(
-        config=config, entity_repo=repo or _repo(), ontology=_ontology()
+        config=config,
+        entity_repo=repo or _repo(),
+        ontology=_ontology(),
+        **workflow_kwargs,
     )
-    return await workflow.process(_extraction())
+    return await workflow.process(_extraction(), source_id=source_id)
 
 
 # ---------------------------------------------------------------------------
@@ -331,3 +334,204 @@ async def test_degraded_warning_is_silent_when_nothing_is_classified(caplog):
     assert "nothing will be classified" in messages
     assert "DEGRADED" not in messages
     assert result.concept_alignment_report["aligned_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# N.4d.4 — the gap loop reaches the aligner from HERE
+# ---------------------------------------------------------------------------
+#
+# The unit tests in test_concept_alignment.py construct a ConceptAligner
+# directly, so they cannot see whether the workflow hands it anything. A review
+# measured that deleting `gap_recorder=` and `source_id=` from this stage left
+# all 597 entity-filtering tests green — the whole feature became a no-op in
+# production with every suite passing. These are the guards for that seam.
+
+
+class _Recorder:
+    """Stands in for `OntologyEvolutionAgent`, matching its real return shape."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def record_gap(self, **kwargs):
+        self.calls.append(kwargs)
+        return type("_Gap", (), {"id": "ontology_gap:1"})()
+
+
+# The file's own fixtures already produce the verdict this loop needs: the
+# entities embed at [1.0, 0.0] and the only "programme" candidate at [0.0, 1.0],
+# so cosine is 0, below the related floor, and the verdict is NOVEL with
+# `EV_NONE_CLOSE` — one of the two codes that license a gap.
+
+
+async def test_the_recorder_reaches_the_aligner():
+    recorder = _Recorder()
+    result = await _run(_config(alignment=True), gap_recorder=recorder)
+    report = result.concept_alignment_report
+    assert report["gap_recorder_wired"] is True
+    assert report["gap_eligible"] >= 1
+    assert report["gaps_recorded"] == report["gap_eligible"]
+    assert recorder.calls, "the workflow never handed the recorder to the aligner"
+
+
+async def test_the_source_id_reaches_the_aligner():
+    """Provenance for the gap row. Without it a concept recurring across
+    documents is indistinguishable from one seen once — which is the whole
+    reason the accumulation exists.
+    """
+    recorder = _Recorder()
+    await _run(
+        _config(alignment=True),
+        gap_recorder=recorder,
+        source_id="source:abc",
+    )
+    assert recorder.calls[0]["source_id"] == "source:abc"
+
+
+async def test_the_gap_ontology_name_reaches_the_aligner():
+    """B1: gaps are filed under the notebook's DECLARED vocabulary, not a member
+    of the per-document applied set.
+    """
+    recorder = _Recorder()
+    await _run(
+        _config(alignment=True),
+        gap_recorder=recorder,
+        gap_ontology_name="deals",
+    )
+    assert recorder.calls[0]["ontology_name"] == "deals"
+
+
+async def test_without_a_declared_name_the_applied_schema_names_the_gap():
+    """The fallback, and the vacuity guard for the test above: the name really is
+    read from the caller rather than always being the schema's.
+    """
+    recorder = _Recorder()
+    await _run(_config(alignment=True), gap_recorder=recorder)
+    assert recorder.calls[0]["ontology_name"] == _ontology().metadata.name
+
+
+async def test_all_applied_schemas_reach_the_aligner():
+    """`detect_applicable_schemas(top_k=3)` returns up to three. Passing one
+    makes every type declared in the other two fail to resolve, which yields a
+    reason code that licenses no gap — the loop silently under-fires.
+    """
+    unrelated = schema.Ontology(
+        metadata=schema.OntologyMetadata(name="unrelated", version="1"),
+        entity_types={
+            "Tranche": schema.EntityTypeDefinition(name="Tranche", parent_type="Deal")
+        },
+        relationship_types={},
+    )
+    # `RegioDeal` — the entities' label — is declared ONLY in the second element.
+    result = await _run(
+        _config(alignment=True),
+        gap_recorder=_Recorder(),
+        alignment_schemas=[unrelated, _ontology()],
+    )
+    assert result.concept_alignment_report["gap_eligible"] >= 1, (
+        "the label resolved in no schema — only the first was searched"
+    )
+
+    # Vacuity guard: with ONLY the unrelated schema the label does not resolve,
+    # so the assertion above is about the search and not about a label that
+    # would have resolved regardless.
+    without = await _run(
+        _config(alignment=True),
+        gap_recorder=_Recorder(),
+        alignment_schemas=[unrelated],
+    )
+    assert without.concept_alignment_report["gap_eligible"] == 0
+
+
+async def test_warns_when_no_gap_recorder_is_wired(caplog):
+    """D-N4-8's honest DEGRADED warning, for the tier this phase added."""
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    sink = _loguru_to_caplog()
+    try:
+        with caplog.at_level(logging.WARNING):
+            await _run(_config(alignment=True))
+    finally:
+        loguru_logger.remove(sink)
+    messages = " | ".join(r.message for r in caplog.records)
+    assert "gap_recorder" in messages
+
+
+async def test_no_degraded_warning_about_the_recorder_when_it_is_wired(caplog):
+    """Vacuity guard: the warning is about the recorder's absence, not a line
+    that always fires.
+    """
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    sink = _loguru_to_caplog()
+    try:
+        with caplog.at_level(logging.WARNING):
+            await _run(
+                _config(alignment=True), gap_recorder=_Recorder()
+            )
+    finally:
+        loguru_logger.remove(sink)
+    messages = " | ".join(r.message for r in caplog.records)
+    assert "gap_recorder" not in messages
+
+
+async def test_no_ontology_warning_in_the_production_argument_set(caplog):
+    """The DEGRADED branch reads the RESOLVED set, not `self._ontology`.
+
+    Built as PRODUCTION builds it: `alignment_schemas=` supplied and `ontology=`
+    absent, since the app stopped passing the latter. That combination is the
+    only one that discriminates — a review measured that an earlier version of
+    this test went through a helper which always supplies `ontology=`, so both
+    the correct and the reverted condition were false and the substantive mutant
+    survived. Under the revert every production run would emit a false "no
+    canonical type resolves" while types resolve fine, in the tier D-N4-8 exists
+    to make honest.
+    """
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    workflow = FilteringWorkflow(
+        config=_config(alignment=True),
+        entity_repo=_repo(),
+        gap_recorder=_Recorder(),
+        alignment_schemas=[_ontology()],
+    )
+    assert workflow._ontology is None, "this test must not supply `ontology=`"
+
+    sink = _loguru_to_caplog()
+    try:
+        with caplog.at_level(logging.WARNING):
+            result = await workflow.process(_extraction())
+    finally:
+        loguru_logger.remove(sink)
+    messages = " | ".join(r.message for r in caplog.records)
+    assert "no canonical type resolves" not in messages
+    # And types really did resolve, so the absence of the warning is a statement
+    # about the branch rather than about a stage that classified nothing.
+    assert result.concept_alignment_report["gap_eligible"] >= 1
+
+
+async def test_the_ontology_warning_fires_when_nothing_resolves_types(caplog):
+    """Vacuity guard for the test above."""
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    workflow = FilteringWorkflow(
+        config=_config(alignment=True),
+        entity_repo=_repo(),
+        gap_recorder=_Recorder(),
+    )
+    sink = _loguru_to_caplog()
+    try:
+        with caplog.at_level(logging.WARNING):
+            await workflow.process(_extraction())
+    finally:
+        loguru_logger.remove(sink)
+    messages = " | ".join(r.message for r in caplog.records)
+    assert "no canonical type resolves" in messages

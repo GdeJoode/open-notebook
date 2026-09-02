@@ -102,6 +102,21 @@ def get_reference_extraction_enabled() -> bool:
     return _bool_env("ENABLE_REFERENCE_EXTRACTION", False)
 
 
+def get_concept_alignment_enabled() -> bool:
+    """Whether Track N.4's concept-alignment stage runs (D-N4-8).
+
+    Default ``False``, the safe value: an un-flagged run behaves exactly as it
+    did before the stage existed. Set ``ENABLE_CONCEPT_ALIGNMENT=true`` to turn
+    it on.
+
+    The flag exists because the stage was otherwise unreachable in every real
+    run — the previous judge tier shipped behind a config default nothing set,
+    which is the failure D-N4-8 was written to prevent. Reading it at call time
+    (like the upload guards) lets ops flip it without a rebuild.
+    """
+    return _bool_env("ENABLE_CONCEPT_ALIGNMENT", False)
+
+
 # ---------------------------------------------------------------------------
 # Audit thresholds (Track F.1 — operations & quality)
 # ---------------------------------------------------------------------------

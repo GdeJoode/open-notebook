@@ -645,6 +645,66 @@ appears.
 - Note `record_gap` swallows its own exceptions and returns a gap with `id=None`
   on failure; treat a null id as "not recorded", never as success.
 
+> **D-N4-14 — what a gap row is named after, and what recording one sets in
+> motion (N.4d.4).**
+> Gaps are keyed on `(entity_text, ontology_name)`, so the name decides whether a
+> concept ACCUMULATES. The first attempt used `applicable_schemas[0]`, which
+> `detect_applicable_schemas` ranks by per-document content overlap — so the same
+> concept in two documents of one notebook landed in two rows at frequency 1
+> instead of one at frequency 2, defeating the cross-document accumulation the
+> `source_id` plumbing exists for. The name is now the notebook's **declared**
+> `base_ontology`, falling back to the applied schema's own name only when a
+> notebook has none configured.
+>
+> Relatedly, alignment receives **all** applied schemas, not the first:
+> `detect_applicable_schemas(top_k=3)` means a type declared in the second or
+> third would otherwise fail `resolve_canonical_type`, produce a code that
+> licenses no gap, and make the loop under-fire for two thirds of the vocabulary.
+>
+> **What the flag switches on.** `OntologyEvolutionAgent` ships with
+> `frequency_threshold=5` and `auto_propose=True`, so the fifth recording of one
+> concept writes a `schema_proposal` row unasked, with `parent_type` taken from
+> the rich extraction label. Two things bound what reaches a curator's queue: the
+> reason-code gate (C1), and per-run de-duplication by concept, since the
+> threshold counts DOCUMENTS.
+>
+> The de-duplication is **belt-and-braces under the shipped pipeline**, stated
+> that way after a review measured it rather than as the live scenario an earlier
+> draft claimed: Stage 4's `EntityDeduplicator._normalize_key` applies
+> character-for-character the same normalisation eleven stages earlier, whenever
+> `dedup_enabled` is set — which it is on both the app default config and the
+> re-filter router. A duplicate reaches the gap loop only when the aligner is
+> driven directly (the configuration both of its tests use) or dedup is off. It
+> is kept because a gap is a claim about the graph and must not depend on an
+> unrelated stage's configuration, and what it suppresses is counted
+> (`gap_duplicates_suppressed`) because its key is the normalised form while
+> `record_gap` matches `entity_text` exactly.
+>
+> **Two collaborators, one failure shape.** `record_gap` returns a gap with
+> `id=None` on failure and `get_gap_statistics` returns a truthy
+> `{"ontology_name": …, "error": …}` — both swallow their own exceptions and
+> report through the RETURN. A caller watching only for a raise reports success.
+> The first was handled from the start; the second was not, and reported
+> `gap_statistics_status="ok"` with the error payload as the standing totals,
+> persisted into `extraction_result.metadata`. Both are now read from the
+> returned value — by MEMBERSHIP, not truthiness: `str(e)` is `""` for any
+> exception raised without arguments, so a truthiness check still reported `ok`
+> for a bare `TimeoutError`, which is what a slow gap store under load produces.
+>
+> **Binding, three rules, each of which caught something here.** A test double
+> for a collaborator must reproduce the real method's failure RETURN, not a raise
+> it never performs. At least one fixture must build the PRODUCTION argument set
+> rather than a superset — a helper that always supplies an argument the app has
+> stopped supplying makes the discriminating configuration unreachable. And when
+> a guard reads a value from a collaborator, exercise it against the REAL
+> collaborator at least once: both blockers in this sub-phase were found that way
+> and by no other means, the second only by sweeping several exception types.
+>
+> **Where the loop is inert, stated so it is not rediscovered**: the
+> single-schema path and `run_filtering_only` detect no schemas, so no canonical
+> type resolves and no verdict is gap-licensing. Both wire the same collaborators
+> anyway, so enabling the stage there degrades nothing silently.
+
 #### What happens to the entity-level tier
 
 `concept_alignment` keeps `RELATED_TO` / `NOVEL` — which is where its value always
