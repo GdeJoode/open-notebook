@@ -645,6 +645,35 @@ appears.
 - Note `record_gap` swallows its own exceptions and returns a gap with `id=None`
   on failure; treat a null id as "not recorded", never as success.
 
+> **D-N4-14 — what a gap row is named after, and what recording one sets in
+> motion (N.4d.4).**
+> Gaps are keyed on `(entity_text, ontology_name)`, so the name decides whether a
+> concept ACCUMULATES. The first attempt used `applicable_schemas[0]`, which
+> `detect_applicable_schemas` ranks by per-document content overlap — so the same
+> concept in two documents of one notebook landed in two rows at frequency 1
+> instead of one at frequency 2, defeating the cross-document accumulation the
+> `source_id` plumbing exists for. The name is now the notebook's **declared**
+> `base_ontology`, falling back to the applied schema's own name only when a
+> notebook has none configured.
+>
+> Relatedly, alignment receives **all** applied schemas, not the first:
+> `detect_applicable_schemas(top_k=3)` means a type declared in the second or
+> third would otherwise fail `resolve_canonical_type`, produce a code that
+> licenses no gap, and make the loop under-fire for two thirds of the vocabulary.
+>
+> **What the flag switches on.** `OntologyEvolutionAgent` ships with
+> `frequency_threshold=5` and `auto_propose=True`, so the fifth recording of one
+> concept writes a `schema_proposal` row unasked, with `parent_type` taken from
+> the rich extraction label. Two things bound what reaches a curator's queue: the
+> reason-code gate (C1), and per-run de-duplication by concept — the threshold
+> counts DOCUMENTS, and the multi-schema merger can leave two entities with one
+> surface form and different labels.
+>
+> **Where the loop is inert, stated so it is not rediscovered**: the
+> single-schema path and `run_filtering_only` detect no schemas, so no canonical
+> type resolves and no verdict is gap-licensing. Both wire the same collaborators
+> anyway, so enabling the stage there degrades nothing silently.
+
 #### What happens to the entity-level tier
 
 `concept_alignment` keeps `RELATED_TO` / `NOVEL` — which is where its value always

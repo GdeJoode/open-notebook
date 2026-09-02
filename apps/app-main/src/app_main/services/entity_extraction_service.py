@@ -477,6 +477,10 @@ class EntityExtractionService:
         # top of each ``run_extraction`` so a single-schema / no-schema run does
         # not inherit a prior run's schemas.
         self._applicable_schemas: Optional[List[Any]] = None
+        # N.4d.4: the notebook's declared vocabulary name, for gap rows. See the
+        # stash site in `_run_multi_schema` for why it is not read off the
+        # applied set.
+        self._gap_ontology_name: Optional[str] = None
         # The most-recently-built routed caller for this run. After extraction
         # its ``served_provider`` / ``served_model_id`` carry the provider that
         # actually answered (J-Q7) — read at provenance-stamp time so the KG
@@ -869,9 +873,10 @@ class EntityExtractionService:
         """
         deps: Dict[str, Any] = {
             "entity_repo": None,
-            "ontology": None,
+            "schemas": None,
             "gap_recorder": None,
             "llm_caller": None,
+            "gap_ontology_name": None,
         }
         if not f_config.concept_alignment.enabled:
             return deps
@@ -883,11 +888,20 @@ class EntityExtractionService:
         except Exception as e:
             logger.warning(f"concept alignment: no entity repo ({e})")
 
-        # The ontologies this run applied, already projected with the notebook's
-        # accepted schema edits (N.4d.3). None on the single-schema and re-filter
-        # paths, where no set was detected.
+        # ALL the ontologies this run applied, already projected with the
+        # notebook's accepted schema edits (N.4d.3) — not just the first.
+        # `detect_applicable_schemas(top_k=3)` means an applied set holds three,
+        # and a type declared in the second or third would otherwise fail
+        # `resolve_canonical_type`, produce a code that licenses no gap, and make
+        # the loop under-fire for two thirds of the applied vocabulary.
+        #
+        # None on the single-schema path and on `run_filtering_only`, where no
+        # set is detected at all: there no canonical type resolves, so every
+        # verdict carries a code that licenses no gap and the loop is inert.
+        # Stated rather than left to be rediscovered.
         if self._applicable_schemas:
-            deps["ontology"] = self._applicable_schemas[0]
+            deps["schemas"] = list(self._applicable_schemas)
+        deps["gap_ontology_name"] = self._gap_ontology_name
 
         try:
             from ontology_manager import get_ontology_manager
@@ -902,7 +916,15 @@ class EntityExtractionService:
             except Exception as e:
                 logger.warning(f"concept alignment: no judge caller ({e})")
 
-        missing = [name for name, value in deps.items() if value is None]
+        # `gap_ontology_name` is absent for a notebook with no configured base
+        # ontology, which is the Regio-Deal corpus's state today. That is not a
+        # wiring failure — the aligner falls back to the applied schema's own
+        # name — so it is not reported as one.
+        missing = [
+            name
+            for name, value in deps.items()
+            if value is None and name != "gap_ontology_name"
+        ]
         if missing:
             # The workflow warns about its own DEGRADED tiers, but only about the
             # ones it was handed. This says which could not be BUILT, which is a
@@ -1084,6 +1106,19 @@ class EntityExtractionService:
         self._applicable_schemas = [
             ontology for ontology, _conf in applicable_schemas
         ]
+        # N.4d.4 B1: the name every ontology GAP this run records is filed
+        # under. It must be the notebook's DECLARED vocabulary, never a member
+        # of the applied set: `detect_applicable_schemas` ranks by per-document
+        # content overlap, so `applicable_schemas[0]` changes with the document,
+        # and gaps are keyed on `(entity_text, ontology_name)`. Naming them after
+        # a per-document winner splits one concept across two rows at frequency
+        # 1 instead of accumulating one at frequency 2 — exactly the failure the
+        # cross-document `source_id` plumbing exists to make visible.
+        self._gap_ontology_name = (
+            notebook_schema.base_ontology
+            if notebook_schema is not None and notebook_schema.base_ontology
+            else None
+        )
 
         if not applicable_schemas:
             # No schema cleared the floor — fall back to the configured
@@ -1263,6 +1298,7 @@ class EntityExtractionService:
         # populates this (below). A single-schema run leaves it None so the
         # persist bridge degrades to the alias/enum path.
         self._applicable_schemas = None
+        self._gap_ontology_name = None
 
         # 3. Build config and workflow
         config_kwargs: Dict[str, Any] = {
@@ -1360,8 +1396,9 @@ class EntityExtractionService:
                 f_workflow = FilteringWorkflow(
                     config=f_config,
                     entity_repo=align_deps["entity_repo"],
-                    ontology=align_deps["ontology"],
+                    alignment_schemas=align_deps["schemas"],
                     gap_recorder=align_deps["gap_recorder"],
+                    gap_ontology_name=align_deps["gap_ontology_name"],
                 )
 
                 filtered = await f_workflow.process(
@@ -1384,6 +1421,26 @@ class EntityExtractionService:
                     "merge_groups": len(merge_groups) if merge_groups else 0,
                     "predicted_edges": len(filtered.predicted_edges),
                 }
+                # N.4d.4: the gap counters are the phase's only operator-visible
+                # output. Left on `concept_alignment_report` alone they never
+                # reach anyone — this dict is what lands in
+                # `extraction_result.metadata["filtering"]`. `eligible` vs
+                # `recorded` is the distinction that matters: `record_gap`
+                # returns a gap with `id=None` when the write failed, so without
+                # both numbers a run where nothing was written reads exactly like
+                # one where everything was.
+                alignment_report = filtered.concept_alignment_report
+                if alignment_report:
+                    filtering_stats["concept_alignment"] = {
+                        "aligned": alignment_report.get("aligned_count", 0),
+                        "judged": alignment_report.get("judged_count", 0),
+                        "gap_eligible": alignment_report.get("gap_eligible", 0),
+                        "gaps_recorded": alignment_report.get("gaps_recorded", 0),
+                        "gaps_unrecorded": alignment_report.get("gaps_unrecorded", 0),
+                        "gap_recorder_wired": alignment_report.get(
+                            "gap_recorder_wired", False
+                        ),
+                    }
                 result.metadata["filtering"] = filtering_stats
 
                 logger.info(
@@ -1605,8 +1662,26 @@ class EntityExtractionService:
 
         # Run filtering
         f_config = filtering_config or FilteringConfig()
-        f_workflow = FilteringWorkflow(config=f_config)
-        filtered = await f_workflow.process(extraction)
+        # N.4d.4: the same collaborators the main path wires, so a re-filter is
+        # not silently a different pipeline. In practice the stage stays off
+        # here — this path re-detects no schemas, so `_applicable_schemas` is
+        # None and no canonical type resolves, and the router that calls it
+        # always supplies an explicit `FilteringConfig` with alignment absent.
+        # Wiring it anyway costs nothing and means a caller who DOES enable it
+        # gets the same behaviour rather than a quietly degraded one.
+        align_deps = await self._concept_alignment_deps(f_config)
+        f_workflow = FilteringWorkflow(
+            config=f_config,
+            entity_repo=align_deps["entity_repo"],
+            alignment_schemas=align_deps["schemas"],
+            gap_recorder=align_deps["gap_recorder"],
+            gap_ontology_name=align_deps["gap_ontology_name"],
+        )
+        filtered = await f_workflow.process(
+            extraction,
+            source_id=source_id,
+            alignment_llm_caller=align_deps["llm_caller"],
+        )
 
         # Persist to KG
         all_relations = [

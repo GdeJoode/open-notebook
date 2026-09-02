@@ -1376,10 +1376,17 @@ class TestConceptAlignmentIsReachable:
 
         service = self._service()
         service._applicable_schemas = ["an-ontology"]
+        service._gap_ontology_name = "deals"
         deps = await service._concept_alignment_deps(
             FilteringConfig(concept_alignment=ConceptAlignmentConfig(enabled=False))
         )
-        assert set(deps) == {"entity_repo", "ontology", "gap_recorder", "llm_caller"}
+        assert set(deps) == {
+            "entity_repo",
+            "schemas",
+            "gap_recorder",
+            "llm_caller",
+            "gap_ontology_name",
+        }
         assert all(value is None for value in deps.values())
 
     @pytest.mark.asyncio
@@ -1387,7 +1394,8 @@ class TestConceptAlignmentIsReachable:
         from entity_filtering.config import ConceptAlignmentConfig, FilteringConfig
 
         service = self._service()
-        service._applicable_schemas = ["an-ontology"]
+        service._applicable_schemas = ["first", "second", "third"]
+        service._gap_ontology_name = "deals"
         with patch.object(
             EntityExtractionService,
             "_make_routed_caller",
@@ -1397,7 +1405,9 @@ class TestConceptAlignmentIsReachable:
                 FilteringConfig(concept_alignment=ConceptAlignmentConfig(enabled=True))
             )
         assert deps["entity_repo"] is not None
-        assert deps["ontology"] == "an-ontology"
+        # All three, not `[0]`: `detect_applicable_schemas` uses top_k=3.
+        assert deps["schemas"] == ["first", "second", "third"]
+        assert deps["gap_ontology_name"] == "deals"
         assert deps["gap_recorder"] is not None
         assert deps["llm_caller"] == "a-caller"
 
@@ -1411,6 +1421,7 @@ class TestConceptAlignmentIsReachable:
 
         service = self._service()
         service._applicable_schemas = ["an-ontology"]
+        service._gap_ontology_name = None
         with patch.object(
             EntityExtractionService,
             "_make_routed_caller",
@@ -1428,6 +1439,7 @@ class TestConceptAlignmentIsReachable:
 
         service = self._service()
         service._applicable_schemas = None
+        service._gap_ontology_name = None
         caller = AsyncMock(return_value="a-caller")
         with patch.object(EntityExtractionService, "_make_routed_caller", caller):
             deps = await service._concept_alignment_deps(
@@ -1469,8 +1481,18 @@ class TestConceptAlignmentIsReachable:
                 captured["process"] = kwargs
                 return FilteredResult(entities=result.entities, relations=[])
 
+        async def _extract_and_stash(**_kwargs):
+            # The real `_run_multi_schema` stashes the applied set and the
+            # notebook's declared vocabulary; a stub that skips that leaves
+            # `_applicable_schemas` at None, and then an assertion about the
+            # ontology reaching the workflow cannot fail. A review caught exactly
+            # that here.
+            svc._applicable_schemas = ["first-ontology", "second-ontology"]
+            svc._gap_ontology_name = "deals"
+            return extracted
+
         with patch.object(
-            svc, "_run_multi_schema", AsyncMock(return_value=extracted)
+            svc, "_run_multi_schema", AsyncMock(side_effect=_extract_and_stash)
         ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
             svc, "_embed_entities", AsyncMock()
         ), patch.object(
@@ -1492,10 +1514,125 @@ class TestConceptAlignmentIsReachable:
         assert captured["init"]["config"].concept_alignment.enabled is True
         assert captured["init"]["entity_repo"] is not None
         assert captured["init"]["gap_recorder"] is not None
+        # ALL applied schemas, not just the first: a type declared in the second
+        # or third would otherwise fail to resolve and license no gap.
+        assert captured["init"]["alignment_schemas"] == [
+            "first-ontology",
+            "second-ontology",
+        ]
+        # And the gap name is the notebook's DECLARED vocabulary, never a member
+        # of the applied set — that set is ranked per document, and gaps are
+        # keyed on (entity_text, ontology_name).
+        assert captured["init"]["gap_ontology_name"] == "deals"
         # source_id is the gap rows' provenance — without it a concept recurring
         # across documents is indistinguishable from one seen once.
         assert captured["process"]["source_id"] == "source:test"
         assert captured["process"]["alignment_llm_caller"] == "a-caller"
+
+    @pytest.mark.asyncio
+    async def test_the_gap_counters_reach_the_persisted_stats(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture,
+        monkeypatch,
+    ):
+        """The counters are this phase's only operator-visible output. On the
+        alignment report alone they reach nobody: `filtering_stats` is what lands
+        in `extraction_result.metadata["filtering"]`.
+        """
+        monkeypatch.setenv("ENABLE_CONCEPT_ALIGNMENT", "true")
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        extracted = ExtractionResult(
+            entities=[ExtractedEntity(text="X", label="L")], relations=[]
+        )
+
+        class _Workflow:
+            def __init__(self, **kwargs):
+                pass
+
+            async def process(self, result, **kwargs):
+                return FilteredResult(
+                    entities=result.entities,
+                    relations=[],
+                    concept_alignment_report={
+                        "aligned_count": 3,
+                        "judged_count": 1,
+                        "gap_eligible": 2,
+                        "gaps_recorded": 1,
+                        "gaps_unrecorded": 1,
+                        "gap_recorder_wired": True,
+                    },
+                )
+
+        with patch.object(
+            svc, "_run_multi_schema", AsyncMock(return_value=extracted)
+        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(svc, "_persistence", AsyncMock()), patch(
+            "app_main.services.entity_extraction_service.FilteringWorkflow",
+            _Workflow,
+        ), patch.object(
+            EntityExtractionService,
+            "_make_routed_caller",
+            AsyncMock(return_value="a-caller"),
+        ):
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=True,
+            )
+
+        stats = extracted.metadata["filtering"]["concept_alignment"]
+        # Both numbers, because a null id from `record_gap` is not success: with
+        # only one of them a run where nothing was written reads exactly like one
+        # where everything was.
+        assert stats["gap_eligible"] == 2
+        assert stats["gaps_recorded"] == 1
+        assert stats["gaps_unrecorded"] == 1
+        assert stats["gap_recorder_wired"] is True
+
+    @pytest.mark.asyncio
+    async def test_no_alignment_report_leaves_the_stats_untouched(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture,
+        monkeypatch,
+    ):
+        """Vacuity guard: the key appears because a report was produced, not
+        unconditionally.
+        """
+        monkeypatch.delenv("ENABLE_CONCEPT_ALIGNMENT", raising=False)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        extracted = ExtractionResult(
+            entities=[ExtractedEntity(text="X", label="L")], relations=[]
+        )
+
+        class _Workflow:
+            def __init__(self, **kwargs):
+                pass
+
+            async def process(self, result, **kwargs):
+                return FilteredResult(entities=result.entities, relations=[])
+
+        with patch.object(
+            svc, "_run_multi_schema", AsyncMock(return_value=extracted)
+        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(svc, "_persistence", AsyncMock()), patch(
+            "app_main.services.entity_extraction_service.FilteringWorkflow",
+            _Workflow,
+        ):
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=True,
+            )
+
+        assert "concept_alignment" not in extracted.metadata["filtering"]
 
     @pytest.mark.asyncio
     async def test_the_flag_off_leaves_the_stage_disabled_at_the_seam(

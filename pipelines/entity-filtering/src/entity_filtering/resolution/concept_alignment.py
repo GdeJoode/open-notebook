@@ -678,6 +678,10 @@ class ConceptAligner:
             "gaps_recorded": 0,
             "gaps_unrecorded": 0,
             "gap_recorder_wired": self._gap_recorder is not None,
+            # The gap store's standing totals, filled in after recording. None
+            # when nothing was recorded or the store could not answer — never an
+            # empty dict, so "not queried" cannot read as "zero gaps".
+            "gap_statistics": None,
         }
         novel = [e for e in entities if _props(e).get("is_new")]
         if not novel:
@@ -717,6 +721,7 @@ class ConceptAligner:
         report["capped_type_fetches"] = sorted(
             t for t, f in cache.items() if len(f.rows) >= self._max_candidates
         )
+        gap_texts: set = set()
         for entity, alignment in decided:
             self._enrich(entity, alignment)
             report["aligned_count"] += 1
@@ -726,7 +731,9 @@ class ConceptAligner:
                 report["reason_counts"][alignment.reason_code] = (
                     report["reason_counts"].get(alignment.reason_code, 0) + 1
                 )
-            await self._maybe_record_gap(entity, alignment, source_id, report)
+            await self._maybe_record_gap(
+                entity, alignment, source_id, report, gap_texts
+            )
 
         logger.info(
             "ConceptAligner: {} aligned ({} related, {} novel), {} judged, "
@@ -739,10 +746,13 @@ class ConceptAligner:
             report["gaps_recorded"],
             report["gap_eligible"],
         )
+        report["gap_statistics"] = await self._gap_statistics(report)
         if report["gaps_unrecorded"]:
             # `record_gap` logs its own failure at ERROR and then returns a gap
-            # object anyway, so without this line a run where every write failed
-            # looks identical to one where every write succeeded.
+            # object anyway, so a caller reading only the return value cannot
+            # tell. The INFO line above carries both numbers; this raises the
+            # level, because "some eligible gaps were not written" is an
+            # operational fault and not a run statistic.
             logger.warning(
                 "ConceptAligner: {n} eligible gap(s) were NOT recorded (the "
                 "recorder returned no id)",
@@ -750,12 +760,39 @@ class ConceptAligner:
             )
         return entities, report
 
+    async def _gap_statistics(self, report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """The gap store's standing totals, for the alignment report (N.4c scope).
+
+        Queried only when this run actually recorded something: the counters
+        above describe THIS run, while these describe the accumulation a curator
+        acts on — how many gaps stand open for this vocabulary, and how far the
+        recurring ones are from the auto-proposal threshold. Skipped otherwise so
+        a run that recorded nothing pays no query.
+
+        Returns ``None`` rather than an empty dict when unavailable, so a reader
+        cannot mistake "not queried" for "zero gaps" — the same distinction the
+        rest of this module keeps.
+        """
+        if not report["gaps_recorded"] or self._gap_recorder is None:
+            return None
+        getter = getattr(self._gap_recorder, "get_gap_statistics", None)
+        if getter is None:
+            return None
+        try:
+            return await getter(ontology_name=self._ontology_name)
+        except Exception:
+            logger.warning(
+                "ConceptAligner: gap statistics unavailable", exc_info=True
+            )
+            return None
+
     async def _maybe_record_gap(
         self,
         entity: Dict[str, Any],
         alignment: Alignment,
         source_id: Optional[str],
         report: Dict[str, Any],
+        seen: set,
     ) -> None:
         """Record an ontology gap for a NOVEL verdict that established something.
 
@@ -766,23 +803,50 @@ class ConceptAligner:
 
         Never raises. Alignment is a classification pass; a gap store that is
         down must not cost the caller its verdicts.
+
+        **What recording a gap sets in motion.** `OntologyEvolutionAgent` ships
+        with ``frequency_threshold=5`` and ``auto_propose=True``, so the fifth
+        recording of one concept creates a ``schema_proposal`` row without anyone
+        asking. That is why the gate is on the reason code and why the per-run
+        de-duplication exists: both bound what reaches a curator's queue. The
+        proposal's ``parent_type`` comes from ``entity_type_guess``, i.e. the
+        rich extraction label passed below — an unvalidated guess that N.4d.3's
+        placement is what actually checks.
         """
         if alignment.verdict != NOVEL:
+            # Belt-and-braces. No RELATED_TO alignment carries a reason code
+            # today, so the code gate below would catch this anyway — but a gap
+            # is a claim about a concept the graph does NOT hold, and that must
+            # not depend on a second condition happening to hold. Exercised
+            # directly rather than through `align`, which cannot produce the
+            # combination.
             return
         if alignment.reason_code not in GAP_LICENSING_CODES:
             return
+
+        text = str(entity.get("text", "") or "").strip()
+        if _normalize(text) in seen:
+            # One gap per novel CONCEPT per run. The multi-schema merger can
+            # leave two entities with the same surface form and different labels,
+            # and `record_gap` increments frequency on every call — so without
+            # this a single document pushes one concept two steps toward the
+            # proposal threshold, which is meant to count DOCUMENTS.
+            return
+        seen.add(_normalize(text))
         report["gap_eligible"] += 1
         if self._gap_recorder is None:
             report["gaps_unrecorded"] += 1
             return
 
-        text = str(entity.get("text", "") or "").strip()
         try:
             gap = await self._gap_recorder.record_gap(
                 entity_text=text,
                 # The RICH label, not the canonical type: a curator proposing a
-                # new type needs the domain word the extractor used, and the
-                # canonical is already recoverable from the alignment properties.
+                # new type needs the domain word the extractor used, and
+                # `create_proposal_from_gap` reads this field straight into the
+                # proposal's `parent_type`. It reads ONLY the gap row, so the
+                # canonical is not recoverable there — which is the reason this
+                # has to be the useful value rather than the safe one.
                 entity_type_guess=str(entity.get("label", "") or "") or None,
                 context=_gap_context(entity),
                 source_id=source_id,

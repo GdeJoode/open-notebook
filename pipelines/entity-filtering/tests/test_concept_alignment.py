@@ -754,14 +754,13 @@ def test_only_the_two_established_codes_license_a_gap():
     is the safe default.
     """
     assert set(ca.GAP_LICENSING_CODES) == {EV_NONE_CLOSE, EV_JUDGE_NO_LINK}
-    for code in ca.REASON_CODES:
-        if code in ca.GAP_LICENSING_CODES:
-            continue
-        assert code not in ca.GAP_LICENSING_CODES
     # Every licensing code is a real reason code, so a rename cannot leave the
     # gate pointing at a string nothing emits.
     for code in ca.GAP_LICENSING_CODES:
         assert code in ca.REASON_CODES
+    # (An earlier draft also looped over REASON_CODES asserting that a
+    # non-licensing code is not licensing, which cannot fail by construction.
+    # The set equality above is what kills the widening mutant.)
 
 
 # ===========================================================================
@@ -966,3 +965,162 @@ async def test_without_a_schema_the_name_matches_the_agents_own_default(monkeypa
     await _align(aligner, [_entity("X", "L", embedding=[1.0, 0.0])],
                  canonical="programme", monkeypatch=monkeypatch)
     assert recorder.calls[0]["ontology_name"] == "general"
+
+
+async def test_two_mentions_of_one_concept_record_a_single_gap(monkeypatch):
+    """The frequency threshold counts DOCUMENTS, not mentions.
+
+    The multi-schema merger can leave two entities with the same surface form and
+    different labels; `record_gap` increments on every call, so without a per-run
+    guard one document pushes a concept two steps toward the auto-proposal
+    threshold.
+    """
+    recorder = _Recorder()
+    aligner = ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=recorder)
+    _ents, report = await _align(
+        aligner,
+        [
+            _entity("Brede Welvaart", "BeleidsThema", embedding=[1.0, 0.0]),
+            _entity(" brede welvaart ", "Indicator", embedding=[1.0, 0.0]),
+        ],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert len(recorder.calls) == 1
+    assert report["gap_eligible"] == 1
+    # Both entities are still classified — de-duplication bounds the GAP, not
+    # the verdicts.
+    assert report["aligned_count"] == 2
+
+
+async def test_two_different_concepts_still_record_two_gaps(monkeypatch):
+    """Vacuity guard for the test above: the de-duplication is by concept, not a
+    cap of one gap per run.
+    """
+    recorder = _Recorder()
+    aligner = ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=recorder)
+    _ents, report = await _align(
+        aligner,
+        [
+            _entity("Brede Welvaart", "BeleidsThema", embedding=[1.0, 0.0]),
+            _entity("Leefbaarheid", "BeleidsThema", embedding=[1.0, 0.0]),
+        ],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert len(recorder.calls) == 2
+    assert report["gap_eligible"] == 2
+
+
+async def test_the_surrounding_text_travels_with_the_gap(monkeypatch):
+    """`_gap_context` reads the chunking pipeline's
+    ``extraction_context.surrounding_text``. A curator triaging a gap months
+    later has the sentence it came from; nothing else in the row carries it.
+    """
+    recorder = _Recorder()
+    entity = _entity("Brede Welvaart", "BeleidsThema", embedding=[1.0, 0.0])
+    entity["extraction_context"] = {"surrounding_text": "  ...de brede welvaart...  "}
+    await _align(ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=recorder),
+                 [entity], canonical="programme", monkeypatch=monkeypatch)
+    assert recorder.calls[0]["context"] == "...de brede welvaart..."
+
+
+@pytest.mark.parametrize(
+    "context",
+    [None, {}, {"surrounding_text": None}, {"surrounding_text": "   "}, "a string"],
+)
+async def test_a_missing_context_still_records_the_gap(monkeypatch, context):
+    """Context is provenance, not evidence: a re-ingest that carries none must
+    still record the gap rather than skip it.
+    """
+    recorder = _Recorder()
+    entity = _entity("Brede Welvaart", "BeleidsThema", embedding=[1.0, 0.0])
+    if context is not None:
+        entity["extraction_context"] = context
+    _e, report = await _align(
+        ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=recorder),
+        [entity], canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert recorder.calls[0]["context"] is None
+    assert report["gaps_recorded"] == 1
+
+
+async def test_a_related_verdict_carrying_a_licensing_code_records_nothing():
+    """The verdict gate, exercised directly — `align` cannot produce this
+    combination, so a test that went through it would be asserting the code gate
+    under another name.
+    """
+    recorder = _Recorder()
+    aligner = ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=recorder)
+    report = {"gap_eligible": 0, "gaps_recorded": 0, "gaps_unrecorded": 0}
+    alignment = ca.Alignment(
+        verdict=RELATED_TO,
+        method=ca.METHOD_EMBEDDING,
+        confidence=0.9,
+        evidence="close",
+        reason_code=EV_NONE_CLOSE,
+    )
+    await aligner._maybe_record_gap(
+        {"text": "X"}, alignment, "source:a", report, set()
+    )
+    assert recorder.calls == []
+    assert report["gap_eligible"] == 0
+
+
+async def test_the_standing_gap_totals_are_surfaced(monkeypatch):
+    """Carried N.4c scope. The run counters describe THIS run; these describe the
+    accumulation a curator acts on.
+    """
+    class _WithStats(_Recorder):
+        def __init__(self):
+            super().__init__()
+            self.stats_for = []
+
+        async def get_gap_statistics(self, ontology_name="general"):
+            self.stats_for.append(ontology_name)
+            return {"total": 7, "by_status": {"pending": 7}}
+
+    recorder = _WithStats()
+    _e, report = await _align(
+        ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=recorder,
+                       ontology_name="deals"),
+        [_entity("X", "L", embedding=[1.0, 0.0])],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert report["gap_statistics"] == {"total": 7, "by_status": {"pending": 7}}
+    # Scoped to the vocabulary the gaps were filed under, not a default.
+    assert recorder.stats_for == ["deals"]
+
+
+async def test_a_run_that_recorded_nothing_pays_no_statistics_query(monkeypatch):
+    class _WithStats(_Recorder):
+        def __init__(self):
+            super().__init__()
+            self.stats_calls = 0
+
+        async def get_gap_statistics(self, ontology_name="general"):
+            self.stats_calls += 1
+            return {"total": 7}
+
+    recorder = _WithStats()
+    _e, report = await _align(
+        ConceptAligner(_band_repo(), schemas=["s"], judge_enabled=False,
+                       gap_recorder=recorder),
+        [_entity("X", "L", embedding=[1.0, 0.0])],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert recorder.stats_calls == 0
+    assert report["gap_statistics"] is None
+
+
+async def test_unavailable_statistics_are_none_not_empty(monkeypatch):
+    """"Not queried" must not read as "zero gaps"."""
+    class _Failing(_Recorder):
+        async def get_gap_statistics(self, ontology_name="general"):
+            raise RuntimeError("store down")
+
+    _e, report = await _align(
+        ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=_Failing()),
+        [_entity("X", "L", embedding=[1.0, 0.0])],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert report["gap_statistics"] is None
+    assert report["gaps_recorded"] == 1
