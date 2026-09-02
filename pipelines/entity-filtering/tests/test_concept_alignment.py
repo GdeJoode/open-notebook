@@ -21,15 +21,15 @@ import json
 import pytest
 from entity_filtering.resolution import concept_alignment as ca
 from entity_filtering.resolution.concept_alignment import (
+    EV_BAND_UNADJUDICATED,
     EV_EMPTY_TEXT,
     EV_ERROR,
     EV_FETCH_FAILED,
     EV_INCOMPARABLE_VECTORS,
+    EV_JUDGE_NO_LINK,
     EV_NO_CANDIDATE_VECTORS,
     EV_NO_QUERY_VECTOR,
     EV_NO_REPO,
-    EV_BAND_UNADJUDICATED,
-    EV_JUDGE_NO_LINK,
     EV_NO_ROWS,
     EV_NO_TYPE,
     EV_NONE_CLOSE,
