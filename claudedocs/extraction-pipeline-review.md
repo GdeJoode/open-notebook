@@ -15,6 +15,19 @@ the report says so instead of guessing.
 **Not done here**: nothing was fixed. A reviewer who repairs on the way reports on
 their own work.
 
+**Correction, 2026-09-02.** The measured runs in sections 3 and 3b ran against a
+DIFFERENT SurrealDB instance than the project's own: before Docker Desktop's WSL
+integration was enabled, `localhost:8000` reached an empty instance with a single
+stale model row. After the container stack was restarted the same address reaches
+the project's database (2 notebooks, 14 sources, 5302 entities, 17 configured
+models). Nothing in those runs touched the project's data.
+
+What that changes: **finding R4 is withdrawn** (see below). What it does not
+change: every code-level finding, which was established by reading the source, and
+the attrition measurements, which are about pipeline behaviour and if anything are
+cleaner for having started from an empty graph. Findings verified against the
+project's own database afterwards are marked **[verified live]**.
+
 ---
 
 ## 1. What the chain actually is
@@ -146,6 +159,14 @@ bijlage re-run with the length threshold relaxed (10 chunks → 17 entities, 6
 relations). **Final graph: 117 entities, 39 relations, 0 gaps, across 8 documents
 and 70 chunks.**
 
+**A limitation of this table, stated so it is not misread.** It starts AFTER the
+LLM. Track N.3's not-a-concept gate runs inside Pass 2, before the
+`ExtractionResult` is built, so anything it removed is already gone by the first
+row here. "Nothing was dropped" is true of the fifteen filtering stages and says
+nothing about N.3 — and it cannot be recovered after the fact, because
+`not_a_concept_removed` and `abstained_chunks` are discarded by the multi-schema
+merger (R3). N.5a fixes that.
+
 **The graph grows linearly.** 124 entities were extracted across the eight
 documents; 117 rows exist. Seven collapsed, every one of them inside a single
 document's batch. Three convenanten
@@ -252,12 +273,40 @@ hierarchy edge. No test pins this.
 
 ### Gaps — nobody decides
 
-**G0. The curator queue has no writer, so the whole review surface is unreachable.**
+**G0b. And the row that HOLDS the queue is never created either — the cycle is
+closed. [verified live]** Found only by running a real extraction against the
+project's own database, which produced 323 entities while leaving
+`notebook_schema` at zero rows and `pass1_results` unchanged: Pass 1 had not run
+at all.
+
+```
+no schema row -> no base ontology forced -> content scoring clears the floor
+for nothing -> _run_multi_schema RETURNS EARLY to the legacy single-schema
+path -> Pass 1 never runs -> no proposals -> nothing creates the row
+```
+
+Nothing in production writes a `notebook_schema` row. The router's
+`_get_or_default_schema` builds one in memory and returns it unpersisted, while
+its own docstring claims "we materialise the row eagerly so the toggle persists
+across restarts"; the only writers are the three toggle endpoints, so the row
+exists only if a user happens to flip a switch. The comment on the early return
+already calls this "the common case: a notebook with no configured schema" — what
+it does not say is that the case is self-sustaining.
+
+Measured after fixing it (PC.1): the row is created, `coverage_pct` moves from
+0.0 to 0.508, and the 111 stranded proposals collapse to 79 distinct queued types.
+
+**G0. The curator queue has no writer, so the whole review surface is unreachable.
+[verified live]**
 This is the largest finding in the review, and it only became visible by running
 several documents.
 
-Pass 1 works and is persisted: after eight documents `pass1_results` holds **14
-rows**, each with a coverage figure (0.42–0.85) and one to three proposed types
+Pass 1 works and is persisted. On the project's own corpus: **17 `pass1_results`
+rows carrying 111 proposals across 79 distinct type names** — `Coalitie`,
+`Coalition`, `CoalitieType`, `Acteur`, `BestuursActeur`, `CollectiveActor`,
+exactly the near-duplicates one curator decision resolves — none of which had ever
+reached a screen. On the review's own eight-document run, `pass1_results` holds
+**14 rows**, each with a coverage figure (0.42–0.85) and one to three proposed types
 (`Method`, `GrantFundingSource`, …). But `notebook_schema.pending_extensions` is
 **empty**, and `NotebookSchemaRepository.add_pending_extension` has **no
 production caller** — the only callers in the repository are in its own roundtrip
@@ -322,10 +371,27 @@ over-generation metrics N.3 exists to produce — survive only on the single-sch
 path. The stored `extraction_result.metadata` from the live run contains none of
 them.
 
-**R4. The model route falls back to a model that is not installed.**
-With no `default_models` row, the resolver routes entity extraction to Ollama
-`gemma2`, which this machine does not have; the only configured model row (a NIM
-endpoint) returns HTTP 410. Neither failure is visible until an extraction dies.
+**R4. ~~The model route falls back to a model that is not installed.~~
+WITHDRAWN.** This described the empty instance the review had unknowingly
+connected to, which held one stale model row and no `default_models`. The
+project's own database has 17 configured models and a populated `default_models`
+whose `default_extraction_model` resolves. The claim was wrong for this
+environment and is retracted rather than softened.
+
+**R4b. Ollama silently truncates every prompt over its runtime default.
+[verified live]** Replacing R4, and a larger problem. `llama3.1:8b` has a native
+context of 131072 tokens, but Ollama's runtime default here is 4096 and the model
+carries no `num_ctx`. Esperanto's Ollama provider forwards only `temperature`,
+`top_p` and `max_tokens`; it never sends `num_ctx`, so the `context_window`
+column on a model row cannot influence it. Measured on a 5507-token prompt:
+`prompt_eval_count` 4096 against the stock model, 7220 against a variant created
+with `num_ctx=16384`. Nothing errors — the model answers a prompt whose tail was
+cut off, and the JSON instructions live in that tail, which is what produces the
+`Failed to parse LLM response` errors in the extraction logs.
+
+Note the ORDER of any fix: filling in `context_window` makes the M.3 packer build
+LARGER prompts, so doing that before raising Ollama's context makes the truncation
+worse, not better.
 
 **R5. Stage ORDER is load-bearing and only partly guarded.**
 The N.4d.0 review already established by mutation that the workflow tests do not

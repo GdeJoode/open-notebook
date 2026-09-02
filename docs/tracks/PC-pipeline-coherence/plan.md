@@ -82,6 +82,27 @@ Everything downstream operates on `pending_extensions`: accept, reject, the
 - **Guard**: the test drives `run_extraction`, not the repository — this whole
   finding is that the repository method works and nobody calls it.
 
+> **PC.1 SHIPPED** — `ensure_row`, `merge_pending_extensions` and
+> `set_coverage_pct` on the repository; the extraction path creates the row
+> BEFORE schema detection and records the Pass-1 outcome after it. Verified
+> against the project's own database: row created, `coverage_pct` 0.0 -> 0.508,
+> 111 stranded proposals collapsed to 79 queued types, a repeat merge adding 0.
+>
+> **What the live run changed about the phase.** The first implementation was
+> fully tested, fully green and completely inert on real data: it created the row
+> in `_record_pass1_outcome`, which sits AFTER `_run_multi_schema`'s early return
+> to the legacy path — and that early return is exactly what happens when no
+> schema row exists. The cycle (no row -> nothing forced -> detection finds
+> nothing -> legacy path -> no Pass 1 -> no row) can only be broken before
+> detection. **Binding for the rest of this track**: a fix for a "nothing ever
+> writes X" finding must be proven on data where X is genuinely absent, not only
+> on a fixture that says it is.
+>
+> **Carried out of PC.1**: a durable "no" for rejected proposals (PC.5); the
+> read-modify-write race, now reachable because PC.1 is the first production
+> caller (PC.6); and the Ollama context truncation measured during verification
+> (PC.6, review finding R4b).
+
 ## PC.2 — One identity — ~1.5d
 
 **The finding (review I2, R2, G2).** `KGResolver` registers an alias
@@ -166,6 +187,13 @@ extraction dies.
   independent flags, or an explicit dependency check that refuses an incoherent
   combination loudly.
 - A startup or first-use check that the routed extraction model actually answers.
+- **Ollama context (review R4b, measured)**: esperanto never sends `num_ctx`, so
+  Ollama truncates every prompt over its runtime default (measured: 4096 of a
+  5507-token prompt) without erroring, and the JSON instructions in the prompt's
+  tail are what get cut. The `context_window` column cannot fix this on its own —
+  and filling it in FIRST makes the packer build larger prompts, so it makes
+  truncation worse. Either send `num_ctx`, or document that Ollama models must be
+  registered as variants that bake it in.
 - **AC**: enabling a feature either works or says why it cannot; the measured
   "flag on, zero effect, only a warning" state is unreachable.
 
