@@ -15,19 +15,48 @@ forced set — ``base_ontology`` plus its affinity bundle plus the schemas named
 accepted extensions — which ``_apply_notebook_schema_default`` forces onto every
 extraction in this notebook regardless of the document.
 
-So that is the set used, and the report says so in ``vocabulary``. The runtime set
-is a SUPERSET: auto-detection may add up to three more schemas, which can only add
-types. The consequence is stated rather than hidden: a placement can report
-``PARENT_UNKNOWN`` for a parent that a document-specific schema would have
-defined, and it can miss siblings that only appear once such a schema is applied.
-It never reports a placement that the runtime set would contradict, because
-everything in the forced set is in the runtime set.
+So that is the set used, and the report says so in ``vocabulary``.
+
+A placement CAN disagree with the verdict the runtime set would give. An earlier
+draft claimed it could not, reasoning from the forced set being a subset of the
+runtime one; a review disproved that twice, and both are measured facts about the
+shipped vocabulary rather than hypotheticals:
+
+* **Verdicts are not monotone in the applied set.** Adding a schema turns
+  ``PLACED`` into ``DUPLICATE`` — proposing ``ScholarlyArticle`` under ``Deal`` in
+  a ``deals`` notebook reports ``PLACED`` against ``(deals, policy_themes)`` and
+  ``DUPLICATE`` once auto-detection adds ``scholarly``. A superset premise only
+  carries monotone conclusions, and ``PARENT_UNKNOWN`` and missing siblings — the
+  consequences the earlier draft did list — happen to be the monotone ones.
+* **The forced set is not always a subset.** ``_apply_notebook_schema_default`` is
+  gated on a truthy ``base_ontology``, which the Regio-Deal notebooks leave empty.
+  There the runtime forces nothing at all, while this service still composes a set
+  from the schemas named on accepted extensions.
+
+What makes that tolerable is that the placement is ADVISORY: it writes nothing,
+and the re-parent it may suggest is applied only by an explicit
+``POST /schema/reparent``. It is a report a curator reads, not a decision the
+pipeline acts on — which is also why the phase never applies one automatically.
 
 The judge is optional and fails open
 ====================================
-No caller wired, a caller that raises, or a reply the parser refuses all produce
-``judged=False`` and an empty selection — never a guess. Silence selects nothing,
-the same rule the judge's own parser enforces.
+No caller wired, a caller that raises, and a reply the parser refuses all produce
+an empty selection — never a guess. Silence selects nothing, the same rule the
+judge's own parser enforces.
+
+They are not the same OUTCOME, though, and a review found this service reporting
+them as one. ``judge_status`` names which happened:
+
+* ``not_asked`` — no caller is wired, or the placement offered no candidates;
+* ``unavailable`` — the caller raised, so no reply came back;
+* ``refused`` — a reply came back and the parser would not use it (a top-level
+  array, unparseable JSON, a non-list selection);
+* ``decided`` — the judge answered usably. An empty ``selected`` here IS the
+  judge's decision to move nothing.
+
+``judged`` is exactly ``judge_status == "decided"``. Anything gating on
+adjudication — N.4d.4's gap loop, per C1 — must read that and not the emptiness
+of ``selected``, because three of the four states produce an empty one.
 """
 
 from __future__ import annotations
@@ -47,6 +76,15 @@ from ontology_manager.type_placement_judge import (
 )
 from shared.models import NotebookSchema
 
+# What became of the judge for this placement. Four states, because three of them
+# produce an empty selection and only one of those is a decision.
+NOT_ASKED = "not_asked"
+UNAVAILABLE = "unavailable"
+REFUSED = "refused"
+DECIDED = "decided"
+
+JUDGE_STATUSES = (NOT_ASKED, UNAVAILABLE, REFUSED, DECIDED)
+
 
 @dataclass
 class PlacementReport:
@@ -54,9 +92,10 @@ class PlacementReport:
 
     ``candidates`` is the bounded set the judge was offered and ``selected`` what
     it chose. Both are reported, because an empty selection over five candidates
-    is a decision and an empty selection over zero candidates means nothing was
-    ever asked — the entity-side work was rejected twice for reporting one as the
-    other.
+    reads nothing like an empty selection over zero — the entity-side work was
+    rejected twice for reporting one as the other, and this service was rejected
+    once for collapsing a REFUSED reply into "the judge moved nothing".
+    ``judge_status`` is the discriminator; ``judged`` is a convenience over it.
     """
 
     type_name: str
@@ -67,8 +106,13 @@ class PlacementReport:
     duplicate_of: Optional[str] = None
     candidates: Tuple[str, ...] = field(default_factory=tuple)
     selected: Tuple[str, ...] = field(default_factory=tuple)
-    judged: bool = False
+    judge_status: str = NOT_ASKED
     judge_evidence: str = ""
+
+    @property
+    def judged(self) -> bool:
+        """True only when a usable reply came back — see ``judge_status``."""
+        return self.judge_status == DECIDED
     vocabulary: Tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
@@ -172,8 +216,7 @@ class TypePlacementService:
 
         if placement.verdict != PLACED or not placement.descendant_candidates:
             # No resolved parent means no sibling set, so there is nothing to ask
-            # about. Reported as judged=False over zero candidates, which is a
-            # different state from a judge that looked and chose nothing.
+            # about — `not_asked` over zero candidates.
             return report
 
         candidates = candidates_from_ontologies(
@@ -181,6 +224,14 @@ class TypePlacementService:
         )
         selection = await self._judge(type_name, description, placement, candidates)
         if selection is None:
+            report.judge_status = UNAVAILABLE if self._llm_caller_factory else NOT_ASKED
+            return report
+
+        report.judge_evidence = selection.evidence
+        if not selection.decided:
+            # The parser would not use the reply. That is NOT the judge choosing
+            # to move nothing, though both carry an empty selection.
+            report.judge_status = REFUSED
             return report
 
         # The judge answers in POSITIONAL ids — "0", "1" — so that two applied
@@ -188,11 +239,10 @@ class TypePlacementService:
         # curator reads names, so they are mapped back here; an id the parser
         # already filtered to the offered set always maps.
         by_id = {candidate_id: name for candidate_id, name, _desc in candidates}
-        report.judged = True
+        report.judge_status = DECIDED
         report.selected = tuple(
             by_id[chosen] for chosen in selection.selected if chosen in by_id
         )
-        report.judge_evidence = selection.evidence
         return report
 
     async def _judge(
@@ -202,11 +252,13 @@ class TypePlacementService:
         placement: TypePlacement,
         candidates: Sequence[Any],
     ) -> Optional[JudgeSelection]:
-        """Run the batched judge, or return ``None`` when it could not run.
+        """Run the batched judge, or return ``None`` when NOBODY WAS ASKED.
 
-        ``None`` is distinct from a selection of zero: the first means nobody was
-        asked, the second that the judge looked and moved nothing. Every failure
-        path lands on ``None`` rather than on a guess.
+        ``None`` means no reply exists to interpret: no caller is wired, no
+        candidates were offered, or the caller raised. A reply that came back and
+        was refused is NOT ``None`` — the parser returns a selection with
+        ``decided=False``, and the caller reports that as ``refused``. Collapsing
+        the two is the defect this docstring previously described as the design.
         """
         if self._llm_caller_factory is None or not candidates:
             return None

@@ -410,3 +410,52 @@ def test_a_top_level_array_is_refused_however_it_is_spelled(spelling):
     refused while the fenced and prose-wrapped forms were descended into.
     """
     assert parse_judge_response(spelling, _cands("A", "B")).selected == ()
+
+
+# ---------------------------------------------------------------------------
+# A refusal is not a decision (N.4d.3 review)
+# ---------------------------------------------------------------------------
+
+
+def test_a_refused_reply_is_not_reported_as_a_decision():
+    """Every refusal path yields an empty selection over a full candidate set —
+    exactly the shape of a judge that looked and moved nothing. A review of the
+    caller found the two collapsed, so `decided` separates them at the source.
+    """
+    candidates = (("0", "Article", ""), ("1", "Report", ""))
+    refusals = [
+        "",
+        "   ",
+        '["0"]',
+        '```json\n["0"]\n```',
+        "no json here at all",
+        "{not json}",
+        '{"move_under_proposal": "0"}',
+        '{"move_under_proposal": {"0": true}}',
+        '{"move_under_proposal": 2}',
+        '"a bare string"',
+        '{"something_else": ["0"]}',
+    ]
+    for raw in refusals:
+        selection = parse_judge_response(raw, candidates)
+        assert selection.selected == (), raw
+        assert selection.decided is False, f"a refusal reported itself decided: {raw!r}"
+
+
+def test_a_judge_that_moves_nothing_did_decide():
+    selection = parse_judge_response('{"move_under_proposal": []}', (("0", "A", ""),))
+    assert selection.selected == ()
+    assert selection.decided is True
+
+
+def test_a_selection_is_a_decision():
+    selection = parse_judge_response('{"move_under_proposal": ["0"]}', (("0", "A", ""),))
+    assert selection.selected == ("0",)
+    assert selection.decided is True
+
+
+def test_an_empty_candidate_set_is_never_a_decision():
+    """Nothing was asked, so there is nothing to have decided."""
+    selection = parse_judge_response('{"move_under_proposal": []}', ())
+    assert selection.considered == ()
+    assert selection.decided is False

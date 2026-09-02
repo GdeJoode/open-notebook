@@ -586,14 +586,32 @@ appears.
 > it claims. What DOES exist at acceptance is the notebook-level FORCED set —
 > `base_ontology` + its affinity bundle + the schemas named on accepted extensions
 > — which `_apply_notebook_schema_default` applies to every extraction in the
-> notebook regardless of document. That is the set `TypePlacementService` uses,
-> and the report names it in `vocabulary`.
+> notebook. That is the set `TypePlacementService` uses, and the report names it
+> in `vocabulary`.
 >
-> The runtime set is a SUPERSET, so the consequence is stated rather than hidden:
-> a placement can report `PARENT_UNKNOWN` for a parent that a document-specific
-> schema would have defined, and can miss siblings that appear only once such a
-> schema is applied. It never reports a placement the runtime set contradicts,
-> because everything in the forced set is in the runtime set.
+> **A placement CAN disagree with the verdict the runtime set would give**, and
+> the second attempt's claim that it cannot was wrong twice over. Both were
+> measured on the shipped vocabulary:
+>
+> 1. **Verdicts are not monotone in the applied set.** Adding a schema can turn
+>    `PLACED` into `DUPLICATE`, which is the verdict N.4d.1 exists to produce.
+>    Proposing `ScholarlyArticle` under `Deal` in a `deals` notebook reports
+>    `PLACED` against `(deals, policy_themes)` and `DUPLICATE` once auto-detection
+>    adds `scholarly`. So "everything in the forced set is in the runtime set"
+>    licenses nothing: a superset premise only carries monotone conclusions, and
+>    `PARENT_UNKNOWN` and missing siblings — the two consequences the second
+>    attempt listed — happen to be the monotone ones.
+> 2. **The forced set is not always a subset.** `_apply_notebook_schema_default`
+>    is gated on a truthy `base_ontology`, and the Regio-Deal corpus's notebooks
+>    have it empty today. There the runtime forces NOTHING, while the report still
+>    composes a set from the schemas named on accepted extensions and places
+>    against it.
+>
+> The placement is therefore **advisory**: it is a report a curator reads, it
+> writes nothing, and the re-parent it may suggest is applied only by an explicit
+> `POST /schema/reparent`. That is what makes the disagreement tolerable rather
+> than a defect — and it is the reason the phase does not act on a placement
+> automatically.
 
 **N.4d.4 — Gap loop + reachability** (unchanged from the previous N.4c scope) — ~1d
 - `record_gap` on a NOVEL verdict (D-N4-6), gated on the reason code — which is

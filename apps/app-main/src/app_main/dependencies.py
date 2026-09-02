@@ -646,10 +646,6 @@ def get_entity_extraction_service() -> EntityExtractionService:
 
 
 def get_type_placement_service():
-    # Return type is left off deliberately: the service is imported lazily to
-    # avoid a cycle back through entity_extraction_service, and the two
-    # neighbouring providers that annotate a lazily-imported class are the file's
-    # only two F821s.
     """FastAPI provider for the N.4d.3 placement service.
 
     Wires the ontology manager's loader and the routed LLM caller factory. The
@@ -657,10 +653,15 @@ def get_type_placement_service():
     its siblings a judge thinks belong under it, so a curator can decide. Tests
     instantiate it directly with a stub loader and, where the judge matters, a
     stub caller factory.
+
+    No return annotation: the service is imported lazily to avoid a cycle back
+    through ``entity_extraction_service``, and annotating a lazily-imported class
+    is what makes this file's two existing F821s. One more would be a third.
     """
+    from ontology_manager import get_ontology_manager
+
     from app_main.services.entity_extraction_service import make_default_llm_caller
     from app_main.services.type_placement_service import TypePlacementService
-    from ontology_manager import get_ontology_manager
 
     manager = get_ontology_manager()
     return TypePlacementService(

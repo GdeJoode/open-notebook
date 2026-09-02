@@ -491,11 +491,21 @@ class _PlacementView(BaseModel):
     ``POST /schema/reparent``.
 
     ``candidates`` and ``selected`` are both present because an empty
-    ``selected`` over five candidates is a decision, while an empty ``selected``
-    over zero candidates means nothing was ever asked — and ``judged`` says which
-    of the two happened. ``vocabulary`` names the schemas the placement was
-    computed against: the notebook-level forced set, which is a SUBSET of what a
-    given document's extraction applies.
+    ``selected`` over five candidates reads nothing like an empty ``selected``
+    over zero. ``judge_status`` says which of FOUR states produced it —
+    ``not_asked`` (no model wired, or no candidates), ``unavailable`` (the model
+    could not be reached), ``refused`` (a reply came back and the parser would
+    not use it), ``decided`` (the judge answered; an empty ``selected`` here is
+    its decision). ``judged`` is ``judge_status == "decided"``, kept because
+    three of the four states carry an empty ``selected`` and a client must not
+    read emptiness as a verdict.
+
+    ``vocabulary`` names the schemas the placement was computed against: the
+    notebook-level forced set. See D-N4-13 — a verdict CAN differ from the one a
+    given document's applied set would give (adding a schema turns ``PLACED``
+    into ``DUPLICATE``), which is tolerable only because this is advisory: it
+    writes nothing, and a re-parent is applied by an explicit
+    ``POST /schema/reparent``.
     """
 
     type_name: str
@@ -507,6 +517,7 @@ class _PlacementView(BaseModel):
     candidates: List[str] = Field(default_factory=list)
     selected: List[str] = Field(default_factory=list)
     judged: bool = False
+    judge_status: str = "not_asked"
     judge_evidence: str = ""
     vocabulary: List[str] = Field(default_factory=list)
 
@@ -1018,6 +1029,7 @@ async def _placement_for_accepted(
         candidates=list(report.candidates),
         selected=list(report.selected),
         judged=report.judged,
+        judge_status=report.judge_status,
         judge_evidence=report.judge_evidence,
         vocabulary=list(report.vocabulary),
     )

@@ -367,6 +367,71 @@ class TestDeleteEndpoint:
 # ---------------------------------------------------------------------------
 
 
+class TestEditResponsesReportTheEffectiveSchema:
+    """The POST half of the same contract the GET carries.
+
+    The first attempt asserted this on the GET only, and the review measured
+    that reverting the POST filter left all fifty router tests green — so the
+    duplicate row and the `ext:${type_name}` key collision were reintroducible on
+    the path a client refreshes from after an edit.
+    """
+
+    @staticmethod
+    def _response_for(accepted):
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+        edit_service = AsyncMock(spec=SchemaEditService)
+        edit_service.reparent_type.return_value = _make_schema(accepted=accepted)
+        client = _make_app(notebook_svc, edit_service)
+        resp = client.post(
+            f"/api/notebooks/{NOTEBOOK_ID}/schema/reparent",
+            json={"type_names": ["ScholarlyArticle"], "new_parent": "Thesis"},
+        )
+        assert resp.status_code == 200
+        return resp.json()
+
+    @staticmethod
+    def _move(type_name, new_parent):
+        return {
+            "reparent_id": f"reparent::{type_name}->{new_parent}",
+            "op": "reparent",
+            "type_name": type_name,
+            "new_parent": new_parent,
+            "parent_type": new_parent,
+        }
+
+    def test_the_declared_parent_is_the_baseline(self):
+        body = self._response_for([])
+        node = next(
+            t for t in body["base_ontology_types"] if t["name"] == "ScholarlyArticle"
+        )
+        assert node["parent_type"] == "Article"
+
+    def test_a_reparent_is_not_returned_as_an_extension(self):
+        body = self._response_for([self._move("ScholarlyArticle", "Thesis")])
+        assert body["accepted_extensions"] == []
+
+    def test_the_row_reports_the_new_parent(self):
+        body = self._response_for([self._move("ScholarlyArticle", "Thesis")])
+        node = next(
+            t for t in body["base_ontology_types"] if t["name"] == "ScholarlyArticle"
+        )
+        assert node["parent_type"] == "Thesis"
+
+    def test_two_moves_of_one_type_cannot_collide(self):
+        body = self._response_for(
+            [
+                self._move("ScholarlyArticle", "Thesis"),
+                self._move("ScholarlyArticle", "Periodical"),
+            ]
+        )
+        assert body["accepted_extensions"] == []
+        node = next(
+            t for t in body["base_ontology_types"] if t["name"] == "ScholarlyArticle"
+        )
+        assert node["parent_type"] == "Periodical"
+
+
 class TestAcceptSurfacesThePlacement:
     """N.4d.3 — accepting an extension shows the curator where it landed.
 
@@ -387,7 +452,7 @@ class TestAcceptSurfacesThePlacement:
         return client
 
     def test_the_response_carries_the_placement(self):
-        from app_main.services.type_placement_service import PlacementReport
+        from app_main.services.type_placement_service import DECIDED, PlacementReport
 
         edit_service = AsyncMock(spec=SchemaEditService)
         edit_service.accept_extension.return_value = _make_schema(
@@ -404,7 +469,7 @@ class TestAcceptSurfacesThePlacement:
             parent="Deal",
             candidates=("RegioDeal", "Woondeal"),
             selected=("RegioDeal",),
-            judged=True,
+            judge_status=DECIDED,
             vocabulary=("deals",),
         )
 
@@ -419,6 +484,7 @@ class TestAcceptSurfacesThePlacement:
         assert placement["candidates"] == ["RegioDeal", "Woondeal"]
         assert placement["selected"] == ["RegioDeal"]
         assert placement["judged"] is True
+        assert placement["judge_status"] == "decided"
         # The declared parent from the accepted entry is what gets validated —
         # the service validates a claim, it does not invent one.
         assert placement_service.placement_for.await_args.args[1:3] == (

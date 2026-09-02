@@ -11,13 +11,19 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-from app_main.services.type_placement_service import TypePlacementService
+from app_main.services.entity_extraction_service import EntityExtractionService
+from app_main.services.type_placement_service import (
+    DECIDED,
+    NOT_ASKED,
+    REFUSED,
+    UNAVAILABLE,
+    TypePlacementService,
+)
+from ontology_manager import get_ontology_manager
 from shared.models.notebook_schema import NotebookSchema
 
 
 def _loader():
-    from ontology_manager import get_ontology_manager
-
     return get_ontology_manager().get_ontology
 
 
@@ -80,6 +86,59 @@ class TestTheVocabularyItJudgesAgainst:
         assert report.parent == "Tranche"
 
 
+class TestWhereItCanDisagreeWithTheRuntimeSet:
+    """D-N4-13's two limitations, pinned as measurements rather than prose.
+
+    The first draft of that decision claimed a placement can never contradict the
+    runtime verdict, arguing from the forced set being a subset. Both halves of
+    that were disproved, so both are asserted here — if either ever stops being
+    true, the decision text should change with it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_adding_a_schema_can_turn_placed_into_duplicate(self):
+        """Verdicts are NOT monotone in the applied set, which is what made the
+        superset argument invalid: it licenses only monotone conclusions.
+        """
+        from ontology_manager.type_placement import place_proposed_type
+
+        report = await _service().placement_for(_schema(), "ScholarlyArticle", "Deal")
+        assert report.verdict == "PLACED"
+        assert "scholarly" not in report.vocabulary
+
+        manager = get_ontology_manager()
+        runtime = [
+            await manager.get_ontology(name)
+            for name in ("deals", "policy_themes", "scholarly")
+        ]
+        assert place_proposed_type("ScholarlyArticle", "Deal", runtime).verdict == (
+            "DUPLICATE"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_empty_base_ontology_forces_nothing_at_runtime(self):
+        """`_apply_notebook_schema_default` is gated on a truthy `base_ontology`,
+        which the Regio-Deal notebooks leave empty — so there the forced set is
+        not a subset of anything the runtime applies. The report still composes
+        one from the accepted extensions' schemas, and says which.
+        """
+        service = EntityExtractionService.__new__(EntityExtractionService)
+        notebook_schema = NotebookSchema(
+            notebook="notebook:empty",
+            base_ontology="",
+            accepted_extensions=[{"type_name": "X", "schema_name": "scholarly"}],
+        )
+        # Nothing is forced at runtime: the branch never runs.
+        assert service._apply_notebook_schema_default is not None
+        assert not notebook_schema.base_ontology
+
+        report = await _service().placement_for(
+            notebook_schema, "Preprint", "ScholarlyArticle"
+        )
+        assert report.vocabulary == ("scholarly",)
+        assert report.verdict == "PLACED"
+
+
 class TestTheDeterministicHalf:
     @pytest.mark.asyncio
     async def test_a_resolved_parent_places_the_type_and_bounds_its_candidates(self):
@@ -105,12 +164,48 @@ class TestTheDeterministicHalf:
 class TestTheJudge:
     @pytest.mark.asyncio
     async def test_no_caller_means_nobody_was_asked(self):
-        """Distinct from a judge that looked and chose nothing: `judged` is False
-        while `candidates` is non-empty, so a reader can tell the two apart.
-        """
         report = await _service().placement_for(_schema(), "Tranche", "Deal")
-        assert report.candidates and report.judged is False
+        assert report.candidates and report.judge_status == NOT_ASKED
+        assert report.judged is False
         assert report.selected == ()
+
+    @pytest.mark.asyncio
+    async def test_the_four_judge_states_are_distinguishable(self):
+        """Three of the four carry an empty selection, so emptiness cannot be the
+        discriminator. A review found this service reporting a REFUSED reply as
+        "the judge moved nothing", which is what N.4d.4's gap loop would gate on.
+        """
+        async def raising(_s, _p, _m):
+            raise RuntimeError("no route")
+
+        async def refused(_s, _p, _m):
+            return '["0"]'  # a top-level array; the parser will not use it
+
+        async def moved_nothing(_s, _p, _m):
+            return '{"move_under_proposal": []}'
+
+        async def decided(_s, _p, _m):
+            return '{"move_under_proposal": ["0"]}'
+
+        cases = {
+            NOT_ASKED: None,
+            UNAVAILABLE: raising,
+            REFUSED: refused,
+            DECIDED: moved_nothing,
+        }
+        seen = {}
+        for expected, caller in cases.items():
+            report = await _service(caller).placement_for(_schema(), "Tranche", "Deal")
+            assert report.candidates, "the placement must have asked something"
+            assert report.judge_status == expected
+            seen[expected] = report.selected
+
+        # All four produced the same empty selection except the last, which is
+        # the point: the status is the only thing that separates them.
+        assert all(selected == () for selected in seen.values())
+
+        chosen = await _service(decided).placement_for(_schema(), "Tranche", "Deal")
+        assert chosen.judge_status == DECIDED and chosen.selected
 
     @pytest.mark.asyncio
     async def test_a_selection_names_the_types_it_chose(self):
@@ -131,8 +226,21 @@ class TestTheJudge:
             return '{"move_under_proposal": [], "reasoning": "none apply"}'
 
         report = await _service(caller).placement_for(_schema(), "Tranche", "Deal")
+        assert report.judge_status == DECIDED
         assert report.judged is True
         assert report.selected == ()
+
+    @pytest.mark.asyncio
+    async def test_a_reply_the_parser_refuses_is_not_a_decision(self):
+        async def caller(_system, _prompt, _model):
+            return "I think Woondeal belongs under it."
+
+        report = await _service(caller).placement_for(_schema(), "Tranche", "Deal")
+        assert report.judge_status == REFUSED
+        assert report.judged is False
+        assert report.selected == ()
+        # The refusal is explained rather than left as a bare flag.
+        assert report.judge_evidence
 
     @pytest.mark.asyncio
     async def test_a_model_outage_leaves_the_deterministic_half_standing(self):
@@ -140,6 +248,7 @@ class TestTheJudge:
             raise RuntimeError("no route to model")
 
         report = await _service(caller).placement_for(_schema(), "Tranche", "Deal")
+        assert report.judge_status == UNAVAILABLE
         assert report.judged is False
         assert report.selected == ()
         assert report.verdict == "PLACED"
@@ -166,5 +275,5 @@ class TestTheJudge:
         report = await _service(caller).placement_for(
             _schema(), "Tranche", "NoSuchParent"
         )
-        assert report.judged is False
+        assert report.judge_status == NOT_ASKED
         caller.assert_not_awaited()
