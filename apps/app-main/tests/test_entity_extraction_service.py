@@ -1146,6 +1146,132 @@ class TestRunMultiSchemaBody:
         assert "PreprintServer" in svc._applicable_schemas[0].entity_types
 
     @pytest.mark.asyncio
+    async def test_an_empty_base_ontology_forces_no_schema(
+        self, svc, notebook_schema_repo_fixture
+    ):
+        """N.4d.3 / D-N4-13 point 2 — the gate this decision rests on.
+
+        `_apply_notebook_schema_default` runs only for a TRUTHY `base_ontology`,
+        which the Regio-Deal notebooks leave empty. That is why the forced set is
+        not always a subset of what the runtime applies, and it is what
+        `TypePlacementService` reports around.
+
+        The discriminator is an accepted extension naming a schema
+        auto-detection did NOT pick: with the gate, nothing is forced and the
+        applied set is exactly what `detect_applicable_schemas` returned; without
+        it, `scholarly` is forced in on the extension's `schema_name`. A review
+        measured that the placement-side test asserted this half in a form that
+        could not fail — `assert service._apply_notebook_schema_default is not
+        None` is true of any object with that attribute — so the gate is
+        exercised here instead.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(
+                notebook="notebook:abc",
+                base_ontology="",
+                accepted_extensions=[
+                    {"extension_id": "e1", "type_name": "X", "schema_name": "scholarly"}
+                ],
+            )
+        )
+
+        deals = _make_ontology("deals")
+        scholarly = _make_ontology("scholarly")
+        by_name = {"deals": deals, "scholarly": scholarly}
+
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=list(by_name))
+        mock_manager.get_ontology = AsyncMock(side_effect=lambda n: by_name.get(n))
+        detect_spy = AsyncMock(return_value=[(deals, 0.92)])
+        mock_extract = AsyncMock(return_value=ExtractionResult())
+
+        with patch(
+            "ontology_manager.get_ontology_manager",
+            return_value=mock_manager,
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=detect_spy,
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as mock_workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()):
+            mock_workflow = MagicMock()
+            mock_workflow.extract = mock_extract
+            mock_workflow_cls.return_value = mock_workflow
+
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+        applied = [
+            ontology.metadata.name
+            for ontology, _conf in mock_extract.await_args.kwargs["applicable_schemas"]
+        ]
+        assert applied == ["deals"], (
+            f"an empty base_ontology forced a schema in: {applied}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_configured_base_ontology_does_force_its_schemas(
+        self, svc, notebook_schema_repo_fixture
+    ):
+        """The vacuity guard for the test above: with a base set, the same
+        extension's schema IS forced, so "nothing was forced" is a statement
+        about the gate rather than about a mechanism that never fires.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(
+                notebook="notebook:abc",
+                base_ontology="deals",
+                accepted_extensions=[
+                    {"extension_id": "e1", "type_name": "X", "schema_name": "scholarly"}
+                ],
+            )
+        )
+
+        deals = _make_ontology("deals")
+        scholarly = _make_ontology("scholarly")
+        by_name = {"deals": deals, "scholarly": scholarly}
+
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=list(by_name))
+        mock_manager.get_ontology = AsyncMock(side_effect=lambda n: by_name.get(n))
+        detect_spy = AsyncMock(return_value=[(deals, 0.92)])
+        mock_extract = AsyncMock(return_value=ExtractionResult())
+
+        with patch(
+            "ontology_manager.get_ontology_manager",
+            return_value=mock_manager,
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=detect_spy,
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as mock_workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()):
+            mock_workflow = MagicMock()
+            mock_workflow.extract = mock_extract
+            mock_workflow_cls.return_value = mock_workflow
+
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+        applied = [
+            ontology.metadata.name
+            for ontology, _conf in mock_extract.await_args.kwargs["applicable_schemas"]
+        ]
+        assert "scholarly" in applied
+
+    @pytest.mark.asyncio
     async def test_run_multi_schema_does_not_forward_a_reparent_as_a_type(
         self, svc, notebook_schema_repo_fixture
     ):

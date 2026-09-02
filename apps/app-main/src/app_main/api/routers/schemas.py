@@ -495,8 +495,10 @@ class _PlacementView(BaseModel):
     over zero. ``judge_status`` says which of FOUR states produced it —
     ``not_asked`` (no model wired, or no candidates), ``unavailable`` (the model
     could not be reached), ``refused`` (a reply came back and the parser would
-    not use it), ``decided`` (the judge answered; an empty ``selected`` here is
-    its decision). ``judged`` is ``judge_status == "decided"``, kept because
+    not use it — among them a top-level array, unparseable JSON, a non-list
+    selection, and an object omitting the key), ``decided`` (the judge answered;
+    an empty ``selected`` here is ordinarily its decision, the exception being a
+    reply that named only ids never offered). ``judged`` is ``judge_status == "decided"``, kept because
     three of the four states carry an empty ``selected`` and a client must not
     read emptiness as a verdict.
 

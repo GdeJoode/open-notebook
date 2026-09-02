@@ -49,10 +49,17 @@ them as one. ``judge_status`` names which happened:
 
 * ``not_asked`` — no caller is wired, or the placement offered no candidates;
 * ``unavailable`` — the caller raised, so no reply came back;
-* ``refused`` — a reply came back and the parser would not use it (a top-level
-  array, unparseable JSON, a non-list selection);
-* ``decided`` — the judge answered usably. An empty ``selected`` here IS the
-  judge's decision to move nothing.
+* ``refused`` — a reply came back and the parser would not use it. Every path
+  through ``parse_judge_response``'s ``_nothing`` lands here, which is more than
+  the obvious three: a top-level array, unparseable JSON and a non-list selection,
+  but also an empty reply, valid JSON that is not an object, and an object that
+  omits ``move_under_proposal`` entirely;
+* ``decided`` — the judge answered usably. An empty ``selected`` here is
+  ordinarily the judge's decision to move nothing. One case is neither: a reply
+  naming only ids that were never offered parses fine and is filtered to nothing,
+  so it reports ``decided`` with an empty selection. That is a fenced widening
+  attempt rather than a decision; ``judge_evidence`` records the ignore count and
+  the parser logs it.
 
 ``judged`` is exactly ``judge_status == "decided"``. Anything gating on
 adjudication — N.4d.4's gap loop, per C1 — must read that and not the emptiness
@@ -259,6 +266,14 @@ class TypePlacementService:
         was refused is NOT ``None`` — the parser returns a selection with
         ``decided=False``, and the caller reports that as ``refused``. Collapsing
         the two is the defect this docstring previously described as the design.
+
+        The caller maps ``None`` to ``unavailable`` when a factory is configured
+        and to ``not_asked`` otherwise, so the "no candidates" cause would be
+        reported as ``unavailable`` if it could occur with a factory wired. It
+        cannot: ``placement_for`` returns before judging when
+        ``descendant_candidates`` is empty, and ``candidates_from_ontologies``
+        never drops one. Recorded rather than defended — the two sides key off
+        different predicates and only that invariant keeps them agreeing.
         """
         if self._llm_caller_factory is None or not candidates:
             return None

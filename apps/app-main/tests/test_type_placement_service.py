@@ -11,7 +11,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-from app_main.services.entity_extraction_service import EntityExtractionService
 from app_main.services.type_placement_service import (
     DECIDED,
     NOT_ASKED,
@@ -116,22 +115,26 @@ class TestWhereItCanDisagreeWithTheRuntimeSet:
         )
 
     @pytest.mark.asyncio
-    async def test_an_empty_base_ontology_forces_nothing_at_runtime(self):
+    async def test_an_empty_base_ontology_still_produces_a_report(self):
         """`_apply_notebook_schema_default` is gated on a truthy `base_ontology`,
         which the Regio-Deal notebooks leave empty — so there the forced set is
-        not a subset of anything the runtime applies. The report still composes
-        one from the accepted extensions' schemas, and says which.
+        not a subset of anything the runtime applies. This asserts THIS service's
+        half: it still composes a set from the accepted extensions' schemas and
+        places against it.
+
+        The runtime half — that the gate really does force nothing — lives in
+        `test_entity_extraction_service.py::TestRunMultiSchemaBody::
+        test_an_empty_base_ontology_forces_no_schema`, which exercises the branch
+        through `run_extraction`. A review measured that asserting it here read
+        `service._apply_notebook_schema_default is not None`, which is true of any
+        object carrying that attribute and could not fail; removing the gate left
+        the whole 1670-test suite green.
         """
-        service = EntityExtractionService.__new__(EntityExtractionService)
         notebook_schema = NotebookSchema(
             notebook="notebook:empty",
             base_ontology="",
             accepted_extensions=[{"type_name": "X", "schema_name": "scholarly"}],
         )
-        # Nothing is forced at runtime: the branch never runs.
-        assert service._apply_notebook_schema_default is not None
-        assert not notebook_schema.base_ontology
-
         report = await _service().placement_for(
             notebook_schema, "Preprint", "ScholarlyArticle"
         )

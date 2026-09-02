@@ -605,7 +605,11 @@ appears.
 >    is gated on a truthy `base_ontology`, and the Regio-Deal corpus's notebooks
 >    have it empty today. There the runtime forces NOTHING, while the report still
 >    composes a set from the schemas named on accepted extensions and places
->    against it.
+>    against it. Guarded on BOTH sides, after a review measured that the runtime
+>    half was first asserted in a form that could not fail: the gate itself in
+>    `test_an_empty_base_ontology_forces_no_schema` (with
+>    `test_a_configured_base_ontology_does_force_its_schemas` as its vacuity
+>    guard), and the report in `test_an_empty_base_ontology_still_produces_a_report`.
 >
 > The placement is therefore **advisory**: it is a report a curator reads, it
 > writes nothing, and the re-parent it may suggest is applied only by an explicit
