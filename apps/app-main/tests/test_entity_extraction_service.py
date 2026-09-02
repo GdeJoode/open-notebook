@@ -18,15 +18,13 @@ from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from shared.models import Chunk
-from shared.models.extraction import ExtractionResult
-from shared.models.notebook_schema import NotebookSchema
-
 from app_main.services.entity_extraction_service import (
     EntityExtractionService,
     SchemaReviewPendingError,
 )
+from shared.models import Chunk
+from shared.models.extraction import ExtractedEntity, ExtractionResult, FilteredResult
+from shared.models.notebook_schema import NotebookSchema
 
 
 def _make_chunk(text: str = "hello world", chunk_id: str = "chunk:1") -> Chunk:
@@ -1341,6 +1339,204 @@ class TestRunMultiSchemaBody:
         assert "Researcher" not in names, (
             f"a re-parent reached the Pass-2 extension map: {forwarded!r}"
         )
+
+
+class TestConceptAlignmentIsReachable:
+    """Track N.4d.4 / D-N4-8 — the flag and the wiring.
+
+    The previous judge tier shipped behind a config default nothing set and never
+    ran in production; the decision exists so that cannot repeat. These assert the
+    stage is reachable from an env flag and that its collaborators actually arrive,
+    not that a helper returns the right dict in isolation.
+    """
+
+    def _service(self):
+        return EntityExtractionService.__new__(EntityExtractionService)
+
+    @pytest.mark.asyncio
+    async def test_the_flag_is_off_by_default(self, monkeypatch):
+        from app_main.config import get_concept_alignment_enabled
+
+        monkeypatch.delenv("ENABLE_CONCEPT_ALIGNMENT", raising=False)
+        assert get_concept_alignment_enabled() is False
+
+    @pytest.mark.asyncio
+    async def test_the_flag_turns_it_on(self, monkeypatch):
+        from app_main.config import get_concept_alignment_enabled
+
+        monkeypatch.setenv("ENABLE_CONCEPT_ALIGNMENT", "true")
+        assert get_concept_alignment_enabled() is True
+
+    @pytest.mark.asyncio
+    async def test_a_disabled_stage_builds_no_collaborators(self):
+        """Not merely "returns None": nothing is constructed, so a run with the
+        flag off pays no repo, model or ontology cost.
+        """
+        from entity_filtering.config import ConceptAlignmentConfig, FilteringConfig
+
+        service = self._service()
+        service._applicable_schemas = ["an-ontology"]
+        deps = await service._concept_alignment_deps(
+            FilteringConfig(concept_alignment=ConceptAlignmentConfig(enabled=False))
+        )
+        assert set(deps) == {"entity_repo", "ontology", "gap_recorder", "llm_caller"}
+        assert all(value is None for value in deps.values())
+
+    @pytest.mark.asyncio
+    async def test_an_enabled_stage_wires_all_four(self):
+        from entity_filtering.config import ConceptAlignmentConfig, FilteringConfig
+
+        service = self._service()
+        service._applicable_schemas = ["an-ontology"]
+        with patch.object(
+            EntityExtractionService,
+            "_make_routed_caller",
+            AsyncMock(return_value="a-caller"),
+        ):
+            deps = await service._concept_alignment_deps(
+                FilteringConfig(concept_alignment=ConceptAlignmentConfig(enabled=True))
+            )
+        assert deps["entity_repo"] is not None
+        assert deps["ontology"] == "an-ontology"
+        assert deps["gap_recorder"] is not None
+        assert deps["llm_caller"] == "a-caller"
+
+    @pytest.mark.asyncio
+    async def test_a_collaborator_that_cannot_be_built_degrades_that_tier_only(self):
+        """A judge that cannot be reached must not cost the graph query. Nothing
+        here raises — a wiring failure degrades a tier, it does not fail the
+        extraction.
+        """
+        from entity_filtering.config import ConceptAlignmentConfig, FilteringConfig
+
+        service = self._service()
+        service._applicable_schemas = ["an-ontology"]
+        with patch.object(
+            EntityExtractionService,
+            "_make_routed_caller",
+            AsyncMock(side_effect=RuntimeError("no route")),
+        ):
+            deps = await service._concept_alignment_deps(
+                FilteringConfig(concept_alignment=ConceptAlignmentConfig(enabled=True))
+            )
+        assert deps["llm_caller"] is None
+        assert deps["entity_repo"] is not None and deps["gap_recorder"] is not None
+
+    @pytest.mark.asyncio
+    async def test_the_judge_caller_is_not_built_when_the_judge_is_off(self):
+        from entity_filtering.config import ConceptAlignmentConfig, FilteringConfig
+
+        service = self._service()
+        service._applicable_schemas = None
+        caller = AsyncMock(return_value="a-caller")
+        with patch.object(EntityExtractionService, "_make_routed_caller", caller):
+            deps = await service._concept_alignment_deps(
+                FilteringConfig(
+                    concept_alignment=ConceptAlignmentConfig(
+                        enabled=True, judge_enabled=False
+                    )
+                )
+            )
+        assert deps["llm_caller"] is None
+        caller.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_collaborators_reach_the_workflow(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture,
+        monkeypatch,
+    ):
+        """The seam, not the helper: deleting the wiring at the call site leaves
+        the helper's own tests green, so this asserts what FilteringWorkflow was
+        actually constructed with and what `process` was called with.
+        """
+        monkeypatch.setenv("ENABLE_CONCEPT_ALIGNMENT", "true")
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        extracted = ExtractionResult(
+            entities=[ExtractedEntity(text="X", label="L")], relations=[]
+        )
+        captured = {}
+
+        class _Workflow:
+            def __init__(self, **kwargs):
+                captured["init"] = kwargs
+
+            async def process(self, result, **kwargs):
+                captured["process"] = kwargs
+                return FilteredResult(entities=result.entities, relations=[])
+
+        with patch.object(
+            svc, "_run_multi_schema", AsyncMock(return_value=extracted)
+        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(
+            svc, "_persistence", AsyncMock()
+        ), patch(
+            "app_main.services.entity_extraction_service.FilteringWorkflow",
+            _Workflow,
+        ), patch.object(
+            EntityExtractionService,
+            "_make_routed_caller",
+            AsyncMock(return_value="a-caller"),
+        ):
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=True,
+            )
+
+        assert captured["init"]["config"].concept_alignment.enabled is True
+        assert captured["init"]["entity_repo"] is not None
+        assert captured["init"]["gap_recorder"] is not None
+        # source_id is the gap rows' provenance — without it a concept recurring
+        # across documents is indistinguishable from one seen once.
+        assert captured["process"]["source_id"] == "source:test"
+        assert captured["process"]["alignment_llm_caller"] == "a-caller"
+
+    @pytest.mark.asyncio
+    async def test_the_flag_off_leaves_the_stage_disabled_at_the_seam(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture,
+        monkeypatch,
+    ):
+        """The vacuity guard for the test above: same path, flag off, stage off."""
+        monkeypatch.delenv("ENABLE_CONCEPT_ALIGNMENT", raising=False)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        extracted = ExtractionResult(
+            entities=[ExtractedEntity(text="X", label="L")], relations=[]
+        )
+        captured = {}
+
+        class _Workflow:
+            def __init__(self, **kwargs):
+                captured["init"] = kwargs
+
+            async def process(self, result, **kwargs):
+                return FilteredResult(entities=result.entities, relations=[])
+
+        with patch.object(
+            svc, "_run_multi_schema", AsyncMock(return_value=extracted)
+        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(svc, "_persistence", AsyncMock()), patch(
+            "app_main.services.entity_extraction_service.FilteringWorkflow",
+            _Workflow,
+        ):
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=True,
+            )
+
+        assert captured["init"]["config"].concept_alignment.enabled is False
+        assert captured["init"]["gap_recorder"] is None
 
 
 # ---------------------------------------------------------------------------

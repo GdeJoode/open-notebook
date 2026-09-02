@@ -76,9 +76,23 @@ cause:
 * ``EV_NO_CANDIDATE_VECTORS``  — rows exist but none carry an embedding.
 * ``EV_INCOMPARABLE_VECTORS``  — vectors exist on both sides but none could be
   compared (dimension mismatch or zero norm).
-* ``EV_NONE_CLOSE``            — vectors were genuinely compared and none reached
-  the floor. The only code that licenses a claim about similarity.
+* ``EV_NONE_CLOSE``            — vectors were genuinely compared and the nearest
+  fell BELOW the related floor. The only code that licenses a claim about
+  similarity.
+* ``EV_JUDGE_NO_LINK``         — the nearest landed in the ambiguous band and the
+  judge ruled on THIS item, finding no link. Adjudicated.
+* ``EV_BAND_UNADJUDICATED``    — the nearest landed in the ambiguous band and NO
+  verdict was obtained for this item (no caller, judge disabled, or the judge was
+  silent about it). Nobody decided; the NOVEL verdict is a default, not a finding.
 * ``EV_ERROR``                 — classification raised; nothing was established.
+
+C1 (N.4d.4): the last three were ONE code until this phase, which violated the
+"exactly one cause" contract above in the place it mattered most. Two of them
+(below-floor and unadjudicated-band) also shared ``method=none``, so a consumer
+could separate them only by comparing ``similarity`` against a floor it had to
+know out of band. The gap loop is that consumer: recording an unadjudicated
+concept as a confirmed ontology gap is precisely the overclaim this discipline
+exists to prevent. See :data:`GAP_LICENSING_CODES`.
 
 The lexical signal (D-N4-1 / D-N4-9)
 ====================================
@@ -128,6 +142,8 @@ EV_NO_QUERY_VECTOR = "entity_has_no_embedding"
 EV_NO_CANDIDATE_VECTORS = "no_candidate_embeddings"
 EV_INCOMPARABLE_VECTORS = "vectors_incomparable"
 EV_NONE_CLOSE = "compared_none_close"
+EV_JUDGE_NO_LINK = "judge_ruled_no_link"
+EV_BAND_UNADJUDICATED = "ambiguous_band_unadjudicated"
 EV_ERROR = "classification_error"
 
 REASON_CODES = (
@@ -140,8 +156,26 @@ REASON_CODES = (
     EV_NO_CANDIDATE_VECTORS,
     EV_INCOMPARABLE_VECTORS,
     EV_NONE_CLOSE,
+    EV_JUDGE_NO_LINK,
+    EV_BAND_UNADJUDICATED,
     EV_ERROR,
 )
+
+# The reason codes that license recording an ontology GAP (D-N4-6 / C1).
+#
+# A gap says "the ontology has no concept for this". Only a NOVEL verdict that
+# actually ESTABLISHED something about the graph can support that: the vectors
+# were compared and the nearest fell below the floor, or a judge looked at the
+# ambiguous band and ruled there is no link.
+#
+# Every other code names a reason nothing was established — no repo, no type, a
+# failed fetch, no rows, a missing embedding on either side, incomparable vectors,
+# a raised classification, or an ambiguous band nobody adjudicated. Each of those
+# produces a NOVEL verdict because NOVEL is the safe default, not because the
+# concept is new. Recording them would inflate frequency counts that
+# `OntologyEvolutionAgent` turns into schema proposals at a threshold, so the
+# error compounds into a curator-visible artefact rather than staying local.
+GAP_LICENSING_CODES = (EV_NONE_CLOSE, EV_JUDGE_NO_LINK)
 
 # Fixed per-method confidences. A raw cosine is NEVER written here: mixing a
 # similarity score with an ontological confidence makes the two incomparable (and
@@ -193,6 +227,38 @@ def _normalize(text: str) -> str:
 def _candidate_name(candidate: Dict[str, Any]) -> str:
     """A ``find_by_type`` row exposes ``name``; in-batch dicts use ``text``."""
     return str(candidate.get("name") or candidate.get("text", "") or "")
+
+
+def _schema_name(schemas: Optional[List[Any]]) -> str:
+    """The applied ontology's own name, for the gap rows this run writes.
+
+    Falls back to ``"general"`` — the same default `OntologyEvolutionAgent`
+    itself uses — when no schema is applied or one carries no metadata. Gaps are
+    keyed on ``(entity_text, ontology_name)``, so guessing a different name here
+    would split one concept's frequency count across two rows and delay the
+    proposal threshold rather than reach it sooner.
+    """
+    for ontology in schemas or ():
+        metadata = getattr(ontology, "metadata", None)
+        name = getattr(metadata, "name", None)
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return "general"
+
+
+def _gap_context(entity: Dict[str, Any]) -> Optional[str]:
+    """The text around the mention, for a curator reading the gap later.
+
+    Reads the chunking pipeline's ``extraction_context.surrounding_text``. Absent
+    (a re-ingest, or an extractor that does not carry context) the gap is still
+    recorded — the context is provenance, not evidence.
+    """
+    context = entity.get("extraction_context")
+    if isinstance(context, dict):
+        text = context.get("surrounding_text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return None
 
 
 def _props(entity: Dict[str, Any]) -> Dict[str, Any]:
@@ -545,6 +611,13 @@ class ConceptAligner:
             with no ordering, so this is an ARBITRARY sample — every NOVEL verdict
             discloses the cap rather than implying it saw the whole graph.
         min_inner_tokens: precision guard for the alias-candidate signal.
+        gap_recorder: object with ``record_gap(entity_text, entity_type_guess,
+            context, source_id, ontology_name)`` — normally an
+            ``OntologyEvolutionAgent``. Optional: absent, no gap is recorded and
+            the report says so. A gap is recorded ONLY for a NOVEL verdict whose
+            reason code is in :data:`GAP_LICENSING_CODES` (D-N4-6 / C1).
+        ontology_name: which ontology the gaps belong to. Defaults to the applied
+            schema's own metadata name where one is available.
     """
 
     def __init__(
@@ -559,11 +632,15 @@ class ConceptAligner:
         match_ceiling: float = 0.90,
         max_candidates: int = 100,
         min_inner_tokens: int = 2,
+        gap_recorder: Optional[Any] = None,
+        ontology_name: Optional[str] = None,
     ) -> None:
         self._repo = entity_repo
         self._schemas = schemas
         self._llm_caller = llm_caller
         self._model = model
+        self._gap_recorder = gap_recorder
+        self._ontology_name = ontology_name or _schema_name(schemas)
         self._judge_enabled = judge_enabled
         self._related_floor = related_floor
         self._match_ceiling = match_ceiling
@@ -571,9 +648,17 @@ class ConceptAligner:
         self._min_inner_tokens = min_inner_tokens
 
     async def align(
-        self, entities: List[Dict[str, Any]]
+        self,
+        entities: List[Dict[str, Any]],
+        *,
+        source_id: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-        """Classify every ``is_new`` entity. Returns ``(entities, report)``."""
+        """Classify every ``is_new`` entity. Returns ``(entities, report)``.
+
+        ``source_id`` is provenance for the gap rows: `record_gap` appends it to
+        the gap's source list, which is how a curator sees a concept recurring
+        across documents rather than within one.
+        """
         report: Dict[str, Any] = {
             "aligned_count": 0,
             "judged_count": 0,
@@ -583,6 +668,16 @@ class ConceptAligner:
             "alias_candidates": [],
             "candidate_cap": self._max_candidates,
             "capped_type_fetches": [],
+            # D-N4-6 / C1. `eligible` counts the NOVEL verdicts whose reason code
+            # licenses a gap; `recorded` those that came back with an id. They are
+            # separate numbers because `record_gap` swallows its own exceptions
+            # and returns a gap with `id=None` on failure — a null id is NOT
+            # success, and reporting it as one would be the same overclaim this
+            # module's evidence discipline exists to prevent.
+            "gap_eligible": 0,
+            "gaps_recorded": 0,
+            "gaps_unrecorded": 0,
+            "gap_recorder_wired": self._gap_recorder is not None,
         }
         novel = [e for e in entities if _props(e).get("is_new")]
         if not novel:
@@ -631,17 +726,81 @@ class ConceptAligner:
                 report["reason_counts"][alignment.reason_code] = (
                     report["reason_counts"].get(alignment.reason_code, 0) + 1
                 )
+            await self._maybe_record_gap(entity, alignment, source_id, report)
 
         logger.info(
             "ConceptAligner: {} aligned ({} related, {} novel), {} judged, "
-            "{} alias candidates",
+            "{} alias candidates, {} of {} eligible gaps recorded",
             report["aligned_count"],
             report["verdict_counts"][RELATED_TO],
             report["verdict_counts"][NOVEL],
             report["judged_count"],
             len(report["alias_candidates"]),
+            report["gaps_recorded"],
+            report["gap_eligible"],
         )
+        if report["gaps_unrecorded"]:
+            # `record_gap` logs its own failure at ERROR and then returns a gap
+            # object anyway, so without this line a run where every write failed
+            # looks identical to one where every write succeeded.
+            logger.warning(
+                "ConceptAligner: {n} eligible gap(s) were NOT recorded (the "
+                "recorder returned no id)",
+                n=report["gaps_unrecorded"],
+            )
         return entities, report
+
+    async def _maybe_record_gap(
+        self,
+        entity: Dict[str, Any],
+        alignment: Alignment,
+        source_id: Optional[str],
+        report: Dict[str, Any],
+    ) -> None:
+        """Record an ontology gap for a NOVEL verdict that established something.
+
+        Gated on the reason code, not on the verdict (C1): most NOVEL verdicts
+        exist because NOVEL is the safe default when nothing could be compared,
+        and recording those would inflate the frequency counts that
+        `OntologyEvolutionAgent` turns into schema proposals at a threshold.
+
+        Never raises. Alignment is a classification pass; a gap store that is
+        down must not cost the caller its verdicts.
+        """
+        if alignment.verdict != NOVEL:
+            return
+        if alignment.reason_code not in GAP_LICENSING_CODES:
+            return
+        report["gap_eligible"] += 1
+        if self._gap_recorder is None:
+            report["gaps_unrecorded"] += 1
+            return
+
+        text = str(entity.get("text", "") or "").strip()
+        try:
+            gap = await self._gap_recorder.record_gap(
+                entity_text=text,
+                # The RICH label, not the canonical type: a curator proposing a
+                # new type needs the domain word the extractor used, and the
+                # canonical is already recoverable from the alignment properties.
+                entity_type_guess=str(entity.get("label", "") or "") or None,
+                context=_gap_context(entity),
+                source_id=source_id,
+                ontology_name=self._ontology_name,
+            )
+        except Exception:
+            logger.warning(
+                "ConceptAligner: gap recording raised for '{}'", text, exc_info=True
+            )
+            report["gaps_unrecorded"] += 1
+            return
+
+        if getattr(gap, "id", None):
+            report["gaps_recorded"] += 1
+        else:
+            # `record_gap` catches its own exceptions and returns a gap with
+            # `id=None`. Treat that as "not recorded", never as success.
+            report["gaps_unrecorded"] += 1
 
     # -- deterministic tiers -------------------------------------------------
 
@@ -903,7 +1062,7 @@ class ConceptAligner:
                         f"judge found no link (nearest cosine {score:.3f} to "
                         f"{_candidate_name(nearest)!r}){sampled}"
                     ),
-                    reason_code=EV_NONE_CLOSE,
+                    reason_code=EV_JUDGE_NO_LINK,
                     canonical_type=canonical,
                 )))
             else:
@@ -918,7 +1077,7 @@ class ConceptAligner:
                         f"{_candidate_name(nearest)!r} is inconclusive and no judge "
                         f"verdict was obtained for this concept{sampled}"
                     ),
-                    reason_code=EV_NONE_CLOSE,
+                    reason_code=EV_BAND_UNADJUDICATED,
                     canonical_type=canonical,
                 )))
         return out
@@ -975,6 +1134,9 @@ __all__ = [
     "EV_NO_CANDIDATE_VECTORS",
     "EV_INCOMPARABLE_VECTORS",
     "EV_NONE_CLOSE",
+    "EV_JUDGE_NO_LINK",
+    "EV_BAND_UNADJUDICATED",
+    "GAP_LICENSING_CODES",
     "EV_ERROR",
     "REASON_CODES",
     "resolve_canonical_type",

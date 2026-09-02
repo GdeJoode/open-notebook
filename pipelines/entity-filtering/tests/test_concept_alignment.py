@@ -28,6 +28,8 @@ from entity_filtering.resolution.concept_alignment import (
     EV_NO_CANDIDATE_VECTORS,
     EV_NO_QUERY_VECTOR,
     EV_NO_REPO,
+    EV_BAND_UNADJUDICATED,
+    EV_JUDGE_NO_LINK,
     EV_NO_ROWS,
     EV_NO_TYPE,
     EV_NONE_CLOSE,
@@ -667,3 +669,300 @@ async def test_no_repo_verdict_still_carries_the_canonical_type(monkeypatch):
     props = ents[0]["properties"]
     assert props["alignment_reason_code"] == EV_NO_REPO
     assert props["alignment_canonical_type"] == "programme"
+
+
+# ===========================================================================
+# C1 (N.4d.4) — three NOVEL outcomes, three reason codes
+# ===========================================================================
+#
+# These three shared ONE code until N.4d.4, and two of them also shared
+# ``method=none``, so a consumer could tell them apart only by comparing
+# ``similarity`` against a floor it had to know out of band. The whole existing
+# suite passed the split unchanged, which is what made the collapse invisible.
+
+
+def _far_repo():
+    """cosine 0.0 → below the related floor."""
+    return _Repo({"programme": [_row("Leefbaarheid", "entity:leef",
+                                     embedding=[0.0, 1.0])]})
+
+
+async def test_below_the_floor_is_the_only_compared_none_close(monkeypatch):
+    aligner = ConceptAligner(_far_repo(), schemas=["s"])
+    ents, _report = await _align(aligner,
+                                 [_entity("X", "L", embedding=[1.0, 0.0])],
+                                 canonical="programme", monkeypatch=monkeypatch)
+    props = ents[0]["properties"]
+    assert props["concept_alignment"] == NOVEL
+    assert props["alignment_reason_code"] == EV_NONE_CLOSE
+
+
+async def test_a_judge_ruling_no_link_gets_its_own_code(monkeypatch):
+    """Adjudicated: a judge looked at this item's band and found nothing."""
+    def caller(system, user, model):
+        return json.dumps({"alignments": [{"id": "0", "verdict": "NOVEL"}]})
+
+    aligner = ConceptAligner(_band_repo(), schemas=["s"], llm_caller=caller)
+    ents, report = await _align(aligner,
+                                [_entity("X", "L", embedding=[1.0, 0.0])],
+                                canonical="programme", monkeypatch=monkeypatch)
+    props = ents[0]["properties"]
+    assert props["concept_alignment"] == NOVEL
+    assert props["alignment_reason_code"] == EV_JUDGE_NO_LINK
+    assert report["judged_count"] == 1
+
+
+async def test_an_unadjudicated_band_gets_its_own_code(monkeypatch):
+    """Nobody decided. NOVEL here is a default, not a finding — which is the
+    distinction the gap loop turns on.
+    """
+    aligner = ConceptAligner(_band_repo(), schemas=["s"], judge_enabled=False)
+    ents, report = await _align(aligner,
+                                [_entity("X", "L", embedding=[1.0, 0.0])],
+                                canonical="programme", monkeypatch=monkeypatch)
+    props = ents[0]["properties"]
+    assert props["concept_alignment"] == NOVEL
+    assert props["alignment_reason_code"] == EV_BAND_UNADJUDICATED
+    assert report["judged_count"] == 0
+
+
+async def test_the_three_novel_codes_are_mutually_distinct(monkeypatch):
+    """The property the split exists for, asserted over all three at once: no two
+    of these outcomes may report the same code. Collapsing any pair fails here.
+    """
+    def ruling(system, user, model):
+        return json.dumps({"alignments": [{"id": "0", "verdict": "NOVEL"}]})
+
+    outcomes = []
+    for aligner in (
+        ConceptAligner(_far_repo(), schemas=["s"]),
+        ConceptAligner(_band_repo(), schemas=["s"], llm_caller=ruling),
+        ConceptAligner(_band_repo(), schemas=["s"], judge_enabled=False),
+    ):
+        ents, _r = await _align(aligner, [_entity("X", "L", embedding=[1.0, 0.0])],
+                                canonical="programme", monkeypatch=monkeypatch)
+        props = ents[0]["properties"]
+        assert props["concept_alignment"] == NOVEL
+        outcomes.append(props["alignment_reason_code"])
+
+    assert len(set(outcomes)) == 3, f"two NOVEL outcomes share a code: {outcomes}"
+
+
+def test_only_the_two_established_codes_license_a_gap():
+    """A gap says the ontology has no concept for this. Only a NOVEL verdict that
+    ESTABLISHED something can support it — everything else is NOVEL because NOVEL
+    is the safe default.
+    """
+    assert set(ca.GAP_LICENSING_CODES) == {EV_NONE_CLOSE, EV_JUDGE_NO_LINK}
+    for code in ca.REASON_CODES:
+        if code in ca.GAP_LICENSING_CODES:
+            continue
+        assert code not in ca.GAP_LICENSING_CODES
+    # Every licensing code is a real reason code, so a rename cannot leave the
+    # gate pointing at a string nothing emits.
+    for code in ca.GAP_LICENSING_CODES:
+        assert code in ca.REASON_CODES
+
+
+# ===========================================================================
+# D-N4-6 / C1 (N.4d.4) — the gap loop
+# ===========================================================================
+
+
+class _Recorder:
+    """Stands in for `OntologyEvolutionAgent`, matching its real return shape.
+
+    `record_gap` returns an `OntologyGap` whose ``id`` is None when the write
+    failed — it catches its own exceptions and returns an object either way. The
+    stub reproduces that rather than raising, because "returned something with no
+    id" is the failure mode the caller has to handle.
+    """
+
+    def __init__(self, gap_id="ontology_gap:1", raises=False):
+        self._gap_id = gap_id
+        self._raises = raises
+        self.calls = []
+
+    async def record_gap(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._raises:
+            raise RuntimeError("gap store down")
+        return type("_Gap", (), {"id": self._gap_id})()
+
+
+async def test_a_compared_and_distant_concept_is_recorded_as_a_gap(monkeypatch):
+    recorder = _Recorder()
+    aligner = ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=recorder)
+    ents, report = await _align(
+        aligner,
+        [_entity("Brede Welvaart", "BeleidsThema", embedding=[1.0, 0.0])],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert ents[0]["properties"]["alignment_reason_code"] == EV_NONE_CLOSE
+    assert report["gap_eligible"] == 1
+    assert report["gaps_recorded"] == 1
+    assert report["gaps_unrecorded"] == 0
+
+    call, = recorder.calls
+    assert call["entity_text"] == "Brede Welvaart"
+    # The RICH label, not the canonical type: a curator proposing a new type
+    # needs the domain word the extractor used.
+    assert call["entity_type_guess"] == "BeleidsThema"
+
+
+async def test_a_judged_no_link_is_also_recorded(monkeypatch):
+    def ruling(system, user, model):
+        return json.dumps({"alignments": [{"id": "0", "verdict": "NOVEL"}]})
+
+    recorder = _Recorder()
+    aligner = ConceptAligner(_band_repo(), schemas=["s"], llm_caller=ruling,
+                             gap_recorder=recorder)
+    _ents, report = await _align(aligner, [_entity("X", "L", embedding=[1.0, 0.0])],
+                                 canonical="programme", monkeypatch=monkeypatch)
+    assert report["gaps_recorded"] == 1
+
+
+async def test_an_unadjudicated_band_is_never_recorded(monkeypatch):
+    """C1's whole point. Nobody decided this was novel — NOVEL was the default —
+    so recording it would let an unadjudicated concept accumulate toward a schema
+    proposal a curator then has to reject.
+    """
+    recorder = _Recorder()
+    aligner = ConceptAligner(_band_repo(), schemas=["s"], judge_enabled=False,
+                             gap_recorder=recorder)
+    ents, report = await _align(aligner, [_entity("X", "L", embedding=[1.0, 0.0])],
+                                canonical="programme", monkeypatch=monkeypatch)
+    assert ents[0]["properties"]["concept_alignment"] == NOVEL
+    assert ents[0]["properties"]["alignment_reason_code"] == EV_BAND_UNADJUDICATED
+    assert recorder.calls == []
+    assert report["gap_eligible"] == 0 and report["gaps_recorded"] == 0
+
+
+@pytest.mark.parametrize(
+    "make_aligner, code",
+    [
+        (lambda r: ConceptAligner(None, schemas=["s"], gap_recorder=r), EV_NO_REPO),
+        (lambda r: ConceptAligner(_Repo({}), schemas=["s"], gap_recorder=r), EV_NO_ROWS),
+        (
+            lambda r: ConceptAligner(_Repo({}, raises=True), schemas=["s"], gap_recorder=r),
+            EV_FETCH_FAILED,
+        ),
+    ],
+)
+async def test_a_novel_verdict_that_established_nothing_records_no_gap(
+    monkeypatch, make_aligner, code
+):
+    """Every one of these is NOVEL because NOVEL is the safe default, not because
+    the concept is new. Recording them compounds: frequency counts become schema
+    proposals at a threshold.
+    """
+    recorder = _Recorder()
+    ents, report = await _align(make_aligner(recorder),
+                                [_entity("X", "L", embedding=[1.0, 0.0])],
+                                canonical="programme", monkeypatch=monkeypatch)
+    assert ents[0]["properties"]["concept_alignment"] == NOVEL
+    assert ents[0]["properties"]["alignment_reason_code"] == code
+    assert recorder.calls == []
+    assert report["gap_eligible"] == 0
+
+
+async def test_the_gate_is_not_vacuous(monkeypatch):
+    """Guard against the test above passing because nothing is ever recorded: the
+    same recorder, on the same entity, DOES record when the verdict established
+    something.
+    """
+    recorder = _Recorder()
+    _e, report = await _align(
+        ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=recorder),
+        [_entity("X", "L", embedding=[1.0, 0.0])],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert report["gaps_recorded"] == 1 and len(recorder.calls) == 1
+
+
+async def test_a_related_verdict_records_no_gap(monkeypatch):
+    recorder = _Recorder()
+    close = _Repo({"programme": [_row("Leefbaarheid", "entity:leef",
+                                      embedding=[1.0, 0.0])]})
+    ents, report = await _align(
+        ConceptAligner(close, schemas=["s"], gap_recorder=recorder),
+        [_entity("X", "L", embedding=[1.0, 0.0])],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert ents[0]["properties"]["concept_alignment"] == RELATED_TO
+    assert recorder.calls == [] and report["gap_eligible"] == 0
+
+
+async def test_a_null_id_is_not_counted_as_recorded(monkeypatch):
+    """`record_gap` catches its own exceptions and returns a gap with `id=None`.
+    Reading that as success would report a run where every write failed exactly
+    like one where every write landed.
+    """
+    recorder = _Recorder(gap_id=None)
+    _e, report = await _align(
+        ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=recorder),
+        [_entity("X", "L", embedding=[1.0, 0.0])],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert report["gap_eligible"] == 1
+    assert report["gaps_recorded"] == 0
+    assert report["gaps_unrecorded"] == 1
+
+
+async def test_a_raising_recorder_costs_no_verdict(monkeypatch):
+    """Alignment is a classification pass; a gap store that is down must not take
+    the verdicts down with it.
+    """
+    recorder = _Recorder(raises=True)
+    ents, report = await _align(
+        ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=recorder),
+        [_entity("X", "L", embedding=[1.0, 0.0])],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert ents[0]["properties"]["concept_alignment"] == NOVEL
+    assert report["aligned_count"] == 1
+    assert report["gap_eligible"] == 1 and report["gaps_unrecorded"] == 1
+
+
+async def test_no_recorder_wired_is_reported_not_silent(monkeypatch):
+    """An eligible gap that nobody could record is counted, so a report cannot
+    read as "there were no gaps" when it means "nothing was listening".
+    """
+    _e, report = await _align(
+        ConceptAligner(_far_repo(), schemas=["s"]),
+        [_entity("X", "L", embedding=[1.0, 0.0])],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert report["gap_recorder_wired"] is False
+    assert report["gap_eligible"] == 1 and report["gaps_unrecorded"] == 1
+
+
+async def test_the_source_id_reaches_the_gap(monkeypatch):
+    """Provenance: `record_gap` appends it to the gap's source list, which is how
+    a curator sees a concept recurring ACROSS documents rather than within one.
+    """
+    recorder = _Recorder()
+    monkeypatch.setattr(ca, "resolve_canonical_type", lambda label, schemas: "programme")
+    await ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=recorder).align(
+        [_entity("X", "L", embedding=[1.0, 0.0])], source_id="source:abc"
+    )
+    assert recorder.calls[0]["source_id"] == "source:abc"
+
+
+async def test_the_ontology_name_comes_from_the_applied_schema(monkeypatch):
+    """Gaps are keyed on (entity_text, ontology_name), so a guessed name would
+    split one concept's frequency across two rows and delay the threshold.
+    """
+    recorder = _Recorder()
+    aligner = ConceptAligner(_far_repo(), schemas=[_ontology()], gap_recorder=recorder)
+    await _align(aligner, [_entity("X", "L", embedding=[1.0, 0.0])],
+                 canonical="programme", monkeypatch=monkeypatch)
+    assert recorder.calls[0]["ontology_name"] == _ontology().metadata.name
+
+
+async def test_without_a_schema_the_name_matches_the_agents_own_default(monkeypatch):
+    recorder = _Recorder()
+    aligner = ConceptAligner(_far_repo(), schemas=None, gap_recorder=recorder)
+    await _align(aligner, [_entity("X", "L", embedding=[1.0, 0.0])],
+                 canonical="programme", monkeypatch=monkeypatch)
+    assert recorder.calls[0]["ontology_name"] == "general"

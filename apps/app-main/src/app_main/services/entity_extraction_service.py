@@ -36,6 +36,8 @@ from surrealdb_service.repositories import (
     SourceRepository,
 )
 
+from app_main.config import get_concept_alignment_enabled
+
 if TYPE_CHECKING:
     from ontology_manager.schema import Ontology
     from shared.models import NotebookSchema
@@ -850,6 +852,68 @@ class EntityExtractionService:
 
         return result
 
+    async def _concept_alignment_deps(
+        self, f_config: "FilteringConfig"
+    ) -> Dict[str, Any]:
+        """Collaborators Stage 15 needs, or ``None`` for each that cannot be built.
+
+        Track N.4d.4 / D-N4-8. The stage is reachable only if something actually
+        hands it a graph to query, an ontology to resolve types against, a judge,
+        and a place to record gaps — the previous tier shipped behind a config
+        default nothing set and never ran in production.
+
+        Returns all four keys always, so the caller wires whatever is available
+        and the workflow's own DEGRADED warning reports the rest. Nothing here
+        raises: a failure to build one collaborator degrades that tier, it does
+        not fail the extraction.
+        """
+        deps: Dict[str, Any] = {
+            "entity_repo": None,
+            "ontology": None,
+            "gap_recorder": None,
+            "llm_caller": None,
+        }
+        if not f_config.concept_alignment.enabled:
+            return deps
+
+        try:
+            from app_main.dependencies import get_entity_repo
+
+            deps["entity_repo"] = get_entity_repo()
+        except Exception as e:
+            logger.warning(f"concept alignment: no entity repo ({e})")
+
+        # The ontologies this run applied, already projected with the notebook's
+        # accepted schema edits (N.4d.3). None on the single-schema and re-filter
+        # paths, where no set was detected.
+        if self._applicable_schemas:
+            deps["ontology"] = self._applicable_schemas[0]
+
+        try:
+            from ontology_manager import get_ontology_manager
+
+            deps["gap_recorder"] = get_ontology_manager().evolution
+        except Exception as e:
+            logger.warning(f"concept alignment: no gap recorder ({e})")
+
+        if f_config.concept_alignment.judge_enabled:
+            try:
+                deps["llm_caller"] = await self._make_routed_caller()
+            except Exception as e:
+                logger.warning(f"concept alignment: no judge caller ({e})")
+
+        missing = [name for name, value in deps.items() if value is None]
+        if missing:
+            # The workflow warns about its own DEGRADED tiers, but only about the
+            # ones it was handed. This says which could not be BUILT, which is a
+            # different fact and the one an operator can act on.
+            logger.warning(
+                "Concept alignment enabled but these collaborators could not be "
+                "wired: {missing}",
+                missing=missing,
+            )
+        return deps
+
     def _project_notebook_edits(
         self,
         applicable_schemas: List[Tuple["Ontology", float]],
@@ -1267,6 +1331,7 @@ class EntityExtractionService:
                 else:
                     # Default config: string dedup + fuzzy + embedding
                     from entity_filtering.config import (
+                        ConceptAlignmentConfig,
                         EmbeddingDedupConfig,
                         FuzzyDedupConfig,
                     )
@@ -1283,10 +1348,27 @@ class EntityExtractionService:
                             similarity_threshold=0.90,
                         ),
                         edge_prediction_enabled=True,
+                        # N.4d.4 / D-N4-8: the stage was otherwise unreachable in
+                        # every real run. An explicitly supplied filtering_config
+                        # is the caller's own choice and is never overridden.
+                        concept_alignment=ConceptAlignmentConfig(
+                            enabled=get_concept_alignment_enabled()
+                        ),
                     )
-                f_workflow = FilteringWorkflow(config=f_config)
 
-                filtered = await f_workflow.process(result)
+                align_deps = await self._concept_alignment_deps(f_config)
+                f_workflow = FilteringWorkflow(
+                    config=f_config,
+                    entity_repo=align_deps["entity_repo"],
+                    ontology=align_deps["ontology"],
+                    gap_recorder=align_deps["gap_recorder"],
+                )
+
+                filtered = await f_workflow.process(
+                    result,
+                    source_id=source_id,
+                    alignment_llm_caller=align_deps["llm_caller"],
+                )
 
                 merge_groups = filtered.merged_entity_groups
                 all_relations = [
