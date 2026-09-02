@@ -48,12 +48,37 @@ Everything downstream operates on `pending_extensions`: accept, reject, the
 
 - Write the deduped Pass-1 proposals into `pending_extensions` at the end of
   `run_multi_schema`, and roll `coverage_pct` from `best_coverage`.
-- **Decide explicitly**: proposals are per-document, `pending_extensions` is
-  per-notebook. Re-proposing the same type across documents must not create
-  duplicates — key on `type_name` and keep the highest-coverage rationale.
+- **Decided**: proposals are per-document, `pending_extensions` is per-notebook,
+  so re-proposing the same type across documents must not create duplicates. Key
+  on the trimmed, lowercased `type_name`.
+- **Deviation from the first draft, recorded rather than silently dropped**: that
+  draft said "keep the highest-coverage rationale". Proposals do not carry a
+  coverage figure — coverage is per `pass1_results` ROW, across all of a pass's
+  proposals — so there is nothing to rank them by without inventing it.
+  First-seen wins instead. Attaching per-proposal coverage is a follow-up worth
+  doing only if a curator asks for the better rationale.
+- **Also decided**: `excluded_types` (the curator's explicit soft-delete) blocks
+  a re-proposal, and a name that cannot survive the accept/reject route as a path
+  segment is refused outright rather than queued unactionable.
+- **Known race, not closed here**: `merge_pending_extensions` and
+  `set_coverage_pct` are read-modify-writes over the whole row, inherited from
+  `add_pending_extension` — but PC.1 is the first production caller, so the race
+  becomes reachable the moment a bulk upload ingests two sources into one
+  notebook concurrently. The fix is a server-side append or an optimistic version
+  check, i.e. a change to the repository's write contract. Owned by **PC.6**
+  (configuration and robustness).
+- **Known gap, not closed here**: a REJECTED proposal returns.
+  `reject_extension` drops the row and records nothing, and there is no
+  `rejected_extensions` field — a durable "no" needs a new field and a migration.
+  Owned by **PC.5** (the curator-surface phase). A test asserts the current
+  behaviour so it is known rather than discovered, and that test fails the day
+  the gap closes.
 - **AC**: after two documents proposing overlapping types, the Schema tab shows
   each type once; accepting one runs the N.4d.3 placement and returns a verdict;
-  `coverage_pct` is non-zero and matches the rolling average of `pass1_results`.
+  `coverage_pct` is non-zero and matches the mean over sources of each source's
+  best CURRENT coverage — `pass1_results` is append-only, so "current" means the
+  newest row per `(source, schema_attempted)`, and a plain max over all rows
+  would make a coverage regression after a schema edit invisible.
 - **Guard**: the test drives `run_extraction`, not the repository — this whole
   finding is that the repository method works and nobody calls it.
 
@@ -107,7 +132,14 @@ different canonical bucket depending on the document. In the measured corpus,
 - **AC**: a label's canonical type is identical across the eight review documents;
   a sweep over the shipped ontologies shows no label with two canonical answers.
 
-## PC.5 — A door for the curator loop — ~1d
+## PC.5 — A door for the curator loop — ~1.5d
+
+**Also owned here (from PC.1's review)**: a durable "no". `reject_extension`
+records nothing, so a rejected proposal is re-queued by the next document that
+proposes it. Needs a `rejected_extensions` field, a migration, and the
+`merge_pending_extensions` check — at which point PC.1's
+`test_a_rejected_type_does_come_back` must be inverted.
+
 
 **The finding (review G1).** `ontology_gap` and `schema_proposal` are written by
 `OntologyEvolutionAgent`, whose only production caller is N.4d.4's recorder. No

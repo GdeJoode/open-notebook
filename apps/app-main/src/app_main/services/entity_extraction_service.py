@@ -887,6 +887,19 @@ class EntityExtractionService:
         proposals = metadata.get("proposed_extensions") or []
 
         try:
+            # The row that HOLDS the queue is created here, because nothing else
+            # creates it. Measured on the live corpus: 17 `pass1_results` rows
+            # with 111 proposals, and zero `notebook_schema` rows — so every
+            # writer below was correctly reporting "no row" and doing nothing.
+            # Without this the rest of PC.1 is inert on exactly the data that
+            # motivated it.
+            base = self._gap_ontology_name or self._top_applied_schema_name()
+            if base:
+                await notebook_schema_repo.ensure_row(notebook_id, base)
+        except Exception as e:
+            logger.warning(f"could not create notebook_schema for {notebook_id}: {e}")
+
+        try:
             if proposals:
                 added = await notebook_schema_repo.merge_pending_extensions(
                     notebook_id, proposals
@@ -907,34 +920,77 @@ class EntityExtractionService:
         except Exception as e:
             logger.warning(f"could not update coverage for {notebook_id}: {e}")
 
+    # How many `pass1_results` rows the coverage average reads. Pass 1 writes one
+    # row per applied schema per extraction, so ~2-3 rows per document; 1000 is
+    # roughly 300-500 documents including re-extractions. Stated as a number
+    # rather than left at the repository default of 100, which a review measured
+    # would silently start truncating at ~57 documents — and truncate a source
+    # PARTIALLY, giving a wrong average rather than a stale one.
+    _COVERAGE_WINDOW = 1000
+
+    def _top_applied_schema_name(self) -> Optional[str]:
+        """The schema this run actually extracted with, for a new schema row.
+
+        Only used when the notebook has no declared `base_ontology` — which is
+        the common case, since nothing creates the row. `detect_applicable_schemas`
+        ranks by content overlap, so the first entry is the best-fitting schema
+        for the document that triggered the creation. A starting value the
+        curator can change, not a verdict.
+        """
+        for ontology in self._applicable_schemas or []:
+            metadata = getattr(ontology, "metadata", None)
+            name = getattr(metadata, "name", None)
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+        return None
+
     @staticmethod
     async def _rolling_coverage(
         notebook_id: str, pass1_repo: "Pass1ResultRepository"
     ) -> Optional[float]:
-        """Mean over SOURCES of each source's best Pass-1 coverage.
+        """Mean over SOURCES of each source's best CURRENT Pass-1 coverage.
 
         The field is documented as "rolling-average coverage across all sources
         processed in this notebook", so it is recomputed from `pass1_results`
-        rather than accumulated incrementally: a re-extraction of one source then
-        corrects the average instead of counting twice.
+        rather than accumulated incrementally.
 
-        Per source the MAX is taken, because Pass 1 runs once per applied schema
-        and the notebook's coverage is how well its best-fitting schema did, not
-        the average of a good fit and a bad one. Returns ``None`` when there is
-        nothing to average, so the caller writes nothing rather than writing 0.0.
+        `pass1_results` is append-only: re-extracting a source adds rows, it does
+        not replace them. So the max is taken over the NEWEST row per
+        ``(source, schema_attempted)`` — the rows are read newest-first, so the
+        first sighting of a pair is its current one — and only then across schemas
+        within a source. A plain max over all of a source's rows would span
+        re-runs, which means a coverage REGRESSION after a schema edit could never
+        lower the number. An earlier version did exactly that and its docstring
+        claimed the opposite; this is the corrected behaviour.
+
+        Per source the max across schemas is the right summary because Pass 1 runs
+        once per applied schema and a notebook's coverage is how well its
+        best-fitting schema did — not the average of a good fit and a bad one.
+
+        Returns ``None`` when there is nothing to average, so the caller writes
+        nothing rather than writing 0.0 and claiming a measurement nobody made.
         """
-        rows = await pass1_repo.list_by_notebook(notebook_id)
+        rows = await pass1_repo.list_by_notebook(
+            notebook_id, limit=EntityExtractionService._COVERAGE_WINDOW
+        )
         if not rows:
             return None
-        best_per_source: Dict[str, float] = {}
-        for row in rows:
+
+        current: Dict[tuple, float] = {}
+        for row in rows:  # newest first
             source = str(getattr(row, "source", "") or "")
             if not source:
                 continue
-            value = float(getattr(row, "coverage_pct", 0.0) or 0.0)
-            best_per_source[source] = max(best_per_source.get(source, 0.0), value)
-        if not best_per_source:
+            pair = (source, str(getattr(row, "schema_attempted", "") or ""))
+            if pair in current:
+                continue  # an older run of the same source+schema
+            current[pair] = float(getattr(row, "coverage_pct", 0.0) or 0.0)
+
+        if not current:
             return None
+        best_per_source: Dict[str, float] = {}
+        for (source, _schema), value in current.items():
+            best_per_source[source] = max(best_per_source.get(source, 0.0), value)
         return sum(best_per_source.values()) / len(best_per_source)
 
     async def _concept_alignment_deps(
