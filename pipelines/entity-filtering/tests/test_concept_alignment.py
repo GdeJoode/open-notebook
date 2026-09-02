@@ -1118,8 +1118,34 @@ async def test_a_run_that_recorded_nothing_pays_no_statistics_query(monkeypatch)
     assert report["gap_statistics_status"] == ca.STATS_NOT_RECORDED
 
 
-async def test_unavailable_statistics_are_none_not_empty(monkeypatch):
-    """"Not queried" must not read as "zero gaps"."""
+async def test_a_store_that_reports_its_own_error_is_unavailable(monkeypatch):
+    """The failure mode the REAL agent has.
+
+    `OntologyEvolutionAgent.get_gap_statistics` catches its own exceptions and
+    returns a truthy ``{"ontology_name": ..., "error": ...}`` — the same shape as
+    `record_gap` returning a gap with `id=None`. A review measured that reading
+    only the exception path reported `ok` with that payload as the standing
+    totals, and persisted it. Stubbed the way `_Recorder` is: from the real
+    method's failure RETURN, not from a raise it never performs.
+    """
+    class _RealShape(_Recorder):
+        async def get_gap_statistics(self, ontology_name="general"):
+            return {"ontology_name": ontology_name, "error": "db is down"}
+
+    _e, report = await _align(
+        ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=_RealShape()),
+        [_entity("X", "L", embedding=[1.0, 0.0])],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert report["gap_statistics"] is None
+    assert report["gap_statistics_status"] == ca.STATS_UNAVAILABLE
+    assert report["gaps_recorded"] == 1
+
+
+async def test_a_raising_store_is_also_unavailable(monkeypatch):
+    """The defensive path, kept for a recorder that is not the shipped agent —
+    but NOT the one the production collaborator takes.
+    """
     class _Failing(_Recorder):
         async def get_gap_statistics(self, ontology_name="general"):
             raise RuntimeError("store down")
@@ -1131,7 +1157,21 @@ async def test_unavailable_statistics_are_none_not_empty(monkeypatch):
     )
     assert report["gap_statistics"] is None
     assert report["gap_statistics_status"] == ca.STATS_UNAVAILABLE
-    assert report["gaps_recorded"] == 1
+
+
+async def test_the_real_agents_error_shape_is_what_this_guards():
+    """Pins the shape to the real source, so a change there fails HERE rather
+    than silently making the guard inert.
+    """
+    from pathlib import Path
+
+    import ontology_manager.evolution as evolution
+
+    source = Path(evolution.__file__).read_text(encoding="utf-8")
+    assert 'return {"ontology_name": ontology_name, "error": str(e)}' in source, (
+        "get_gap_statistics no longer returns an error payload — re-check "
+        "_gap_statistics' unavailable branch"
+    )
 
 
 async def test_a_recorder_without_statistics_is_a_distinct_state(monkeypatch):
@@ -1157,15 +1197,16 @@ async def test_the_four_statistics_states_are_distinguishable(monkeypatch):
         async def get_gap_statistics(self, ontology_name="general"):
             return {"total": 1}
 
-    class _Boom(_Recorder):
+    class _Errored(_Recorder):
         async def get_gap_statistics(self, ontology_name="general"):
-            raise RuntimeError("down")
+            # The real agent's failure shape — a truthy dict, never a raise.
+            return {"ontology_name": ontology_name, "error": "down"}
 
     seen = {}
     cases = [
         (ca.STATS_OK, _Ok(), _far_repo(), True),
         (ca.STATS_UNSUPPORTED, _Recorder(), _far_repo(), True),
-        (ca.STATS_UNAVAILABLE, _Boom(), _far_repo(), True),
+        (ca.STATS_UNAVAILABLE, _Errored(), _far_repo(), True),
         (ca.STATS_NOT_RECORDED, _Ok(), _band_repo(), False),
     ]
     for expected, recorder, repo, judge in cases:
@@ -1176,7 +1217,9 @@ async def test_the_four_statistics_states_are_distinguishable(monkeypatch):
         assert report["gap_statistics_status"] == expected
         seen[expected] = report["gap_statistics"]
 
-    assert len(seen) == 4
+    # Every declared status is covered, so a fifth cannot be added without
+    # updating this sweep.
+    assert set(seen) == set(ca.STATS_STATUSES)
     assert sum(1 for value in seen.values() if value is None) == 3
 
 

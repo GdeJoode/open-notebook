@@ -665,9 +665,30 @@ appears.
 > `frequency_threshold=5` and `auto_propose=True`, so the fifth recording of one
 > concept writes a `schema_proposal` row unasked, with `parent_type` taken from
 > the rich extraction label. Two things bound what reaches a curator's queue: the
-> reason-code gate (C1), and per-run de-duplication by concept — the threshold
-> counts DOCUMENTS, and the multi-schema merger can leave two entities with one
-> surface form and different labels.
+> reason-code gate (C1), and per-run de-duplication by concept, since the
+> threshold counts DOCUMENTS.
+>
+> The de-duplication is **belt-and-braces under the shipped pipeline**, stated
+> that way after a review measured it rather than as the live scenario an earlier
+> draft claimed: Stage 4's `EntityDeduplicator._normalize_key` applies
+> character-for-character the same normalisation eleven stages earlier, whenever
+> `dedup_enabled` is set — which it is on both the app default config and the
+> re-filter router. A duplicate reaches the gap loop only when the aligner is
+> driven directly (the configuration both of its tests use) or dedup is off. It
+> is kept because a gap is a claim about the graph and must not depend on an
+> unrelated stage's configuration, and what it suppresses is counted
+> (`gap_duplicates_suppressed`) because its key is the normalised form while
+> `record_gap` matches `entity_text` exactly.
+>
+> **Two collaborators, one failure shape.** `record_gap` returns a gap with
+> `id=None` on failure and `get_gap_statistics` returns a truthy
+> `{"ontology_name": …, "error": …}` — both swallow their own exceptions and
+> report through the RETURN. A caller watching only for a raise reports success.
+> The first was handled from the start; the second was not, and reported
+> `gap_statistics_status="ok"` with the error payload as the standing totals,
+> persisted into `extraction_result.metadata`. Both are now read from the
+> returned value. **Binding**: a test double for either collaborator must
+> reproduce the real method's failure RETURN, not a raise it never performs.
 >
 > **Where the loop is inert, stated so it is not rediscovered**: the
 > single-schema path and `run_filtering_only` detect no schemas, so no canonical

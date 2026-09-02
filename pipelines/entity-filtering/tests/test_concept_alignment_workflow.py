@@ -479,29 +479,41 @@ async def test_no_degraded_warning_about_the_recorder_when_it_is_wired(caplog):
     assert "gap_recorder" not in messages
 
 
-async def test_no_ontology_warning_when_alignment_schemas_are_supplied(caplog):
+async def test_no_ontology_warning_in_the_production_argument_set(caplog):
     """The DEGRADED branch reads the RESOLVED set, not `self._ontology`.
 
-    Since the app now passes `alignment_schemas=` and no longer passes
-    `ontology=`, a branch still keyed on `self._ontology` would emit "no
-    canonical type resolves" on every production run while types resolve fine.
+    Built as PRODUCTION builds it: `alignment_schemas=` supplied and `ontology=`
+    absent, since the app stopped passing the latter. That combination is the
+    only one that discriminates — a review measured that an earlier version of
+    this test went through a helper which always supplies `ontology=`, so both
+    the correct and the reverted condition were false and the substantive mutant
+    survived. Under the revert every production run would emit a false "no
+    canonical type resolves" while types resolve fine, in the tier D-N4-8 exists
+    to make honest.
     """
     import logging
 
     from loguru import logger as loguru_logger
 
+    workflow = FilteringWorkflow(
+        config=_config(alignment=True),
+        entity_repo=_repo(),
+        gap_recorder=_Recorder(),
+        alignment_schemas=[_ontology()],
+    )
+    assert workflow._ontology is None, "this test must not supply `ontology=`"
+
     sink = _loguru_to_caplog()
     try:
         with caplog.at_level(logging.WARNING):
-            await _run(
-                _config(alignment=True),
-                gap_recorder=_Recorder(),
-                alignment_schemas=[_ontology()],
-            )
+            result = await workflow.process(_extraction())
     finally:
         loguru_logger.remove(sink)
     messages = " | ".join(r.message for r in caplog.records)
     assert "no canonical type resolves" not in messages
+    # And types really did resolve, so the absence of the warning is a statement
+    # about the branch rather than about a stage that classified nothing.
+    assert result.concept_alignment_report["gap_eligible"] >= 1
 
 
 async def test_the_ontology_warning_fires_when_nothing_resolves_types(caplog):

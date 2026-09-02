@@ -797,7 +797,12 @@ class ConceptAligner:
         Returns ``(totals, status)``. The totals are ``None`` rather than an empty
         dict when unavailable, so a reader cannot mistake "not queried" for "zero
         gaps"; the status says which of the four cases produced it, because three
-        of them are ``None`` and only one warns.
+        of them are ``None``.
+
+        A store that is DOWN reaches ``unavailable`` through the returned payload,
+        not through an exception: the real agent swallows its own failure and
+        returns ``{"ontology_name": ..., "error": ...}``. Reading only the
+        exception path made this report ``ok`` with that payload as the totals.
         """
         if not report["gaps_recorded"] or self._gap_recorder is None:
             return None, STATS_NOT_RECORDED
@@ -805,12 +810,28 @@ class ConceptAligner:
         if getter is None:
             return None, STATS_UNSUPPORTED
         try:
-            return await getter(ontology_name=self._ontology_name), STATS_OK
+            totals = await getter(ontology_name=self._ontology_name)
         except Exception:
             logger.warning(
                 "ConceptAligner: gap statistics unavailable", exc_info=True
             )
             return None, STATS_UNAVAILABLE
+
+        # `OntologyEvolutionAgent.get_gap_statistics` catches its own exceptions
+        # and returns a TRUTHY dict carrying an ``error`` key
+        # (`ontology_manager/evolution.py`, the final `except` of that method) —
+        # the same shape as `record_gap` returning a gap with `id=None`. So the
+        # `except` above never fires for the collaborator production actually
+        # wires, and without this branch a store that is down reports `ok` with
+        # an error payload presented as the standing totals. This phase's own
+        # plan bullet states the rule for `record_gap`; it holds for its sibling.
+        if not isinstance(totals, dict) or totals.get("error"):
+            logger.warning(
+                "ConceptAligner: gap statistics reported an error: {e}",
+                e=(totals.get("error") if isinstance(totals, dict) else totals),
+            )
+            return None, STATS_UNAVAILABLE
+        return totals, STATS_OK
 
     async def _maybe_record_gap(
         self,
@@ -1240,6 +1261,11 @@ __all__ = [
     "EV_JUDGE_NO_LINK",
     "EV_BAND_UNADJUDICATED",
     "GAP_LICENSING_CODES",
+    "STATS_STATUSES",
+    "STATS_NOT_RECORDED",
+    "STATS_UNSUPPORTED",
+    "STATS_UNAVAILABLE",
+    "STATS_OK",
     "EV_ERROR",
     "REASON_CODES",
     "resolve_canonical_type",
