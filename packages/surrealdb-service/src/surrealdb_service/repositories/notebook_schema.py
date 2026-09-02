@@ -180,7 +180,7 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
         """Create the notebook's schema row when it does not exist yet.
 
         Track PC.1. Nothing in production ever created this row. The router's
-        ``_get_or_default_schema`` builds one IN MEMORY and returns it without
+        ``_ensure_schema_row`` builds one IN MEMORY and returns it without
         persisting — its docstring claims "we materialise the row eagerly so the
         toggle persists across restarts", which is not what the code does — and
         the only writers are the three toggle endpoints, so the row appears only
@@ -194,12 +194,32 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
         nothing.
 
         ``base_ontology`` is a starting value, not a verdict: the curator changes
-        it from the Schema tab. The caller passes the schema the extraction
-        actually applied, which is the only defensible default available at that
-        moment.
+        it from the Schema tab. Callers with no explicit curator choice should
+        pass ``shared.models.notebook_schema.DEFAULT_BASE_ONTOLOGY`` — the value
+        every read path already falls back to — and specifically NOT an
+        extraction request's ``ontology_name``, which is per-request state with a
+        different default; a review measured that writing it here changes
+        canonical typing across the graph and breaks the schema TTL download.
+
+        **Name collision, deliberate.** The router's ``_ensure_schema_row`` has
+        the opposite semantic: it builds the default row and does NOT persist it.
+        This method is the persisting one. Renaming that helper is PC.5's job (it
+        is called by the toggle endpoints); until then, the two live one grep
+        apart and this paragraph is the disambiguation.
+
+        **The check is not the protection.** ``idx_notebook_schema_notebook`` is
+        UNIQUE (migration 45), and that index — not this read-then-write — is
+        what actually prevents a duplicate: two concurrent first-extractions on
+        the same notebook can both read ``None`` and both attempt a create, and
+        the loser's constraint violation raises to the caller. That is safe (no
+        duplicate row, no clobbering) but not free: the losing run sees no row
+        and takes the legacy path for its document, so it produces no Pass-1
+        proposals. The next document recovers, since by then the row exists.
 
         Returns ``True`` when a row was created, ``False`` when one already
-        existed (so a caller can log the transition without re-reading).
+        existed (so a caller can log the transition without re-reading). A
+        ``False`` under a race means the same thing to the caller as a ``False``
+        without one: read the row again if you need it.
         """
         existing = await self.get_by_notebook(notebook_id)
         if existing is not None:

@@ -44,7 +44,12 @@ from shared.models.llm import (
     ModelUsageRecord,
 )
 from shared.models.notebook import ChatMessage, ChatSession, Note, Notebook
-from shared.models.notebook_schema import NotebookEvent, NotebookSchema, Pass1Result
+from shared.models.notebook_schema import (
+    DEFAULT_BASE_ONTOLOGY,
+    NotebookEvent,
+    NotebookSchema,
+    Pass1Result,
+)
 from shared.models.podcast import EpisodeProfile, PodcastEpisode, SpeakerProfile
 from shared.models.settings import ContentSettings
 from shared.models.source import Asset, Chunk, Source, SourceEmbedding, SourceInsight
@@ -66,6 +71,7 @@ __all__ = [
     "ChatSession",
     "ChatMessage",
     # Notebook schema models (Phase B.1b)
+    "DEFAULT_BASE_ONTOLOGY",
     "NotebookSchema",
     "Pass1Result",
     # Notebook event stream (Phase B.3b)

@@ -25,7 +25,10 @@ from app_main.services.entity_extraction_service import (
 )
 from shared.models import Chunk
 from shared.models.extraction import ExtractedEntity, ExtractionResult, FilteredResult
-from shared.models.notebook_schema import NotebookSchema
+from shared.models.notebook_schema import (
+    DEFAULT_BASE_ONTOLOGY,
+    NotebookSchema,
+)
 
 
 def _make_chunk(text: str = "hello world", chunk_id: str = "chunk:1") -> Chunk:
@@ -1753,6 +1756,21 @@ class TestConceptAlignmentIsReachable:
         assert captured["init"]["gap_recorder"] is None
 
 
+def _pass1_row(source, schema, coverage, run=None):
+    """A `pass1_results` row as `list_by_notebook` returns it.
+
+    `run` is the `pass1_metadata["run_id"]` the orchestrator stamps (PC.1). Rows
+    written before PC.1 have none, which is what `run=None` reproduces — so a
+    test that omits it is testing the legacy path, deliberately.
+    """
+    return SimpleNamespace(
+        source=source,
+        schema_attempted=schema,
+        coverage_pct=coverage,
+        pass1_metadata={"run_id": run} if run else {},
+    )
+
+
 class TestPass1OutcomeReachesTheCurator:
     """Track PC.1 — the queue the whole review surface reads from.
 
@@ -1772,7 +1790,16 @@ class TestPass1OutcomeReachesTheCurator:
         deals = _make_ontology("deals")
         return {"deals": deals}, deals
 
-    async def _run(self, svc, schema_repo, pass1_rows, proposals, coverage=0.8):
+    async def _run(
+        self, svc, schema_repo, pass1_rows, proposals, coverage=0.8, save_mock=None
+    ):
+        """Drive a full `run_extraction`.
+
+        `save_mock` exists because a review measured that a caller patching
+        `_save_result` from the OUTSIDE had its patch shadowed by the one below,
+        so the `await_count == 0` it asserted could not fail. A caller that wants
+        to inspect what was persisted passes its double in here instead.
+        """
         by_name, deals = self._ontologies()
         extracted = ExtractionResult(
             entities=[ExtractedEntity(text="X", label="L")],
@@ -1797,7 +1824,9 @@ class TestPass1OutcomeReachesTheCurator:
         ) as workflow_cls, patch(
             "app_main.services.entity_extraction_service.make_default_llm_caller",
             new=AsyncMock(return_value=AsyncMock()),
-        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+        ), patch.object(
+            svc, "_save_result", save_mock or AsyncMock()
+        ), patch.object(
             # Both of these reach OUT of the process - `_embed_entities` to the
             # embedding model and `_persistence` to the database. Left unpatched
             # they made a single test take minutes instead of milliseconds, and
@@ -1869,8 +1898,8 @@ class TestPass1OutcomeReachesTheCurator:
         correctly reported "no row" and did nothing, so the fix was inert on
         exactly the data that motivated it.
 
-        The base ontology is the schema the run actually applied, since a
-        notebook with no row has no declared one.
+        The base ontology written is the SHARED default, not this run's
+        `ontology_name` — see the sibling test for why that distinction matters.
         """
         notebook_schema_repo_fixture.get_by_notebook = AsyncMock(return_value=None)
         notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=True)
@@ -1890,12 +1919,64 @@ class TestPass1OutcomeReachesTheCurator:
         notebook_schema_repo_fixture.ensure_row.assert_awaited_once()
         nb, base = notebook_schema_repo_fixture.ensure_row.await_args.args
         assert nb == "notebook:abc"
-        # The ontology this run was ASKED for. The row is created before schema
-        # detection — that ordering is what breaks the cycle, because the base is
-        # then forced on this same run instead of only helping the next one.
-        assert base == "general"
+        # The row is created before schema detection — that ordering is what
+        # breaks the cycle, because the base is then forced on this same run
+        # instead of only helping the next one.
+        assert base == DEFAULT_BASE_ONTOLOGY
         # And the queue write still happens, on the row that now exists.
         notebook_schema_repo_fixture.merge_pending_extensions.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_the_created_base_is_the_shared_default_not_the_request_param(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """The base written is per-NOTEBOOK state; `ontology_name` is per-REQUEST.
+
+        A review measured what happens when the two are confused. The first
+        version of PC.1 passed `config.ontology_name`, whose own default is
+        "general" and which nothing in the product sets, so the first extraction
+        would have written "general" over the "scholarly" every read path falls
+        back to — and then:
+
+          * `_apply_notebook_schema_default` forces the base into every LATER
+            run's applied set at confidence 0.85, which measurably re-types
+            entities (Person: concept -> person). That may well be an
+            improvement, but it is PC.4's call to make and measure, not a side
+            effect of a job payload's default parameter.
+          * the schema TTL download 500s, because `general.yaml` uses a shape
+            `load_yaml_ontology` cannot parse (verified: AttributeError).
+
+        So this asserts the two are NOT equal, which is the property that would
+        have caught it. If a future change makes the request default "scholarly",
+        this test must be rewritten rather than deleted — the point is the
+        provenance of the value, not the string.
+        """
+        from app_main.api.routers.schemas import _DEFAULT_BASE_ONTOLOGY
+        from app_main.services.entity_extraction_service import ExtractionConfig
+
+        assert ExtractionConfig().ontology_name == "general"
+        assert DEFAULT_BASE_ONTOLOGY != "general"
+        # The read paths and the write path agree on one constant.
+        assert _DEFAULT_BASE_ONTOLOGY == DEFAULT_BASE_ONTOLOGY
+
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(return_value=None)
+        notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=True)
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=1)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        await self._run(
+            svc, notebook_schema_repo_fixture, [],
+            [{"type_name": "Method", "parent_type": "Concept"}],
+        )
+
+        _nb, base = notebook_schema_repo_fixture.ensure_row.await_args.args
+        assert base != "general"
+        assert base == DEFAULT_BASE_ONTOLOGY
 
     @pytest.mark.asyncio
     async def test_no_proposals_writes_nothing_to_the_queue(
@@ -1939,22 +2020,98 @@ class TestPass1OutcomeReachesTheCurator:
         )
 
         # `list_by_notebook` returns newest-first. `pass1_results` is append-only,
-        # so a re-extraction ADDS rows: the 0.9 below is source:a's PREVIOUS run
-        # against the same schema and must not count, or a coverage regression
-        # after a schema edit could never lower the number.
+        # so a re-extraction ADDS rows: the 0.9 below belongs to source:a's
+        # PREVIOUS run and must not count, or a coverage regression could never
+        # lower the number.
         rows = [
-            SimpleNamespace(source="source:a", schema_attempted="deals", coverage_pct=0.8),
-            SimpleNamespace(source="source:a", schema_attempted="policy_themes", coverage_pct=0.5),
-            SimpleNamespace(source="source:b", schema_attempted="deals", coverage_pct=0.6),
-            SimpleNamespace(source="source:a", schema_attempted="deals", coverage_pct=0.9),
+            _pass1_row("source:a", "deals", 0.8, run="r2"),
+            _pass1_row("source:a", "policy_themes", 0.5, run="r2"),
+            _pass1_row("source:b", "deals", 0.6, run="r2"),
+            _pass1_row("source:a", "deals", 0.9, run="r1"),
         ]
         await self._run(svc, notebook_schema_repo_fixture, rows, [])
 
         notebook_schema_repo_fixture.set_coverage_pct.assert_awaited_once()
         _nb, value = notebook_schema_repo_fixture.set_coverage_pct.await_args.args
-        # source:a -> max(0.8 current deals, 0.5 policy_themes) = 0.8; source:b -> 0.6.
-        # The superseded 0.9 is ignored, which is the whole point.
+        # source:a -> max(0.8 deals, 0.5 policy_themes) within run r2 = 0.8;
+        # source:b -> 0.6. The superseded 0.9 is ignored, which is the point.
         assert value == pytest.approx(0.7)
+
+    @pytest.mark.asyncio
+    async def test_coverage_falls_when_a_schema_edit_makes_it_worse(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """The flow the soft-nudge exists to drive, and the one two earlier
+        versions of this rule could not express.
+
+        Low coverage -> the curator edits the schema set -> re-extract -> the
+        number must be free to FALL. Grouping on the newest row per
+        `(source, schema_attempted)` cannot do that: a schema edit is exactly
+        when `schema_attempted` changes, so the abandoned schema's row is never
+        superseded, only aged, and a review measured it still reporting 0.9 while
+        the current run scored 0.30. Grouping on the newest RUN can.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=False)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        rows = [
+            # Newest run: the curator switched the notebook to `scholarly`.
+            _pass1_row("source:a", "scholarly", 0.3, run="r2"),
+            # History: the schemas that ran before the edit, both better.
+            _pass1_row("source:a", "deals", 0.9, run="r1"),
+            _pass1_row("source:a", "policy_themes", 0.4, run="r1"),
+        ]
+        await self._run(svc, notebook_schema_repo_fixture, rows, [])
+
+        _nb, value = notebook_schema_repo_fixture.set_coverage_pct.await_args.args
+        assert value == pytest.approx(0.3)
+
+    @pytest.mark.asyncio
+    async def test_rows_written_before_the_run_id_still_report_their_best(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """The 17 rows already in the live database carry no `run_id`.
+
+        They are grouped as ONE run per source rather than one run each, so a
+        legacy source reports its best schema instead of whichever row happens to
+        sort newest — and a single real run supersedes the whole legacy tail,
+        which is how a notebook leaves this state.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=False)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        legacy_only = [
+            _pass1_row("source:a", "policy_themes", 0.4),
+            _pass1_row("source:a", "deals", 0.9),
+        ]
+        await self._run(svc, notebook_schema_repo_fixture, legacy_only, [])
+        _nb, value = notebook_schema_repo_fixture.set_coverage_pct.await_args.args
+        assert value == pytest.approx(0.9)
+
+        notebook_schema_repo_fixture.set_coverage_pct.reset_mock()
+        stamped_then_legacy = [
+            _pass1_row("source:a", "scholarly", 0.3, run="r1"),
+            _pass1_row("source:a", "deals", 0.9),
+        ]
+        await self._run(svc, notebook_schema_repo_fixture, stamped_then_legacy, [])
+        _nb, value = notebook_schema_repo_fixture.set_coverage_pct.await_args.args
+        assert value == pytest.approx(0.3)
 
     @pytest.mark.asyncio
     async def test_no_pass1_rows_writes_no_coverage(
@@ -1996,19 +2153,24 @@ class TestPass1OutcomeReachesTheCurator:
             notebook_schema_repo=notebook_schema_repo_fixture,
             pass1_repo=pass1_repo_fixture,
         )
-        rows = [SimpleNamespace(source="source:a", coverage_pct=0.5)]
+        rows = [_pass1_row("source:a", "deals", 0.5, run="r1")]
         saved = AsyncMock()
-        with patch.object(svc, "_save_result", saved):
-            await self._run(
-                svc, notebook_schema_repo_fixture, rows,
-                [{"type_name": "Method", "parent_type": "Concept"}],
-            )
+        await self._run(
+            svc, notebook_schema_repo_fixture, rows,
+            [{"type_name": "Method", "parent_type": "Concept"}],
+            save_mock=saved,
+        )
         # Both writes were attempted and both raised...
         notebook_schema_repo_fixture.merge_pending_extensions.assert_awaited()
         notebook_schema_repo_fixture.set_coverage_pct.assert_awaited()
-        # ...and the extraction still completed with its entity intact. A review
-        # noted the earlier version of this test ended on a comment and asserted
-        # nothing, so it read stronger than it was.
+        # ...and the extraction still completed with its entity intact. Two
+        # earlier versions of this ending were weaker than they read: the first
+        # asserted nothing at all, the second asserted on a double that the
+        # helper had shadowed, so it could not fail. This one inspects what was
+        # actually handed to `_save_result`.
+        assert saved.await_count == 1
+        _source_id, persisted = saved.await_args.args
+        assert [e.text for e in persisted.entities] == ["X"]
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
+from uuid import uuid4
 
 from loguru import logger
 from ontology_manager.document_mapper import get_ontology_for_document_type
@@ -575,6 +576,9 @@ async def run_multi_schema(
     sample = _sample_text_for_pass1(chunks)
     validator = Pass1SchemaValidator(llm_caller=llm_caller, default_model=model)
 
+    # One id for this whole call, stamped on every `pass1_results` row it
+    # writes, so the rows of one extraction can be recognised as one run.
+    run_id = uuid4().hex
     pass1_outputs: List[Tuple[Ontology, float, Pass1Output]] = []
     accumulated_extensions: List[Dict[str, Any]] = []
     best_coverage = 0.0
@@ -636,6 +640,19 @@ async def run_multi_schema(
                 schema_attempted=schema_name,
                 **pass1_out.model_dump(),
             )
+            # Stamp the run that produced this row (Track PC.1). `pass1_results`
+            # is append-only and one run writes one row PER APPLIED SCHEMA, so
+            # without this the rows of a run cannot be told apart from the rows
+            # of the run before it. The notebook's rolling coverage needs exactly
+            # that: after a curator edits the schema set and re-extracts, the
+            # abandoned schema's row must stop counting, and grouping on
+            # `(source, schema_attempted)` cannot express that — the old pair is
+            # never superseded, only aged, so coverage could never fall. Goes in
+            # the FLEXIBLE metadata bag, so no migration.
+            pass1_row.pass1_metadata = {
+                **(pass1_row.pass1_metadata or {}),
+                "run_id": run_id,
+            }
             try:
                 await pass1_repo.record(pass1_row)
             except Exception as e:

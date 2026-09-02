@@ -28,6 +28,7 @@ from ontology_extraction.multi_schema_orchestrator import (
 )
 from ontology_extraction.workflow import ExtractionWorkflow
 from ontology_manager.schema_projection import project_accepted_edits
+from shared.models.notebook_schema import DEFAULT_BASE_ONTOLOGY
 from shared.services.metrics import record_metric
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories import (
@@ -915,28 +916,52 @@ class EntityExtractionService:
     # PARTIALLY, giving a wrong average rather than a stale one.
     _COVERAGE_WINDOW = 1000
 
+    # Group key for `pass1_results` rows written before PC.1 stamped a run id.
+    # They are one run per source, not one run each, so a legacy source still
+    # reports its best schema rather than whichever schema happens to be newest.
+    _LEGACY_RUN = "__pre_pc1__"
+
     @staticmethod
     async def _rolling_coverage(
         notebook_id: str, pass1_repo: "Pass1ResultRepository"
     ) -> Optional[float]:
-        """Mean over SOURCES of each source's best CURRENT Pass-1 coverage.
+        """Mean over SOURCES of each source's best coverage IN ITS NEWEST RUN.
 
         The field is documented as "rolling-average coverage across all sources
         processed in this notebook", so it is recomputed from `pass1_results`
         rather than accumulated incrementally.
 
-        `pass1_results` is append-only: re-extracting a source adds rows, it does
-        not replace them. So the max is taken over the NEWEST row per
-        ``(source, schema_attempted)`` — the rows are read newest-first, so the
-        first sighting of a pair is its current one — and only then across schemas
-        within a source. A plain max over all of a source's rows would span
-        re-runs, which means a coverage REGRESSION after a schema edit could never
-        lower the number. An earlier version did exactly that and its docstring
-        claimed the opposite; this is the corrected behaviour.
+        `pass1_results` is append-only — re-extracting a source adds rows, it does
+        not replace them — and one extraction writes one row PER APPLIED SCHEMA.
+        So a source's current measurement is the set of rows sharing its newest
+        ``run_id``, and the summary per source is the max across the schemas in
+        that run: Pass 1 runs once per applied schema and a notebook's coverage is
+        how well its best-fitting schema did, not the average of a good fit and a
+        bad one.
 
-        Per source the max across schemas is the right summary because Pass 1 runs
-        once per applied schema and a notebook's coverage is how well its
-        best-fitting schema did — not the average of a good fit and a bad one.
+        Two earlier versions of this rule were wrong in the same direction, both
+        caught by review, so the reasoning is spelled out. A plain max over all of
+        a source's rows spans re-runs, so coverage could only ever rise. Grouping
+        on the newest row per ``(source, schema_attempted)`` fixes re-extraction
+        under an UNCHANGED schema set and still cannot fall when the set changes —
+        the abandoned schema's pair is never superseded, only aged — which is
+        precisely the flow the soft-nudge exists to drive: low coverage, curator
+        edits the schema, re-extract, number should move. Measured: after a run
+        under `scholarly` scoring 0.30, the pair rule still reported 0.90 from an
+        abandoned `deals` row. Only a run boundary expresses "these rows are the
+        current measurement and those are history", so PC.1 stamps one
+        (`pass1_metadata["run_id"]`, written by the orchestrator).
+
+        **Rows written before PC.1 carry no ``run_id``.** They are grouped under a
+        single synthetic per-source run so they behave as they did before rather
+        than each becoming a run of its own, and any real run supersedes them:
+        once a source has one stamped row, its unstamped history is dropped.
+
+        A source deleted from the notebook keeps contributing until its rows age
+        out of the window — `pass1_results` has no cascade and this method does
+        not check liveness. Recorded as a known limit rather than fixed here: the
+        fix is a delete-time cleanup or a liveness join, which is a change to
+        somebody else's write path.
 
         Returns ``None`` when there is nothing to average, so the caller writes
         nothing rather than writing 0.0 and claiming a measurement nobody made.
@@ -947,21 +972,24 @@ class EntityExtractionService:
         if not rows:
             return None
 
-        current: Dict[tuple, float] = {}
-        for row in rows:  # newest first
+        # Rows arrive newest-first, so the first run_id seen for a source is that
+        # source's current run. `_LEGACY_RUN` groups the pre-PC.1 tail.
+        current_run: Dict[str, str] = {}
+        best_per_source: Dict[str, float] = {}
+        for row in rows:
             source = str(getattr(row, "source", "") or "")
             if not source:
                 continue
-            pair = (source, str(getattr(row, "schema_attempted", "") or ""))
-            if pair in current:
-                continue  # an older run of the same source+schema
-            current[pair] = float(getattr(row, "coverage_pct", 0.0) or 0.0)
-
-        if not current:
-            return None
-        best_per_source: Dict[str, float] = {}
-        for (source, _schema), value in current.items():
+            meta = getattr(row, "pass1_metadata", None) or {}
+            run = str(meta.get("run_id") or "") or EntityExtractionService._LEGACY_RUN
+            seen = current_run.setdefault(source, run)
+            if run != seen:
+                continue  # an older run of this source
+            value = float(getattr(row, "coverage_pct", 0.0) or 0.0)
             best_per_source[source] = max(best_per_source.get(source, 0.0), value)
+
+        if not best_per_source:
+            return None
         return sum(best_per_source.values()) / len(best_per_source)
 
     async def _concept_alignment_deps(
@@ -1144,13 +1172,26 @@ class EntityExtractionService:
         #
         # Creating it before `_apply_notebook_schema_default` means the base is
         # forced on THIS run, so the first document a notebook ever sees gets a
-        # Pass-1 pass instead of the legacy path. The base is the ontology this
-        # run was asked for — a starting value the curator changes from the
-        # Schema tab, not a verdict.
+        # Pass-1 pass instead of the legacy path.
+        #
+        # The base written is `DEFAULT_BASE_ONTOLOGY` — the constant the Schema
+        # tab, the TTL export and the toggle endpoints already read — NOT this
+        # run's `config.ontology_name`. A review caught that distinction and it
+        # is not cosmetic. `ontology_name` is a per-REQUEST parameter whose own
+        # default is "general" and which nothing in the product sets, while
+        # `base_ontology` is per-NOTEBOOK state the curator owns; letting the
+        # former set the latter would have meant (a) the Schema tab showing a
+        # base nobody chose, (b) `_apply_notebook_schema_default` forcing
+        # "general" into every later run's applied set at 0.85, which measurably
+        # re-types entities (Person: concept -> person) and so silently enacts a
+        # choice Track PC.4 reserves for itself, and (c) a 500 on the schema TTL
+        # download, because `general.yaml` uses a shape `load_yaml_ontology`
+        # cannot parse. A starting value the curator changes from the Schema
+        # tab — not a verdict, and not a request parameter's leftovers.
         if notebook_schema is None:
             try:
                 created = await notebook_schema_repo.ensure_row(
-                    notebook_id, config.ontology_name
+                    notebook_id, DEFAULT_BASE_ONTOLOGY
                 )
                 if created:
                     notebook_schema = await notebook_schema_repo.get_by_notebook(

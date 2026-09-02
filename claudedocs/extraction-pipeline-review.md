@@ -286,7 +286,7 @@ path -> Pass 1 never runs -> no proposals -> nothing creates the row
 ```
 
 Nothing in production writes a `notebook_schema` row. The router's
-`_get_or_default_schema` builds one in memory and returns it unpersisted, while
+`_ensure_schema_row` builds one in memory and returns it unpersisted, while
 its own docstring claims "we materialise the row eagerly so the toggle persists
 across restarts"; the only writers are the three toggle endpoints, so the row
 exists only if a user happens to flip a switch. The comment on the early return

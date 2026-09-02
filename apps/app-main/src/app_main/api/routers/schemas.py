@@ -79,7 +79,10 @@ from ontology_manager.rdf_owl_shacl import (
 from ontology_manager.registry import OntologyRegistry
 from rdflib import Graph, Literal, URIRef
 from rdflib.namespace import OWL, RDF, RDFS
-from shared.models.notebook_schema import NotebookSchema
+from shared.models.notebook_schema import (
+    DEFAULT_BASE_ONTOLOGY,
+    NotebookSchema,
+)
 from shared.types.enums import JobStatus, JobType
 from surrealdb_service.repositories.notebook_schema import (
     NotebookSchemaRepository,
@@ -108,7 +111,12 @@ router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["schemas"])
 #
 # When B.3a wires the manager config end-to-end (or when ``general.yaml``
 # is normalised to the list-of-dicts shape), revisit this literal.
-_DEFAULT_BASE_ONTOLOGY = "scholarly"
+#
+# PC.1 moved the literal to ``shared.models.notebook_schema`` so the extraction
+# service — which now PERSISTS a row on a notebook's first document — writes the
+# same value this module reads. The alias is kept because it is the name the
+# eight call sites below and the router tests use.
+_DEFAULT_BASE_ONTOLOGY = DEFAULT_BASE_ONTOLOGY
 
 
 def _ontologies_dir() -> Path:

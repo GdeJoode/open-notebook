@@ -102,32 +102,104 @@ class TestMergePendingExtensions:
     async def test_a_rejected_type_does_come_back(self):
         """Asserted so the behaviour is KNOWN, not discovered.
 
-        `reject_extension` drops the row and records nothing — there is no
-        `rejected_extensions` field — so a rejected type returns. Closing that
-        needs a new field and a migration, which is a follow-up; this test exists
-        so the gap cannot be mistaken for a guarantee, and it FAILS the day the
-        follow-up lands, which is when the docstring must change too.
+        `reject_pending_extension` drops the row and records nothing — there is
+        no `rejected_extensions` field — so a rejected type returns the next time
+        a document proposes it. Closing that needs a new field and a migration,
+        which is a follow-up (PC.5); this test exists so the gap cannot be
+        mistaken for a guarantee.
+
+        A review measured that an earlier version of this test could not fail: it
+        merged one proposal into a pristine queue and asserted the count, which
+        two other tests already do, and no rejection appeared anywhere in it. So
+        the sequence is walked for real here — propose, REJECT through the
+        production method, propose again — which is the only shape that fails the
+        day a rejection starts leaving a trace.
         """
-        repo = _repo(_schema())
+        schema = _schema()
+        repo = _repo(schema)
+
         assert await repo.merge_pending_extensions(
             NOTEBOOK, [{"type_name": "Method"}]
         ) == 1
+        assert _names(repo) == ["Method"]
+
+        assert await repo.reject_pending_extension(NOTEBOOK, "pass1::method") is True
+        assert _names(repo) == []
+
+        # The curator said no. The next document says Method again, and it is
+        # back in the queue, because nothing recorded the no.
+        assert await repo.merge_pending_extensions(
+            NOTEBOOK, [{"type_name": "Method"}]
+        ) == 1
+        assert _names(repo) == ["Method"]
+
+    # One test per refusal rule, because a review measured that bundling them
+    # let two rules ride on a third: the control-character case was written
+    # `"Bell\\x07"`, which is the six literal characters `B e l l \\ x 0 7` and
+    # is refused by the BACKSLASH rule, so deleting the control-character rule
+    # left the whole file green.
 
     @pytest.mark.asyncio
-    async def test_a_name_that_breaks_its_own_route_is_refused(self):
-        """The accept/reject endpoints take the name as a bare path segment, so a
-        `/` splits the path and the request 404s — the row would be queued and
-        then be neither acceptable nor rejectable.
+    async def test_a_name_with_a_slash_is_refused(self):
+        """The accept/reject endpoints take the name as a bare path segment with
+        no `:path` converter, so a `/` splits the path and the request 404s — the
+        row would be queued and then be neither acceptable nor rejectable.
         """
         repo = _repo(_schema())
         added = await repo.merge_pending_extensions(
             NOTEBOOK,
             [
                 {"type_name": "Grant/Funding Source"},
-                {"type_name": "Back\\\\slash"},
-                {"type_name": "Bell\\x07"},
                 {"type_name": "Perfectly Fine Name"},
             ],
+        )
+        assert added == 1
+        assert _names(repo) == ["Perfectly Fine Name"]
+
+    @pytest.mark.asyncio
+    async def test_a_name_with_a_backslash_is_refused(self):
+        repo = _repo(_schema())
+        added = await repo.merge_pending_extensions(
+            NOTEBOOK,
+            [
+                {"type_name": "Back\\slash"},
+                {"type_name": "Perfectly Fine Name"},
+            ],
+        )
+        assert added == 1
+        assert _names(repo) == ["Perfectly Fine Name"]
+
+    @pytest.mark.asyncio
+    async def test_a_name_with_a_control_character_is_refused(self):
+        """A REAL control character — `\\x07` as one byte, not as four source
+        characters — and no backslash or slash anywhere in the name, so this case
+        can only be carried by the control-character rule itself.
+        """
+        name = "Bell\x07Type"
+        assert "\\" not in name and "/" not in name
+        assert any(ord(ch) < 32 for ch in name)
+
+        repo = _repo(_schema())
+        added = await repo.merge_pending_extensions(
+            NOTEBOOK,
+            [
+                {"type_name": name},
+                {"type_name": "Perfectly Fine Name"},
+            ],
+        )
+        assert added == 1
+        assert _names(repo) == ["Perfectly Fine Name"]
+
+    @pytest.mark.asyncio
+    async def test_a_name_with_a_delete_character_is_refused(self):
+        """`\\x7f` is the other half of the rule (`ord(ch) == 127`), which the
+        `< 32` half does not cover.
+        """
+        name = "Del\x7fType"
+        repo = _repo(_schema())
+        added = await repo.merge_pending_extensions(
+            NOTEBOOK,
+            [{"type_name": name}, {"type_name": "Perfectly Fine Name"}],
         )
         assert added == 1
         assert _names(repo) == ["Perfectly Fine Name"]
