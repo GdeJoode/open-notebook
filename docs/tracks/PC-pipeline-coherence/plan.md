@@ -70,15 +70,27 @@ Everything downstream operates on `pending_extensions`: accept, reject, the
 - **Known gap, not closed here**: a REJECTED proposal returns.
   `reject_extension` drops the row and records nothing, and there is no
   `rejected_extensions` field — a durable "no" needs a new field and a migration.
-  Owned by **PC.5** (the curator-surface phase). A test asserts the current
-  behaviour so it is known rather than discovered, and that test fails the day
-  the gap closes.
+  Owned by **PC.5** (the curator-surface phase). A test walks the sequence for
+  real — propose, reject through the production method, propose again — so the
+  gap is pinned rather than merely described; simulating the PC.5 follow-up makes
+  it fail, which is what makes it a guard. (The first version of that test
+  contained no rejection at all and could not fail; a review measured it.)
 - **AC**: after two documents proposing overlapping types, the Schema tab shows
   each type once; accepting one runs the N.4d.3 placement and returns a verdict;
   `coverage_pct` is non-zero and matches the mean over sources of each source's
-  best CURRENT coverage — `pass1_results` is append-only, so "current" means the
-  newest row per `(source, schema_attempted)`, and a plain max over all rows
-  would make a coverage regression after a schema edit invisible.
+  best CURRENT coverage — `pass1_results` is append-only and one extraction
+  writes one row per applied schema, so "current" means the rows sharing that
+  source's newest `run_id`, and the best schema WITHIN that run.
+- **Also decided (review round 2)**: the base ontology written on row creation is
+  `DEFAULT_BASE_ONTOLOGY`, the constant every read path already falls back to —
+  never the extraction request's `ontology_name`. The two are different kinds of
+  state (per-notebook versus per-request) and confusing them was measured to
+  re-type entities across the graph and to 500 the schema TTL download.
+- **Also decided (review round 2)**: the orchestrator stamps a `run_id` per
+  extraction into the FLEXIBLE `pass1_metadata`. Two grouping rules were tried
+  before it and both could only let coverage RISE; only a run boundary expresses
+  "these rows are the current measurement, those are history", which is what the
+  soft-nudge's own flow (low coverage -> edit the schema -> re-extract) needs.
 - **Guard**: the test drives `run_extraction`, not the repository — this whole
   finding is that the repository method works and nobody calls it.
 
