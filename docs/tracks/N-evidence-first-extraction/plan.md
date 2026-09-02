@@ -617,6 +617,26 @@ appears.
 > than a defect — and it is the reason the phase does not act on a placement
 > automatically.
 
+> **N.4d.3 SHIPPED** (merge `801f84ae`). `reparent_type` + `POST /schema/reparent`
+> record the curator's decision; `ontology_manager.schema_projection` applies
+> accepted edits to DEEP COPIES of the applied ontologies (the registry hands out
+> shared objects); the bridge's parent walk is now symmetric with its own step 1;
+> and `TypePlacementService` runs the placement and the N.4d.2 judge at accept
+> time, reporting and writing nothing. APPROVED at attempt 4 after 3 blockers and
+> 8 majors. Report: `reviews/phase-N.4d3-attempts-1-4.md`.
+>
+> **Binding for N.4d.4** — the gap loop gates on adjudication (C1), and
+> `parse_judge_response` never returns None: a REFUSED reply carries an empty
+> selection exactly like a judge that moved nothing. Read
+> `JudgeSelection.decided` / `PlacementReport.judge_status`, never the emptiness
+> of `selected`. Three of the four judge states carry an empty one.
+>
+> **Binding generally** — a guard that cannot fail is worse than no guard, because
+> it reports as one. It occurred three times here: a sweep that killed zero
+> mutants, a call site whose deletion was invisible, and the test written to stop
+> this very decision text from drifting. Assert at the seam where the mechanism
+> runs, and add the vacuity guard that makes a negative assertion mean something.
+
 **N.4d.4 — Gap loop + reachability** (unchanged from the previous N.4c scope) — ~1d
 - `record_gap` on a NOVEL verdict (D-N4-6), gated on the reason code — which is
   why **C1 must be closed first**: a concept nobody adjudicated must not be
