@@ -705,6 +705,24 @@ appears.
 > type resolves and no verdict is gap-licensing. Both wire the same collaborators
 > anyway, so enabling the stage there degrades nothing silently.
 
+> **N.4d.4 SHIPPED** (merge `948416bf`). C1 is closed — `EV_NONE_CLOSE` split
+> three ways — and the gap loop gates on the reason code, so only a NOVEL verdict
+> that ESTABLISHED something can become an ontology gap. `ENABLE_CONCEPT_ALIGNMENT`
+> plus DI for all four collaborators makes the stage reachable at all (D-N4-8).
+> APPROVED at attempt 5 after 3 blockers and 7 majors. Report:
+> `reviews/phase-N.4d4-attempts-1-5.md`.
+>
+> **Binding for N.5**, from D-N4-14 and paid for three times over: a test double
+> must reproduce the real method's failure RETURN, not a raise it never performs;
+> at least one fixture must build the PRODUCTION argument set rather than a
+> superset; and a guard that reads a collaborator's value must be exercised
+> against the REAL collaborator at least once. Both blockers in this sub-phase
+> were findable by no other means.
+>
+> **Operational note**: the entity-filtering suite runs against a REACHABLE live
+> SurrealDB, so an unpatched repository call in a test silently exercises the
+> real database and can pass for the wrong reason.
+
 #### What happens to the entity-level tier
 
 `concept_alignment` keeps `RELATED_TO` / `NOVEL` — which is where its value always
