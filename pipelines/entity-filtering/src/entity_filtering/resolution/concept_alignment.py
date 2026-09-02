@@ -177,6 +177,21 @@ REASON_CODES = (
 # error compounds into a curator-visible artefact rather than staying local.
 GAP_LICENSING_CODES = (EV_NONE_CLOSE, EV_JUDGE_NO_LINK)
 
+# What became of the standing-totals lookup. Four states, because three of them
+# leave ``gap_statistics`` at ``None`` and a reader cannot otherwise tell "this
+# run wrote nothing" from "the store could not answer".
+STATS_NOT_RECORDED = "not_recorded"
+STATS_UNSUPPORTED = "unsupported"
+STATS_UNAVAILABLE = "unavailable"
+STATS_OK = "ok"
+
+STATS_STATUSES = (
+    STATS_NOT_RECORDED,
+    STATS_UNSUPPORTED,
+    STATS_UNAVAILABLE,
+    STATS_OK,
+)
+
 # Fixed per-method confidences. A raw cosine is NEVER written here: mixing a
 # similarity score with an ontological confidence makes the two incomparable (and
 # would let the embedding tier outrank the ontology tier). The cosine is reported
@@ -678,10 +693,16 @@ class ConceptAligner:
             "gaps_recorded": 0,
             "gaps_unrecorded": 0,
             "gap_recorder_wired": self._gap_recorder is not None,
-            # The gap store's standing totals, filled in after recording. None
-            # when nothing was recorded or the store could not answer — never an
-            # empty dict, so "not queried" cannot read as "zero gaps".
+            # Eligible mentions of a concept already recorded in THIS run. Kept
+            # out of `gap_eligible`, which counts concepts, so the two never
+            # disagree about what a gap is.
+            "gap_duplicates_suppressed": 0,
+            # The gap store's standing totals, filled in after recording. Never
+            # an empty dict, so "not queried" cannot read as "zero gaps" — and
+            # `gap_statistics_status` says WHICH of the four happened, because
+            # three of them produce the same ``None``.
             "gap_statistics": None,
+            "gap_statistics_status": STATS_NOT_RECORDED,
         }
         novel = [e for e in entities if _props(e).get("is_new")]
         if not novel:
@@ -746,7 +767,9 @@ class ConceptAligner:
             report["gaps_recorded"],
             report["gap_eligible"],
         )
-        report["gap_statistics"] = await self._gap_statistics(report)
+        report["gap_statistics"], report["gap_statistics_status"] = (
+            await self._gap_statistics(report)
+        )
         if report["gaps_unrecorded"]:
             # `record_gap` logs its own failure at ERROR and then returns a gap
             # object anyway, so a caller reading only the return value cannot
@@ -760,7 +783,9 @@ class ConceptAligner:
             )
         return entities, report
 
-    async def _gap_statistics(self, report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def _gap_statistics(
+        self, report: Dict[str, Any]
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
         """The gap store's standing totals, for the alignment report (N.4c scope).
 
         Queried only when this run actually recorded something: the counters
@@ -769,22 +794,23 @@ class ConceptAligner:
         recurring ones are from the auto-proposal threshold. Skipped otherwise so
         a run that recorded nothing pays no query.
 
-        Returns ``None`` rather than an empty dict when unavailable, so a reader
-        cannot mistake "not queried" for "zero gaps" — the same distinction the
-        rest of this module keeps.
+        Returns ``(totals, status)``. The totals are ``None`` rather than an empty
+        dict when unavailable, so a reader cannot mistake "not queried" for "zero
+        gaps"; the status says which of the four cases produced it, because three
+        of them are ``None`` and only one warns.
         """
         if not report["gaps_recorded"] or self._gap_recorder is None:
-            return None
+            return None, STATS_NOT_RECORDED
         getter = getattr(self._gap_recorder, "get_gap_statistics", None)
         if getter is None:
-            return None
+            return None, STATS_UNSUPPORTED
         try:
-            return await getter(ontology_name=self._ontology_name)
+            return await getter(ontology_name=self._ontology_name), STATS_OK
         except Exception:
             logger.warning(
                 "ConceptAligner: gap statistics unavailable", exc_info=True
             )
-            return None
+            return None, STATS_UNAVAILABLE
 
     async def _maybe_record_gap(
         self,
@@ -826,11 +852,24 @@ class ConceptAligner:
 
         text = str(entity.get("text", "") or "").strip()
         if _normalize(text) in seen:
-            # One gap per novel CONCEPT per run. The multi-schema merger can
-            # leave two entities with the same surface form and different labels,
-            # and `record_gap` increments frequency on every call — so without
-            # this a single document pushes one concept two steps toward the
-            # proposal threshold, which is meant to count DOCUMENTS.
+            # One gap per novel CONCEPT per run: `record_gap` increments
+            # frequency on every call, and that threshold is meant to count
+            # DOCUMENTS.
+            #
+            # Belt-and-braces under the SHIPPED pipeline, and said so rather than
+            # overstated: Stage 4's `EntityDeduplicator._normalize_key` is
+            # character-for-character the same normalisation and runs eleven
+            # stages earlier whenever `dedup_enabled` is set, which it is on both
+            # the app default config and the re-filter router. So the duplicate
+            # reaches here only when the aligner is driven directly or dedup is
+            # off. Kept because a gap is a claim about the graph and must not
+            # depend on an unrelated stage's configuration.
+            #
+            # Note the two keys differ: this suppresses on the NORMALISED form
+            # while `record_gap` matches `entity_text` exactly, so "Brede
+            # Welvaart" and "brede welvaart" collapse here and would be two rows
+            # in the store. Counted rather than dropped silently.
+            report["gap_duplicates_suppressed"] += 1
             return
         seen.add(_normalize(text))
         report["gap_eligible"] += 1

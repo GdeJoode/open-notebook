@@ -477,3 +477,49 @@ async def test_no_degraded_warning_about_the_recorder_when_it_is_wired(caplog):
         loguru_logger.remove(sink)
     messages = " | ".join(r.message for r in caplog.records)
     assert "gap_recorder" not in messages
+
+
+async def test_no_ontology_warning_when_alignment_schemas_are_supplied(caplog):
+    """The DEGRADED branch reads the RESOLVED set, not `self._ontology`.
+
+    Since the app now passes `alignment_schemas=` and no longer passes
+    `ontology=`, a branch still keyed on `self._ontology` would emit "no
+    canonical type resolves" on every production run while types resolve fine.
+    """
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    sink = _loguru_to_caplog()
+    try:
+        with caplog.at_level(logging.WARNING):
+            await _run(
+                _config(alignment=True),
+                gap_recorder=_Recorder(),
+                alignment_schemas=[_ontology()],
+            )
+    finally:
+        loguru_logger.remove(sink)
+    messages = " | ".join(r.message for r in caplog.records)
+    assert "no canonical type resolves" not in messages
+
+
+async def test_the_ontology_warning_fires_when_nothing_resolves_types(caplog):
+    """Vacuity guard for the test above."""
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    workflow = FilteringWorkflow(
+        config=_config(alignment=True),
+        entity_repo=_repo(),
+        gap_recorder=_Recorder(),
+    )
+    sink = _loguru_to_caplog()
+    try:
+        with caplog.at_level(logging.WARNING):
+            await workflow.process(_extraction())
+    finally:
+        loguru_logger.remove(sink)
+    messages = " | ".join(r.message for r in caplog.records)
+    assert "no canonical type resolves" in messages

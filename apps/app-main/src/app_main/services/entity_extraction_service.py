@@ -1437,8 +1437,19 @@ class EntityExtractionService:
                         "gap_eligible": alignment_report.get("gap_eligible", 0),
                         "gaps_recorded": alignment_report.get("gaps_recorded", 0),
                         "gaps_unrecorded": alignment_report.get("gaps_unrecorded", 0),
+                        "gap_duplicates_suppressed": alignment_report.get(
+                            "gap_duplicates_suppressed", 0
+                        ),
                         "gap_recorder_wired": alignment_report.get(
                             "gap_recorder_wired", False
+                        ),
+                        # The store's STANDING totals — this run's counters say
+                        # what happened, these say what has accumulated, which is
+                        # what a curator acts on. `status` travels with them
+                        # because three of its four values leave the totals null.
+                        "gap_statistics": alignment_report.get("gap_statistics"),
+                        "gap_statistics_status": alignment_report.get(
+                            "gap_statistics_status"
                         ),
                     }
                 result.metadata["filtering"] = filtering_stats
@@ -1618,6 +1629,17 @@ class EntityExtractionService:
         Fetches the raw extraction_result, runs FilteringWorkflow, and
         persists filtered entities to the KG tables.
         """
+        # N.4d.4: this path re-detects NO schemas, so anything left on the
+        # instance belongs to a previous run of a different source. Cleared
+        # FIRST, before any early return, for the same reason the L.1 comment
+        # below passes `applicable_schemas=None` to persist: "so a reused service
+        # instance can't leak a prior run's schemas onto a different source's
+        # re-filter". An earlier draft argued the leak was unreachable because
+        # the DI provider happens to build a fresh instance per call — the
+        # assumption that comment had already declined to rely on.
+        self._applicable_schemas = None
+        self._gap_ontology_name = None
+
         # Fetch existing extraction result
         rows = await execute_query(
             "SELECT * FROM extraction_result WHERE source_id = $source_id LIMIT 1",
@@ -1662,13 +1684,11 @@ class EntityExtractionService:
 
         # Run filtering
         f_config = filtering_config or FilteringConfig()
-        # N.4d.4: the same collaborators the main path wires, so a re-filter is
-        # not silently a different pipeline. In practice the stage stays off
-        # here — this path re-detects no schemas, so `_applicable_schemas` is
-        # None and no canonical type resolves, and the router that calls it
-        # always supplies an explicit `FilteringConfig` with alignment absent.
-        # Wiring it anyway costs nothing and means a caller who DOES enable it
-        # gets the same behaviour rather than a quietly degraded one.
+        # The same collaborators the main path wires, so a re-filter is not
+        # silently a different pipeline. With no schemas detected the stage is
+        # inert here regardless (no canonical type resolves, so no verdict
+        # licenses a gap); wiring it costs nothing and means a caller who DOES
+        # enable it gets the same behaviour rather than a quietly degraded one.
         align_deps = await self._concept_alignment_deps(f_config)
         f_workflow = FilteringWorkflow(
             config=f_config,

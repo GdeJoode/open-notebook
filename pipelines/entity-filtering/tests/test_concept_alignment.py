@@ -987,6 +987,10 @@ async def test_two_mentions_of_one_concept_record_a_single_gap(monkeypatch):
     )
     assert len(recorder.calls) == 1
     assert report["gap_eligible"] == 1
+    # The suppressed mention is counted rather than dropped silently: the two
+    # keys differ (this normalises, `record_gap` matches exactly), so a reader
+    # can see the difference between "one concept" and "one call".
+    assert report["gap_duplicates_suppressed"] == 1
     # Both entities are still classified — de-duplication bounds the GAP, not
     # the verdicts.
     assert report["aligned_count"] == 2
@@ -1008,6 +1012,7 @@ async def test_two_different_concepts_still_record_two_gaps(monkeypatch):
     )
     assert len(recorder.calls) == 2
     assert report["gap_eligible"] == 2
+    assert report["gap_duplicates_suppressed"] == 0
 
 
 async def test_the_surrounding_text_travels_with_the_gap(monkeypatch):
@@ -1086,6 +1091,7 @@ async def test_the_standing_gap_totals_are_surfaced(monkeypatch):
         canonical="programme", monkeypatch=monkeypatch,
     )
     assert report["gap_statistics"] == {"total": 7, "by_status": {"pending": 7}}
+    assert report["gap_statistics_status"] == ca.STATS_OK
     # Scoped to the vocabulary the gaps were filed under, not a default.
     assert recorder.stats_for == ["deals"]
 
@@ -1109,6 +1115,7 @@ async def test_a_run_that_recorded_nothing_pays_no_statistics_query(monkeypatch)
     )
     assert recorder.stats_calls == 0
     assert report["gap_statistics"] is None
+    assert report["gap_statistics_status"] == ca.STATS_NOT_RECORDED
 
 
 async def test_unavailable_statistics_are_none_not_empty(monkeypatch):
@@ -1123,4 +1130,102 @@ async def test_unavailable_statistics_are_none_not_empty(monkeypatch):
         canonical="programme", monkeypatch=monkeypatch,
     )
     assert report["gap_statistics"] is None
+    assert report["gap_statistics_status"] == ca.STATS_UNAVAILABLE
     assert report["gaps_recorded"] == 1
+
+
+async def test_a_recorder_without_statistics_is_a_distinct_state(monkeypatch):
+    """Three of the four states leave `gap_statistics` at None, so the value
+    cannot be the discriminator — and only one of them warns.
+    """
+    recorder = _Recorder()  # no get_gap_statistics at all
+    _e, report = await _align(
+        ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=recorder),
+        [_entity("X", "L", embedding=[1.0, 0.0])],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert report["gap_statistics"] is None
+    assert report["gap_statistics_status"] == ca.STATS_UNSUPPORTED
+    assert report["gaps_recorded"] == 1
+
+
+async def test_the_four_statistics_states_are_distinguishable(monkeypatch):
+    """The same shape as the judge's four states: a value that three cases share
+    is not a discriminator.
+    """
+    class _Ok(_Recorder):
+        async def get_gap_statistics(self, ontology_name="general"):
+            return {"total": 1}
+
+    class _Boom(_Recorder):
+        async def get_gap_statistics(self, ontology_name="general"):
+            raise RuntimeError("down")
+
+    seen = {}
+    cases = [
+        (ca.STATS_OK, _Ok(), _far_repo(), True),
+        (ca.STATS_UNSUPPORTED, _Recorder(), _far_repo(), True),
+        (ca.STATS_UNAVAILABLE, _Boom(), _far_repo(), True),
+        (ca.STATS_NOT_RECORDED, _Ok(), _band_repo(), False),
+    ]
+    for expected, recorder, repo, judge in cases:
+        aligner = ConceptAligner(repo, schemas=["s"], gap_recorder=recorder,
+                                 judge_enabled=judge)
+        _e, report = await _align(aligner, [_entity("X", "L", embedding=[1.0, 0.0])],
+                                  canonical="programme", monkeypatch=monkeypatch)
+        assert report["gap_statistics_status"] == expected
+        seen[expected] = report["gap_statistics"]
+
+    assert len(seen) == 4
+    assert sum(1 for value in seen.values() if value is None) == 3
+
+
+async def test_the_unrecorded_warning_is_emitted(monkeypatch, caplog):
+    """An eligible gap that was not written is an operational fault, not a run
+    statistic — and the line that says so must be falsifiable.
+    """
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    class _Propagate(logging.Handler):
+        def emit(self, record):
+            logging.getLogger(record.name).handle(record)
+
+    sink = loguru_logger.add(_Propagate(), level="WARNING", format="{message}")
+    try:
+        with caplog.at_level(logging.WARNING):
+            await _align(
+                ConceptAligner(_far_repo(), schemas=["s"],
+                               gap_recorder=_Recorder(gap_id=None)),
+                [_entity("X", "L", embedding=[1.0, 0.0])],
+                canonical="programme", monkeypatch=monkeypatch,
+            )
+    finally:
+        loguru_logger.remove(sink)
+    assert any("were NOT recorded" in r.message for r in caplog.records)
+
+
+async def test_no_unrecorded_warning_when_everything_landed(monkeypatch, caplog):
+    """Vacuity guard: the warning is about the failure, not a line that always
+    fires.
+    """
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    class _Propagate(logging.Handler):
+        def emit(self, record):
+            logging.getLogger(record.name).handle(record)
+
+    sink = loguru_logger.add(_Propagate(), level="WARNING", format="{message}")
+    try:
+        with caplog.at_level(logging.WARNING):
+            await _align(
+                ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=_Recorder()),
+                [_entity("X", "L", embedding=[1.0, 0.0])],
+                canonical="programme", monkeypatch=monkeypatch,
+            )
+    finally:
+        loguru_logger.remove(sink)
+    assert not any("were NOT recorded" in r.message for r in caplog.records)
