@@ -70,11 +70,13 @@ Everything downstream operates on `pending_extensions`: accept, reject, the
 - **Known gap, not closed here**: a REJECTED proposal returns.
   `reject_extension` drops the row and records nothing, and there is no
   `rejected_extensions` field — a durable "no" needs a new field and a migration.
-  Owned by **PC.5** (the curator-surface phase). A test walks the sequence for
-  real — propose, reject through the production method, propose again — so the
-  gap is pinned rather than merely described; simulating the PC.5 follow-up makes
-  it fail, which is what makes it a guard. (The first version of that test
-  contained no rejection at all and could not fail; a review measured it.)
+  Owned by **PC.5** (the curator-surface phase). Two tests pin it, one per layer,
+  because the repository's `reject_pending_extension` has no production caller —
+  a curator's Reject button goes through `SchemaEditService.reject_extension`,
+  keyed on `type_name`. Whichever layer PC.5 records the "no" in, one of the two
+  fails. (The first version of that guard contained no rejection at all and could
+  not fail; the second rejected through the dead method and would have stayed
+  green if PC.5 wrote the trace in the service. Both were review findings.)
 - **AC**: after two documents proposing overlapping types, the Schema tab shows
   each type once; accepting one runs the N.4d.3 placement and returns a verdict;
   `coverage_pct` is non-zero and matches the mean over sources of each source's

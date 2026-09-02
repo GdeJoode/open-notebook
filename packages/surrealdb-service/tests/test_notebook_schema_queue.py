@@ -108,12 +108,16 @@ class TestMergePendingExtensions:
         which is a follow-up (PC.5); this test exists so the gap cannot be
         mistaken for a guarantee.
 
-        A review measured that an earlier version of this test could not fail: it
-        merged one proposal into a pristine queue and asserted the count, which
-        two other tests already do, and no rejection appeared anywhere in it. So
-        the sequence is walked for real here — propose, REJECT through the
-        production method, propose again — which is the only shape that fails the
-        day a rejection starts leaving a trace.
+        Two reviews shaped this test. The first version could not fail at all: it
+        merged one proposal into a pristine queue and asserted the count, with no
+        rejection anywhere in it. This version walks the sequence — propose,
+        reject, propose again — but through `reject_pending_extension`, which the
+        second review pointed out has NO production caller: a curator's Reject
+        button goes through `SchemaEditService.reject_extension`, keyed on
+        `type_name`. So this pins the repository's own behaviour, and the guard
+        that follows the curator's actual path lives in app-main, in
+        `test_schema_edit_service.py::TestARejectedTypeComesBackThroughTheCuratorsOwnPath`.
+        Whichever layer PC.5 records the "no" in, one of the two fails.
         """
         schema = _schema()
         repo = _repo(schema)

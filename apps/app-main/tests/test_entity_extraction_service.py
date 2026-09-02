@@ -1766,6 +1766,98 @@ class TestApplicabilitySample:
     that had nothing to do with the queue.
     """
 
+    @pytest.mark.asyncio
+    async def test_the_extraction_path_actually_uses_the_spread_sample(self):
+        """The helper being right is worth nothing if production does not call it.
+
+        A mutation proved that: reverting `_run_multi_schema` to the old
+        first-chunk sample left every test in this class green, because they all
+        exercised `_applicability_sample` directly and nothing pinned the WIRING.
+        That is the same shape as the guards this track keeps having to fix — a
+        correct unit with no seam behind it.
+
+        So this drives `run_extraction` and inspects the text the detector was
+        actually handed.
+        """
+        source_repo = AsyncMock()
+        source_repo.get = AsyncMock(
+            return_value=MagicMock(id="source:test", metadata={})
+        )
+        # A title page, then a body. The old rule would hand over "Convenant".
+        source_repo.get_chunks = AsyncMock(
+            return_value=[_make_chunk("Convenant", "chunk:0")]
+            + [
+                _make_chunk(f"brede welvaart paragraaf {i}", f"chunk:{i + 1}")
+                for i in range(300)
+            ]
+        )
+
+        deals = _make_ontology("deals")
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=["deals"])
+        mock_manager.get_ontology = AsyncMock(return_value=deals)
+        detect = AsyncMock(return_value=[(deals, 0.9)])
+
+        schema_repo = AsyncMock()
+        schema_repo.get_by_notebook = AsyncMock(return_value=None)
+        schema_repo.ensure_row = AsyncMock(return_value=True)
+        schema_repo.merge_pending_extensions = AsyncMock(return_value=0)
+        schema_repo.set_coverage_pct = AsyncMock(return_value=True)
+        pass1_repo = AsyncMock()
+        pass1_repo.list_by_notebook = AsyncMock(return_value=[])
+        svc = EntityExtractionService(
+            source_repo=source_repo,
+            notebook_schema_repo=schema_repo,
+            pass1_repo=pass1_repo,
+        )
+
+        with patch(
+            "ontology_manager.get_ontology_manager", return_value=mock_manager
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=detect,
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(svc, "_persistence", AsyncMock()), patch.object(
+            EntityExtractionService,
+            "_resolve_privacy_mode",
+            AsyncMock(return_value=None),
+        ), patch.object(
+            EntityExtractionService,
+            "_pack_chunks_for_route_head",
+            AsyncMock(side_effect=lambda chunks: chunks),
+        ):
+            workflow = MagicMock()
+            workflow.extract = AsyncMock(
+                return_value=ExtractionResult(entities=[], relations=[], metadata={})
+            )
+            workflow_cls.return_value = workflow
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+        detect.assert_awaited()
+        scored = detect.await_args.kwargs["document_text"]
+        assert "Convenant" in scored, "the head is still scored"
+        assert "paragraaf 299" in scored, (
+            "the detector must see the end of the document, not only its cover"
+        )
+        # The old rule handed over the first chunk alone — the word "Convenant"
+        # and nothing else. Count how much of the document is actually
+        # represented rather than asserting a length, which would only be
+        # measuring this fixture's chunk size.
+        represented = sum(f"paragraaf {i} " in scored + " " for i in range(300))
+        assert represented >= 20, (
+            f"only {represented} of 300 body paragraphs reached the detector"
+        )
+
     def test_the_sample_spans_the_document_not_just_its_first_chunk(self):
         from app_main.services.entity_extraction_service import (
             _applicability_sample,
@@ -1785,8 +1877,8 @@ class TestApplicabilitySample:
 
     def test_windows_are_spread_rather_than_taken_from_the_front(self):
         from app_main.services.entity_extraction_service import (
-            _applicability_sample,
             _SAMPLE_MAX_WINDOWS,
+            _applicability_sample,
         )
 
         chunks = [{"text": f"chunk-{i}"} for i in range(500)]
@@ -1815,8 +1907,8 @@ class TestApplicabilitySample:
 
     def test_the_budget_is_respected(self):
         from app_main.services.entity_extraction_service import (
-            _applicability_sample,
             _SAMPLE_BUDGET_CHARS,
+            _applicability_sample,
         )
 
         chunks = [{"text": "x" * 5000} for _ in range(200)]

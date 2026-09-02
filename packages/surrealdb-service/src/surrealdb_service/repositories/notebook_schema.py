@@ -257,8 +257,11 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
         row and records nothing — there is no ``rejected_extensions`` field — so a
         type the curator rejected returns the next time a document proposes it.
         A durable "no" needs a new field and a migration, so it is recorded as a
-        follow-up rather than half-solved here, and asserted in the tests so the
-        behaviour is known rather than discovered.
+        follow-up rather than half-solved here. Two tests pin it, one per layer,
+        because the repository's own `reject_pending_extension` has no production
+        caller: `test_notebook_schema_queue.py` covers this module, and
+        `test_schema_edit_service.py` covers the path a curator's Reject button
+        actually takes.
 
         The stored ``type_name`` is stripped, and a name that cannot survive the
         accept/reject route is refused outright: those endpoints take the name as
