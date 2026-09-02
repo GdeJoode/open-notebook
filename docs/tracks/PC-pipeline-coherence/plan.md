@@ -110,6 +110,17 @@ Everything downstream operates on `pending_extensions`: accept, reject, the
 > writes X" finding must be proven on data where X is genuinely absent, not only
 > on a fixture that says it is.
 >
+> **Round 2 found the same class of thing one layer up.** The row was created,
+> but with `config.ontology_name` — a per-request parameter defaulting to
+> "general" that nothing sets — as the notebook's declared base ontology. The
+> live row proved it was not hypothetical: `base_ontology: general`, written by
+> PC.1's own verification run, and the schema TTL download for that notebook
+> raised `AttributeError` because `general.yaml` cannot be parsed by
+> `load_yaml_ontology`. Repaired in place (`scholarly`, queue of 79 and coverage
+> 0.508 intact) and re-verified on a notebook where the row was genuinely absent.
+> **Second binding lesson**: per-request state must not set per-notebook state.
+> The two look alike at a call site and diverge everywhere else.
+>
 > **Carried out of PC.1**: a durable "no" for rejected proposals (PC.5); the
 > read-modify-write race, now reachable because PC.1 is the first production
 > caller (PC.6); and the Ollama context truncation measured during verification
