@@ -1130,7 +1130,9 @@ async def test_a_store_that_reports_its_own_error_is_unavailable(monkeypatch):
     """
     class _RealShape(_Recorder):
         async def get_gap_statistics(self, ontology_name="general"):
-            return {"ontology_name": ontology_name, "error": "db is down"}
+            # An EMPTY message, because `str(e)` is "" for any exception raised
+            # without arguments — the case a truthiness check let through.
+            return {"ontology_name": ontology_name, "error": ""}
 
     _e, report = await _align(
         ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=_RealShape()),
@@ -1159,9 +1161,86 @@ async def test_a_raising_store_is_also_unavailable(monkeypatch):
     assert report["gap_statistics_status"] == ca.STATS_UNAVAILABLE
 
 
-async def test_the_real_agents_error_shape_is_what_this_guards():
-    """Pins the shape to the real source, so a change there fails HERE rather
-    than silently making the guard inert.
+@pytest.mark.parametrize(
+    "raised",
+    [RuntimeError("db is down"), RuntimeError(), KeyError(), TimeoutError(), Exception()],
+)
+async def test_the_real_agent_reports_unavailable_for_any_failure(monkeypatch, raised):
+    """Run against the REAL `OntologyEvolutionAgent`, not a double.
+
+    Two blockers in this phase were visible only this way. The first: the agent
+    swallows its exception and returns a payload, so watching for a raise
+    reported `ok`. The second: that payload is `{"error": str(e)}`, and `str(e)`
+    is `""` for any exception raised without arguments — so a truthiness check
+    reported `ok` for a bare `TimeoutError`, which is exactly what a slow gap
+    store under load produces. Both were measured, not reasoned about.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    evolution = pytest.importorskip("ontology_manager.evolution")
+
+    aligner = ConceptAligner(
+        None, gap_recorder=evolution.OntologyEvolutionAgent(), ontology_name="deals"
+    )
+    with patch(
+        "surrealdb_service.connection.execute_query", AsyncMock(side_effect=raised)
+    ):
+        totals, status = await aligner._gap_statistics({"gaps_recorded": 1})
+
+    assert status == ca.STATS_UNAVAILABLE
+    assert totals is None
+
+
+async def test_the_real_agent_reports_ok_when_the_store_answers(monkeypatch):
+    """Vacuity guard for the sweep above: the same real agent, a working store,
+    and the totals come through — so `unavailable` is about the failure and not
+    about a path that never succeeds.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    evolution = pytest.importorskip("ontology_manager.evolution")
+
+    aligner = ConceptAligner(
+        None, gap_recorder=evolution.OntologyEvolutionAgent(), ontology_name="deals"
+    )
+    with patch(
+        "surrealdb_service.connection.execute_query", AsyncMock(return_value=[])
+    ):
+        totals, status = await aligner._gap_statistics({"gaps_recorded": 1})
+
+    assert status == ca.STATS_OK
+    assert isinstance(totals, dict) and "error" not in totals
+
+
+async def test_a_getter_returning_no_dict_costs_no_verdict(monkeypatch):
+    """`.get` runs outside the `try`, so a getter returning None would raise out
+    of `align()`, out of the workflow stage, and into app-main's filtering
+    `except` — discarding the whole filtering result. The same invariant
+    `_maybe_record_gap` already holds for `record_gap`.
+    """
+    class _Wrong(_Recorder):
+        async def get_gap_statistics(self, ontology_name="general"):
+            return None
+
+    _e, report = await _align(
+        ConceptAligner(_far_repo(), schemas=["s"], gap_recorder=_Wrong()),
+        [_entity("X", "L", embedding=[1.0, 0.0])],
+        canonical="programme", monkeypatch=monkeypatch,
+    )
+    assert report["gap_statistics"] is None
+    assert report["gap_statistics_status"] == ca.STATS_UNAVAILABLE
+    # The verdicts survived the bad collaborator.
+    assert report["aligned_count"] == 1 and report["gaps_recorded"] == 1
+
+
+def test_the_real_agents_error_shape_is_what_this_guards():
+    """Detects drift in the ONE return this guard was written against.
+
+    Narrower than it sounds, and said so: it will not notice a second failure
+    return added under a different key, and it does fire on a pure reformat of
+    that line in another package. It exists so a rename there surfaces here
+    rather than quietly making the branch above inert; the behavioural guards are
+    the tests around it.
     """
     from pathlib import Path
 

@@ -687,8 +687,18 @@ appears.
 > The first was handled from the start; the second was not, and reported
 > `gap_statistics_status="ok"` with the error payload as the standing totals,
 > persisted into `extraction_result.metadata`. Both are now read from the
-> returned value. **Binding**: a test double for either collaborator must
-> reproduce the real method's failure RETURN, not a raise it never performs.
+> returned value — by MEMBERSHIP, not truthiness: `str(e)` is `""` for any
+> exception raised without arguments, so a truthiness check still reported `ok`
+> for a bare `TimeoutError`, which is what a slow gap store under load produces.
+>
+> **Binding, three rules, each of which caught something here.** A test double
+> for a collaborator must reproduce the real method's failure RETURN, not a raise
+> it never performs. At least one fixture must build the PRODUCTION argument set
+> rather than a superset — a helper that always supplies an argument the app has
+> stopped supplying makes the discriminating configuration unreachable. And when
+> a guard reads a value from a collaborator, exercise it against the REAL
+> collaborator at least once: both blockers in this sub-phase were found that way
+> and by no other means, the second only by sweeping several exception types.
 >
 > **Where the loop is inert, stated so it is not rediscovered**: the
 > single-schema path and `run_filtering_only` detect no schemas, so no canonical

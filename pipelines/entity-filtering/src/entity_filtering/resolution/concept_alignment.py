@@ -818,14 +818,24 @@ class ConceptAligner:
             return None, STATS_UNAVAILABLE
 
         # `OntologyEvolutionAgent.get_gap_statistics` catches its own exceptions
-        # and returns a TRUTHY dict carrying an ``error`` key
+        # and returns a dict carrying an ``error`` key
         # (`ontology_manager/evolution.py`, the final `except` of that method) —
         # the same shape as `record_gap` returning a gap with `id=None`. So the
         # `except` above never fires for the collaborator production actually
         # wires, and without this branch a store that is down reports `ok` with
         # an error payload presented as the standing totals. This phase's own
         # plan bullet states the rule for `record_gap`; it holds for its sibling.
-        if not isinstance(totals, dict) or totals.get("error"):
+        #
+        # MEMBERSHIP, not truthiness: the payload is `{"error": str(e)}`, and
+        # `str(e)` is `""` for any exception raised without arguments. Measured
+        # against the real agent — a bare `TimeoutError`, `KeyError`, or
+        # `Exception` all produced `{"error": ""}` and were reported `ok`, and a
+        # timeout on a slow gap store is exactly the condition this status exists
+        # to surface. The `isinstance` half is load-bearing too: `.get` runs
+        # outside the `try`, so a getter returning None would raise out of
+        # `align()` and cost the caller its whole filtering result — the same
+        # invariant `_maybe_record_gap` holds for `record_gap`.
+        if not isinstance(totals, dict) or "error" in totals:
             logger.warning(
                 "ConceptAligner: gap statistics reported an error: {e}",
                 e=(totals.get("error") if isinstance(totals, dict) else totals),
