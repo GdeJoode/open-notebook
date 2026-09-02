@@ -126,7 +126,8 @@ Everything downstream operates on `pending_extensions`: accept, reject, the
 - **Guard**: the test drives `run_extraction`, not the repository — this whole
   finding is that the repository method works and nobody calls it.
 
-> **PC.1 SHIPPED** — `ensure_row`, `merge_pending_extensions` and
+> **PC.1 SHIPPED** (review-approved attempt 5, merged `0786e0a6`; full report in
+> `reviews/phase-PC.1-attempts-1-5.md`) — `ensure_row`, `merge_pending_extensions` and
 > `set_coverage_pct` on the repository; the extraction path creates the row
 > BEFORE schema detection and records the Pass-1 outcome after it. Verified
 > against the project's own database: row created, `coverage_pct` 0.0 -> 0.508,
