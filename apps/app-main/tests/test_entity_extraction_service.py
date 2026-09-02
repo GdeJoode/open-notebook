@@ -14,6 +14,7 @@ All paths are mocked at the workflow / orchestrator seam — no LLM,
 no SurrealDB, no esperanto model construction.
 """
 
+from types import SimpleNamespace
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1750,6 +1751,185 @@ class TestConceptAlignmentIsReachable:
 
         assert captured["init"]["config"].concept_alignment.enabled is False
         assert captured["init"]["gap_recorder"] is None
+
+
+class TestPass1OutcomeReachesTheCurator:
+    """Track PC.1 — the queue the whole review surface reads from.
+
+    A pipeline review measured that `notebook_schema.pending_extensions` had no
+    production writer at all: `add_pending_extension`'s only callers were in its
+    own roundtrip test, so after eight documents and fourteen `pass1_results`
+    rows the queue was empty and `coverage_pct` was 0.0. Everything downstream
+    reads those two fields — accept, reject, the panel, and through the accept
+    step the whole of N.4d.1-N.4d.3.
+
+    These drive `run_extraction`, not the repository. The repository method
+    already worked; nobody called it, and only a test at the seam can see that.
+    """
+
+    @staticmethod
+    def _ontologies():
+        deals = _make_ontology("deals")
+        return {"deals": deals}, deals
+
+    async def _run(self, svc, schema_repo, pass1_rows, proposals, coverage=0.8):
+        by_name, deals = self._ontologies()
+        extracted = ExtractionResult(
+            entities=[ExtractedEntity(text="X", label="L")],
+            relations=[],
+            metadata={"proposed_extensions": proposals, "best_coverage": coverage},
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=list(by_name))
+        mock_manager.get_ontology = AsyncMock(side_effect=lambda n: by_name.get(n))
+        pass1_repo = AsyncMock()
+        pass1_repo.list_by_notebook = AsyncMock(return_value=pass1_rows)
+        svc._pass1_repo = pass1_repo
+
+        with patch(
+            "ontology_manager.get_ontology_manager", return_value=mock_manager
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=AsyncMock(return_value=[(deals, 0.9)]),
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()):
+            workflow = MagicMock()
+            workflow.extract = AsyncMock(return_value=extracted)
+            workflow_cls.return_value = workflow
+            await svc.run_extraction(
+                source_id="source:test", notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+        return schema_repo
+
+    @pytest.mark.asyncio
+    async def test_proposals_reach_the_pending_queue(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(
+                notebook="notebook:abc", base_ontology="deals"
+            )
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=2)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        proposals = [
+            {"type_name": "Method", "parent_type": "Concept"},
+            {"type_name": "GrantFundingSource", "parent_type": "Organization"},
+        ]
+        await self._run(svc, notebook_schema_repo_fixture, [], proposals)
+
+        notebook_schema_repo_fixture.merge_pending_extensions.assert_awaited_once()
+        args = notebook_schema_repo_fixture.merge_pending_extensions.await_args.args
+        assert args[0] == "notebook:abc"
+        assert [p["type_name"] for p in args[1]] == ["Method", "GrantFundingSource"]
+
+    @pytest.mark.asyncio
+    async def test_no_proposals_writes_nothing_to_the_queue(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """Vacuity guard: the call happens because there were proposals, not on
+        every run.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        await self._run(svc, notebook_schema_repo_fixture, [], [])
+        notebook_schema_repo_fixture.merge_pending_extensions.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_coverage_is_the_mean_of_each_sources_best(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """Per source the MAX (Pass 1 runs once per applied schema, and the
+        notebook's coverage is how well its best-fitting schema did), then the
+        mean across sources.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        rows = [
+            SimpleNamespace(source="source:a", coverage_pct=0.4),
+            SimpleNamespace(source="source:a", coverage_pct=0.8),   # best for a
+            SimpleNamespace(source="source:b", coverage_pct=0.6),
+        ]
+        await self._run(svc, notebook_schema_repo_fixture, rows, [])
+
+        notebook_schema_repo_fixture.set_coverage_pct.assert_awaited_once()
+        _nb, value = notebook_schema_repo_fixture.set_coverage_pct.await_args.args
+        assert value == pytest.approx(0.7)  # mean of 0.8 and 0.6, not of all three
+
+    @pytest.mark.asyncio
+    async def test_no_pass1_rows_writes_no_coverage(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """Writing 0.0 would claim a measurement nobody made."""
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        await self._run(svc, notebook_schema_repo_fixture, [], [])
+        notebook_schema_repo_fixture.set_coverage_pct.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failing_queue_write_costs_no_entities(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """Extraction has already succeeded by the time this runs; surfacing a
+        proposal must never lose the entities.
+        """
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(
+            side_effect=RuntimeError("db down")
+        )
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(
+            side_effect=RuntimeError("db down")
+        )
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+        rows = [SimpleNamespace(source="source:a", coverage_pct=0.5)]
+        await self._run(
+            svc, notebook_schema_repo_fixture, rows,
+            [{"type_name": "Method", "parent_type": "Concept"}],
+        )
+        # No exception escaped, and the run completed.
 
 
 # ---------------------------------------------------------------------------

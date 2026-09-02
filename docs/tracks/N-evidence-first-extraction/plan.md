@@ -832,11 +832,65 @@ three plan-mandated behavioural tests. Also carry the `ConceptAlignmentConfig` a
 the `FilteredResult.concept_alignment_report` field (both backward compatible and
 already regression-verified against ontology-extraction's 316 tests).
 
-### N.5 — Integration + regression gate + docs
-- A heterogeneous regression gate (M.5-style): on a golden corpus, assert the
-  pre-LLM layer + abstention **cut LLM extraction calls and/or over-generation**
-  WITHOUT dropping golden entities/relations (recall floor). Update `ARCHITECTURE.md`
-  extraction subsection; `status.md` + `RETRO.md`.
+### N.5 — Close Track N's own debts + regression gate + docs
+
+> **RE-PLANNED 2026-09-02** after the pipeline review
+> (`claudedocs/extraction-pipeline-review.md`). The review measured a live corpus
+> of eight documents and found problems that are real but mostly **not Track N's**:
+> they span schema review (Track B), entity resolution (K), typing (L), and the
+> default filtering configuration. Those move to **Track PC — pipeline coherence**.
+> N.5 keeps only what this track genuinely owes, so it can close.
+>
+> The one finding that changes N's own footing: **the accept-extension queue has
+> no writer**, so N.4d.1–N.4d.3 (placement, judge, re-parent) cannot be reached
+> from a real run. That is PC.1, and until it lands the N.4d work is shipped but
+> unreachable. N.5 does not wait for it — the debts below are independent.
+
+**N.5a — N.3's observability survives the production path** (review R3)
+`_merge_results` builds a fresh `ExtractionResult`, so `not_a_concept_removed`,
+`not_a_concept_judged` and `abstained_chunks` are discarded on the multi-schema
+path — which is the path production uses. Measured cost: `Bennett_test.pdf`
+produced ten chunks and zero entities, and its stored record cannot say whether
+the model found nothing or the gate removed everything.
+- **AC**: the three counters survive the merge, summed across passes, and reach
+  `extraction_result.metadata`. A document that yields nothing is explainable from
+  its own record.
+- **Guard**: assert on a MERGED result, not a single-pass one — the single-schema
+  path already keeps them, so a test there cannot fail.
+
+**N.5b — Decide what `is_a` is now** (review I3)
+N.2 mines `is_a` from text; D-N4-12 moved subsumption to the type boundary and
+retired the instance tier. Both ship. `is_a` is declared in no ontology, so the
+mined edges survive only because `OntologyValidator` downgrades an unknown
+predicate to a WARNING outside strict mode and stage 11 is off by default. Turning
+on `strict_mode` deletes every mined hierarchy edge, silently.
+- **Decision required, not a fix**: either declare `is_a` in the shipped
+  ontologies (it becomes a first-class predicate that survives strict mode), or
+  retire the Hearst miner as D-N4-12 retired its instance-level sibling. Shipping
+  a producer whose output survives by accident is the option to rule out.
+- **AC**: whichever is chosen, a test fails if `strict_mode` changes the outcome
+  unnoticed.
+
+**N.5c — The carried residuals** — R2 (cross-pass duplicate `is_a`), C2 (the
+LIMIT-cap disclosure missing from three evidence paths), C3/C4 (`canonical_type`
+dropped on two alignment paths), C5 (an `assert` used as a production control
+guard). All small; all on code this track owns.
+
+**N.5d — The regression gate + docs**
+The original scope: a heterogeneous gate on a golden corpus asserting the pre-LLM
+layer + abstention cut LLM calls and/or over-generation WITHOUT dropping golden
+entities (recall floor). Update `ARCHITECTURE.md`, `status.md`, `RETRO.md`.
+- **Now measurable**: `scripts/n_pipeline_review_run.py` is the harness the review
+  used and the corpus JSONs are its baseline (124 entities extracted from 70
+  chunks over 8 documents). The gate compares against those, so "did we regress"
+  has a number instead of an opinion.
+- **Binding** (D-N4-14): a double reproduces the real method's failure RETURN; a
+  fixture builds the PRODUCTION argument set; a guard that reads a collaborator's
+  value is exercised against the real collaborator at least once.
+
+**Out of N.5, moved to Track PC**: the curator-queue writer, cross-document
+identity, canonicalisation stability, the alias-policy contradiction, the gap/
+proposal read path, and default-configuration coherence.
 
 ## 4. Dependencies, test & migration strategy
 - **New dependency**: `spacy` + `en_core_web_sm` (D2), added to the

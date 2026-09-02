@@ -1,0 +1,537 @@
+{
+  "documents": [
+    {
+      "pdf": "docling_input/Bennett_test.pdf",
+      "source": "source:6tds2zy0d4mh8tlds36d",
+      "chunks": 10,
+      "elapsed_s": 304.4,
+      "result": {
+        "source_id": "source:6tds2zy0d4mh8tlds36d",
+        "entity_count": 0,
+        "relation_count": 0
+      },
+      "stages": [],
+      "graph_after": {
+        "entity": 101,
+        "relation": 33,
+        "ontology_gap": 0
+      }
+    }
+  ],
+  "chunks_per_document": 10,
+  "elapsed_s": 304.5,
+  "notebook": "notebook:w0ciyupdj32rofyg1cki",
+  "graph": {
+    "entity": 101,
+    "relation": 33,
+    "ontology_gap": 0
+  },
+  "entities": [
+    {
+      "entity_type": "concept",
+      "name": "'give and take'",
+      "primary_type": "DefinedTerm"
+    },
+    {
+      "entity_type": "concept",
+      "name": "B. Dam (wethouder)",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Binnenlandse Zaken en Koninkrijksrelaties",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "topic",
+      "name": "Brede Welvaart",
+      "primary_type": "BeleidsThema"
+    },
+    {
+      "entity_type": "topic",
+      "name": "Brede welvaart en het gelijk van de praktijk",
+      "primary_type": "BeleidsThema"
+    },
+    {
+      "entity_type": "concept",
+      "name": "C.A. Jansen",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "concept",
+      "name": "C.P. van Burgsteden (Lid van het Dagelijks Bestuur)",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "person",
+      "name": "Carola Schouten",
+      "primary_type": "Persoon"
+    },
+    {
+      "entity_type": "concept",
+      "name": "Claire Charbit",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "location",
+      "name": "Commissaris van de Koning",
+      "primary_type": "FunctioneleRegio"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Cultuur en Wetenschap",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "concept",
+      "name": "D.S. Beljaarts",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "concept",
+      "name": "Dagelijks Bestuur van Wetterskip Frysl\u00e2n",
+      "primary_type": "GovernmentBody"
+    },
+    {
+      "entity_type": "concept",
+      "name": "Economics Department, O.E.C.D.",
+      "primary_type": "Organization"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Economische Zaken en Klimaat",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "person",
+      "name": "Erwin Hoogland",
+      "primary_type": "Persoon"
+    },
+    {
+      "entity_type": "concept",
+      "name": "Fiscal Equalisation",
+      "primary_type": "DefinedTerm"
+    },
+    {
+      "entity_type": "organization",
+      "name": "Gedeputeerde staten van de provincie Drenthe",
+      "primary_type": "Organisatie"
+    },
+    {
+      "entity_type": "administrative_area",
+      "name": "Gedeputeerde staten van de provincie Frysl\u00e2n",
+      "primary_type": "Provincie"
+    },
+    {
+      "entity_type": "organization",
+      "name": "Gedeputeerde staten van de provincie Overijssel",
+      "primary_type": "Organisatie"
+    },
+    {
+      "entity_type": "concept",
+      "name": "Hansj\u00f6rg Bl\u00f6chliger",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "person",
+      "name": "Hugo de Jonge",
+      "primary_type": "Persoon"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Infrastructuur en Waterstaat",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "concept",
+      "name": "J.J.M. Uitermark",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "person",
+      "name": "K.H. Ollongren",
+      "primary_type": "Ambtenaar"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Landbouw, Natuur en Voedselkwaliteit",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "concept",
+      "name": "Lee Mizell",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "concept",
+      "name": "Leefbaarheid naar Toekomstkracht",
+      "primary_type": "DefinedTerm"
+    },
+    {
+      "entity_type": "person",
+      "name": "M.C.G. Keijzer",
+      "primary_type": "Ambtenaar"
+    },
+    {
+      "entity_type": "concept",
+      "name": "M.C.G. Keijzer",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "person",
+      "name": "Maarten van Ooijen",
+      "primary_type": "Persoon"
+    },
+    {
+      "entity_type": "person",
+      "name": "Mark Harbers",
+      "primary_type": "Persoon"
+    },
+    {
+      "entity_type": "person",
+      "name": "Micky Adriaansens",
+      "primary_type": "Persoon"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Minister van Binnenlandse Zaken en Koninkrijksrelaties",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Minister van Economische Zaken",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Minister van Volkshuisvesting en Ruimtelijke Ordening",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "concept",
+      "name": "OECD Member countries",
+      "primary_type": "DefinedTerm"
+    },
+    {
+      "entity_type": "other",
+      "name": "OECD Network on Fiscal Relations Across Levels of Government",
+      "primary_type": "Other"
+    },
+    {
+      "entity_type": "concept",
+      "name": "OECD Working Papers on Fiscal Federalism No. 4",
+      "primary_type": "CreativeWork"
+    },
+    {
+      "entity_type": "concept",
+      "name": "Olaf Merk",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Onderwijs, Cultuur en Wetenschap",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Participatie en Pensioenen",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "person",
+      "name": "Paul Blokhuis",
+      "primary_type": "Ambtenaar"
+    },
+    {
+      "entity_type": "programme",
+      "name": "Provincie Drenthe",
+      "primary_type": "RegioDeal"
+    },
+    {
+      "entity_type": "administrative_area",
+      "name": "Provincie Overijssel",
+      "primary_type": "Provincie"
+    },
+    {
+      "entity_type": "concept",
+      "name": "Public Governance Department, O.E.C.D.",
+      "primary_type": "Organization"
+    },
+    {
+      "entity_type": "concept",
+      "name": "R. van Iddekinge (wethouder)",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "concept",
+      "name": "R.F. Douwstra (gedeputeerde)",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "person",
+      "name": "R.W. Knops",
+      "primary_type": "Ambtenaar"
+    },
+    {
+      "entity_type": "programme",
+      "name": "Regio Deal Oost-Groningen",
+      "primary_type": "RegioDeal"
+    },
+    {
+      "entity_type": "person",
+      "name": "Robbert Dijkgraaf",
+      "primary_type": "Persoon"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Sociale Zaken en Werkgelegenheid",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Staatssecretaris van Infrastructuur en Waterstaat",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Staatssecretaris voor Volksgezondheid, Welzijn en Sport",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "person",
+      "name": "Tamara van Ark",
+      "primary_type": "Ambtenaar"
+    },
+    {
+      "entity_type": "concept",
+      "name": "V.P.G. Karremans",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "person",
+      "name": "Van Engelshoven",
+      "primary_type": "Persoon"
+    },
+    {
+      "entity_type": "person",
+      "name": "Vivianne Heijnen",
+      "primary_type": "Persoon"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Volksgezondheid, Welzijn en Sport",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "government_organization",
+      "name": "Welzijn en Sport",
+      "primary_type": "Ministerie"
+    },
+    {
+      "entity_type": "location",
+      "name": "Zuid- en Oost-Drenthe",
+      "primary_type": "Grensregio"
+    },
+    {
+      "entity_type": "topic",
+      "name": "belangrijk doel",
+      "primary_type": "BeleidsPijler"
+    },
+    {
+      "entity_type": "topic",
+      "name": "bereid maken voor bijstand of ondersteuning van mensen die een zorgnoodzaak hebben in de regio",
+      "primary_type": "BeleidsPijler"
+    },
+    {
+      "entity_type": "topic",
+      "name": "bestuurlijke en beleidsmatige blik",
+      "primary_type": "BeleidsPijler"
+    },
+    {
+      "entity_type": "topic",
+      "name": "brede welvaart",
+      "primary_type": "BeleidsThema"
+    },
+    {
+      "entity_type": "topic",
+      "name": "bruto binnenlands product",
+      "primary_type": "Indicator"
+    },
+    {
+      "entity_type": "topic",
+      "name": "bruto binnenlands product van de regio",
+      "primary_type": "Indicator"
+    },
+    {
+      "entity_type": "concept",
+      "name": "chris van koppen",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "topic",
+      "name": "complexity",
+      "primary_type": "Indicator"
+    },
+    {
+      "entity_type": "concept",
+      "name": "distinct fiscal equalisation arrangements",
+      "primary_type": "DefinedTerm"
+    },
+    {
+      "entity_type": "other",
+      "name": "economic and fiscal base",
+      "primary_type": "Other"
+    },
+    {
+      "entity_type": "topic",
+      "name": "economische groei",
+      "primary_type": "BeleidsPijler"
+    },
+    {
+      "entity_type": "concept",
+      "name": "federal and unitary countries",
+      "primary_type": "DefinedTerm"
+    },
+    {
+      "entity_type": "other",
+      "name": "federal countries",
+      "primary_type": "Other"
+    },
+    {
+      "entity_type": "administrative_area",
+      "name": "het Rijk",
+      "primary_type": "Gemeente"
+    },
+    {
+      "entity_type": "concept",
+      "name": "het Rijk",
+      "primary_type": "GovernmentBody"
+    },
+    {
+      "entity_type": "administrative_area",
+      "name": "het college van burgemeester en wethouders van de gemeente De Fryske Marren",
+      "primary_type": "Gemeente"
+    },
+    {
+      "entity_type": "administrative_area",
+      "name": "het college van burgemeester en wethouders van de gemeente S\u00fadwest-Frysl\u00e2n",
+      "primary_type": "Gemeente"
+    },
+    {
+      "entity_type": "topic",
+      "name": "het verhogen van het bruto binnenlands product van de regio",
+      "primary_type": "BeleidsPijler"
+    },
+    {
+      "entity_type": "topic",
+      "name": "high public service cost",
+      "primary_type": "Indicator"
+    },
+    {
+      "entity_type": "concept",
+      "name": "high tax revenue and low cost of public services",
+      "primary_type": "DefinedTerm"
+    },
+    {
+      "entity_type": "concept",
+      "name": "highly visible 'global balance'",
+      "primary_type": "DefinedTerm"
+    },
+    {
+      "entity_type": "other",
+      "name": "intensive care",
+      "primary_type": "Other"
+    },
+    {
+      "entity_type": "concept",
+      "name": "joks janssen",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "concept",
+      "name": "katja nagelkerke",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "topic",
+      "name": "kwaliteit van leven en leefomgeving",
+      "primary_type": "BeleidsPijler"
+    },
+    {
+      "entity_type": "topic",
+      "name": "langetermijnori\u00ebntatie",
+      "primary_type": "BeleidsPijler"
+    },
+    {
+      "entity_type": "topic",
+      "name": "longevity",
+      "primary_type": "Indicator"
+    },
+    {
+      "entity_type": "concept",
+      "name": "low tax revenue and high public service cost",
+      "primary_type": "DefinedTerm"
+    },
+    {
+      "entity_type": "concept",
+      "name": "marijn molema",
+      "primary_type": "Person"
+    },
+    {
+      "entity_type": "topic",
+      "name": "oplopend personeelstekort",
+      "primary_type": "Indicator"
+    },
+    {
+      "entity_type": "topic",
+      "name": "personeelstekort",
+      "primary_type": "Indicator"
+    },
+    {
+      "entity_type": "other",
+      "name": "regio",
+      "primary_type": "Other"
+    },
+    {
+      "entity_type": "topic",
+      "name": "regionaal beleid",
+      "primary_type": "BeleidsPijler"
+    },
+    {
+      "entity_type": "other",
+      "name": "regionaal economisch beleidprogramma",
+      "primary_type": "Other"
+    },
+    {
+      "entity_type": "topic",
+      "name": "samenhang in beleid",
+      "primary_type": "BeleidsThema"
+    },
+    {
+      "entity_type": "topic",
+      "name": "spoedeisende zorg",
+      "primary_type": "BeleidsPijler"
+    },
+    {
+      "entity_type": "other",
+      "name": "sub-central governments",
+      "primary_type": "Other"
+    },
+    {
+      "entity_type": "other",
+      "name": "unitary countries",
+      "primary_type": "Other"
+    },
+    {
+      "entity_type": "concept",
+      "name": "volle vaart",
+      "primary_type": "Concept"
+    },
+    {
+      "entity_type": "other",
+      "name": "ziekenhuis",
+      "primary_type": "Other"
+    }
+  ],
+  "ontology_gaps": []
+}

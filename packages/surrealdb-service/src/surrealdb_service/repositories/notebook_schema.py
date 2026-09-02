@@ -176,6 +176,81 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
         await self.upsert(existing)
         return True
 
+    async def merge_pending_extensions(
+        self, notebook_id: str, extensions: List[Dict[str, Any]]
+    ) -> int:
+        """Add proposals to ``pending_extensions``, skipping ones already known.
+
+        Track PC.1. :meth:`add_pending_extension` appends unconditionally and
+        rewrites the row per call, which is right for a single proposal and wrong
+        for a Pass-1 batch: proposals are per-DOCUMENT while this list is
+        per-NOTEBOOK, so the same type proposed by three documents would appear
+        three times, and each append would be its own read-modify-write.
+
+        A proposal is skipped when its ``type_name`` already appears in
+        ``pending_extensions`` OR in ``accepted_extensions`` — re-proposing a type
+        the curator already accepted is noise, and re-proposing one already
+        queued is a duplicate. Matching is case-insensitive on the trimmed name,
+        because the LLM's capitalisation is not stable across documents.
+
+        Each stored proposal gets a deterministic ``extension_id``
+        (``pass1::<lowercased type_name>``) so a replay is idempotent and the
+        accept/reject endpoints have the id their contract documents.
+
+        Returns the number of proposals actually added. ``0`` means everything
+        was already known — which is a normal outcome, not a failure.
+        """
+        existing = await self.get_by_notebook(notebook_id)
+        if existing is None:
+            logger.warning(
+                f"merge_pending_extensions: no notebook_schema row for {notebook_id}"
+            )
+            return 0
+
+        def _key(entry: Dict[str, Any]) -> str:
+            return str(entry.get("type_name", "") or "").strip().lower()
+
+        known = {_key(e) for e in existing.pending_extensions}
+        known |= {_key(e) for e in existing.accepted_extensions}
+
+        added = 0
+        for proposal in extensions or []:
+            if not isinstance(proposal, dict):
+                continue
+            key = _key(proposal)
+            if not key or key in known:
+                continue
+            known.add(key)
+            existing.pending_extensions.append(
+                {**proposal, "extension_id": f"pass1::{key}"}
+            )
+            added += 1
+
+        if added:
+            await self.upsert(existing)
+        return added
+
+    async def set_coverage_pct(self, notebook_id: str, value: float) -> bool:
+        """Store the notebook's rolling Pass-1 coverage.
+
+        Track PC.1. The field is documented as driving the B.3c soft-nudge and is
+        rendered by the Schema tab, but nothing in the extraction path wrote it —
+        after eight documents and fourteen Pass-1 measurements it was still 0.0.
+
+        Clamped to 0.0–1.0: the model constrains the field, and a Pass-1 run that
+        reports a percentage instead of a fraction should not make the write fail
+        after the extraction already succeeded.
+        """
+        existing = await self.get_by_notebook(notebook_id)
+        if existing is None:
+            logger.warning(
+                f"set_coverage_pct: no notebook_schema row for {notebook_id}"
+            )
+            return False
+        existing.coverage_pct = max(0.0, min(1.0, float(value)))
+        await self.upsert(existing)
+        return True
+
     async def accept_pending_extension(
         self, notebook_id: str, extension_id: str
     ) -> bool:

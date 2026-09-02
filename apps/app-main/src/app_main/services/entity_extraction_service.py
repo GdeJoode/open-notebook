@@ -856,6 +856,87 @@ class EntityExtractionService:
 
         return result
 
+    async def _record_pass1_outcome(
+        self,
+        result: Any,
+        notebook_id: str,
+        notebook_schema_repo: "NotebookSchemaRepository",
+        pass1_repo: "Pass1ResultRepository",
+    ) -> None:
+        """Move Pass 1's findings to where a curator can act on them (PC.1).
+
+        Pass 1 already worked and was already persisted to ``pass1_results``. What
+        did not happen is the step that makes it ACTIONABLE:
+        ``notebook_schema.pending_extensions`` had no writer anywhere in
+        production — `add_pending_extension`'s only callers were in its own
+        roundtrip test — and `coverage_pct`, documented as driving the B.3c
+        soft-nudge, was never written either.
+
+        Everything downstream reads those two fields: accept, reject, the
+        `PendingExtensionsPanel`, and through the accept step the whole of
+        N.4d.1-N.4d.3. A pipeline review measured the consequence: after eight
+        documents and fourteen `pass1_results` rows, `pending_extensions` was
+        empty and `coverage_pct` was 0.0.
+
+        Best-effort by design: extraction has already succeeded by the time this
+        runs, and a failure to surface a proposal must not lose the entities. The
+        failure is logged at WARNING rather than swallowed, because a queue that
+        silently stops filling is exactly the defect this method exists to fix.
+        """
+        metadata = getattr(result, "metadata", None) or {}
+        proposals = metadata.get("proposed_extensions") or []
+
+        try:
+            if proposals:
+                added = await notebook_schema_repo.merge_pending_extensions(
+                    notebook_id, proposals
+                )
+                logger.info(
+                    "pass1 proposals queued for {nb}: {added} new of {total} proposed",
+                    nb=notebook_id,
+                    added=added,
+                    total=len(proposals),
+                )
+        except Exception as e:
+            logger.warning(f"could not queue pass1 proposals for {notebook_id}: {e}")
+
+        try:
+            coverage = await self._rolling_coverage(notebook_id, pass1_repo)
+            if coverage is not None:
+                await notebook_schema_repo.set_coverage_pct(notebook_id, coverage)
+        except Exception as e:
+            logger.warning(f"could not update coverage for {notebook_id}: {e}")
+
+    @staticmethod
+    async def _rolling_coverage(
+        notebook_id: str, pass1_repo: "Pass1ResultRepository"
+    ) -> Optional[float]:
+        """Mean over SOURCES of each source's best Pass-1 coverage.
+
+        The field is documented as "rolling-average coverage across all sources
+        processed in this notebook", so it is recomputed from `pass1_results`
+        rather than accumulated incrementally: a re-extraction of one source then
+        corrects the average instead of counting twice.
+
+        Per source the MAX is taken, because Pass 1 runs once per applied schema
+        and the notebook's coverage is how well its best-fitting schema did, not
+        the average of a good fit and a bad one. Returns ``None`` when there is
+        nothing to average, so the caller writes nothing rather than writing 0.0.
+        """
+        rows = await pass1_repo.list_by_notebook(notebook_id)
+        if not rows:
+            return None
+        best_per_source: Dict[str, float] = {}
+        for row in rows:
+            source = str(getattr(row, "source", "") or "")
+            if not source:
+                continue
+            value = float(getattr(row, "coverage_pct", 0.0) or 0.0)
+            best_per_source[source] = max(best_per_source.get(source, 0.0), value)
+        if not best_per_source:
+            return None
+        return sum(best_per_source.values()) / len(best_per_source)
+
     async def _concept_alignment_deps(
         self, f_config: "FilteringConfig"
     ) -> Dict[str, Any]:
@@ -1187,7 +1268,7 @@ class EntityExtractionService:
                 "Pass-1/Pass-2 will run with their lazy defaults."
             )
 
-        return await workflow.extract(
+        result = await workflow.extract(
             chunks=chunks,
             mode="multi",
             applicable_schemas=applicable_schemas,
@@ -1198,6 +1279,10 @@ class EntityExtractionService:
             llm_caller=llm_caller,
             pass2_token_budget=self._pass2_token_budget,
         )
+        await self._record_pass1_outcome(
+            result, notebook_id, notebook_schema_repo, pass1_repo
+        )
+        return result
 
     async def run_extraction(
         self,
