@@ -98,7 +98,22 @@ Everything downstream operates on `pending_extensions`: accept, reject, the
     first chunk of a parsed PDF is a title fragment with a median length of 66
     characters. Measured: detection fired for 2 of 14 sources. With a sample of
     40 windows spread across the document — the knee of the curve, swept — it
-    fires for 13 of 14, at 3.7 ms for all eleven ontologies.
+    fires for 13 of 14, at 4 ms for all eleven ontologies. Budget and window
+    count are both swept rather than chosen; 13/14 is the ceiling. The budget is
+    SHARED across the windows rather than consumed in index order — a review
+    measured that the first shape stopped partway through the spread on
+    long-chunk documents and scored them on their first 41%, re-introducing the
+    head bias one order of magnitude larger than the cover page it replaced.
+  - **The cost, stated**: 11 of 14 sources move from the legacy single-schema
+    path to multi-schema. That is more LLM calls per document and a different
+    result shape (`type_tags` and `primary_type` are now set where they were
+    not). It is the point — the legacy path is where Pass 1 never runs — but it
+    is a real change in what every ingest does, not a free improvement.
+  - **Known consequence of the empty base**: on a notebook's FIRST accept, the
+    N.4d.3 placement composes an empty forced vocabulary (no base, no accepted
+    extensions yet) and so places against nothing. It still returns a verdict and
+    is advisory, so the AC holds, but the first accept is less informed than
+    later ones. Owned by PC.5 alongside the curator surface.
   - The remaining document falls back to the notebook's most attempted schema
     (ties broken by mean coverage), at most one, never overriding a document that
     detected for itself, and returning nothing when the notebook has no history —

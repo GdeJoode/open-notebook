@@ -1760,7 +1760,7 @@ class TestApplicabilitySample:
     The sample used to be the first chunk capped at 2000 characters. Measured on
     the project's corpus, the first chunk of a parsed PDF is a title fragment
     with a MEDIAN LENGTH OF 66 CHARACTERS, so detection fired for 2 of 14
-    sources; with a sample spread over the body it fires for 12 of 14. That was
+    sources; with a sample spread over the body it fires for 13 of 14. That was
     not a scoring nicety: a document with no detected schema takes the legacy
     path where Pass 1 never runs, so the curator queue stayed empty for reasons
     that had nothing to do with the queue.
@@ -1914,13 +1914,51 @@ class TestApplicabilitySample:
         chunks = [{"text": "x" * 5000} for _ in range(200)]
         assert len(_applicability_sample(chunks)) <= _SAMPLE_BUDGET_CHARS
 
+    @pytest.mark.parametrize("chunk_length", [60, 600, 1500, 3000, 8000])
+    def test_long_chunks_do_not_starve_the_tail_of_the_document(self, chunk_length):
+        """The budget must bound the WORK, not truncate the spread.
+
+        An earlier version capped each window at 1200 characters and stopped
+        once the running total reached the budget. That break fires in ascending
+        index order, so it re-introduced the exact head bias the spread exists to
+        remove — a review measured 17 of 40 windows surviving at 1500-character
+        chunks, scoring the document on its first 41%, one order of magnitude
+        worse than the cover-page problem this all started as.
+
+        The two tests around it could not see this. `test_windows_are_spread`
+        uses 9-character chunks, where the budget never binds; the budget test
+        used 5000-character chunks but asserted only the LENGTH of the result.
+        Between them they touched the failing input and the failing property and
+        never at the same time — which is why this one is parametrised over chunk
+        size and asserts coverage.
+        """
+        from app_main.services.entity_extraction_service import (
+            _SAMPLE_BUDGET_CHARS,
+            _SAMPLE_MAX_WINDOWS,
+            _applicability_sample,
+        )
+
+        n = 200
+        chunks = [{"text": f"MARK{i}-" + ("x" * chunk_length)} for i in range(n)]
+        sample = _applicability_sample(chunks)
+
+        kept = [i for i in range(n) if f"MARK{i}-" in sample]
+        assert len(kept) == _SAMPLE_MAX_WINDOWS, (
+            f"{len(kept)} of {_SAMPLE_MAX_WINDOWS} windows survived at "
+            f"chunk_length={chunk_length}"
+        )
+        assert kept[0] == 0 and kept[-1] == n - 1, (
+            "the spread must still reach both ends of the document"
+        )
+        assert len(sample) <= _SAMPLE_BUDGET_CHARS
+
 
 class TestNotebookHistoryFallback:
     """PC.1 — what happens when a document detects nothing.
 
     Per-document detection decides; only when it genuinely fails does the
-    notebook's own history get a vote. Measured on the project's corpus: 12 of 14
-    documents detect for themselves, and the two that do not sit in a notebook
+    notebook's own history get a vote. Measured on the project's corpus: 13 of 14
+    documents detect for themselves, and the one that does not sits in a notebook
     whose 17 Pass-1 rows all name `policy_themes`.
     """
 

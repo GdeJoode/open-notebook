@@ -65,17 +65,25 @@ from app_main.services.entity_persistence_service import EntityPersistenceServic
 # name, so nothing is forced onto any extraction until a curator chooses.
 NO_DECLARED_BASE = ""
 
-_SAMPLE_BUDGET_CHARS = 20000
-_SAMPLE_WINDOW_CHARS = 1200
-# 40 is where the curve flattens, measured on the project's 14 sources by
-# sweeping this value and counting how many documents detect a schema:
+_SAMPLE_BUDGET_CHARS = 40000
+# 40 windows sharing that budget: 1000 characters each. Both numbers are
+# measured on the project's 14 sources, sweeping each against how many documents
+# detect a schema at all:
 #
-#   windows   25 -> 11/14    40 -> 13/14    60 -> 13/14    100 -> 13/14
+#   budget 20000   w=25 10/14   w=40 12/14   w=60 13/14   w=120 13/14
+#   budget 40000   w=25 11/14   w=40 13/14   w=60 13/14   w=120 13/14
+#   budget 60000   w=25 11/14   w=40 13/14   w=60 13/14   w=120 13/14
 #
-# Below 40 documents are lost; above it nothing is gained and the largest
-# documents start saturating the character budget instead of spanning it. The
-# one source that still detects nothing is a scanned annex, and it is what the
-# notebook-history fallback exists for.
+# 13/14 is the ceiling. Two settings reach it equally cheaply and this is the one
+# with the WIDER windows (1000 characters against 333), because the scorer
+# matches multi-word phrases as substrings and every window boundary is a place
+# a phrase can be cut in half. Cost at this setting: 4 ms per document for all
+# eleven ontologies. The curve is not monotonic — 50 windows scores 12/14 —
+# which says the scorer is borderline for one document rather than that the
+# sample is short.
+#
+# The remaining document is a journal article ("J of Common Market Studies"),
+# and it is what the notebook-history fallback exists for.
 _SAMPLE_MAX_WINDOWS = 40
 
 
@@ -88,9 +96,7 @@ def _applicability_sample(chunks: List[Dict[str, Any]]) -> Optional[str]:
     content path".
     """
     texts = [
-        (chunk.get("text") or "")
-        for chunk in chunks
-        if isinstance(chunk, dict) and (chunk.get("text") or "").strip()
+        (chunk.get("text") or "") for chunk in chunks if (chunk.get("text") or "").strip()
     ]
     if not texts:
         return None
@@ -111,15 +117,16 @@ def _applicability_sample(chunks: List[Dict[str, Any]]) -> Optional[str]:
             }
         )
 
-    pieces: List[str] = []
-    total = 0
-    for i in indices:
-        piece = texts[i][:_SAMPLE_WINDOW_CHARS]
-        pieces.append(piece)
-        total += len(piece)
-        if total >= _SAMPLE_BUDGET_CHARS:
-            break
-    return " ".join(pieces)[:_SAMPLE_BUDGET_CHARS]
+    # Each window gets an equal share of the budget. The previous version capped
+    # every window at a fixed 1200 characters and stopped once the running total
+    # reached the budget — and that break fires in ascending index order, so it
+    # re-introduced the exact head bias the spread exists to remove. A review
+    # measured it: at 1500-character chunks only 17 of 40 windows survived and
+    # the document was scored on its first 41%, an order of magnitude worse than
+    # the cover-page problem this started as. Sharing the budget means all 40
+    # windows are always taken, whatever the chunk size.
+    per_window = max(1, _SAMPLE_BUDGET_CHARS // _SAMPLE_MAX_WINDOWS)
+    return " ".join(texts[i][:per_window] for i in indices)[:_SAMPLE_BUDGET_CHARS]
 
 
 NOTEBOOK_DEFAULT_BUNDLE: Dict[str, List[str]] = {
@@ -1010,6 +1017,21 @@ class EntityExtractionService:
         schema was attempted, ties broken by mean coverage — frequency is the
         notebook's verdict, coverage is how well that verdict worked.
 
+        **Frequency dominates absolutely**, so a schema attempted eight times at
+        coverage 0.0 beats one attempted three times at 0.9 — and `coverage_pct`
+        is precisely the measurement of whether that schema fit. A review raised
+        it and it is a decision, not an oversight: a low-coverage schema a
+        notebook keeps landing on is still what that notebook is about, while the
+        alternative ranking lets one lucky document redefine it — which is what
+        the "per document, history only as fallback" rule exists to prevent.
+        Bounded by firing only when detection found nothing and by returning a
+        single schema. Revisit it if a notebook is seen converging on a schema
+        that measures near zero.
+
+        Note what the history is made of: rows written by the blind first-chunk
+        detector this same change replaces. It self-corrects as documents are
+        re-extracted.
+
         Returns at most one schema. A fallback that guessed three would be
         asserting more about the document than the evidence supports, and every
         extra schema is another Pass-1 and Pass-2 LLM call.
@@ -1458,8 +1480,9 @@ class EntityExtractionService:
             # the legacy path — where Pass 1 never runs and the curator queue
             # gets nothing — ask the notebook what its other documents turned
             # out to be. A notebook of Regio-Deal convenanten whose fifteenth
-            # document happens to be a scanned annex is still a notebook of
-            # Regio-Deal convenanten.
+            # document scores below the floor is still a notebook of Regio-Deal
+            # convenanten. On this corpus that is one document of fourteen, a
+            # journal article whose vocabulary overlaps no bundled ontology.
             #
             # This is a fallback, not a declaration: it is consulted only when
             # per-document detection fails, it never overrides a document that
