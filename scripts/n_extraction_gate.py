@@ -15,9 +15,11 @@ To record a new baseline once a run is known-good::
 
     uv run python scripts/n_extraction_gate.py --run out.json --write-baseline
 
-Exit codes: 0 pass, 1 regression, 2 inconclusive (nothing could be compared).
-An inconclusive result is deliberately NOT 0 — a gate that exits green having
-verified nothing is the failure this whole design is built against.
+Exit codes: 0 pass, 1 regression, 2 inconclusive (nothing could be compared),
+3 refused (the input is not usable as what it was offered as). An inconclusive
+result is deliberately NOT 0 — a gate that exits green having verified nothing is
+the failure this whole design is built against — and a refusal is deliberately not
+1, so a CI wrapper can tell "you regressed" from "I would not act on that file".
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "packages/shared/src"))
@@ -33,6 +36,15 @@ sys.path.insert(0, str(REPO_ROOT / "packages/shared/src"))
 from shared.regression import compare_against_baseline, summarise_run  # noqa: E402
 
 DEFAULT_BASELINE = REPO_ROOT / "tests/regression/n_extraction_baseline.json"
+
+#: Exit code for "I will not act on this input". Distinct from 1 (a regression)
+#: because a CI wrapper reacts differently to the two, and a review found that
+#: `raise SystemExit(<str>)` had quietly merged them.
+REFUSED = 3
+
+
+class GateRefusal(Exception):
+    """The input is not usable as the thing it was offered as."""
 
 
 def _load_documents(path: Path) -> list:
@@ -49,14 +61,22 @@ def _load_documents(path: Path) -> list:
     documents = payload.get("documents")
     documents = documents if isinstance(documents, list) else [payload]
     if not any(isinstance(d, dict) and "result" in d for d in documents):
-        raise SystemExit(
+        raise GateRefusal(
             f"{path} carries no document with a `result` block — this does not "
             "look like harness output. (Did you pass the baseline file?)"
         )
     return documents
 
 
-def main() -> int:
+def main(argv: Optional[list] = None) -> int:
+    """Parse ``argv`` (default ``sys.argv[1:]``) and run one comparison.
+
+    Takes its arguments rather than reading them so the tests can drive it
+    directly. A review pointed out that this glue had no tests at all while two of
+    the review's own fixes lived only here — not a guard that cannot fail, but a
+    behaviour a mutation cannot be applied to, which is the same gap seen from
+    further away.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--run", required=True, type=Path, help="JSON written by the harness"
@@ -72,9 +92,10 @@ def main() -> int:
         action="store_true",
         help="record a baseline even though the run produced no entities",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    current = summarise_run(_load_documents(args.run))
+    documents = _load_documents(args.run)
+    current = summarise_run(documents)
 
     if args.write_baseline:
         # Refuse a run that measured nothing. A review reached this by accident:
@@ -84,7 +105,7 @@ def main() -> int:
         # reporting `inconclusive=False`. The gate now skips a zero floor too, but
         # refusing to RECORD one is the cheaper place to stop it.
         if not current.get("total_entities") and not args.allow_empty_baseline:
-            raise SystemExit(
+            raise GateRefusal(
                 f"{args.run} measured {current.get('total_entities', 0)} entities "
                 f"across {current.get('documents', 0)} documents. Refusing to "
                 "record that as a baseline — a zero floor holds nothing up. Fix "
@@ -95,8 +116,22 @@ def main() -> int:
         previous = (
             json.loads(args.baseline.read_text()) if args.baseline.exists() else {}
         )
-        provenance = dict(previous.get("_provenance") or {})
-        provenance["measured_from"] = str(args.run)
+        # Only the fields that survive a re-record are carried forward. A review
+        # caught the rest: re-recording from a different corpus kept
+        # `_provenance.documents` listing the PREVIOUS seven filenames, plus the
+        # old `measured` date and `sources` list, beside a note that had been
+        # correctly superseded. The note was honest and the metadata around it
+        # described the previous measurement — the same class of defect one field
+        # over. So describe THIS run, and keep only the prose.
+        previous_provenance = dict(previous.get("_provenance") or {})
+        provenance: Dict[str, Any] = {
+            "harness": previous_provenance.get(
+                "harness", "scripts/n_pipeline_review_run.py"
+            ),
+            "measured_from": str(args.run),
+            "measured": _today(),
+            "documents": _document_names(documents),
+        }
         # Carry the previous note forward, but do NOT carry a note that has become
         # false. The checked-in one explains why two dimensions are null; once a
         # run measures them, that explanation describes a state that no longer
@@ -106,12 +141,15 @@ def main() -> int:
             for k in ("over_generation_rate", "abstain_rate")
             if current.get(k) is not None
         ]
-        if measured_now and "note" in provenance:
+        note = previous_provenance.get("note")
+        if note:
+            provenance["note"] = note
+        if measured_now and note:
             provenance["note"] = (
                 "Superseded: this baseline measures "
                 + ", ".join(measured_now)
                 + ". The previous note explained why they were null; it no longer "
-                "applies. Previous note: " + provenance["note"]
+                "applies. Previous note: " + note
             )
         current["_provenance"] = provenance
         args.baseline.write_text(json.dumps(current, indent=2) + "\n")
@@ -128,5 +166,24 @@ def main() -> int:
     return 0 if result.passed else 1
 
 
+def _today() -> str:
+    from datetime import date
+
+    return date.today().isoformat()
+
+
+def _document_names(documents: list) -> list:
+    """The filenames THIS run measured, for the provenance block."""
+    names = []
+    for doc in documents:
+        pdf = str((doc or {}).get("pdf") or "")
+        names.append(pdf.split("/")[-1] if pdf else "?")
+    return names
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except GateRefusal as refusal:
+        print(refusal)
+        raise SystemExit(REFUSED) from None
