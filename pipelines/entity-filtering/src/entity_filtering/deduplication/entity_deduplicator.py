@@ -14,6 +14,7 @@ from collections import Counter
 from typing import Any, Dict, List, Tuple
 
 from loguru import logger
+from shared.utils.text_folding import fold_for_comparison
 
 
 class EntityDeduplicator:
@@ -79,11 +80,14 @@ class EntityDeduplicator:
 
     @staticmethod
     def _normalize_key(text: str) -> str:
-        """Create a deduplication key from entity text."""
-        text = unicodedata.normalize("NFKC", text)
-        text = text.lower().strip()
-        text = re.sub(r"\s+", " ", text)
-        return text
+        """Create a deduplication key from entity text.
+
+        PC.2: one shared fold, so a fifth copy cannot drift from the
+        other four. Kept as a thin shim rather than deleted because this method is
+        called from several places and the class has its own suite; the guard in
+        `tests/test_one_comparison_fold.py` sees through it.
+        """
+        return fold_for_comparison(text)
 
     @staticmethod
     def _select_canonical(group: List[Dict[str, Any]]) -> Dict[str, Any]:

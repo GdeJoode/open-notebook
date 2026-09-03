@@ -115,6 +115,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
+from shared.utils.text_folding import fold_for_comparison
 
 # -- verdicts ---------------------------------------------------------------
 
@@ -232,11 +233,16 @@ class Alignment:
 
 
 def _normalize(text: str) -> str:
-    """Lowercase, NFKC-fold, collapse whitespace (matches KGResolver._normalize)."""
-    if not text:
-        return ""
-    text = unicodedata.normalize("NFKC", text)
-    return re.sub(r"\s+", " ", text.lower().strip())
+    """Lowercase, NFKC-fold, collapse whitespace.
+
+    PC.2: one shared fold. The name is kept because `_tokens` calls it and the
+    alias-candidate tests exercise it; the body is now the shared function.
+
+    NOT `normalize_entity_name` — that one expands curated org aliases, and
+    comparing post-expansion strings here would pre-merge exactly the identities
+    D-N4-9 says must not be merged without a decision.
+    """
+    return fold_for_comparison(text)
 
 
 def _candidate_name(candidate: Dict[str, Any]) -> str:

@@ -21,8 +21,8 @@ except ImportError:
     _NUMPY = False
 
 try:
-    import umap
     import hdbscan
+    import umap
 
     _HDBSCAN = True
 except ImportError:

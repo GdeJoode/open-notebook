@@ -35,6 +35,7 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from loguru import logger
+from shared.utils.text_folding import fold_for_comparison
 
 from entity_filtering.resolution.embedding_resolver import (
     EmbeddingResolver,
@@ -431,13 +432,14 @@ class KGResolver:
 
     @staticmethod
     def _normalize(text: str) -> str:
-        """Normalize text for comparison (lowercase, strip, collapse ws)."""
-        if not text:
-            return ""
-        text = unicodedata.normalize("NFKC", text)
-        text = text.lower().strip()
-        text = re.sub(r"\s+", " ", text)
-        return text
+        """Normalize text for comparison (lowercase, strip, collapse ws).
+
+        PC.2: one shared fold, so a fifth copy cannot drift from the
+        other four. Kept as a thin shim rather than deleted because this method is
+        called from several places and the class has its own suite; the guard in
+        `tests/test_one_comparison_fold.py` sees through it.
+        """
+        return fold_for_comparison(text)
 
     @staticmethod
     def _levenshtein_similarity(s1: str, s2: str) -> float:

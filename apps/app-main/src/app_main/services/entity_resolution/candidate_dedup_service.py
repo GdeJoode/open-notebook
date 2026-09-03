@@ -45,6 +45,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from entity_filtering.config import EmbeddingDedupConfig, FuzzyDedupConfig
 from entity_filtering.deduplication.fuzzy_resolver import FuzzyResolver
 from loguru import logger
+from shared.utils.text_folding import fold_for_comparison
 from surrealdb_service.repositories.entity import EntityRepository
 
 from app_main.services.entity_resolution.overlay_service import OverlayService
@@ -406,8 +407,8 @@ class CandidateDedupService:
             # — demote it to REVIEW so a human confirms (the matcher scored it
             # over both normalized names, the same forms we check here).
             if band == AUTO_MERGE and self._is_discriminator_difference(
-                self._fuzzy._normalize(rec_a["name"]),
-                self._fuzzy._normalize(rec_b["name"]),
+                fold_for_comparison(rec_a["name"]),
+                fold_for_comparison(rec_b["name"]),
             ):
                 band = REVIEW
 
@@ -448,11 +449,11 @@ class CandidateDedupService:
         """Score every same-type pair with the fuzzy resolver's similarity."""
         n = len(group)
         for i in range(n):
-            norm_i = self._fuzzy._normalize(group[i]["name"])
+            norm_i = fold_for_comparison(group[i]["name"])
             if not norm_i:
                 continue
             for j in range(i + 1, n):
-                norm_j = self._fuzzy._normalize(group[j]["name"])
+                norm_j = fold_for_comparison(group[j]["name"])
                 if not norm_j:
                     continue
                 if norm_i == norm_j:
