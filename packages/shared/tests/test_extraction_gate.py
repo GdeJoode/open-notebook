@@ -246,6 +246,21 @@ class TestAPartialCounterSetIsNotAMeasurement:
         assert s["over_generation_rate"] is None  # and these are not
         assert s["documents_missing_counters"] == {"over_generation_rate": 1}
 
+        # And the case that actually separates the guards: one document DOES
+        # supply the extraction inputs, so the `extracted > 0` guard is satisfied
+        # and only the shortfall check can still refuse. The first version of this
+        # test used the fixture above alone, where `extracted` sums to 0 and the
+        # accidental guard catches it — so the mutation survived.
+        mixed = summarise_run(
+            [
+                _doc(3, counters=abstention_only),
+                _doc(4, counters={"entities_extracted": 10, "entities_kept": 4,
+                                  "abstained_chunks": 1, "chunk_count": 10}),
+            ]
+        )
+        assert mixed["over_generation_rate"] is None
+        assert mixed["documents_missing_counters"] == {"over_generation_rate": 1}
+
     def test_the_mirror_case_extraction_without_abstention(self):
         extraction_only = {"entities_extracted": 10, "entities_kept": 4}
         s = summarise_run([_doc(4, counters=extraction_only)])
