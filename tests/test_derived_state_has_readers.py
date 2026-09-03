@@ -53,6 +53,7 @@ property (which is why a declaration, not a sweep, is what is checked).
 from __future__ import annotations
 
 import ast
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,6 +85,13 @@ class Reads:
     path: str
 
 
+#: A phase label must look like ``PC.<n>`` or ``N.<n>`` — this track's own naming.
+#: A review passed ``Owned("")`` and ``Owned("PC.9 — a phase that does not exist")``,
+#: so the check is both that a phase is named and that a row about the field
+#: names it too.
+_PHASE_RE = re.compile(r"\b(PC\.\d[a-z]?|N\.\d[a-z]?)\b")
+
+
 @dataclass(frozen=True)
 class Owned:
     """No consumer yet; a named phase owns giving it one or deleting it."""
@@ -98,7 +106,14 @@ class Owned:
 #: already travel in each entity's ``properties``) and ``llm_verification_results``
 #: (never written at all) were deleted; these two were kept, because deleting a
 #: measurement one phase before it is wanted is churn.
-_DECLARED: Dict[str, object] = {
+#: The value type is deliberately a UNION of the two verified shapes, not
+#: ``object``. A review got a genuinely dead field past the round-3 guard with
+#: ``"zzz_dead": "PC.3 will sort it out"``: the membership check accepted it and
+#: both verifying tests skipped it on an ``isinstance``, so a bare string was a
+#: third, entirely unchecked declaration state. Worse, it is the exact shape this
+#: table had one commit earlier (``Dict[str, str]``), so anyone copying from git
+#: history lands in it. ``test_every_declaration_has_a_verified_shape`` closes it.
+_DECLARED: Dict[str, "Reads | Owned"] = {
     "concept_alignment_report": Reads(
         "apps/app-main/src/app_main/services/entity_extraction_service.py"
     ),
@@ -429,14 +444,51 @@ def test_every_owned_declaration_appears_in_the_inventory():
     The inventory is where a human looks; this file is where CI looks.
     """
     assert INVENTORY.exists(), f"{INVENTORY} not found"
-    text = INVENTORY.read_text(encoding="utf-8")
-    missing = sorted(
-        field
+    lines = INVENTORY.read_text(encoding="utf-8").splitlines()
+    problems: List[str] = []
+    for field, claim in _DECLARED.items():
+        if not isinstance(claim, Owned):
+            continue
+        phase = _PHASE_RE.search(claim.phase)
+        if not phase:
+            problems.append(
+                f"{field}: Owned({claim.phase!r}) names no phase — a review passed "
+                'Owned("") and Owned("PC.9 - a phase that does not exist")'
+            )
+            continue
+        # A ROW about this field, not a substring anywhere in the document. The
+        # inventory is a document about this subject area, so its vocabulary
+        # overlaps plausible field names: a review satisfied the previous check
+        # with `metrics` (a table name in it) and `repair` (inside another row's
+        # prose). Requiring the field in backticks AND the owning phase on the
+        # same line is what makes it evidence rather than coincidence.
+        if not any(
+            f"`{field}`" in line and phase.group(0) in line for line in lines
+        ):
+            problems.append(
+                f"{field}: no row in handoff-inventory.md names both `{field}` "
+                f"and {phase.group(0)}"
+            )
+    assert not problems, "\n".join(problems)
+
+
+def test_every_declaration_has_a_verified_shape():
+    """Closes the round-3 blocker: a bare value is a third, unchecked state.
+
+    Both verifying tests branch on ``isinstance``, so anything that is neither a
+    ``Reads`` nor an ``Owned`` satisfies the membership check and is then skipped
+    by both. A review got a dead field through with
+    ``"zzz_dead": "PC.3 will sort it out"``. It is the exact shape this table had
+    one commit earlier, so it is what anyone copying from history would write.
+    """
+    wrong = sorted(
+        f"{field}: {type(claim).__name__}"
         for field, claim in _DECLARED.items()
-        if isinstance(claim, Owned) and field not in text
+        if not isinstance(claim, (Reads, Owned))
     )
-    assert not missing, (
-        f"declared as owned here but absent from handoff-inventory.md: {missing}"
+    assert not wrong, (
+        "declarations that are neither Reads nor Owned, and are therefore "
+        f"verified by nothing: {wrong}"
     )
 
 

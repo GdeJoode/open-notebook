@@ -172,15 +172,22 @@ step. A full trace found ~20 instances, not the six first recorded. The full tab
 lives in `handoff-inventory.md`; this entry records the decision.
 
 **The user asked for the most structural fix and expected a run object. Measured,
-it is not.** `FilteredResult` is ALREADY a typed run-state carrier, and on that one
-object every payload field is read somewhere, while of its derived-state fields
-only `concept_alignment_report` is — and that reader drops 5 of its 11 keys. (Two
-corrections a review had to make here, both mine: "4/4/2/2 readers" were grep
-OCCURRENCE counts rather than files, and "every derived-state field is read in
-none" was wrong about the one that is.) (An earlier draft wrote "4/4/2/2 readers";
-a review caught that those were grep OCCURRENCE counts, and each payload field is
-read in exactly one file. The contrast is 1-versus-0, which points the same way
-and is the number the guard actually uses.) Both experiments have already been run — the untyped bag
+it is not.** `FilteredResult` is already one, measured with the guard's own counter,
+counting production FILES that Load each attribute:
+
+* every **payload** field is read somewhere — `metadata` in 21 files, `entities`
+  in 9, `relations` in 8, and `removed_entities`, `merged_entity_groups`,
+  `match_candidates` and `predicted_edges` in 1 each;
+* of the **derived-state** fields, only `concept_alignment_report` is read at all
+  — in 1 file, which drops 5 of its 11 keys at the boundary.
+
+Three review rounds went into that paragraph and each of the first two appended a
+correction instead of replacing what it corrected, so the document kept recording
+its own history at the cost of still stating the error. The errors were: presenting
+grep OCCURRENCE counts as readers, and then "every derived-state field is read in
+none", which contradicted the table below it. This is the replacement.
+
+Both experiments have already been run — the untyped bag
 (`ExtractionResult.metadata`) and the typed carrier — and state died in each. The
 fields are not orphaned because nothing carried them; most are carried faithfully
 to a place where nothing reads them. A third carrier moves the corpse.

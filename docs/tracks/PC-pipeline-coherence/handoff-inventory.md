@@ -24,12 +24,23 @@ with a repo-wide grep.
 
 ## Why this file exists rather than a run object
 
-`FilteredResult` (`packages/shared/src/shared/models/extraction.py:194-231`) is
-**already a typed run-state carrier**. Reader counts on that one object, outside the
-model and outside tests. **These are grep occurrence counts, not files** — a review
-corrected an earlier version of this table that presented them as readers. Read as
-files, every payload field has exactly one and every derived-state field has none,
-which is the contrast that matters and the number the guard uses:
+`FilteredResult` (`packages/shared/src/shared/models/extraction.py`) is
+**already a typed run-state carrier**. Measured with the guard's own counter,
+counting production FILES that Load each attribute:
+
+* every **payload** field is read somewhere — `metadata` in 21 files, `entities`
+  in 9, `relations` in 8, and `removed_entities`, `merged_entity_groups`,
+  `match_candidates` and `predicted_edges` in 1 each;
+* of the **derived-state** fields, only `concept_alignment_report` is read at all
+  — in 1 file, which drops 5 of its 11 keys at the boundary.
+
+Three review rounds went into that paragraph and each of the first two appended a
+correction instead of replacing what it corrected, so the document kept recording
+its own history at the cost of still stating the error. The errors were: presenting
+grep OCCURRENCE counts as readers, and then "every derived-state field is read in
+none", which contradicted the table below it. This is the replacement.
+
+The original occurrence counts, kept because they are what the first draft cited:
 
 | field | kind | readers |
 |---|---|---|
@@ -90,12 +101,15 @@ five would have fired a banner (coverage 0.45 / 0.48 / 0.55 / 0.58 →
 | D1 | `extraction_chunking/extraction_metrics.py` + tests | **done (PC.1b)** | Superseded by `shared/regression/extraction_gate.summarise_run`, which computes the same two rates over the same keys **with** N.5d's per-metric input discipline. `measure_extraction` had no production caller. |
 | D2 | `frontend/src/lib/api/sources.ts` `getExtractionResult` | **done (PC.1b)** | Defined; no component called it. |
 | D3 | `FilteredResult.linked_entities`, `.llm_verification_results` | **done (PC.1b)** | Zero readers. `linked_entities` was a second copy of URIs that already travel in each entity's `properties`; `llm_verification_results` was never written at all. |
-| — | `FilteredResult.kg_resolution_report`, `.validation_report` | kept | Moved to ACCEPT with owners PC.3 and PC.6 — see below. A review's first pass listed them here as deletions, which would have been churn one phase before they are wanted. |
+| — | `kg_resolution_report` | kept, owner **PC.3** | Its AC needs a measured figure for how many rows cross-document resolution collapses. Listed here rather than deleted: removing a measurement one phase before it is wanted is churn. |
+| — | `validation_report` | kept, owner **PC.6** | Stage 11 is inert because no production call site passes an ontology to `FilteringWorkflow`; PC.6 owns making "the flag is on and it did nothing" visible. |
 
 ## ACCEPT — recorded, with an owner
 
 | Dropped | Boundary | Owner | Why there |
 |---|---|---|---|
+| `kg_resolution_report` (kept, no reader) | filtering → nothing | **PC.3** | The declaration in `tests/test_derived_state_has_readers.py` names PC.3; this row is the other half of that promise. |
+| `validation_report` (kept, no reader) | filtering → nothing | **PC.6** | Same, naming PC.6. A promise made in one place is not a promise, which is why the guard requires both. |
 | `persist_filtered_result`'s five counts (**W3**, code shipped) | persist → `run_extraction` | **PC.3** | The counts now reach `summary["persisted"]` and `extraction_result.metadata["persisted"]`, and `scripts/pc1b_handoff_probe.py` reads the durable copy — but no PRODUCTION consumer reads either. Filed honestly as accept-with-owner: PC.3's AC ("materially fewer than 117 rows, with a named figure") is what will read it. |
 | `source_chunk_id`, `source_grounding`, `extraction_context` never persisted | filtering → persist | **PC.3** | They have live in-run consumers; only the persist boundary drops them, and they are the evidence a cross-document match needs to be explainable |
 | `verdict_counts`, `method_counts`, `reason_counts`, `capped_type_fetches`, `alias_candidates` | alignment report → `filtering_stats` (7 of 11 keys copied) | **PC.2** / **PC.6** | `alias_candidates` is PC.2's containment signal; the counts are how "the flag is on and did nothing" becomes visible |
