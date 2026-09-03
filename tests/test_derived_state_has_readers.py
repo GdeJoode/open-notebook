@@ -6,8 +6,8 @@ place nothing reads. Track N found six such boundaries, each one phase after the
 phase that introduced it; the PC.1b inventory found roughly twenty.
 
 **Why this shape rather than a run object.** `FilteredResult` is already a typed
-run-state carrier, and on that one object the payload fields have 4/4/2/2 readers
-while the derived-state fields have 0/0/0/0. A carrier was not the missing thing, so
+run-state carrier, and on that one object every payload field is read in at least
+one production file while every derived-state field is read in none. A carrier was not the missing thing, so
 this is not a third carrier: it is the rule, made able to fail. A producer names its
 consumer or it goes — the generalisation of what N.5b decided about the Hearst miner.
 
@@ -47,7 +47,8 @@ EXTRACTION_MODEL = (
 
 #: Fields on the extraction result models that carry the PAYLOAD rather than
 #: derived state. They are out of scope: nobody has ever lost an entity list at a
-#: handoff, and the reader counts confirm it (4/4/2/2 against 0/0/0/0).
+#: handoff, and the reader counts confirm it: each is read somewhere, each
+#: derived-state field was read nowhere.
 _PAYLOAD_FIELDS = {
     "entities",
     "relations",

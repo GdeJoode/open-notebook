@@ -143,6 +143,30 @@ _OBSERVABILITY_COUNTERS = (
 )
 
 
+def _persisted_counts(persist_result: Any) -> Dict[str, int]:
+    """What `persist_filtered_result` actually wrote, for the caller.
+
+    Track PC.1b / W3. Returns ``{}`` when persistence did not run — filtering was
+    skipped, or the extraction found nothing — so the caller omits the key rather
+    than reporting five fabricated zeros. "Not measured" and "measured zero" stay
+    distinguishable, the rule N.5d's gate rests on and the same reason
+    `_observability_counters` below returns an empty dict.
+    """
+    if not isinstance(persist_result, dict):
+        return {}
+    return {
+        key: int(persist_result[key] or 0)
+        for key in (
+            "entities_upserted",
+            "entities_failed",
+            "relations_created",
+            "relations_merged",
+            "candidates_stored",
+        )
+        if key in persist_result
+    }
+
+
 def _observability_counters(metadata: Any) -> Dict[str, int]:
     """Lift the N.3/N.5a counters out of a result's metadata for the caller.
 
@@ -1044,9 +1068,15 @@ class EntityExtractionService:
         lands in `metadata["soft_nudge"]`. Meanwhile B.3c built the other half:
         the `notebook_event` table, its repository, a router filtering on
         `_KNOWN_NUDGE_EVENT_TYPES`, and `SchemaSoftNudge.tsx` polling it. The two
-        halves have never met — `workflow.py` reads
-        `merged, _decision = await run_multi_schema(...)`, the underscore being
-        the discard, and `notebook_event` held ZERO rows.
+        halves had never met, and `notebook_event` held ZERO rows.
+
+        Note what the defect was NOT. `workflow.py` reads
+        `merged, _decision = await run_multi_schema(...)`, and an earlier version
+        of this docstring blamed that underscore. A review showed otherwise: the
+        verdict is already written into `merged.metadata["soft_nudge"]` and this
+        method reads exactly that key. Nothing was dropped in transit — the state
+        was carried faithfully and no writer acted on it, which is a better
+        illustration of the phase's thesis than the version I first wrote.
 
         Measured on the five sources carrying Pass-1 rows before this landed: all
         five would have fired a banner (coverage 0.45 / 0.48 / 0.55 / 0.58 ->
@@ -2008,6 +2038,22 @@ class EntityExtractionService:
                 # the filtering try/except, with its own log-and-continue guard.
                 await self._run_triage(source_id, persist_result)
 
+        # PC.1b / W3: record what was WRITTEN before the row is saved.
+        #
+        # It goes on the RESULT METADATA as well as the summary, and that is not
+        # belt-and-braces. The summary lands in `job.result`, which nothing in the
+        # repo reads — writing only there would have created a fresh producer with
+        # no consumer, in the phase whose whole point is to stop doing that.
+        # Building `scripts/pc1b_handoff_probe.py` is what caught it. The metadata
+        # copy is persisted on `extraction_result` and the probe reads it.
+        #
+        # It cannot sit beside the filtering stats — those are assigned before
+        # persistence has run — nor beside the summary below, because
+        # `_save_result` has already happened by then.
+        written = _persisted_counts(persist_result)
+        if written:
+            result.metadata["persisted"] = written
+
         # 7. Persist raw extraction results
         await self._save_result(source_id, result)
 
@@ -2028,20 +2074,8 @@ class EntityExtractionService:
         # graph — a real and interesting gap that the system producing it had no
         # way to report. PC.3's own AC ("materially fewer than 117 rows, with a
         # named figure") needs this instrument.
-        if isinstance(persist_result, dict):
-            written = {
-                key: persist_result[key]
-                for key in (
-                    "entities_upserted",
-                    "entities_failed",
-                    "relations_created",
-                    "relations_merged",
-                    "candidates_stored",
-                )
-                if key in persist_result
-            }
-            if written:
-                summary["persisted"] = written
+        if written:
+            summary["persisted"] = written
         logger.info(
             f"Entity extraction completed for source {source_id}: "
             f"{result.entity_count} entities, {result.relation_count} relations"

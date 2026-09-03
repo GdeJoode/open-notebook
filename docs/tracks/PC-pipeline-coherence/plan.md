@@ -173,8 +173,11 @@ lives in `handoff-inventory.md`; this entry records the decision.
 
 **The user asked for the most structural fix and expected a run object. Measured,
 it is not.** `FilteredResult` is ALREADY a typed run-state carrier, and on that one
-object the payload fields have 4/4/2/2 readers while the derived-state fields have
-0/0/0/0. Both experiments have already been run — the untyped bag
+object every payload field is read in at least one production file and every
+derived-state field is read in none. (An earlier draft wrote "4/4/2/2 readers";
+a review caught that those were grep OCCURRENCE counts, and each payload field is
+read in exactly one file. The contrast is 1-versus-0, which points the same way
+and is the number the guard actually uses.) Both experiments have already been run — the untyped bag
 (`ExtractionResult.metadata`) and the typed carrier — and state died in each. The
 fields are not orphaned because nothing carried them; most are carried faithfully
 to a place where nothing reads them. A third carrier moves the corpse.

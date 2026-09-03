@@ -26,7 +26,10 @@ with a repo-wide grep.
 
 `FilteredResult` (`packages/shared/src/shared/models/extraction.py:194-231`) is
 **already a typed run-state carrier**. Reader counts on that one object, outside the
-model and outside tests:
+model and outside tests. **These are grep occurrence counts, not files** — a review
+corrected an earlier version of this table that presented them as readers. Read as
+files, every payload field has exactly one and every derived-state field has none,
+which is the contrast that matters and the number the guard uses:
 
 | field | kind | readers |
 |---|---|---|
@@ -68,9 +71,15 @@ building it twice would be churn; what changes is the honesty of the label. This
 is the phase's own rule applied to the phase's own work.
 
 **W1 is the sharpest case in the repo**: producer, table, repository, router and
-React component all exist; only the write between them is missing.
-`workflow.py:157` reads `merged, _decision = await run_multi_schema(...)` — the
-underscore is the discard. Measured on the five sources holding Pass-1 rows, all
+React component all exist; only the write between them was missing.
+
+An earlier version of this file said the verdict was discarded at
+`workflow.py:157` (`merged, _decision = await run_multi_schema(...)`). A review
+showed that is wrong, and the correction strengthens the point: `run_multi_schema`
+already writes the verdict into `merged.metadata["soft_nudge"]`, and
+`_emit_soft_nudge` reads exactly that key rather than the discarded return value.
+The state was **carried faithfully and nothing acted on it** — which is this
+file's thesis, not an exception to it. Measured on the five sources holding Pass-1 rows, all
 five would have fired a banner (coverage 0.45 / 0.48 / 0.55 / 0.58 →
 `schema_mismatch`, 0.85 → `extension_suggested`).
 
@@ -106,6 +115,31 @@ through a working router, and **nothing has ever written one**. This is the mirr
 image of every row above and it is why the invariant checks both directions is left
 as a follow-up: the current test catches producers without consumers, not consumers
 without producers. Closing this specific one is W1.
+
+## Found by the PC.1b review, owned elsewhere
+
+- **`soft_nudge_dismissed` is never re-armed.** `schemas.py:1485` sets it `True`
+  and a comment claims the B.1e orchestrator sets it back; nothing in the
+  repository ever writes `False`. Combined with W1's duplicate suppression, one
+  click on "Don't show again" permanently silences the wire this phase just
+  built, while events accumulate unread and suppress each other. → **PC.5**, with
+  the dismissal path it owns.
+- **Suppression hides the worse document behind the better one.** The first
+  unread event of a type blocks later ones, and its payload keeps the FIRST
+  document's coverage. Latent today — `SchemaSoftNudge.tsx` renders a static
+  per-type string and never reads the payload — and live the moment anyone
+  surfaces it. → **PC.5**.
+- **Deleting the four uncollectable test files cost real coverage**, even though
+  their effective coverage was already zero: `clean_thinking_content` and
+  `parse_thinking_content` in `shared/utils/text.py` now have no test anywhere.
+  `split_text`, `token_count` and `compare_versions` are covered elsewhere. →
+  unowned; named so it is a known gap rather than a silent one.
+- **Four of this phase's own guards live in package test directories**, which
+  `unit-guards.yml` does not run — in the phase whose header names "it runs
+  nowhere" as failure mode #1. Widening the job is not free: `pytest tests
+  apps/app-main/tests` in one invocation dies with `Plugin already registered
+  under a different name` under `--import-mode=importlib`. → **PC.6**, with the
+  configuration coherence it owns.
 
 ## Bugs found while compiling this
 
