@@ -228,6 +228,32 @@ class TestAPartialCounterSetIsNotAMeasurement:
         assert mixed["abstain_rate"] is None
         assert mixed["documents_missing_counters"]["abstain_rate"] == 1
 
+    def test_each_rate_is_guarded_separately_not_by_the_other_s_luck(self):
+        """A mutation found this gap: dropping the shortfall check from
+        `over_generation_rate` alone left every test green.
+
+        The reason is that the legacy fixture carries only `chunk_count`, so
+        `entities_extracted` sums to 0 and the `extracted > 0` guard catches it by
+        accident — which is exactly the accident the review described, where
+        over-generation "escapes only by luck". A document carrying the ABSTENTION
+        inputs and not the extraction ones separates the two guards, and nothing
+        in the suite had one.
+        """
+        abstention_only = {"abstained_chunks": 4, "chunk_count": 10}
+        s = summarise_run([_doc(3, counters=abstention_only)])
+
+        assert s["abstain_rate"] == pytest.approx(0.4)  # its own inputs are there
+        assert s["over_generation_rate"] is None  # and these are not
+        assert s["documents_missing_counters"] == {"over_generation_rate": 1}
+
+    def test_the_mirror_case_extraction_without_abstention(self):
+        extraction_only = {"entities_extracted": 10, "entities_kept": 4}
+        s = summarise_run([_doc(4, counters=extraction_only)])
+
+        assert s["over_generation_rate"] == pytest.approx(0.6)
+        assert s["abstain_rate"] is None
+        assert s["documents_missing_counters"] == {"abstain_rate": 1}
+
     def test_a_complete_set_still_measures(self):
         """The vacuity guard: strictness must not make every rate `None`, or the
         gate's cost half would be permanently skipped for a different reason.
