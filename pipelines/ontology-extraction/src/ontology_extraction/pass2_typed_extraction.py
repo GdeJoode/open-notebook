@@ -132,8 +132,30 @@ def _domain_ner_enabled() -> bool:
 
 
 def _hearst_isa_enabled() -> bool:
-    """Track N.2: seed deterministic Hearst is-a relations (default ON)."""
-    return _env_bool("EXTRACTION_HEARST_ISA", True)
+    """Track N.2: seed deterministic Hearst is-a relations (default OFF, N.5b).
+
+    Measured on the project's eight-document corpus while this defaulted ON: 220
+    raw Hearst pairs across 3823 chunks, 138 of them distinct, and **zero**
+    `is_a` edges in the graph — of 1895 relations in 100 types, not one. The
+    precision gate is why: both endpoints must be entities the LLM extracted for
+    the SAME chunk. Under the much looser reading "both endpoints exist anywhere
+    in this notebook" only 15 distinct pairs survive, and their quality is mixed
+    — `agrariers is_a ondernemers` is right, `banken is_a voedselketen` is wrong,
+    `PD is_a Control variables` is a table artefact, and
+    `projecten is_a uitvoeringsactiviteiten` repeats fifteen times.
+
+    So this ships explicitly off rather than nominally on. The review finding it
+    answers (I3) was not "the miner is bad" but "a producer whose output survives
+    by accident": `is_a` was declared in no ontology, and the mined edges lived
+    only because `OntologyValidator` downgrades an unknown predicate to a WARNING
+    outside strict mode. One flag flip deleted them silently.
+
+    Both halves of N.5b matter and neither works alone. `is_a` is now declared in
+    the three root ontologies, so a run that turns this back on produces a
+    predicate the validator recognises under strict mode too; and this default
+    means nothing flows until somebody decides it should.
+    """
+    return _env_bool("EXTRACTION_HEARST_ISA", False)
 
 
 def _not_a_concept_enabled() -> bool:
