@@ -81,3 +81,28 @@ Still open inside this track's code, recorded rather than fixed:
 - The baseline predates PC.1's applicability-sample fix and N.5a's counters, so
   its entity counts come from runs that mostly took the legacy single-schema path.
   Re-measuring is a live run; until then the gate's two cost dimensions skip.
+
+## Found while closing N.5, outside this track
+
+`pipelines/entity-filtering/tests/test_llm_matcher.py::TestMatchPair::test_calls_ollama_for_unknown_pair`
+fails, and has failed since before Track PC.1 — verified by running it at
+`b8a5238f`, so it is neither N.5's nor PC.1's. Not fixed here because it belongs
+to Track K's code, but worth recording because the *shape* is one this track has
+paid for repeatedly.
+
+The test builds its matcher with `LLMMatcher.__new__` and sets seven attributes.
+Production `__init__` sets four more (`_agentic_enabled`, `_context_provider`,
+`_agentic_lower`, `_agentic_upper`), so `match_pair` raises `AttributeError` — and
+the broad `except Exception` around the whole LLM call converts that programming
+error into a business verdict:
+
+```
+{'match': False, 'confidence': 0.0,
+ 'reasoning': "error: 'LLMMatcher' object has no attribute '_agentic_enabled'"}
+```
+
+Two separate problems. The fixture is D-N4-14 rule 2 exactly — a fixture must
+build the PRODUCTION argument set — and it is what makes the test fail. The
+`except` is the more interesting one: any future defect inside that `try` block
+will be reported as "these two entities are not the same, confidence 0.0" rather
+than as an error, and a resolution run would carry on quietly.
