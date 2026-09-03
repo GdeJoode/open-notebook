@@ -57,8 +57,15 @@ dies just as reliably. So the fix is not a third carrier. It is the invariant in
 |---|---|---|---|---|
 | W1 | `run_multi_schema` → `ExtractionWorkflow.extract` | the `SoftNudgeDecision` | `multi_schema_orchestrator.py:667,716` | `notebook_event` table + router `notebook_events.py:68` + `SchemaSoftNudge.tsx` — **0 rows ever written** |
 | W2 | `_merge_results` → persist | merged `type_tags` / `primary_type` | `multi_schema_orchestrator.py:796-798` | `entity` rows; `upsert_entity` already unions `type_tags` server-side (`entity.py:204-207`) |
-| W3 | `persist_filtered_result` → `run_extraction` | `entities_upserted`, `entities_failed`, `relations_created`, `relations_merged`, `candidates_stored` | `entity_persistence_service.py:806-813` | PC.3's own AC — "materially fewer than 117 rows, with a named figure" has no producer today |
 | W3b | re-filter → the stored row | a prior run's `concept_alignment` sub-dict | `entity_extraction_service.py:2166-2184` overwrites | the row itself; the erase is silent |
+
+**W3 was filed here and does not belong here.** A review pointed out that its
+"waiting consumer" was given as *PC.3's own AC* — and a future phase's acceptance
+criterion is not a waiting reader. By this file's own cut rule that is an ACCEPT
+row, and it has moved to that table. The code stays (`summary["persisted"]` and
+`extraction_result.metadata["persisted"]`), because PC.3 needs the instrument and
+building it twice would be churn; what changes is the honesty of the label. This
+is the phase's own rule applied to the phase's own work.
 
 **W1 is the sharpest case in the repo**: producer, table, repository, router and
 React component all exist; only the write between them is missing.
@@ -69,16 +76,18 @@ five would have fired a banner (coverage 0.45 / 0.48 / 0.55 / 0.58 →
 
 ## DELETE — superseded or unused
 
-| # | What | Why |
-|---|---|---|
-| D1 | `apps/app-main/src/app_main/services/extraction_chunking/extraction_metrics.py` + tests | Superseded by `shared/regression/extraction_gate.summarise_run`, which computes the same two rates over the same metadata keys **with** N.5d's per-metric input discipline. `measure_extraction` has no production caller at all. |
-| D2 | `frontend/src/lib/api/sources.ts` `getExtractionResult` | Defined; no component calls it. |
-| D3 | `FilteredResult.kg_resolution_report`, `.validation_report`, `.linked_entities`, `.llm_verification_results` | Zero readers each. N.5b ruled out shipping a producer that survives by accident. |
+| # | What | Status | Why |
+|---|---|---|---|
+| D1 | `extraction_chunking/extraction_metrics.py` + tests | **done (PC.1b)** | Superseded by `shared/regression/extraction_gate.summarise_run`, which computes the same two rates over the same keys **with** N.5d's per-metric input discipline. `measure_extraction` had no production caller. |
+| D2 | `frontend/src/lib/api/sources.ts` `getExtractionResult` | **done (PC.1b)** | Defined; no component called it. |
+| D3 | `FilteredResult.linked_entities`, `.llm_verification_results` | **done (PC.1b)** | Zero readers. `linked_entities` was a second copy of URIs that already travel in each entity's `properties`; `llm_verification_results` was never written at all. |
+| — | `FilteredResult.kg_resolution_report`, `.validation_report` | kept | Moved to ACCEPT with owners PC.3 and PC.6 — see below. A review's first pass listed them here as deletions, which would have been churn one phase before they are wanted. |
 
 ## ACCEPT — recorded, with an owner
 
 | Dropped | Boundary | Owner | Why there |
 |---|---|---|---|
+| `persist_filtered_result`'s five counts (**W3**, code shipped) | persist → `run_extraction` | **PC.3** | The counts now reach `summary["persisted"]` and `extraction_result.metadata["persisted"]`, and `scripts/pc1b_handoff_probe.py` reads the durable copy — but no PRODUCTION consumer reads either. Filed honestly as accept-with-owner: PC.3's AC ("materially fewer than 117 rows, with a named figure") is what will read it. |
 | `source_chunk_id`, `source_grounding`, `extraction_context` never persisted | filtering → persist | **PC.3** | They have live in-run consumers; only the persist boundary drops them, and they are the evidence a cross-document match needs to be explainable |
 | `verdict_counts`, `method_counts`, `reason_counts`, `capped_type_fetches`, `alias_candidates` | alignment report → `filtering_stats` (7 of 11 keys copied) | **PC.2** / **PC.6** | `alias_candidates` is PC.2's containment signal; the counts are how "the flag is on and did nothing" becomes visible |
 | `_save_result` stores raw pre-filter entities beside post-filter `metadata["filtering"]` | `run_extraction` → `extraction_result` | **PC.6** | Needs a decision (label both, or stop storing raw), not a patch |

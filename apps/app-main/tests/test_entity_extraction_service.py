@@ -1892,6 +1892,93 @@ class TestTheCountersCrossOutOfTheService:
         assert measured["abstain_rate"] == pytest.approx(9 / 20)
 
 
+class TestARefilterDoesNotEraseWhatItDidNotMeasure:
+    """PC.1b / W3b — the boundary a review proved had no guard at all.
+
+    `run_filtering_only` builds a six-key `stats` dict and assigned it over
+    `metadata["filtering"]`. The extraction path's version of that key also
+    carries a `concept_alignment` block with the alignment counters, so any
+    re-filter destroyed them — silently, and with nothing to notice.
+
+    The review reverted the fix and ran both suites: 1839 passed, 69 passed, zero
+    failures. The phase's own AC says every wired boundary has a test that fails
+    when the state stops crossing, and this one did not. This is that test.
+    """
+
+    @staticmethod
+    async def _refilter(previous_metadata):
+        """Drive the real `run_filtering_only` and return what it wrote back."""
+        svc = EntityExtractionService(source_repo=AsyncMock())
+        written = {}
+
+        class _Workflow:
+            def __init__(self, **kwargs):
+                pass
+
+            async def process(self, result, **kwargs):
+                return FilteredResult(entities=[], relations=[])
+
+        row = {
+            "id": "extraction_result:1",
+            "entities": [{"text": "X", "label": "L"}],
+            "relations": [],
+            "metadata": previous_metadata,
+        }
+
+        async def fake_query(query, params=None, *a, **kw):
+            if query.strip().startswith("UPDATE"):
+                written.update(params or {})
+                return []
+            return [row]
+
+        with patch(
+            "app_main.services.entity_extraction_service.execute_query",
+            AsyncMock(side_effect=fake_query),
+        ), patch(
+            "app_main.services.entity_extraction_service.FilteringWorkflow",
+            _Workflow,
+        ), patch.object(
+            EntityExtractionService, "_embed_entities", AsyncMock()
+        ), patch.object(
+            EntityExtractionService, "_persistence", AsyncMock(), create=True
+        ):
+            await svc.run_filtering_only(source_id="source:B")
+        return written.get("metadata", {})
+
+    @pytest.mark.asyncio
+    async def test_the_alignment_counters_survive_a_refilter(self):
+        metadata = await self._refilter(
+            {
+                "filtering": {
+                    "entities_before": 9,
+                    "concept_alignment": {"aligned": 4, "gaps_recorded": 2},
+                }
+            }
+        )
+        assert metadata["filtering"]["concept_alignment"] == {
+            "aligned": 4,
+            "gaps_recorded": 2,
+        }
+
+    @pytest.mark.asyncio
+    async def test_the_keys_this_path_recomputes_still_win(self):
+        """Vacuity guard. A merge that preferred the OLD values would keep the
+        alignment block and also keep a stale `entities_before`, which is worse
+        than the overwrite it replaced.
+        """
+        metadata = await self._refilter(
+            {"filtering": {"entities_before": 999, "concept_alignment": {"aligned": 4}}}
+        )
+        assert metadata["filtering"]["entities_before"] == 1
+        assert metadata["filtering"]["concept_alignment"] == {"aligned": 4}
+
+    @pytest.mark.asyncio
+    async def test_a_row_with_no_previous_filtering_block_is_unaffected(self):
+        metadata = await self._refilter({})
+        assert metadata["filtering"]["entities_before"] == 1
+        assert "concept_alignment" not in metadata["filtering"]
+
+
 class TestWhatWasWrittenReachesTheSummary:
     """PC.1b / W3 — the difference between extracted and persisted, expressible.
 
@@ -1918,7 +2005,14 @@ class TestWhatWasWrittenReachesTheSummary:
         )
         return persistence
 
-    async def _run(self, svc, persistence):
+    async def _run(self, svc, persistence, save_mock=None):
+        """`save_mock` for the same reason `TestPass1OutcomeReachesTheCurator._run`
+        takes one: a caller patching `_save_result` from the OUTSIDE has its patch
+        shadowed by the one below, so its assertions run against a double nothing
+        ever called. That trap was found by review in PC.1 and it caught this
+        class too — a helper that patches a collaborator must let the caller
+        supply it.
+        """
         deals = _make_ontology("deals")
         mock_manager = MagicMock()
         mock_manager.list_ontologies = AsyncMock(return_value=["deals"])
@@ -1936,7 +2030,9 @@ class TestWhatWasWrittenReachesTheSummary:
         ) as workflow_cls, patch(
             "app_main.services.entity_extraction_service.make_default_llm_caller",
             new=AsyncMock(return_value=AsyncMock()),
-        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+        ), patch.object(
+            svc, "_save_result", save_mock or AsyncMock()
+        ), patch.object(
             svc, "_embed_entities", AsyncMock()
         ), patch.object(svc, "_persistence", persistence), patch.object(
             EntityExtractionService,
@@ -1976,6 +2072,32 @@ class TestWhatWasWrittenReachesTheSummary:
         assert summary["entity_count"] == 1  # what the LLM produced
         assert summary["persisted"]["entities_upserted"] == 0  # what was written
         assert summary["entity_count"] != summary["persisted"]["entities_upserted"]
+
+    def test_the_counts_helper_distinguishes_absent_from_zero(self):
+        from app_main.services.entity_extraction_service import _persisted_counts
+
+        assert _persisted_counts(None) == {}
+        assert _persisted_counts("not a dict") == {}
+        assert _persisted_counts({"persisted_entity_ids": []}) == {}
+        # A measured zero survives; it is not the same as "persistence did not run".
+        assert _persisted_counts({"entities_upserted": 0}) == {"entities_upserted": 0}
+
+    @pytest.mark.asyncio
+    async def test_the_counts_are_persisted_where_something_reads_them(
+        self, base_source_repo
+    ):
+        """`summary` lands in `job.result`, which nothing in the repo reads.
+        Writing only there would have created a fresh producer with no consumer,
+        in the phase whose point is to stop doing that. The metadata copy is
+        durable on `extraction_result` and IS read, by the PC.1b probe.
+        """
+        svc = EntityExtractionService(source_repo=base_source_repo)
+        saved = AsyncMock()
+        await self._run(svc, self._persistence(), save_mock=saved)
+
+        assert saved.await_count == 1
+        _source_id, persisted_result = saved.await_args.args
+        assert persisted_result.metadata["persisted"]["entities_upserted"] == 3
 
     @pytest.mark.asyncio
     async def test_a_run_that_persisted_nothing_says_nothing(self, base_source_repo):

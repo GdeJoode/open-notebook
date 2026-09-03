@@ -8,7 +8,6 @@ import {
   SourceStatusResponse,
   CreateSourceRequest,
   UpdateSourceRequest,
-  ExtractionResultResponse,
   RunEntitiesOptions,
   RelatedSourceHybrid,
 } from '@/lib/types/api'
@@ -199,12 +198,6 @@ export const sourcesApi = {
     return response.data
   },
 
-  getExtractionResult: async (id: string): Promise<ExtractionResultResponse> => {
-    const response = await apiClient.get<ExtractionResultResponse>(
-      `/sources/${id}/extraction-result`
-    )
-    return response.data
-  },
 
   runFiltering: async (id: string, options?: {
     dedup_enabled?: boolean

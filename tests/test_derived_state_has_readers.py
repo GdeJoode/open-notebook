@@ -36,7 +36,7 @@ from __future__ import annotations
 import ast
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 import pytest
 
@@ -82,61 +82,138 @@ _OWNED_WITHOUT_READER: Dict[str, str] = {
 }
 
 
-def _model_classes(tree: ast.AST) -> Dict[str, List[str]]:
-    """Map class name -> annotated field names, for every class in a module."""
-    found: Dict[str, List[str]] = {}
+#: Attribute names common enough elsewhere in the codebase that a read of them
+#: cannot be attributed to these models by name alone. A derived-state field must
+#: not use one, because the guard below could not tell its readers from anybody
+#: else's — measured today: `confidence` reads in 27 files, `status` 26,
+#: `metrics` 9. A review planted `metrics` and `confidence` as dead fields and
+#: the first version of this guard stayed green.
+#:
+#: This converts an undetectable case into a naming rule, which is the honest
+#: trade: the guard cannot do type inference, so it refuses names it would have
+#: to guess about.
+_AMBIGUOUS_FIELD_NAMES = frozenset(
+    {
+        "confidence",
+        "status",
+        "metrics",
+        "report",
+        "errors",
+        "summary",
+        "result",
+        "results",
+        "data",
+        "config",
+        "stats",
+        "count",
+        "name",
+        "text",
+        "value",
+        "items",
+    }
+)
+
+
+def _result_model_names(tree: ast.AST) -> Set[str]:
+    """`ExtractionResult` and everything that inherits from it, transitively.
+
+    A review planted `class ResolvedResult(FilteredResult)` with a dead field and
+    the first version — which filtered on a hard-coded pair of class names — was
+    green. Any subclass carries the same handoff risk, so the set is derived.
+    """
+    by_name: Dict[str, List[str]] = {}
     for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        fields = [
-            stmt.target.id
-            for stmt in node.body
-            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
-        ]
-        if fields:
-            found[node.name] = fields
-    return found
+        if isinstance(node, ast.ClassDef):
+            by_name[node.name] = [
+                b.id for b in node.bases if isinstance(b, ast.Name)
+            ]
+    models = {"ExtractionResult"}
+    changed = True
+    while changed:
+        changed = False
+        for name, bases in by_name.items():
+            if name not in models and models & set(bases):
+                models.add(name)
+                changed = True
+    return models
 
 
-def _derived_state_fields(source: str) -> Set[str]:
-    """Every annotated field on the extraction models that is not payload."""
-    classes = _model_classes(ast.parse(source))
-    fields: Set[str] = set()
-    for name, declared in classes.items():
-        if name not in {"ExtractionResult", "FilteredResult"}:
+def _derived_state_fields(source: str) -> Dict[str, str]:
+    """``{field: declaring class}`` for every non-payload field on the models."""
+    tree = ast.parse(source)
+    models = _result_model_names(tree)
+    fields: Dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name not in models:
             continue
-        fields.update(f for f in declared if f not in _PAYLOAD_FIELDS)
+        for stmt in node.body:
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                if stmt.target.id not in _PAYLOAD_FIELDS:
+                    fields[stmt.target.id] = node.name
     return fields
 
 
-def _reader_count(field: str) -> int:
-    """Production readers of ``.field``, excluding tests and the model itself.
-
-    Uses git grep so the search respects .gitignore and never walks .venv or
-    node_modules — a plain filesystem walk here was measured taking minutes.
-    """
+def _production_sources() -> List[Path]:
+    """Every production .py file git tracks, tests and the model excluded."""
     result = subprocess.run(
-        ["git", "grep", "-l", "--", f"\\.{field}\\b"],
+        ["git", "ls-files", "--", "*.py"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
     )
-    paths = [p for p in result.stdout.splitlines() if p.strip()]
-    return len(
-        [
-            p
-            for p in paths
-            if p.endswith(".py")
-            and "/tests/" not in p
-            and not Path(p).name.startswith("test_")
-            and not p.endswith("shared/models/extraction.py")
-        ]
-    )
+    return [
+        REPO_ROOT / p
+        for p in result.stdout.splitlines()
+        if p.endswith(".py")
+        # `startswith` as well as `in`: the repo's own root suite is `tests/…`,
+        # which contains no leading slash and slipped through the first version.
+        # Control 2 below caught it, which is what that control is for.
+        and not p.startswith("tests/")
+        and "/tests/" not in p
+        and not Path(p).name.startswith("test_")
+        and not p.endswith("shared/models/extraction.py")
+    ]
+
+
+def _count_reads(field: str, sources: Optional[List[Path]] = None) -> int:
+    """How many production files READ ``.field`` — not write it, not name it.
+
+    The rule this guard states is "a producer names its CONSUMER". The first
+    version counted `git grep '\.field'`, which matches a write as readily as a
+    read: a review planted a single line, `result.zzz_orphan_writeonly_report =
+    {"n": 1}`, and the guard went green. The four orphans it did find were found
+    only incidentally — all four were written through constructor kwargs, which
+    carry no leading dot.
+
+    So: parse, and count `ast.Attribute` nodes in a **Load** context only. A
+    file that merely assigns the field is a second producer, not a consumer.
+    """
+    seen = 0
+    for path in sources if sources is not None else _production_sources():
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr == field
+                and isinstance(node.ctx, ast.Load)
+            ):
+                seen += 1
+                break
+    return seen
 
 
 @pytest.fixture(scope="module")
-def derived_fields() -> Set[str]:
+def derived_fields() -> Dict[str, str]:
     return _derived_state_fields(EXTRACTION_MODEL.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def production_sources() -> List[Path]:
+    """Parsed once. Re-walking the tree per field made the suite minutes long."""
+    return _production_sources()
 
 
 # ---------------------------------------------------------------------------
@@ -145,40 +222,40 @@ def derived_fields() -> Set[str]:
 
 
 def test_the_scanner_reaches_the_model():
-    """Control 1: path resolution. Without this, a moved or renamed model file
-    makes the sweep below find nothing and pass — the vacuity failure that made
-    PC.1's first attempt fully green and completely inert.
+    """Control 1: path resolution. Without it, a moved model file makes the sweep
+    find nothing and pass — the vacuity failure that made PC.1's first attempt
+    fully green and completely inert.
     """
     assert EXTRACTION_MODEL.exists(), f"{EXTRACTION_MODEL} not found"
     assert "class FilteredResult" in EXTRACTION_MODEL.read_text(encoding="utf-8")
 
 
-def test_the_scanner_finds_a_field_it_should(derived_fields: Set[str]):
-    """Control 2: detection. `concept_alignment_report` is derived state and is
-    still declared, so the AST walk must see it. If the walk breaks, this fails
-    rather than the sweep reporting an empty set.
+def test_the_scanner_walks_the_production_tree(production_sources: List[Path]):
+    """Control 2: the file list. An empty or tiny list would make every field
+    look like an orphan, or — with the `or` the other way — like a reader.
+    """
+    assert len(production_sources) > 200, len(production_sources)
+    assert any(p.name == "workflow.py" for p in production_sources)
+    assert not any("/tests/" in str(p) for p in production_sources)
+
+
+def test_the_scanner_finds_a_field_it_should(derived_fields: Dict[str, str]):
+    """Control 3: detection. `concept_alignment_report` is derived state and is
+    still declared, so the AST walk must see it and attribute it to its class.
     """
     assert derived_fields, "no derived-state fields detected at all"
-    assert "concept_alignment_report" in derived_fields
+    assert derived_fields.get("concept_alignment_report") == "FilteredResult"
 
 
-def test_payload_fields_are_excluded_deliberately(derived_fields: Set[str]):
-    """Control 3: the exclusion list is doing work rather than swallowing the set.
-    `entities` must be excluded, `concept_alignment_report` must not be.
-    """
+def test_payload_fields_are_excluded_deliberately(derived_fields: Dict[str, str]):
+    """Control 4: the exclusion list does work rather than swallowing the set."""
     assert "entities" not in derived_fields
     assert "merged_entity_groups" not in derived_fields
-    assert _PAYLOAD_FIELDS & derived_fields == set()
+    assert _PAYLOAD_FIELDS & set(derived_fields) == set()
 
 
 def test_a_planted_dead_field_is_caught():
-    """Control 4, the one that makes the promise real.
-
-    Runs the SAME detector over a source string containing a field that does not
-    exist anywhere in the repo. No file is written. If the detector is ever
-    narrowed to a hard-coded list of today's names, this fails — which is the
-    failure mode a guard like this dies of.
-    """
+    """Control 5: the detector is not a hard-coded list of today's names."""
     planted = '''
 from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
@@ -196,17 +273,59 @@ class FilteredResult(ExtractionResult):
     detected = _derived_state_fields(planted)
     assert "a_freshly_added_report_nobody_reads" in detected
     assert "predicted_edges" not in detected  # payload, correctly excluded
-    assert _reader_count("a_freshly_added_report_nobody_reads") == 0
+    assert _count_reads("a_freshly_added_report_nobody_reads") == 0
 
 
-def test_the_reader_count_can_tell_read_from_unread():
-    """Control 5: the counter itself. A counter that returns 0 for everything
-    would make the guard below pass trivially; one that returns >0 for everything
-    would make it fail loudly and get deleted. Pin both ends against fields whose
-    status PC.1b measured.
+def test_a_dead_field_on_a_SUBCLASS_is_caught():
+    """Control 6, from review finding 2b. The first version filtered on a
+    hard-coded `{"ExtractionResult", "FilteredResult"}`, so a new subclass was
+    invisible — a planted `class ResolvedResult(FilteredResult)` with a dead
+    field left the guard green. Inheritance is now resolved transitively.
     """
-    assert _reader_count("merged_entity_groups") > 0
-    assert _reader_count("a_field_that_certainly_does_not_exist_anywhere") == 0
+    planted = '''
+from typing import Any, Dict, Optional
+from pydantic import BaseModel
+
+
+class ExtractionResult(BaseModel):
+    entities: list = []
+
+
+class FilteredResult(ExtractionResult):
+    predicted_edges: list = []
+
+
+class ResolvedResult(FilteredResult):
+    cross_document_resolution_report: Optional[Dict[str, Any]] = None
+'''
+    detected = _derived_state_fields(planted)
+    assert detected.get("cross_document_resolution_report") == "ResolvedResult"
+
+
+def test_a_write_is_not_mistaken_for_a_read(tmp_path: Path):
+    """Control 7, from review finding 2c — the decisive one.
+
+    The rule says a producer names its CONSUMER. The first version counted
+    `git grep '\.field'`, which matches an assignment as readily as a read, so a
+    single planted line — `result.zzz_orphan_writeonly_report = {"n": 1}` — made
+    the guard green. The four orphans it did find were found only incidentally:
+    all four were written through constructor kwargs, which carry no leading dot.
+    """
+    writer = tmp_path / "writer.py"
+    writer.write_text("def f(result):\n    result.zzz_only_written = {'n': 1}\n")
+    reader = tmp_path / "reader.py"
+    reader.write_text("def g(result):\n    return result.zzz_also_read\n")
+
+    assert _count_reads("zzz_only_written", [writer, reader]) == 0
+    assert _count_reads("zzz_also_read", [writer, reader]) == 1
+
+
+def test_the_counter_can_tell_read_from_unread(production_sources: List[Path]):
+    """Control 8: the counter itself. All-zero would make the guard pass
+    trivially; all-nonzero would make it fail loudly and get deleted.
+    """
+    assert _count_reads("concept_alignment_report", production_sources) > 0
+    assert _count_reads("zzz_certainly_not_an_attribute_anywhere", production_sources) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -214,22 +333,42 @@ def test_the_reader_count_can_tell_read_from_unread():
 # ---------------------------------------------------------------------------
 
 
-def test_every_derived_state_field_has_a_reader_or_an_owner(derived_fields: Set[str]):
-    """The invariant. A field that measures something must be read by something.
+def test_no_derived_state_field_uses_an_ambiguous_name(derived_fields: Dict[str, str]):
+    """A field whose name is common elsewhere cannot be checked by this guard.
+
+    From review finding 2a: `confidence` is read in 27 production files and
+    `metrics` in 9, so a dead field with either name would look well-read. The
+    guard cannot do type inference, so it refuses the names it would have to
+    guess about — and says which, rather than silently passing them.
+    """
+    ambiguous = sorted(set(derived_fields) & _AMBIGUOUS_FIELD_NAMES)
+    assert not ambiguous, (
+        "derived-state fields with names too common to attribute: "
+        + ", ".join(ambiguous)
+        + ". Rename them (e.g. `metrics` -> `extraction_metrics_report`) so a "
+        "read of the name can only mean this model."
+    )
+
+
+def test_every_derived_state_field_has_a_reader_or_an_owner(
+    derived_fields: Dict[str, str], production_sources: List[Path]
+):
+    """The invariant. A field that measures something must be READ by something.
 
     When this fails, the fix is one of three — and "add it to the allow-list" is
     only the third:
 
     1. Give it a reader. It was probably measured for a purpose.
     2. Delete it. N.5b ruled out shipping a producer that survives by accident.
-    3. Add it to `_OWNED_WITHOUT_READER` **and** add a row to
+    3. Add it to `_OWNED_WITHOUT_READER` **and** a row to
        `docs/tracks/PC-pipeline-coherence/handoff-inventory.md` naming the phase
        that will do (1) or (2). That is a deliberate, reviewable act.
     """
     orphans = sorted(
         field
         for field in derived_fields
-        if field not in _OWNED_WITHOUT_READER and _reader_count(field) == 0
+        if field not in _OWNED_WITHOUT_READER
+        and _count_reads(field, production_sources) == 0
     )
     assert not orphans, (
         "derived state with no reader and no owner phase: "
@@ -240,9 +379,9 @@ def test_every_derived_state_field_has_a_reader_or_an_owner(derived_fields: Set[
     )
 
 
-def test_the_allow_list_does_not_outlive_its_entries(derived_fields: Set[str]):
-    """An allow-list entry for a field that no longer exists is stale permission.
-    It would silently cover a future field that happens to reuse the name.
+def test_the_allow_list_does_not_outlive_its_entries(derived_fields: Dict[str, str]):
+    """An allow-list entry for a field that no longer exists is stale permission:
+    it would silently cover a future field that reuses the name.
     """
-    stale = sorted(set(_OWNED_WITHOUT_READER) - derived_fields)
+    stale = sorted(set(_OWNED_WITHOUT_READER) - set(derived_fields))
     assert not stale, f"_OWNED_WITHOUT_READER names fields that no longer exist: {stale}"

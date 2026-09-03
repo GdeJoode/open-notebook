@@ -646,7 +646,7 @@ async def run_pass2(
     all_relations: List[ExtractedRelation] = []
     parse_failures = 0
 
-    # Track N.3 telemetry counters (feed extraction_metrics): entities the LLM
+    # Track N.3 telemetry counters (feed the N.5d regression gate): entities the LLM
     # emitted before the not-a-concept gate, how many it rejected, how many the
     # judge arbitrated, and chunks the LLM abstained on (returned no entity).
     nac_on = _not_a_concept_enabled()
@@ -844,7 +844,7 @@ async def run_pass2(
             "total_entities": len(all_entities),
             "total_relations": len(all_relations),
             "parse_failures": parse_failures,
-            # Track N.3: raw counts for extraction_metrics (over-generation +
+            # Track N.3: raw counts for the N.5d regression gate (over-generation +
             # abstain rate). entities_kept mirrors total_entities — kept for a
             # self-describing metadata contract the metric module reads directly.
             "entities_extracted": entities_extracted,

@@ -17,6 +17,10 @@ name: Unit guards
 on:
   pull_request:
     branches: [main]
+  # Also on push to main: a guard that only runs pre-merge cannot tell you that
+  # main is currently broken, which is the state this phase found `tests/` in.
+  push:
+    branches: [main]
   workflow_dispatch: {}
 
 concurrency:
@@ -47,8 +51,16 @@ jobs:
       - name: Set up Python 3.11
         run: uv python install 3.11
 
+      # `--all-packages`, not a bare `uv sync`. The root project depends on
+      # pydantic, loguru and python-dotenv and nothing else; `[tool.uv.sources]`
+      # only says WHERE workspace members would come from if something depended
+      # on them. `tests/` imports `shared`, `entity_filtering`, `file_manager`,
+      # `ingestion`, `fastapi` and `httpx`, so a bare sync collects zero tests
+      # and the job is red on its first run — which a review caught by running
+      # the exact two commands in an isolated environment. `db-integration.yml`
+      # gets away with the same line only because it sets a `working-directory`.
       - name: Install workspace deps
-        run: uv sync --extra dev
+        run: uv sync --all-packages --extra dev
 
       - name: Run repository guards
         run: uv run pytest tests/ -v --tb=short
