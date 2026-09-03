@@ -194,6 +194,10 @@ class CandidateOut(BaseModel):
     name_a: str
     name_b: str
     entity_type: str
+    #: ``id_b``'s type when the two differ, else "". Non-empty only for the
+    #: ``fold_equal_cross_type`` method: without it the card renders the same
+    #: name twice with nothing to distinguish the rows.
+    entity_type_b: str = ""
     score: float
     band: str
     method: str
@@ -229,6 +233,7 @@ async def list_candidates(
             name_a=c.name_a,
             name_b=c.name_b,
             entity_type=c.entity_type,
+            entity_type_b=c.entity_type_b,
             score=c.score,
             band=c.band,
             method=c.method,

@@ -6,7 +6,11 @@ import type {
   ApplyClusterInput,
   MergeCandidate,
 } from '@/lib/api/entity-resolution'
-import { candidateToApplyCluster } from '@/lib/utils/entity-resolution'
+import {
+  candidateToApplyCluster,
+  candidateTypeLabel,
+  isCrossTypeCandidate,
+} from '@/lib/utils/entity-resolution'
 import { MergeConfirmDialog } from '@/components/resolution/MergeConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'

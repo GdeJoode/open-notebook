@@ -90,6 +90,11 @@ class MergeCandidate:
     # tie-break id for stability). Populated by the service.
     winner_id: str = ""
     loser_id: str = ""
+    #: ``id_b``'s type when it differs from ``id_a``'s, else "". Only the
+    #: cross-type fold-equal generator can produce a pair whose two entities
+    #: carry different types, and a curator card that shows one name twice with
+    #: no visible difference is not reviewable — the type IS the difference.
+    entity_type_b: str = ""
 
     def to_merge_cluster(self) -> MergeCluster:
         """Project an auto-merge candidate onto a K.3 ``MergeCluster``.
@@ -106,10 +111,18 @@ class MergeCandidate:
         """
         winner_id = self.winner_id or self.id_a
         loser_id = self.loser_id or self.id_b
-        new_canonical = self.name_b if winner_id == self.id_b else self.name_a
+        b_wins = winner_id == self.id_b
+        new_canonical = self.name_b if b_wins else self.name_a
+        # The surviving type must be the winner's for the same reason the
+        # surviving name must be: a cross-type pair has two answers, and K.3
+        # repoints relations onto the winner. Reporting `entity_type` blindly
+        # would label the survivor with the loser's type.
+        entity_type = (
+            self.entity_type_b if b_wins and self.entity_type_b else self.entity_type
+        )
         return MergeCluster(
             new_canonical=new_canonical,
-            entity_type=self.entity_type,
+            entity_type=entity_type,
             winner_id=winner_id,
             loser_ids=[loser_id],
             member_surface_forms=[self.name_a, self.name_b],
@@ -716,6 +729,11 @@ class CandidateDedupService:
             name_a=rec_a["name"],
             name_b=rec_b["name"],
             entity_type=rec_a["entity_type"],
+            entity_type_b=(
+                rec_b["entity_type"]
+                if rec_b["entity_type"] != rec_a["entity_type"]
+                else ""
+            ),
             score=round(score, 4),
             band=band,
             method=method,
