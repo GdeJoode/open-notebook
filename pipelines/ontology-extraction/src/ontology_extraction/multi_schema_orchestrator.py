@@ -879,13 +879,88 @@ def _merge_results(
             relinked_relations.append(relation)
 
     schema_names = [name for name, _result in per_schema_results]
+    merged_metadata: Dict[str, Any] = {
+        "merged_from_schemas": schema_names,
+        "schema_count": len(per_schema_results),
+        "total_entities": len(final_entities),
+        "total_relations": len(relinked_relations),
+    }
+    merged_metadata.update(_merge_pass_counters(per_schema_results, final_entities))
     return ExtractionResult(
         entities=final_entities,
         relations=relinked_relations,
-        metadata={
-            "merged_from_schemas": schema_names,
-            "schema_count": len(per_schema_results),
-            "total_entities": len(final_entities),
-            "total_relations": len(relinked_relations),
-        },
+        metadata=merged_metadata,
     )
+
+
+# The per-pass counters `run_pass2` emits that a merge must carry (Track N.5a).
+# All of them are per-PASS quantities, so summing is the meaningful merge: each
+# pass ran its own gate over its own LLM output. `chunk_count` sums to
+# chunk-PASSES rather than chunks, which keeps `abstain_rate` a coherent ratio —
+# the share of chunk-pass attempts that yielded nothing — and `per_schema` below
+# is what a reader divides by to get back to the document.
+_MERGED_PASS_COUNTERS = (
+    "chunk_count",
+    "entities_extracted",
+    "entities_kept",
+    "not_a_concept_removed",
+    "not_a_concept_judged",
+    "abstained_chunks",
+    "parse_failures",
+)
+
+
+def _merge_pass_counters(
+    per_schema_results: List[Tuple[str, ExtractionResult]],
+    final_entities: List[ExtractedEntity],
+) -> Dict[str, Any]:
+    """Carry the per-pass observability counters through the merge.
+
+    Track N.5a. `_merge_results` built a fresh four-key metadata dict, so
+    everything `run_pass2` measured was discarded on the MULTI-SCHEMA path —
+    which is the path production takes. The cost is not that the numbers went
+    missing; it is that their absence reads as a clean run. Measured on a
+    two-pass fixture whose passes over-generated 14 entities down to 5 and
+    abstained on 9 of 20 chunk-passes, the merged result reported
+    `over_generation_rate` 0.00 and `abstain_rate` 0.00 — a false statement
+    rather than a gap. `Bennett_test.pdf` producing ten chunks and zero entities
+    could not be explained from its own record: nobody could say whether the
+    model found nothing or the not-a-concept gate removed everything.
+
+    Three choices worth naming:
+
+    * **Summed, not averaged.** Every counter is a count of things one pass did.
+    * **`entities_kept` is the sum of what survived each pass's gates**, which is
+      deliberately NOT `len(final_entities)`: the difference between them is
+      cross-pass duplication, not gate rejection, and conflating the two would
+      make the merge itself look like over-generation. The difference is
+      published as `merged_duplicates_collapsed` so it is visible rather than
+      implied.
+    * **`per_schema` keeps the unmerged view**, because "which pass removed
+      everything" is exactly the question the merged sum cannot answer, and it is
+      the question this phase exists to make answerable.
+
+    Passes that predate these keys contribute 0 rather than raising, so a mixed
+    result degrades to a low count instead of an error.
+    """
+    totals: Dict[str, int] = {key: 0 for key in _MERGED_PASS_COUNTERS}
+    per_schema: Dict[str, Dict[str, int]] = {}
+
+    for schema_name, result in per_schema_results:
+        metadata = result.metadata or {}
+        counted: Dict[str, int] = {}
+        for key in _MERGED_PASS_COUNTERS:
+            try:
+                value = int(metadata.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                value = 0
+            counted[key] = value
+            totals[key] += value
+        per_schema[schema_name] = counted
+
+    merged: Dict[str, Any] = dict(totals)
+    merged["per_schema"] = per_schema
+    merged["merged_duplicates_collapsed"] = max(
+        0, totals["entities_kept"] - len(final_entities)
+    )
+    return merged
