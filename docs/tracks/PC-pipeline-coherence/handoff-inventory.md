@@ -18,7 +18,10 @@ computed, often persisted, and never read back by anything in this repository.
 Compiled 2026-09-03 by tracing `run_pass2` → `_merge_results` → `run_multi_schema`
 → `ExtractionWorkflow.extract` → `EntityExtractionService.run_extraction` →
 `FilteringWorkflow.process` → `EntityPersistenceService`, and by counting readers
-with a repo-wide grep.
+with a repo-wide grep. **That grep is how this file was first compiled, not how
+the rule is enforced**: three review rounds established that counting `.field` by
+name cannot be made honest, so `tests/test_derived_state_has_readers.py` requires
+each field to DECLARE its consumer and verifies the declaration instead.
 
 ---
 
@@ -42,7 +45,7 @@ none", which contradicted the table below it. This is the replacement.
 
 The original occurrence counts, kept because they are what the first draft cited:
 
-| field | kind | readers |
+| field | kind | occurrences (NOT files) |
 |---|---|---|
 | `merged_entity_groups` | payload | 4 |
 | `predicted_edges` | payload | 4 |
@@ -129,6 +132,21 @@ through a working router, and **nothing has ever written one**. This is the mirr
 image of every row above and it is why the invariant checks both directions is left
 as a follow-up: the current test catches producers without consumers, not consumers
 without producers. Closing this specific one is W1.
+
+## The residual hole, stated rather than hidden
+
+A dead field named identically to an existing row here — `metrics`,
+`alias_candidates` — satisfies the `Owned` row check, because the guard cannot
+tell that the row is about the metrics *table* rather than about a new field of
+that name. A review found it and judged it the intended reviewability boundary
+rather than a hole; the reasoning is worth keeping. The collision set is no longer
+"any substring in a document" but the ~15 rows this file contains, each already
+naming a phase that owns that subject, so a false positive requires the new field
+to be named identically to an existing owned handoff — at which point "that phase
+owns it" is close to true anyway. It also requires a visible `Owned(...)` entry in
+the diff, which is a different risk class from a value that looks like ordinary
+usage. And closing it needs semantic knowledge of what a row is about, which is
+the same wall as type inference.
 
 ## Found by the PC.1b review, owned elsewhere
 

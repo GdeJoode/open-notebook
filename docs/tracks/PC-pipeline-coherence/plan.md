@@ -211,14 +211,34 @@ three or more boundaries needing the same field. Today none does.
   wired boundaries each have a test that fails when the state stops crossing; W1 is
   proven on a database where `notebook_event` is genuinely empty.
 
-> **PC.1b SHIPPED 2026-09-03** — see `handoff-inventory.md` and the phase report.
+> **PC.1b SHIPPED 2026-09-03** (review-approved attempt 4; report in
+> `reviews/phase-PC.1b-attempts-1-4.md`) — see `handoff-inventory.md` and the phase report.
 > Turning the CI job on required making `tests/` green first, and it was not: four
 > files have been UNCOLLECTABLE since the monolith→workspace cutover of 2026-04-24,
 > and four more failed because they patched `execute_query` in a module the service
 > under test does not use. Both were invisible because nothing ran the suite.
 >
-> **Binding for the rest of the track**: a carrier is not a consumer. Before adding
-> a field to a result model, name what reads it — the invariant now asks.
+> **Four review rounds, and the finding is the shape of the rounds themselves.**
+> Rounds 1 and 2 closed the specific dead fields the reviewer planted — a denylist
+> entry, one more parsed file — and round 2's review named why that was not
+> progress: the counter attributed a read by bare attribute name with no
+> information about what object it belonged to, and no denylist fixes that. Round 3
+> inverted the guard — every derived-state field DECLARES its consumer and the
+> guard verifies the declaration — and round 4 closed the declaration's own escape
+> hatches.
+>
+> **Binding for the rest of the track**, in order of how much they cost:
+>
+> 1. A carrier is not a consumer. Before adding a field to a result model, name
+>    what reads it — the invariant now asks.
+> 2. Closing planted instances is not closing the property. The tell is that each
+>    fix names a field rather than a rule.
+> 3. A guard's escape hatch is most dangerous when it looks like ordinary usage:
+>    the bare-string declaration was a blocker because it was the shape that same
+>    table had one commit earlier.
+> 4. A correction that leaves the corrected text in place is not a correction, and
+>    reporting one as done converts a review round into a round that verifies
+>    nothing.
 
 ## PC.2 — One identity — ~1.5d
 

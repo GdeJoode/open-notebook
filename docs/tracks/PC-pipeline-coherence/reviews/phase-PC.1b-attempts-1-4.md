@@ -177,3 +177,77 @@ Twelve tests, of which **eight are controls**. Two earned their keep immediately
 the file-list control caught that the exclusion filter tested `"/tests/" in path`
 while the repo's own root suite is `tests/…`, and the cross-file scan caught the
 duplicate class name.
+
+---
+
+# Attempt 4 — APPROVED
+
+Every attack from rounds 1–3 replayed against the committed tree, plus three new
+ones aimed at the round-4 additions. All eight die, and the three `Owned` variants
+fail in one run with three distinct messages — the check distinguishes *no phase
+named* from *phase named, no evidence*.
+
+| attack | fails on |
+|---|---|
+| dead fields named `error` / `score` / `state` (Load-read in 88 / 8 / 3 files) | `test_every_derived_state_field_is_declared` |
+| a subclass declared in another package | same |
+| a field written and logged by its own producer | same |
+| an unparseable production file | `test_every_production_file_parses` |
+| a bare-string declaration | `test_every_declaration_has_a_verified_shape` |
+| `Owned("")` / `Owned("PC.9 …")` / a real phase with no row | `test_every_owned_declaration_appears_in_the_inventory` |
+
+## The residual hole, accepted deliberately
+
+A dead field named identically to an existing inventory row (`metrics`,
+`alias_candidates`) satisfies the row check. The reviewer judged this the intended
+reviewability boundary rather than a defect, and the reasoning is recorded in the
+inventory: the collision set is now the ~15 rows the file contains rather than any
+substring in it, each already naming a phase that owns that subject; it requires a
+visible `Owned(...)` entry rather than a value that looks like ordinary usage; and
+closing it needs semantic knowledge of what a row is about, which is the same wall
+as type inference. Stated in the document rather than left for someone to find.
+
+## What this phase is actually about
+
+Three findings earned a place beyond the code.
+
+**Closing planted instances is not closing the property, and the tell is that each
+fix names a field rather than a rule.** Rounds 1 and 2 added denylist entries and
+parsed one more file; round 3 inverted the question; round 4 closed the
+declaration's own escape hatches. Only the last two transfer to anything else. The
+reviewer's round-2 sentence is the one to keep: *"a third round that adds
+`error`/`warning`/`info` to the list and parses a second file would be the same
+move again, and I would come back with `output`, `stat` and `page_count`."*
+
+**A guard's escape hatch is most dangerous when it looks like ordinary usage.** The
+bare-string declaration was a blocker specifically because `Dict[str, str]` is what
+that same table looked like one commit earlier — so the unchecked path was not
+exotic, it was what anyone copying from history would write.
+
+**A correction that leaves the corrected text in place is not a correction**, and
+reporting it as done is worse than not doing it. One sentence about reader counts
+took three rounds because each round appended its correction below the error
+instead of replacing it, and in round 3 I reported it fixed when one of the two
+documents was untouched. That converted a review round into a round that verified
+nothing.
+
+## A pattern with enough instances to be evidence
+
+Three times in this phase a new control caught, on its **first execution**, the
+thing it was written against:
+
+- the file-list control found that the exclusion filter tested `"/tests/" in path`
+  while the repo's own root suite is `tests/…`, so root test files were being
+  scanned as production code;
+- the cross-file class scan found two unrelated classes named `ExtractionResult`;
+- the stricter `Owned` row check failed on the phase's own two inventory rows,
+  which were vaguer than the declaration claimed.
+
+## Verification at approval
+
+```
+apps/app-main               1833 passed,  6 skipped
+shared + entity-filtering   1313 passed,  4 skipped
+tests/ (local)                75 passed
+tests/ (isolated, uv sync --all-packages --extra dev)   75 passed
+```
