@@ -130,12 +130,31 @@ class KGResolutionConfig:
         fuzzy_threshold: Fuzzy similarity threshold for candidate matching.
         semantic_threshold: Embedding similarity threshold for candidate matching.
         max_candidates: Maximum KG candidates evaluated per entity.
-        register_aliases: Store matched surface forms as aliases.
+        register_aliases: Store matched surface forms as aliases. Default OFF
+            (PC.2) — see the note under the class.
         mark_new_entities: Flag entities not found in the KG as new.
         use_alias_table: Consult the alias table during resolution.
         centrality_aware: Adjust matching thresholds based on KG entity importance.
         centrality_strictness: Amount to raise thresholds for important entities.
         importance_threshold: Entity weight above which it is considered important.
+
+    **One alias policy (PC.2).** `register_aliases` used to default to True while
+    concept alignment, in the SAME pass, refused to register anything on the
+    explicit grounds that merging identities must be a deliberate act (D-N4-9).
+    One decision, two opposite answers.
+
+    It is settled the way D-N4-9 settled it, for a reason `find_by_alias` makes
+    concrete: `use_alias_table` consults `entity_alias` at tier 1, so an alias
+    written from a fuzzy match becomes the ground truth for the NEXT resolution.
+    A machine guess hardens into identity with no human anywhere in the loop, and
+    every row it writes is `verified = false`, so nothing downstream can tell it
+    apart from a checked one except by rank.
+
+    Flipping the default costs nothing today — `enabled` is False, and
+    `entity_alias` holds 0 rows on the working database — which is exactly why it
+    is the moment to flip it, rather than after the writer wakes up. PC.2's
+    curator queue is where a surface form now becomes an alias: proposed, shown,
+    and decided.
     """
 
     enabled: bool = False
@@ -143,7 +162,7 @@ class KGResolutionConfig:
     fuzzy_threshold: float = 0.85
     semantic_threshold: float = 0.90
     max_candidates: int = 100
-    register_aliases: bool = True
+    register_aliases: bool = False
     mark_new_entities: bool = True
     use_alias_table: bool = True
     centrality_aware: bool = False

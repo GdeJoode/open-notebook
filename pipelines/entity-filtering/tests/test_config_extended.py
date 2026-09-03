@@ -117,7 +117,10 @@ class TestKGResolutionConfigDefaults:
         assert cfg.fuzzy_threshold == 0.85
         assert cfg.semantic_threshold == 0.90
         assert cfg.max_candidates == 100
-        assert cfg.register_aliases is True
+        # PC.2: a fuzzy match no longer writes an alias by itself. See
+        # `test_alias_policy.py` for the policy and the reason; this line only
+        # records that the default moved deliberately.
+        assert cfg.register_aliases is False
         assert cfg.mark_new_entities is True
         assert cfg.use_alias_table is True
 

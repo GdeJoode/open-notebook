@@ -98,6 +98,10 @@ class KGResolver:
         semantic_threshold: Minimum cosine similarity for a semantic match.
         max_candidates: Upper bound on KG candidates evaluated per type.
         register_aliases: Whether to write new aliases back to the store.
+            Defaults to False here as well as in `KGResolutionConfig`, so a
+            caller that constructs the resolver directly cannot get the opposite
+            policy from the one the pipeline runs (PC.2). An alias is a
+            deliberate act; the curator queue is where one is made.
         mark_new_entities: Whether to set ``is_new=True`` on unmatched
             entities.
         use_alias_table: Whether to attempt alias-table lookup (tier 1).
@@ -115,7 +119,7 @@ class KGResolver:
         fuzzy_threshold: float = 0.85,
         semantic_threshold: float = 0.90,
         max_candidates: int = 100,
-        register_aliases: bool = True,
+        register_aliases: bool = False,
         mark_new_entities: bool = True,
         use_alias_table: bool = True,
         centrality_aware: bool = False,
