@@ -82,6 +82,11 @@ class GateResult:
     def skipped(self) -> List[GateDimension]:
         return [d for d in self.dimensions if d.outcome is GateOutcome.SKIPPED]
 
+    #: ``{metric: count}`` for metrics some documents could not supply, carried
+    #: from the run summary so a skip or failure can say WHICH documents fell
+    #: short rather than only that something did.
+    missing_counters: Dict[str, int] = field(default_factory=dict)
+
     def report(self) -> str:
         """A human-readable summary; the script prints this and CI logs it."""
         lines: List[str] = []
@@ -92,6 +97,11 @@ class GateResult:
                 GateOutcome.SKIPPED: "skip",
             }[d.outcome]
             lines.append(f"  [{mark}] {d.name}: {d.detail}")
+        for metric, count in sorted(self.missing_counters.items()):
+            lines.append(
+                f"         ({count} document(s) in this run carried no inputs for "
+                f"{metric})"
+            )
         if self.inconclusive:
             lines.append("  INCONCLUSIVE — no dimension had a baseline to compare against")
         else:
@@ -105,6 +115,34 @@ class GateResult:
 # document swings them.
 RECALL_TOLERANCE = 0.10
 COST_TOLERANCE = 0.15
+
+
+# Which counters each rate needs, and the rule that a rate is reported ONLY when
+# every document could supply all of them.
+#
+# A review found the alternative the hard way. The first version set a single
+# `saw_counters` flag from whole-dict truthiness and then guarded each rate on
+# one input: `abstain_rate` on `chunk_count > 0`, which is its DENOMINATOR. The
+# legacy single-schema path emits `chunk_count` and none of the abstention
+# counters — it uses a pluggable extractor rather than `run_pass2`, so it
+# genuinely cannot count abstention — and the result was `abstain_rate: 0.0` for
+# a run in which abstention was never measured. That is this track's own thesis,
+# committed by the code written to enforce it: an absent measurement reading as a
+# measurement of zero.
+#
+# Requiring EVERY document to carry a metric's inputs is stricter than requiring
+# one to, and deliberately so. A mixed corpus where half the documents took the
+# legacy path would otherwise sum legacy `chunk_count` into the denominator while
+# only multi-schema documents could contribute to the numerator, understating the
+# rate by exactly the legacy share. `documents_missing_counters` records the count
+# so a skip can say why rather than merely saying it.
+_RATE_INPUTS: Dict[str, tuple] = {
+    "over_generation_rate": ("entities_extracted", "entities_kept"),
+    "abstain_rate": ("abstained_chunks", "chunk_count"),
+}
+_COUNTER_INPUTS = tuple(
+    dict.fromkeys(key for inputs in _RATE_INPUTS.values() for key in inputs)
+)
 
 
 def summarise_run(documents: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
@@ -123,11 +161,10 @@ def summarise_run(documents: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     total_entities = 0
     total_relations = 0
     documents_with_entities = 0
-    extracted = 0
-    kept = 0
-    abstained = 0
-    chunk_passes = 0
-    saw_counters = False
+    totals: Dict[str, int] = {key: 0 for key in _COUNTER_INPUTS}
+    # Per METRIC, how many documents could not contribute to it. A metric is
+    # reported only when that count is zero — see `_RATE_INPUTS` below.
+    missing: Dict[str, int] = {metric: 0 for metric in _RATE_INPUTS}
 
     for doc in documents:
         result = doc.get("result") or {}
@@ -138,12 +175,16 @@ def summarise_run(documents: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
             documents_with_entities += 1
 
         counters = result.get("counters") or doc.get("counters") or {}
-        if counters:
-            saw_counters = True
-            extracted += int(counters.get("entities_extracted", 0) or 0)
-            kept += int(counters.get("entities_kept", 0) or 0)
-            abstained += int(counters.get("abstained_chunks", 0) or 0)
-            chunk_passes += int(counters.get("chunk_count", 0) or 0)
+        for metric, inputs in _RATE_INPUTS.items():
+            if all(key in counters for key in inputs):
+                for key in inputs:
+                    try:
+                        totals[key] += int(counters[key] or 0)
+                    except (TypeError, ValueError):
+                        missing[metric] += 1
+                        break
+            else:
+                missing[metric] += 1
 
     summary: Dict[str, Any] = {
         "documents": len(documents),
@@ -155,11 +196,19 @@ def summarise_run(documents: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         # no value here and must not be compared as though it had one.
         "over_generation_rate": None,
         "abstain_rate": None,
+        "documents_missing_counters": {
+            metric: count for metric, count in missing.items() if count
+        },
     }
-    if saw_counters and extracted > 0:
-        summary["over_generation_rate"] = max(0.0, (extracted - kept) / extracted)
-    if saw_counters and chunk_passes > 0:
-        summary["abstain_rate"] = min(1.0, abstained / chunk_passes)
+
+    extracted = totals["entities_extracted"]
+    if not missing["over_generation_rate"] and extracted > 0:
+        summary["over_generation_rate"] = max(
+            0.0, (extracted - totals["entities_kept"]) / extracted
+        )
+    chunk_passes = totals["chunk_count"]
+    if not missing["abstain_rate"] and chunk_passes > 0:
+        summary["abstain_rate"] = min(1.0, totals["abstained_chunks"] / chunk_passes)
     return summary
 
 
@@ -195,8 +244,11 @@ def _unmeasurable(
     if current is None:
         return GateDimension(
             name, GateOutcome.FAILED, baseline, current,
-            f"the baseline measured {baseline:g} and this run measured nothing — "
-            "the measurement itself regressed",
+            f"the baseline measured {baseline:g} and this run measured nothing. "
+            "Either the counters stopped being carried (a regression in the "
+            "extraction path) or this run took a route that cannot count them "
+            "(the legacy single-schema path emits no abstention counters) — "
+            "both make the two runs incomparable, so neither is a pass",
         )
     return None
 
@@ -301,11 +353,19 @@ def compare_against_baseline(
             cost_tolerance,
         ),
     ]
+    missing = dict(current.get("documents_missing_counters") or {})
     evaluated = [d for d in dimensions if d.outcome is not GateOutcome.SKIPPED]
     if not evaluated:
-        return GateResult(passed=False, dimensions=dimensions, inconclusive=True)
+        return GateResult(
+            passed=False,
+            dimensions=dimensions,
+            inconclusive=True,
+            missing_counters=missing,
+        )
     return GateResult(
-        passed=not any(d.failed for d in dimensions), dimensions=dimensions
+        passed=not any(d.failed for d in dimensions),
+        dimensions=dimensions,
+        missing_counters=missing,
     )
 
 

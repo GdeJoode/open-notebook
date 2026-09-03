@@ -224,10 +224,23 @@ makes either change gets a predicate the validator recognises.
 **The regression gate (Track N.5d).** `shared.regression.extraction_gate`
 compares a harness run against `tests/regression/n_extraction_baseline.json` on
 four dimensions: entity recall and per-document liveness as floors,
-over-generation and abstention as ceilings. A dimension with no baseline value is
-SKIPPED, never passed, and a comparison in which everything skipped is
-inconclusive (exit 2) rather than green. Run it with
+over-generation and abstention as ceilings. Run it with
 `scripts/n_extraction_gate.py --run <harness output>`.
+
+Three rules keep it from passing on nothing, each of them paid for by a review
+finding: a dimension with **no baseline** value is SKIPPED and never passed; a
+dimension the **baseline measured and this run did not** FAILS, because a
+measurement disappearing is either a regression in the extraction path or a run
+that took a route which cannot count (the legacy single-schema path drives a
+pluggable extractor rather than `run_pass2`, so it emits `chunk_count` and no
+abstention counters) — both make the runs incomparable; and a **zero baseline**
+for a floor is SKIPPED, since `0 × (1 − tolerance)` holds nothing up. A
+comparison in which everything skipped is inconclusive (exit 2), not green.
+
+Each rate is computed only when EVERY document supplied all of its own inputs.
+Inferring one from another's presence is how `abstain_rate` briefly reported a
+measured `0.0` for legacy runs, which carry its denominator and not its
+numerator.
 
 ### Model-aware context packing (Track M)
 

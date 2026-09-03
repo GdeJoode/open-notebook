@@ -177,6 +177,98 @@ class TestTheGateCannotPassVacuously:
         assert names["documents_with_entities"] is GateOutcome.FAILED
 
 
+class TestAPartialCounterSetIsNotAMeasurement:
+    """The blocker the SEAM introduced, found by a review one round after the
+    seam was built — the third instance of this track's own thesis inside it.
+
+    `ExtractionWorkflow`'s legacy single-schema branch emits `chunk_count` and
+    none of the abstention counters: it drives a pluggable extractor rather than
+    `run_pass2`, so it genuinely cannot count abstention. The first version of
+    `summarise_run` set one `saw_counters` flag from whole-dict truthiness and
+    then guarded `abstain_rate` on `chunk_count > 0` — its DENOMINATOR — so a
+    legacy run reported `abstain_rate: 0.0` for something never counted.
+    `over_generation_rate` escaped only because its guard happened to test its own
+    numerator.
+
+    Two production routes reach that path (no `notebook_id` or
+    `multi_schema_enabled=false`, and the fallback when no schema clears the
+    applicability floor), and the checked-in baseline says its corpus mostly took
+    it. So this was reachable through the step the docs recommend next.
+    """
+
+    LEGACY = {"chunk_count": 10}
+    MULTI = {
+        "chunk_count": 20,
+        "entities_extracted": 14,
+        "entities_kept": 5,
+        "abstained_chunks": 9,
+    }
+
+    def test_a_denominator_without_its_numerator_measures_nothing(self):
+        s = summarise_run([_doc(3, counters=self.LEGACY)])
+        assert s["abstain_rate"] is None
+        assert s["over_generation_rate"] is None
+
+    def test_the_shortfall_is_counted_so_a_skip_can_say_why(self):
+        s = summarise_run([_doc(3, counters=self.LEGACY)])
+        assert s["documents_missing_counters"] == {
+            "over_generation_rate": 1,
+            "abstain_rate": 1,
+        }
+
+    def test_a_mixed_corpus_does_not_understate_the_rate(self):
+        """Half legacy, half multi-schema. Summing legacy `chunk_count` into the
+        denominator while only multi documents can contribute to the numerator
+        would understate abstention by exactly the legacy share — a wrong number
+        rather than a missing one.
+        """
+        mixed = summarise_run(
+            [_doc(3, counters=self.LEGACY), _doc(5, counters=self.MULTI)]
+        )
+        assert mixed["abstain_rate"] is None
+        assert mixed["documents_missing_counters"]["abstain_rate"] == 1
+
+    def test_a_complete_set_still_measures(self):
+        """The vacuity guard: strictness must not make every rate `None`, or the
+        gate's cost half would be permanently skipped for a different reason.
+        """
+        s = summarise_run([_doc(5, counters=self.MULTI)])
+        assert s["over_generation_rate"] == pytest.approx(9 / 14)
+        assert s["abstain_rate"] == pytest.approx(9 / 20)
+        assert s["documents_missing_counters"] == {}
+
+    def test_the_gate_refuses_to_compare_a_legacy_run_to_a_measured_baseline(self):
+        """And the current-absent rule now actually fires on this path. Before
+        the fix the phantom 0.0 sailed past it as a 0.45 -> 0.0 improvement.
+        """
+        baseline = summarise_run([_doc(5, counters=self.MULTI)])
+        current = summarise_run([_doc(5, counters=self.LEGACY)])
+        result = compare_against_baseline(baseline, current)
+
+        assert not result.passed
+        assert {d.name for d in result.failures} == {
+            "over_generation_rate",
+            "abstain_rate",
+        }
+        assert "carried no inputs for abstain_rate" in result.report()
+
+    def test_the_failure_message_names_both_causes_not_one(self):
+        """A review pointed out the message asserted a cause. An operator who
+        simply ran with `multi_schema_enabled=false` gets the same sentence as
+        one whose merge stopped carrying counters, and they open different files.
+        """
+        baseline = summarise_run([_doc(5, counters=self.MULTI)])
+        current = summarise_run([_doc(5, counters=self.LEGACY)])
+        detail = next(
+            d.detail
+            for d in compare_against_baseline(baseline, current).dimensions
+            if d.name == "abstain_rate"
+        )
+        assert "measured nothing" in detail
+        assert "legacy single-schema path" in detail
+        assert "incomparable" in detail
+
+
 class TestTheMeasurementDisappearing:
     """A review found the mirror image of the missing-baseline rule.
 
@@ -218,7 +310,7 @@ class TestTheMeasurementDisappearing:
             d.detail for d in result.dimensions if d.name == "over_generation_rate"
         )
         assert "no baseline value" not in detail
-        assert "the measurement itself regressed" in detail
+        assert "this run measured nothing" in detail
 
     def test_a_metric_new_since_the_baseline_still_skips(self):
         """The vacuity guard for the two above: the legitimate direction must
