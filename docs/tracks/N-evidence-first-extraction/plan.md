@@ -896,7 +896,8 @@ entities (recall floor). Update `ARCHITECTURE.md`, `status.md`, `RETRO.md`.
   fixture builds the PRODUCTION argument set; a guard that reads a collaborator's
   value is exercised against the real collaborator at least once.
 
-> **N.5 SHIPPED 2026-09-03** — `e8ae249c` (N.5a), `2942cb5b` (N.5b),
+> **N.5 SHIPPED 2026-09-03** (review-approved attempt 3, merged `a4bb9d1b`;
+> report in `reviews/phase-N.5-attempts-1-3.md`) — `e8ae249c` (N.5a), `2942cb5b` (N.5b),
 > `8d9937fc` (N.5c), `47f424dd` (N.5d). Status and retrospective in
 > `status.md` / `RETRO.md`.
 >
