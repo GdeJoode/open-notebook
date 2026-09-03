@@ -163,6 +163,44 @@ def summarise_run(documents: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     return summary
 
 
+def _unmeasurable(
+    name: str, baseline: Optional[float], current: Optional[float]
+) -> Optional[GateDimension]:
+    """Decide whether a dimension can be compared at all, and how it fails if not.
+
+    Three cases, and a review found that collapsing them was wrong twice over.
+
+    * **No baseline, no current** — nobody has ever measured this. SKIPPED.
+    * **No baseline, current present** — the legitimate case this rule was written
+      for: a metric that did not exist when the baseline was taken. SKIPPED, and
+      never PASSED, because a gate that reads "no baseline" as "not worse" cannot
+      fail on anything newly added.
+    * **Baseline present, current absent** — the MEASUREMENT DISAPPEARED. That is
+      not a baseline problem, it is this track's own defect recurring: N.5a
+      existed because the merge stopped carrying these counters. Reporting it as
+      "no baseline value" and passing was the first version's behaviour and it
+      was exactly backwards, so it FAILS.
+    """
+    if baseline is None and current is None:
+        return GateDimension(
+            name, GateOutcome.SKIPPED, baseline, current,
+            "never measured on either side — not checked, and not a pass",
+        )
+    if baseline is None:
+        return GateDimension(
+            name, GateOutcome.SKIPPED, baseline, current,
+            f"no baseline value (this run measured {current:g}) — not checked, "
+            "and not counted as a pass",
+        )
+    if current is None:
+        return GateDimension(
+            name, GateOutcome.FAILED, baseline, current,
+            f"the baseline measured {baseline:g} and this run measured nothing — "
+            "the measurement itself regressed",
+        )
+    return None
+
+
 def _compare_floor(
     name: str,
     baseline: Optional[float],
@@ -170,10 +208,18 @@ def _compare_floor(
     tolerance: float,
 ) -> GateDimension:
     """A dimension that must not FALL: recall and its kin."""
-    if baseline is None or current is None:
+    unmeasurable = _unmeasurable(name, baseline, current)
+    if unmeasurable is not None:
+        return unmeasurable
+    if baseline <= 0:
+        # A floor derived from zero holds nothing up: `0 * (1 - tolerance)` is
+        # 0.0 and every possible run clears it. A review reached this by
+        # recording a baseline from a corpus where every document yielded
+        # nothing — a plausible accident with Ollama down — and the gate was
+        # then permanently green while reporting `inconclusive=False`.
         return GateDimension(
             name, GateOutcome.SKIPPED, baseline, current,
-            "no baseline value — not checked, and not counted as a pass",
+            "baseline is zero — a floor derived from it would pass anything",
         )
     floor = baseline * (1.0 - tolerance)
     ok = current >= floor
@@ -194,11 +240,9 @@ def _compare_ceiling(
     tolerance: float,
 ) -> GateDimension:
     """A dimension that must not RISE: the cost metrics."""
-    if baseline is None or current is None:
-        return GateDimension(
-            name, GateOutcome.SKIPPED, baseline, current,
-            "no baseline value — not checked, and not counted as a pass",
-        )
+    unmeasurable = _unmeasurable(name, baseline, current)
+    if unmeasurable is not None:
+        return unmeasurable
     ceiling = baseline + tolerance
     ok = current <= ceiling
     return GateDimension(

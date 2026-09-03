@@ -84,12 +84,18 @@ have made the rule itself untested in practice.
 
 ## Numbers
 
-- Live corpus: 8 documents, 3823 chunks, 124 entities, 1895 relations across 100
-  relation types.
-- Hearst miner while default-on: 220 raw pairs, 138 distinct, **0** edges in the
-  graph.
-- Applicability detection: 2 of 14 documents before the sample fix, 13 of 14
-  after (the fix itself landed in Track PC.1).
+These come from three different measurements and are listed separately on
+purpose — an earlier draft ran them together into one sentence, which a review
+caught:
+
+- **The harness runs** (`scripts/n_pipeline_review_run.py`, capped at 10 chunks
+  per document): 8 records over 7 distinct PDFs, 124 entities.
+- **The database** at the time of the review: 14 sources, 3823 chunks, 1895
+  relations across 100 relation types.
+- **Scans over that database**: the Hearst miner yields 220 raw pairs (138
+  distinct) and the graph holds **0** `is_a` edges; applicability detection fires
+  for 2 of 14 sources before the sample fix and 13 of 14 after (the fix itself
+  landed in Track PC.1).
 - Attrition through the fifteen filtering stages after the LLM: effectively zero
   — which is itself a finding, and one the review's own table cannot fully
   explain, because it starts AFTER the N.3 gate.

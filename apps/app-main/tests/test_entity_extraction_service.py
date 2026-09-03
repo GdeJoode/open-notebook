@@ -1754,6 +1754,144 @@ class TestConceptAlignmentIsReachable:
         assert captured["init"]["gap_recorder"] is None
 
 
+class TestTheCountersCrossOutOfTheService:
+    """Track N.5d — the seam a review found missing between N.5a and the gate.
+
+    N.5a made the multi-schema merge carry N.3's counters into
+    `ExtractionResult.metadata`. `run_extraction` returned only entity and
+    relation counts plus the filtering stats, so nothing that reads a RUN ever
+    saw them — including the regression gate, whose two cost dimensions read a
+    key no producer in the repository wrote. Half a gate, structurally unable to
+    fail, while three documents said re-measuring would populate it.
+    """
+
+    def test_the_counters_are_lifted_out_of_the_metadata(self):
+        from app_main.services.entity_extraction_service import (
+            _observability_counters,
+        )
+
+        counters = _observability_counters(
+            {
+                "chunk_count": 20,
+                "entities_extracted": 14,
+                "entities_kept": 5,
+                "not_a_concept_removed": 9,
+                "not_a_concept_judged": 7,
+                "abstained_chunks": 9,
+                "parse_failures": 0,
+                "merged_from_schemas": ["deals", "policy"],  # not a counter
+            }
+        )
+        assert counters == {
+            "chunk_count": 20,
+            "entities_extracted": 14,
+            "entities_kept": 5,
+            "not_a_concept_removed": 9,
+            "not_a_concept_judged": 7,
+            "abstained_chunks": 9,
+            "parse_failures": 0,
+        }
+
+    def test_absent_counters_yield_no_key_at_all(self):
+        """"Not measured" and "measured zero" must stay distinguishable — the
+        gate's SKIPPED-versus-PASSED rule is built on exactly that difference.
+        """
+        from app_main.services.entity_extraction_service import (
+            _observability_counters,
+        )
+
+        assert _observability_counters({}) == {}
+        assert _observability_counters(None) == {}
+        assert _observability_counters("not a dict") == {}
+        # A measured zero survives.
+        assert _observability_counters({"abstained_chunks": 0}) == {
+            "abstained_chunks": 0
+        }
+
+    def test_a_non_numeric_counter_is_dropped_not_raised(self):
+        from app_main.services.entity_extraction_service import (
+            _observability_counters,
+        )
+
+        got = _observability_counters(
+            {"chunk_count": "many", "entities_extracted": 4}
+        )
+        assert got == {"entities_extracted": 4}
+
+    @pytest.mark.asyncio
+    async def test_a_run_summary_carries_them_to_the_gate(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """The seam itself, driven end to end: what `run_extraction` RETURNS is
+        what the harness writes and the gate reads, so the assertion is on the
+        summary rather than on the metadata it came from.
+        """
+        from shared.regression import summarise_run
+
+        notebook_schema_repo_fixture.get_by_notebook = AsyncMock(
+            return_value=NotebookSchema(notebook="notebook:abc", base_ontology="deals")
+        )
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        notebook_schema_repo_fixture.ensure_row = AsyncMock(return_value=False)
+        svc = EntityExtractionService(
+            source_repo=base_source_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        deals = _make_ontology("deals")
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=["deals"])
+        mock_manager.get_ontology = AsyncMock(return_value=deals)
+        extracted = ExtractionResult(
+            entities=[ExtractedEntity(text="X", label="L")],
+            relations=[],
+            metadata={
+                "chunk_count": 20,
+                "entities_extracted": 14,
+                "entities_kept": 5,
+                "abstained_chunks": 9,
+            },
+        )
+
+        with patch(
+            "ontology_manager.get_ontology_manager", return_value=mock_manager
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=AsyncMock(return_value=[(deals, 0.9)]),
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(svc, "_persistence", AsyncMock()), patch.object(
+            EntityExtractionService,
+            "_resolve_privacy_mode",
+            AsyncMock(return_value=None),
+        ), patch.object(
+            EntityExtractionService,
+            "_pack_chunks_for_route_head",
+            AsyncMock(side_effect=lambda chunks: chunks),
+        ):
+            workflow = MagicMock()
+            workflow.extract = AsyncMock(return_value=extracted)
+            workflow_cls.return_value = workflow
+            summary = await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=False,
+            )
+
+        assert summary["counters"]["entities_extracted"] == 14
+        # And the gate, reading exactly this shape, now measures something.
+        measured = summarise_run([{"result": summary}])
+        assert measured["over_generation_rate"] == pytest.approx(9 / 14)
+        assert measured["abstain_rate"] == pytest.approx(9 / 20)
+
+
 class TestApplicabilitySample:
     """PC.1 — what the schema detector is allowed to see.
 

@@ -182,26 +182,44 @@ as a clean run: a two-pass fixture that culled 14 entities to 5 and abstained on
 is the question a sum cannot answer) and `merged_duplicates_collapsed` making the
 gap between gate survivors and distinct entities explicit rather than implied.
 
-**Relation provenance survives collapse (Track N.5c / R2).** The relation merge
-keys on `(source, target, relation_type)` and keeps max confidence, which used to
-drop the loser's `relation_source`. Every distinct contributor is now unioned onto
-the winner as `relation_sources`, so the claim the provenance exists for — that
-one `WHERE relation_source = ...` drops everything a pass contributed — is true.
+**Relation provenance survives collapse (Track N.5c / R2).** Two collapses drop
+provenance and both are fixed. In memory, `_merge_results` keys relations on
+`(source, target, relation_type)` and keeps max confidence; at persist,
+`_upsert_relation` keys on `(in, out, relation_type)` and overlays properties, so
+a later write re-tagged `relation_source`. Each now unions every distinct
+contributor into **`relation_sources`**, while `relation_source` keeps naming
+whichever writer most recently won.
+
+Note what that means for a query: a collapsed edge is found by
+`WHERE properties.relation_sources CONTAINS 'hearst'`, NOT by
+`WHERE relation_source = 'hearst'` — the latter matches only edges a single
+writer produced, and following it would under-delete. Nothing in the codebase
+reads either key today; the Hearst seeder is the only producer of
+`relation_source` and it ships off, so this is a contract for a future consumer
+rather than a live path.
 
 **Which vocabulary a document is extracted against (Track PC.1).** Applicability
 detection is scored over a sample spread across the whole document (40 windows
 sharing a 40000-character budget), not its first chunk. Measured on the project's
 corpus, the first chunk of a parsed PDF is a title fragment with a median length
-of 66 characters and detection fired for 2 of 14 sources; with the spread it fires
-for 13 of 14. A document that detects nothing falls back to the notebook's most
+of 66 characters and detection fired for 2 of the database's 14 sources; with the
+spread it fires for 13 of 14. A document that detects nothing falls back to the notebook's most
 attempted schema, and only then to the legacy single-schema path.
 
 **`is_a` (Track N.5b).** Declared in the three root ontologies — `schema_core`,
 `base`, `policy_themes` — which covers all eleven through `extends`. It is
 subsumption between two MENTIONS, not the schema-level `parent_type` D-N4-12
 moved to the type boundary. Its only producer, the Hearst miner, ships
-**default-off** (`EXTRACTION_HEARST_ISA`): measured over eight documents while it
-defaulted on, it produced 220 raw pairs and zero edges in the graph.
+**default-off** (`EXTRACTION_HEARST_ISA`): scanning the database's 3823 chunks it
+yields 220 raw pairs, and the graph holds zero `is_a` edges.
+
+Declaring it closes a latent hazard rather than a live one. `is_a` was in no
+ontology, so `OntologyValidator` treats it as an unknown predicate — a WARNING
+outside strict mode, an ERROR inside it. Two things would have to change before
+that deleted anything: `strict_mode` on, AND an ontology passed to
+`FilteringWorkflow`, which neither production call site does today (stage 11
+builds `self._validator = None` and is inert). The declaration means whoever
+makes either change gets a predicate the validator recognises.
 
 **The regression gate (Track N.5d).** `shared.regression.extraction_gate`
 compares a harness run against `tests/regression/n_extraction_baseline.json` on

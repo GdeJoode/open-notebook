@@ -207,6 +207,26 @@ def _resolve_entity_type(
     )
 
 
+def _as_source_list(properties: Any) -> List[str]:
+    """Every provenance tag a properties bag carries, from either key.
+
+    A bag may hold `relation_source` (one writer), `relation_sources` (the union
+    a previous collapse accumulated), or both. Reading both means a third write
+    unions onto the second's result instead of overwriting it — the second-order
+    loss a review flagged after the first fix.
+    """
+    if not isinstance(properties, dict):
+        return []
+    found: List[str] = []
+    single = properties.get("relation_source")
+    if isinstance(single, str) and single.strip():
+        found.append(single.strip())
+    many = properties.get("relation_sources")
+    if isinstance(many, (list, tuple, set)):
+        found.extend(str(v).strip() for v in many if str(v).strip())
+    return found
+
+
 class EntityPersistenceService:
     """Persists filtered entities and relations to the KG tables."""
 
@@ -319,6 +339,22 @@ class EntityPersistenceService:
             # retained) — mirrors EntityRepository.upsert_entity's dict overlay.
             merged_properties: Dict[str, Any] = dict(edge.get("properties") or {})
             merged_properties.update(properties or {})
+            # ...except provenance, which must UNION rather than overlay. This is
+            # the path residual R2 actually named: two writes collapse on
+            # `(in, out, relation_type)` and the later one re-tags
+            # `relation_source`, so an edge first written by the Hearst seeder and
+            # later re-found by the LLM loses the seeder's tag entirely. N.5c
+            # fixed the in-memory `_merge_results` collapse; a review pointed out
+            # that this second collapse is the one the plan described, and that
+            # fixing only the first leaves the reversibility claim false.
+            #
+            # `relation_sources` is the accumulated set; `relation_source`
+            # continues to name whichever writer most recently won, which is what
+            # the overlay above already meant.
+            contributors = set(_as_source_list(edge.get("properties")))
+            contributors |= set(_as_source_list(properties))
+            if len(contributors) > 1:
+                merged_properties["relation_sources"] = sorted(contributors)
             existing_confidence = edge.get("confidence")
             new_confidence = (
                 confidence

@@ -881,9 +881,17 @@ The original scope: a heterogeneous gate on a golden corpus asserting the pre-LL
 layer + abstention cut LLM calls and/or over-generation WITHOUT dropping golden
 entities (recall floor). Update `ARCHITECTURE.md`, `status.md`, `RETRO.md`.
 - **Now measurable**: `scripts/n_pipeline_review_run.py` is the harness the review
-  used and the corpus JSONs are its baseline (124 entities extracted from 70
-  chunks over 8 documents). The gate compares against those, so "did we regress"
-  has a number instead of an opinion.
+  used and the corpus JSONs are its baseline (124 entities over 70 chunks, in 8
+  records covering 7 distinct PDFs — one was run twice). The gate compares against
+  those, so "did we regress" has a number instead of an opinion.
+- **Correction (review, attempt 1)**: "now measurable" was true of recall and NOT
+  of the two cost dimensions. `run_extraction` returned only entity/relation
+  counts plus filtering stats, so N.5a's counters — freshly rescued from the merge
+  — never crossed out of the service, and the gate read a key nothing wrote. Half
+  the gate could not fail while three documents said re-measuring would fill it.
+  The seam is closed in `_observability_counters`; the lesson is that a producer
+  and a consumer can each be correct while the thing between them was never
+  built.
 - **Binding** (D-N4-14): a double reproduces the real method's failure RETURN; a
   fixture builds the PRODUCTION argument set; a guard that reads a collaborator's
   value is exercised against the real collaborator at least once.

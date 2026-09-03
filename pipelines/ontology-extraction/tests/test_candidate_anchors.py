@@ -170,8 +170,13 @@ def test_hearst_not_seeded_when_an_endpoint_is_not_an_entity(monkeypatch):
 
 
 def test_hearst_seeding_disabled_by_env(monkeypatch):
-    """Still meaningful after N.5b flipped the default: it pins that the env var
-    is READ, which an implementation that hard-coded the new default would break.
+    """Kept for the explicit-"false" case, but it no longer pins much.
+
+    A review corrected the previous docstring here, which claimed this test pins
+    that the env var is read: with the default now `False`, setting it to "false"
+    and asserting absence passes just as well against an implementation that
+    hard-codes `return False`. The two `setenv("true")` tests above are what pin
+    the read.
     """
     monkeypatch.setenv("EXTRACTION_HEARST_ISA", "false")
     ont = _ontology()

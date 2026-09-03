@@ -177,6 +177,105 @@ class TestTheGateCannotPassVacuously:
         assert names["documents_with_entities"] is GateOutcome.FAILED
 
 
+class TestTheMeasurementDisappearing:
+    """A review found the mirror image of the missing-baseline rule.
+
+    Both comparators skipped whenever EITHER side was absent, with a message
+    hard-coded to "no baseline value". So a run whose counters stopped arriving —
+    which is N.5a's own defect recurring — reported green and printed a reason
+    that was false. The rule the phase wrote covers "this metric did not exist
+    when the baseline was taken"; it did not cover "this metric existed and this
+    run lost it", which is the case that catches a regression in this track's own
+    code.
+    """
+
+    @staticmethod
+    def _with_rates():
+        return summarise_run(
+            [_doc(9, counters={"entities_extracted": 20, "entities_kept": 9,
+                               "abstained_chunks": 1, "chunk_count": 10})]
+        )
+
+    def test_a_current_run_that_lost_its_counters_fails(self):
+        baseline = self._with_rates()
+        current = summarise_run([_doc(9)])  # same entities, no counters
+        result = compare_against_baseline(baseline, current)
+
+        assert not result.passed
+        failed = {d.name for d in result.failures}
+        assert failed == {"over_generation_rate", "abstain_rate"}
+        assert "measured nothing" in result.report()
+
+    def test_the_skip_message_no_longer_blames_the_baseline_wrongly(self):
+        """The reason string is part of the guard: an operator reads it and
+        decides whether to act. Saying "no baseline value" about a run that lost
+        its own measurement sends them to the wrong file.
+        """
+        baseline = self._with_rates()
+        current = summarise_run([_doc(9)])
+        result = compare_against_baseline(baseline, current)
+        detail = next(
+            d.detail for d in result.dimensions if d.name == "over_generation_rate"
+        )
+        assert "no baseline value" not in detail
+        assert "the measurement itself regressed" in detail
+
+    def test_a_metric_new_since_the_baseline_still_skips(self):
+        """The vacuity guard for the two above: the legitimate direction must
+        keep skipping, or every added metric would fail its first run.
+        """
+        baseline = summarise_run([_doc(9)])
+        current = self._with_rates()
+        result = compare_against_baseline(baseline, current)
+        assert {d.name for d in result.skipped} == {
+            "over_generation_rate",
+            "abstain_rate",
+        }
+        assert result.passed
+
+    def test_never_measured_on_either_side_is_neither_pass_nor_fail(self):
+        base = summarise_run([_doc(9)])
+        result = compare_against_baseline(base, summarise_run([_doc(9)]))
+        skipped = {d.name for d in result.skipped}
+        assert skipped == {"over_generation_rate", "abstain_rate"}
+        assert "never measured on either side" in result.report()
+
+
+class TestAZeroBaselineHoldsNothingUp:
+    """A review reached this by recording a baseline from a corpus where every
+    document yielded nothing — Ollama down, a plausible accident. The floor is
+    then `0 * (1 - tolerance)` = 0.0, every run clears it, and the gate is
+    permanently green while reporting `inconclusive=False`. Zeros rather than
+    nulls, but the same failure class the design targets.
+    """
+
+    def test_a_zero_floor_skips_rather_than_passing_anything(self):
+        baseline = summarise_run([_doc(0), _doc(0)])
+        assert baseline["total_entities"] == 0
+
+        result = compare_against_baseline(baseline, summarise_run([_doc(0)]))
+        assert {d.name for d in result.skipped} >= {
+            "total_entities",
+            "documents_with_entities",
+        }
+        assert result.inconclusive
+        assert not result.passed
+
+    def test_a_normal_baseline_is_unaffected(self):
+        """Vacuity guard: skipping on zero must not creep into ordinary
+        comparisons, or the recall floor would stop working entirely.
+        """
+        baseline = summarise_run([_doc(60), _doc(64)])
+        # Same document count on both sides, so this isolates the recall floor
+        # from the per-document liveness dimension.
+        assert compare_against_baseline(
+            baseline, summarise_run([_doc(70), _doc(70)])
+        ).passed
+        assert not compare_against_baseline(
+            baseline, summarise_run([_doc(15), _doc(15)])
+        ).passed
+
+
 class TestTheCheckedInBaseline:
     def test_the_baseline_file_is_loadable_and_says_what_it_measured(self):
         baseline = json.loads(BASELINE_PATH.read_text())
@@ -189,8 +288,14 @@ class TestTheCheckedInBaseline:
     def test_the_baseline_declares_its_two_unmeasured_dimensions(self):
         """Recorded as null rather than 0.0, and the provenance note says why:
         the counters that would have produced them were being discarded by the
-        merge when this corpus was measured. Anyone re-measuring after N.5a gets
-        real numbers; until then the gate must skip, not pass.
+        merge when this corpus was measured.
+
+        An earlier version of this docstring said "anyone re-measuring after N.5a
+        gets real numbers", and a review showed that was false at the time: N.5a
+        put the counters into `ExtractionResult.metadata` but `run_extraction`
+        never returned them, so the gate read a key nothing wrote. That seam is
+        closed now (`_observability_counters`), which is what makes the sentence
+        true — but it took a second fix, not the first.
         """
         baseline = json.loads(BASELINE_PATH.read_text())
         assert baseline["over_generation_rate"] is None

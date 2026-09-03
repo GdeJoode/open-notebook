@@ -22,6 +22,6 @@
       "Bijlage 3. Lopende trajecten Achterhoek NPVR.pdf",
       "Bennett_test.pdf"
     ],
-    "note": "Measured BEFORE PC.1 fixed the applicability sample (2/14 -> 13/14 documents detecting a schema) and before N.5a carried the pass counters through the merge. So the entity counts here come from runs that mostly took the legacy single-schema path, and over_generation_rate / abstain_rate are null because the merge discarded the counters that would have produced them - not because nothing was culled. The gate reports those two dimensions as SKIPPED rather than passing them."
+    "note": "Measured BEFORE PC.1 fixed the applicability sample (2/14 -> 13/14 documents detecting a schema), before N.5a carried the pass counters through the merge, and before N.5d closed the seam that lets those counters reach a run summary at all. So the entity counts here come from runs that mostly took the legacy single-schema path, and over_generation_rate / abstain_rate are null because nothing was carrying them - not because nothing was culled. The gate reports those two as SKIPPED rather than passing them. Two cautions for whoever re-measures: the eight source records cover seven distinct PDFs (Achterhoek was run twice and its 0-entity record was dropped from the list while its zero stayed in the totals), and abstain_rate's denominator is chunk-PASSES, so a multi-schema re-measure is structurally higher than this single-schema baseline and may fail the ceiling without a regression."
   }
 }

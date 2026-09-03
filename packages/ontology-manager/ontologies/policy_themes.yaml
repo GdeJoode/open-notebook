@@ -121,9 +121,12 @@ relationship_types:
   # removed every mined hierarchy edge silently.
   #
   # The miner itself is DEFAULT-OFF (`EXTRACTION_HEARST_ISA`, see
-  # `pass2_typed_extraction`). Measured on an eight-document corpus it produced
-  # 220 raw pairs and ZERO edges in the graph, because its precision gate needs
-  # both endpoints to be entities the LLM extracted for the same chunk. The
+  # `pass2_typed_extraction`). Measured against the project's database — 14 sources, 3823 chunks — the
+  # miner yields 220 raw Hearst pairs, 138 of them distinct, while the graph
+  # holds ZERO `is_a` edges among 1895 relations across 100 relation types.
+  # (Two measurements over the same database, not one run: the pair scan reads
+  # every chunk, the edge count reads the graph.) Its precision gate needs both
+  # endpoints to be entities the LLM extracted for the same chunk. The
   # declaration exists so that whoever turns it back on gets a predicate the
   # validator recognises — not so that something starts flowing today.
   #

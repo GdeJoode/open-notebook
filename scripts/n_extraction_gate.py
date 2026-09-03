@@ -67,20 +67,53 @@ def main() -> int:
         action="store_true",
         help="record this run as the new baseline instead of comparing",
     )
+    parser.add_argument(
+        "--allow-empty-baseline",
+        action="store_true",
+        help="record a baseline even though the run produced no entities",
+    )
     args = parser.parse_args()
 
     current = summarise_run(_load_documents(args.run))
 
     if args.write_baseline:
+        # Refuse a run that measured nothing. A review reached this by accident:
+        # with Ollama down every document still produces a `result` block, so the
+        # file looks like harness output, and a baseline of zero entities makes
+        # every later floor `0 * (1 - tolerance)` — permanently green while
+        # reporting `inconclusive=False`. The gate now skips a zero floor too, but
+        # refusing to RECORD one is the cheaper place to stop it.
+        if not current.get("total_entities") and not args.allow_empty_baseline:
+            raise SystemExit(
+                f"{args.run} measured {current.get('total_entities', 0)} entities "
+                f"across {current.get('documents', 0)} documents. Refusing to "
+                "record that as a baseline — a zero floor holds nothing up. Fix "
+                "the run first, or pass --allow-empty-baseline if this is "
+                "genuinely what the corpus produces."
+            )
+
         previous = (
             json.loads(args.baseline.read_text()) if args.baseline.exists() else {}
         )
-        # Carry the provenance block forward so a re-record never silently drops
-        # the note explaining what a null dimension means.
-        current["_provenance"] = {
-            **(previous.get("_provenance") or {}),
-            "measured_from": str(args.run),
-        }
+        provenance = dict(previous.get("_provenance") or {})
+        provenance["measured_from"] = str(args.run)
+        # Carry the previous note forward, but do NOT carry a note that has become
+        # false. The checked-in one explains why two dimensions are null; once a
+        # run measures them, that explanation describes a state that no longer
+        # exists, and a stale explanation is worse than none.
+        measured_now = [
+            k
+            for k in ("over_generation_rate", "abstain_rate")
+            if current.get(k) is not None
+        ]
+        if measured_now and "note" in provenance:
+            provenance["note"] = (
+                "Superseded: this baseline measures "
+                + ", ".join(measured_now)
+                + ". The previous note explained why they were null; it no longer "
+                "applies. Previous note: " + provenance["note"]
+            )
+        current["_provenance"] = provenance
         args.baseline.write_text(json.dumps(current, indent=2) + "\n")
         print(f"baseline written to {args.baseline}")
         return 0

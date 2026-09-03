@@ -12,8 +12,9 @@ Both halves of the decision are pinned here:
 * the predicate is declared in every shipped ontology, so ``strict_mode`` cannot
   change the outcome unnoticed — which is the phase's stated acceptance criterion;
 * the miner ships explicitly OFF, so nothing flows until somebody decides it
-  should. Measured while it defaulted on: 220 raw pairs over 3823 chunks and zero
-  edges in the graph.
+  should. Measured while it defaulted on, over the database rather than over one
+  harness run: 220 raw pairs across all 3823 chunks, and zero `is_a` edges in the
+  graph.
 """
 
 from __future__ import annotations
@@ -108,12 +109,12 @@ async def test_an_undeclared_predicate_still_differs_between_the_two_modes():
 def test_the_hearst_miner_ships_off():
     """The other half of the decision, and the half a config drift would undo.
 
-    Measured while this defaulted on: 220 raw pairs across 3823 chunks of the
-    project's own corpus, 138 distinct, and ZERO `is_a` edges in the graph. The
-    precision gate requires both endpoints to be entities the LLM extracted for
-    the same chunk; under the looser "exists anywhere in this notebook" reading
-    only 15 distinct pairs survive, including `banken is_a voedselketen` and
-    `PD is_a Control variables`.
+    Two measurements over the project's database, not one run: scanning all 3823
+    chunks yields 220 raw pairs (138 distinct), and the graph holds ZERO `is_a`
+    edges. The precision gate requires both endpoints to be entities the LLM
+    extracted for the same chunk; under the looser "exists anywhere in this
+    notebook" reading only 15 distinct pairs survive, including
+    `banken is_a voedselketen` and `PD is_a Control variables`.
     """
     import os
     from unittest.mock import patch

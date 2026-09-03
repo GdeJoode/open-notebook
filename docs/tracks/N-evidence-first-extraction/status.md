@@ -36,10 +36,18 @@ removed all seven".
 
 **N.5b.** The review's finding was not that Hearst mining is bad but that N.2
 shipped a producer whose output survived by accident. Measured before deciding:
-220 raw pairs over 3823 chunks, 138 distinct, and **zero** `is_a` edges in a graph
-holding 1895 relations across 100 types. The per-chunk precision gate is why; even
-under a notebook-wide reading only 15 distinct pairs survive, and those include
-`banken is_a voedselketen` and `PD is_a Control variables`. The decision (the
+scanning all 3823 chunks of the database's 14 sources yields 220 raw pairs, 138
+distinct — and the graph holds **zero** `is_a` edges among 1895 relations across
+100 types. (Two measurements over the same database, not one harness run.) The
+per-chunk precision gate is why; even under a notebook-wide reading only 15
+distinct pairs survive, and those include `banken is_a voedselketen` and
+`PD is_a Control variables`.
+
+A review sharpened the risk statement too: "turning on `strict_mode` deletes every
+mined edge" needs a second change as well as the flag — an ontology passed to
+`FilteringWorkflow`, which neither production call site does, so stage 11 builds
+`self._validator = None` and is inert. The decision stands; the distance was two
+changes, not one. The decision (the
 user's, on that evidence) was to declare the predicate in the three root
 ontologies and ship the miner explicitly off. Neither half works alone: declaring
 alone leaves a producer that produces nothing; switching off alone leaves an
@@ -60,8 +68,13 @@ cannot contain — the merge was discarding them when it was measured.
 ## Where the numbers live
 
 - `tests/regression/n_extraction_baseline.json` — 124 entities over seven
-  documents, six of which produced entities. Carries a provenance block saying
-  what it predates and what its two null dimensions mean.
+  distinct PDFs, six of which produced entities. Carries a provenance block
+  saying what it predates and what its two null dimensions mean. **Not
+  reproducible by one harness run over those seven files**: the corpus JSONs hold
+  eight records, because `Bijlage 3. Lopende trajecten Achterhoek NPVR.pdf` was
+  run twice (0 entities at the default `--min-chars`, 17 after a re-run) and the
+  0-entity record was dropped from the document list while contributing its zero
+  to both totals. Arithmetically consistent, historically messy.
 - `claudedocs/extraction-pipeline-review.md` — the live review that re-planned N.5.
 - `scripts/n_pipeline_review_run.py` — the harness; `scripts/n_extraction_gate.py`
   compares its output against the baseline.

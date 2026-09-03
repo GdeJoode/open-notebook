@@ -967,10 +967,15 @@ def _merge_pass_counters(
     * **Summed, not averaged.** Every counter is a count of things one pass did.
     * **`entities_kept` is the sum of what survived each pass's gates**, which is
       deliberately NOT `len(final_entities)`: the difference between them is
-      cross-pass duplication, not gate rejection, and conflating the two would
-      make the merge itself look like over-generation. The difference is
-      published as `merged_duplicates_collapsed` so it is visible rather than
-      implied.
+      DUPLICATION, not gate rejection, and conflating the two would make the merge
+      itself look like over-generation. The difference is published as
+      `merged_duplicates_collapsed` so it is visible rather than implied. A review
+      corrected the name's own description: that number is not only CROSS-pass
+      duplication. `entities_kept` is `len(all_entities)` per pass with no
+      within-pass dedup, while `final_entities` dedups on `normalize_entity_name`
+      across chunks AND passes, so one pass extracting "Gemeente" from eight
+      chunks contributes seven to it. Read it as "mentions that collapsed into a
+      distinct entity", from any cause.
     * **`per_schema` keeps the unmerged view**, because "which pass removed
       everything" is exactly the question the merged sum cannot answer, and it is
       the question this phase exists to make answerable.

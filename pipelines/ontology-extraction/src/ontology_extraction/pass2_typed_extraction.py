@@ -134,11 +134,12 @@ def _domain_ner_enabled() -> bool:
 def _hearst_isa_enabled() -> bool:
     """Track N.2: seed deterministic Hearst is-a relations (default OFF, N.5b).
 
-    Measured on the project's eight-document corpus while this defaulted ON: 220
-    raw Hearst pairs across 3823 chunks, 138 of them distinct, and **zero**
-    `is_a` edges in the graph — of 1895 relations in 100 types, not one. The
-    precision gate is why: both endpoints must be entities the LLM extracted for
-    the SAME chunk. Under the much looser reading "both endpoints exist anywhere
+    Two measurements over the project's database, taken while this defaulted ON
+    and worth keeping separate because they are not one run: scanning all 3823
+    chunks of the 14 ingested sources, the miner yields 220 raw Hearst pairs, 138
+    of them distinct; and the graph holds **zero** `is_a` edges among 1895
+    relations across 100 relation types. The precision gate is why: both endpoints
+    must be entities the LLM extracted for the SAME chunk. Under the much looser reading "both endpoints exist anywhere
     in this notebook" only 15 distinct pairs survive, and their quality is mixed
     — `agrariers is_a ondernemers` is right, `banken is_a voedselketen` is wrong,
     `PD is_a Control variables` is a table artefact, and

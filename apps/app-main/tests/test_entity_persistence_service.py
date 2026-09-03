@@ -1064,3 +1064,94 @@ class TestPersistStampsRichType:
         ent = mock_upsert.call_args.args[0]
         assert ent.entity_type == "technology"
         assert ent.primary_type == "Technologie"
+
+
+class TestRelationProvenanceSurvivesThePersistCollapse:
+    """Track N.5c / R2, on the path the residual actually named.
+
+    R2 was defined as: "at persist the two collapse on
+    `(in, out, relation_type)` and the LATER write re-tags `relation_source`".
+    N.5c's first fix addressed the in-memory `_merge_results` collapse, which is
+    a real defect but a different one — a review pointed out that the named path
+    was untouched and that fixing only the first left the reversibility claim
+    false. `_upsert_relation` overlays properties (`merged.update(new)`), so an
+    edge first written by the Hearst seeder and later re-found by the LLM lost
+    the seeder's tag entirely.
+
+    `relation_source` still names whichever writer most recently won, which is
+    what the overlay already meant. `relation_sources` accumulates.
+    """
+
+    @staticmethod
+    def _service():
+        mock_repo = MagicMock()
+        mock_repo.upsert_entity = AsyncMock(return_value="entity:fake")
+        return EntityPersistenceService(entity_repository=mock_repo)
+
+    @staticmethod
+    def _existing_edge(properties):
+        return [{"id": "relation:e1", "properties": properties, "confidence": 0.5}]
+
+    async def _upsert(self, existing_properties, incoming_properties):
+        svc = self._service()
+        calls = []
+
+        async def fake_query(query, params=None, *a, **kw):
+            calls.append((query, params or {}))
+            if query.strip().startswith("SELECT"):
+                return self._existing_edge(existing_properties)
+            return []
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new=AsyncMock(side_effect=fake_query),
+        ):
+            await svc._upsert_relation(
+                src_id="entity:a",
+                tgt_id="entity:b",
+                relation_type="is_a",
+                confidence=0.9,
+                source_id="source:x",
+                properties=incoming_properties,
+            )
+        update = next(p for q, p in calls if q.strip().startswith("UPDATE"))
+        return update["properties"]
+
+    @pytest.mark.asyncio
+    async def test_a_later_write_no_longer_erases_the_earlier_tag(self):
+        props = await self._upsert(
+            {"relation_source": "hearst"}, {"relation_source": "llm"}
+        )
+        assert props["relation_sources"] == ["hearst", "llm"]
+        # The overlay's own meaning is preserved: the latest writer still names
+        # itself in `relation_source`.
+        assert props["relation_source"] == "llm"
+
+    @pytest.mark.asyncio
+    async def test_a_third_write_accumulates_rather_than_replacing(self):
+        """The second-order loss the same review flagged: once a collapse has
+        written a list, the NEXT write's overlay would replace that list wholesale
+        unless the union reads it back.
+        """
+        props = await self._upsert(
+            {"relation_source": "llm", "relation_sources": ["hearst", "llm"]},
+            {"relation_source": "edge_predictor"},
+        )
+        assert props["relation_sources"] == ["edge_predictor", "hearst", "llm"]
+
+    @pytest.mark.asyncio
+    async def test_a_single_writer_gets_no_list(self):
+        """Vacuity guard: the fix must not put a redundant key on every edge in
+        the graph, and re-writing the same source twice is not a collapse.
+        """
+        props = await self._upsert(
+            {"relation_source": "hearst"}, {"relation_source": "hearst"}
+        )
+        assert "relation_sources" not in props
+        assert props["relation_source"] == "hearst"
+
+    @pytest.mark.asyncio
+    async def test_edges_without_provenance_are_untouched(self):
+        props = await self._upsert({"weight": 1.0}, {"cosine_signal": 0.4})
+        assert "relation_sources" not in props
+        assert props == {"weight": 1.0, "cosine_signal": 0.4}
