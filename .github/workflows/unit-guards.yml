@@ -1,0 +1,68 @@
+name: Unit guards
+
+# Runs the repository-level guard suite (`tests/`) on every PR.
+#
+# Why this workflow exists (Track PC, phase PC.1b). Before it, NO CI job ran any
+# Python unit suite: `db-integration.yml` runs one testcontainers file behind a
+# path filter, and `e2e.yml` runs Playwright. So a guard added anywhere in
+# `apps/`, `packages/` or `pipelines/tests/` executed only on the machine of
+# whoever wrote it — which is the first of the three ways this project has seen a
+# guard fail ("it runs nowhere"). A rule that runs nowhere is not a rule.
+#
+# Scope is deliberately the root `tests/` directory only. That is the repo's
+# `testpaths` and it is where the cross-cutting invariants live; the per-package
+# suites are large and slow and belong in their own job when someone wants them.
+# Widening this is a decision, not an oversight.
+
+on:
+  pull_request:
+    branches: [main]
+  # Also on push to main: a guard that only runs pre-merge cannot tell you that
+  # main is currently broken, which is the state this phase found `tests/` in.
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: unit-guards-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guards:
+    name: Repository invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        # `fetch-depth: 0` is NOT needed for history — the derived-state guard
+        # uses `git ls-files` plus AST parsing, both of which read the working
+        # tree. Kept at 0 only so a future guard that compares against a base ref
+        # does not have to rediscover why a shallow clone breaks it. A review
+        # caught the previous comment justifying it by a `git grep` the guard no
+        # longer performs.
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: 'latest'
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      # `--all-packages`, not a bare `uv sync`. The root project depends on
+      # pydantic, loguru and python-dotenv and nothing else; `[tool.uv.sources]`
+      # only says WHERE workspace members would come from if something depended
+      # on them. `tests/` imports `shared`, `entity_filtering`, `file_manager`,
+      # `ingestion`, `fastapi` and `httpx`, so a bare sync collects zero tests
+      # and the job is red on its first run — which a review caught by running
+      # the exact two commands in an isolated environment. `db-integration.yml`
+      # gets away with the same line only because it sets a `working-directory`.
+      - name: Install workspace deps
+        run: uv sync --all-packages --extra dev
+
+      - name: Run repository guards
+        run: uv run pytest tests/ -v --tb=short

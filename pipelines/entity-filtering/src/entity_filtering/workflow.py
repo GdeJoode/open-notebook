@@ -460,25 +460,15 @@ class FilteringWorkflow:
         # ------------------------------------------------------------------
         # Stage 8: Entity linking (optional enrichment)
         # ------------------------------------------------------------------
-        linked_entities: dict[str, dict[str, Any]] = {}
         if self._entity_linker is not None:
+            # PC.1b removed the `linked_entities` index this stage also built.
+            # It was a second copy of data that already travels on the entities
+            # themselves — `link()` writes `dbpedia_uri` / `wikidata_id` into
+            # each entity's `properties`, which IS persisted — and the copy had
+            # no reader anywhere. The linking itself is untouched.
             deduped_entities = await self._entity_linker.link(
                 deduped_entities
             )
-            # Collect linked entity metadata for the result
-            for ent in deduped_entities:
-                props = ent.get("properties", {})
-                if props.get("dbpedia_uri") or props.get("wikidata_id"):
-                    linked_entities[ent.get("text", "")] = {
-                        k: v
-                        for k, v in props.items()
-                        if k
-                        in (
-                            "dbpedia_uri",
-                            "wikipedia_url",
-                            "wikidata_id",
-                        )
-                    }
 
         # ------------------------------------------------------------------
         # Stage 9: Contextual clustering (optional enrichment)
@@ -787,7 +777,6 @@ class FilteringWorkflow:
             merged_entity_groups=merge_groups,
             match_candidates=all_match_candidates,
             predicted_edges=predicted_relations,
-            linked_entities=linked_entities,
             kg_resolution_report=kg_resolution_report,
             concept_alignment_report=concept_alignment_report,
             validation_report=validation_report,

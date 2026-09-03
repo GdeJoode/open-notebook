@@ -8,7 +8,6 @@ correctly and maintain Liskov substitution where expected.
 import json
 
 import pytest
-
 from shared.models.extraction import (
     ExtractedEntity,
     ExtractedRelation,
@@ -57,8 +56,6 @@ class TestExtractionResultRoundtrip:
                 )
             ],
             validation_report={"ontology": {"valid_entities": 5}},
-            linked_entities={"Albert Einstein": {"dbpedia_uri": "http://dbpedia.org/resource/Albert_Einstein"}},
-            llm_verification_results={"verified": 3, "rejected": 1},
             kg_resolution_report={"matched_count": 2, "new_count": 3},
             metadata={"filtering": {"input_entities": 20, "output_entities": 5}},
         )
@@ -72,8 +69,6 @@ class TestExtractionResultRoundtrip:
         assert len(restored.merged_entity_groups) == 1
         assert len(restored.predicted_edges) == 1
         assert restored.validation_report is not None
-        assert restored.linked_entities["Albert Einstein"]["dbpedia_uri"] == "http://dbpedia.org/resource/Albert_Einstein"
-        assert restored.llm_verification_results is not None
         assert restored.kg_resolution_report is not None
 
     def test_filtered_result_is_valid_extraction_result(self):
@@ -111,7 +106,14 @@ class TestExtractionCacheCompatibility:
         assert len(parsed["relations"]) == 15
 
     def test_filtered_result_storable_as_json_string(self):
-        """json.dumps on FilteredResult with all extra fields succeeds."""
+        """json.dumps on FilteredResult round-trips its declared fields.
+
+        PC.1b: the docstring used to say "with all extra fields", and it passed a
+        `linked_entities=` kwarg for a field the phase had deleted — invisible
+        because pydantic's default `extra='ignore'` swallows it. A review pointed
+        out that this was the last surviving trace of the deletion, and that it
+        survived precisely because nothing could see it.
+        """
         filtered = FilteredResult(
             entities=[ExtractedEntity(text="Test", label="ORG", confidence=0.9)],
             relations=[],
@@ -119,7 +121,6 @@ class TestExtractionCacheCompatibility:
             merged_entity_groups=[["A", "a"]],
             predicted_edges=[],
             validation_report={"test": True},
-            linked_entities={"Test": {"uri": "http://example.com"}},
         )
         dumped = filtered.model_dump()
         json_str = json.dumps(dumped)

@@ -1892,6 +1892,404 @@ class TestTheCountersCrossOutOfTheService:
         assert measured["abstain_rate"] == pytest.approx(9 / 20)
 
 
+class TestARefilterDoesNotEraseWhatItDidNotMeasure:
+    """PC.1b / W3b — the boundary a review proved had no guard at all.
+
+    `run_filtering_only` builds a six-key `stats` dict and assigned it over
+    `metadata["filtering"]`. The extraction path's version of that key also
+    carries a `concept_alignment` block with the alignment counters, so any
+    re-filter destroyed them — silently, and with nothing to notice.
+
+    The review reverted the fix and ran both suites: 1839 passed, 69 passed, zero
+    failures. The phase's own AC says every wired boundary has a test that fails
+    when the state stops crossing, and this one did not. This is that test.
+    """
+
+    @staticmethod
+    async def _refilter(previous_metadata):
+        """Drive the real `run_filtering_only` and return what it wrote back."""
+        svc = EntityExtractionService(source_repo=AsyncMock())
+        written = {}
+
+        class _Workflow:
+            def __init__(self, **kwargs):
+                pass
+
+            async def process(self, result, **kwargs):
+                return FilteredResult(entities=[], relations=[])
+
+        row = {
+            "id": "extraction_result:1",
+            "entities": [{"text": "X", "label": "L"}],
+            "relations": [],
+            "metadata": previous_metadata,
+        }
+
+        async def fake_query(query, params=None, *a, **kw):
+            if query.strip().startswith("UPDATE"):
+                written.update(params or {})
+                return []
+            return [row]
+
+        with patch(
+            "app_main.services.entity_extraction_service.execute_query",
+            AsyncMock(side_effect=fake_query),
+        ), patch(
+            "app_main.services.entity_extraction_service.FilteringWorkflow",
+            _Workflow,
+        ), patch.object(
+            EntityExtractionService, "_embed_entities", AsyncMock()
+        ), patch.object(
+            EntityExtractionService, "_persistence", AsyncMock(), create=True
+        ):
+            await svc.run_filtering_only(source_id="source:B")
+        return written.get("metadata", {})
+
+    @pytest.mark.asyncio
+    async def test_the_alignment_counters_survive_a_refilter(self):
+        metadata = await self._refilter(
+            {
+                "filtering": {
+                    "entities_before": 9,
+                    "concept_alignment": {"aligned": 4, "gaps_recorded": 2},
+                }
+            }
+        )
+        assert metadata["filtering"]["concept_alignment"] == {
+            "aligned": 4,
+            "gaps_recorded": 2,
+        }
+
+    @pytest.mark.asyncio
+    async def test_the_keys_this_path_recomputes_still_win(self):
+        """Vacuity guard. A merge that preferred the OLD values would keep the
+        alignment block and also keep a stale `entities_before`, which is worse
+        than the overwrite it replaced.
+        """
+        metadata = await self._refilter(
+            {"filtering": {"entities_before": 999, "concept_alignment": {"aligned": 4}}}
+        )
+        assert metadata["filtering"]["entities_before"] == 1
+        assert metadata["filtering"]["concept_alignment"] == {"aligned": 4}
+
+    @pytest.mark.asyncio
+    async def test_a_row_with_no_previous_filtering_block_is_unaffected(self):
+        metadata = await self._refilter({})
+        assert metadata["filtering"]["entities_before"] == 1
+        assert "concept_alignment" not in metadata["filtering"]
+
+
+class TestWhatWasWrittenReachesTheSummary:
+    """PC.1b / W3 — the difference between extracted and persisted, expressible.
+
+    `persist_filtered_result` has always returned five counts; only
+    `persisted_entity_ids` was read. So `summary["entity_count"]` is the count the
+    LLM produced, and the pipeline review's own measurement — 124 entities
+    extracted against 117 rows in the graph — could not be reported by the system
+    that produced it. PC.3's AC ("materially fewer than 117 rows, with a named
+    figure") has no instrument without this.
+    """
+
+    @staticmethod
+    def _persistence(**counts):
+        persistence = AsyncMock()
+        persistence.persist_filtered_result = AsyncMock(
+            return_value={
+                "persisted_entity_ids": ["entity:1"],
+                "entities_upserted": counts.get("entities_upserted", 3),
+                "entities_failed": counts.get("entities_failed", 1),
+                "relations_created": counts.get("relations_created", 2),
+                "relations_merged": counts.get("relations_merged", 0),
+                "candidates_stored": counts.get("candidates_stored", 0),
+            }
+        )
+        return persistence
+
+    async def _run(self, svc, persistence, save_mock=None):
+        """`save_mock` for the same reason `TestPass1OutcomeReachesTheCurator._run`
+        takes one: a caller patching `_save_result` from the OUTSIDE has its patch
+        shadowed by the one below, so its assertions run against a double nothing
+        ever called. That trap was found by review in PC.1 and it caught this
+        class too — a helper that patches a collaborator must let the caller
+        supply it.
+        """
+        deals = _make_ontology("deals")
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=["deals"])
+        mock_manager.get_ontology = AsyncMock(return_value=deals)
+        extracted = ExtractionResult(
+            entities=[ExtractedEntity(text="X", label="L")], relations=[], metadata={}
+        )
+        with patch(
+            "ontology_manager.get_ontology_manager", return_value=mock_manager
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=AsyncMock(return_value=[(deals, 0.9)]),
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(
+            svc, "_save_result", save_mock or AsyncMock()
+        ), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(svc, "_persistence", persistence), patch.object(
+            EntityExtractionService,
+            "_resolve_privacy_mode",
+            AsyncMock(return_value=None),
+        ), patch.object(
+            EntityExtractionService,
+            "_pack_chunks_for_route_head",
+            AsyncMock(side_effect=lambda chunks: chunks),
+        ):
+            workflow = MagicMock()
+            workflow.extract = AsyncMock(return_value=extracted)
+            workflow_cls.return_value = workflow
+            return await svc.run_extraction(source_id="source:test", notebook_id=None)
+
+    @pytest.mark.asyncio
+    async def test_the_summary_reports_what_was_written(self, base_source_repo):
+        svc = EntityExtractionService(source_repo=base_source_repo)
+        summary = await self._run(svc, self._persistence())
+
+        assert summary["persisted"]["entities_upserted"] == 3
+        assert summary["persisted"]["entities_failed"] == 1
+        assert summary["persisted"]["relations_created"] == 2
+
+    @pytest.mark.asyncio
+    async def test_extracted_and_persisted_are_separately_visible(
+        self, base_source_repo
+    ):
+        """The property the review needed and could not express: a run whose LLM
+        produced more than the graph accepted must be able to SAY so.
+        """
+        svc = EntityExtractionService(source_repo=base_source_repo)
+        summary = await self._run(
+            svc, self._persistence(entities_upserted=0, entities_failed=1)
+        )
+
+        assert summary["entity_count"] == 1  # what the LLM produced
+        assert summary["persisted"]["entities_upserted"] == 0  # what was written
+        assert summary["entity_count"] != summary["persisted"]["entities_upserted"]
+
+    def test_the_counts_helper_distinguishes_absent_from_zero(self):
+        from app_main.services.entity_extraction_service import _persisted_counts
+
+        assert _persisted_counts(None) == {}
+        assert _persisted_counts("not a dict") == {}
+        assert _persisted_counts({"persisted_entity_ids": []}) == {}
+        # A measured zero survives; it is not the same as "persistence did not run".
+        assert _persisted_counts({"entities_upserted": 0}) == {"entities_upserted": 0}
+
+    @pytest.mark.asyncio
+    async def test_the_counts_are_persisted_where_something_reads_them(
+        self, base_source_repo
+    ):
+        """`summary` lands in `job.result`, which nothing in the repo reads.
+        Writing only there would have created a fresh producer with no consumer,
+        in the phase whose point is to stop doing that. The metadata copy is
+        durable on `extraction_result` and IS read, by the PC.1b probe.
+        """
+        svc = EntityExtractionService(source_repo=base_source_repo)
+        saved = AsyncMock()
+        await self._run(svc, self._persistence(), save_mock=saved)
+
+        assert saved.await_count == 1
+        _source_id, persisted_result = saved.await_args.args
+        assert persisted_result.metadata["persisted"]["entities_upserted"] == 3
+
+    @pytest.mark.asyncio
+    async def test_a_run_that_persisted_nothing_says_nothing(self, base_source_repo):
+        """Vacuity guard. With filtering off, nothing is written, and the key is
+        absent rather than a fabricated set of zeros — "not measured" and
+        "measured zero" must stay distinguishable, the same rule N.5d rests on.
+        """
+        svc = EntityExtractionService(source_repo=base_source_repo)
+        deals = _make_ontology("deals")
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=["deals"])
+        mock_manager.get_ontology = AsyncMock(return_value=deals)
+        with patch(
+            "ontology_manager.get_ontology_manager", return_value=mock_manager
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(
+            EntityExtractionService,
+            "_resolve_privacy_mode",
+            AsyncMock(return_value=None),
+        ), patch.object(
+            EntityExtractionService,
+            "_pack_chunks_for_route_head",
+            AsyncMock(side_effect=lambda chunks: chunks),
+        ):
+            workflow = MagicMock()
+            workflow.extract = AsyncMock(
+                return_value=ExtractionResult(
+                    entities=[ExtractedEntity(text="X", label="L")], relations=[]
+                )
+            )
+            workflow_cls.return_value = workflow
+            summary = await svc.run_extraction(
+                source_id="source:test", notebook_id=None, run_filtering=False
+            )
+
+        assert "persisted" not in summary
+
+
+class TestTheSoftNudgeReachesItsBanner:
+    """PC.1b / W1 — the cleanest producer/consumer pair in the repo, connected.
+
+    `_decide_soft_nudge` has run on every document since B.1e; B.3c built the
+    `notebook_event` table, its repository, a router filtering on
+    `_KNOWN_NUDGE_EVENT_TYPES` and `SchemaSoftNudge.tsx` to poll it. The two
+    halves never met: `workflow.py` discards the decision into `_decision` and the
+    table held ZERO rows. Measured before this landed, all five sources carrying
+    Pass-1 rows would have fired a banner.
+
+    These assert on what the REPOSITORY was asked to write, not on the decision
+    being computed — the decision was always computed. The gap was the write.
+    """
+
+    @staticmethod
+    def _svc(base_source_repo, event_repo, **kw):
+        return EntityExtractionService(
+            source_repo=base_source_repo, notebook_event_repo=event_repo, **kw
+        )
+
+    @staticmethod
+    def _event_repo(unread=None):
+        repo = AsyncMock()
+        repo.list_unread = AsyncMock(return_value=unread or [])
+        repo.record = AsyncMock(return_value="notebook_event:1")
+        return repo
+
+    @pytest.mark.asyncio
+    async def test_a_mismatch_verdict_is_written_as_an_event(self, base_source_repo):
+        event_repo = self._event_repo()
+        svc = self._svc(base_source_repo, event_repo)
+
+        await svc._emit_soft_nudge(
+            {
+                "soft_nudge": "schema_mismatch",
+                "best_coverage": 0.45,
+                "schemas_attempted": ["deals"],
+            },
+            "notebook:abc",
+            "source:x",
+        )
+
+        event_repo.record.assert_awaited_once()
+        nb, event_type, payload = event_repo.record.await_args.args
+        assert nb == "notebook:abc"
+        assert event_type == "schema_mismatch"
+        assert payload["source_id"] == "source:x"
+        assert payload["best_coverage"] == 0.45
+
+    @pytest.mark.asyncio
+    async def test_the_event_type_is_exactly_what_the_router_filters_on(
+        self, base_source_repo
+    ):
+        """The enum's docstring promises its values "round-trip through
+        `notebook_event.type` without manual conversion". If either side is
+        renamed, the banner silently stops appearing — which is the state this
+        phase found. So assert against the ROUTER's own set, not a literal.
+        """
+        from app_main.api.routers.notebook_events import _KNOWN_NUDGE_EVENT_TYPES
+        from ontology_extraction.multi_schema_orchestrator import SoftNudgeDecision
+
+        for decision in (
+            SoftNudgeDecision.SCHEMA_MISMATCH,
+            SoftNudgeDecision.EXTENSION_SUGGESTED,
+        ):
+            event_repo = self._event_repo()
+            svc = self._svc(base_source_repo, event_repo)
+            await svc._emit_soft_nudge(
+                {"soft_nudge": decision.value}, "notebook:abc", "source:x"
+            )
+            _nb, event_type, _payload = event_repo.record.await_args.args
+            assert event_type in _KNOWN_NUDGE_EVENT_TYPES
+
+    @pytest.mark.asyncio
+    async def test_a_fitting_schema_raises_nothing(self, base_source_repo):
+        """NONE writes no row. An event the banner would ignore is still a row a
+        curator has to dismiss.
+        """
+        event_repo = self._event_repo()
+        svc = self._svc(base_source_repo, event_repo)
+
+        for metadata in ({"soft_nudge": "none"}, {}, {"soft_nudge": ""}):
+            await svc._emit_soft_nudge(metadata, "notebook:abc", "source:x")
+        event_repo.record.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_unread_banner_is_not_duplicated(self, base_source_repo):
+        """Re-extracting a notebook's documents would otherwise queue one banner
+        per document saying the same thing.
+        """
+        event_repo = self._event_repo(unread=[MagicMock()])
+        svc = self._svc(base_source_repo, event_repo)
+
+        await svc._emit_soft_nudge(
+            {"soft_nudge": "schema_mismatch"}, "notebook:abc", "source:x"
+        )
+        event_repo.record.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failing_write_costs_no_entities(self, base_source_repo):
+        """Extraction has already succeeded by the time this runs."""
+        event_repo = self._event_repo()
+        event_repo.record = AsyncMock(side_effect=RuntimeError("db down"))
+        svc = self._svc(base_source_repo, event_repo)
+
+        await svc._emit_soft_nudge(
+            {"soft_nudge": "schema_mismatch"}, "notebook:abc", "source:x"
+        )  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_the_decision_travels_from_the_run_to_the_repository(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """The seam, not the unit. Everything above could pass while
+        `_record_pass1_outcome` never called `_emit_soft_nudge` — which is the
+        exact shape that made PC.1's first attempt fully green and inert. This
+        drives the recorder with a real result payload.
+        """
+        event_repo = self._event_repo()
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        pass1_repo_fixture.list_by_notebook = AsyncMock(return_value=[])
+        svc = self._svc(
+            base_source_repo,
+            event_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        result = ExtractionResult(
+            entities=[],
+            relations=[],
+            metadata={"soft_nudge": "extension_suggested", "best_coverage": 0.85},
+        )
+        await svc._record_pass1_outcome(
+            result,
+            "notebook:abc",
+            notebook_schema_repo_fixture,
+            pass1_repo_fixture,
+            "source:test",
+        )
+
+        event_repo.record.assert_awaited_once()
+        _nb, event_type, payload = event_repo.record.await_args.args
+        assert event_type == "extension_suggested"
+        assert payload["source_id"] == "source:test"
+
+
 class TestApplicabilitySample:
     """PC.1 — what the schema detector is allowed to see.
 

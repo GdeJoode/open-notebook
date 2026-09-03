@@ -143,6 +143,30 @@ _OBSERVABILITY_COUNTERS = (
 )
 
 
+def _persisted_counts(persist_result: Any) -> Dict[str, int]:
+    """What `persist_filtered_result` actually wrote, for the caller.
+
+    Track PC.1b / W3. Returns ``{}`` when persistence did not run — filtering was
+    skipped, or the extraction found nothing — so the caller omits the key rather
+    than reporting five fabricated zeros. "Not measured" and "measured zero" stay
+    distinguishable, the rule N.5d's gate rests on and the same reason
+    `_observability_counters` below returns an empty dict.
+    """
+    if not isinstance(persist_result, dict):
+        return {}
+    return {
+        key: int(persist_result[key] or 0)
+        for key in (
+            "entities_upserted",
+            "entities_failed",
+            "relations_created",
+            "relations_merged",
+            "candidates_stored",
+        )
+        if key in persist_result
+    }
+
+
 def _observability_counters(metadata: Any) -> Dict[str, int]:
     """Lift the N.3/N.5a counters out of a result's metadata for the caller.
 
@@ -568,6 +592,7 @@ class EntityExtractionService:
         source_repo: SourceRepository,
         notebook_schema_repo: Optional[NotebookSchemaRepository] = None,
         pass1_repo: Optional[Pass1ResultRepository] = None,
+        notebook_event_repo: Optional[Any] = None,
     ):
         self._source_repo = source_repo
         # B.1f wiring: the multi-schema orchestrator needs both repos.
@@ -576,6 +601,10 @@ class EntityExtractionService:
         # inject fakes to assert on the multi-schema branch.
         self._notebook_schema_repo = notebook_schema_repo
         self._pass1_repo = pass1_repo
+        # PC.1b: injected only by tests. Production lazily constructs it, like
+        # the two repos above — the soft-nudge write is best-effort and must not
+        # make the service harder to build.
+        self._notebook_event_repo = notebook_event_repo
         self._persistence = EntityPersistenceService()
         # Q.4: the after-extraction triage pipeline (match + merge + signals +
         # status + queue + backbone). Constructed lazily on first persist so a
@@ -982,6 +1011,7 @@ class EntityExtractionService:
         notebook_id: str,
         notebook_schema_repo: "NotebookSchemaRepository",
         pass1_repo: "Pass1ResultRepository",
+        source_id: str = "",
     ) -> None:
         """Move Pass 1's findings to where a curator can act on them (PC.1).
 
@@ -1026,6 +1056,81 @@ class EntityExtractionService:
                 await notebook_schema_repo.set_coverage_pct(notebook_id, coverage)
         except Exception as e:
             logger.warning(f"could not update coverage for {notebook_id}: {e}")
+
+        await self._emit_soft_nudge(metadata, notebook_id, source_id)
+
+    async def _emit_soft_nudge(
+        self, metadata: Dict[str, Any], notebook_id: str, source_id: str
+    ) -> None:
+        """Write the soft-nudge decision where the banner can read it (PC.1b/W1).
+
+        `_decide_soft_nudge` has run on every document since B.1e and its verdict
+        lands in `metadata["soft_nudge"]`. Meanwhile B.3c built the other half:
+        the `notebook_event` table, its repository, a router filtering on
+        `_KNOWN_NUDGE_EVENT_TYPES`, and `SchemaSoftNudge.tsx` polling it. The two
+        halves had never met, and `notebook_event` held ZERO rows.
+
+        Note what the defect was NOT. `workflow.py` reads
+        `merged, _decision = await run_multi_schema(...)`, and an earlier version
+        of this docstring blamed that underscore. A review showed otherwise: the
+        verdict is already written into `merged.metadata["soft_nudge"]` and this
+        method reads exactly that key. Nothing was dropped in transit — the state
+        was carried faithfully and no writer acted on it, which is a better
+        illustration of the phase's thesis than the version I first wrote.
+
+        Measured on the five sources carrying Pass-1 rows before this landed: all
+        five would have fired a banner (coverage 0.45 / 0.48 / 0.55 / 0.58 ->
+        `schema_mismatch`, 0.85 -> `extension_suggested`). The enum's own
+        docstring says its values "round-trip through `notebook_event.type`
+        without manual conversion", so the design intent was always this write.
+
+        Two deliberate choices:
+
+        * **NONE writes nothing.** A schema that fits is not news, and an event
+          the banner would ignore is still a row a curator has to dismiss.
+        * **An unread event of the same type for the same notebook suppresses a
+          duplicate.** Re-extracting a notebook's documents one after another
+          would otherwise queue one banner per document saying the same thing.
+          The source that triggered it is in the payload, so the first event
+          still names a concrete document.
+
+        Best-effort like its two siblings above: extraction has already succeeded,
+        and failing to raise a banner must not lose the entities.
+        """
+        decision = str(metadata.get("soft_nudge") or "")
+        if not decision or decision == "none":
+            return
+        try:
+            from surrealdb_service.repositories.notebook_event import (
+                NotebookEventRepository,
+            )
+
+            repo = self._notebook_event_repo or NotebookEventRepository()
+            existing = await repo.list_unread(notebook_id, event_type=decision)
+            if existing:
+                logger.debug(
+                    "soft nudge {d} already pending for {nb}; not duplicating",
+                    d=decision,
+                    nb=notebook_id,
+                )
+                return
+            await repo.record(
+                notebook_id,
+                decision,
+                {
+                    "source_id": source_id,
+                    "best_coverage": metadata.get("best_coverage"),
+                    "schemas_attempted": metadata.get("schemas_attempted") or [],
+                },
+            )
+            logger.info(
+                "soft nudge {d} raised for {nb} (source={src})",
+                d=decision,
+                nb=notebook_id,
+                src=source_id,
+            )
+        except Exception as e:
+            logger.warning(f"could not raise soft nudge for {notebook_id}: {e}")
 
     # How many `pass1_results` rows the coverage average reads. Pass 1 writes one
     # row per applied schema per extraction, so ~2-3 rows per document; 1000 is
@@ -1625,7 +1730,7 @@ class EntityExtractionService:
             pass2_token_budget=self._pass2_token_budget,
         )
         await self._record_pass1_outcome(
-            result, notebook_id, notebook_schema_repo, pass1_repo
+            result, notebook_id, notebook_schema_repo, pass1_repo, source_id
         )
         return result
 
@@ -1788,6 +1893,11 @@ class EntityExtractionService:
         merge_groups = None
         filtering_stats = {}
 
+        # PC.1b / W3: bound before the filtering guard, not inside it. The
+        # summary below reports what was WRITTEN, and filtering is skipped
+        # entirely when `run_filtering` is false or the extraction found nothing
+        # — in which case nothing was written and `None` is the honest answer.
+        persist_result: Any = None
         if run_filtering and (result.entities or result.relations):
             filtered = None
             all_relations: List[Dict[str, Any]] = []
@@ -1928,6 +2038,22 @@ class EntityExtractionService:
                 # the filtering try/except, with its own log-and-continue guard.
                 await self._run_triage(source_id, persist_result)
 
+        # PC.1b / W3: record what was WRITTEN before the row is saved.
+        #
+        # It goes on the RESULT METADATA as well as the summary, and that is not
+        # belt-and-braces. The summary lands in `job.result`, which nothing in the
+        # repo reads — writing only there would have created a fresh producer with
+        # no consumer, in the phase whose whole point is to stop doing that.
+        # Building `scripts/pc1b_handoff_probe.py` is what caught it. The metadata
+        # copy is persisted on `extraction_result` and the probe reads it.
+        #
+        # It cannot sit beside the filtering stats — those are assigned before
+        # persistence has run — nor beside the summary below, because
+        # `_save_result` has already happened by then.
+        written = _persisted_counts(persist_result)
+        if written:
+            result.metadata["persisted"] = written
+
         # 7. Persist raw extraction results
         await self._save_result(source_id, result)
 
@@ -1940,6 +2066,16 @@ class EntityExtractionService:
         counters = _observability_counters(getattr(result, "metadata", None))
         if counters:
             summary["counters"] = counters
+        # PC.1b / W3: what was WRITTEN, beside what was extracted.
+        # `persist_filtered_result` has always returned these five; only
+        # `persisted_entity_ids` was read, so `summary["entity_count"]` is the
+        # count the LLM produced and nothing could express the difference. The
+        # pipeline review measured 124 entities extracted against 117 rows in the
+        # graph — a real and interesting gap that the system producing it had no
+        # way to report. PC.3's own AC ("materially fewer than 117 rows, with a
+        # named figure") needs this instrument.
+        if written:
+            summary["persisted"] = written
         logger.info(
             f"Entity extraction completed for source {source_id}: "
             f"{result.entity_count} entities, {result.relation_count} relations"
@@ -2174,9 +2310,19 @@ class EntityExtractionService:
             "predicted_edges": len(filtered.predicted_edges),
         }
 
-        # Update extraction_result metadata with filtering stats
+        # Update extraction_result metadata with filtering stats.
+        #
+        # PC.1b / W3b: MERGE rather than overwrite. This dict has six keys; the
+        # extraction path's version also carries a `concept_alignment` block with
+        # the alignment counters, and assigning over the whole key destroyed it —
+        # silently, on any re-filter. Keys this path recomputes win; keys it knows
+        # nothing about survive.
         metadata = row.get("metadata", {})
-        metadata["filtering"] = stats
+        previous_filtering = metadata.get("filtering")
+        if isinstance(previous_filtering, dict):
+            metadata["filtering"] = {**previous_filtering, **stats}
+        else:
+            metadata["filtering"] = stats
         await execute_query(
             "UPDATE extraction_result SET metadata = $metadata "
             "WHERE source_id = $source_id",

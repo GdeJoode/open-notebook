@@ -604,6 +604,32 @@ class EntityPersistenceService:
                 #
                 # B.8a: thread the real extraction_method (was silently
                 # defaulting to "llm" for every path — provenance bug).
+                # PC.1b / W2: union the tags the MULTI-SCHEMA MERGE computed
+                # into the ones the bridge resolves. `_merge_results` unions
+                # `type_tags` across every pass that found this entity and picks
+                # `primary_type` from the highest-confidence one — and until now
+                # persistence recomputed both from `_resolve_entity_type` and
+                # overwrote them, so the merge's headline output reached nothing.
+                # PC.1 moved 11 of 14 sources onto the multi-schema path, which
+                # turned that from theoretical into universal.
+                #
+                # Union rather than replace: the L.1/L.2 bridge is deliberate and
+                # knows about aliases and unmapped residuals, which the merge does
+                # not. `upsert_entity` already unions `type_tags` server-side
+                # (entity.py:204-207), so this matches the storage semantics.
+                # `primary_type` is NOT taken from the merge — one canonical
+                # answer per entity is PC.4's decision to make, not a side effect
+                # of this one.
+                merged_tags = [
+                    str(t).strip()
+                    for t in (entity.get("type_tags") or [])
+                    if str(t).strip()
+                ]
+                combined_tags = list(resolved.type_tags)
+                for tag in merged_tags:
+                    if tag not in combined_tags:
+                        combined_tags.append(tag)
+
                 entity_model = Entity(
                     canonical_name=text,
                     entity_type=label,
@@ -611,7 +637,7 @@ class EntityPersistenceService:
                     # for an aliased / unmapped residual — always preserved when
                     # a non-trivial label exists (never silently dropped).
                     primary_type=resolved.primary_type,
-                    type_tags=resolved.type_tags,
+                    type_tags=combined_tags,
                     confidence=confidence,
                     source_documents=[source_id],
                     properties=stored_props,

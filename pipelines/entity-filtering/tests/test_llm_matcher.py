@@ -105,6 +105,17 @@ class TestMatchPair:
         matcher._base_url = "http://localhost:11434"
         matcher._timeout = 10
         matcher._system_prompt = "test prompt"
+        # PC.1b: production `__init__` also sets these five. Without them
+        # `match_pair` raises AttributeError, and its broad `except Exception`
+        # converts that programming error into the business verdict
+        # "not a match, confidence 0.0" — so the test failed while the code
+        # under test looked like it had simply disagreed. D-N4-14 rule 2: a
+        # fixture builds the PRODUCTION argument set.
+        matcher._agentic_enabled = False
+        matcher._agentic_lower = 0.4
+        matcher._agentic_upper = 0.8
+        matcher._agentic_max_iter = 1
+        matcher._context_provider = None
 
         mock_response = {
             "message": {
@@ -140,6 +151,17 @@ class TestMatchPair:
         matcher._base_url = "http://localhost:11434"
         matcher._timeout = 10
         matcher._system_prompt = "test prompt"
+        # PC.1b: production `__init__` also sets these five. Without them
+        # `match_pair` raises AttributeError, and its broad `except Exception`
+        # converts that programming error into the business verdict
+        # "not a match, confidence 0.0" — so the test failed while the code
+        # under test looked like it had simply disagreed. D-N4-14 rule 2: a
+        # fixture builds the PRODUCTION argument set.
+        matcher._agentic_enabled = False
+        matcher._agentic_lower = 0.4
+        matcher._agentic_upper = 0.8
+        matcher._agentic_max_iter = 1
+        matcher._context_provider = None
 
         with patch.object(matcher, "_call_ollama", new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = Exception("Connection refused")
