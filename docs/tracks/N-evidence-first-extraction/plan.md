@@ -888,6 +888,28 @@ entities (recall floor). Update `ARCHITECTURE.md`, `status.md`, `RETRO.md`.
   fixture builds the PRODUCTION argument set; a guard that reads a collaborator's
   value is exercised against the real collaborator at least once.
 
+> **N.5 SHIPPED 2026-09-03** — `e8ae249c` (N.5a), `2942cb5b` (N.5b),
+> `8d9937fc` (N.5c), `47f424dd` (N.5d). Status and retrospective in
+> `status.md` / `RETRO.md`.
+>
+> Three of N.5c's five residuals were already closed by earlier phases and a
+> fourth (C3) became moot when D-N4-12 deleted the tier carrying it — verified in
+> the code, not assumed from the plan. The two live findings had the same shape as
+> each other: **a measurement that reads as a statement.** N.5a's merge reported
+> `over_generation_rate` 0.00 for a run that culled 14 entities to 5, and N.5b's
+> miner shipped enabled while contributing zero edges to the graph.
+>
+> N.5b was a user decision on measured evidence (220 raw pairs, 0 graph edges, 15
+> survivors of mixed quality): declare `is_a` in the root ontologies AND ship the
+> miner explicitly off. Neither half works alone.
+>
+> **The gate's central rule** (N.5d): a dimension with no baseline value is
+> SKIPPED, never PASSED, and an all-skipped comparison is inconclusive rather than
+> green. The two cost dimensions are exactly the ones the baseline cannot contain,
+> because the merge was discarding their inputs when it was measured — so a gate
+> that read "no baseline" as "not worse" could not have failed on anything this
+> track added.
+
 **Out of N.5, moved to Track PC**: the curator-queue writer, cross-document
 identity, canonicalisation stability, the alias-policy contradiction, the gap/
 proposal read path, and default-configuration coherence.

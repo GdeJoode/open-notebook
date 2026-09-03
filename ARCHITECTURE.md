@@ -171,6 +171,46 @@ invariant); the merge step uses confidence-max semantics so the highest-
 confidence pass wins. Multi-schema is **on by default** when `notebook_id`
 is provided; flip `multi_schema_enabled=false` per-request to fall back.
 
+**What the merge carries besides entities (Track N.5a).** `_merge_results` used
+to rebuild metadata from four keys, so every counter `run_pass2` emitted was
+discarded whenever more than one schema applied — which is the path production
+takes. The cost was not that the numbers went missing but that their absence read
+as a clean run: a two-pass fixture that culled 14 entities to 5 and abstained on
+9 of 20 chunk-passes measured as `over_generation_rate` 0.00 and `abstain_rate`
+0.00. The per-pass counters are now summed onto the merged result, with
+`per_schema` keeping the unmerged view (because "which pass removed everything"
+is the question a sum cannot answer) and `merged_duplicates_collapsed` making the
+gap between gate survivors and distinct entities explicit rather than implied.
+
+**Relation provenance survives collapse (Track N.5c / R2).** The relation merge
+keys on `(source, target, relation_type)` and keeps max confidence, which used to
+drop the loser's `relation_source`. Every distinct contributor is now unioned onto
+the winner as `relation_sources`, so the claim the provenance exists for — that
+one `WHERE relation_source = ...` drops everything a pass contributed — is true.
+
+**Which vocabulary a document is extracted against (Track PC.1).** Applicability
+detection is scored over a sample spread across the whole document (40 windows
+sharing a 40000-character budget), not its first chunk. Measured on the project's
+corpus, the first chunk of a parsed PDF is a title fragment with a median length
+of 66 characters and detection fired for 2 of 14 sources; with the spread it fires
+for 13 of 14. A document that detects nothing falls back to the notebook's most
+attempted schema, and only then to the legacy single-schema path.
+
+**`is_a` (Track N.5b).** Declared in the three root ontologies — `schema_core`,
+`base`, `policy_themes` — which covers all eleven through `extends`. It is
+subsumption between two MENTIONS, not the schema-level `parent_type` D-N4-12
+moved to the type boundary. Its only producer, the Hearst miner, ships
+**default-off** (`EXTRACTION_HEARST_ISA`): measured over eight documents while it
+defaulted on, it produced 220 raw pairs and zero edges in the graph.
+
+**The regression gate (Track N.5d).** `shared.regression.extraction_gate`
+compares a harness run against `tests/regression/n_extraction_baseline.json` on
+four dimensions: entity recall and per-document liveness as floors,
+over-generation and abstention as ceilings. A dimension with no baseline value is
+SKIPPED, never passed, and a comparison in which everything skipped is
+inconclusive (exit 2) rather than green. Run it with
+`scripts/n_extraction_gate.py --run <harness output>`.
+
 ### Model-aware context packing (Track M)
 
 The extraction failover chain is **heterogeneous** — each candidate model has a
