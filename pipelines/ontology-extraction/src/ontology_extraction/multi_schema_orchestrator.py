@@ -807,6 +807,8 @@ def _merge_results(
     # ------------------------------------------------------------------
     rel_key_t = Tuple[str, str, str]
     relation_best: Dict[rel_key_t, ExtractedRelation] = {}
+    # key -> every distinct `relation_source` seen for it (R2, see below).
+    relation_sources: Dict[rel_key_t, set] = {}
     relation_insertion_order: List[rel_key_t] = []
 
     for _schema_name, result in per_schema_results:
@@ -818,6 +820,24 @@ def _merge_results(
             )
             if not key[0] or not key[1] or not key[2]:
                 continue
+            # Track N.5c / R2. Max-confidence picks ONE of the duplicates and the
+            # loser's provenance goes with it: two passes that both find
+            # `is_a(dorpshuizen, ontmoetingspunten)` — the LLM in one at 0.9, the
+            # Hearst seeder in the other at 0.5 — collapse to the LLM's, and
+            # `relation_source: hearst` is gone. That silently falsifies the claim
+            # the provenance exists to support, which is that one
+            # `WHERE relation_source = ...` drops everything a pass contributed.
+            # Reproduced before fixing, and the properties bag IS persisted, so
+            # this is a real loss rather than a bookkeeping one.
+            #
+            # Latent today — the Hearst miner ships off (N.5b) and is the only
+            # `is_a` producer left — but it applies to EVERY relation carrying
+            # provenance, not only to `is_a`, and it returns the moment that flag
+            # does. The union is collected here and applied to the winner below.
+            source = str((relation.properties or {}).get("relation_source") or "")
+            if source:
+                relation_sources.setdefault(key, set()).add(source)
+
             existing = relation_best.get(key)
             if existing is None:
                 relation_best[key] = relation
@@ -825,9 +845,24 @@ def _merge_results(
             elif float(relation.confidence) > float(existing.confidence):
                 relation_best[key] = relation
 
-    final_relations: List[ExtractedRelation] = [
-        relation_best[k] for k in relation_insertion_order
-    ]
+    final_relations: List[ExtractedRelation] = []
+    for k in relation_insertion_order:
+        winner = relation_best[k]
+        contributors = relation_sources.get(k)
+        # Only rewrite when the winner would otherwise UNDER-report: a single
+        # contributor that the winner already names needs no list.
+        if contributors and contributors != {
+            str((winner.properties or {}).get("relation_source") or "")
+        }:
+            winner = winner.model_copy(
+                update={
+                    "properties": {
+                        **(winner.properties or {}),
+                        "relation_sources": sorted(contributors),
+                    }
+                }
+            )
+        final_relations.append(winner)
 
     # ------------------------------------------------------------------
     # B.4 fix (B.1f scope): rewrite each surviving relation's endpoint
@@ -879,13 +914,93 @@ def _merge_results(
             relinked_relations.append(relation)
 
     schema_names = [name for name, _result in per_schema_results]
+    merged_metadata: Dict[str, Any] = {
+        "merged_from_schemas": schema_names,
+        "schema_count": len(per_schema_results),
+        "total_entities": len(final_entities),
+        "total_relations": len(relinked_relations),
+    }
+    merged_metadata.update(_merge_pass_counters(per_schema_results, final_entities))
     return ExtractionResult(
         entities=final_entities,
         relations=relinked_relations,
-        metadata={
-            "merged_from_schemas": schema_names,
-            "schema_count": len(per_schema_results),
-            "total_entities": len(final_entities),
-            "total_relations": len(relinked_relations),
-        },
+        metadata=merged_metadata,
     )
+
+
+# The per-pass counters `run_pass2` emits that a merge must carry (Track N.5a).
+# All of them are per-PASS quantities, so summing is the meaningful merge: each
+# pass ran its own gate over its own LLM output. `chunk_count` sums to
+# chunk-PASSES rather than chunks, which keeps `abstain_rate` a coherent ratio —
+# the share of chunk-pass attempts that yielded nothing — and `per_schema` below
+# is what a reader divides by to get back to the document.
+_MERGED_PASS_COUNTERS = (
+    "chunk_count",
+    "entities_extracted",
+    "entities_kept",
+    "not_a_concept_removed",
+    "not_a_concept_judged",
+    "abstained_chunks",
+    "parse_failures",
+)
+
+
+def _merge_pass_counters(
+    per_schema_results: List[Tuple[str, ExtractionResult]],
+    final_entities: List[ExtractedEntity],
+) -> Dict[str, Any]:
+    """Carry the per-pass observability counters through the merge.
+
+    Track N.5a. `_merge_results` built a fresh four-key metadata dict, so
+    everything `run_pass2` measured was discarded on the MULTI-SCHEMA path —
+    which is the path production takes. The cost is not that the numbers went
+    missing; it is that their absence reads as a clean run. Measured on a
+    two-pass fixture whose passes over-generated 14 entities down to 5 and
+    abstained on 9 of 20 chunk-passes, the merged result reported
+    `over_generation_rate` 0.00 and `abstain_rate` 0.00 — a false statement
+    rather than a gap. `Bennett_test.pdf` producing ten chunks and zero entities
+    could not be explained from its own record: nobody could say whether the
+    model found nothing or the not-a-concept gate removed everything.
+
+    Three choices worth naming:
+
+    * **Summed, not averaged.** Every counter is a count of things one pass did.
+    * **`entities_kept` is the sum of what survived each pass's gates**, which is
+      deliberately NOT `len(final_entities)`: the difference between them is
+      DUPLICATION, not gate rejection, and conflating the two would make the merge
+      itself look like over-generation. The difference is published as
+      `merged_duplicates_collapsed` so it is visible rather than implied. A review
+      corrected the name's own description: that number is not only CROSS-pass
+      duplication. `entities_kept` is `len(all_entities)` per pass with no
+      within-pass dedup, while `final_entities` dedups on `normalize_entity_name`
+      across chunks AND passes, so one pass extracting "Gemeente" from eight
+      chunks contributes seven to it. Read it as "mentions that collapsed into a
+      distinct entity", from any cause.
+    * **`per_schema` keeps the unmerged view**, because "which pass removed
+      everything" is exactly the question the merged sum cannot answer, and it is
+      the question this phase exists to make answerable.
+
+    Passes that predate these keys contribute 0 rather than raising, so a mixed
+    result degrades to a low count instead of an error.
+    """
+    totals: Dict[str, int] = {key: 0 for key in _MERGED_PASS_COUNTERS}
+    per_schema: Dict[str, Dict[str, int]] = {}
+
+    for schema_name, result in per_schema_results:
+        metadata = result.metadata or {}
+        counted: Dict[str, int] = {}
+        for key in _MERGED_PASS_COUNTERS:
+            try:
+                value = int(metadata.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                value = 0
+            counted[key] = value
+            totals[key] += value
+        per_schema[schema_name] = counted
+
+    merged: Dict[str, Any] = dict(totals)
+    merged["per_schema"] = per_schema
+    merged["merged_duplicates_collapsed"] = max(
+        0, totals["entities_kept"] - len(final_entities)
+    )
+    return merged

@@ -7,10 +7,22 @@ the raw counts ``run_pass2`` records in its result metadata, derive two rates �
   emitted entities the deterministic + judge not-a-concept gate rejected as page-
   furniture. A pre-filter that does its job pushes this ABOVE 0 without dropping
   golden entities (the N.5 regression gate asserts the recall floor separately).
-* ``abstain_rate`` = ``abstained_chunks / total_chunks`` — the share of chunks
-  that yielded no entity at all (pure boilerplate / no domain content). The
-  abstention prompt should push this above 0 on furniture-heavy corpora instead
-  of manufacturing plausible-but-empty concepts.
+* ``abstain_rate`` = ``abstained_chunks / total_chunks`` — the share of chunk
+  ATTEMPTS that yielded no entity at all (pure boilerplate / no domain content).
+  The abstention prompt should push this above 0 on furniture-heavy corpora
+  instead of manufacturing plausible-but-empty concepts.
+
+  **"Attempts", not "chunks", on the multi-schema path** (N.5a). Pass 2 runs once
+  per applied schema over the same chunks, and the merge sums both numerator and
+  denominator, so a three-schema run over ten chunks reports ``total_chunks`` 30.
+  The ratio stays coherent — it is the share of chunk-pass attempts that produced
+  nothing — but the denominator SCALES WITH THE NUMBER OF SCHEMAS. Two
+  consequences worth knowing before comparing runs: a multi-schema run's
+  ``abstain_rate`` is structurally higher than a single-schema one's, and
+  ``per_schema`` in the merged metadata is what to divide by to get back to the
+  document. A review flagged this as a live hazard for the N.5d gate, whose
+  baseline was measured when most documents took the legacy single-schema path:
+  a naive re-measure can fail the ceiling without anything having regressed.
 
 Pure functions over the counts — no LLM, no DB — so this doubles as a CI gate the
 N.5 heterogeneous-corpus test can assert on directly, exactly like M.5's
@@ -32,7 +44,9 @@ class ExtractionMetrics:
     * ``rejected`` — ``extracted − survivors`` (page-furniture the gate removed).
     * ``over_generation_rate`` — ``rejected / extracted`` ∈ [0, 1] (0 when the LLM
       emitted nothing).
-    * ``abstained_chunks`` / ``total_chunks`` — chunks that produced no entity.
+    * ``abstained_chunks`` / ``total_chunks`` — chunk ATTEMPTS that produced no
+      entity. On the multi-schema path both are summed across passes, so the
+      denominator is chunk-passes rather than chunks (see the module docstring).
     * ``abstain_rate`` — ``abstained_chunks / total_chunks`` ∈ [0, 1].
     """
 

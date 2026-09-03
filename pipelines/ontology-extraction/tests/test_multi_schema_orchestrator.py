@@ -612,6 +612,262 @@ class TestDedupeExtensions:
 # ---------------------------------------------------------------------------
 
 
+def _pass_result(
+    schema, *, kept=0, extracted=0, abstained=0, removed=0, judged=0, chunks=10
+):
+    """A `run_pass2` result with the counter metadata it really emits."""
+    return (
+        schema,
+        ExtractionResult(
+            entities=[
+                ExtractedEntity(text=f"{schema}-e{i}", label="L")
+                for i in range(kept)
+            ],
+            metadata={
+                "ontology_name": schema,
+                "chunk_count": chunks,
+                "extensions_count": 0,
+                "total_entities": kept,
+                "total_relations": 0,
+                "parse_failures": 0,
+                "entities_extracted": extracted,
+                "entities_kept": kept,
+                "not_a_concept_removed": removed,
+                "not_a_concept_judged": judged,
+                "abstained_chunks": abstained,
+            },
+        ),
+    )
+
+
+class TestRelationProvenanceSurvivesCollapse:
+    """Track N.5c / R2 — the reversibility claim, made true.
+
+    The relation merge collapses duplicates on
+    `(source, target, relation_type)` and keeps the highest confidence. The
+    loser's `relation_source` went with it, so two passes that both found
+    `is_a(dorpshuizen, ontmoetingspunten)` — the LLM at 0.9 in one, the Hearst
+    seeder at 0.5 in the other — produced a surviving edge with no trace of the
+    seeder. That falsifies what the provenance is for: that one
+    `WHERE relation_source = ...` drops everything a pass contributed.
+
+    Latent today, since the Hearst miner ships off (N.5b) and is the only `is_a`
+    producer left. Not `is_a`-specific though: it applies to any relation
+    carrying provenance, and it returns the moment that flag does.
+    """
+
+    @staticmethod
+    def _rel(conf, source=None, target="ontmoetingspunten"):
+        return ExtractedRelation(
+            source_entity="dorpshuizen",
+            target_entity=target,
+            relation_type="is_a",
+            confidence=conf,
+            properties={"relation_source": source} if source else {},
+        )
+
+    def test_the_loser_s_provenance_is_not_dropped(self):
+        merged = _merge_results(
+            [
+                ("deals", ExtractionResult(relations=[self._rel(0.9)])),
+                ("policy", ExtractionResult(relations=[self._rel(0.5, "hearst")])),
+            ]
+        )
+        assert len(merged.relations) == 1
+        assert merged.relations[0].confidence == 0.9  # max-confidence still wins
+        assert merged.relations[0].properties["relation_sources"] == ["hearst"]
+
+    def test_every_contributor_is_named_not_just_the_loser(self):
+        merged = _merge_results(
+            [
+                ("deals", ExtractionResult(relations=[self._rel(0.9, "llm")])),
+                ("policy", ExtractionResult(relations=[self._rel(0.5, "hearst")])),
+            ]
+        )
+        assert merged.relations[0].properties["relation_sources"] == ["hearst", "llm"]
+
+    def test_a_single_contributor_adds_no_list(self):
+        """A relation nothing collapsed into keeps the shape it already had —
+        the fix must not put a redundant key on every edge in the graph.
+        """
+        merged = _merge_results(
+            [
+                ("deals", ExtractionResult(relations=[self._rel(0.5, "hearst")])),
+                ("policy", ExtractionResult(relations=[self._rel(0.4, "hearst")])),
+            ]
+        )
+        props = merged.relations[0].properties
+        assert props == {"relation_source": "hearst"}
+        assert "relation_sources" not in props
+
+    def test_relations_with_no_provenance_are_untouched(self):
+        merged = _merge_results(
+            [
+                ("deals", ExtractionResult(relations=[self._rel(0.9)])),
+                ("policy", ExtractionResult(relations=[self._rel(0.5)])),
+            ]
+        )
+        assert merged.relations[0].properties == {}
+
+    def test_distinct_relations_do_not_share_provenance(self):
+        """A vacuity guard: the union is per KEY. Pooling it across the merge
+        would tag every edge with every source and still satisfy the tests above.
+        """
+        merged = _merge_results(
+            [
+                (
+                    "deals",
+                    ExtractionResult(
+                        relations=[
+                            self._rel(0.9),
+                            self._rel(0.9, target="voorzieningen"),
+                        ]
+                    ),
+                ),
+                ("policy", ExtractionResult(relations=[self._rel(0.5, "hearst")])),
+            ]
+        )
+        by_target = {r.target_entity: r.properties for r in merged.relations}
+        assert by_target["ontmoetingspunten"]["relation_sources"] == ["hearst"]
+        assert "relation_sources" not in by_target["voorzieningen"]
+
+
+class TestPassCountersSurviveTheMerge:
+    """Track N.5a — the observability N.3 measured, on the path production takes.
+
+    `_merge_results` built a fresh four-key metadata dict, so every counter
+    `run_pass2` emitted was discarded whenever more than one schema applied. The
+    cost is not that the numbers went missing — it is that their absence reads as
+    a CLEAN RUN: measured on the fixture below, the merged result reported
+    `over_generation_rate` 0.00 where the passes had culled 14 entities to 5, and
+    `abstain_rate` 0.00 where 9 of 20 chunk-passes yielded nothing.
+
+    Every test here asserts on a MERGED result — two or more passes. The
+    single-schema path returns its input untouched, so the counters were always
+    intact there and a test on that path could not fail.
+    """
+
+    def test_the_counters_reach_the_merged_record(self):
+        merged = _merge_results(
+            [
+                _pass_result("deals", kept=3, extracted=9, abstained=2, removed=6, judged=4),
+                _pass_result("policy", kept=2, extracted=5, abstained=7, removed=3, judged=3),
+            ]
+        )
+        assert merged.metadata["entities_extracted"] == 14
+        assert merged.metadata["not_a_concept_removed"] == 9
+        assert merged.metadata["not_a_concept_judged"] == 7
+        assert merged.metadata["abstained_chunks"] == 9
+        assert merged.metadata["chunk_count"] == 20
+
+    def test_a_document_that_yields_nothing_explains_itself(self):
+        """The measured case: `Bennett_test.pdf` produced ten chunks and zero
+        entities, and its stored record could not say whether the model found
+        nothing or the not-a-concept gate removed everything. Those are opposite
+        diagnoses — one is a document with no concepts, the other is a gate that
+        is too aggressive — and the summed totals alone still cannot tell them
+        apart when the passes disagree. `per_schema` can.
+        """
+        merged = _merge_results(
+            [
+                # The model found nothing at all in this pass.
+                _pass_result("deals", kept=0, extracted=0, abstained=10),
+                # The model found seven and the gate removed all seven.
+                _pass_result("policy", kept=0, extracted=7, abstained=3, removed=7, judged=7),
+            ]
+        )
+        assert merged.entities == []
+
+        per_schema = merged.metadata["per_schema"]
+        assert per_schema["deals"]["entities_extracted"] == 0
+        assert per_schema["deals"]["not_a_concept_removed"] == 0
+        assert per_schema["policy"]["entities_extracted"] == 7
+        assert per_schema["policy"]["not_a_concept_removed"] == 7
+
+    def test_entities_kept_counts_gate_survivors_not_distinct_entities(self):
+        """Two passes finding the SAME entity is duplication, not
+        over-generation, and folding one into the other would make the merge
+        itself look like a gate rejection.
+        """
+        same = ExtractionResult(
+            entities=[ExtractedEntity(text="Alice", label="Person")],
+            metadata={"entities_extracted": 4, "entities_kept": 1, "chunk_count": 5},
+        )
+        merged = _merge_results([("deals", same), ("policy", same)])
+
+        assert len(merged.entities) == 1  # one distinct entity...
+        assert merged.metadata["entities_kept"] == 2  # ...two gate survivors
+        assert merged.metadata["total_entities"] == 1
+        # And the difference is published rather than left to be inferred.
+        assert merged.metadata["merged_duplicates_collapsed"] == 1
+
+    def test_the_merged_record_no_longer_reads_as_a_clean_run(self):
+        """The property the defect actually broke, stated as a ratio rather than
+        as a key list: a run that culled most of what the model produced must not
+        measure as one that culled nothing.
+        """
+        merged = _merge_results(
+            [
+                _pass_result("deals", kept=3, extracted=9, abstained=2, removed=6, judged=4),
+                _pass_result("policy", kept=2, extracted=5, abstained=7, removed=3, judged=3),
+            ]
+        )
+        extracted = merged.metadata["entities_extracted"]
+        survivors = merged.metadata["entities_kept"]
+        assert extracted > 0 and survivors < extracted
+        assert (extracted - survivors) / extracted > 0.5
+
+        abstained = merged.metadata["abstained_chunks"]
+        chunks = merged.metadata["chunk_count"]
+        assert chunks > 0 and 0.0 < abstained / chunks < 1.0
+
+    def test_a_pass_from_before_these_keys_contributes_zero(self):
+        """A result with no counter metadata degrades to a low count, not an
+        error — the keys are additive and a missing pass is worth 0.
+        """
+        merged = _merge_results(
+            [
+                _pass_result("deals", kept=1, extracted=4, abstained=1, removed=3, judged=2),
+                ("legacy", ExtractionResult(entities=[], metadata={})),
+            ]
+        )
+        assert merged.metadata["entities_extracted"] == 4
+        assert merged.metadata["per_schema"]["legacy"]["entities_extracted"] == 0
+
+    def test_a_non_numeric_counter_does_not_break_the_merge(self):
+        """Metadata is a free-form bag; a bad value must not cost the extraction
+        that already succeeded.
+        """
+        merged = _merge_results(
+            [
+                _pass_result("deals", kept=1, extracted=4),
+                (
+                    "broken",
+                    ExtractionResult(
+                        entities=[],
+                        metadata={"entities_extracted": "not a number"},
+                    ),
+                ),
+            ]
+        )
+        assert merged.metadata["entities_extracted"] == 4
+
+    def test_the_existing_merge_output_is_not_disturbed(self):
+        """A vacuity guard for the whole class: the keys the merge already
+        published still say what they said, so "the counters arrived" cannot be
+        satisfied by a merge that broke everything else.
+        """
+        merged = _merge_results(
+            [
+                _pass_result("deals", kept=2, extracted=5),
+                _pass_result("policy", kept=1, extracted=3),
+            ]
+        )
+        assert merged.metadata["merged_from_schemas"] == ["deals", "policy"]
+        assert merged.metadata["schema_count"] == 2
+        assert merged.metadata["total_entities"] == len(merged.entities) == 3
+
+
 class TestMergeResults:
     """Direct tests of ``_merge_results`` so the merge correctness
     contract is testable without spinning up the full pipeline."""

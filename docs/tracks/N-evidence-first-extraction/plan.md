@@ -881,12 +881,42 @@ The original scope: a heterogeneous gate on a golden corpus asserting the pre-LL
 layer + abstention cut LLM calls and/or over-generation WITHOUT dropping golden
 entities (recall floor). Update `ARCHITECTURE.md`, `status.md`, `RETRO.md`.
 - **Now measurable**: `scripts/n_pipeline_review_run.py` is the harness the review
-  used and the corpus JSONs are its baseline (124 entities extracted from 70
-  chunks over 8 documents). The gate compares against those, so "did we regress"
-  has a number instead of an opinion.
+  used and the corpus JSONs are its baseline (124 entities over 70 chunks, in 8
+  records covering 7 distinct PDFs — one was run twice). The gate compares against
+  those, so "did we regress" has a number instead of an opinion.
+- **Correction (review, attempt 1)**: "now measurable" was true of recall and NOT
+  of the two cost dimensions. `run_extraction` returned only entity/relation
+  counts plus filtering stats, so N.5a's counters — freshly rescued from the merge
+  — never crossed out of the service, and the gate read a key nothing wrote. Half
+  the gate could not fail while three documents said re-measuring would fill it.
+  The seam is closed in `_observability_counters`; the lesson is that a producer
+  and a consumer can each be correct while the thing between them was never
+  built.
 - **Binding** (D-N4-14): a double reproduces the real method's failure RETURN; a
   fixture builds the PRODUCTION argument set; a guard that reads a collaborator's
   value is exercised against the real collaborator at least once.
+
+> **N.5 SHIPPED 2026-09-03** — `e8ae249c` (N.5a), `2942cb5b` (N.5b),
+> `8d9937fc` (N.5c), `47f424dd` (N.5d). Status and retrospective in
+> `status.md` / `RETRO.md`.
+>
+> Three of N.5c's five residuals were already closed by earlier phases and a
+> fourth (C3) became moot when D-N4-12 deleted the tier carrying it — verified in
+> the code, not assumed from the plan. The two live findings had the same shape as
+> each other: **a measurement that reads as a statement.** N.5a's merge reported
+> `over_generation_rate` 0.00 for a run that culled 14 entities to 5, and N.5b's
+> miner shipped enabled while contributing zero edges to the graph.
+>
+> N.5b was a user decision on measured evidence (220 raw pairs, 0 graph edges, 15
+> survivors of mixed quality): declare `is_a` in the root ontologies AND ship the
+> miner explicitly off. Neither half works alone.
+>
+> **The gate's central rule** (N.5d): a dimension with no baseline value is
+> SKIPPED, never PASSED, and an all-skipped comparison is inconclusive rather than
+> green. The two cost dimensions are exactly the ones the baseline cannot contain,
+> because the merge was discarding their inputs when it was measured — so a gate
+> that read "no baseline" as "not worse" could not have failed on anything this
+> track added.
 
 **Out of N.5, moved to Track PC**: the curator-queue writer, cross-document
 identity, canonicalisation stability, the alias-policy contradiction, the gap/

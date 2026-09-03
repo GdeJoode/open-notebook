@@ -171,6 +171,77 @@ invariant); the merge step uses confidence-max semantics so the highest-
 confidence pass wins. Multi-schema is **on by default** when `notebook_id`
 is provided; flip `multi_schema_enabled=false` per-request to fall back.
 
+**What the merge carries besides entities (Track N.5a).** `_merge_results` used
+to rebuild metadata from four keys, so every counter `run_pass2` emitted was
+discarded whenever more than one schema applied — which is the path production
+takes. The cost was not that the numbers went missing but that their absence read
+as a clean run: a two-pass fixture that culled 14 entities to 5 and abstained on
+9 of 20 chunk-passes measured as `over_generation_rate` 0.00 and `abstain_rate`
+0.00. The per-pass counters are now summed onto the merged result, with
+`per_schema` keeping the unmerged view (because "which pass removed everything"
+is the question a sum cannot answer) and `merged_duplicates_collapsed` making the
+gap between gate survivors and distinct entities explicit rather than implied.
+
+**Relation provenance survives collapse (Track N.5c / R2).** Two collapses drop
+provenance and both are fixed. In memory, `_merge_results` keys relations on
+`(source, target, relation_type)` and keeps max confidence; at persist,
+`_upsert_relation` keys on `(in, out, relation_type)` and overlays properties, so
+a later write re-tagged `relation_source`. Each now unions every distinct
+contributor into **`relation_sources`**, while `relation_source` keeps naming
+whichever writer most recently won.
+
+Note what that means for a query: a collapsed edge is found by
+`WHERE properties.relation_sources CONTAINS 'hearst'`, NOT by
+`WHERE relation_source = 'hearst'` — the latter matches only edges a single
+writer produced, and following it would under-delete. Nothing in the codebase
+reads either key today; the Hearst seeder is the only producer of
+`relation_source` and it ships off, so this is a contract for a future consumer
+rather than a live path.
+
+**Which vocabulary a document is extracted against (Track PC.1).** Applicability
+detection is scored over a sample spread across the whole document (40 windows
+sharing a 40000-character budget), not its first chunk. Measured on the project's
+corpus, the first chunk of a parsed PDF is a title fragment with a median length
+of 66 characters and detection fired for 2 of the database's 14 sources; with the
+spread it fires for 13 of 14. A document that detects nothing falls back to the notebook's most
+attempted schema, and only then to the legacy single-schema path.
+
+**`is_a` (Track N.5b).** Declared in the three root ontologies — `schema_core`,
+`base`, `policy_themes` — which covers all eleven through `extends`. It is
+subsumption between two MENTIONS, not the schema-level `parent_type` D-N4-12
+moved to the type boundary. Its only producer, the Hearst miner, ships
+**default-off** (`EXTRACTION_HEARST_ISA`): scanning the database's 3823 chunks it
+yields 220 raw pairs, and the graph holds zero `is_a` edges.
+
+Declaring it closes a latent hazard rather than a live one. `is_a` was in no
+ontology, so `OntologyValidator` treats it as an unknown predicate — a WARNING
+outside strict mode, an ERROR inside it. Two things would have to change before
+that deleted anything: `strict_mode` on, AND an ontology passed to
+`FilteringWorkflow`, which neither production call site does today (stage 11
+builds `self._validator = None` and is inert). The declaration means whoever
+makes either change gets a predicate the validator recognises.
+
+**The regression gate (Track N.5d).** `shared.regression.extraction_gate`
+compares a harness run against `tests/regression/n_extraction_baseline.json` on
+four dimensions: entity recall and per-document liveness as floors,
+over-generation and abstention as ceilings. Run it with
+`scripts/n_extraction_gate.py --run <harness output>`.
+
+Three rules keep it from passing on nothing, each of them paid for by a review
+finding: a dimension with **no baseline** value is SKIPPED and never passed; a
+dimension the **baseline measured and this run did not** FAILS, because a
+measurement disappearing is either a regression in the extraction path or a run
+that took a route which cannot count (the legacy single-schema path drives a
+pluggable extractor rather than `run_pass2`, so it emits `chunk_count` and no
+abstention counters) — both make the runs incomparable; and a **zero baseline**
+for a floor is SKIPPED, since `0 × (1 − tolerance)` holds nothing up. A
+comparison in which everything skipped is inconclusive (exit 2), not green.
+
+Each rate is computed only when EVERY document supplied all of its own inputs.
+Inferring one from another's presence is how `abstain_rate` briefly reported a
+measured `0.0` for legacy runs, which carry its denominator and not its
+numerator.
+
 ### Model-aware context packing (Track M)
 
 The extraction failover chain is **heterogeneous** — each candidate model has a

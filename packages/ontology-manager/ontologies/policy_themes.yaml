@@ -111,3 +111,31 @@ relationship_types:
   - name: "VERMINDERT"
     description: "Verminderende relatie"
     extraction_hints: ["vermindert, voorkomt, remt af, doorbreekt"]
+
+  # Track N.5b — subsumption between EXTRACTED ENTITIES, mined deterministically
+  # from Hearst patterns ("dorpshuizen en andere ontmoetingspunten"). Declared
+  # here so it is a first-class predicate rather than one that survives by
+  # accident: before this, `is_a` appeared in no ontology, and the only reason
+  # the mined edges were not deleted is that `OntologyValidator` downgrades an
+  # unknown predicate to a WARNING outside strict mode. Turning on `strict_mode`
+  # removed every mined hierarchy edge silently.
+  #
+  # The miner itself is DEFAULT-OFF (`EXTRACTION_HEARST_ISA`, see
+  # `pass2_typed_extraction`). Measured against the project's database — 14 sources, 3823 chunks — the
+  # miner yields 220 raw Hearst pairs, 138 of them distinct, while the graph
+  # holds ZERO `is_a` edges among 1895 relations across 100 relation types.
+  # (Two measurements over the same database, not one run: the pair scan reads
+  # every chunk, the edge count reads the graph.) Its precision gate needs both
+  # endpoints to be entities the LLM extracted for the same chunk. The
+  # declaration exists so that whoever turns it back on gets a predicate the
+  # validator recognises — not so that something starts flowing today.
+  #
+  # NOT the same relation as `parent_type` on an entity TYPE: that is subsumption
+  # in the schema, which D-N4-12 moved to the type boundary. This is subsumption
+  # between two instances mentioned in a document.
+  - name: "is_a"
+    description: "The subject is a kind of the object (instance-level subsumption)"
+    schema_org: "https://schema.org/additionalType"
+    source_types: ["*"]
+    target_types: ["*"]
+    cardinality: "many_to_many"

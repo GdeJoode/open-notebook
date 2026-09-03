@@ -129,6 +129,49 @@ def _applicability_sample(chunks: List[Dict[str, Any]]) -> Optional[str]:
     return " ".join(texts[i][:per_window] for i in indices)[:_SAMPLE_BUDGET_CHARS]
 
 
+# The counters N.3 measures and N.5a carries through the multi-schema merge.
+# They live in `ExtractionResult.metadata`; this is the list that crosses out of
+# the service, so a consumer does not have to know the metadata bag's shape.
+_OBSERVABILITY_COUNTERS = (
+    "chunk_count",
+    "entities_extracted",
+    "entities_kept",
+    "not_a_concept_removed",
+    "not_a_concept_judged",
+    "abstained_chunks",
+    "parse_failures",
+)
+
+
+def _observability_counters(metadata: Any) -> Dict[str, int]:
+    """Lift the N.3/N.5a counters out of a result's metadata for the caller.
+
+    Track N.5d closed a seam here. `run_extraction` returned only entity and
+    relation counts plus the filtering stats, so the counters N.5a had just
+    fixed the merge to carry never reached anything that reads a run — including
+    the regression gate, whose two cost dimensions read a key NOTHING in the
+    repository wrote. A review caught that: half the gate was structurally unable
+    to fail while three documents claimed re-measuring would populate it. Exactly
+    the anti-pattern this track's retrospective says it learned to detect,
+    reached from the other side.
+
+    Returns ``{}`` when the metadata carries none of them, so the caller can omit
+    the key entirely. "Not measured" and "measured zero" stay distinguishable,
+    which is the distinction the gate's SKIPPED-versus-PASSED rule rests on.
+    """
+    if not isinstance(metadata, dict):
+        return {}
+    counters: Dict[str, int] = {}
+    for key in _OBSERVABILITY_COUNTERS:
+        if key not in metadata:
+            continue
+        try:
+            counters[key] = int(metadata[key] or 0)
+        except (TypeError, ValueError):
+            continue
+    return counters
+
+
 NOTEBOOK_DEFAULT_BUNDLE: Dict[str, List[str]] = {
     "deals": ["policy_themes"],
     "government": ["policy_themes"],
@@ -1894,6 +1937,9 @@ class EntityExtractionService:
             "relation_count": result.relation_count,
             **filtering_stats,
         }
+        counters = _observability_counters(getattr(result, "metadata", None))
+        if counters:
+            summary["counters"] = counters
         logger.info(
             f"Entity extraction completed for source {source_id}: "
             f"{result.entity_count} entities, {result.relation_count} relations"

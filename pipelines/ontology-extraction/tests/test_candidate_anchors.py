@@ -122,7 +122,15 @@ def _caller_returning(entities_json: str):
     return caller
 
 
-def test_hearst_seeds_isa_only_between_extracted_entities():
+def test_hearst_seeds_isa_only_between_extracted_entities(monkeypatch):
+    """N.5b turned the miner OFF by default, so this asks for it explicitly.
+
+    That is the right way round: this test is about what the miner DOES, and its
+    default belongs to `test_is_a_predicate.py::test_the_hearst_miner_ships_off`.
+    Leaving it implicit is how the two got confused in the first place — a
+    producer that ran because nobody had chosen otherwise.
+    """
+    monkeypatch.setenv("EXTRACTION_HEARST_ISA", "true")
     ont = _ontology()
     chunks = [{"text": "Fasteners such as bolts and screws are used.", "id": "c1"}]
     # LLM extracts all three entities but NO is_a relation.
@@ -145,7 +153,11 @@ def test_hearst_seeds_isa_only_between_extracted_entities():
     assert all(r.source_chunk_id == "c1" for r in isa)
 
 
-def test_hearst_not_seeded_when_an_endpoint_is_not_an_entity():
+def test_hearst_not_seeded_when_an_endpoint_is_not_an_entity(monkeypatch):
+    """Asserts an ABSENCE, so it needs the miner on or it cannot fail: with the
+    N.5b default it would pass against a miner that had been deleted outright.
+    """
+    monkeypatch.setenv("EXTRACTION_HEARST_ISA", "true")
     ont = _ontology()
     chunks = [{"text": "Fasteners such as bolts and screws.", "id": "c1"}]
     # 'Fasteners' (the broad type) is NOT among the extracted entities.
@@ -158,6 +170,14 @@ def test_hearst_not_seeded_when_an_endpoint_is_not_an_entity():
 
 
 def test_hearst_seeding_disabled_by_env(monkeypatch):
+    """Kept for the explicit-"false" case, but it no longer pins much.
+
+    A review corrected the previous docstring here, which claimed this test pins
+    that the env var is read: with the default now `False`, setting it to "false"
+    and asserting absence passes just as well against an implementation that
+    hard-codes `return False`. The two `setenv("true")` tests above are what pin
+    the read.
+    """
     monkeypatch.setenv("EXTRACTION_HEARST_ISA", "false")
     ont = _ontology()
     chunks = [{"text": "Fasteners such as bolts.", "id": "c1"}]
