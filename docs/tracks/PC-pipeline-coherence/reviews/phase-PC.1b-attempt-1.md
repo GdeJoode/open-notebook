@@ -1,4 +1,4 @@
-# Phase PC.1b — attempt 1 — VERDICT: REVISIONS_NEEDED (3 blockers, 5 majors)
+# Phase PC.1b — attempts 1–3
 
 - **Branch**: `feature/track-pc1b-derived-state`
 - **Reviewed commits**: `12f0056f`, `cabcf624`, `70d840b3`
@@ -103,3 +103,77 @@ than my version did, and makes the misstatement gratuitous.
   `"/tests/" in path` while the repo's own root suite is `tests/…`, with no
   leading slash.
 - Suites after the fixes: app-main 1833 / 6 skipped, root `tests/` 69.
+
+
+---
+
+# Attempt 2 — REVISIONS_NEEDED (2 blockers, 3 majors)
+
+Blockers 1 and 3 and majors 4, 6, 7 verified fixed. Blocker 2 was **partially**
+fixed: the three plants from round 1 died, and three new attacks got through.
+
+| attack | why it passed |
+|---|---|
+| dead fields named `error`, `score`, `state` | `_AMBIGUOUS_FIELD_NAMES` held 16 hand-picked names against 2733 distinct Load-context attribute names. It denied the two names round 1 happened to plant and missed the three most frequent Loads in the repo — `info` (141 files), `warning` (135), `error` (88), all loguru |
+| a subclass declared in ANOTHER package | "inheritance is resolved transitively from the AST" was true only *within* `shared/models/extraction.py`, which is the one file the scan parsed |
+| a field written and logged by its own producer | any file with a Load counted, including the writer's. The inventory records exactly this defect elsewhere: `aliases_registered` is initialised and logged, never incremented |
+
+Plus: unparseable files were silently skipped (the reviewer's own broken plant
+was dropped and produced a plausible orphan for the wrong reason), and the
+correction I had just made to the reader-count claim was **wrong in the other
+direction** — "every derived-state field is read in none" contradicted the table
+two lines below it, which lists `concept_alignment_report` as having one.
+
+## The observation that mattered more than the count
+
+> Rounds 1 and 2 each closed the specific fields I planted rather than the
+> property that let them through. […] A third round that adds `error`/`warning`/
+> `info` to the list and parses a second file would be the same move again, and I
+> would come back with `output`, `stat` and `page_count`.
+
+That is correct, and it is the finding of this phase.
+
+# Attempt 3 — the guard inverted
+
+All three surviving attacks have one root cause: **the counter attributed a read
+by bare attribute name, with no information about what object the attribute
+belonged to.** `x.foo` cannot tell you the type of `x` without inference, so a
+name-based sweep is either too loose or too strict, and no denylist fixes that.
+
+So the requirement is inverted. The guard no longer searches the repository for
+somebody who might read a field. **Every derived-state field must declare its
+consumer**, and the guard verifies the declaration:
+
+- `Reads(path)` — the named file must Load the attribute AND not be its only
+  writer, which closes the self-read hole by construction rather than by
+  denylist.
+- `Owned(phase)` — no reader yet, a named phase owns it, and the claim must also
+  appear in `handoff-inventory.md`. A promise made in one place is not a promise.
+
+A field with no entry fails, **whatever it is called, wherever it is declared,
+and whoever looks at it**. All three round-2 attacks now die for the same reason,
+which is the property rather than the instances.
+
+**What it explicitly cannot do**, now stated in the module docstring rather than
+implied: it cannot prove the Load it finds refers to *this* model rather than a
+same-named attribute elsewhere. It narrows the collision surface from 478 files
+to one and makes the claim reviewable. That is as far as name-based checking
+honestly goes, and saying so is cheaper than a fourth round.
+
+Two further findings, both from writing the new version:
+
+- The tree contains **two unrelated classes called `ExtractionResult`** — the
+  pydantic model and a dataclass in `source_extractor.py` carrying `chunks`,
+  `title`, `url`. Resolving inheritance by name alone dragged the second one in,
+  and the cross-file scan found it on its first run. The root is now anchored to
+  its declaring file; descendants are still matched by name, which is the
+  residual imprecision and is documented.
+- Parsing is no longer tolerant, and a control asserts every production file
+  parses. This matters more than it looks: CI pins Python 3.11 while development
+  runs 3.12, so a 3.12-only construct would parse locally and vanish in CI only —
+  in the direction that hides readers.
+
+Twelve tests, of which **eight are controls**. Two earned their keep immediately:
+the file-list control caught that the exclusion filter tested `"/tests/" in path`
+while the repo's own root suite is `tests/…`, and the cross-file scan caught the
+duplicate class name.

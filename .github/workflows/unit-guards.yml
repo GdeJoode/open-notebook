@@ -35,10 +35,12 @@ jobs:
 
     steps:
       - name: Checkout
-        # `fetch-depth: 0` because the derived-state guard shells out to
-        # `git grep` to count readers; a shallow clone still has the working
-        # tree, but full history keeps the command honest if the guard is ever
-        # extended to compare against a base ref.
+        # `fetch-depth: 0` is NOT needed for history — the derived-state guard
+        # uses `git ls-files` plus AST parsing, both of which read the working
+        # tree. Kept at 0 only so a future guard that compares against a base ref
+        # does not have to rediscover why a shallow clone breaks it. A review
+        # caught the previous comment justifying it by a `git grep` the guard no
+        # longer performs.
         uses: actions/checkout@v4
         with:
           fetch-depth: 0

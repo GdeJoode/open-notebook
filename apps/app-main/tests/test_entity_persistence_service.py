@@ -1232,13 +1232,18 @@ class TestTheMergedTypeTagsReachTheDatabase:
         """The single-schema path sets no `type_tags`; it must behave exactly as
         before, or this change would alter every legacy run too.
         """
-        with_tags = await self._persist(
-            {"text": "X", "label": "Provincie", "confidence": 0.9, "type_tags": []}
-        )
         without = await self._persist(
             {"text": "X", "label": "Provincie", "confidence": 0.9}
         )
-        assert with_tags.type_tags == without.type_tags
+        # A review noted the previous version compared `type_tags=[]` against an
+        # absent key — both take the same `or []` branch, so it passed identically
+        # before and after W2. Compare against what the BRIDGE alone resolves, so
+        # the assertion is that the union added nothing when there was nothing to
+        # add.
+        from app_main.services.entity_persistence_service import _resolve_entity_type
+
+        bridge_only = _resolve_entity_type("Provincie", None)
+        assert without.type_tags == list(bridge_only.type_tags)
 
     @pytest.mark.asyncio
     async def test_primary_type_still_comes_from_the_bridge(self):
@@ -1254,4 +1259,4 @@ class TestTheMergedTypeTagsReachTheDatabase:
                 "primary_type": "RegioDeal",
             }
         )
-        assert written.primary_type != "RegioDeal" or written.primary_type is None
+        assert written.primary_type != "RegioDeal"

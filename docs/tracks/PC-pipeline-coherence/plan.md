@@ -173,8 +173,11 @@ lives in `handoff-inventory.md`; this entry records the decision.
 
 **The user asked for the most structural fix and expected a run object. Measured,
 it is not.** `FilteredResult` is ALREADY a typed run-state carrier, and on that one
-object every payload field is read in at least one production file and every
-derived-state field is read in none. (An earlier draft wrote "4/4/2/2 readers";
+object every payload field is read somewhere, while of its derived-state fields
+only `concept_alignment_report` is — and that reader drops 5 of its 11 keys. (Two
+corrections a review had to make here, both mine: "4/4/2/2 readers" were grep
+OCCURRENCE counts rather than files, and "every derived-state field is read in
+none" was wrong about the one that is.) (An earlier draft wrote "4/4/2/2 readers";
 a review caught that those were grep OCCURRENCE counts, and each payload field is
 read in exactly one file. The contrast is 1-versus-0, which points the same way
 and is the number the guard actually uses.) Both experiments have already been run — the untyped bag
