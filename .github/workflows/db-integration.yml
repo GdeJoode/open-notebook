@@ -15,7 +15,10 @@ on:
     paths:
       - 'migrations/**'
       - 'packages/surrealdb-service/**'
-      - 'packages/shared/src/shared/models/**'
+      # PC.1b widened this from `models/**`: SCHEMAFULL drift is not the only
+      # thing that breaks the roundtrip, and the shared package now also holds
+      # the regression gate the extraction path depends on.
+      - 'packages/shared/src/shared/**'
       - '.github/workflows/db-integration.yml'
   workflow_dispatch: {}
 

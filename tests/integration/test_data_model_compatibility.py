@@ -57,8 +57,6 @@ class TestExtractionResultRoundtrip:
                 )
             ],
             validation_report={"ontology": {"valid_entities": 5}},
-            linked_entities={"Albert Einstein": {"dbpedia_uri": "http://dbpedia.org/resource/Albert_Einstein"}},
-            llm_verification_results={"verified": 3, "rejected": 1},
             kg_resolution_report={"matched_count": 2, "new_count": 3},
             metadata={"filtering": {"input_entities": 20, "output_entities": 5}},
         )
@@ -72,8 +70,6 @@ class TestExtractionResultRoundtrip:
         assert len(restored.merged_entity_groups) == 1
         assert len(restored.predicted_edges) == 1
         assert restored.validation_report is not None
-        assert restored.linked_entities["Albert Einstein"]["dbpedia_uri"] == "http://dbpedia.org/resource/Albert_Einstein"
-        assert restored.llm_verification_results is not None
         assert restored.kg_resolution_report is not None
 
     def test_filtered_result_is_valid_extraction_result(self):

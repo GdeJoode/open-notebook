@@ -211,19 +211,24 @@ class FilteredResult(ExtractionResult):
     )
     validation_report: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Report from ontology/graph validation stage",
-    )
-    linked_entities: Dict[str, Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="Entity linking results (entity text -> link metadata)",
-    )
-    llm_verification_results: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Results from LLM triple verification stage",
+        description=(
+            "Report from the ontology/graph validation stage. PC.1b: no reader "
+            "yet, kept deliberately — stage 11 is inert today because neither "
+            "production call site passes an ontology to FilteringWorkflow, and "
+            "PC.6 owns making 'the flag is on and did nothing' visible. Listed "
+            "in handoff-inventory.md with PC.6 as owner."
+        ),
     )
     kg_resolution_report: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="KG entity resolution statistics",
+        description=(
+            "KG entity resolution statistics (matched_count / new_count). "
+            "PC.1b: no reader yet, kept deliberately — PC.3 owns turning "
+            "cross-document resolution on, and its AC needs a measured figure "
+            "for how many rows it collapses. Listed in the track's "
+            "handoff-inventory.md with PC.3 as owner; PC.3 either reads it or "
+            "deletes it."
+        ),
     )
     concept_alignment_report: Optional[Dict[str, Any]] = Field(
         default=None,

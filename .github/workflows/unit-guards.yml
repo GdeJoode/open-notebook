@@ -1,0 +1,54 @@
+name: Unit guards
+
+# Runs the repository-level guard suite (`tests/`) on every PR.
+#
+# Why this workflow exists (Track PC, phase PC.1b). Before it, NO CI job ran any
+# Python unit suite: `db-integration.yml` runs one testcontainers file behind a
+# path filter, and `e2e.yml` runs Playwright. So a guard added anywhere in
+# `apps/`, `packages/` or `pipelines/tests/` executed only on the machine of
+# whoever wrote it — which is the first of the three ways this project has seen a
+# guard fail ("it runs nowhere"). A rule that runs nowhere is not a rule.
+#
+# Scope is deliberately the root `tests/` directory only. That is the repo's
+# `testpaths` and it is where the cross-cutting invariants live; the per-package
+# suites are large and slow and belong in their own job when someone wants them.
+# Widening this is a decision, not an oversight.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: unit-guards-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guards:
+    name: Repository invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        # `fetch-depth: 0` because the derived-state guard shells out to
+        # `git grep` to count readers; a shallow clone still has the working
+        # tree, but full history keeps the command honest if the guard is ever
+        # extended to compare against a base ref.
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: 'latest'
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install workspace deps
+        run: uv sync --extra dev
+
+      - name: Run repository guards
+        run: uv run pytest tests/ -v --tb=short

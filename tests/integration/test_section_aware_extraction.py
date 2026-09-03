@@ -6,9 +6,9 @@ flows from chunks through ExtractionWorkflow -> FilteringWorkflow -> persistence
 and that the incremental resolver and match candidate persistence work correctly.
 """
 
-import pytest
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from entity_filtering.config import FilteringConfig, IncrementalResolutionConfig
 from entity_filtering.resolution.incremental_resolver import (
     EntityCluster,
@@ -16,9 +16,9 @@ from entity_filtering.resolution.incremental_resolver import (
 )
 from entity_filtering.workflow import FilteringWorkflow
 from shared.models.extraction import (
-    ExtractionContext,
     ExtractedEntity,
     ExtractedRelation,
+    ExtractionContext,
     ExtractionResult,
     FilteredResult,
     MatchCandidate,
@@ -450,7 +450,9 @@ class TestMatchCandidatePersistence:
 
     async def test_persist_match_candidates(self):
         """Match candidates stored with all provenance fields."""
-        from app_main.services.entity_persistence_service import EntityPersistenceService
+        from app_main.services.entity_persistence_service import (
+            EntityPersistenceService,
+        )
 
         svc = EntityPersistenceService()
 
@@ -514,7 +516,9 @@ class TestMatchCandidatePersistence:
 
     async def test_persist_filtered_result_with_candidates(self):
         """persist_filtered_result also stores match candidates."""
-        from app_main.services.entity_persistence_service import EntityPersistenceService
+        from app_main.services.entity_persistence_service import (
+            EntityPersistenceService,
+        )
 
         svc = EntityPersistenceService()
 
@@ -566,7 +570,7 @@ class TestResolutionLogService:
             return [[]]
 
         with patch(
-            "app_main.services.entity_persistence_service.execute_query",
+            "app_main.services.resolution_log_service.execute_query",
             side_effect=mock_query,
         ) as mock:
             items, total = await svc.list_candidates(status="pending")
@@ -587,7 +591,7 @@ class TestResolutionLogService:
             return [[{"id": "rl:1", "status": "accepted", "reviewed_at": "2026-04-07T12:00:00Z"}]]
 
         with patch(
-            "app_main.services.entity_persistence_service.execute_query",
+            "app_main.services.resolution_log_service.execute_query",
             side_effect=mock_query,
         ):
             result = await svc.update_status("rl:1", "accepted")
@@ -612,7 +616,7 @@ class TestResolutionLogService:
             }]]
 
         with patch(
-            "app_main.services.entity_persistence_service.execute_query",
+            "app_main.services.resolution_log_service.execute_query",
             side_effect=mock_query,
         ):
             stats = await svc.get_stats()
@@ -630,7 +634,7 @@ class TestResolutionLogService:
             return [[{"id": params.get("id"), "status": params.get("status")}]]
 
         with patch(
-            "app_main.services.entity_persistence_service.execute_query",
+            "app_main.services.resolution_log_service.execute_query",
             side_effect=mock_query,
         ):
             updated = await svc.bulk_update_status(["rl:1", "rl:2", "rl:3"], "accepted")
