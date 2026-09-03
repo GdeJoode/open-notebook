@@ -299,16 +299,51 @@ async def test_roman_letter_real_word_token_still_auto_merges() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cross_type_homograph_never_proposed() -> None:
-    """A person and an org with the SAME name are never compared (type guard)."""
+async def test_cross_type_homograph_reaches_review_but_never_auto() -> None:
+    """Same name, different type: a REVIEW candidate, never an auto-merge.
+
+    PC.2 deliberately relaxed this guard, and this test records the new contract
+    rather than the old one, so the change cannot happen again by accident.
+
+    **What the guard was for, and still is**: type-blind auto-merging would fuse a
+    person and an organisation that share a name. That is preserved — the band for
+    :data:`FOLD_EQUAL_CROSS_TYPE` has an auto floor of 2.0, which no score can
+    reach, so cross-type pairs are structurally unable to auto-merge.
+
+    **What it was over-reaching on**: suppressing the candidate ENTIRELY assumed
+    ``entity_type`` is reliable. Measured on the live graph, it is not — 4 of 539
+    distinct names exist twice with byte-identical spelling and two different
+    types (`Regio Deal` as both `programme` and `topic`; `Nij Begun Academie` as
+    both). Those are one entity that unstable typing split, and under the old rule
+    no curator could ever see them. That evidence belongs to PC.4.
+
+    So: the human decides, and the machine still cannot decide this one alone.
+    """
     rows = [
         _entity("entity:p", "Mark Rutte", etype="person"),
         _entity("entity:o", "Mark Rutte", etype="organization"),
     ]
     report = await _service(rows).propose_candidates()
-    # Identical name but different types → no candidate at all.
     assert report.auto_merge_count == 0
-    assert report.review_count == 0
+    assert report.review_count == 1
+    assert report.review[0].method == "fold_equal_cross_type"
+
+
+@pytest.mark.asyncio
+async def test_cross_type_never_auto_merges_even_at_maximum_score() -> None:
+    """The cross-type auto floor is unreachable, not merely high.
+
+    A guard expressed as a threshold is only a guard if no input can cross it.
+    Drives the band directly with the largest score the pipeline can produce (1.0)
+    and asserts the band is still ``review``.
+    """
+    from app_main.services.entity_resolution.candidate_dedup_service import (
+        FOLD_EQUAL_CROSS_TYPE,
+    )
+
+    svc = _service([])
+    score, method, band = svc._strongest_band({FOLD_EQUAL_CROSS_TYPE: 1.0})
+    assert (score, method, band) == (1.0, FOLD_EQUAL_CROSS_TYPE, "review")
 
 
 # --- AC4: force-split hard veto -----------------------------------------------
@@ -496,3 +531,120 @@ async def test_merge_cluster_new_canonical_follows_winner_when_b_wins() -> None:
     assert cluster.loser_ids == ["entity:a"]
     # The winner is id_b → new_canonical must be name_b, NOT the hardcoded name_a.
     assert cluster.new_canonical == "Koninkrijksrelaties"
+
+
+# --- PC.2: one identity ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_case_only_duplicate_reaches_the_curator() -> None:
+    """Two names differing only in case are an auto-merge proposal.
+
+    Measured on the live graph before this generator existed: of 15 case-only
+    duplicate groups among active entities, 9 reached the curator by the fuzzy or
+    embedding tier and 6 did not — a name short enough or a vector far enough
+    apart and the pair was invisible. Equality under the comparison fold is not a
+    similarity score, so it does not depend on either tier's threshold.
+    """
+    rows = [
+        _entity("entity:a", "REGIO DEAL"),
+        _entity("entity:b", "Regio Deal"),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert report.auto_merge_count == 1
+    assert report.auto_merge[0].method == "fold_equal"
+
+
+@pytest.mark.asyncio
+async def test_fold_equal_survives_a_low_embedding_score() -> None:
+    """Fold-equality is not outranked by a weak score from another tier.
+
+    The regression this pins: `_record` originally kept one (score, method) pair
+    per candidate and overwrote on a higher raw score, so a 0.945 embedding could
+    replace a 0.94 fuzzy and DEMOTE the pair from auto to review, because the two
+    tiers have different thresholds. Scores from different scales are not
+    comparable; the band is.
+    """
+    svc = _service([])
+    best: dict = {}
+    svc._record(best, "entity:a", "entity:b", 0.94, "fuzzy")
+    svc._record(best, "entity:a", "entity:b", 0.945, "embedding")
+    score, method, band = svc._strongest_band(best[("entity:a", "entity:b")])
+    assert band == "auto_merge"
+    assert (score, method) == (0.94, "fuzzy")
+
+
+@pytest.mark.asyncio
+async def test_head_affix_short_form_reaches_review() -> None:
+    """`Gemeente Leudal` / `Leudal`: a review proposal, never an auto-merge.
+
+    Levenshtein puts this pair at 0.53 — no threshold the dedup config would
+    accept can reach it, and one that could would also merge `Regio Deal
+    Groningen` with `Regio Deal Drenthe`.
+    """
+    rows = [
+        _entity("entity:a", "Gemeente Leudal"),
+        _entity("entity:b", "Leudal"),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert report.auto_merge_count == 0
+    assert report.review_count == 1
+    assert report.review[0].method == "containment"
+
+
+@pytest.mark.asyncio
+async def test_tail_qualified_siblings_are_not_proposed() -> None:
+    """`Regio Deal Groningen` / `Regio Deal Drenthe` / `Regio Deal`: no candidate.
+
+    The pair the dedup config names as the reason it will not lower the fuzzy
+    threshold. Containment must not smuggle it back in: the extra tokens sit at
+    the TAIL, so they discriminate rather than qualify.
+    """
+    rows = [
+        _entity("entity:a", "Regio Deal"),
+        _entity("entity:b", "Regio Deal Groningen"),
+        _entity("entity:c", "Regio Deal Drenthe"),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert report.auto_merge_count == 0
+    assert report.review_count == 0
+
+
+@pytest.mark.asyncio
+async def test_place_name_in_tail_position_is_not_a_short_form() -> None:
+    """An organisation named after a place is not that place.
+
+    The failure mode of head-anchored containment with a free length guard: on the
+    live graph `Het Hogeland` paired with seven organisations operating there. The
+    removed head run is a proper name, not a curated qualifier, so the curated rule
+    rejects it.
+    """
+    rows = [
+        _entity("entity:a", "Het Hogeland"),
+        _entity("entity:b", "Mensenwerk Het Hogeland"),
+        _entity("entity:c", "Ondernemersplatform Het Hogeland"),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert report.auto_merge_count == 0
+    assert report.review_count == 0
+
+
+@pytest.mark.asyncio
+async def test_force_split_still_vetoes_the_new_generators() -> None:
+    """A force-split overlay beats fold-equality and containment too.
+
+    Without this, adding generators would quietly route around the one control a
+    curator has for saying *these are not the same*. Asserted per generator, because
+    a veto applied in only one code path is not a veto.
+    """
+    from shared.utils.name_normalizer import normalize_entity_name
+
+    fold_rows = [_entity("entity:a", "REGIO DEAL"), _entity("entity:b", "Regio Deal")]
+    split = {frozenset({normalize_entity_name("REGIO DEAL"), normalize_entity_name("Regio Deal")})}
+    report = await _service(fold_rows, split_pairs=split).propose_candidates()
+    assert report.auto_merge_count == 0 and report.review_count == 0
+
+    cont_rows = [_entity("entity:c", "Gemeente Leudal"), _entity("entity:d", "Leudal")]
+    split = {frozenset({normalize_entity_name("Gemeente Leudal"), normalize_entity_name("Leudal")})}
+    report = await _service(cont_rows, split_pairs=split).propose_candidates()
+    assert report.auto_merge_count == 0 and report.review_count == 0

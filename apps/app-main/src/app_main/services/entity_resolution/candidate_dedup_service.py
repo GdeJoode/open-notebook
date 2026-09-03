@@ -45,6 +45,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from entity_filtering.config import EmbeddingDedupConfig, FuzzyDedupConfig
 from entity_filtering.deduplication.fuzzy_resolver import FuzzyResolver
 from loguru import logger
+from shared.utils.org_affixes import head_affix
 from shared.utils.text_folding import fold_for_comparison
 from surrealdb_service.repositories.entity import EntityRepository
 
@@ -56,6 +57,12 @@ from app_main.services.entity_resolution.recanonicalization_service import (
 # Band labels.
 AUTO_MERGE = "auto_merge"
 REVIEW = "review"
+
+#: PC.2 candidate methods. Named rather than inlined because the band table, the
+#: report and the frontend card all key on them.
+FOLD_EQUAL = "fold_equal"
+FOLD_EQUAL_CROSS_TYPE = "fold_equal_cross_type"
+CONTAINMENT = "containment"
 
 # Forced (overlay) candidates report a sentinel score so the UI can flag them as
 # a user rule rather than a matcher score.
@@ -371,14 +378,18 @@ class CandidateDedupService:
 
         # Pair -> best (score, method). Dedup so a pair caught by both fuzzy and
         # embedding reports once, at its highest score.
-        best: Dict[Tuple[str, str], Tuple[float, str]] = {}
+        best: Dict[Tuple[str, str], Dict[str, float]] = {}
 
         f_review, f_auto = self._fuzzy_bands()
         e_review, e_auto = self._embedding_bands()
 
+        # Fold-equal runs across ALL rows, not per type bucket — see the method.
+        self._score_fold_equal(list(by_id.values()), best)
+
         for etype, group in buckets.items():
             self._score_fuzzy(group, best)
             self._score_embedding(group, best)
+            self._score_containment(group, best)
 
         # Build candidates, applying the force-split veto.
         report = CandidateReport(
@@ -387,7 +398,7 @@ class CandidateDedupService:
         )
         seen_pairs: set[Tuple[str, str]] = set()
 
-        for (id_a, id_b), (score, method) in best.items():
+        for (id_a, id_b), per_method in best.items():
             rec_a = by_id[id_a]
             rec_b = by_id[id_b]
             norm_pair = frozenset({rec_a["name"], rec_b["name"]})
@@ -395,9 +406,10 @@ class CandidateDedupService:
             if self._vetoed(norm_pair, rec_a["name"], rec_b["name"], split_pairs):
                 continue
 
-            review_floor = f_review if method == "fuzzy" else e_review
-            auto = f_auto if method == "fuzzy" else e_auto
-            band = self._band(score, review_floor, auto)
+            # Band each method against ITS OWN floors and take the strongest
+            # result — see `_record` for why a single cross-scale maximum
+            # demoted auto-merges.
+            score, method, band = self._strongest_band(per_method)
             if band is None:
                 continue
 
@@ -441,10 +453,107 @@ class CandidateDedupService:
     # Scoring (reuse the entity-filtering resolvers)
     # ------------------------------------------------------------------
 
+    def _score_fold_equal(
+        self,
+        rows: List[Dict[str, Any]],
+        best: Dict[Tuple[str, str], Dict[str, float]],
+    ) -> None:
+        """Propose pairs whose names are identical after the comparison fold.
+
+        The most certain class of duplicate, and the one this door could not see.
+        Measured on the project's graph: 543 active entities holding **15**
+        case-only duplicate groups, of which 9 reached a curator and 6 did not.
+        The six split into two causes, and neither is about scoring:
+
+        * **4 were blocked by the type bucket** — the same name typed `programme`
+          in one row and `topic` in another is never compared, because
+          `propose_candidates` buckets by `entity_type`. That is PC.4's unstable
+          typing causing a missed merge.
+        * **2 were blocked because one side has no embedding**, so the embedding
+          scorer declines and the fuzzy scorer had already skipped them.
+
+        And the nine that DID surface all arrived by the **embedding** scorer,
+        none by fuzzy — because `_score_fuzzy` skips any pair that is equal after
+        normalisation, on the stated grounds that it is "already K.1/K.3
+        territory". Nothing does that work across documents: the persist boundary
+        writes the RAW `canonical_name` and cross-document KG resolution is off by
+        default. A stage declined its own work assuming another had done it, and
+        that stage does not run.
+
+        So this runs over every row at once rather than per bucket, and needs
+        neither embeddings nor a shared type.
+
+        **Same type is `auto_merge`.** Two active rows with the same type and an
+        identical folded name are the definition of a duplicate; the discriminator
+        guard is inapplicable because the folded names are equal. The force-split
+        veto still applies unchanged.
+
+        **Cross type is `review`, never auto.** It is either PC.4's typing
+        instability (merge) or a genuine homonym (do not), and a human decides.
+        That list is also the evidence PC.4's own AC needs — labels holding two
+        canonical answers on real data rather than a sweep over shipped
+        ontologies.
+        """
+        by_fold: Dict[str, List[Dict[str, Any]]] = {}
+        for row in rows:
+            folded = fold_for_comparison(row["name"])
+            if folded:
+                by_fold.setdefault(folded, []).append(row)
+
+        for group in by_fold.values():
+            if len(group) < 2:
+                continue
+            for i in range(len(group)):
+                for j in range(i + 1, len(group)):
+                    a, b = group[i], group[j]
+                    method = (
+                        FOLD_EQUAL
+                        if a["entity_type"] == b["entity_type"]
+                        else FOLD_EQUAL_CROSS_TYPE
+                    )
+                    self._record(best, a["id"], b["id"], 1.0, method)
+
+    def _score_containment(
+        self,
+        group: List[Dict[str, Any]],
+        best: Dict[Tuple[str, str], Dict[str, float]],
+    ) -> None:
+        """Propose long-form/short-form pairs the fuzzy tier structurally misses.
+
+        Levenshtein similarity normalises by the LONGER string, so a pure
+        qualifier costs a similarity proportional to the length delta:
+        `binnenlandse zaken en koninkrijksrelaties` against
+        `minister van binnenlandse zaken en koninkrijksrelaties` is 13 insertions
+        over 53 characters — **0.755**, below the 0.85 threshold. Any threshold
+        low enough to catch it also merges `Regio Deal Groningen` with
+        `Regio Deal Drenthe` (≈0.83), which the dedup config comment already
+        documents as the tension it refuses to resolve by lowering the bar.
+        Jaro-Winkler does not help either: it boosts common PREFIXES, and
+        `Minister van …` differs at position 0.
+
+        The rule — head-anchored, curated head run — lives in
+        :mod:`shared.utils.org_affixes` together with the measurements that chose
+        it over the two weaker rules this method tried first.
+
+        **Always `review`, never `auto`.** Containment is a recall device, not a
+        decision — which of the two forms is canonical is exactly what a reviewer
+        is for, and `Onderwijs` / `Ministerie van Onderwijs` is in the output.
+        """
+        from entity_filtering.resolution.concept_alignment import _tokens
+
+        tokenised = [(row, _tokens(row["name"])) for row in group]
+        for i, (a, ta) in enumerate(tokenised):
+            for b, tb in tokenised[i + 1 :]:
+                if not ta or not tb:
+                    continue
+                outer, inner = (ta, tb) if len(ta) > len(tb) else (tb, ta)
+                if head_affix(outer, inner) is not None:
+                    self._record(best, a["id"], b["id"], 1.0, CONTAINMENT)
+
     def _score_fuzzy(
         self,
         group: List[Dict[str, Any]],
-        best: Dict[Tuple[str, str], Tuple[float, str]],
+        best: Dict[Tuple[str, str], Dict[str, float]],
     ) -> None:
         """Score every same-type pair with the fuzzy resolver's similarity."""
         n = len(group)
@@ -465,7 +574,7 @@ class CandidateDedupService:
     def _score_embedding(
         self,
         group: List[Dict[str, Any]],
-        best: Dict[Tuple[str, str], Tuple[float, str]],
+        best: Dict[Tuple[str, str], Dict[str, float]],
     ) -> None:
         """Score same-type pairs by cosine similarity of their embeddings.
 
@@ -496,6 +605,43 @@ class CandidateDedupService:
                     best, with_emb[i]["id"], with_emb[j]["id"], score, "embedding"
                 )
 
+    #: Band strength, for choosing between methods that disagree.
+    _BAND_RANK = {AUTO_MERGE: 2, REVIEW: 1}
+
+    def _strongest_band(
+        self, per_method: Dict[str, float]
+    ) -> Tuple[float, str, Optional[str]]:
+        """``(score, method, band)`` for the method reaching the strongest band.
+
+        Ties on band are broken by which method scored higher WITHIN its own
+        band, which is arbitrary but stable; what matters is that a method never
+        loses a band it earned to a different scale's larger number.
+        """
+        f_review, f_auto = self._fuzzy_bands()
+        e_review, e_auto = self._embedding_bands()
+        floors = {
+            "fuzzy": (f_review, f_auto),
+            "embedding": (e_review, e_auto),
+            # Identical after the fold, same type: a duplicate by definition.
+            FOLD_EQUAL: (1.0, 1.0),
+            # Identical after the fold, different type: a human decides whether
+            # that is PC.4's typing instability or a genuine homonym. Never auto,
+            # so the auto floor is unreachable by construction.
+            FOLD_EQUAL_CROSS_TYPE: (1.0, 2.0),
+            # Containment is a recall device, never a decision.
+            CONTAINMENT: (1.0, 2.0),
+        }
+        best_choice: Tuple[float, str, Optional[str]] = (0.0, "", None)
+        best_rank = -1
+        for method, score in per_method.items():
+            review_floor, auto = floors.get(method, (f_review, f_auto))
+            band = self._band(score, review_floor, auto)
+            rank = self._BAND_RANK.get(band, -1) if band else -1
+            if rank > best_rank or (rank == best_rank and score > best_choice[0]):
+                best_rank = rank
+                best_choice = (score, method, band)
+        return best_choice
+
     @staticmethod
     def _pair_key(id_a: str, id_b: str) -> Tuple[str, str]:
         """Order-insensitive pair key."""
@@ -503,17 +649,31 @@ class CandidateDedupService:
 
     def _record(
         self,
-        best: Dict[Tuple[str, str], Tuple[float, str]],
+        best: Dict[Tuple[str, str], Dict[str, float]],
         id_a: str,
         id_b: str,
         score: float,
         method: str,
     ) -> None:
-        """Keep the highest score per pair (method follows the winning score)."""
+        """Keep each METHOD's best score for a pair, not one winner across scales.
+
+        PC.2. The previous version kept a single ``(score, method)`` and let the
+        method follow the highest number — across scales that are not comparable.
+        Measured with the shipped thresholds (fuzzy auto 0.93, embedding auto
+        0.95): a pair scoring fuzzy **0.94** bands as `auto_merge` on its own, and
+        adding an embedding score of **0.945** stores the embedding reading and
+        bands the pair as `review`. A higher number on a different scale silently
+        DEMOTED an auto-merge.
+
+        Latent while there were two methods and acute with three, because the
+        alternative is to pick a containment score that games whichever scale it
+        would otherwise lose to. Each method now keeps its own best and is banded
+        against its own floors; the strongest band wins.
+        """
         key = self._pair_key(id_a, id_b)
-        prior = best.get(key)
-        if prior is None or score > prior[0]:
-            best[key] = (score, method)
+        per_method = best.setdefault(key, {})
+        if score > per_method.get(method, float("-inf")):
+            per_method[method] = score
 
     # ------------------------------------------------------------------
     # Overlay application

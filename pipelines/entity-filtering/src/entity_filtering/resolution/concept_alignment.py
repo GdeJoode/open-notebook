@@ -1252,7 +1252,12 @@ class ConceptAligner:
         props["alignment_similarity"] = alignment.similarity
 
 
+# PC.2: `_tokens` is exported so the curator door folds names into tokens exactly
+# as this module does. `_is_token_subsequence` is deliberately NOT exported: it is
+# unanchored, and unanchored containment pairs `Regio Deal` with
+# `Regio Deal Groningen` — see `_score_containment`.
 __all__ = [
+    "_tokens",
     "Alignment",
     "AliasCandidate",
     "ConceptAligner",
