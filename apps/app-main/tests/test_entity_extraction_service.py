@@ -1892,6 +1892,154 @@ class TestTheCountersCrossOutOfTheService:
         assert measured["abstain_rate"] == pytest.approx(9 / 20)
 
 
+class TestTheSoftNudgeReachesItsBanner:
+    """PC.1b / W1 — the cleanest producer/consumer pair in the repo, connected.
+
+    `_decide_soft_nudge` has run on every document since B.1e; B.3c built the
+    `notebook_event` table, its repository, a router filtering on
+    `_KNOWN_NUDGE_EVENT_TYPES` and `SchemaSoftNudge.tsx` to poll it. The two
+    halves never met: `workflow.py` discards the decision into `_decision` and the
+    table held ZERO rows. Measured before this landed, all five sources carrying
+    Pass-1 rows would have fired a banner.
+
+    These assert on what the REPOSITORY was asked to write, not on the decision
+    being computed — the decision was always computed. The gap was the write.
+    """
+
+    @staticmethod
+    def _svc(base_source_repo, event_repo, **kw):
+        return EntityExtractionService(
+            source_repo=base_source_repo, notebook_event_repo=event_repo, **kw
+        )
+
+    @staticmethod
+    def _event_repo(unread=None):
+        repo = AsyncMock()
+        repo.list_unread = AsyncMock(return_value=unread or [])
+        repo.record = AsyncMock(return_value="notebook_event:1")
+        return repo
+
+    @pytest.mark.asyncio
+    async def test_a_mismatch_verdict_is_written_as_an_event(self, base_source_repo):
+        event_repo = self._event_repo()
+        svc = self._svc(base_source_repo, event_repo)
+
+        await svc._emit_soft_nudge(
+            {
+                "soft_nudge": "schema_mismatch",
+                "best_coverage": 0.45,
+                "schemas_attempted": ["deals"],
+            },
+            "notebook:abc",
+            "source:x",
+        )
+
+        event_repo.record.assert_awaited_once()
+        nb, event_type, payload = event_repo.record.await_args.args
+        assert nb == "notebook:abc"
+        assert event_type == "schema_mismatch"
+        assert payload["source_id"] == "source:x"
+        assert payload["best_coverage"] == 0.45
+
+    @pytest.mark.asyncio
+    async def test_the_event_type_is_exactly_what_the_router_filters_on(
+        self, base_source_repo
+    ):
+        """The enum's docstring promises its values "round-trip through
+        `notebook_event.type` without manual conversion". If either side is
+        renamed, the banner silently stops appearing — which is the state this
+        phase found. So assert against the ROUTER's own set, not a literal.
+        """
+        from app_main.api.routers.notebook_events import _KNOWN_NUDGE_EVENT_TYPES
+        from ontology_extraction.multi_schema_orchestrator import SoftNudgeDecision
+
+        for decision in (
+            SoftNudgeDecision.SCHEMA_MISMATCH,
+            SoftNudgeDecision.EXTENSION_SUGGESTED,
+        ):
+            event_repo = self._event_repo()
+            svc = self._svc(base_source_repo, event_repo)
+            await svc._emit_soft_nudge(
+                {"soft_nudge": decision.value}, "notebook:abc", "source:x"
+            )
+            _nb, event_type, _payload = event_repo.record.await_args.args
+            assert event_type in _KNOWN_NUDGE_EVENT_TYPES
+
+    @pytest.mark.asyncio
+    async def test_a_fitting_schema_raises_nothing(self, base_source_repo):
+        """NONE writes no row. An event the banner would ignore is still a row a
+        curator has to dismiss.
+        """
+        event_repo = self._event_repo()
+        svc = self._svc(base_source_repo, event_repo)
+
+        for metadata in ({"soft_nudge": "none"}, {}, {"soft_nudge": ""}):
+            await svc._emit_soft_nudge(metadata, "notebook:abc", "source:x")
+        event_repo.record.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_unread_banner_is_not_duplicated(self, base_source_repo):
+        """Re-extracting a notebook's documents would otherwise queue one banner
+        per document saying the same thing.
+        """
+        event_repo = self._event_repo(unread=[MagicMock()])
+        svc = self._svc(base_source_repo, event_repo)
+
+        await svc._emit_soft_nudge(
+            {"soft_nudge": "schema_mismatch"}, "notebook:abc", "source:x"
+        )
+        event_repo.record.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failing_write_costs_no_entities(self, base_source_repo):
+        """Extraction has already succeeded by the time this runs."""
+        event_repo = self._event_repo()
+        event_repo.record = AsyncMock(side_effect=RuntimeError("db down"))
+        svc = self._svc(base_source_repo, event_repo)
+
+        await svc._emit_soft_nudge(
+            {"soft_nudge": "schema_mismatch"}, "notebook:abc", "source:x"
+        )  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_the_decision_travels_from_the_run_to_the_repository(
+        self, base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+    ):
+        """The seam, not the unit. Everything above could pass while
+        `_record_pass1_outcome` never called `_emit_soft_nudge` — which is the
+        exact shape that made PC.1's first attempt fully green and inert. This
+        drives the recorder with a real result payload.
+        """
+        event_repo = self._event_repo()
+        notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=0)
+        notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+        pass1_repo_fixture.list_by_notebook = AsyncMock(return_value=[])
+        svc = self._svc(
+            base_source_repo,
+            event_repo,
+            notebook_schema_repo=notebook_schema_repo_fixture,
+            pass1_repo=pass1_repo_fixture,
+        )
+
+        result = ExtractionResult(
+            entities=[],
+            relations=[],
+            metadata={"soft_nudge": "extension_suggested", "best_coverage": 0.85},
+        )
+        await svc._record_pass1_outcome(
+            result,
+            "notebook:abc",
+            notebook_schema_repo_fixture,
+            pass1_repo_fixture,
+            "source:test",
+        )
+
+        event_repo.record.assert_awaited_once()
+        _nb, event_type, payload = event_repo.record.await_args.args
+        assert event_type == "extension_suggested"
+        assert payload["source_id"] == "source:test"
+
+
 class TestApplicabilitySample:
     """PC.1 — what the schema detector is allowed to see.
 

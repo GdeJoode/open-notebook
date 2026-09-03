@@ -568,6 +568,7 @@ class EntityExtractionService:
         source_repo: SourceRepository,
         notebook_schema_repo: Optional[NotebookSchemaRepository] = None,
         pass1_repo: Optional[Pass1ResultRepository] = None,
+        notebook_event_repo: Optional[Any] = None,
     ):
         self._source_repo = source_repo
         # B.1f wiring: the multi-schema orchestrator needs both repos.
@@ -576,6 +577,10 @@ class EntityExtractionService:
         # inject fakes to assert on the multi-schema branch.
         self._notebook_schema_repo = notebook_schema_repo
         self._pass1_repo = pass1_repo
+        # PC.1b: injected only by tests. Production lazily constructs it, like
+        # the two repos above — the soft-nudge write is best-effort and must not
+        # make the service harder to build.
+        self._notebook_event_repo = notebook_event_repo
         self._persistence = EntityPersistenceService()
         # Q.4: the after-extraction triage pipeline (match + merge + signals +
         # status + queue + backbone). Constructed lazily on first persist so a
@@ -982,6 +987,7 @@ class EntityExtractionService:
         notebook_id: str,
         notebook_schema_repo: "NotebookSchemaRepository",
         pass1_repo: "Pass1ResultRepository",
+        source_id: str = "",
     ) -> None:
         """Move Pass 1's findings to where a curator can act on them (PC.1).
 
@@ -1026,6 +1032,75 @@ class EntityExtractionService:
                 await notebook_schema_repo.set_coverage_pct(notebook_id, coverage)
         except Exception as e:
             logger.warning(f"could not update coverage for {notebook_id}: {e}")
+
+        await self._emit_soft_nudge(metadata, notebook_id, source_id)
+
+    async def _emit_soft_nudge(
+        self, metadata: Dict[str, Any], notebook_id: str, source_id: str
+    ) -> None:
+        """Write the soft-nudge decision where the banner can read it (PC.1b/W1).
+
+        `_decide_soft_nudge` has run on every document since B.1e and its verdict
+        lands in `metadata["soft_nudge"]`. Meanwhile B.3c built the other half:
+        the `notebook_event` table, its repository, a router filtering on
+        `_KNOWN_NUDGE_EVENT_TYPES`, and `SchemaSoftNudge.tsx` polling it. The two
+        halves have never met — `workflow.py` reads
+        `merged, _decision = await run_multi_schema(...)`, the underscore being
+        the discard, and `notebook_event` held ZERO rows.
+
+        Measured on the five sources carrying Pass-1 rows before this landed: all
+        five would have fired a banner (coverage 0.45 / 0.48 / 0.55 / 0.58 ->
+        `schema_mismatch`, 0.85 -> `extension_suggested`). The enum's own
+        docstring says its values "round-trip through `notebook_event.type`
+        without manual conversion", so the design intent was always this write.
+
+        Two deliberate choices:
+
+        * **NONE writes nothing.** A schema that fits is not news, and an event
+          the banner would ignore is still a row a curator has to dismiss.
+        * **An unread event of the same type for the same notebook suppresses a
+          duplicate.** Re-extracting a notebook's documents one after another
+          would otherwise queue one banner per document saying the same thing.
+          The source that triggered it is in the payload, so the first event
+          still names a concrete document.
+
+        Best-effort like its two siblings above: extraction has already succeeded,
+        and failing to raise a banner must not lose the entities.
+        """
+        decision = str(metadata.get("soft_nudge") or "")
+        if not decision or decision == "none":
+            return
+        try:
+            from surrealdb_service.repositories.notebook_event import (
+                NotebookEventRepository,
+            )
+
+            repo = self._notebook_event_repo or NotebookEventRepository()
+            existing = await repo.list_unread(notebook_id, event_type=decision)
+            if existing:
+                logger.debug(
+                    "soft nudge {d} already pending for {nb}; not duplicating",
+                    d=decision,
+                    nb=notebook_id,
+                )
+                return
+            await repo.record(
+                notebook_id,
+                decision,
+                {
+                    "source_id": source_id,
+                    "best_coverage": metadata.get("best_coverage"),
+                    "schemas_attempted": metadata.get("schemas_attempted") or [],
+                },
+            )
+            logger.info(
+                "soft nudge {d} raised for {nb} (source={src})",
+                d=decision,
+                nb=notebook_id,
+                src=source_id,
+            )
+        except Exception as e:
+            logger.warning(f"could not raise soft nudge for {notebook_id}: {e}")
 
     # How many `pass1_results` rows the coverage average reads. Pass 1 writes one
     # row per applied schema per extraction, so ~2-3 rows per document; 1000 is
@@ -1625,7 +1700,7 @@ class EntityExtractionService:
             pass2_token_budget=self._pass2_token_budget,
         )
         await self._record_pass1_outcome(
-            result, notebook_id, notebook_schema_repo, pass1_repo
+            result, notebook_id, notebook_schema_repo, pass1_repo, source_id
         )
         return result
 
