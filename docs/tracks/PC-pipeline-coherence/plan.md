@@ -179,6 +179,51 @@ Separately, the same six-line normalisation is copied four times
 - **AC**: the normalisation exists once; a test fails if a fifth copy appears;
   the measured 25 pairs are reachable by a curator.
 
+### PC.2a — Who carries a run's state across a handoff (added 2026-09-03)
+
+**The finding, named by the user after Track N closed**: it is as though state is
+not preserved between pipeline steps — per document, per notebook, and across the
+graph. Substantially right, and worth stating precisely, because the precise
+version points at a fix and the loose one does not.
+
+The PAYLOAD always survives: entities, relations and chunks come through. What
+was repeatedly lost is the DERIVED state — what a step measured, judged or
+attempted — and it was lost at HANDOFFS, never inside a step. Every instance
+found so far:
+
+| Boundary | What was dropped | Found in |
+|---|---|---|
+| Pass 2 → merge | all five N.3 counters | N.5a |
+| merge → `run_extraction`'s caller | the same counters again | N.5d |
+| legacy path → anything | the counters never existed | N.5d |
+| document → notebook | no `notebook_schema` row at all: no queue, no coverage, no declared vocabulary, with 111 proposals stranded | PC.1 |
+| pass → merged relation | `relation_source` on the losing duplicate | N.5c |
+| write → re-write | `relation_source` on the earlier edge | N.5c (round 2) |
+
+**The pattern underneath, and why nothing noticed.** Each case is a producer with
+no consumer. `pass1_results` rows were written and nothing read them until PC.1
+computed coverage from them; the counters were counted and nothing carried them;
+the queue had readers and no writer; relation provenance is written and read by
+nothing to this day. A producer without a consumer decays silently, because
+nothing signals when the handoff breaks — which is the same shape as the guards
+this project keeps finding, one layer up.
+
+**The structural question to answer here**: there is no object that carries an
+extraction run and enforces its handoffs. Each step builds its own dict and
+chooses what to pass on, so every boundary is an independent opportunity to drop
+something, and correctness at each step says nothing about the chain.
+
+- Decide whether a run carries an explicit state object across the stages, or
+  whether each handoff gets a pinned contract instead (a shape test at the seam,
+  which is cheaper and weaker).
+- Either way, inventory the remaining handoffs before choosing — the six above
+  were each found by accident, one phase after the phase that introduced them,
+  and there is no reason to think the list is complete.
+- **AC**: the handoff inventory exists and is checked in; each boundary either
+  carries the state or has a test that fails when it stops carrying it. A
+  producer with no consumer is either given one or removed — shipping one is
+  ruled out, on the same grounds N.5b ruled out a producer surviving by accident.
+
 ## PC.3 — Look at the graph that is already there — ~1.5d
 
 **The finding.** KG resolution (stage 10) is what matches a new mention against
