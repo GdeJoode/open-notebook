@@ -640,6 +640,98 @@ def _pass_result(
     )
 
 
+class TestRelationProvenanceSurvivesCollapse:
+    """Track N.5c / R2 — the reversibility claim, made true.
+
+    The relation merge collapses duplicates on
+    `(source, target, relation_type)` and keeps the highest confidence. The
+    loser's `relation_source` went with it, so two passes that both found
+    `is_a(dorpshuizen, ontmoetingspunten)` — the LLM at 0.9 in one, the Hearst
+    seeder at 0.5 in the other — produced a surviving edge with no trace of the
+    seeder. That falsifies what the provenance is for: that one
+    `WHERE relation_source = ...` drops everything a pass contributed.
+
+    Latent today, since the Hearst miner ships off (N.5b) and is the only `is_a`
+    producer left. Not `is_a`-specific though: it applies to any relation
+    carrying provenance, and it returns the moment that flag does.
+    """
+
+    @staticmethod
+    def _rel(conf, source=None, target="ontmoetingspunten"):
+        return ExtractedRelation(
+            source_entity="dorpshuizen",
+            target_entity=target,
+            relation_type="is_a",
+            confidence=conf,
+            properties={"relation_source": source} if source else {},
+        )
+
+    def test_the_loser_s_provenance_is_not_dropped(self):
+        merged = _merge_results(
+            [
+                ("deals", ExtractionResult(relations=[self._rel(0.9)])),
+                ("policy", ExtractionResult(relations=[self._rel(0.5, "hearst")])),
+            ]
+        )
+        assert len(merged.relations) == 1
+        assert merged.relations[0].confidence == 0.9  # max-confidence still wins
+        assert merged.relations[0].properties["relation_sources"] == ["hearst"]
+
+    def test_every_contributor_is_named_not_just_the_loser(self):
+        merged = _merge_results(
+            [
+                ("deals", ExtractionResult(relations=[self._rel(0.9, "llm")])),
+                ("policy", ExtractionResult(relations=[self._rel(0.5, "hearst")])),
+            ]
+        )
+        assert merged.relations[0].properties["relation_sources"] == ["hearst", "llm"]
+
+    def test_a_single_contributor_adds_no_list(self):
+        """A relation nothing collapsed into keeps the shape it already had —
+        the fix must not put a redundant key on every edge in the graph.
+        """
+        merged = _merge_results(
+            [
+                ("deals", ExtractionResult(relations=[self._rel(0.5, "hearst")])),
+                ("policy", ExtractionResult(relations=[self._rel(0.4, "hearst")])),
+            ]
+        )
+        props = merged.relations[0].properties
+        assert props == {"relation_source": "hearst"}
+        assert "relation_sources" not in props
+
+    def test_relations_with_no_provenance_are_untouched(self):
+        merged = _merge_results(
+            [
+                ("deals", ExtractionResult(relations=[self._rel(0.9)])),
+                ("policy", ExtractionResult(relations=[self._rel(0.5)])),
+            ]
+        )
+        assert merged.relations[0].properties == {}
+
+    def test_distinct_relations_do_not_share_provenance(self):
+        """A vacuity guard: the union is per KEY. Pooling it across the merge
+        would tag every edge with every source and still satisfy the tests above.
+        """
+        merged = _merge_results(
+            [
+                (
+                    "deals",
+                    ExtractionResult(
+                        relations=[
+                            self._rel(0.9),
+                            self._rel(0.9, target="voorzieningen"),
+                        ]
+                    ),
+                ),
+                ("policy", ExtractionResult(relations=[self._rel(0.5, "hearst")])),
+            ]
+        )
+        by_target = {r.target_entity: r.properties for r in merged.relations}
+        assert by_target["ontmoetingspunten"]["relation_sources"] == ["hearst"]
+        assert "relation_sources" not in by_target["voorzieningen"]
+
+
 class TestPassCountersSurviveTheMerge:
     """Track N.5a — the observability N.3 measured, on the path production takes.
 

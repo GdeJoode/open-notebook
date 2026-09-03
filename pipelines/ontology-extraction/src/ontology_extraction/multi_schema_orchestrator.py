@@ -807,6 +807,8 @@ def _merge_results(
     # ------------------------------------------------------------------
     rel_key_t = Tuple[str, str, str]
     relation_best: Dict[rel_key_t, ExtractedRelation] = {}
+    # key -> every distinct `relation_source` seen for it (R2, see below).
+    relation_sources: Dict[rel_key_t, set] = {}
     relation_insertion_order: List[rel_key_t] = []
 
     for _schema_name, result in per_schema_results:
@@ -818,6 +820,24 @@ def _merge_results(
             )
             if not key[0] or not key[1] or not key[2]:
                 continue
+            # Track N.5c / R2. Max-confidence picks ONE of the duplicates and the
+            # loser's provenance goes with it: two passes that both find
+            # `is_a(dorpshuizen, ontmoetingspunten)` — the LLM in one at 0.9, the
+            # Hearst seeder in the other at 0.5 — collapse to the LLM's, and
+            # `relation_source: hearst` is gone. That silently falsifies the claim
+            # the provenance exists to support, which is that one
+            # `WHERE relation_source = ...` drops everything a pass contributed.
+            # Reproduced before fixing, and the properties bag IS persisted, so
+            # this is a real loss rather than a bookkeeping one.
+            #
+            # Latent today — the Hearst miner ships off (N.5b) and is the only
+            # `is_a` producer left — but it applies to EVERY relation carrying
+            # provenance, not only to `is_a`, and it returns the moment that flag
+            # does. The union is collected here and applied to the winner below.
+            source = str((relation.properties or {}).get("relation_source") or "")
+            if source:
+                relation_sources.setdefault(key, set()).add(source)
+
             existing = relation_best.get(key)
             if existing is None:
                 relation_best[key] = relation
@@ -825,9 +845,24 @@ def _merge_results(
             elif float(relation.confidence) > float(existing.confidence):
                 relation_best[key] = relation
 
-    final_relations: List[ExtractedRelation] = [
-        relation_best[k] for k in relation_insertion_order
-    ]
+    final_relations: List[ExtractedRelation] = []
+    for k in relation_insertion_order:
+        winner = relation_best[k]
+        contributors = relation_sources.get(k)
+        # Only rewrite when the winner would otherwise UNDER-report: a single
+        # contributor that the winner already names needs no list.
+        if contributors and contributors != {
+            str((winner.properties or {}).get("relation_source") or "")
+        }:
+            winner = winner.model_copy(
+                update={
+                    "properties": {
+                        **(winner.properties or {}),
+                        "relation_sources": sorted(contributors),
+                    }
+                }
+            )
+        final_relations.append(winner)
 
     # ------------------------------------------------------------------
     # B.4 fix (B.1f scope): rewrite each surviving relation's endpoint
