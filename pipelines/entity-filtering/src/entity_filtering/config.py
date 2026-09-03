@@ -169,7 +169,6 @@ class ConceptAlignmentConfig:
             (mirror of ``KGResolutionConfig.semantic_threshold``).
         max_candidates: Rows per type fetch. The query is ``LIMIT``-capped and
             unordered, so this is an arbitrary sample — the verdicts disclose it.
-        min_inner_tokens: Precision guard for the alias-candidate signal.
     """
 
     enabled: bool = False
@@ -177,7 +176,6 @@ class ConceptAlignmentConfig:
     related_floor: float = 0.75
     match_ceiling: float = 0.90
     max_candidates: int = 100
-    min_inner_tokens: int = 2
 
 
 @dataclass

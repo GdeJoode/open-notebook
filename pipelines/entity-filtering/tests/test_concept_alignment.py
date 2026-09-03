@@ -40,7 +40,6 @@ from entity_filtering.resolution.concept_alignment import (
     RELATED_TO,
     ConceptAligner,
     build_judge_prompt,
-    lexical_alias_candidates,
     parse_judge_response,
     probe_neighbours,
     resolve_canonical_type,
@@ -336,32 +335,24 @@ def test_probe_picks_the_highest_and_tolerates_null_properties():
 
 
 # ===========================================================================
-# D-N4-1/9 — lexical containment is an alias candidate, never a verdict
+# D-N4-1/9 — lexical containment never becomes a verdict
 # ===========================================================================
 
 
-def test_containment_yields_alias_candidate_not_subsumption():
-    got = lexical_alias_candidates(
-        "Tweede Kamer der Staten-Generaal", [_row("Tweede Kamer", "entity:tk")]
-    )
-    assert len(got) == 1
-    assert got[0].candidate_id == "entity:tk"
-    assert "alias" in got[0].evidence and "NOT a subtype" in got[0].evidence
+async def test_containment_alone_never_becomes_a_subsumption_verdict(monkeypatch):
+    """`Tweede Kamer der Staten-Generaal` ⊃ `Tweede Kamer` is not `is_a`.
 
+    The alias-candidate PRODUCER this section used to test was removed in PC.2:
+    it had no consumer in three tracks, and its unanchored containment rule was
+    measured on 5000 live entities to pair `Regio Deal` with both
+    `Regio Deal Groningen` and `Regio Deal Drenthe` — the merge the dedup config
+    exists to refuse. `CandidateDedupService._score_containment` now carries the
+    signal, head-anchored and curated, to a curator who decides.
 
-def test_alias_candidates_are_direction_agnostic():
-    got = lexical_alias_candidates("Regio Deal", [_row("Regio Deal Midden-Limburg")])
-    assert len(got) == 1
-
-
-def test_sibling_and_single_word_and_substring_do_not_pair():
-    assert lexical_alias_candidates("Gemeente Den Haag", [_row("Gemeente Den Bosch")]) == []
-    assert lexical_alias_candidates("Gemeente Groningen", [_row("Gemeente")]) == []
-    assert lexical_alias_candidates("Regio Dealer Groep", [_row("Regio Deal")]) == []
-    assert lexical_alias_candidates("Regio Deal", [_row("regio  deal")]) == []
-
-
-async def test_alias_candidates_are_reported_without_becoming_a_verdict(monkeypatch):
+    What must not regress is the original D-N4-1 finding, which is about this
+    module: containment is not evidence of subsumption, so it may not steer the
+    alignment verdict here. That is what this test still pins.
+    """
     repo = _Repo({"programme": [_row("Tweede Kamer", "entity:tk", embedding=[0.0, 1.0])]})
     aligner = ConceptAligner(repo, schemas=["s"])
     ents, report = await _align(
@@ -369,9 +360,11 @@ async def test_alias_candidates_are_reported_without_becoming_a_verdict(monkeypa
         [_entity("Tweede Kamer der Staten-Generaal", "L", embedding=[1.0, 0.0])],
         canonical="programme", monkeypatch=monkeypatch,
     )
-    assert report["alias_candidates"][0]["candidate_name"] == "Tweede Kamer"
-    # containment is a review candidate, never a verdict
     assert ents[0]["properties"]["concept_alignment"] in (RELATED_TO, NOVEL)
+    assert "alias_candidates" not in report, (
+        "the report key was removed with its producer; a reappearance means the "
+        "dead signal came back"
+    )
 
 
 # ===========================================================================

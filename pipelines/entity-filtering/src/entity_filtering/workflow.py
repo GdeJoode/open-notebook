@@ -745,7 +745,6 @@ class FilteringWorkflow:
                 related_floor=align_cfg.related_floor,
                 match_ceiling=align_cfg.match_ceiling,
                 max_candidates=align_cfg.max_candidates,
-                min_inner_tokens=align_cfg.min_inner_tokens,
                 gap_recorder=self._gap_recorder,
                 ontology_name=self._gap_ontology_name,
             )

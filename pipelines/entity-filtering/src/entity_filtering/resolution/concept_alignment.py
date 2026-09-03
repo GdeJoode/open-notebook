@@ -94,12 +94,18 @@ know out of band. The gap loop is that consumer: recording an unadjudicated
 concept as a confirmed ontology gap is precisely the overclaim this discipline
 exists to prevent. See :data:`GAP_LICENSING_CODES`.
 
-The lexical signal (D-N4-1 / D-N4-9)
-====================================
+The lexical signal (D-N4-1 / D-N4-9) moved to the curator door (PC.2)
+=====================================================================
 Name containment means *alias* / *part_of* / *named_after* at least as often as
-*subtype* — on real Dutch names ``Tweede Kamer der Staten-Generaal`` ⊃ ``Tweede
-Kamer`` is an alias. It survives as ``lexical_alias_candidates``: review
-candidates in the report, never a verdict and never auto-registered.
+*subtype*, and this module used to surface it as ``lexical_alias_candidates`` in
+the report. It had no consumer in three tracks, and its rule — unanchored token
+containment — was measured on 5000 live entities to produce exactly the merge the
+dedup config refuses (`Regio Deal` with both `Regio Deal Groningen` and
+`Regio Deal Drenthe`).
+
+`CandidateDedupService._score_containment` now does this job over the same
+population (`find_by_type` returns graph entities), with a head-anchored curated
+rule, a band, a curator card and an apply path. One signal, one producer.
 
 Candidates are fetched by CANONICAL type (D-N4-3): ``find_by_type`` filters the
 canonical ``entity_type`` column, so passing the rich Track-L label returns ``[]``
@@ -514,32 +520,6 @@ def parse_judge_response(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class AliasCandidate:
-    """A long-form/short-form name pair worth reviewing as an alias.
-
-    Attempt 1 read name containment as ``is_a``; on real data it means *alias*,
-    *part_of* or *named_after* far more often. The signal is genuinely useful
-    though — ``KGResolver``'s fuzzy tier STRUCTURALLY misses these pairs because a
-    large length delta tanks Levenshtein — so it is surfaced as a REVIEW candidate.
-    It never becomes a relation and is never auto-registered: writing an alias
-    merges two identities, which must be an explicit decision.
-    """
-
-    text: str
-    candidate_name: str
-    candidate_id: Optional[str]
-    evidence: str
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "text": self.text,
-            "candidate_name": self.candidate_name,
-            "candidate_id": self.candidate_id,
-            "evidence": self.evidence,
-        }
-
-
 def _tokens(text: str) -> List[str]:
     return [t for t in _normalize(text).split(" ") if t]
 
@@ -553,50 +533,6 @@ def _is_token_subsequence(outer: Sequence[str], inner: Sequence[str]) -> bool:
     if m == 0 or m > n:
         return False
     return any(list(outer[i : i + m]) == list(inner) for i in range(n - m + 1))
-
-
-def lexical_alias_candidates(
-    text: str,
-    candidates: List[Dict[str, Any]],
-    *,
-    min_inner_tokens: int = 2,
-) -> List[AliasCandidate]:
-    """Name-containment pairs, in EITHER direction, as alias review candidates.
-
-    ``min_inner_tokens`` keeps a single shared common word from pairing unrelated
-    entities. Direction is deliberately NOT interpreted: which of the two is
-    canonical is exactly what a reviewer decides.
-    """
-    tokens = _tokens(text)
-    if not tokens:
-        return []
-    out: List[AliasCandidate] = []
-    for cand in candidates:
-        cand_name = _candidate_name(cand)
-        cand_tokens = _tokens(cand_name)
-        if not cand_tokens or cand_tokens == tokens:
-            continue
-        if (
-            len(cand_tokens) >= min_inner_tokens
-            and _is_token_subsequence(tokens, cand_tokens)
-        ):
-            evidence = f"{text!r} contains the existing name {cand_name!r}"
-        elif (
-            len(tokens) >= min_inner_tokens
-            and _is_token_subsequence(cand_tokens, tokens)
-        ):
-            evidence = f"the existing name {cand_name!r} contains {text!r}"
-        else:
-            continue
-        out.append(
-            AliasCandidate(
-                text=text,
-                candidate_name=cand_name,
-                candidate_id=str(cand.get("id", "") or "") or None,
-                evidence=evidence + " — review as a possible alias, NOT a subtype",
-            )
-        )
-    return out
 
 
 # --------------------------------------------------------------------------
@@ -631,7 +567,6 @@ class ConceptAligner:
         max_candidates: rows per type fetch. The underlying query is ``LIMIT n``
             with no ordering, so this is an ARBITRARY sample — every NOVEL verdict
             discloses the cap rather than implying it saw the whole graph.
-        min_inner_tokens: precision guard for the alias-candidate signal.
         gap_recorder: object with ``record_gap(entity_text, entity_type_guess,
             context, source_id, ontology_name)`` — normally an
             ``OntologyEvolutionAgent``. Optional: absent, no gap is recorded and
@@ -652,7 +587,6 @@ class ConceptAligner:
         related_floor: float = 0.75,
         match_ceiling: float = 0.90,
         max_candidates: int = 100,
-        min_inner_tokens: int = 2,
         gap_recorder: Optional[Any] = None,
         ontology_name: Optional[str] = None,
     ) -> None:
@@ -666,7 +600,6 @@ class ConceptAligner:
         self._related_floor = related_floor
         self._match_ceiling = match_ceiling
         self._max_candidates = max_candidates
-        self._min_inner_tokens = min_inner_tokens
 
     async def align(
         self,
@@ -686,7 +619,6 @@ class ConceptAligner:
             "verdict_counts": {v: 0 for v in VERDICTS},
             "method_counts": {m: 0 for m in METHODS},
             "reason_counts": {},
-            "alias_candidates": [],
             "candidate_cap": self._max_candidates,
             "capped_type_fetches": [],
             # D-N4-6 / C1. `eligible` counts the NOVEL verdicts whose reason code
@@ -720,23 +652,21 @@ class ConceptAligner:
 
         for entity in novel:
             try:
-                alignment, ambiguous, aliases = await self._classify(entity, cache)
+                alignment, ambiguous = await self._classify(entity, cache)
             except Exception:
                 logger.warning(
                     "ConceptAligner: classification failed for '{}', keeping NOVEL",
                     entity.get("text", "<unknown>"),
                     exc_info=True,
                 )
-                alignment, ambiguous, aliases = (
+                alignment, ambiguous = (
                     self._novel(
                         "classification raised before anything could be "
                         "established about the graph",
                         EV_ERROR,
                     ),
                     None,
-                    [],
                 )
-            report["alias_candidates"].extend(a.to_dict() for a in aliases)
             if alignment is not None:
                 decided.append((entity, alignment))
             elif ambiguous is not None:
@@ -764,12 +694,11 @@ class ConceptAligner:
 
         logger.info(
             "ConceptAligner: {} aligned ({} related, {} novel), {} judged, "
-            "{} alias candidates, {} of {} eligible gaps recorded",
+"{} of {} eligible gaps recorded",
             report["aligned_count"],
             report["verdict_counts"][RELATED_TO],
             report["verdict_counts"][NOVEL],
             report["judged_count"],
-            len(report["alias_candidates"]),
             report["gaps_recorded"],
             report["gap_eligible"],
         )
@@ -949,14 +878,12 @@ class ConceptAligner:
     ) -> Tuple[
         Optional[Alignment],
         Optional[Tuple[Dict[str, Any], float, str, str]],
-        List[AliasCandidate],
     ]:
-        """Tiers 1-2. ``(alignment, ambiguous_band, alias_candidates)`` — exactly
-        one of the first two is set. The band tuple is
-        ``(nearest, score, canonical_type, sampling_note)``."""
+        """Tiers 1-2. ``(alignment, ambiguous_band)`` — exactly one is set.
+        The band tuple is ``(nearest, score, canonical_type, sampling_note)``."""
         text = str(entity.get("text", "") or "").strip()
         if not text:
-            return self._novel("the entity has no surface form", EV_EMPTY_TEXT), None, []
+            return self._novel("the entity has no surface form", EV_EMPTY_TEXT), None
 
         label = str(entity.get("label", "") or "")
         canonical = resolve_canonical_type(label, self._schemas)
@@ -970,7 +897,6 @@ class ConceptAligner:
                     canonical_type=canonical,
                 ),
                 None,
-                [],
             )
         if not canonical:
             return (
@@ -980,7 +906,6 @@ class ConceptAligner:
                     EV_NO_TYPE,
                 ),
                 None,
-                [],
             )
 
         fetch = await self._candidates(canonical, cache)
@@ -993,7 +918,6 @@ class ConceptAligner:
                     canonical_type=canonical,
                 ),
                 None,
-                [],
             )
         candidates = fetch.rows
         if not candidates:
@@ -1006,12 +930,7 @@ class ConceptAligner:
                     canonical_type=canonical,
                 ),
                 None,
-                [],
             )
-
-        aliases = lexical_alias_candidates(
-            text, candidates, min_inner_tokens=self._min_inner_tokens
-        )
 
         probe = probe_neighbours(_props(entity).get("embedding"), candidates)
         sampled = self._sample_note(canonical, len(candidates))
@@ -1027,7 +946,6 @@ class ConceptAligner:
                     canonical_type=canonical,
                 ),
                 None,
-                aliases,
             )
 
         nearest, score = probe.nearest, probe.score
@@ -1044,7 +962,6 @@ class ConceptAligner:
                     canonical_type=canonical,
                 ),
                 None,
-                aliases,
             )
         if score >= self._match_ceiling:
             return (
@@ -1062,7 +979,6 @@ class ConceptAligner:
                     canonical_type=canonical,
                 ),
                 None,
-                aliases,
             )
         if score < self._related_floor:
             return (
@@ -1080,9 +996,8 @@ class ConceptAligner:
                     canonical_type=canonical,
                 ),
                 None,
-                aliases,
             )
-        return None, (nearest, score, canonical, sampled), aliases
+        return None, (nearest, score, canonical, sampled)
 
     def _sample_note(self, canonical: str, fetched: int) -> str:
         """Disclose that the candidate set is a capped, unordered sample (M4)."""
@@ -1259,7 +1174,6 @@ class ConceptAligner:
 __all__ = [
     "_tokens",
     "Alignment",
-    "AliasCandidate",
     "ConceptAligner",
     "JudgeItem",
     "NeighbourProbe",
@@ -1291,7 +1205,6 @@ __all__ = [
     "REASON_CODES",
     "resolve_canonical_type",
     "probe_neighbours",
-    "lexical_alias_candidates",
     "build_judge_prompt",
     "parse_judge_response",
     "JUDGE_SYSTEM_PROMPT",
