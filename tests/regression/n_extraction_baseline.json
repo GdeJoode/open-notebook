@@ -1,0 +1,27 @@
+{
+  "documents": 7,
+  "documents_with_entities": 6,
+  "total_entities": 124,
+  "total_relations": 38,
+  "over_generation_rate": null,
+  "abstain_rate": null,
+  "_provenance": {
+    "measured": "2026-09-02",
+    "harness": "scripts/n_pipeline_review_run.py",
+    "sources": [
+      "claudedocs/pipeline-review-corpus.json",
+      "claudedocs/pipeline-review-achterhoek.json",
+      "claudedocs/pipeline-review-bennett.json"
+    ],
+    "documents": [
+      "Convenant_Oost-Groningen.pdf",
+      "Convenant_Zuid-Oost-Drenthe-II.pdf",
+      "Convenant_Zuidwest-Friesland.pdf",
+      "Van-meer-waarde-Nationaal-Netwerk-Brede-Welvaart-2025.pdf",
+      "fiscal_equalisation.pdf",
+      "Bijlage 3. Lopende trajecten Achterhoek NPVR.pdf",
+      "Bennett_test.pdf"
+    ],
+    "note": "Measured BEFORE PC.1 fixed the applicability sample (2/14 -> 13/14 documents detecting a schema) and before N.5a carried the pass counters through the merge. So the entity counts here come from runs that mostly took the legacy single-schema path, and over_generation_rate / abstain_rate are null because the merge discarded the counters that would have produced them - not because nothing was culled. The gate reports those two dimensions as SKIPPED rather than passing them."
+  }
+}

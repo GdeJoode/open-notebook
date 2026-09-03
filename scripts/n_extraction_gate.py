@@ -1,0 +1,99 @@
+"""Track N.5d — run the extraction regression gate against a measured run.
+
+Splits into two steps on purpose. Measuring needs Ollama, a database and minutes
+per document; deciding is arithmetic and lives in
+``shared.regression.extraction_gate``, where the suite exercises it on every run.
+This script is only the glue.
+
+Typical use, after re-measuring with the harness::
+
+    SURREAL_DATABASE=staging uv run --project apps/app-main \\
+        python scripts/n_pipeline_review_run.py --pdf <doc> --json out.json
+    uv run python scripts/n_extraction_gate.py --run out.json
+
+To record a new baseline once a run is known-good::
+
+    uv run python scripts/n_extraction_gate.py --run out.json --write-baseline
+
+Exit codes: 0 pass, 1 regression, 2 inconclusive (nothing could be compared).
+An inconclusive result is deliberately NOT 0 — a gate that exits green having
+verified nothing is the failure this whole design is built against.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "packages/shared/src"))
+
+from shared.regression import compare_against_baseline, summarise_run  # noqa: E402
+
+DEFAULT_BASELINE = REPO_ROOT / "tests/regression/n_extraction_baseline.json"
+
+
+def _load_documents(path: Path) -> list:
+    """Accept either a multi-document corpus file or a single-document run.
+
+    Refuses a file in which NOTHING carries a ``result`` block. Handing this the
+    BASELINE file by mistake otherwise reads as a run of one document that
+    extracted nothing, and the gate reports a catastrophic regression instead of
+    "wrong file" — a confusing failure that looks exactly like a real one. A
+    document whose parse failed still has a ``result`` with zero counts, so this
+    discriminates the two.
+    """
+    payload = json.loads(path.read_text())
+    documents = payload.get("documents")
+    documents = documents if isinstance(documents, list) else [payload]
+    if not any(isinstance(d, dict) and "result" in d for d in documents):
+        raise SystemExit(
+            f"{path} carries no document with a `result` block — this does not "
+            "look like harness output. (Did you pass the baseline file?)"
+        )
+    return documents
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--run", required=True, type=Path, help="JSON written by the harness"
+    )
+    parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
+    parser.add_argument(
+        "--write-baseline",
+        action="store_true",
+        help="record this run as the new baseline instead of comparing",
+    )
+    args = parser.parse_args()
+
+    current = summarise_run(_load_documents(args.run))
+
+    if args.write_baseline:
+        previous = (
+            json.loads(args.baseline.read_text()) if args.baseline.exists() else {}
+        )
+        # Carry the provenance block forward so a re-record never silently drops
+        # the note explaining what a null dimension means.
+        current["_provenance"] = {
+            **(previous.get("_provenance") or {}),
+            "measured_from": str(args.run),
+        }
+        args.baseline.write_text(json.dumps(current, indent=2) + "\n")
+        print(f"baseline written to {args.baseline}")
+        return 0
+
+    baseline = json.loads(args.baseline.read_text())
+    result = compare_against_baseline(baseline, current)
+    print(f"extraction regression gate — {args.run.name} vs {args.baseline.name}")
+    print(result.report())
+
+    if result.inconclusive:
+        return 2
+    return 0 if result.passed else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
