@@ -648,3 +648,27 @@ async def test_force_split_still_vetoes_the_new_generators() -> None:
     split = {frozenset({normalize_entity_name("Gemeente Leudal"), normalize_entity_name("Leudal")})}
     report = await _service(cont_rows, split_pairs=split).propose_candidates()
     assert report.auto_merge_count == 0 and report.review_count == 0
+
+
+@pytest.mark.asyncio
+async def test_curated_head_run_does_not_pair_unrelated_names() -> None:
+    """A curated head run is not enough — the remainder must actually match.
+
+    Found by mutation: deleting the suffix check left every test green, because
+    `Regio Deal` / `Regio Deal Groningen` is rejected by the curated list anyway
+    (`regio` is not an affix). The check earns its place on a different shape —
+    a curated head over a DIFFERENT tail — where dropping it pairs two unrelated
+    municipalities.
+    """
+    from shared.utils.org_affixes import head_affix
+
+    assert head_affix(["gemeente", "amsterdam"], ["utrecht"]) is None
+    assert head_affix(["gemeente", "amsterdam"], ["amsterdam"]) == ("gemeente",)
+
+    rows = [
+        _entity("entity:a", "Gemeente Amsterdam"),
+        _entity("entity:b", "Utrecht"),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert report.auto_merge_count == 0
+    assert report.review_count == 0
