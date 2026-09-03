@@ -1,0 +1,30 @@
+-- Migration 78: entity_alias — declare the four fields its writer already writes
+--
+-- Track PC.2. `entity_alias` is SCHEMAFULL and migration 39 declares five fields:
+-- alias_text, canonical_entity, source_document, confidence, created_at.
+-- `EntityRepository.register_alias` inserts NINE, and SurrealDB silently drops
+-- the undeclared ones on a SCHEMAFULL table rather than raising. So on any
+-- freshly migrated database every alias loses its provenance — how it was
+-- matched, how strongly, by which method, and whether a human confirmed it — and
+-- nothing anywhere reports a failure.
+--
+-- Found by PC.2's own determinism test: `find_by_alias` orders by
+-- `verified DESC, similarity_score DESC` so one surface form binds to one
+-- canonical reproducibly. That test passes against the long-lived `staging`
+-- database, where all nine fields exist because the table was written before it
+-- was schema-locked, and FAILS against a fresh container, where all three
+-- ordering keys read NONE and the ordering does nothing. A fix that works only
+-- on databases that predate the schema is not a fix.
+--
+-- `verified` is the load-bearing one: `vault_sync_service` exports only
+-- `verified = true` aliases, so on a fresh database it can never export any.
+--
+-- Types mirror what the writer supplies. `verified` gets `DEFAULT false` so rows
+-- written before this migration read as unverified rather than as NONE, which is
+-- the safe direction: an unverified alias is ranked below a verified one and is
+-- excluded from the vault export.
+
+DEFINE FIELD IF NOT EXISTS match_type ON entity_alias TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS similarity_score ON entity_alias TYPE option<float>;
+DEFINE FIELD IF NOT EXISTS method ON entity_alias TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS verified ON entity_alias TYPE bool DEFAULT false;

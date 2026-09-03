@@ -1,0 +1,10 @@
+-- Down for migration 78: return entity_alias to its migration-39 field set.
+--
+-- Destructive by construction: on a SCHEMAFULL table, removing a field
+-- definition makes the stored values unreadable, so every alias loses its
+-- provenance again. That is the state migration 78 exists to end.
+
+REMOVE FIELD IF EXISTS match_type ON entity_alias;
+REMOVE FIELD IF EXISTS similarity_score ON entity_alias;
+REMOVE FIELD IF EXISTS method ON entity_alias;
+REMOVE FIELD IF EXISTS verified ON entity_alias;
