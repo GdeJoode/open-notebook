@@ -1863,6 +1863,11 @@ class EntityExtractionService:
         merge_groups = None
         filtering_stats = {}
 
+        # PC.1b / W3: bound before the filtering guard, not inside it. The
+        # summary below reports what was WRITTEN, and filtering is skipped
+        # entirely when `run_filtering` is false or the extraction found nothing
+        # — in which case nothing was written and `None` is the honest answer.
+        persist_result: Any = None
         if run_filtering and (result.entities or result.relations):
             filtered = None
             all_relations: List[Dict[str, Any]] = []
@@ -2015,6 +2020,28 @@ class EntityExtractionService:
         counters = _observability_counters(getattr(result, "metadata", None))
         if counters:
             summary["counters"] = counters
+        # PC.1b / W3: what was WRITTEN, beside what was extracted.
+        # `persist_filtered_result` has always returned these five; only
+        # `persisted_entity_ids` was read, so `summary["entity_count"]` is the
+        # count the LLM produced and nothing could express the difference. The
+        # pipeline review measured 124 entities extracted against 117 rows in the
+        # graph — a real and interesting gap that the system producing it had no
+        # way to report. PC.3's own AC ("materially fewer than 117 rows, with a
+        # named figure") needs this instrument.
+        if isinstance(persist_result, dict):
+            written = {
+                key: persist_result[key]
+                for key in (
+                    "entities_upserted",
+                    "entities_failed",
+                    "relations_created",
+                    "relations_merged",
+                    "candidates_stored",
+                )
+                if key in persist_result
+            }
+            if written:
+                summary["persisted"] = written
         logger.info(
             f"Entity extraction completed for source {source_id}: "
             f"{result.entity_count} entities, {result.relation_count} relations"
@@ -2249,9 +2276,19 @@ class EntityExtractionService:
             "predicted_edges": len(filtered.predicted_edges),
         }
 
-        # Update extraction_result metadata with filtering stats
+        # Update extraction_result metadata with filtering stats.
+        #
+        # PC.1b / W3b: MERGE rather than overwrite. This dict has six keys; the
+        # extraction path's version also carries a `concept_alignment` block with
+        # the alignment counters, and assigning over the whole key destroyed it —
+        # silently, on any re-filter. Keys this path recomputes win; keys it knows
+        # nothing about survive.
         metadata = row.get("metadata", {})
-        metadata["filtering"] = stats
+        previous_filtering = metadata.get("filtering")
+        if isinstance(previous_filtering, dict):
+            metadata["filtering"] = {**previous_filtering, **stats}
+        else:
+            metadata["filtering"] = stats
         await execute_query(
             "UPDATE extraction_result SET metadata = $metadata "
             "WHERE source_id = $source_id",

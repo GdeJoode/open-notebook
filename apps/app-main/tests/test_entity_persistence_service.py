@@ -1155,3 +1155,103 @@ class TestRelationProvenanceSurvivesThePersistCollapse:
         props = await self._upsert({"weight": 1.0}, {"cosine_signal": 0.4})
         assert "relation_sources" not in props
         assert props == {"weight": 1.0, "cosine_signal": 0.4}
+
+
+
+class TestTheMergedTypeTagsReachTheDatabase:
+    """PC.1b / W2 — the multi-schema merge's headline output, persisted.
+
+    `_merge_results` unions `type_tags` across every pass that found an entity
+    and picks `primary_type` from the highest-confidence one. Persistence then
+    recomputed both from `_resolve_entity_type` and **overwrote** them, so the
+    thing multi-schema extraction exists to produce reached nothing. PC.1 moved
+    11 of 14 sources onto the multi-schema path, which turned that from
+    theoretical into universal.
+
+    Union, not replace: the L.1/L.2 bridge knows about aliases and unmapped
+    residuals and the merge does not. `upsert_entity` already unions `type_tags`
+    server-side, so this matches the storage semantics.
+    """
+
+    @staticmethod
+    async def _persist(entity):
+        svc, mock_upsert = _make_service_with_mock_repo()
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new=AsyncMock(return_value=[]),
+        ):
+            await svc.persist_filtered_result(
+                source_id="source:x", entities=[entity], relations=[]
+            )
+        return mock_upsert.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_a_tag_only_the_merge_knew_about_survives(self):
+        written = await self._persist(
+            {
+                "text": "Provincie Drenthe",
+                "label": "Provincie",
+                "confidence": 0.9,
+                "type_tags": ["RegioDeal"],
+            }
+        )
+        assert "RegioDeal" in written.type_tags
+
+    @pytest.mark.asyncio
+    async def test_the_bridge_s_own_tags_are_not_lost(self):
+        """Vacuity guard for the test above: a union that simply took the
+        merge's list would pass it while silently discarding what the bridge
+        resolved, which is the L.1/L.2 work.
+        """
+        written = await self._persist(
+            {
+                "text": "Provincie Drenthe",
+                "label": "Provincie",
+                "confidence": 0.9,
+                "type_tags": ["RegioDeal"],
+            }
+        )
+        assert len(written.type_tags) > 1, (
+            f"only the merge's tag survived: {written.type_tags}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_duplicates_when_both_sides_agree(self):
+        written = await self._persist(
+            {
+                "text": "Provincie Drenthe",
+                "label": "Provincie",
+                "confidence": 0.9,
+                "type_tags": ["Provincie"],
+            }
+        )
+        assert len(written.type_tags) == len(set(written.type_tags))
+
+    @pytest.mark.asyncio
+    async def test_an_entity_without_merge_tags_is_unchanged(self):
+        """The single-schema path sets no `type_tags`; it must behave exactly as
+        before, or this change would alter every legacy run too.
+        """
+        with_tags = await self._persist(
+            {"text": "X", "label": "Provincie", "confidence": 0.9, "type_tags": []}
+        )
+        without = await self._persist(
+            {"text": "X", "label": "Provincie", "confidence": 0.9}
+        )
+        assert with_tags.type_tags == without.type_tags
+
+    @pytest.mark.asyncio
+    async def test_primary_type_still_comes_from_the_bridge(self):
+        """Deliberate boundary: one canonical answer per entity is PC.4's
+        decision. The merge's `primary_type` is NOT taken here.
+        """
+        written = await self._persist(
+            {
+                "text": "Provincie Drenthe",
+                "label": "Provincie",
+                "confidence": 0.9,
+                "type_tags": ["RegioDeal"],
+                "primary_type": "RegioDeal",
+            }
+        )
+        assert written.primary_type != "RegioDeal" or written.primary_type is None

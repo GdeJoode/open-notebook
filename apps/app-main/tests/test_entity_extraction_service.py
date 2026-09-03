@@ -1892,6 +1892,134 @@ class TestTheCountersCrossOutOfTheService:
         assert measured["abstain_rate"] == pytest.approx(9 / 20)
 
 
+class TestWhatWasWrittenReachesTheSummary:
+    """PC.1b / W3 — the difference between extracted and persisted, expressible.
+
+    `persist_filtered_result` has always returned five counts; only
+    `persisted_entity_ids` was read. So `summary["entity_count"]` is the count the
+    LLM produced, and the pipeline review's own measurement — 124 entities
+    extracted against 117 rows in the graph — could not be reported by the system
+    that produced it. PC.3's AC ("materially fewer than 117 rows, with a named
+    figure") has no instrument without this.
+    """
+
+    @staticmethod
+    def _persistence(**counts):
+        persistence = AsyncMock()
+        persistence.persist_filtered_result = AsyncMock(
+            return_value={
+                "persisted_entity_ids": ["entity:1"],
+                "entities_upserted": counts.get("entities_upserted", 3),
+                "entities_failed": counts.get("entities_failed", 1),
+                "relations_created": counts.get("relations_created", 2),
+                "relations_merged": counts.get("relations_merged", 0),
+                "candidates_stored": counts.get("candidates_stored", 0),
+            }
+        )
+        return persistence
+
+    async def _run(self, svc, persistence):
+        deals = _make_ontology("deals")
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=["deals"])
+        mock_manager.get_ontology = AsyncMock(return_value=deals)
+        extracted = ExtractionResult(
+            entities=[ExtractedEntity(text="X", label="L")], relations=[], metadata={}
+        )
+        with patch(
+            "ontology_manager.get_ontology_manager", return_value=mock_manager
+        ), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=AsyncMock(return_value=[(deals, 0.9)]),
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(svc, "_persistence", persistence), patch.object(
+            EntityExtractionService,
+            "_resolve_privacy_mode",
+            AsyncMock(return_value=None),
+        ), patch.object(
+            EntityExtractionService,
+            "_pack_chunks_for_route_head",
+            AsyncMock(side_effect=lambda chunks: chunks),
+        ):
+            workflow = MagicMock()
+            workflow.extract = AsyncMock(return_value=extracted)
+            workflow_cls.return_value = workflow
+            return await svc.run_extraction(source_id="source:test", notebook_id=None)
+
+    @pytest.mark.asyncio
+    async def test_the_summary_reports_what_was_written(self, base_source_repo):
+        svc = EntityExtractionService(source_repo=base_source_repo)
+        summary = await self._run(svc, self._persistence())
+
+        assert summary["persisted"]["entities_upserted"] == 3
+        assert summary["persisted"]["entities_failed"] == 1
+        assert summary["persisted"]["relations_created"] == 2
+
+    @pytest.mark.asyncio
+    async def test_extracted_and_persisted_are_separately_visible(
+        self, base_source_repo
+    ):
+        """The property the review needed and could not express: a run whose LLM
+        produced more than the graph accepted must be able to SAY so.
+        """
+        svc = EntityExtractionService(source_repo=base_source_repo)
+        summary = await self._run(
+            svc, self._persistence(entities_upserted=0, entities_failed=1)
+        )
+
+        assert summary["entity_count"] == 1  # what the LLM produced
+        assert summary["persisted"]["entities_upserted"] == 0  # what was written
+        assert summary["entity_count"] != summary["persisted"]["entities_upserted"]
+
+    @pytest.mark.asyncio
+    async def test_a_run_that_persisted_nothing_says_nothing(self, base_source_repo):
+        """Vacuity guard. With filtering off, nothing is written, and the key is
+        absent rather than a fabricated set of zeros — "not measured" and
+        "measured zero" must stay distinguishable, the same rule N.5d rests on.
+        """
+        svc = EntityExtractionService(source_repo=base_source_repo)
+        deals = _make_ontology("deals")
+        mock_manager = MagicMock()
+        mock_manager.list_ontologies = AsyncMock(return_value=["deals"])
+        mock_manager.get_ontology = AsyncMock(return_value=deals)
+        with patch(
+            "ontology_manager.get_ontology_manager", return_value=mock_manager
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as workflow_cls, patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(
+            EntityExtractionService,
+            "_resolve_privacy_mode",
+            AsyncMock(return_value=None),
+        ), patch.object(
+            EntityExtractionService,
+            "_pack_chunks_for_route_head",
+            AsyncMock(side_effect=lambda chunks: chunks),
+        ):
+            workflow = MagicMock()
+            workflow.extract = AsyncMock(
+                return_value=ExtractionResult(
+                    entities=[ExtractedEntity(text="X", label="L")], relations=[]
+                )
+            )
+            workflow_cls.return_value = workflow
+            summary = await svc.run_extraction(
+                source_id="source:test", notebook_id=None, run_filtering=False
+            )
+
+        assert "persisted" not in summary
+
+
 class TestTheSoftNudgeReachesItsBanner:
     """PC.1b / W1 — the cleanest producer/consumer pair in the repo, connected.
 

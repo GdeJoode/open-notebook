@@ -159,6 +159,54 @@ Everything downstream operates on `pending_extensions`: accept, reject, the
 > caller (PC.6); and the Ollama context truncation measured during verification
 > (PC.6, review finding R4b).
 
+## PC.1b — Derived state that reaches a reader — ~1.5d
+
+**The finding, named by the user after Track N closed**: it is as though state is
+not preserved between pipeline steps — per document, per notebook, and across the
+graph. Substantially right, and promoted to its own phase ahead of PC.2 because
+two of its fixes are instruments PC.2 and PC.3 need.
+
+The PAYLOAD always survives. What is repeatedly lost is the DERIVED state — what a
+step measured, judged or attempted — and it is lost at HANDOFFS, never inside a
+step. A full trace found ~20 instances, not the six first recorded. The full table
+lives in `handoff-inventory.md`; this entry records the decision.
+
+**The user asked for the most structural fix and expected a run object. Measured,
+it is not.** `FilteredResult` is ALREADY a typed run-state carrier, and on that one
+object the payload fields have 4/4/2/2 readers while the derived-state fields have
+0/0/0/0. Both experiments have already been run — the untyped bag
+(`ExtractionResult.metadata`) and the typed carrier — and state died in each. The
+fields are not orphaned because nothing carried them; most are carried faithfully
+to a place where nothing reads them. A third carrier moves the corpse.
+
+So the structural fix is the **invariant**: a producer names its consumer or it
+goes — the generalisation of what N.5b decided about the Hearst miner, made able to
+fail. The run object keeps a falsifiable trigger: build it when the inventory shows
+three or more boundaries needing the same field. Today none does.
+
+- **The inventory** — every boundary classified wire / delete / accept-with-owner.
+- **The invariant** — `tests/test_derived_state_has_readers.py`, with a walker
+  control, a detector control, a reader-counter control and a mutant control that
+  runs the same detector over a planted dead field in an in-test source string.
+- **CI** — `unit-guards.yml`. Before this, NO CI job ran any Python unit suite, so
+  a guard placed in a package test directory ran only on its author's machine.
+- **W1** the soft-nudge decision reaches `notebook_event`; **W2** the merge's
+  `type_tags` reach persistence; **W3** the persist counters reach the summary;
+  **W3b** the re-filter stops erasing alignment state.
+- **AC**: the inventory is checked in and every row has a disposition and an owner;
+  the invariant fails when a derived-state field has no reader and no owner; the
+  wired boundaries each have a test that fails when the state stops crossing; W1 is
+  proven on a database where `notebook_event` is genuinely empty.
+
+> **PC.1b SHIPPED 2026-09-03** — see `handoff-inventory.md` and the phase report.
+> Turning the CI job on required making `tests/` green first, and it was not: four
+> files have been UNCOLLECTABLE since the monolith→workspace cutover of 2026-04-24,
+> and four more failed because they patched `execute_query` in a module the service
+> under test does not use. Both were invisible because nothing ran the suite.
+>
+> **Binding for the rest of the track**: a carrier is not a consumer. Before adding
+> a field to a result model, name what reads it — the invariant now asks.
+
 ## PC.2 — One identity — ~1.5d
 
 **The finding (review I2, R2, G2).** `KGResolver` registers an alias
@@ -179,51 +227,6 @@ Separately, the same six-line normalisation is copied four times
 - **AC**: the normalisation exists once; a test fails if a fifth copy appears;
   the measured 25 pairs are reachable by a curator.
 
-### PC.2a — Who carries a run's state across a handoff (added 2026-09-03)
-
-**The finding, named by the user after Track N closed**: it is as though state is
-not preserved between pipeline steps — per document, per notebook, and across the
-graph. Substantially right, and worth stating precisely, because the precise
-version points at a fix and the loose one does not.
-
-The PAYLOAD always survives: entities, relations and chunks come through. What
-was repeatedly lost is the DERIVED state — what a step measured, judged or
-attempted — and it was lost at HANDOFFS, never inside a step. Every instance
-found so far:
-
-| Boundary | What was dropped | Found in |
-|---|---|---|
-| Pass 2 → merge | all five N.3 counters | N.5a |
-| merge → `run_extraction`'s caller | the same counters again | N.5d |
-| legacy path → anything | the counters never existed | N.5d |
-| document → notebook | no `notebook_schema` row at all: no queue, no coverage, no declared vocabulary, with 111 proposals stranded | PC.1 |
-| pass → merged relation | `relation_source` on the losing duplicate | N.5c |
-| write → re-write | `relation_source` on the earlier edge | N.5c (round 2) |
-
-**The pattern underneath, and why nothing noticed.** Each case is a producer with
-no consumer. `pass1_results` rows were written and nothing read them until PC.1
-computed coverage from them; the counters were counted and nothing carried them;
-the queue had readers and no writer; relation provenance is written and read by
-nothing to this day. A producer without a consumer decays silently, because
-nothing signals when the handoff breaks — which is the same shape as the guards
-this project keeps finding, one layer up.
-
-**The structural question to answer here**: there is no object that carries an
-extraction run and enforces its handoffs. Each step builds its own dict and
-chooses what to pass on, so every boundary is an independent opportunity to drop
-something, and correctness at each step says nothing about the chain.
-
-- Decide whether a run carries an explicit state object across the stages, or
-  whether each handoff gets a pinned contract instead (a shape test at the seam,
-  which is cheaper and weaker).
-- Either way, inventory the remaining handoffs before choosing — the six above
-  were each found by accident, one phase after the phase that introduced them,
-  and there is no reason to think the list is complete.
-- **AC**: the handoff inventory exists and is checked in; each boundary either
-  carries the state or has a test that fails when it stops carrying it. A
-  producer with no consumer is either given one or removed — shipping one is
-  ruled out, on the same grounds N.5b ruled out a producer surviving by accident.
-
 ## PC.3 — Look at the graph that is already there — ~1.5d
 
 **The finding.** KG resolution (stage 10) is what matches a new mention against
@@ -234,6 +237,7 @@ ministers produced 58 entities with no consolidation.
 - Decide whether cross-document resolution belongs in the default path. If yes,
   enable it and measure the cost; if no, say so in the config docstring and accept
   that the graph is per-document.
+- **From PC.1b's inventory**: `kg_resolution_report` (kept with no reader — this phase's AC needs its measured figure), `source_chunk_id`/`source_grounding`/`extraction_context` never persisted, `incremental_report`, and the raw write key (`upsert_entity` keys on the unfolded `canonical_name`, which is why case-variants are two rows).
 - **AC**: re-running the review corpus produces materially fewer than 117 rows,
   with a named, measured figure; `M.C.G. Keijzer` is one entity.
 - **Watch**: stage 10 is also where the automatic alias registration lives, so
@@ -251,6 +255,7 @@ different canonical bucket depending on the document. In the measured corpus,
 - Make the canonical answer for a label independent of which applied set happens
   to contain it — either by always including the base vocabulary in the applied
   set, or by resolving against the union rather than the selection.
+- **From PC.1b's inventory**: PC.2's cross-type fold-equal candidates are this phase's evidence — labels holding two canonical answers on real data rather than a sweep over shipped ontologies.
 - **AC**: a label's canonical type is identical across the eight review documents;
   a sweep over the shipped ontologies shows no label with two canonical answers.
 
@@ -271,6 +276,7 @@ API route, MCP tool, CLI or frontend reads either table. Meanwhile
 - Either surface both tables (list, accept, reject) or turn `auto_propose` off
   until something reads them. Writing into a room with no door is the one option
   to rule out.
+- **From PC.1b's inventory**: `ontology_gap` / `schema_proposal` have readers but no route; and `notebook_event` is now written by PC.1b, so a dismissal path is this phase's to design.
 - **AC**: a proposal created by the threshold is visible and actionable, or it is
   not created.
 
@@ -295,6 +301,7 @@ extraction dies.
   and filling it in FIRST makes the packer build larger prompts, so it makes
   truncation worse. Either send `num_ctx`, or document that Ollama models must be
   registered as variants that bake it in.
+- **From PC.1b's inventory**: `validation_report` (kept with no reader — stage 11 is inert because no production call site passes an ontology), the alignment report keys dropped at the `filtering_stats` copy, `metrics` rows nothing reads, and `_save_result` storing pre-filter entities beside post-filter stats.
 - **AC**: enabling a feature either works or says why it cannot; the measured
   "flag on, zero effect, only a warning" state is unreachable.
 
@@ -303,10 +310,16 @@ extraction dies.
 ## Sequence
 
 PC.1 first — it unblocks four already-shipped sub-phases and is the smallest.
-Then PC.2 (the policy decision PC.3 depends on), then PC.3 (the largest effect on
-the data), then PC.4, PC.5, PC.6 in any order.
+Then **PC.1b** (added 2026-09-03, ahead of PC.2 at the user's direction: it ships
+the instruments PC.2 and PC.3 measure with, and the invariant that stops the next
+orphan arriving while they work). Then PC.2 (the policy decision PC.3 depends on),
+then PC.3 (the largest effect on the data), then PC.4, PC.5, PC.6 in any order.
 
-Rough total ~7 days. PC.1 alone is worth doing immediately regardless of the rest.
+Rough total ~8.5 days. PC.1 alone was worth doing immediately regardless of the
+rest, and PC.1b turned out to be worth doing before PC.2 for a reason the plan did
+not anticipate: turning on a CI job that runs the guards revealed that `tests/`
+had been red on main — four files uncollectable since April, four more failing —
+because nothing ran it.
 
 ## Standing rules inherited from Track N (D-N4-14)
 
