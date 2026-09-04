@@ -260,6 +260,68 @@ Separately, the same six-line normalisation is copied four times
 - **AC**: the normalisation exists once; a test fails if a fifth copy appears;
   the measured 25 pairs are reachable by a curator.
 
+**Status: DONE** — `feature/track-pc2-one-identity`, 12 commits, **APPROVED** after
+three review rounds. Report: [`phase-PC.2-report.md`](./phase-PC.2-report.md).
+Review: [`reviews/phase-PC.2-attempts-1-3.md`](./reviews/phase-PC.2-attempts-1-3.md).
+
+All four AC items met. `fold_for_comparison` replaces the four copies (verified
+byte-identical by execution over 18 adversarial inputs first) and an AST guard
+fails on a fifth. `register_aliases` now defaults to False in both the config and
+the constructor, matching D-N4-9. The long-form/short-form pairs reach the curator
+through `_score_containment`.
+
+Three things the plan did not anticipate, each with its measurement:
+
+- **The containment rule needed three attempts.** Unanchored containment — the
+  rule `concept_alignment` already had — manufactures exactly the merge the dedup
+  config refuses. Head-anchored with a free length guard yields 315 candidates and
+  pairs a place with every organisation named after it. Head-anchored **and**
+  curated yields 82, noise gone. The measurements are in the report.
+- **`entity_alias` loses its provenance on every fresh database.** SCHEMAFULL,
+  five fields declared, nine written, the rest dropped silently. Invisible against
+  `staging`, which predates the schema lock. Migration 78. This is also why the
+  determinism fix could not have been verified on `staging` alone.
+- **Two labelling bugs in the apply path.** The frontend labelled the survivor
+  `name_a` regardless of who won, contradicting the server-side rule it mirrors.
+
+Three review rounds, and every blocker plus two of three round-2 majors were the
+same defect: **a value produced for a surface that never consumes it** — the card
+helpers imported and never called, the containment head run computed and
+discarded, and a `.test.ts`/`.test.tsx` name collision that made `tsc` skip the
+file guarding the first blocker. PC.1b's producer-must-name-its-consumer invariant
+is Python-only and all three sat on the Python/TypeScript boundary. **A
+cross-boundary guard is the track-level follow-up this phase argues for.** Round
+3's sweep confirmed no fourth instance: 40 response-model fields against every
+identifier in `frontend/src`, 0 orphaned.
+
+Round 1 returned REVISIONS_NEEDED and changed two things materially, both of which
+the first report had claimed as done:
+
+- **The curator card was never wired.** `candidateTypeLabel` was written, tested
+  and imported — and called nowhere, so a cross-type candidate still rendered one
+  name twice with the deciding fact hidden. Now covered by a jsdom test that
+  mounts the real component.
+- **Migration 78 was a bare DEFINE.** A SurrealDB DEFAULT does not backfill, and a
+  strict type then blocks every UPDATE to a pre-existing row — the class
+  migrations 61, 64 and 65 already fixed twice here. It now carries the coalescing
+  repair, proven against a forged legacy row.
+
+And the correction that matters most for later phases: **an organ OF X is not X**.
+The curated affix list was built from corpus frequency and carried the governance
+affixes, so it proposed `Burgemeester van Rotterdam` ~ `Rotterdam` and
+`Gemeenteraad van Amsterdam` ~ `Amsterdam` as merges — and the tests pinned one of
+them as correct. Cut from 40 affixes to 11 (`waterschap` went in round 2, once
+review showed it re-created the very class the cut removed). This gives up the
+plan's own
+`Minister van BZK` example: that class is real but belongs in a later phase as an
+**organ-of relation**, not a merge.
+
+Handed to **PC.4**: 8 names the graph held twice under two types, six of them
+`programme` against `topic`. The working corpus was emptied after the measurement,
+so PC.4 should re-derive the list from the cross-type band on real data — what
+carries forward is the shape of the finding, not the rows. The report records
+three figures that do not reconcile rather than picking one.
+
 ## PC.3 — Look at the graph that is already there — ~1.5d
 
 **The finding.** KG resolution (stage 10) is what matches a new mention against

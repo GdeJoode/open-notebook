@@ -95,13 +95,61 @@ export function buildCandidateRejectOverlay(
 export function candidateToApplyCluster(
   candidate: MergeCandidate,
 ): ApplyClusterInput {
+  // The apply repoints relations onto `winner_id`, so the surviving entity's
+  // LABEL must be the winner's — mirroring `MergeCandidate.to_merge_cluster`
+  // server-side, which spells this out. `name_a` unconditionally mislabels the
+  // survivor whenever b wins on confidence.
+  const bWins = candidate.winner_id === candidate.id_b
   return {
-    new_canonical: candidate.name_a,
-    entity_type: candidate.entity_type,
+    new_canonical: bWins ? candidate.name_b : candidate.name_a,
+    // Same argument for the type. A cross-type candidate carries two answers
+    // (`entity_type_b`), and taking a's blindly labels the survivor with the
+    // loser's type.
+    entity_type:
+      bWins && candidate.entity_type_b
+        ? candidate.entity_type_b
+        : candidate.entity_type,
     winner_id: candidate.winner_id,
     loser_ids: [candidate.loser_id],
     member_surface_forms: [candidate.name_a, candidate.name_b],
   }
+}
+
+/** True when a candidate's two entities carry different types.
+ *
+ * Only `fold_equal_cross_type` produces these, and there the two NAMES are
+ * byte-identical — the type is the entire reason the graph holds two rows. A card
+ * that does not surface it shows the same name twice with nothing to decide on.
+ */
+export function isCrossTypeCandidate(candidate: MergeCandidate): boolean {
+  return Boolean(
+    candidate.entity_type_b && candidate.entity_type_b !== candidate.entity_type,
+  )
+}
+
+/** The type line for a candidate card: one type, or both when they differ.
+ *
+ * A pure function rather than JSX so it has a test that can fail — the card
+ * itself mounts a Radix AlertDialog that the node-environment vitest cannot
+ * render, which is the same reason `candidateToApplyCluster` lives here.
+ */
+export function candidateTypeLabel(candidate: MergeCandidate): string {
+  return isCrossTypeCandidate(candidate)
+    ? `${candidate.entity_type} ↔ ${candidate.entity_type_b}`
+    : candidate.entity_type
+}
+
+/** The method line for a candidate card, with its evidence when there is any.
+ *
+ * `containment` alone tells a curator nothing: `Gemeente Groningen` ~ `Groningen`
+ * and `Provincie Groningen` ~ `Groningen` are two mutually exclusive proposals
+ * for the same short form, and at most one is right. Naming the run that was
+ * removed is what makes them tellable apart.
+ */
+export function candidateMethodLabel(candidate: MergeCandidate): string {
+  return candidate.evidence
+    ? `${candidate.method} (${candidate.evidence})`
+    : candidate.method
 }
 
 /** Validate an overlay rule before POSTing (mirrors the server 422 guards). */

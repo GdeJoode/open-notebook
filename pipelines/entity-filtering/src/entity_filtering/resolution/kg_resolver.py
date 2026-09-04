@@ -30,11 +30,10 @@ The resolver communicates with the database exclusively through the
 entities are simply marked as new (no-op mode).
 """
 
-import re
-import unicodedata
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from loguru import logger
+from shared.utils.text_folding import fold_for_comparison
 
 from entity_filtering.resolution.embedding_resolver import (
     EmbeddingResolver,
@@ -97,6 +96,10 @@ class KGResolver:
         semantic_threshold: Minimum cosine similarity for a semantic match.
         max_candidates: Upper bound on KG candidates evaluated per type.
         register_aliases: Whether to write new aliases back to the store.
+            Defaults to False here as well as in `KGResolutionConfig`, so a
+            caller that constructs the resolver directly cannot get the opposite
+            policy from the one the pipeline runs (PC.2). An alias is a
+            deliberate act; the curator queue is where one is made.
         mark_new_entities: Whether to set ``is_new=True`` on unmatched
             entities.
         use_alias_table: Whether to attempt alias-table lookup (tier 1).
@@ -114,7 +117,7 @@ class KGResolver:
         fuzzy_threshold: float = 0.85,
         semantic_threshold: float = 0.90,
         max_candidates: int = 100,
-        register_aliases: bool = True,
+        register_aliases: bool = False,
         mark_new_entities: bool = True,
         use_alias_table: bool = True,
         centrality_aware: bool = False,
@@ -299,7 +302,7 @@ class KGResolver:
                 report["matched_count"] += 1
                 report["match_type_counts"]["fuzzy"] += 1
                 await self._maybe_register_alias(
-                    candidate_id, entity_text, "fuzzy", best_fuzzy_score
+                    candidate_id, entity_text, "fuzzy", best_fuzzy_score, report
                 )
                 return True
 
@@ -343,6 +346,7 @@ class KGResolver:
                         entity_text,
                         "semantic",
                         best_sem_score,
+                        report,
                     )
                     return True
 
@@ -398,8 +402,16 @@ class KGResolver:
         alias_text: str,
         match_type: str,
         similarity_score: float,
+        report: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Register a new alias if the feature is enabled."""
+        """Register a new alias if the feature is enabled.
+
+        Returns nothing; the outcome is recorded on ``report`` when one is given.
+        ``aliases_registered`` was initialised and logged but never incremented,
+        so the INFO line printed `0` for every run — including runs that had
+        written aliases. A counter that cannot move is not observability, it is a
+        claim the code contradicts (PC.2).
+        """
         if not self._register_aliases or self._repo is None:
             return
         try:
@@ -410,6 +422,8 @@ class KGResolver:
                 similarity_score=similarity_score,
                 method="kg_resolver",
             )
+            if success and report is not None:
+                report["aliases_registered"] += 1
             if not success:
                 logger.debug(
                     "KGResolver: alias registration returned False "
@@ -431,13 +445,14 @@ class KGResolver:
 
     @staticmethod
     def _normalize(text: str) -> str:
-        """Normalize text for comparison (lowercase, strip, collapse ws)."""
-        if not text:
-            return ""
-        text = unicodedata.normalize("NFKC", text)
-        text = text.lower().strip()
-        text = re.sub(r"\s+", " ", text)
-        return text
+        """Normalize text for comparison (lowercase, strip, collapse ws).
+
+        PC.2: one shared fold, so a fifth copy cannot drift from the
+        other four. Kept as a thin shim rather than deleted because this method is
+        called from several places and the class has its own suite; the guard in
+        `tests/test_one_comparison_fold.py` sees through it.
+        """
+        return fold_for_comparison(text)
 
     @staticmethod
     def _levenshtein_similarity(s1: str, s2: str) -> float:

@@ -71,12 +71,18 @@ jobs:
       - name: Pre-pull SurrealDB image
         run: docker pull surrealdb/surrealdb:v2
 
-      - name: Run migration roundtrip suite
+      # PC.2 widened this from the single roundtrip file. A schema fix whose
+      # only proof is a container test that runs in no job is not proven: the
+      # `entity_alias` drift migration 78 repairs was invisible against the
+      # long-lived working database and only surfaced on a fresh container, and
+      # its tests lived here, executing nowhere. Every `requires_docker` test in
+      # this package now runs, so a new one is covered by existing.
+      - name: Run testcontainers suite
         working-directory: packages/surrealdb-service
         run: |
           uv run pytest \
             -m requires_docker \
-            tests/test_migrations_roundtrip.py \
+            tests/ \
             -v --tb=short
 
       - name: Dump SurrealDB container logs on failure

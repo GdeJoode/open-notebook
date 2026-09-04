@@ -62,6 +62,15 @@ export interface MergeCandidate {
   name_a: string
   name_b: string
   entity_type: string
+  /** Why this pair is here when `method` alone does not say — today, the head
+   *  run `containment` removed. `containment` on its own is not reviewable: a
+   *  corpus holding both `Gemeente Groningen` and `Provincie Groningen` yields
+   *  two mutually exclusive proposals for `Groningen`. */
+  evidence?: string
+  /** `id_b`'s type when it differs from `id_a`'s, else "". Non-empty only for
+   *  the `fold_equal_cross_type` method, where the two names are byte-identical
+   *  and the type is the only visible difference. */
+  entity_type_b?: string
   score: number
   /** 'auto_merge' | 'review' — the review band is never auto-applied. */
   band: string

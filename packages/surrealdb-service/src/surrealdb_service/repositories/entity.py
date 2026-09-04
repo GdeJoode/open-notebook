@@ -64,13 +64,39 @@ class EntityRepository:
         Queries the entity_alias table for an exact match on the alias text
         and returns the associated canonical entity information.
 
+        **Ordering is part of the contract** (PC.2). Nothing stops two rows from
+        binding the same ``alias_text`` to two different canonical entities —
+        ``entity_alias`` has no uniqueness constraint on it, and `register_alias`
+        writes a row per resolution. With a bare ``LIMIT 1`` the caller then gets
+        whichever row the storage engine happened to return, so the same surface
+        form can resolve to a different entity between two runs over identical
+        input. That is an identity failure the pipeline cannot detect downstream:
+        both answers look equally confident.
+
+        The order encodes a policy, not a preference:
+
+        1. ``verified DESC`` — a human decision outranks a machine one. This is
+           also the disagreement this method was on the wrong side of:
+           `vault_sync_service` exports only ``verified = true`` aliases, while
+           this reader accepted any. An unverified alias is a machine guess, and
+           using it as tier-1 ground truth for the NEXT resolution is a feedback
+           loop that hardens guesses into identity.
+        2. ``similarity_score DESC`` — among equally-trusted rows, the strongest.
+        3. ``id ASC`` — a stable tie-break, so the result is reproducible rather
+           than merely usually-the-same.
+
+        Unverified aliases are still returned when nothing better exists: filtering
+        them out entirely would make tier 1 inert, since every writer today writes
+        ``verified = false``. Ranking rather than filtering keeps the recall and
+        removes the non-determinism.
+
         Args:
             alias_text: The alias text to search for (exact match).
 
         Returns:
-            A dictionary with keys ``id``, ``name``, ``match_type``, and
-            ``similarity_score`` for the resolved canonical entity, or
-            None if no match is found.
+            A dictionary with keys ``id``, ``name``, ``match_type``,
+            ``similarity_score`` and ``verified`` for the resolved canonical
+            entity, or None if no match is found.
         """
         if not alias_text:
             return None
@@ -79,9 +105,11 @@ class EntityRepository:
             result = await execute_query(
                 "SELECT canonical_entity.id AS id, "
                 "canonical_entity.name AS name, "
-                "match_type, similarity_score "
+                "match_type, similarity_score, verified "
                 "FROM entity_alias "
-                "WHERE alias_text = $alias_text LIMIT 1",
+                "WHERE alias_text = $alias_text "
+                "ORDER BY verified DESC, similarity_score DESC, id ASC "
+                "LIMIT 1",
                 {"alias_text": alias_text},
                 self.config,
             )

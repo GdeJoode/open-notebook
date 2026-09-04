@@ -1,0 +1,55 @@
+-- ============================================================================
+-- Migration 78: entity_alias — declare the four fields its writer already writes
+-- (Track PC.2), and repair the rows that predate them.
+--
+-- THE DRIFT. `entity_alias` is SCHEMAFULL and migration 39 declares five fields:
+-- alias_text, canonical_entity, source_document, confidence, created_at.
+-- `EntityRepository.register_alias` sets `match_type`, `similarity_score`,
+-- `method` and `verified` on top, and SurrealDB drops undeclared fields on a
+-- SCHEMAFULL table SILENTLY rather than raising. So on any freshly migrated
+-- database every alias loses its provenance — how it was matched, how strongly,
+-- by which method, and whether a human confirmed it — with no error and no log.
+-- `vault_sync_service` exports only `verified = true` aliases, so on such a
+-- database it can never export a single one.
+--
+-- Found by PC.2's `find_by_alias` ordering fix, which sorts by
+-- `verified DESC, similarity_score DESC, id ASC` so one surface form binds to one
+-- canonical reproducibly. Its test passes against the long-lived `staging`
+-- database, where all nine columns exist because the table was written before it
+-- was schema-locked, and FAILS against a fresh container, where all three sort
+-- keys read NONE.
+--
+-- THE SECOND HALF — why the DEFINE alone is not enough. A SurrealDB column
+-- DEFAULT applies only to NEWLY created records; rows that predate the DEFINE
+-- keep NONE, and a strict (non-`option<>`) type then rejects the whole record on
+-- the first UPDATE, because a SCHEMAFULL UPDATE re-validates every field. This
+-- repository has hit that exact class twice — migration 61 (`entity`) and
+-- migration 64 (`source`) — and migration 65 turned the repair into an idempotent
+-- forward-guard sweep. 65 runs BEFORE this migration, so it cannot know about a
+-- field defined here; the coalesce therefore belongs in 78 itself.
+--
+-- `entity_alias` has live UPDATE paths that would break on a drifted row:
+--   * entity_filtering/deduplication/canonical_entities.py — the K.2 duplicate
+--     merge transfers aliases with `UPDATE entity_alias SET canonical_entity = ...`
+--   * services/extraction/api.py — the same transfer
+--   * recanonicalization_service.py — the K.3 apply
+--   * vault_sync_service.py — the vault round trip, which sets all four fields
+--
+-- WHY `verified` IS STRICT AND THE OTHER THREE ARE NOT. `verified` carries a
+-- policy (`find_by_alias` ranks by it; the vault export filters on it), and a
+-- tri-state boolean makes both meaningless — NONE sorts by engine-defined order
+-- and satisfies neither `= true` nor `= false`. The other three are genuinely
+-- absent for aliases created outside the resolver, so `option<>` is the honest
+-- type there and no coalesce is needed or wanted.
+--
+-- The UPDATE is idempotent: on a clean row `verified ?? false` is a no-op; on a
+-- drifted row it sets only the NONE field. Unverified is the safe direction —
+-- ranked below a verified alias and excluded from the vault export.
+-- ============================================================================
+
+DEFINE FIELD IF NOT EXISTS match_type ON entity_alias TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS similarity_score ON entity_alias TYPE option<float>;
+DEFINE FIELD IF NOT EXISTS method ON entity_alias TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS verified ON entity_alias TYPE bool DEFAULT false;
+
+UPDATE entity_alias SET verified = verified ?? false;

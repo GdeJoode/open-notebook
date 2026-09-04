@@ -6,7 +6,12 @@ import type {
   ApplyClusterInput,
   MergeCandidate,
 } from '@/lib/api/entity-resolution'
-import { candidateToApplyCluster } from '@/lib/utils/entity-resolution'
+import {
+  candidateMethodLabel,
+  candidateToApplyCluster,
+  candidateTypeLabel,
+  isCrossTypeCandidate,
+} from '@/lib/utils/entity-resolution'
 import { MergeConfirmDialog } from '@/components/resolution/MergeConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -35,6 +40,12 @@ export function CandidateMergeCard({
   const [confirmOpen, setConfirmOpen] = useState(false)
   const applyCluster = candidateToApplyCluster(candidate)
 
+  // A cross-type candidate has byte-identical names on both sides — the two
+  // entities exist separately only because they were typed differently. Without
+  // the types rendered inline the card reads as the same name twice, and the
+  // Merge button below is one click from a destructive apply.
+  const crossType = isCrossTypeCandidate(candidate)
+
   // The apply payload puts the winner at name_a / loser at name_b.
   const winnerLabel =
     candidate.winner_id === candidate.id_a ? candidate.name_a : candidate.name_b
@@ -48,15 +59,25 @@ export function CandidateMergeCard({
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium truncate">
               {candidate.name_a}
+              {crossType && (
+                <span className="ml-1 font-normal text-muted-foreground">
+                  ({candidate.entity_type})
+                </span>
+              )}
             </span>
             <span className="text-muted-foreground">↔</span>
             <span className="text-sm font-medium truncate">
               {candidate.name_b}
+              {crossType && (
+                <span className="ml-1 font-normal text-muted-foreground">
+                  ({candidate.entity_type_b})
+                </span>
+              )}
             </span>
           </div>
           <div className="text-xs text-muted-foreground">
-            {candidate.entity_type} · {(candidate.score * 100).toFixed(0)}% ·{' '}
-            {candidate.method}
+            {candidateTypeLabel(candidate)} ·{' '}
+            {(candidate.score * 100).toFixed(0)}% · {candidateMethodLabel(candidate)}
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
