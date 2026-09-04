@@ -131,6 +131,7 @@ five would have fired a banner (coverage 0.45 / 0.48 / 0.55 / 0.58 →
 | finding | boundary | owner | note |
 |---|---|---|---|
 | `POST /apply` performs no band or type check | curator UI → `entity_resolution` router | **PC.5** | It applies whatever cluster the client echoes, so the router docstring's "only `auto_merge` candidates may be applied" is enforced only by the frontend. Pre-existing from K.5; PC.2 is what puts cross-type pairs into the review list, so the discipline now matters more. Not changed in a phase about identity. |
+| `CandidatesResponse.auto_merge` + three counts fetched, never rendered | `/candidates` → resolution page | **PC.5** | The page shows `candidates.review` only. K.5-era surface and a UI decision, not forgotten wiring — but PC.2 changed what flows through it: `fold_equal` is a new AUTO producer, so a same-type case-only duplicate lands in a band no curator sees and `okf_import_service` applies unattended, with "Keep apart" unreachable for it. |
 | Office-of / organ-of name pairs have no home | name shapes → nothing | **later phase** | `Minister van BZK` / `BZK`, `Burgemeester van Rotterdam` / `Rotterdam`. Real and worth surfacing, but as a RELATION — a merge proposal asserts they are one entity, which is false. PC.2 removed them from the containment rule rather than leave a leading question in front of a destructive button. |
 
 ## Inverted case — a consumer with no producer

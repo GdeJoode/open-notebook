@@ -447,9 +447,19 @@ class CandidateDedupService:
             ):
                 band = REVIEW
 
+            # Evidence explains the METHOD, so it only travels when containment
+            # is the method that won the band. A pair can be produced by
+            # containment and then banded by a higher-ranked embedding score; the
+            # head run is still true OF THE PAIR, but rendering
+            # "embedding (gemeente)" attributes it to a tier that never looked at
+            # the head run.
             candidate = self._make_candidate(
                 rec_a, rec_b, score, band, method,
-                evidence=evidence.get(self._pair_key(id_a, id_b), ""),
+                evidence=(
+                    evidence.get(self._pair_key(id_a, id_b), "")
+                    if method == CONTAINMENT
+                    else ""
+                ),
             )
             seen_pairs.add(self._pair_key(id_a, id_b))
             if band == AUTO_MERGE:

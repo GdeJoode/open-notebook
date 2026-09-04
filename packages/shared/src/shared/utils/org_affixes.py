@@ -92,9 +92,20 @@ _AFFIX_SOURCE: Tuple[str, ...] = (
     # asserted that a water board IS the province. Both cannot be the rule.
     "gemeente",
     "de gemeente",
+    # `provincie` survives on a DIFFERENT argument, and review corrected me here:
+    # the sentence above does not cover it, because there IS a separate Groningen
+    # and a separate Utrecht — the cities. It survives on the same argument as
+    # `stichting` below: "Groningen" genuinely is used to mean the province in
+    # policy prose, so the pair is a homonym rather than a reference error, and a
+    # homonym is a question a curator can answer.
+    #
+    # It does mean the door emits `Gemeente Groningen` ~ `Groningen` AND
+    # `Provincie Groningen` ~ `Groningen` — two mutually exclusive proposals for
+    # one short form, at most one right. That is why `head_affix` returns the run
+    # it removed and why `MergeCandidate.evidence` carries it to the card: without
+    # it the two proposals are indistinguishable.
     "provincie",
     "de provincie",
-    # A legal form in front of the same organisation's own name.
     # A legal form in front of the organisation's OWN name, so the two denote one
     # entity. The residual risk is a homonym rather than a reference error —
     # `Stichting Lezen` / `Lezen`, `Stichting Vluchteling` / `Vluchteling` — where

@@ -144,8 +144,14 @@ no longer produced. The class is real and worth surfacing — but as an
 **organ-of relation**, not a merge, because proposing a merge asserts something
 stronger than the evidence supports. Filed for a later phase.
 
-Containment is always `review`, never `auto`: which of the two forms is canonical
-is exactly what a reviewer is for.
+Containment is always `review`, never `auto` — as a **method**. The pair it
+produces can still be reported as `auto_merge` when another tier independently
+bands it there, which is correct: `_strongest_band` takes the strongest band any
+method earned. What containment cannot do is put a pair in `auto_merge` by itself.
+The distinction matters now that `evidence` makes containment provenance visible,
+and the head run travels only when containment is the method that won, so a card
+never reads `embedding (gemeente)` — the fact would be true of the pair and the
+attribution false.
 
 ## 3. A deliberate contract change, recorded rather than deleted
 
@@ -430,6 +436,51 @@ missed edge case. The 40-affix list was built from corpus frequency, and the tes
 *pinned one of the false pairs as correct*. Frequency is the wrong evidence for a
 rule about reference, and a test written from the same misunderstanding as the
 code cannot catch it. That is the argument for adversarial review in one example.
+
+## Round 4 — approved, with five one-line follow-ups taken
+
+Review round 3 returned APPROVED and ran the escalation check I asked for: 40
+fields across every `entity-resolution` response model against every identifier in
+`frontend/src`, **0 orphaned by name**. No fourth instance of the produce-without-
+consume pattern; `evidence` and `entity_type_b`, the two fields this phase added
+to that boundary, are both produced, typed, transported and rendered.
+
+The five minors were filed as non-blocking and fixed anyway, because four are
+comment or one-line edits and the fifth was a real attribution error:
+
+- **Evidence rode along on the wrong method.** `evidence.get(...)` was applied
+  unconditionally, so a containment head run appeared on a candidate whose winning
+  method was `embedding` — the fact true of the pair, the attribution false. Gated
+  on `method == CONTAINMENT` and pinned by a test that drives the embedding tier
+  to win the band.
+- **`provincie` survived on the wrong argument.** The `gemeente` sentence — *there
+  is no separate "Leudal" to be distinguished from* — does not cover it, because
+  there **is** a separate Groningen and a separate Utrecht: the cities. It
+  survives on the `stichting` argument instead: "Groningen" genuinely means the
+  province in policy prose, so the pair is a homonym rather than a reference
+  error. Behaviour unchanged, stated reason corrected.
+- **A corrected comment left standing beside its correction** in `org_affixes.py`
+  — the exact pattern this phase closed for the guard docstring one round earlier,
+  and PC.1b's round-4 lesson verbatim.
+- A `SyntaxWarning` from a non-raw docstring, and the report clause above.
+
+**One observation handed to PC.5, deliberately not read as a fourth instance.**
+`CandidatesResponse.auto_merge` and the three counts are fetched by the resolution
+page and never rendered — it shows `candidates.review` only. That is K.5-era
+surface untouched here, and a UI decision rather than a forgotten wiring. But PC.2
+changed what flows through it: `fold_equal` is a new AUTO producer, so a same-type
+case-only duplicate now lands in a band no curator surface displays and which
+`okf_import_service` applies unattended, with "Keep apart" unreachable for it.
+AC4 still holds — the plan's pairs are containment pairs and those are all REVIEW.
+Filed beside the `/apply` item.
+
+### The reading that carries forward
+
+The most useful thing to come out of three adversarial rounds is not a fix. When a
+mutation "survives", check whether some test is **pinning the mutated behaviour**
+before concluding the guard is weak: a mutant and a test that agree with each
+other look identical to a mutant no guard catches, and the two need opposite
+fixes. `waterschap` was the first kind and I read it as the second.
 
 ## Round 3
 

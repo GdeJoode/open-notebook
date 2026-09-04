@@ -700,3 +700,35 @@ async def test_the_auto_merge_band_never_carries_a_cross_type_pair() -> None:
     assert all(c.entity_type_b == "" for c in report.auto_merge), (
         "a candidate carrying two types reached the unattended apply path"
     )
+
+
+@pytest.mark.asyncio
+async def test_the_head_run_travels_only_when_containment_won_the_band() -> None:
+    """Evidence explains the METHOD, not the pair.
+
+    A pair can be produced by containment and then banded by a higher-ranked
+    embedding score. The head run is still true of the pair, but a card reading
+    `embedding (gemeente)` attributes it to a tier that never looked at a head
+    run — the displayed fact is right and the attribution is wrong.
+    """
+    plain = [_entity("entity:a", "Gemeente Leudal"), _entity("entity:b", "Leudal")]
+    report = await _service(plain).propose_candidates()
+    containment = [c for c in report.review if c.method == "containment"]
+    assert len(containment) == 1
+    assert containment[0].evidence == "gemeente"
+
+    # Same pair, now with near-identical vectors so the embedding tier bands it
+    # AUTO and outranks containment's review-only band.
+    vectors = [
+        _entity("entity:a", "Gemeente Leudal", embedding=[1.0, 0.0]),
+        _entity("entity:b", "Leudal", embedding=[1.0, 0.001]),
+    ]
+    report = await _service(vectors).propose_candidates()
+    winners = [*report.auto_merge, *report.review]
+    assert [c.method for c in winners] == ["embedding"], (
+        f"setup: expected embedding to win the band, got "
+        f"{[(c.method, c.band) for c in winners]}"
+    )
+    assert winners[0].evidence == "", (
+        f"a head run rode along on {winners[0].method!r}"
+    )

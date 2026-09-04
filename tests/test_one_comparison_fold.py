@@ -142,7 +142,7 @@ _WS_LITERALS = (r"\s+", "\\s+")
 
 
 def _arg_or_keyword(call: ast.Call, index: int, name: str) -> ast.expr | None:
-    """The positional argument at ``index``, or the keyword called ``name``.
+    r"""The positional argument at ``index``, or the keyword called ``name``.
 
     `re.sub(pattern=…)` and `normalize(form=…)` are legal and were both evasions
     while the detector read positional arguments only.
