@@ -86,7 +86,20 @@ def _resolver(models: Optional[Dict[str, Model]] = None, rows=None) -> RouteReso
     )
 
 
-def _set_cloud_keys(monkeypatch, anthropic=True, openai=True):
+def _set_cloud_keys(monkeypatch, anthropic=True, openai=True, nvidia=False):
+    """Establish the cloud-credential precondition — all three, not two.
+
+    `nvidia` was missing, so `test_cloud_no_keys_returns_single_local` asserted
+    "no cloud key" while leaving `NVIDIA_API_KEY` at whatever the environment
+    happened to hold. That passed for as long as nothing loaded a `.env` earlier
+    in the session; `app_main/api/app.py:35` calls `load_dotenv()` at import time,
+    so the first test file to import it turns every one of these into a test of
+    the developer's shell. Found when a PC.6 test did exactly that: the route came
+    back `['nvidia', 'ollama']`.
+
+    Defaults to deleting: no caller of this helper wants an NVIDIA candidate, and
+    the one test that does sets the key itself.
+    """
     if anthropic:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     else:
@@ -95,6 +108,10 @@ def _set_cloud_keys(monkeypatch, anthropic=True, openai=True):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-oai-test")
     else:
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    if nvidia:
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+    else:
+        monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
 
 
 def _providers(route: ResolvedRoute) -> List[str]:
