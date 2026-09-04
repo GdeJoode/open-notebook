@@ -139,6 +139,19 @@ export function candidateTypeLabel(candidate: MergeCandidate): string {
     : candidate.entity_type
 }
 
+/** The method line for a candidate card, with its evidence when there is any.
+ *
+ * `containment` alone tells a curator nothing: `Gemeente Groningen` ~ `Groningen`
+ * and `Provincie Groningen` ~ `Groningen` are two mutually exclusive proposals
+ * for the same short form, and at most one is right. Naming the run that was
+ * removed is what makes them tellable apart.
+ */
+export function candidateMethodLabel(candidate: MergeCandidate): string {
+  return candidate.evidence
+    ? `${candidate.method} (${candidate.evidence})`
+    : candidate.method
+}
+
 /** Validate an overlay rule before POSTing (mirrors the server 422 guards). */
 export function isValidOverlay(rule: OverlayCreateInput): boolean {
   if (rule.kind !== 'merge' && rule.kind !== 'split') return false

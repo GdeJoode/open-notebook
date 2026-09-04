@@ -7,6 +7,7 @@ import type {
   MergeCandidate,
 } from '@/lib/api/entity-resolution'
 import {
+  candidateMethodLabel,
   candidateToApplyCluster,
   candidateTypeLabel,
   isCrossTypeCandidate,
@@ -76,7 +77,7 @@ export function CandidateMergeCard({
           </div>
           <div className="text-xs text-muted-foreground">
             {candidateTypeLabel(candidate)} ·{' '}
-            {(candidate.score * 100).toFixed(0)}% · {candidate.method}
+            {(candidate.score * 100).toFixed(0)}% · {candidateMethodLabel(candidate)}
           </div>
         </div>
         <div className="flex gap-2 shrink-0">

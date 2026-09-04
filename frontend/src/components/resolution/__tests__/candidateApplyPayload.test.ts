@@ -1,4 +1,11 @@
 /**
+ * NAME (PC.2): this file was `CandidateMergeCard.test.ts` and had to be renamed.
+ * TypeScript dedupes by extension priority, so a `Foo.test.ts` beside a
+ * `Foo.test.tsx` silently drops the `.tsx` from the program — `tsc --noEmit` then
+ * reports "clean" while never looking at the component test at all, which is the
+ * one guarding the round-1 blocker. Found by review; the two files now have
+ * distinct basenames and both are typechecked.
+ *
  * Unit tests for the fuzzy-candidate merge logic behind `CandidateMergeCard`
  * (Track K.6). The card renders the shared destructive-merge confirmation gate
  * (Radix AlertDialog), which the node-environment vitest cannot mount — the

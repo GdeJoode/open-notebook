@@ -11,13 +11,32 @@ stages would disagree about whether two names are the same string, and the
 disagreement would show up as an entity that deduplicates in one stage and not the
 next.
 
-**What it checks and what it cannot.** It detects the SHAPE — a function whose body
-combines an NFKC normalise, a ``.lower()`` and a ``re.sub`` on ``\\s+`` — by AST,
-not by matching source text, so renaming the function or its locals does not evade
-it. It cannot detect a fold spelled a different way (``str.casefold``, a manual
-character loop, ``' '.join(text.split())``). That limit is stated rather than
-implied, and the mutant control below is what keeps the detector honest about the
-shape it does claim.
+**What it checks.** It detects the SHAPE — a callable whose body combines an NFKC
+normalise, a ``.lower()`` and a ``re.sub`` on ``\\s+`` — by AST rather than by
+matching source text, so renaming the function or its locals does not evade it.
+Review round 1 documented three limits and implied the rest was covered; a
+reviewer then planted 18 variants and six got through. The parametrised cases at
+the foot of this file are those six plus two more, so the claim below is a
+measured one rather than a description of intent.
+
+**Handled**: plain function, method, ``staticmethod``, ``classmethod``; a
+precompiled pattern bound at module level, in a class body (used via ``self.``,
+``cls.`` or any attribute), inside a function, or onto an instance attribute in
+``__init__``; annotated assignment; the ``"NFKC"`` form or the ``\\s+`` literal held
+in a constant; the keyword forms ``re.sub(pattern=…)`` and ``normalize(form=…)``;
+a lambda, reported under the name it is bound to; ``str.lower(t)`` and aliased
+imports.
+
+**Not handled, and each of these would evade it today**:
+
+* a fold spelled a different way — ``str.casefold``, a manual character loop,
+  ``' '.join(text.split())``, or the pattern ``r"\\s\\s*"``;
+* a pattern reached through a subscript, a tuple unpack, or another module's
+  namespace, which would need import resolution.
+
+The list is exhaustive as far as it has been attacked, which is not the same as
+exhaustive. It is here so a reader does not infer coverage from the cases that ARE
+handled — the mistake round 1 invited.
 
 PC.1b's guard took four review rounds to become one that could fail. The controls
 here are the ones that phase ended up needing: the walker must prove it reached
@@ -101,9 +120,11 @@ def _is_nfkc_call(node: ast.AST, nfkc_names: Set[str]) -> bool:
         return False
     func = node.func
     name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-    if name != "normalize" or not node.args:
+    if name != "normalize":
         return False
-    first = node.args[0]
+    first = _arg_or_keyword(node, 0, "form")
+    if first is None:
+        return False
     return (isinstance(first, ast.Constant) and first.value == "NFKC") or (
         isinstance(first, ast.Name) and first.id in nfkc_names
     )
@@ -120,13 +141,42 @@ def _is_lower_call(node: ast.AST) -> bool:
 _WS_LITERALS = (r"\s+", "\\s+")
 
 
+def _arg_or_keyword(call: ast.Call, index: int, name: str) -> ast.expr | None:
+    """The positional argument at ``index``, or the keyword called ``name``.
+
+    `re.sub(pattern=…)` and `normalize(form=…)` are legal and were both evasions
+    while the detector read positional arguments only.
+    """
+    if len(call.args) > index:
+        return call.args[index]
+    for keyword in call.keywords:
+        if keyword.arg == name:
+            return keyword.value
+    return None
+
+
 def _bound_targets(node: ast.AST) -> List[str]:
-    """Names an assignment binds, for `x = …`, `x: T = …` and `a = b = …`."""
+    """Names an assignment binds: `x = …`, `x: T = …`, `a = b = …`, `self.x = …`.
+
+    Attribute targets are reported by their attribute name, because that is how
+    the value is later read (`self._ws.sub(...)`) and `_is_whitespace_sub` matches
+    an attribute access by name. `self._ws = re.compile(r"\s+")` in `__init__` is
+    a plausible spelling and was an evasion until review named it.
+    """
+    targets: List[ast.expr]
     if isinstance(node, ast.AnnAssign):
-        return [node.target.id] if isinstance(node.target, ast.Name) else []
-    if isinstance(node, ast.Assign):
-        return [t.id for t in node.targets if isinstance(t, ast.Name)]
-    return []
+        targets = [node.target]
+    elif isinstance(node, ast.Assign):
+        targets = list(node.targets)
+    else:
+        return []
+    names: List[str] = []
+    for target in targets:
+        if isinstance(target, ast.Name):
+            names.append(target.id)
+        elif isinstance(target, ast.Attribute):
+            names.append(target.attr)
+    return names
 
 
 def _names_bound_to_constant(tree: ast.AST, values: Sequence[object]) -> Set[str]:
@@ -159,9 +209,11 @@ def _whitespace_pattern_names(tree: ast.AST) -> Set[str]:
             continue
         func = call.func
         attr = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-        if attr != "compile" or not call.args:
+        if attr != "compile":
             continue
-        first = call.args[0]
+        first = _arg_or_keyword(call, 0, "pattern")
+        if first is None:
+            continue
         pattern_is_ws = (
             isinstance(first, ast.Constant) and first.value in _WS_LITERALS
         ) or (isinstance(first, ast.Name) and first.id in literal_names)
@@ -187,9 +239,9 @@ def _is_whitespace_sub(
         return True
     if isinstance(target, ast.Attribute) and target.attr in compiled:
         return True
-    if not node.args:
+    first = _arg_or_keyword(node, 0, "pattern")
+    if first is None:
         return False
-    first = node.args[0]
     return (isinstance(first, ast.Constant) and first.value in _WS_LITERALS) or (
         isinstance(first, ast.Name) and first.id in literal_names
     )
@@ -450,6 +502,18 @@ _EVASIONS = {
     ),
     "lambda": _PRELUDE + (
         f'fold = lambda t: re.sub(r"\\s+", " ", {_TAIL})\n'
+    ),
+    "instance attribute compiled in __init__": _PRELUDE + (
+        "class C:\n"
+        "    def __init__(self):\n"
+        '        self._ws = re.compile(r"\\s+")\n'
+        "    def fold(self, t):\n"
+        f'        return self._ws.sub(" ", {_TAIL})\n'
+    ),
+    "keyword arguments": _PRELUDE + (
+        "def fold(t):\n"
+        '    return re.sub(pattern=r"\\s+", repl=" ", '
+        'string=unicodedata.normalize(form="NFKC", unistr=t).lower().strip())\n'
     ),
     "function-local compile": _PRELUDE + (
         "def fold(t):\n"

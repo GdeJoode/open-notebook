@@ -21,6 +21,18 @@ import type { MergeCandidate } from '@/lib/api/entity-resolution'
 
 afterEach(cleanup)
 
+/** Every prop the app passes. A fixture that omits a required one mounts the
+ *  component in a shape production never produces — and `onReject` was omitted
+ *  here until review caught that this file was not being typechecked at all. */
+const mount = (candidate: MergeCandidate) =>
+  render(
+    <CandidateMergeCard
+      candidate={candidate}
+      onApprove={() => {}}
+      onReject={() => {}}
+    />,
+  )
+
 const SAME_TYPE: MergeCandidate = {
   id_a: 'entity:a',
   id_b: 'entity:b',
@@ -46,7 +58,7 @@ const CROSS_TYPE: MergeCandidate = {
 
 describe('CandidateMergeCard — the curator can see what differs', () => {
   it('shows both types when a cross-type pair has identical names', () => {
-    render(<CandidateMergeCard candidate={CROSS_TYPE} onApprove={() => {}} />)
+    mount(CROSS_TYPE)
     const card = screen.getByTestId('merge-candidate-entity:a:entity:b')
     const text = card.textContent ?? ''
     // The two types are the entire content of this decision: the names are
@@ -56,7 +68,7 @@ describe('CandidateMergeCard — the curator can see what differs', () => {
   })
 
   it('shows one type for a same-type pair', () => {
-    render(<CandidateMergeCard candidate={SAME_TYPE} onApprove={() => {}} />)
+    mount(SAME_TYPE)
     const text = screen.getByTestId('merge-candidate-entity:a:entity:b').textContent ?? ''
     expect(text).toContain('organization')
     // No spurious second type, and no bare "↔" between two identical labels.
@@ -64,13 +76,44 @@ describe('CandidateMergeCard — the curator can see what differs', () => {
   })
 
   it('does not treat an equal entity_type_b as cross-type', () => {
-    render(
-      <CandidateMergeCard
-        candidate={{ ...CROSS_TYPE, entity_type_b: 'programme' }}
-        onApprove={() => {}}
-      />,
-    )
+    mount({ ...CROSS_TYPE, entity_type_b: 'programme' })
     const text = screen.getByTestId('merge-candidate-entity:a:entity:b').textContent ?? ''
     expect(text).not.toContain('programme ↔ programme')
+  })
+})
+
+describe('CandidateMergeCard — why this pair is here', () => {
+  const CONTAINMENT: MergeCandidate = {
+    ...SAME_TYPE,
+    name_a: 'Gemeente Groningen',
+    name_b: 'Groningen',
+    method: 'containment',
+    evidence: 'gemeente',
+    score: 1.0,
+  }
+
+  it('names the head run that was removed', () => {
+    // Without it the card says `containment`, and a corpus holding both
+    // `Gemeente Groningen` and `Provincie Groningen` shows a curator two
+    // mutually exclusive proposals for `Groningen` that look identical.
+    mount(CONTAINMENT)
+    const text =
+      screen.getByTestId('merge-candidate-entity:a:entity:b').textContent ?? ''
+    expect(text).toContain('containment (gemeente)')
+  })
+
+  it('distinguishes the province proposal from the municipality one', () => {
+    mount({ ...CONTAINMENT, name_a: 'Provincie Groningen', evidence: 'provincie' })
+    const text =
+      screen.getByTestId('merge-candidate-entity:a:entity:b').textContent ?? ''
+    expect(text).toContain('containment (provincie)')
+  })
+
+  it('shows the bare method when there is no evidence to add', () => {
+    mount(SAME_TYPE)
+    const text =
+      screen.getByTestId('merge-candidate-entity:a:entity:b').textContent ?? ''
+    expect(text).toContain('embedding')
+    expect(text).not.toContain('embedding (')
   })
 })

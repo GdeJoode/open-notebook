@@ -90,6 +90,12 @@ class MergeCandidate:
     # tie-break id for stability). Populated by the service.
     winner_id: str = ""
     loser_id: str = ""
+    #: Why this pair is here, when the method alone does not say. Today: the head
+    #: run `containment` removed. `containment` on its own is not reviewable —
+    #: with both `Gemeente Groningen` and `Provincie Groningen` in a corpus the
+    #: door emits two mutually exclusive proposals for `Groningen`, and the
+    #: removed run is the only thing that tells them apart on the card.
+    evidence: str = ""
     #: ``id_b``'s type when it differs from ``id_a``'s, else "". Only the
     #: cross-type fold-equal generator can produce a pair whose two entities
     #: carry different types, and a curator card that shows one name twice with
@@ -392,6 +398,10 @@ class CandidateDedupService:
         # Pair -> best (score, method). Dedup so a pair caught by both fuzzy and
         # embedding reports once, at its highest score.
         best: Dict[Tuple[str, str], Dict[str, float]] = {}
+        # Pair -> the head run `_score_containment` removed. Passed explicitly
+        # rather than parked on `self`, so two concurrent proposal runs cannot
+        # read each other's evidence.
+        evidence: Dict[Tuple[str, str], str] = {}
 
         f_review, f_auto = self._fuzzy_bands()
         e_review, e_auto = self._embedding_bands()
@@ -402,7 +412,7 @@ class CandidateDedupService:
         for etype, group in buckets.items():
             self._score_fuzzy(group, best)
             self._score_embedding(group, best)
-            self._score_containment(group, best)
+            self._score_containment(group, best, evidence)
 
         # Build candidates, applying the force-split veto.
         report = CandidateReport(
@@ -438,7 +448,8 @@ class CandidateDedupService:
                 band = REVIEW
 
             candidate = self._make_candidate(
-                rec_a, rec_b, score, band, method
+                rec_a, rec_b, score, band, method,
+                evidence=evidence.get(self._pair_key(id_a, id_b), ""),
             )
             seen_pairs.add(self._pair_key(id_a, id_b))
             if band == AUTO_MERGE:
@@ -530,6 +541,7 @@ class CandidateDedupService:
         self,
         group: List[Dict[str, Any]],
         best: Dict[Tuple[str, str], Dict[str, float]],
+        evidence: Dict[Tuple[str, str], str],
     ) -> None:
         """Propose long-form/short-form pairs the fuzzy tier structurally misses.
 
@@ -560,8 +572,17 @@ class CandidateDedupService:
                 if not ta or not tb:
                     continue
                 outer, inner = (ta, tb) if len(ta) > len(tb) else (tb, ta)
-                if head_affix(outer, inner) is not None:
+                affix = head_affix(outer, inner)
+                if affix is not None:
                     self._record(best, a["id"], b["id"], 1.0, CONTAINMENT)
+                    # The run that was removed is what makes the proposal
+                    # reviewable. `containment` alone does not tell a curator why
+                    # two names are here, and in a corpus with both
+                    # `Gemeente Groningen` and `Provincie Groningen` the door
+                    # emits two mutually exclusive proposals for the same short
+                    # form — at most one can be right, and the head run is the
+                    # only thing that distinguishes them on the card.
+                    evidence[self._pair_key(a["id"], b["id"])] = " ".join(affix)
 
     def _score_fuzzy(
         self,
@@ -714,6 +735,7 @@ class CandidateDedupService:
         score: float,
         band: str,
         method: str,
+        evidence: str = "",
     ) -> MergeCandidate:
         """Assemble a candidate, fixing winner/loser by confidence then id."""
         if (rec_a["confidence"], rec_b["id"]) >= (
@@ -728,6 +750,7 @@ class CandidateDedupService:
             id_b=rec_b["id"],
             name_a=rec_a["name"],
             name_b=rec_b["name"],
+            evidence=evidence,
             entity_type=rec_a["entity_type"],
             entity_type_b=(
                 rec_b["entity_type"]

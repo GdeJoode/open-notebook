@@ -109,11 +109,33 @@ counterexamples are now rejected and pinned, plus a structural guard that no
 curated run ends in a relational `van` — which is the shape every removed affix
 had, and the addition most likely to be made again.
 
-**One judgement is deliberately kept.** `Gemeente Leudal` and `Leudal` are not
-literally the same thing either — a governing body and an area. In Dutch policy
-prose they denote one actor and appear interchangeably in the same paragraph, and
-this is the pair the PC.2 plan named as the case to solve. Kept as a judgement
-about this corpus, said out loud in the module docstring rather than implied.
+**One judgement is deliberately kept, and one was wrong.** `Gemeente Leudal` and
+`Leudal` are not literally the same thing either — a governing body and an area.
+In Dutch policy prose they denote one actor and appear interchangeably in the same
+paragraph, because there is no separate "Leudal" for the municipality to be
+distinguished *from*. That is the pair the plan named as the case to solve, and it
+is kept as a judgement about this corpus, said out loud rather than implied.
+
+`waterschap` was kept under the same sentence and should not have been. Review
+round 2 found that it fails the test the other two pass: no Dutch text uses
+"Limburg" to mean "Waterschap Limburg". A water board is a distinct legal actor
+whose management area is named after a province that is *itself* a separate
+entity, so `Waterschap Limburg` / `Limburg` is a body-versus-territory pair — the
+class round 1 had just been cut to remove. It also put the two new test files in
+direct contradiction: one rejected `Dagelijks Bestuur van Wetterskip Fryslân` /
+`Wetterskip Fryslân` because a water board's executive is not the water board,
+while the other accepted `Waterschap Limburg` / `Limburg`, asserting that a water
+board *is* the province. Removed, and both spellings of `coöperatie` added, since
+NFKC does not strip the diaeresis and the ASCII form is what people type.
+
+**The removed run now reaches the card.** `head_affix` returns the run rather than
+a bool, and its docstring says why — *"a curator card that says 'differs by the
+head run `gemeente`' is reviewable, and one that says 'containment' is not"* — but
+the caller discarded it and the card rendered `containment`. The same shape as B1,
+one value over. It matters concretely: a corpus holding both `Gemeente Groningen`
+and `Provincie Groningen` yields two mutually exclusive proposals for `Groningen`,
+at most one of which can be right, and the head run is the only thing that tells
+them apart. `MergeCandidate.evidence` now carries it through the API to the card.
 
 **What the correction costs.** The plan also named
 `Minister van Binnenlandse Zaken en Koninkrijksrelaties` beside
@@ -368,6 +390,10 @@ the reason a test exists.
 | M13 | constructor default back to `True` | 2 |
 | M14 | the card's functions imported but not called (round 2) | 1 |
 | M15 | the organ-of affixes re-added (round 2) | 8 |
+| M16 | the card test's required `onReject` prop dropped (round 3) | tsc |
+| M17 | the card drops the containment evidence (round 3) | 2 |
+| M18 | the coalesce removed from migration 78 (round 3) | 2 |
+| M19 | `waterschap` re-added (round 3) | **nothing**, then 2 |
 
 **M4 is the useful one.** Deleting the head-anchoring check left all 28 tests
 green, because the pair it was written for — `Regio Deal` /
@@ -375,6 +401,14 @@ green, because the pair it was written for — `Regio Deal` /
 an affix). The check earns its place on a shape no test had: a curated head over
 a *different* tail, where dropping it clips the head blind and pairs
 `Gemeente Amsterdam` with `Utrecht`.
+
+**M19 is the round-3 repeat of M4's lesson.** I removed `waterschap` from the
+affix list and did not move it from the accepted cases to the rejected ones, so
+re-adding it left the suite green — the test still asserted the behaviour I had
+just decided was wrong. Reading the mutation result as "the mutation survived" was
+itself a misread: the mutant was passing a test that agreed with it. Deleting code
+without moving its test is the same defect as deleting a producer without deleting
+its consumer.
 
 **M8 is the one I got wrong twice.** The rendering decision had no test that could
 fail; I extracted it into a pure function, tested the function, and never changed
@@ -396,6 +430,41 @@ missed edge case. The 40-affix list was built from corpus frequency, and the tes
 *pinned one of the false pairs as correct*. Frequency is the wrong evidence for a
 rule about reference, and a test written from the same misunderstanding as the
 code cannot catch it. That is the argument for adversarial review in one example.
+
+## Round 3
+
+Review round 2 closed both blockers and returned three majors, all cheap, plus
+seven minors. What they had in common is worth naming:
+
+- **M5 (`waterschap`)** — a bend in the rule kept under a sentence that did not
+  actually cover it, with two of the phase's own tests contradicting each other on
+  the same distinction.
+- **M6** — `CandidateMergeCard.test.ts` beside `CandidateMergeCard.test.tsx` made
+  TypeScript drop the `.tsx` by extension-priority dedupe, so "tsc clean" was
+  vacuous *for the one file guarding the round-1 blocker*, and it was hiding a
+  real `TS2741`: the fixture omitted the required `onReject`, mounting the card in
+  a shape production never produces. Renamed; both files are now typechecked, and
+  a fixture helper builds the full prop set.
+- **M7** — the containment evidence computed for a curator who never saw it.
+
+Two of those three are the B1 pattern again: a value produced for a surface that
+does not consume it. That is the finding this phase keeps generating, and it is
+the one PC.1b built an invariant against for Python. Nothing enforces it across
+the Python/TypeScript boundary, which is where all three instances sat.
+
+Minors also closed: the guard's "what it cannot" paragraph was rewritten rather
+than left standing beside its correction (PC.1b's round-4 lesson); two further AST
+evasions closed (an instance attribute compiled in `__init__`, and the
+`re.sub(pattern=…)` / `normalize(form=…)` keyword forms); a third migration test
+now applies migration 78 through `AsyncMigration.from_file`, since the other two
+ran the line by hand and grepped the file, and neither would have caught a parser
+that dropped the trailing statement.
+
+**Migration 78 was edited in place.** Any database that applied round 1's version
+has 78 recorded and will never receive the coalesce. The branch is unmerged and
+the working database is empty, so this is almost certainly nobody — but a dev
+database that ran the earlier body needs `UPDATE entity_alias SET verified =
+verified ?? false` by hand.
 
 ## Process note
 

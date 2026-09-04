@@ -73,22 +73,41 @@ from __future__ import annotations
 from typing import FrozenSet, Sequence, Tuple
 
 _AFFIX_SOURCE: Tuple[str, ...] = (
-    # Municipalities, provinces, water boards. The body and the area it governs
-    # are not literally the same thing, and this is the one place the list bends:
-    # in Dutch policy prose `Gemeente Leudal` and `Leudal` denote one actor and
-    # are used interchangeably in the same paragraph. It is also the pair the
-    # PC.2 plan named as the case to solve. Kept deliberately, as a judgement
-    # about this corpus rather than a linguistic universal.
+    # Municipalities and provinces. The body and the area it governs are not
+    # literally the same thing, and this is the one place the list bends: in Dutch
+    # policy prose `Gemeente Leudal` and `Leudal` denote one actor and appear
+    # interchangeably in the same paragraph, because there is no separate "Leudal"
+    # for the municipality to be distinguished FROM. That is the pair the PC.2
+    # plan named as the case to solve. A judgement about this corpus, not a
+    # linguistic universal.
+    #
+    # `waterschap` was here and was REMOVED. It fails the test the other two pass:
+    # no Dutch text uses "Limburg" to mean "Waterschap Limburg". A water board is
+    # a distinct legal actor whose management area is named after a province that
+    # is itself a separate entity, so `Waterschap Limburg` / `Limburg` is a
+    # body-versus-territory pair — the class this list was just cut to remove. It
+    # also contradicted the sibling test: `Dagelijks Bestuur van Wetterskip
+    # Fryslân` / `Wetterskip Fryslân` is rejected because a water board's
+    # executive is not the water board, while `Waterschap Limburg` / `Limburg`
+    # asserted that a water board IS the province. Both cannot be the rule.
     "gemeente",
     "de gemeente",
     "provincie",
     "de provincie",
-    "waterschap",
-    "het waterschap",
     # A legal form in front of the same organisation's own name.
+    # A legal form in front of the organisation's OWN name, so the two denote one
+    # entity. The residual risk is a homonym rather than a reference error —
+    # `Stichting Lezen` / `Lezen`, `Stichting Vluchteling` / `Vluchteling` — where
+    # the foundation's name is also a common noun another entity may own. That is
+    # what review is for, and the `entity_type` bucket suppresses the usual case
+    # (organization against topic). It does NOT suppress it where PC.4 found 38%
+    # of entities land, in `concept`/`other`, so this is a known cost.
     "stichting",
     "vereniging",
+    # Both spellings: NFKC does not strip the diaeresis, so the curated form must
+    # carry the one people actually type as well.
     "coöperatie",
+    "cooperatie",
     # Personal honorifics — unambiguously the same person.
     "heer",
     "de heer",

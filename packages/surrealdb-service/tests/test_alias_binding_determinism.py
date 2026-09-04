@@ -257,3 +257,49 @@ async def test_the_repair_line_is_in_the_migration_and_is_idempotent(
             "UPDATE entity_alias SET verified = verified ?? false;",
             config=live_surrealdb,
         )
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_the_runner_actually_executes_the_repair(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """The repair must survive the path a deployment takes, not just a grep.
+
+    The two tests above leave a gap between them: one runs the coalesce by hand,
+    the other only checks the text is in the file. Neither proves that
+    `AsyncMigration.from_file` keeps the trailing statement in the SQL the runner
+    executes — a migration whose last line is dropped by its own parser would pass
+    both. Review closed this gap manually; this keeps it closed.
+    """
+    from surrealdb_service.migrations import AsyncMigration
+    from surrealdb_service.testing import fixtures as fx
+
+    rid = f"entity_alias:{uuid.uuid4().hex[:12]}"
+    canonical = await _entity(live_surrealdb, f"runner-{uuid.uuid4().hex[:8]}")
+
+    await execute_query(
+        "DEFINE FIELD OVERWRITE verified ON entity_alias TYPE option<bool>;",
+        config=live_surrealdb,
+    )
+    await execute_query(
+        f"CREATE {rid} SET alias_text = $t, canonical_entity = {canonical}, "
+        "verified = NONE;",
+        {"t": f"runner-{uuid.uuid4().hex[:8]}"},
+        live_surrealdb,
+    )
+
+    # Re-apply migration 78 exactly as the runner derives it — DEFINEs and the
+    # coalesce together, from the on-disk file.
+    sql = AsyncMigration.from_file(fx._MIGRATIONS_DIR / "78.surrealql").sql
+    await execute_query(sql, config=live_surrealdb)
+
+    rows = await execute_query(f"SELECT verified FROM {rid};", config=live_surrealdb)
+    assert rows[0]["verified"] is False, (
+        "the runner-applied migration body left the row at NONE — the repair line "
+        "is in the file but not in the SQL that actually runs"
+    )
+    # And the row is writable again, which is the whole point.
+    await execute_query(
+        f"UPDATE {rid} SET canonical_entity = {canonical};", config=live_surrealdb
+    )

@@ -23,8 +23,11 @@ def _t(text: str) -> list[str]:
         ("Gemeente Leudal", "Leudal", ("gemeente",)),
         ("de gemeente Roermond", "Roermond", ("de", "gemeente")),
         ("Provincie Groningen", "Groningen", ("provincie",)),
-        ("Waterschap Limburg", "Limburg", ("waterschap",)),
         ("Stichting Mensenwerk", "Mensenwerk", ("stichting",)),
+        # Both spellings: NFKC does not strip the diaeresis, so the ASCII form
+        # people actually type must be curated separately.
+        ("Coöperatie Zorgverlening", "Zorgverlening", ("coöperatie",)),
+        ("Cooperatie Zorgverlening", "Zorgverlening", ("cooperatie",)),
         ("de heer Rob Opdam", "Rob Opdam", ("de", "heer")),
         ("mevrouw Ans de Vries", "Ans de Vries", ("mevrouw",)),
     ],
@@ -53,6 +56,17 @@ def test_short_forms_are_recognised(outer: str, inner: str, removed: tuple) -> N
         # `nl_normalization.strip_leading_noise` names this one in writing:
         # collapsing a named body onto a bare concept token another entity owns.
         ("Ministerie van Onderwijs", "Onderwijs"),
+        # `waterschap` was in this list's first version and is removed. It fails
+        # the test `gemeente` and `provincie` pass: no Dutch text uses "Limburg"
+        # to mean "Waterschap Limburg". A water board is a distinct legal actor
+        # whose management area is named after a province that is ITSELF a
+        # separate entity, so this is a body-versus-territory pair.
+        #
+        # It also contradicted the case below: a water board's executive is not
+        # the water board, while `Waterschap Limburg` / `Limburg` asserted that a
+        # water board IS the province. Both cannot be the rule.
+        ("Waterschap Limburg", "Limburg"),
+        ("Waterschap Rivierenland", "Rivierenland"),
         # The PC.2 plan asked for this pair. It is an office-of pair, so it is
         # deliberately NOT produced — see the module docstring. The class is real
         # and belongs in a later phase as an organ-of RELATION, not a merge.
