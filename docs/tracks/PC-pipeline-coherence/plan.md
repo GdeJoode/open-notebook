@@ -377,6 +377,9 @@ API route, MCP tool, CLI or frontend reads either table. Meanwhile
 
 ## PC.6 — Configuration that expresses one intent — ~1d
 
+**Status: DONE (review pending)** — `feature/track-pc6-config-coherence`.
+Report: [`phase-PC.6-report.md`](./phase-PC.6-report.md).
+
 **The finding (review R1).** `ENABLE_CONCEPT_ALIGNMENT=true` did nothing in the
 measured run because alignment classifies only entities KG resolution marked
 `is_new`, and KG resolution is off by default — a feature reachable only by
