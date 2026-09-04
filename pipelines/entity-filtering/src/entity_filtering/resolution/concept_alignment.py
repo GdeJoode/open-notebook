@@ -115,8 +115,6 @@ by construction.
 from __future__ import annotations
 
 import json
-import re
-import unicodedata
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -522,17 +520,6 @@ def parse_judge_response(
 
 def _tokens(text: str) -> List[str]:
     return [t for t in _normalize(text).split(" ") if t]
-
-
-def _is_token_subsequence(outer: Sequence[str], inner: Sequence[str]) -> bool:
-    """True when ``inner`` is a CONTIGUOUS token run inside ``outer``.
-
-    Token-boundary matching (not substring), so "deal" never matches "dealer".
-    """
-    n, m = len(outer), len(inner)
-    if m == 0 or m > n:
-        return False
-    return any(list(outer[i : i + m]) == list(inner) for i in range(n - m + 1))
 
 
 # --------------------------------------------------------------------------
@@ -1168,9 +1155,11 @@ class ConceptAligner:
 
 
 # PC.2: `_tokens` is exported so the curator door folds names into tokens exactly
-# as this module does. `_is_token_subsequence` is deliberately NOT exported: it is
-# unanchored, and unanchored containment pairs `Regio Deal` with
-# `Regio Deal Groningen` — see `_score_containment`.
+# as this module does. `_is_token_subsequence` used to sit beside it and is now
+# DELETED: its only caller was `lexical_alias_candidates`, which PC.2 removed, and
+# a producer with no consumer is what PC.1b's invariant exists to prevent. It was
+# also the wrong primitive — unanchored, so it pairs `Regio Deal` with
+# `Regio Deal Groningen`, which is the merge the dedup config refuses.
 __all__ = [
     "_tokens",
     "Alignment",

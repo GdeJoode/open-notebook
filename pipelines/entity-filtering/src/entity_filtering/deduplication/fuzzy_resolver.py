@@ -9,8 +9,6 @@ Merges entities with similar names using string distance algorithms:
 Uses UnionFind for transitive merging of entity groups.
 """
 
-import re
-import unicodedata
 from collections import Counter
 from typing import Any, Dict, List, Tuple
 

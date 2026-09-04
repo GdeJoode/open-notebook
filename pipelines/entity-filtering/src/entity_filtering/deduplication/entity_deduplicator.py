@@ -8,8 +8,6 @@ A FAISS/embedding-based deduplicator will be added as a separate
 module in a future migration.
 """
 
-import re
-import unicodedata
 from collections import Counter
 from typing import Any, Dict, List, Tuple
 

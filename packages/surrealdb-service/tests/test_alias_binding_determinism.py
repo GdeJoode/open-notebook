@@ -160,3 +160,100 @@ async def test_alias_provenance_survives_a_fresh_migrated_database(
     assert row["similarity_score"] == pytest.approx(0.87), "similarity_score dropped"
     assert row["method"] == "levenshtein", "method dropped by the schema"
     assert row["verified"] is False, "verified dropped by the schema"
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_a_row_that_predates_the_field_is_repaired_not_bricked(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """An `entity_alias` row written before migration 78 must stay writable.
+
+    The drift class migrations 61, 64 and 65 exist for: a SurrealDB column
+    DEFAULT applies only to NEWLY created rows, so a row predating the DEFINE
+    keeps NONE, and a strict type then rejects the WHOLE record on the next
+    UPDATE because a SCHEMAFULL update re-validates every field. `entity_alias`
+    has four live UPDATE paths — the K.2 duplicate-merge alias transfer (twice),
+    the K.3 apply, and the vault round trip — every one of which would have
+    started failing on pre-78 rows had 78 shipped as a bare DEFINE.
+
+    The previous test covers a NEWLY created row, which is exactly the case a
+    DEFAULT does handle, so it cannot see this. Here the legacy timeline is
+    replayed with the migration-64/65 forging technique — OVERWRITE the field as
+    `option<>`, create the row at NONE, re-DEFINE it strict without backfilling —
+    and then the migration's own coalescing UPDATE is run against it.
+    """
+    text = f"probe-{uuid.uuid4().hex[:10]}"
+    canonical = await _entity(live_surrealdb, f"{text}-canonical")
+    rid = f"entity_alias:{uuid.uuid4().hex[:12]}"
+
+    await execute_query(
+        "DEFINE FIELD OVERWRITE verified ON entity_alias TYPE option<bool>;",
+        config=live_surrealdb,
+    )
+    await execute_query(
+        f"CREATE {rid} SET alias_text = $t, canonical_entity = {canonical}, "
+        "verified = NONE;",
+        {"t": text},
+        live_surrealdb,
+    )
+    await execute_query(
+        "DEFINE FIELD OVERWRITE verified ON entity_alias TYPE bool DEFAULT false;",
+        config=live_surrealdb,
+    )
+
+    none_rows = await execute_query(
+        f"SELECT type::is::none(verified) AS isnone FROM {rid};", config=live_surrealdb
+    )
+    assert none_rows and none_rows[0]["isnone"] is True, "setup: expected NONE"
+
+    # Pre-repair: the K.2 alias transfer — a real production write — is blocked.
+    with pytest.raises(Exception) as excinfo:
+        await execute_query(
+            f"UPDATE {rid} SET canonical_entity = {canonical};", config=live_surrealdb
+        )
+    assert "verified" in str(excinfo.value), (
+        f"expected the strict `verified` field to be what blocks the write, got: "
+        f"{excinfo.value}"
+    )
+
+    # The migration's own repair line, run verbatim.
+    await execute_query(
+        "UPDATE entity_alias SET verified = verified ?? false;", config=live_surrealdb
+    )
+
+    await execute_query(
+        f"UPDATE {rid} SET canonical_entity = {canonical};", config=live_surrealdb
+    )
+    rows = await execute_query(f"SELECT verified FROM {rid};", config=live_surrealdb)
+    assert rows[0]["verified"] is False, "the repaired row must read as unverified"
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_the_repair_line_is_in_the_migration_and_is_idempotent(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """The coalesce must be in migration 78 itself, not only in this test.
+
+    The test above would pass just as well if the repair existed nowhere but the
+    test body. Migration 65's guard sweep runs BEFORE 78 and so cannot cover a
+    field defined by it, which is why the line has to live here.
+    """
+    from surrealdb_service.testing import fixtures as fx
+
+    body = (fx._MIGRATIONS_DIR / "78.surrealql").read_text()
+    sql = "\n".join(
+        line for line in body.splitlines() if not line.strip().startswith("--")
+    )
+    assert "verified = verified ?? false" in sql, (
+        "migration 78 declares a strict field without repairing the rows that "
+        "predate it — the drift class migrations 61/64/65 already fixed twice"
+    )
+
+    # Idempotent: running it twice on a clean database changes nothing.
+    for _ in range(2):
+        await execute_query(
+            "UPDATE entity_alias SET verified = verified ?? false;",
+            config=live_surrealdb,
+        )

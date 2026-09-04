@@ -1,8 +1,14 @@
+-- ============================================================================
 -- Down for migration 78: return entity_alias to its migration-39 field set.
 --
 -- Destructive by construction: on a SCHEMAFULL table, removing a field
 -- definition makes the stored values unreadable, so every alias loses its
--- provenance again. That is the state migration 78 exists to end.
+-- provenance again and `vault_sync_service` can export none. That is the state
+-- migration 78 exists to end.
+--
+-- The coalescing UPDATE is not undone — it only ever wrote `false` where NONE
+-- stood, and there is nothing to restore NONE for once the field is gone.
+-- ============================================================================
 
 REMOVE FIELD IF EXISTS match_type ON entity_alias;
 REMOVE FIELD IF EXISTS similarity_score ON entity_alias;

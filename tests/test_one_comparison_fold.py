@@ -31,7 +31,7 @@ from __future__ import annotations
 import ast
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Sequence, Set, Tuple
 
 import pytest
 
@@ -91,8 +91,12 @@ def _production_sources() -> List[Path]:
     ]
 
 
-def _is_nfkc_call(node: ast.AST) -> bool:
-    """``unicodedata.normalize("NFKC", …)``, however the module is imported."""
+def _is_nfkc_call(node: ast.AST, nfkc_names: Set[str]) -> bool:
+    """``unicodedata.normalize("NFKC", …)``, however the module is imported.
+
+    ``nfkc_names`` carries the module's names bound to the literal ``"NFKC"``, so
+    holding the form in a constant does not hide the call.
+    """
     if not isinstance(node, ast.Call):
         return False
     func = node.func
@@ -100,7 +104,9 @@ def _is_nfkc_call(node: ast.AST) -> bool:
     if name != "normalize" or not node.args:
         return False
     first = node.args[0]
-    return isinstance(first, ast.Constant) and first.value == "NFKC"
+    return (isinstance(first, ast.Constant) and first.value == "NFKC") or (
+        isinstance(first, ast.Name) and first.id in nfkc_names
+    )
 
 
 def _is_lower_call(node: ast.AST) -> bool:
@@ -111,41 +117,82 @@ def _is_lower_call(node: ast.AST) -> bool:
     )
 
 
-#: Module-level names bound to `re.compile(r"\s+")`, per parsed module. A
-#: precompiled pattern is how anybody writing this for performance would spell it
-#: — the shared implementation itself does — and the first version of the detector
-#: missed exactly that, which its own control caught.
-def _whitespace_pattern_names(tree: ast.AST) -> Set[str]:
+_WS_LITERALS = (r"\s+", "\\s+")
+
+
+def _bound_targets(node: ast.AST) -> List[str]:
+    """Names an assignment binds, for `x = …`, `x: T = …` and `a = b = …`."""
+    if isinstance(node, ast.AnnAssign):
+        return [node.target.id] if isinstance(node.target, ast.Name) else []
+    if isinstance(node, ast.Assign):
+        return [t.id for t in node.targets if isinstance(t, ast.Name)]
+    return []
+
+
+def _names_bound_to_constant(tree: ast.AST, values: Sequence[object]) -> Set[str]:
+    r"""Names bound anywhere to one of ``values`` as a plain literal.
+
+    Catches the indirection of holding the literal in a constant —
+    ``_WS = r"\s+"`` then ``re.sub(_WS, …)``, or ``_FORM = "NFKC"`` then
+    ``normalize(_FORM, …)``. Both were live evasions found by adversarial review.
+    """
     names: Set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+        value = getattr(node, "value", None)
+        if isinstance(value, ast.Constant) and value.value in values:
+            names.update(_bound_targets(node))
+    return names
+
+
+#: Names bound to `re.compile(r"\s+")`, per parsed module — at module level, in a
+#: class body, or inside a function. A precompiled pattern is how anybody writing
+#: this for performance would spell it — the shared implementation itself does —
+#: and the first version of the detector missed exactly that, which its own
+#: control caught. A later review found it still missed the CLASS-attribute form
+#: (`self._WS.sub`), which is this repo's own idiom (`CandidateDedupService._ROMAN_RE`).
+def _whitespace_pattern_names(tree: ast.AST) -> Set[str]:
+    literal_names = _names_bound_to_constant(tree, _WS_LITERALS)
+    names: Set[str] = set()
+    for node in ast.walk(tree):
+        call = getattr(node, "value", None)
+        if not isinstance(call, ast.Call):
             continue
-        call = node.value
         func = call.func
         attr = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
         if attr != "compile" or not call.args:
             continue
         first = call.args[0]
-        if isinstance(first, ast.Constant) and first.value in (r"\s+", "\\s+"):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    names.add(target.id)
+        pattern_is_ws = (
+            isinstance(first, ast.Constant) and first.value in _WS_LITERALS
+        ) or (isinstance(first, ast.Name) and first.id in literal_names)
+        if pattern_is_ws:
+            names.update(_bound_targets(node))
     return names
 
 
-def _is_whitespace_sub(node: ast.AST, compiled: Set[str]) -> bool:
+def _is_whitespace_sub(
+    node: ast.AST, compiled: Set[str], literal_names: Set[str]
+) -> bool:
     r"""``re.sub(r"\s+", …)``, or ``<name>.sub(…)`` for a name compiled from it."""
     if not isinstance(node, ast.Call):
         return False
     func = node.func
     if not isinstance(func, ast.Attribute) or func.attr != "sub":
         return False
-    if isinstance(func.value, ast.Name) and func.value.id in compiled:
+    target = func.value
+    # `_WS.sub(…)`, and equally `self._WS.sub(…)` / `cls._WS.sub(…)` / any
+    # `<obj>._WS.sub(…)`. The attribute form is this repo's own idiom, and the
+    # detector missed it until a review planted it.
+    if isinstance(target, ast.Name) and target.id in compiled:
+        return True
+    if isinstance(target, ast.Attribute) and target.attr in compiled:
         return True
     if not node.args:
         return False
     first = node.args[0]
-    return isinstance(first, ast.Constant) and first.value in (r"\s+", "\\s+")
+    return (isinstance(first, ast.Constant) and first.value in _WS_LITERALS) or (
+        isinstance(first, ast.Name) and first.id in literal_names
+    )
 
 
 def detect_folds(source: str) -> Set[str]:
@@ -156,17 +203,30 @@ def detect_folds(source: str) -> Set[str]:
     """
     tree = ast.parse(source)
     compiled = _whitespace_pattern_names(tree)
+    literal_names = _names_bound_to_constant(tree, _WS_LITERALS)
+    nfkc_names = _names_bound_to_constant(tree, ("NFKC",))
     found: Set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        # Lambdas count: `fold = lambda t: ...` is a fifth copy that happens to
+        # have no `def`. It is reported under the name it is bound to.
+        if isinstance(node, ast.Lambda):
+            name = next(
+                (n for parent in ast.walk(tree)
+                 for n in _bound_targets(parent)
+                 if getattr(parent, "value", None) is node),
+                "<lambda>",
+            )
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = node.name
+        else:
             continue
         nfkc = lower = ws = False
         for inner in ast.walk(node):
-            nfkc = nfkc or _is_nfkc_call(inner)
+            nfkc = nfkc or _is_nfkc_call(inner, nfkc_names)
             lower = lower or _is_lower_call(inner)
-            ws = ws or _is_whitespace_sub(inner, compiled)
+            ws = ws or _is_whitespace_sub(inner, compiled, literal_names)
         if nfkc and lower and ws:
-            found.add(node.name)
+            found.add(name)
     return found
 
 
@@ -274,18 +334,30 @@ def test_the_shims_do_not_hide_the_implementation():
     """
     from entity_filtering.deduplication.entity_deduplicator import EntityDeduplicator
     from entity_filtering.deduplication.fuzzy_resolver import FuzzyResolver
+    from entity_filtering.resolution import concept_alignment
     from entity_filtering.resolution.kg_resolver import KGResolver
-
-    probe = "  Brede   Welvaart  "
     from shared.utils.text_folding import fold_for_comparison
 
-    assert (
-        EntityDeduplicator._normalize_key(probe)
-        == FuzzyResolver._normalize(probe)
-        == KGResolver._normalize(probe)
-        == fold_for_comparison(probe)
-        == "brede welvaart"
+    # All FOUR shims, and over inputs where a partial revert would show: interior
+    # runs, an NFKC-only difference, and a case-only difference. A single probe
+    # like "  Brede   Welvaart  " is satisfied by a shim that dropped the NFKC
+    # step, which is exactly the silent partial revert this test is for.
+    shims = (
+        EntityDeduplicator._normalize_key,
+        FuzzyResolver._normalize,
+        KGResolver._normalize,
+        concept_alignment._normalize,
     )
+    for probe, expected in (
+        ("  Brede   Welvaart  ", "brede welvaart"),
+        ("Ｒｅｇｉｏ\tDeal", "regio deal"),   # full-width + tab: NFKC + collapse
+        ("REGIO DEAL", "regio deal"),         # case only
+        ("ﬁnanciering", "financiering"),      # ligature: NFKC only
+        ("", ""),
+    ):
+        got = {shim(probe) for shim in shims}
+        assert got == {expected}, f"{probe!r}: shims disagree or drifted: {got}"
+        assert fold_for_comparison(probe) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -326,3 +398,91 @@ def test_the_documented_non_matches_really_are_not_matched(name: str):
     trusts it would assume coverage that does not exist.
     """
     assert name not in _scanned_keys()
+
+
+# ---------------------------------------------------------------------------
+# Evasions found by adversarial review
+#
+# Round 1 of this guard documented three limits and implied the rest was covered.
+# A reviewer planted 18 variants and six got through. Each is now a case, because
+# "the detector handles precompiled patterns" was true of exactly one spelling of
+# that idea.
+# ---------------------------------------------------------------------------
+
+_PRELUDE = "import re, unicodedata\n"
+_TAIL = 'unicodedata.normalize("NFKC", t).lower().strip()'
+
+_EVASIONS = {
+    "class attribute via self": _PRELUDE + (
+        "class C:\n"
+        '    _WS = re.compile(r"\\s+")\n'
+        "    def fold(self, t):\n"
+        f'        return self._WS.sub(" ", {_TAIL})\n'
+    ),
+    "class attribute via cls": _PRELUDE + (
+        "class C:\n"
+        '    _WS = re.compile(r"\\s+")\n'
+        "    @classmethod\n"
+        "    def fold(cls, t):\n"
+        f'        return cls._WS.sub(" ", {_TAIL})\n'
+    ),
+    "annotated assignment": _PRELUDE + (
+        '_WS: re.Pattern = re.compile(r"\\s+")\n'
+        "def fold(t):\n"
+        f'    return _WS.sub(" ", {_TAIL})\n'
+    ),
+    "NFKC held in a constant": _PRELUDE + (
+        '_FORM = "NFKC"\n'
+        "def fold(t):\n"
+        '    return re.sub(r"\\s+", " ", '
+        "unicodedata.normalize(_FORM, t).lower().strip())\n"
+    ),
+    "pattern literal held in a constant": _PRELUDE + (
+        '_WS_PAT = r"\\s+"\n'
+        "def fold(t):\n"
+        f'    return re.sub(_WS_PAT, " ", {_TAIL})\n'
+    ),
+    "constant compiled, then used": _PRELUDE + (
+        '_WS_PAT = r"\\s+"\n'
+        "_WS = re.compile(_WS_PAT)\n"
+        "def fold(t):\n"
+        f'    return _WS.sub(" ", {_TAIL})\n'
+    ),
+    "lambda": _PRELUDE + (
+        f'fold = lambda t: re.sub(r"\\s+", " ", {_TAIL})\n'
+    ),
+    "function-local compile": _PRELUDE + (
+        "def fold(t):\n"
+        '    ws = re.compile(r"\\s+")\n'
+        f'    return ws.sub(" ", {_TAIL})\n'
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_EVASIONS), ids=lambda k: k.replace(" ", "-"))
+def test_a_planted_copy_is_caught_in_every_shape(shape: str) -> None:
+    """Each of these was a green pass against an earlier version of the detector.
+
+    The class-attribute forms matter most: `CandidateDedupService._ROMAN_RE` is
+    exactly that idiom in this repository, so a sixth copy written in the local
+    style would have slipped through.
+    """
+    assert detect_folds(_EVASIONS[shape]), f"evasion not caught: {shape}"
+
+
+def test_the_detector_still_needs_all_three_operations() -> None:
+    """Widening the detector must not make it fire on two of the three.
+
+    The counterweight to the cases above: an NFKC call alone is a unicode nicety
+    and `.lower()` alone is everywhere. Without this, closing the evasions could
+    be "fixed" by loosening the conjunction, and the guard would start failing on
+    unrelated code — a guard that cries wolf gets an allow-list entry, which is
+    how it stops guarding.
+    """
+    two_of_three = _PRELUDE + (
+        '_WS = re.compile(r"\\s+")\n'
+        "class C:\n"
+        "    def not_a_fold(self, t):\n"
+        '        return self._WS.sub(" ", unicodedata.normalize("NFKC", t).strip())\n'
+    )
+    assert detect_folds(two_of_three) == set()

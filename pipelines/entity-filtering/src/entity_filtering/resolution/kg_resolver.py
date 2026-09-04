@@ -30,8 +30,6 @@ The resolver communicates with the database exclusively through the
 entities are simply marked as new (no-op mode).
 """
 
-import re
-import unicodedata
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from loguru import logger
