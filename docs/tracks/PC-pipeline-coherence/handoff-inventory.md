@@ -126,6 +126,22 @@ five would have fired a banner (coverage 0.45 / 0.48 / 0.55 / 0.58 →
 | `incremental_report` incl. `repair` | filtering stage 10b → `filtered.metadata` | **PC.3** | Belongs with the cross-document resolution decision |
 | ~~`find_by_alias` has no `verified` filter and no `ORDER BY`~~ **CLOSED (PC.2)** | `entity_alias` → KG resolver tier 1 | — | Now `ORDER BY verified DESC, similarity_score DESC, id ASC`: a human decision outranks a machine one, ranked not filtered so tier 1 does not go inert. Migration 78 was needed first — three of those columns did not exist on a fresh database. |
 
+## Settled by PC.6
+
+| row | disposition |
+|---|---|
+| `validation_report` — stage 11 inert | **Made unreachable.** The claim was "no production call site passes an ontology". Measured: with `enabled=True` and `ontology=None` the filter does not merely skip — it returns `{"valid_entities": 1, "invalid_entities": 0}`, i.e. a SUCCESS report for a validation that never ran, behind one DEBUG line. Now a BLOCK finding (`validation-without-ontology`). The report field itself stays; it is written when validation actually runs. |
+| `metrics` rows nothing reads | **Measured and reassigned to PC.5.** Only `routing.served` is read (`model_routes.py`); `export.jsonl` and `export.obsidian` are written and read nowhere. That is a question about what a run should REPORT to a human, which is PC.5's remit ("a door for the curator loop"), not configuration coherence. Reassigned with the measurement rather than deferred with a shrug. |
+| alignment report keys dropped at the `filtering_stats` copy | **Reassigned to PC.5**, same argument: which of the 11 keys a curator needs is a surface decision. PC.2 already closed the one key that had an owner (`alias_candidates`). |
+| `_save_result` stores pre-filter entities beside post-filter stats | **Reassigned to PC.5.** Needs a decision about what a stored run means, and that decision is visible only through the surface that renders it. |
+
+Reassigning three rows out of the phase that owned them needs its reason on the
+record: PC.6's remit is *configuration that expresses one intent* — a flag either
+works or says why it cannot. All three are about what a completed run reports,
+which is a different question with a different owner. The alternative was to
+"decide" them here without the surface that would show whether the decision was
+right, which is how `FilteredResult` acquired four fields nobody reads.
+
 ## Found by PC.2's adversarial review
 
 | finding | boundary | owner | note |

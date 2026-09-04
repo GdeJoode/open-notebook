@@ -110,6 +110,49 @@ def test_the_judge_without_a_model_blocks_only_when_alignment_runs() -> None:
     assert off == []
 
 
+def test_validation_without_an_ontology_blocks() -> None:
+    """Reporting success for a check that never ran.
+
+    Measured against the real `OntologyConstraintFilter`: with `ontology=None` it
+    logs one DEBUG line and returns
+    ``{"total_entities": 1, "valid_entities": 1, "invalid_entities": 0, …}``. A run
+    with validation "on" and no ontology is therefore indistinguishable, in its own
+    output, from a run that validated everything successfully. Zero effect is the
+    defect this phase targets; a success report for a check that did not happen is
+    the same defect with evidence attached.
+    """
+    findings = check_feature_dependencies(
+        concept_alignment_enabled=False,
+        kg_resolution_enabled=False,
+        judge_enabled=False,
+        judge_model_configured=True,
+        ontology_validation_enabled=True,
+        ontology_supplied=False,
+    )
+    assert [(f.code, f.severity) for f in findings] == [
+        ("validation-without-ontology", BLOCK)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("enabled", "supplied"), [(False, False), (True, True), (False, True)]
+)
+def test_validation_is_silent_when_it_can_work_or_is_off(
+    enabled: bool, supplied: bool
+) -> None:
+    assert (
+        check_feature_dependencies(
+            concept_alignment_enabled=False,
+            kg_resolution_enabled=False,
+            judge_enabled=False,
+            judge_model_configured=True,
+            ontology_validation_enabled=enabled,
+            ontology_supplied=supplied,
+        )
+        == []
+    )
+
+
 # --- routing ----------------------------------------------------------------
 
 

@@ -171,6 +171,8 @@ def check_feature_dependencies(
     kg_resolution_enabled: bool,
     judge_enabled: bool,
     judge_model_configured: bool,
+    ontology_validation_enabled: bool = False,
+    ontology_supplied: bool = True,
 ) -> List[Finding]:
     """Flags that need a second, unrelated flag to do anything.
 
@@ -205,6 +207,28 @@ def check_feature_dependencies(
                 "silently instead of being judged",
                 "set default_chat_model, or disable the judge "
                 "(ConceptAlignmentConfig.judge_enabled=False)",
+            )
+        )
+
+    if ontology_validation_enabled and not ontology_supplied:
+        # The sharpest instance of this phase's target. `OntologyConstraintFilter`
+        # with `ontology=None` does not merely skip — it returns a report saying
+        # every entity and relation is VALID:
+        #     {"total_entities": 1, "valid_entities": 1, "invalid_entities": 0, …}
+        # so a run with validation "on" and no ontology is indistinguishable in
+        # its own output from a run that validated everything successfully. The
+        # skip is a DEBUG line. Zero effect is bad; reporting success for a check
+        # that never happened is worse.
+        findings.append(
+            Finding(
+                BLOCK,
+                "validation-without-ontology",
+                "ontology validation is enabled but no ontology is supplied; the "
+                "filter skips silently and still reports every entity and "
+                "relation as valid, so the run cannot be told apart from one that "
+                "actually validated",
+                "supply an ontology to the workflow, or disable "
+                "ontology_validation (OntologyValidationConfig.enabled=False)",
             )
         )
 
@@ -247,6 +271,8 @@ def collect_findings(
     judge_enabled: bool,
     judge_model_configured: bool,
     resolver_default_privacy: str,
+    ontology_validation_enabled: bool = False,
+    ontology_supplied: bool = True,
     installed_models: Optional[set] = None,
     ollama_probe: Callable[[str], Optional[set]] = _installed_ollama_models,
 ) -> List[Finding]:
@@ -268,6 +294,8 @@ def collect_findings(
             kg_resolution_enabled=kg_resolution_enabled,
             judge_enabled=judge_enabled,
             judge_model_configured=judge_model_configured,
+            ontology_validation_enabled=ontology_validation_enabled,
+            ontology_supplied=ontology_supplied,
         ),
         *check_privacy_defaults(
             routing_default=str(

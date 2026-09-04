@@ -377,28 +377,74 @@ API route, MCP tool, CLI or frontend reads either table. Meanwhile
 
 ## PC.6 — Configuration that expresses one intent — ~1d
 
-**The finding (review R1, R4).** `ENABLE_CONCEPT_ALIGNMENT=true` did nothing in
-the measured run because alignment classifies only entities KG resolution marked
+**The finding (review R1).** `ENABLE_CONCEPT_ALIGNMENT=true` did nothing in the
+measured run because alignment classifies only entities KG resolution marked
 `is_new`, and KG resolution is off by default — a feature reachable only by
-changing a second, unrelated default. Separately, with no `default_models` row the
-router falls back to Ollama `gemma2`, which is not installed, and the one
-configured model row returns HTTP 410; neither failure surfaces until an
-extraction dies.
+changing a second, unrelated default.
 
-- One named profile per intent (e.g. "fast", "quality") rather than five
-  independent flags, or an explicit dependency check that refuses an incoherent
-  combination loudly.
+- One named profile per intent, or an explicit dependency check that refuses an
+  incoherent combination loudly.
 - A startup or first-use check that the routed extraction model actually answers.
-- **Ollama context (review R4b, measured)**: esperanto never sends `num_ctx`, so
-  Ollama truncates every prompt over its runtime default (measured: 4096 of a
-  5507-token prompt) without erroring, and the JSON instructions in the prompt's
-  tail are what get cut. The `context_window` column cannot fix this on its own —
-  and filling it in FIRST makes the packer build larger prompts, so it makes
-  truncation worse. Either send `num_ctx`, or document that Ollama models must be
-  registered as variants that bake it in.
-- **From PC.1b's inventory**: `validation_report` (kept with no reader — stage 11 is inert because no production call site passes an ontology), the alignment report keys dropped at the `filtering_stats` copy, `metrics` rows nothing reads, and `_save_result` storing pre-filter entities beside post-filter stats.
+- **From PC.1b's inventory**: `validation_report` (kept with no reader — stage 11
+  is inert because no production call site passes an ontology), the alignment
+  report keys dropped at the `filtering_stats` copy, `metrics` rows nothing reads,
+  and `_save_result` storing pre-filter entities beside post-filter stats.
 - **AC**: enabling a feature either works or says why it cannot; the measured
   "flag on, zero effect, only a warning" state is unreachable.
+
+### Two claims in the original plan that measurement disproved
+
+Both were carried from review R1/R4 and are corrected here rather than left to be
+inherited as fact.
+
+**The Ollama `num_ctx` paragraph (R4b) was wrong in its specifics.** It said
+esperanto never sends `num_ctx`, so Ollama truncates every prompt over its runtime
+default and the JSON instructions in the prompt's tail are what get cut. Measured
+(2026-09-04, adversarial review of a branch that was reverted in full):
+
+* `num_ctx` **is** sent, unconditionally, by both callers —
+  `shared/model_routing.py::_call_ollama` and esperanto's own Ollama provider. A
+  request-level value also *overrides* a Modelfile `PARAMETER`, so baking context
+  into a model variant is inert on this path.
+* Truncation discards the **head**, not the tail — verified with markers at both
+  ends of an over-long prompt. Instructions at the end survive; document content
+  is what is lost.
+* Extraction is **not** truncating: `EXTRACTION_CHUNK_SIZE=4000` chars plus the
+  regiodeal ontology gives a worst-case prompt of ~4,530 tokens against the 8,192
+  already sent.
+
+The genuine finding underneath is narrower and belongs to PC.6: the context lives
+in `model_routing.yaml` per step, and nothing checks that a step's `num_ctx` is
+large enough for the prompts that step builds. The `-ctx16k` model-variant
+approach is **not** the answer here; it was tried and reverted.
+
+**The `gemma2` fallback claim has no basis in the code.** The plan said that with
+no `default_models` row the router falls back to Ollama `gemma2`, which is not
+installed. `gemma` appears nowhere in the repository. The real state, measured: all
+eleven routed local models are installed, `default_models` holds zero rows, and
+that empty row is a legitimate "not configured yet" rather than a fault — models
+for summaries and transformations are added later.
+
+### What the phase found instead
+
+**Two model-configuration systems with opposite privacy defaults.**
+`model_routing.yaml` (pipeline steps × privacy) defaults to `internal`, local
+only; `default_models` + `route_resolver` (LLMTask × PrivacyMode) defaults to
+`CLOUD`, prefer cloud and fall back to local. Each is defensible alone; together
+they mean the same document is treated as local by one path and cloud-eligible by
+the other. **Decided (user): keep both, one authoritative per domain, with a
+bridge check that fails when they contradict** — merging touches both code paths,
+the `/api/models/defaults` surface and the J.4 telemetry for no behaviour anyone
+asked for.
+
+**Startup seeded model rows for a provider the config had retired.** `seed_nim_routes`
+runs on every boot and is where the single NVIDIA `model` row came from — a
+configuration contradicting itself once per startup, for a vendor nothing is
+allowed to call. Now skipped while the provider is declared unavailable.
+
+**NVIDIA is declared unavailable rather than deleted** (user's decision): the
+`public` routes stay as the record of what the cloud path was, and resolving one
+raises `ProviderUnavailableError` with the reason instead of reaching for a key.
 
 ---
 
