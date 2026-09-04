@@ -126,6 +126,13 @@ five would have fired a banner (coverage 0.45 / 0.48 / 0.55 / 0.58 →
 | `incremental_report` incl. `repair` | filtering stage 10b → `filtered.metadata` | **PC.3** | Belongs with the cross-document resolution decision |
 | ~~`find_by_alias` has no `verified` filter and no `ORDER BY`~~ **CLOSED (PC.2)** | `entity_alias` → KG resolver tier 1 | — | Now `ORDER BY verified DESC, similarity_score DESC, id ASC`: a human decision outranks a machine one, ranked not filtered so tier 1 does not go inert. Migration 78 was needed first — three of those columns did not exist on a fresh database. |
 
+## Found by PC.2's adversarial review
+
+| finding | boundary | owner | note |
+|---|---|---|---|
+| `POST /apply` performs no band or type check | curator UI → `entity_resolution` router | **PC.5** | It applies whatever cluster the client echoes, so the router docstring's "only `auto_merge` candidates may be applied" is enforced only by the frontend. Pre-existing from K.5; PC.2 is what puts cross-type pairs into the review list, so the discipline now matters more. Not changed in a phase about identity. |
+| Office-of / organ-of name pairs have no home | name shapes → nothing | **later phase** | `Minister van BZK` / `BZK`, `Burgemeester van Rotterdam` / `Rotterdam`. Real and worth surfacing, but as a RELATION — a merge proposal asserts they are one entity, which is false. PC.2 removed them from the containment rule rather than leave a leading question in front of a destructive button. |
+
 ## Inverted case — a consumer with no producer
 
 `notebook_event{extension_suggested, schema_mismatch}` is polled by the frontend

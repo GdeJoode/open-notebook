@@ -283,9 +283,31 @@ Three things the plan did not anticipate, each with its measurement:
 - **Two labelling bugs in the apply path.** The frontend labelled the survivor
   `name_a` regardless of who won, contradicting the server-side rule it mirrors.
 
-Handed to **PC.4**: 8 cross-type candidates — byte-identical names split across
-`entity_type`, six of them `programme` against `topic`. That is the evidence PC.4's
-AC asks for, measured rather than swept.
+Adversarial review returned REVISIONS_NEEDED on attempt 1 and changed two things
+materially, both of which the first report had claimed as done:
+
+- **The curator card was never wired.** `candidateTypeLabel` was written, tested
+  and imported — and called nowhere, so a cross-type candidate still rendered one
+  name twice with the deciding fact hidden. Now covered by a jsdom test that
+  mounts the real component.
+- **Migration 78 was a bare DEFINE.** A SurrealDB DEFAULT does not backfill, and a
+  strict type then blocks every UPDATE to a pre-existing row — the class
+  migrations 61, 64 and 65 already fixed twice here. It now carries the coalescing
+  repair, proven against a forged legacy row.
+
+And the correction that matters most for later phases: **an organ OF X is not X**.
+The curated affix list was built from corpus frequency and carried the governance
+affixes, so it proposed `Burgemeester van Rotterdam` ~ `Rotterdam` and
+`Gemeenteraad van Amsterdam` ~ `Amsterdam` as merges — and the tests pinned one of
+them as correct. Cut from 40 affixes to 12. This gives up the plan's own
+`Minister van BZK` example: that class is real but belongs in a later phase as an
+**organ-of relation**, not a merge.
+
+Handed to **PC.4**: 8 names the graph held twice under two types, six of them
+`programme` against `topic`. The working corpus was emptied after the measurement,
+so PC.4 should re-derive the list from the cross-type band on real data — what
+carries forward is the shape of the finding, not the rows. The report records
+three figures that do not reconcile rather than picking one.
 
 ## PC.3 — Look at the graph that is already there — ~1.5d
 

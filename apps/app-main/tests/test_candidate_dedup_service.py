@@ -672,3 +672,31 @@ async def test_curated_head_run_does_not_pair_unrelated_names() -> None:
     report = await _service(rows).propose_candidates()
     assert report.auto_merge_count == 0
     assert report.review_count == 0
+
+
+@pytest.mark.asyncio
+async def test_the_auto_merge_band_never_carries_a_cross_type_pair() -> None:
+    """Asserted on the LIST, not on the band function.
+
+    `okf_import_service._run_dedup` iterates `report.auto_merge` and applies every
+    entry with `apply_merge` — no human, no confirmation. `fold_equal` is a new
+    AUTO producer at score 1.0, so PC.2 widens what that unattended path merges:
+    a case-only duplicate of the same type now merges during an OKF import.
+
+    That is intended — same type and equal under the fold is what a duplicate IS,
+    and the fold strips no punctuation and folds no diacritics. What must never
+    reach it is a cross-type pair, where the graph holds two rows precisely
+    because something is unresolved. `_strongest_band` is tested separately; this
+    tests the collection that path actually reads.
+    """
+    rows = [
+        _entity("entity:p", "Mark Rutte", etype="person"),
+        _entity("entity:o", "Mark Rutte", etype="organization"),
+        _entity("entity:c", "REGIO DEAL", etype="programme"),
+        _entity("entity:d", "Regio Deal", etype="programme"),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert [c.method for c in report.auto_merge] == ["fold_equal"]
+    assert all(c.entity_type_b == "" for c in report.auto_merge), (
+        "a candidate carrying two types reached the unattended apply path"
+    )
