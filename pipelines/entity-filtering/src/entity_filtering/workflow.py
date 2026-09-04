@@ -193,8 +193,37 @@ class FilteringWorkflow:
             )
 
         # Ontology validation
+        #
+        # PC.6: the check lives HERE, not at app startup, because this is the only
+        # place that holds both facts — the flag and the ontology. The first
+        # attempt put it in `collect_findings`, whose single production caller
+        # never passes either, so the finding was structurally unreachable: built,
+        # tested, never called, which is the defect this whole track keeps
+        # producing.
+        #
+        # What it prevents is worse than a no-op. `OntologyConstraintFilter` with
+        # `ontology=None` logs one DEBUG line and returns
+        # `{"total_entities": N, "valid_entities": N, "invalid_entities": 0}` — a
+        # SUCCESS report for a validation that never happened, so the run cannot
+        # be told apart from one that validated everything.
         self._ontology_filter: Optional[OntologyConstraintFilter] = None
         if self._config.ontology_validation.enabled:
+            if ontology is None:
+                from shared.config_coherence import (
+                    ConfigurationError,
+                    check_feature_dependencies,
+                )
+
+                raise ConfigurationError(
+                    check_feature_dependencies(
+                        concept_alignment_enabled=False,
+                        kg_resolution_enabled=False,
+                        judge_enabled=False,
+                        judge_model_configured=True,
+                        ontology_validation_enabled=True,
+                        ontology_supplied=False,
+                    )
+                )
             self._ontology_filter = OntologyConstraintFilter(
                 ontology=ontology,
                 strict=self._config.ontology_validation.strict_mode,

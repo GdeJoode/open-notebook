@@ -176,11 +176,31 @@ def test_a_retired_provider_blocks_only_on_the_route_that_is_taken() -> None:
     assert ("provider-unavailable", BLOCK) in {(f.code, f.severity) for f in taken}
 
 
-def test_a_routed_local_model_that_is_not_pulled_blocks() -> None:
-    findings = check_routing(_routing(model="not-pulled:9b"), installed={"llama3.1:8b"})
-    blocking = [f for f in findings if f.severity == BLOCK]
+def test_a_missing_model_blocks_only_on_a_step_every_run_exercises() -> None:
+    """`extraction` refuses; `vlm` warns. Both are the same missing model.
+
+    A partially-pulled Ollama used to hard-refuse startup for a step the operator
+    may never touch, and the failure mode was worst in the COMMON case: no Ollama
+    at all degrades to one WARN, while Ollama with *some* models refused. That is
+    the over-reach `test_a_disabled_feature_never_blocks` refuses for feature
+    flags, applied to routes.
+    """
+    from shared.config_coherence import REQUIRED_STEPS
+
+    assert "extraction" in REQUIRED_STEPS and "vlm" not in REQUIRED_STEPS
+
+    required = check_routing(_routing(model="not-pulled:9b"), installed={"llama3.1:8b"})
+    blocking = [f for f in required if f.severity == BLOCK]
     assert [f.code for f in blocking] == ["model-not-installed"]
     assert "ollama pull not-pulled:9b" in blocking[0].remedy
+
+    optional = dict(_routing())
+    optional["routing"] = {
+        "vlm": {"internal": {"provider": "ollama", "model": "not-pulled:9b"}}
+    }
+    findings = check_routing(optional, installed={"llama3.1:8b"})
+    assert [(f.code, f.severity) for f in findings] == [("model-not-installed", WARN)]
+    assert "not exercised by every run" in findings[0].remedy
 
 
 def test_an_implicit_latest_tag_counts_as_installed() -> None:

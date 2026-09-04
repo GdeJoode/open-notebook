@@ -118,13 +118,40 @@ class ResolvedRoute:
     ordered_candidates: List[ModelCandidate] = field(default_factory=list)
 
 
+def _provider_is_retired(provider: str) -> bool:
+    """True when `model_routing.yaml` declares the provider unavailable (PC.6).
+
+    This is the bridge between the two model-configuration systems. Retiring a
+    provider in the YAML used to affect only the pipeline half; the app resolver
+    filtered on API-key presence alone, so a retired vendor whose key was still in
+    `.env` stayed at the HEAD of the CLOUD chain for chat, the judge and agent
+    extraction. Declaration on, zero effect on half the system — the acceptance
+    criterion this phase exists to enforce, failed by the phase's own mechanism.
+
+    Read on every call rather than cached: `_load_config` already memoises, and a
+    stale answer here is a route to a vendor nothing is allowed to call.
+    """
+    try:
+        from shared.model_routing import _load_config
+
+        conf = _load_config().get("providers", {}).get(provider, {})
+    except Exception:  # noqa: BLE001 — an unreadable YAML retires nothing
+        return False
+    return conf.get("available") is False
+
+
 def _provider_key_present(provider: str) -> bool:
-    """True iff the provider is local OR its API key env var is set (J-Q6).
+    """True iff the provider is usable: not retired, AND local or keyed (J-Q6).
 
     Reuses the existing registry check (``bool(os.environ.get(api_key_env_var))``)
     so the "is this provider configured" semantics match ``providers.py``. Local
     providers (ollama/llamacpp) never need a key.
+
+    PC.6 adds the retirement gate. A key in the environment is not consent: it is
+    what a retired vendor leaves behind.
     """
+    if _provider_is_retired(provider):
+        return False
     cfg = get_provider_config(provider)
     if cfg is None:
         return False

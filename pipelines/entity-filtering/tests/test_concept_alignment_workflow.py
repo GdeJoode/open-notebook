@@ -87,7 +87,14 @@ def _repo():
     })
 
 
-def _config(*, alignment: bool, ontology_validation: bool = True,
+# PC.6: `ontology_validation` defaulted to True here while no test passes an
+# `ontology` to the workflow — so every one of these ran the constraint filter
+# with `ontology=None`, which reports every entity and relation VALID for a
+# validation that never happened. These tests are about concept alignment; they
+# never wanted validation, they inherited it. Default flipped rather than the
+# refusal weakened: two shipped tests sitting in the state this phase makes
+# unreachable is evidence the finding is real, not a reason to soften it.
+def _config(*, alignment: bool, ontology_validation: bool = False,
             centrality: bool = False, kg_resolution: bool = True,
             centrality_min_score: float = 0.01) -> FilteringConfig:
     return FilteringConfig(

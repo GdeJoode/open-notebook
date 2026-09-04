@@ -42,6 +42,16 @@ from typing import Any, Callable, Dict, List, Optional
 BLOCK = "block"
 WARN = "warn"
 
+#: Steps every run exercises, so a missing model there stops work outright.
+#: Everything else — `vlm`, `classification`, `summarization` — is reached only by
+#: a caller that asks for it, and an operator who never touches the VLM path must
+#: still be able to boot. Refusing startup over a model they will never load is
+#: the over-reach `check_feature_dependencies` already refuses to commit, and it
+#: is worst in the COMMON case: no Ollama at all degrades to one WARN, while
+#: Ollama with some models would refuse. Declared rather than inferred, because
+#: the inference ("is this step used?") is not available at startup.
+REQUIRED_STEPS = frozenset({"extraction", "embedding"})
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -153,13 +163,21 @@ def check_routing(
 
             if provider == "ollama" and model and installed is not None:
                 if model not in installed:
+                    reached = privacy in (default_privacy, "any")
+                    required = step in REQUIRED_STEPS
                     findings.append(
                         Finding(
-                            BLOCK if privacy in (default_privacy, "any") else WARN,
+                            BLOCK if (reached and required) else WARN,
                             "model-not-installed",
                             f"{step}/{privacy} routes to local model {model!r}, "
                             f"which is not pulled",
-                            f"`ollama pull {model}`, or change the route",
+                            f"`ollama pull {model}`"
+                            + (
+                                ", or change the route"
+                                if required
+                                else f" before using the {step} path, or change "
+                                f"the route — {step} is not exercised by every run"
+                            ),
                         )
                     )
     return findings

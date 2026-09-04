@@ -125,8 +125,21 @@ def _providers(route: ResolvedRoute) -> List[str]:
 
 
 @pytest.mark.asyncio
-async def test_cloud_nvidia_key_orders_nvidia_local(monkeypatch, fake_defaults):
+async def test_cloud_key_orders_cloud_then_local(monkeypatch, fake_defaults):
+    """A keyed, NON-retired cloud provider leads the chain; local is the tail.
+
+    This was `test_cloud_nvidia_key_orders_nvidia_local` and asserted the ordering
+    with NVIDIA specifically. PC.6 declared NVIDIA unavailable in
+    `model_routing.yaml`, and the resolver now honours that — so the test would
+    have kept passing only by keeping the one provider the configuration forbids.
+    The ORDERING is the contract and is preserved; the vehicle is now a provider
+    that is not retired.
+    """
     monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+    monkeypatch.setattr(
+        "app_main.services.model_routing.route_resolver._provider_is_retired",
+        lambda provider: False,
+    )
     resolver = _resolver()
 
     route = await resolver.resolve(LLMTask.ENTITY_EXTRACTION, PrivacyMode.CLOUD)
@@ -135,6 +148,34 @@ async def test_cloud_nvidia_key_orders_nvidia_local(monkeypatch, fake_defaults):
     # Final candidate is the local fallback.
     assert route.ordered_candidates[-1].is_local is True
     assert route.mode == PrivacyMode.CLOUD
+
+
+@pytest.mark.asyncio
+async def test_a_retired_provider_is_dropped_even_with_a_key(
+    monkeypatch, fake_defaults
+):
+    """The bridge between the two configuration systems (PC.6).
+
+    Retiring a provider in `model_routing.yaml` used to affect only the pipeline
+    half. The app resolver filtered on API-key presence alone, so a retired vendor
+    whose key was still in `.env` — which is exactly what a retired vendor leaves
+    behind — stayed at the HEAD of the CLOUD chain for chat, the judge and agent
+    extraction. Declaration on, zero effect on half the system: the state this
+    phase exists to make unreachable, produced by the phase's own mechanism.
+
+    A key is not consent.
+    """
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+    monkeypatch.setattr(
+        "app_main.services.model_routing.route_resolver._provider_is_retired",
+        lambda provider: provider == "nvidia",
+    )
+    resolver = _resolver()
+
+    route = await resolver.resolve(LLMTask.ENTITY_EXTRACTION, PrivacyMode.CLOUD)
+
+    assert _providers(route) == ["ollama"]
+    assert route.ordered_candidates[0].is_local is True
 
 
 # ---------------------------------------------------------------------------
