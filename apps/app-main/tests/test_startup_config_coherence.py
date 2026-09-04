@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from app_main.api.app import _check_configuration_coherence
+from app_main.api.app import _check_configuration_coherence, lifespan
 from shared.config_coherence import ConfigurationError
 
 
@@ -75,3 +75,47 @@ async def test_an_unreadable_defaults_row_does_not_manufacture_a_refusal(
     monkeypatch.setattr("app_main.dependencies.get_default_models_repo", _boom)
 
     await _check_configuration_coherence()
+
+
+@pytest.mark.asyncio
+async def test_the_lifespan_actually_calls_the_check_and_lets_it_refuse(
+    monkeypatch,
+) -> None:
+    """The wiring, not the function — found by mutation.
+
+    Deleting `await _check_configuration_coherence()` from the lifespan left every
+    test above green, because they all call the function directly. That is the
+    same defect the whole track keeps producing: something is built and tested,
+    and the caller never uses it. PC.1b's rule in one line — a check that runs
+    nowhere is not a check.
+
+    Asserts two things at once: the call site exists, and a refusal PROPAGATES.
+    The second matters independently — wrapping the call in the best-effort
+    try/except that surrounds the seeds directly below it would silence every
+    BLOCK while leaving the call in place.
+    """
+    calls: list[int] = []
+
+    class _Sentinel(RuntimeError):
+        pass
+
+    async def _spy() -> None:
+        calls.append(1)
+        raise _Sentinel("refusing")
+
+    # Migrations run first and need a database; they are not what is under test.
+    class _NoMigrations:
+        async def get_current_version(self):
+            return 99
+
+        async def needs_migration(self):
+            return False
+
+    monkeypatch.setattr("app_main.api.app.AsyncMigrationManager", _NoMigrations)
+    monkeypatch.setattr("app_main.api.app._check_configuration_coherence", _spy)
+
+    with pytest.raises(_Sentinel):
+        async with lifespan(object()):  # pragma: no cover — must not be entered
+            pass
+
+    assert calls == [1], "the lifespan did not call the coherence check"

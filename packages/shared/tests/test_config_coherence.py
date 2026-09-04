@@ -262,3 +262,71 @@ def test_raise_if_blocking_refuses_and_names_every_reason() -> None:
 
 def test_warnings_alone_do_not_refuse() -> None:
     raise_if_blocking([Finding(WARN, "w", "surprising", "consider x")])
+
+
+# --- resolution refuses a retired provider ----------------------------------
+
+
+def test_resolving_a_retired_provider_raises_with_the_reason() -> None:
+    """Found by mutation: the gate had no test at all.
+
+    I verified `ProviderUnavailableError` by hand in a shell and never wrote this,
+    so deleting the gate left every suite green. The error is raised at RESOLUTION
+    on purpose — one step later the failure is an HTTP error from a vendor, which
+    cannot say the route was retired deliberately — so the message must carry the
+    step, the model and the reason.
+    """
+    import shared.model_routing as mr
+    from shared.model_routing import ProviderUnavailableError
+
+    original = mr._config
+    mr._config = {
+        "defaults": {"default_privacy": "internal"},
+        "providers": {
+            "ollama": {"base_url": "http://localhost:11434", "type": "ollama"},
+            "gone": {"available": False, "reason": "retired for a stated reason"},
+        },
+        "routing": {
+            "extraction": {
+                "internal": {"provider": "ollama", "model": "local:1b"},
+                "public": {"provider": "gone", "model": "cloud/model"},
+            }
+        },
+    }
+    try:
+        # The available route still resolves — the gate must not be a blanket no.
+        assert mr.get_model_config("extraction", privacy="internal")["model"] == "local:1b"
+
+        with pytest.raises(ProviderUnavailableError) as excinfo:
+            mr.get_model_config("extraction", privacy="public")
+
+        message = str(excinfo.value)
+        for expected in ("extraction", "public", "gone", "cloud/model",
+                        "retired for a stated reason", "available: true"):
+            assert expected in message, f"{expected!r} missing from: {message}"
+    finally:
+        mr._config = original
+
+
+def test_an_explicit_override_still_reaches_a_retired_provider() -> None:
+    """An override is a deliberate act and is not second-guessed.
+
+    The gate exists to stop a route SILENTLY reaching a retired provider. A caller
+    who names the provider in `model_override` has already decided; refusing there
+    would break the escape hatch that makes restoring a provider testable.
+    """
+    import shared.model_routing as mr
+
+    original = mr._config
+    mr._config = {
+        "defaults": {"default_privacy": "internal"},
+        "providers": {"gone": {"available": False, "reason": "retired", "base_url": "x"}},
+        "routing": {},
+    }
+    try:
+        resolved = mr.get_model_config(
+            "extraction", model_override={"provider": "gone", "model": "m"}
+        )
+        assert resolved["provider"] == "gone"
+    finally:
+        mr._config = original
