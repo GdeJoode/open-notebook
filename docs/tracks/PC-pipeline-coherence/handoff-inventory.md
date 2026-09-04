@@ -115,15 +115,16 @@ five would have fired a banner (coverage 0.45 / 0.48 / 0.55 / 0.58 →
 | `validation_report` (kept, no reader) | filtering → nothing | **PC.6** | Same, naming PC.6. A promise made in one place is not a promise, which is why the guard requires both. |
 | `persist_filtered_result`'s five counts (**W3**, code shipped) | persist → `run_extraction` | **PC.3** | The counts now reach `summary["persisted"]` and `extraction_result.metadata["persisted"]`, and `scripts/pc1b_handoff_probe.py` reads the durable copy — but no PRODUCTION consumer reads either. Filed honestly as accept-with-owner: PC.3's AC ("materially fewer than 117 rows, with a named figure") is what will read it. |
 | `source_chunk_id`, `source_grounding`, `extraction_context` never persisted | filtering → persist | **PC.3** | They have live in-run consumers; only the persist boundary drops them, and they are the evidence a cross-document match needs to be explainable |
-| `verdict_counts`, `method_counts`, `reason_counts`, `capped_type_fetches`, `alias_candidates` | alignment report → `filtering_stats` (7 of 11 keys copied) | **PC.2** / **PC.6** | `alias_candidates` is PC.2's containment signal; the counts are how "the flag is on and did nothing" becomes visible |
+| ~~`alias_candidates`~~ **CLOSED (PC.2)** | — | — | Deleted with its producer. Same population as the curator door (`find_by_type` returns graph entities) and a weaker rule — unanchored containment, measured to pair `Regio Deal` with `Regio Deal Groningen`. `_score_containment` carries the signal now, with a card and an apply path. |
+| `verdict_counts`, `method_counts`, `reason_counts`, `capped_type_fetches` | alignment report → `filtering_stats` (7 of 11 keys copied) | **PC.6** | How "the flag is on and did nothing" becomes visible |
 | `_save_result` stores raw pre-filter entities beside post-filter `metadata["filtering"]` | `run_extraction` → `extraction_result` | **PC.6** | Needs a decision (label both, or stop storing raw), not a patch |
 | `ontology_gap` / `schema_proposal` rows unread by any route | evolution agent → nothing | **PC.5** | Already assigned by the plan |
 | `metrics` rows `extraction.complete` | `record_metric` → nothing | **PC.6** | Only `routing.served` is read; decide whether extraction metrics are wanted |
 | `metadata["best_coverage"]`, `["schemas_attempted"]`, `merged_from_schemas`, `schema_count` | merge → nothing | **PC.6** | Candidates for deletion once PC.6 decides what a run should report |
 | `merged_duplicates_collapsed`, `per_schema` | merge → nothing yet | **PC.6** | Produced by N.5a for the gate; the gate reads the summed counters, not these |
-| `relation_source` / `relation_sources` | pass 2 + persist → nothing | **PC.2** | One producer (Hearst, default-off), no reader. Either PC.2's identity work reads it or it goes |
+| `relation_source` / `relation_sources` | pass 2 + persist → nothing | **PC.3** (was PC.2) | Reassigned: this is RELATION provenance, not entity identity, so it sits with `source_grounding` in the row above — the evidence a cross-document match needs to be explainable. Not deleted, because N.5's R2 fix exists precisely to stop it being lost at the persist collapse. |
 | `incremental_report` incl. `repair` | filtering stage 10b → `filtered.metadata` | **PC.3** | Belongs with the cross-document resolution decision |
-| `find_by_alias` has no `verified` filter and no `ORDER BY` | `entity_alias` → KG resolver tier 1 | **PC.2** | Two readers disagree about `verified`; one surface form can bind to two canonicals non-deterministically |
+| ~~`find_by_alias` has no `verified` filter and no `ORDER BY`~~ **CLOSED (PC.2)** | `entity_alias` → KG resolver tier 1 | — | Now `ORDER BY verified DESC, similarity_score DESC, id ASC`: a human decision outranks a machine one, ranked not filtered so tier 1 does not go inert. Migration 78 was needed first — three of those columns did not exist on a fresh database. |
 
 ## Inverted case — a consumer with no producer
 
@@ -175,11 +176,16 @@ the same wall as type inference.
 
 ## Bugs found while compiling this
 
-- `KGResolver.report["aliases_registered"]` is initialised and logged, never
-  incremented — the INFO line always prints `0`.
+- ~~`KGResolver.report["aliases_registered"]` is initialised and logged, never
+  incremented — the INFO line always prints `0`.~~ **FIXED (PC.2)**, pinned in
+  both directions: it counts a successful write and not a failed one.
 - `run_filtering_only` builds a bare `FilteringConfig()` (fuzzy and embedding dedup
   **off**) while the main extraction path enables both. The two paths are not the
   same pipeline.
-- `entity_alias` is SCHEMAFULL and declares five fields; `register_alias` writes
-  four more, including `verified`. No migration declares them. → **PC.2**
+- ~~`entity_alias` is SCHEMAFULL and declares five fields; `register_alias` writes
+  four more, including `verified`. No migration declares them.~~ **FIXED (PC.2)**,
+  migration 78. Worse than filed: SurrealDB drops the undeclared fields silently,
+  so on every fresh database an alias lost all its provenance and
+  `vault_sync_service` could never export one. Invisible against `staging`, whose
+  table predates the schema lock.
 - `entity.status` is a free-form `str` with four values in use, no enum.

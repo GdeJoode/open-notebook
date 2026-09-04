@@ -304,7 +304,7 @@ class KGResolver:
                 report["matched_count"] += 1
                 report["match_type_counts"]["fuzzy"] += 1
                 await self._maybe_register_alias(
-                    candidate_id, entity_text, "fuzzy", best_fuzzy_score
+                    candidate_id, entity_text, "fuzzy", best_fuzzy_score, report
                 )
                 return True
 
@@ -348,6 +348,7 @@ class KGResolver:
                         entity_text,
                         "semantic",
                         best_sem_score,
+                        report,
                     )
                     return True
 
@@ -403,8 +404,16 @@ class KGResolver:
         alias_text: str,
         match_type: str,
         similarity_score: float,
+        report: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Register a new alias if the feature is enabled."""
+        """Register a new alias if the feature is enabled.
+
+        Returns nothing; the outcome is recorded on ``report`` when one is given.
+        ``aliases_registered`` was initialised and logged but never incremented,
+        so the INFO line printed `0` for every run — including runs that had
+        written aliases. A counter that cannot move is not observability, it is a
+        claim the code contradicts (PC.2).
+        """
         if not self._register_aliases or self._repo is None:
             return
         try:
@@ -415,6 +424,8 @@ class KGResolver:
                 similarity_score=similarity_score,
                 method="kg_resolver",
             )
+            if success and report is not None:
+                report["aliases_registered"] += 1
             if not success:
                 logger.debug(
                     "KGResolver: alias registration returned False "

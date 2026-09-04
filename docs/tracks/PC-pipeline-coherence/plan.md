@@ -260,6 +260,33 @@ Separately, the same six-line normalisation is copied four times
 - **AC**: the normalisation exists once; a test fails if a fifth copy appears;
   the measured 25 pairs are reachable by a curator.
 
+**Status: DONE** — `feature/track-pc2-one-identity`, 8 commits, report at
+[`phase-PC.2-report.md`](./phase-PC.2-report.md).
+
+All four AC items met. `fold_for_comparison` replaces the four copies (verified
+byte-identical by execution over 18 adversarial inputs first) and an AST guard
+fails on a fifth. `register_aliases` now defaults to False in both the config and
+the constructor, matching D-N4-9. The long-form/short-form pairs reach the curator
+through `_score_containment`.
+
+Three things the plan did not anticipate, each with its measurement:
+
+- **The containment rule needed three attempts.** Unanchored containment — the
+  rule `concept_alignment` already had — manufactures exactly the merge the dedup
+  config refuses. Head-anchored with a free length guard yields 315 candidates and
+  pairs a place with every organisation named after it. Head-anchored **and**
+  curated yields 82, noise gone. The measurements are in the report.
+- **`entity_alias` loses its provenance on every fresh database.** SCHEMAFULL,
+  five fields declared, nine written, the rest dropped silently. Invisible against
+  `staging`, which predates the schema lock. Migration 78. This is also why the
+  determinism fix could not have been verified on `staging` alone.
+- **Two labelling bugs in the apply path.** The frontend labelled the survivor
+  `name_a` regardless of who won, contradicting the server-side rule it mirrors.
+
+Handed to **PC.4**: 8 cross-type candidates — byte-identical names split across
+`entity_type`, six of them `programme` against `topic`. That is the evidence PC.4's
+AC asks for, measured rather than swept.
+
 ## PC.3 — Look at the graph that is already there — ~1.5d
 
 **The finding.** KG resolution (stage 10) is what matches a new mention against
