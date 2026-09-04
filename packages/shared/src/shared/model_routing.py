@@ -41,6 +41,29 @@ from loguru import logger
 # Privacy levels
 # ---------------------------------------------------------------------------
 
+class ProviderUnavailableError(RuntimeError):
+    """A route names a provider that is declared unavailable.
+
+    Track PC.6. Raised at RESOLUTION rather than at call time, because that is
+    the last point where the reason is still known — one step later the failure
+    is an HTTP error from a vendor, which cannot say that the route was retired
+    on purpose. The message names the step, the privacy level and the reason, so
+    the fix is readable from the exception alone.
+    """
+
+    def __init__(
+        self, *, provider: str, step: str, privacy: str, model: str, reason: str
+    ) -> None:
+        self.provider, self.step, self.privacy = provider, step, privacy
+        self.model, self.reason = model, reason
+        super().__init__(
+            f"routing {step!r}/{privacy!r} to provider {provider!r} "
+            f"(model {model!r}), which is declared unavailable: {reason} "
+            f"— set providers.{provider}.available: true in model_routing.yaml "
+            f"to restore it, or route this step elsewhere."
+        )
+
+
 PRIVACY_LEVELS = ("public", "internal", "confidential")
 DEFAULT_PRIVACY = os.getenv("DEFAULT_PRIVACY", "internal")
 
@@ -166,6 +189,21 @@ def get_model_config(
     # Resolve provider details
     provider_name = route.get("provider", "ollama")
     provider_conf = config.get("providers", {}).get(provider_name, {})
+
+    # PC.6: a provider declared unavailable raises here rather than being tried.
+    # Resolution is the last point where the reason is still known — one step
+    # later this is an HTTP 401 from a vendor, which says nothing about the fact
+    # that the route was deliberately retired. The routes themselves are kept:
+    # deleting them would lose what the cloud path was.
+    if provider_conf.get("available") is False:
+        raise ProviderUnavailableError(
+            provider=provider_name,
+            step=step,
+            privacy=privacy,
+            model=route.get("model", "?"),
+            reason=str(provider_conf.get("reason", "")).strip()
+            or "declared unavailable in model_routing.yaml",
+        )
 
     resolved = dict(route)
     resolved["base_url"] = provider_conf.get("base_url", os.getenv("OLLAMA_URL", "http://localhost:11434"))

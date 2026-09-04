@@ -15,6 +15,10 @@
 defaults:
   default_privacy: "internal"
 
+# A provider may declare `available: false` with a `reason`. Routes that name it
+# are KEPT — deleting them would lose the knowledge of what the cloud path was —
+# but resolving one raises instead of silently trying a credential. Track PC.6:
+# the failure this prevents is a route that looks configured and is not.
 providers:
   ollama:
     type: "ollama"
@@ -24,8 +28,11 @@ providers:
     type: "openai_compatible"
     base_url: "${NVIDIA_API_URL:-https://integrate.api.nvidia.com/v1}"
     api_key: "${NVIDIA_API_KEY}"
-    # Default: Mistral Medium 3 (fast, good quality)
-    # For max quality, override with mistralai/mistral-large-3-675b-instruct-2512
+    available: false
+    reason: >-
+      NVIDIA is no longer in use (decided 2026-09-04). The `public` routes below
+      are kept as a record of what the cloud path was; resolving one now raises
+      rather than reaching for a key. Set `available: true` to restore it.
 
 routing:
   # --- Extraction (entity/relation extraction from text) ---
