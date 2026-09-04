@@ -38,8 +38,15 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
-OLLAMA_MODEL = os.getenv("EXTRACTION_MODEL", "llama3.1:8b-instruct-q4_0")
-OLLAMA_NUM_CTX = int(os.getenv("EXTRACTION_NUM_CTX", "8192"))
+
+# `EXTRACTION_MODEL` and `EXTRACTION_NUM_CTX` were read into constants here and
+# REMOVED (PC.6). Each was assigned once and used nowhere: `_extract_from_chunk`
+# resolves the model through `model_routing.call_llm(step="extraction")`, which
+# reads `packages/shared/src/shared/model_routing.yaml`. Setting them in
+# docker-compose looked like configuring extraction and configured nothing —
+# verified live: with `EXTRACTION_MODEL=qwen2.5:14b-…` set, the resolver returned
+# `ollama / llama3.1:8b-instruct-q4_0 / num_ctx 8192`. That cost a fully reverted
+# branch. The lever is model_routing.yaml.
 
 SURREALDB_URL = os.getenv("SURREALDB_URL", "ws://host.docker.internal:8000/rpc")
 SURREALDB_NS = os.getenv("SURREALDB_NS", "open_notebook")

@@ -24,8 +24,8 @@ EXPOSE 8103
 
 # LLM (Ollama on host)
 ENV OLLAMA_URL="http://host.docker.internal:11434"
-ENV EXTRACTION_MODEL="llama3.1:8b-instruct-q4_0"
-ENV EXTRACTION_NUM_CTX="8192"
+# EXTRACTION_MODEL / EXTRACTION_NUM_CTX removed (PC.6): nothing consumed them.
+# Extraction routes through packages/shared/src/shared/model_routing.yaml.
 ENV EXTRACTION_CHUNK_SIZE="4000"
 
 # Embedding
