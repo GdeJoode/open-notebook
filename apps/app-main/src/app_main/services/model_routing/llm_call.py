@@ -169,9 +169,22 @@ async def call_candidate(
     #      silent quality drop. (The packer re-splits for the HEAD; this catches
     #      the per-call-failover case where a head-sized pack reaches a smaller
     #      fallback — the interim V1 guard, Decision M-D3 (b).)
+    # PC.6: defence 1 above DOES NOT WORK and the `setdefault` is gone. esperanto
+    # filters it out before its Ollama provider ever sees it —
+    # `providers/llm/base.py::get_completion_kwargs` returns only
+    # max_tokens/temperature/top_p/streaming, and `num_ctx` appears zero times in
+    # the whole package. Measured through the real factory:
+    #     in  config={"num_ctx": 16384, "temperature": 0.1, "max_tokens": 8}
+    #     out {"options": {"num_predict": 8, "temperature": 0.1, "top_p": 0.9}}
+    # So every app-main LLM call runs at Ollama's default context regardless of
+    # what the packer sized against, and the line that claimed otherwise made the
+    # truncation look handled. On THIS path the context can only be set by baking
+    # `PARAMETER num_ctx` into the model — `check_ollama_context` reports when a
+    # routed model's baked window is smaller than the one the config promises.
+    #
+    # `shared/model_routing._call_ollama` is unaffected: it posts to Ollama
+    # directly and does send `num_ctx`.
     num_ctx = _ollama_num_ctx_for(candidate)
-    if num_ctx is not None:
-        kwargs.setdefault("num_ctx", num_ctx)
     cand_ctx = model_record.context_window
     if cand_ctx is not None:
         est_prompt_tokens = (len(system) + len(user)) // _CHARS_PER_TOKEN
@@ -179,7 +192,10 @@ async def call_candidate(
             logger.warning(
                 "M.4 guard: prompt ~{est} tokens exceeds {prov}/{name} "
                 "context_window {ctx}; the pack was sized for a larger primary "
-                "and reached a smaller fallback. num_ctx={num_ctx} requested.",
+                "and reached a smaller fallback. The runtime window is NOT "
+                "requested per call on this path (esperanto drops num_ctx); it "
+                "is whatever the model bakes in, so {num_ctx} tokens is what the "
+                "packer assumed, not what the model will allocate.",
                 est=est_prompt_tokens,
                 prov=candidate.provider,
                 name=candidate.model_id,

@@ -400,33 +400,58 @@ changing a second, unrelated default.
 Both were carried from review R1/R4 and are corrected here rather than left to be
 inherited as fact.
 
-**The Ollama `num_ctx` paragraph (R4b) was wrong in its specifics.** It said
-esperanto never sends `num_ctx`, so Ollama truncates every prompt over its runtime
-default and the JSON instructions in the prompt's tail are what get cut. Measured
-(2026-09-04, adversarial review of a branch that was reverted in full):
+**The Ollama `num_ctx` paragraph (R4b) — corrected twice, and the second
+correction is the one that holds.** The original said esperanto never sends
+`num_ctx`, so every long prompt is truncated and the JSON instructions in the tail
+are cut. My first correction said the opposite — that both callers send it — and
+was wrong on its load-bearing half. Measured through the real esperanto factory:
 
-* `num_ctx` **is** sent, unconditionally, by both callers —
-  `shared/model_routing.py::_call_ollama` and esperanto's own Ollama provider. A
-  request-level value also *overrides* a Modelfile `PARAMETER`, so baking context
-  into a model variant is inert on this path.
-* Truncation discards the **head**, not the tail — verified with markers at both
-  ends of an over-long prompt. Instructions at the end survive; document content
-  is what is lost.
-* Extraction is **not** truncating: `EXTRACTION_CHUNK_SIZE=4000` chars plus the
-  regiodeal ontology gives a worst-case prompt of ~4,530 tokens against the 8,192
-  already sent.
+```
+in   config={"num_ctx": 16384, "temperature": 0.1, "max_tokens": 8}
+out  {"options": {"num_predict": 8, "temperature": 0.1, "top_p": 0.9}}
+```
 
-The genuine finding underneath is narrower and belongs to PC.6: the context lives
-in `model_routing.yaml` per step, and nothing checks that a step's `num_ctx` is
-large enough for the prompts that step builds. The `-ctx16k` model-variant
-approach is **not** the answer here; it was tried and reverted.
+`num_ctx` appears **zero times** in the esperanto package;
+`providers/llm/base.py::get_completion_kwargs` returns only
+max_tokens/temperature/top_p/streaming, so it is filtered before the Ollama
+provider is reached. The settled picture is that the two callers differ:
 
-**The `gemma2` fallback claim has no basis in the code.** The plan said that with
-no `default_models` row the router falls back to Ollama `gemma2`, which is not
-installed. `gemma` appears nowhere in the repository. The real state, measured: all
-eleven routed local models are installed, `default_models` holds zero rows, and
-that empty row is a legitimate "not configured yet" rather than a fault — models
-for summaries and transformations are added later.
+| caller | used by | sends `num_ctx`? |
+|---|---|---|
+| `shared/model_routing._call_ollama` | extraction service, `preprocessing_service` | **yes** — posts to Ollama directly |
+| esperanto, behind `llm_call.RoutedLLMCaller` | app-main's chat, judge, agent extraction | **no** — filtered upstream |
+
+Consequences, all of them PC.6's business:
+
+* The M.4 guard's `kwargs.setdefault("num_ctx", num_ctx)` was inert. Removed, and
+  the code now states the limitation instead of implying it is handled.
+* On the esperanto path a Modelfile `PARAMETER num_ctx` is the ONLY thing that
+  sets the window — so the model-variant approach is *not* inert there, as the
+  first correction claimed. It was reverted on a premise that holds for the
+  extraction path and not for app-main.
+* `check_ollama_context` reports a model row promising more context than its model
+  bakes, with the variant as the remedy.
+
+What both corrections agree on, and what is confirmed: truncation discards the
+**head**, not the tail — verified with markers at both ends — and extraction is
+not truncating (~4,530-token worst case against 8,192 sent through a caller that
+does send it).
+
+**No router fallback resolves to `gemma2`.** The plan said that with no
+`default_models` row the router falls back to Ollama `gemma2`, which is not
+installed. Both fallbacks are `llama3.1:8b*` — `model_routing.py:184` and
+`route_resolver._DEFAULT_PROVIDER_MODEL_NAME`. (An earlier draft of this
+correction said "`gemma` appears nowhere in the repository", which is false: it
+appears in `docs/features/ai-models.md`, `docs/features/ollama.md` and a test
+fixture, and `ai-models.md:441` listing `gemma3` for transformations is the likely
+origin of the original claim. The substantive point stands; the sweeping version
+of it did not.)
+
+The real state, measured: every routed local model is installed — three distinct
+models across nine ollama routes, not "eleven", which is the number of tags pulled
+— `default_models` holds zero rows, and that empty row is a legitimate "not
+configured yet" rather than a fault, since models for summaries and
+transformations are added later.
 
 ### What the phase found instead
 

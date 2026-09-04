@@ -87,6 +87,24 @@ async def _check_configuration_coherence() -> None:
         judge_model_configured=judge_model_configured,
         resolver_default_privacy=resolver_default,
     )
+    # The esperanto path cannot send `num_ctx`, so a model row promising a window
+    # the model does not bake means the packer sizes prompts the runtime will
+    # truncate. Read from the rows rather than the YAML: YAML steps go through
+    # `_call_ollama`, which does send it, and are not affected.
+    try:
+        from shared.config_coherence import check_ollama_context
+
+        from app_main.dependencies import get_model_repo
+
+        rows = await get_model_repo().get_by_provider("ollama")
+        declared = {
+            str(getattr(r, "name", "") or ""): int(getattr(r, "context_window", 0) or 0)
+            for r in rows
+        }
+        findings = findings + check_ollama_context(declared)
+    except Exception as exc:  # noqa: BLE001 — an unreadable model table is not a verdict
+        logger.warning(f"Could not check Ollama context windows: {exc}")
+
     for finding in findings:
         if finding.severity != BLOCK:
             logger.warning(f"config coherence: {finding}")

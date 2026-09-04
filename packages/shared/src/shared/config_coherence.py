@@ -183,6 +183,90 @@ def check_routing(
     return findings
 
 
+#: What Ollama allocates when nothing asks for more. A model trained for 32k runs
+#: at this unless the request or the Modelfile says otherwise.
+OLLAMA_DEFAULT_NUM_CTX = 4096
+
+
+def _baked_num_ctx(base_url: str, model: str, timeout: float = 5.0) -> Optional[int]:
+    """The `num_ctx` a model's Modelfile bakes in, or None if it bakes none."""
+    try:
+        request = urllib.request.Request(
+            f"{base_url.rstrip('/')}/api/show",
+            data=json.dumps({"name": model}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as fh:
+            payload = json.load(fh)
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+        return None
+    for line in str(payload.get("parameters", "")).splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] == "num_ctx" and parts[1].isdigit():
+            return int(parts[1])
+    return None
+
+
+def check_ollama_context(
+    declared: Dict[str, int],
+    *,
+    base_url: str = "",
+    probe: Callable[[str, str], Optional[int]] = _baked_num_ctx,
+) -> List[Finding]:
+    """A model whose runtime window is smaller than the one its config promises.
+
+    ``declared`` maps an Ollama model name to the context the configuration says
+    it has — today, the ``context_window`` on a model row, which is what
+    ``llm_call``'s packer sizes prompts against.
+
+    Two callers reach Ollama and they are NOT equivalent:
+
+    * ``shared/model_routing._call_ollama`` posts directly and **does** send
+      ``num_ctx``, so a YAML step's declared window is what the runtime allocates.
+      Those steps are not this check's business.
+    * esperanto, behind ``llm_call``'s ``RoutedLLMCaller``, **cannot**:
+      ``providers/llm/base.py::get_completion_kwargs`` returns only
+      max_tokens/temperature/top_p/streaming, and ``num_ctx`` appears zero times
+      in the package. Measured through the real factory —
+      ``config={"num_ctx": 16384, …}`` in, ``{"options": {"num_predict": …,
+      "temperature": …, "top_p": …}}`` out.
+
+    So on that path the ONLY thing setting the window is a Modelfile
+    ``PARAMETER num_ctx``. Where a model row declares more than the model bakes,
+    the packer sizes prompts the runtime silently truncates — from the HEAD,
+    which is where the document content is.
+
+    WARN rather than BLOCK: the run still produces output, and refusing startup
+    over a model row a user is midway through configuring is the over-reach
+    ``REQUIRED_STEPS`` exists to avoid.
+    """
+    findings: List[Finding] = []
+    url = base_url or os.getenv("OLLAMA_URL") or "http://localhost:11434"
+    for model, window in sorted(declared.items()):
+        if not model or not window:
+            continue
+        baked = probe(url, model)
+        effective = baked if baked is not None else OLLAMA_DEFAULT_NUM_CTX
+        if effective < window:
+            findings.append(
+                Finding(
+                    WARN,
+                    "ollama-context-not-honoured",
+                    f"model {model!r} is configured with a context window of "
+                    f"{window}, but reaches Ollama through esperanto, which "
+                    f"cannot send num_ctx — the model bakes "
+                    + (str(baked) if baked is not None else "nothing")
+                    + f", so the runtime allocates {effective} and longer prompts "
+                    f"are truncated from the HEAD",
+                    f"register a variant with `PARAMETER num_ctx {window}` and "
+                    f"point the model row at it, or lower the row's "
+                    f"context_window to {effective} so the configuration stops "
+                    f"promising a window the runtime will not give",
+                )
+            )
+    return findings
+
+
 def check_feature_dependencies(
     *,
     concept_alignment_enabled: bool,
@@ -344,6 +428,7 @@ __all__ = [
     "Finding",
     "check_feature_dependencies",
     "check_privacy_defaults",
+    "check_ollama_context",
     "check_routing",
     "collect_findings",
     "raise_if_blocking",

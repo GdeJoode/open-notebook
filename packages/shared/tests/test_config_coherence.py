@@ -16,6 +16,7 @@ from shared.config_coherence import (
     ConfigurationError,
     Finding,
     check_feature_dependencies,
+    check_ollama_context,
     check_privacy_defaults,
     check_routing,
     collect_findings,
@@ -393,3 +394,58 @@ def test_an_explicit_override_still_reaches_a_retired_provider() -> None:
         assert resolved["provider"] == "gone"
     finally:
         mr._config = original
+
+
+# --- the window a model actually gets --------------------------------------
+
+
+def test_a_model_that_bakes_less_than_it_promises_is_reported() -> None:
+    """Measured through the real esperanto factory before this was written:
+
+        in   config={"num_ctx": 16384, "temperature": 0.1, "max_tokens": 8}
+        out  {"options": {"num_predict": 8, "temperature": 0.1, "top_p": 0.9}}
+
+    `num_ctx` appears zero times in the whole esperanto package, so on that path
+    the Modelfile is the only thing that sets the window. A model row promising
+    32768 against a model that bakes nothing means the packer sizes prompts the
+    runtime truncates — from the HEAD, which is where the document content is.
+    """
+    findings = check_ollama_context(
+        {"bare:8b": 32768}, probe=lambda _url, _model: None
+    )
+    assert [(f.code, f.severity) for f in findings] == [
+        ("ollama-context-not-honoured", WARN)
+    ]
+    assert "4096" in findings[0].message
+    assert "PARAMETER num_ctx 32768" in findings[0].remedy
+
+
+def test_a_model_that_bakes_enough_is_silent() -> None:
+    """The counterweight — and the case that proves the remedy works.
+
+    A `-ctx16k` variant baking 16384 against a row declaring 16384 must produce
+    nothing, or the check would tell an operator to do what they have already
+    done.
+    """
+    assert check_ollama_context(
+        {"m:8b-ctx16k": 16384}, probe=lambda _url, _model: 16384
+    ) == []
+    # And a row declaring no more than the runtime default needs no variant.
+    assert check_ollama_context(
+        {"small:3b": 4096}, probe=lambda _url, _model: None
+    ) == []
+
+
+def test_an_unreachable_runtime_reports_nothing_here() -> None:
+    """`_baked_num_ctx` returns None both for "bakes nothing" and "cannot ask".
+
+    Conflating them would turn a stopped Ollama into a warning per model row. The
+    routing check already reports an unreachable runtime once; this one must not
+    repeat it, so a row at or below the default stays silent either way.
+    """
+    assert check_ollama_context({"m:8b": 4096}, probe=lambda _url, _model: None) == []
+
+
+def test_rows_without_a_declared_window_are_skipped() -> None:
+    assert check_ollama_context({"m:8b": 0}, probe=lambda _u, _m: None) == []
+    assert check_ollama_context({"": 32768}, probe=lambda _u, _m: None) == []
