@@ -11,6 +11,8 @@ COPY packages/ontology-manager/ontologies /app/ontologies
 # Copy shared modules (model routing) — single canonical source
 COPY packages/shared/src/shared/model_routing.py /app/model_routing.py
 COPY packages/shared/src/shared/model_routing.yaml /app/model_routing.yaml
+# PC.6: the coherence checks travel with the routing they check.
+COPY packages/shared/src/shared/config_coherence.py /app/config_coherence.py
 
 # Copy the service API and modules
 COPY services/extraction/api.py /app/api.py

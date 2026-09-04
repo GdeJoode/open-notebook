@@ -372,8 +372,26 @@ API route, MCP tool, CLI or frontend reads either table. Meanwhile
   until something reads them. Writing into a room with no door is the one option
   to rule out.
 - **From PC.1b's inventory**: `ontology_gap` / `schema_proposal` have readers but no route; and `notebook_event` is now written by PC.1b, so a dismissal path is this phase's to design.
+- **Handed over by PC.6** (measured there, decided here — what a completed run
+  reports to a human is this phase's subject, not configuration coherence):
+  - the alignment report's 11 keys, of which the `filtering_stats` copy carries 7;
+  - `_save_result` storing pre-filter entities beside post-filter stats — an
+    inconsistency in what is PERSISTED, so it may turn out to be a bug rather
+    than a display decision;
+  - `export.jsonl` / `export.obsidian` metrics with no reader. PC.6's review
+    pushed back that this one has nothing to do with a curator door and that
+    "nothing reads it" is already the whole measurement — so the honest options
+    are to delete the writes or give them a reader, and it needs no new surface
+    to decide.
+- **Also from PC.2's review**: `POST /apply` performs no band or type check, so
+  the router docstring's "only `auto_merge` candidates may be applied" is
+  enforced only by the frontend; and `CandidatesResponse.auto_merge` plus its
+  counts are fetched by the resolution page and never rendered, which matters
+  more since PC.2 made `fold_equal` a new AUTO producer.
 - **AC**: a proposal created by the threshold is visible and actionable, or it is
-  not created.
+  not created; every run-report field handed over above is either rendered to a
+  curator, or deleted with the measurement recorded; and no destructive apply
+  path relies on the frontend for a check the API should make.
 
 ## PC.6 — Configuration that expresses one intent — ~1d
 

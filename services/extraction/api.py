@@ -17,6 +17,7 @@ import math
 import os
 import re
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,10 +28,46 @@ from fastapi import FastAPI, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Validate this service's OWN copy of the routing config (PC.6).
+
+    app-main runs the same check, and that is not enough: this service is where
+    `model_routing.yaml` is consumed, it ships its own build-time COPY of both the
+    module and the YAML (see the Dockerfile), and `/routing` below is the surface
+    that advertises those routes to a human. Nothing enforces that the copy stays
+    in step with the repository, so a stale image would pass every check run
+    elsewhere.
+
+    Only the routing half is checked here. The feature-dependency half reads
+    app-layer state this service does not have, and inventing an answer for it
+    would produce findings nobody can act on.
+    """
+    try:
+        from config_coherence import BLOCK, check_routing, raise_if_blocking
+        from model_routing import _load_config
+
+        findings = check_routing(_load_config())
+        for finding in findings:
+            if finding.severity != BLOCK:
+                logger.warning(f"config coherence: {finding}")
+        raise_if_blocking(findings)
+    except ImportError:
+        # The shared checker is not part of this image's copy set on older
+        # builds; say so rather than skipping silently.
+        logger.warning(
+            "config coherence: shared.config_coherence not available in this "
+            "image — routing was NOT validated at startup"
+        )
+    yield
+
+
 app = FastAPI(
     title="Entity Extraction Service",
     description="Ontology-guided entity and relation extraction via LLM",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # ---------------------------------------------------------------------------
@@ -580,8 +617,16 @@ async def extract(req: ExtractRequest):
         raise HTTPException(status_code=400, detail="No content found in file")
 
     # Log routing info
-    from model_routing import get_model_config
-    route = get_model_config("extraction", privacy, model_override_dict)
+    from model_routing import ProviderUnavailableError, get_model_config
+
+    try:
+        route = get_model_config("extraction", privacy, model_override_dict)
+    except ProviderUnavailableError as exc:
+        # PC.6: the AC is "says why it cannot". Uncaught, this reached the caller
+        # as a bare 500, so the one place the reason was still known said nothing
+        # at the one place a human would read it. 503 rather than 500: the route
+        # is deliberately retired, not broken.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     logger.info(
         f"Extracting from {file_path.name}: {len(chunks)} chunks, "
         f"ontology={ontology_name}, privacy={privacy}, "

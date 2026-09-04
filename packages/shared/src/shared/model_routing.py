@@ -369,14 +369,30 @@ def get_routing_summary() -> Dict[str, Any]:
     config = _load_config()
     routing = config.get("routing", {})
 
+    providers = config.get("providers", {})
+
+    # PC.6: a retired route is MARKED, not hidden. This is the only human-readable
+    # routing surface (`/routing` on the extraction service, and the app's
+    # services proxy), and it advertised `extraction/public → nvidia:…` exactly as
+    # it advertises a live route — while `get_model_config` raises on that same
+    # route. A summary that contradicts the resolver is worse than no summary.
     summary = {}
     for step, routes in routing.items():
         summary[step] = {}
         for privacy, route in routes.items():
-            summary[step][privacy] = f"{route.get('provider', '?')}:{route.get('model', '?')}"
+            provider = route.get("provider", "?")
+            entry = f"{provider}:{route.get('model', '?')}"
+            if providers.get(provider, {}).get("available") is False:
+                entry += " [UNAVAILABLE]"
+            summary[step][privacy] = entry
 
     return {
         "default_privacy": config.get("defaults", {}).get("default_privacy", DEFAULT_PRIVACY),
-        "providers": list(config.get("providers", {}).keys()),
+        "providers": list(providers.keys()),
+        "unavailable_providers": {
+            name: str(conf.get("reason", "")).strip()
+            for name, conf in providers.items()
+            if conf.get("available") is False
+        },
         "routing": summary,
     }

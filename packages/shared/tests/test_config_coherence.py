@@ -250,24 +250,49 @@ def test_agreeing_defaults_are_silent(routing_default: str, resolver_default: st
 
 
 def test_every_finding_carries_a_remedy() -> None:
-    """A finding without a fix is the log line this phase exists to abolish.
+    """Every finding the module can CONSTRUCT, not every one a chosen input yields.
 
-    Structural rather than per-case: it holds for findings added later, which is
-    the point — the next check cannot quietly ship without one.
+    The first version ran one `collect_findings` call and checked its output.
+    Mutation showed the hole: blanking the remedy on an exercised path failed the
+    test, and blanking it on an unexercised one — `ollama-unreachable`, which that
+    input cannot produce because `installed_models` is supplied — passed. Its
+    docstring claimed "the next check cannot quietly ship without one", and it
+    could.
+
+    So this enumerates the module's own `Finding(...)` constructions by AST and
+    asserts each passes a non-empty remedy. That holds for findings added later,
+    which is what "structural" has to mean.
     """
-    findings = collect_findings(
-        routing_config=_routing(available=False, model="not-pulled:9b"),
-        concept_alignment_enabled=True,
-        kg_resolution_enabled=False,
-        judge_enabled=True,
-        judge_model_configured=False,
-        resolver_default_privacy="CLOUD",
-        installed_models={"llama3.1:8b"},
+    import ast
+    import inspect
+
+    import shared.config_coherence as module
+
+    tree = ast.parse(inspect.getsource(module))
+    constructions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", "") == "Finding"
+    ]
+    assert len(constructions) >= 6, (
+        f"detector control: found only {len(constructions)} Finding(...) calls"
     )
-    assert len(findings) >= 4
-    for f in findings:
-        assert f.remedy.strip(), f"{f.code} reports a problem with no remedy"
-        assert f.severity in (BLOCK, WARN)
+    for call in constructions:
+        args = list(call.args)
+        remedy = args[3] if len(args) >= 4 else None
+        for keyword in call.keywords:
+            if keyword.arg == "remedy":
+                remedy = keyword.value
+        assert remedy is not None, (
+            f"a Finding at line {call.lineno} is constructed without a remedy"
+        )
+        # A literal empty string, or a BinOp/JoinedStr, are all acceptable shapes;
+        # only an unconditionally empty literal is not.
+        if isinstance(remedy, ast.Constant):
+            assert str(remedy.value).strip(), (
+                f"the Finding at line {call.lineno} passes an empty remedy"
+            )
 
 
 def test_blocking_findings_sort_first() -> None:
@@ -518,3 +543,59 @@ def test_the_new_dependencies_are_silent_when_they_can_work(kwargs) -> None:
         )
         == []
     )
+
+
+# --- the surfaces a human reads ---------------------------------------------
+
+
+def test_the_routing_summary_marks_a_retired_route() -> None:
+    """The only human-readable routing surface must not contradict the resolver.
+
+    `/routing` on the extraction service and the app's services proxy both serve
+    this. It advertised `extraction/public → nvidia:…` exactly as it advertises a
+    live route, while `get_model_config` raises on that same route. A summary that
+    disagrees with the resolver is worse than no summary.
+    """
+    import shared.model_routing as mr
+
+    original = mr._config
+    mr._config = {
+        "defaults": {"default_privacy": "internal"},
+        "providers": {
+            "ollama": {"base_url": "x"},
+            "gone": {"available": False, "reason": "retired for a stated reason"},
+        },
+        "routing": {
+            "extraction": {
+                "internal": {"provider": "ollama", "model": "local:1b"},
+                "public": {"provider": "gone", "model": "cloud/model"},
+            }
+        },
+    }
+    try:
+        summary = mr.get_routing_summary()
+        assert summary["routing"]["extraction"]["public"].endswith("[UNAVAILABLE]")
+        assert "[UNAVAILABLE]" not in summary["routing"]["extraction"]["internal"]
+        assert summary["unavailable_providers"] == {
+            "gone": "retired for a stated reason"
+        }
+    finally:
+        mr._config = original
+
+
+def test_a_summary_with_no_retirements_carries_no_marker() -> None:
+    """The counterweight — the marker must mean something when it appears."""
+    import shared.model_routing as mr
+
+    original = mr._config
+    mr._config = {
+        "defaults": {"default_privacy": "internal"},
+        "providers": {"ollama": {"base_url": "x"}},
+        "routing": {"extraction": {"internal": {"provider": "ollama", "model": "m"}}},
+    }
+    try:
+        summary = mr.get_routing_summary()
+        assert summary["unavailable_providers"] == {}
+        assert "[UNAVAILABLE]" not in summary["routing"]["extraction"]["internal"]
+    finally:
+        mr._config = original

@@ -61,9 +61,12 @@ def _compose_env_names() -> Set[str]:
 def _referenced_names() -> Set[str]:
     """Every uppercase env-style token appearing in tracked source or config.
 
-    Deliberately generous — a substring match over the tree. The question is
-    "does anything mention this name at all", and a name that fails even that is
-    unambiguously dead.
+    Deliberately generous — a substring match over the tree, tests included. The
+    question is "does anything mention this name at all", and a name that fails
+    even that is unambiguously dead. A name referenced ONLY by a test would pass
+    here and is a weaker case; the AST guard in
+    `services/extraction/tests/test_no_dead_env_constants.py` is the strict half,
+    and the two are meant to be read together.
     """
     listed = subprocess.run(
         ["git", "ls-files", "--", "*.py", "*.yaml", "*.yml", "*.ts", "*.tsx", "*.sh"],
@@ -103,6 +106,10 @@ def test_the_detector_would_catch_a_planted_name() -> None:
     Without it, the test above passes equally well against a `_referenced_names`
     that returns every possible token — which is what a generous substring match
     is one bug away from.
+
+    The sentinel is ASSEMBLED rather than written out: this file is itself
+    scanned, so a literal would find itself and the control would pass for the
+    wrong reason. It did, on its first run.
     """
-    referenced = _referenced_names()
-    assert "PC6_DEFINITELY_NOT_A_REAL_ENV_NAME" not in referenced
+    sentinel = "PC6_" + "DEFINITELY_NOT_A_REAL" + "_ENV_NAME"
+    assert sentinel not in _referenced_names()

@@ -135,6 +135,14 @@ five would have fired a banner (coverage 0.45 / 0.48 / 0.55 / 0.58 →
 | alignment report keys dropped at the `filtering_stats` copy | **Reassigned to PC.5**, same argument: which of the 11 keys a curator needs is a surface decision. PC.2 already closed the one key that had an owner (`alias_candidates`). |
 | `_save_result` stores pre-filter entities beside post-filter stats | **Reassigned to PC.5.** Needs a decision about what a stored run means, and that decision is visible only through the surface that renders it. |
 
+**Review pushed back on this, and the objection was checkable rather than
+rhetorical**: the first version of the reassignment edited only PC.6's section, so
+the rows lived in this table with a forwarding address and PC.5's scope and AC
+covered none of them. All three are now in PC.5's bullet list and its AC is
+widened. The `metrics` row also carries review's point that it has nothing to do
+with a curator door and needs no surface to decide — delete the writes or give
+them a reader.
+
 Reassigning three rows out of the phase that owned them needs its reason on the
 record: PC.6's remit is *configuration that expresses one intent* — a flag either
 works or says why it cannot. All three are about what a completed run reports,
