@@ -265,7 +265,12 @@ def check_privacy_defaults(
     which is a privacy question rather than a routing preference.
     """
     local_routing = routing_default in ("internal", "confidential")
-    local_resolver = resolver_default.lower() in ("private", "local")
+    # `internal`/`confidential` appear on the routing side and `private`/`local`
+    # on the resolver side; both name the same intent. Accepting only the resolver
+    # vocabulary reported a mismatch for `internal`/`internal`.
+    local_resolver = resolver_default.lower() in (
+        "private", "local", "internal", "confidential"
+    )
     if local_routing == local_resolver:
         return []
     return [

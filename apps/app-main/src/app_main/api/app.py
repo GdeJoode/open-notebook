@@ -66,13 +66,26 @@ async def _check_configuration_coherence() -> None:
 
     from entity_filtering.config import ConceptAlignmentConfig, KGResolutionConfig
 
+    # The resolver's default is READ, not assumed. A hardcoded "CLOUD" made the
+    # bridge check unable to observe one of the two things it compares: an
+    # operator who aligned the two by setting `default_privacy_mode="private"`
+    # would get the mismatch warning forever, and a genuine flip either way would
+    # be invisible.
+    from app_main.services.model_routing.privacy_resolver import _global_mode
+
+    try:
+        resolver_default = (await _global_mode()).value
+    except Exception as exc:  # noqa: BLE001 — mirror the resolver's own fallback
+        logger.warning(f"Could not read default_privacy_mode: {exc}")
+        resolver_default = "cloud"
+
     findings = collect_findings(
         routing_config=_load_config(),
         concept_alignment_enabled=get_concept_alignment_enabled(),
         kg_resolution_enabled=KGResolutionConfig().enabled,
         judge_enabled=ConceptAlignmentConfig().judge_enabled,
         judge_model_configured=judge_model_configured,
-        resolver_default_privacy="CLOUD",
+        resolver_default_privacy=resolver_default,
     )
     for finding in findings:
         if finding.severity != BLOCK:

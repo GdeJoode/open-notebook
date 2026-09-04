@@ -165,7 +165,10 @@ services:
       - SURREALDB_USER=root
       - SURREALDB_PASS=root
       - DEFAULT_ONTOLOGY=regiodeal
-      - DEFAULT_PRIVACY=internal
+      # No DEFAULT_PRIVACY here (PC.6): `shared/model_routing.py` reads it only as
+      # the fallback for `defaults.default_privacy`, which model_routing.yaml
+      # always sets — so setting it in compose changes nothing while reading as a
+      # working control. The constant stays for a YAML that omits the key.
       - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
       - NVIDIA_API_URL=https://integrate.api.nvidia.com/v1
     restart: always
