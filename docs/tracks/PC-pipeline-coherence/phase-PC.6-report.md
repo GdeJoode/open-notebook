@@ -16,7 +16,7 @@ most of this phase is about making things refuse.
 | used by | extraction service, pipeline steps | app-main (judge, chat, agent extraction) |
 | keyed by | step × privacy level | `LLMTask` × `PrivacyMode` |
 | privacy default | `internal` — local only | **`CLOUD`** — prefer cloud, fall back local |
-| state today | all 11 routed local models installed | **zero rows** |
+| state today | every routed local model installed (3 distinct, 9 routes) | **zero rows** |
 
 Each default is defensible alone. Together they mean the same document is treated
 as local by one path and cloud-eligible by the other, which is a privacy question
@@ -104,32 +104,39 @@ together, so no half-trail remains, each replaced by a line naming the real leve
 Verified after rebuild: both absent from the container env, service healthy,
 resolver reporting `ollama / llama3.1:8b-instruct-q4_0 / num_ctx 8192`.
 
-The guard is the **class**: an AST test failing when any module constant in
-`api.py` is assigned from the environment and never read, with a walker control
-and a mutant control.
+The guard is the **class** — though round 1 shipped it scanning only `api.py`
+while a live instance sat one file over (`entity_validator.py` bound `OLLAMA_URL`
+and never read it), and it missed six spellings including `os.environ.get`. It now
+scans every module in the service, handles all six, and is joined by
+`tests/test_compose_env_is_consumed.py` for the half it structurally cannot see:
+a name that appears in `docker-compose.yml` and nowhere else.
 
 ## Two claims in the plan that measurement disproved
 
-Corrected in `plan.md` rather than left to be inherited as fact.
+Corrected in `plan.md` rather than left to be inherited as fact. **The first of
+these took two attempts, and the first attempt is not reproduced here** — a
+correction that leaves the corrected text standing is not a correction; see the
+round-2 section below for what the measurement actually shows.
 
-**The Ollama `num_ctx` paragraph (R4b).** It said esperanto never sends `num_ctx`,
-so every long prompt is truncated and the JSON instructions in the tail are cut.
-Measured — during an adversarial review that reverted a branch built on it:
+**The Ollama `num_ctx` paragraph (R4b)** claimed esperanto never sends `num_ctx`
+and that every long prompt is therefore truncated tail-first. Two of its three
+parts are wrong and one is right, and the settled version is in **Round 2** below.
+What holds: truncation discards the **head**, not the tail — verified with markers
+at both ends — and extraction is not truncating, with a ~4,530-token worst case
+against the 8,192 its caller does send.
 
-- `num_ctx` **is** sent unconditionally by both callers, and a request value
-  *overrides* a Modelfile `PARAMETER`, so baking context into a model variant is
-  inert on this path;
-- truncation discards the **head**, not the tail — instructions at the end
-  survive, document content is what is lost;
-- extraction is not truncating at all: ~4,530-token worst case against 8,192 sent.
+**No router fallback resolves to `gemma2`.** Both are `llama3.1:8b*`
+(`model_routing.py:184`, `route_resolver._DEFAULT_PROVIDER_MODEL_NAME`). An
+earlier draft of this correction over-reached to "`gemma` appears nowhere in the
+repository", which is false — it is in two docs and a test fixture, and
+`ai-models.md:441` listing `gemma3` for transformations is the likely origin of
+the original claim.
 
-The genuine finding underneath is narrower and stays with PC.6: nothing checks
-that a step's `num_ctx` is large enough for the prompts that step builds.
-
-**The `gemma2` fallback.** `gemma` appears nowhere in the repository. All eleven
-routed local models are installed, including `granite3.2-vision` — which an
-earlier probe of mine reported as missing because the model list was truncated by
-`head`, caught by re-checking before reporting.
+Every routed local model is installed, including `granite3.2-vision`. That is
+**three distinct models across nine ollama routes** — the "eleven" in an earlier
+draft was the number of tags pulled in Ollama, a different quantity. An earlier
+probe of mine reported `granite3.2-vision` missing because the model list had been
+truncated by `head`; caught by re-checking before reporting.
 
 ## Three inventory rows reassigned to PC.5, with the measurement
 
@@ -144,6 +151,13 @@ remit, not configuration coherence. Reassigning rows out of the phase that owned
 them needs its reason on the record: deciding them here, without the surface that
 would show whether the decision was right, is exactly how `FilteredResult`
 acquired four fields nobody reads.
+
+**Round 1 of this reassignment did not reach PC.5**, which review established by
+reading the diff rather than arguing: only PC.6's section had been edited, so the
+rows sat in a table with a forwarding address while PC.5's scope and AC covered
+none of them. All three are now in PC.5's bullet list with its AC widened —
+together with review's pushback that the `metrics` row has nothing to do with a
+curator door and needs no surface to decide.
 
 ## Round 2 — what review disproved
 
