@@ -12,7 +12,6 @@ from entity_filtering.config import (
     FilteringConfig,
     FuzzyDedupConfig,
     KGResolutionConfig,
-    LLMVerificationConfig,
     OntologyValidationConfig,
     SemanticConfig,
     SyntacticConfig,
@@ -46,7 +45,6 @@ __all__ = [
     "SemanticConfig",
     "KGResolutionConfig",
     "OntologyValidationConfig",
-    "LLMVerificationConfig",
     "EdgePredictionConfig",
     # Workflow
     "FilteringWorkflow",

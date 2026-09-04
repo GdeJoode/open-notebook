@@ -10,8 +10,6 @@ class TestFilteringConfig:
         assert config.dedup_enabled is True
         assert config.dedup_similarity_threshold == 0.85
         assert config.edge_prediction_enabled is False
-        assert config.treekg_enabled is False
-        assert config.raptor_enabled is False
         assert config.custom_noise_patterns == []
         assert config.custom_reclassification_rules == {}
         assert config.strip_articles is True
@@ -39,14 +37,11 @@ class TestFilteringConfig:
         assert config.dedup_enabled is False
 
     def test_enable_optional_stages(self):
-        config = FilteringConfig(
-            edge_prediction_enabled=True,
-            treekg_enabled=True,
-            raptor_enabled=True,
-        )
+        # `treekg_enabled` / `raptor_enabled` removed with their config fields
+        # (PC.6): no production code read either, so this asserted that a dead
+        # flag could be set.
+        config = FilteringConfig(edge_prediction_enabled=True)
         assert config.edge_prediction_enabled is True
-        assert config.treekg_enabled is True
-        assert config.raptor_enabled is True
 
     def test_custom_articles(self):
         config = FilteringConfig(custom_articles=["De ", "Het "])

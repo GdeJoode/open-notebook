@@ -275,6 +275,10 @@ def check_feature_dependencies(
     judge_model_configured: bool,
     ontology_validation_enabled: bool = False,
     ontology_supplied: bool = True,
+    entity_linking_enabled: bool = False,
+    entity_linker_available: bool = True,
+    outlier_detection_enabled: bool = False,
+    graph_centrality_enabled: bool = True,
 ) -> List[Finding]:
     """Flags that need a second, unrelated flag to do anything.
 
@@ -331,6 +335,40 @@ def check_feature_dependencies(
                 "actually validated",
                 "supply an ontology to the workflow, or disable "
                 "ontology_validation (OntologyValidationConfig.enabled=False)",
+            )
+        )
+
+    if entity_linking_enabled and not entity_linker_available:
+        # Structurally identical to the flagship case, and found by review after
+        # the phase claimed to have closed the class. `linking_provider` defaults
+        # to "none", so enabling entity linking without also changing that second,
+        # unrelated setting leaves `_entity_linker` as None and stage 8 never runs.
+        findings.append(
+            Finding(
+                BLOCK,
+                "linking-without-a-linker",
+                "entity linking is enabled but no linker can be built; "
+                "`linking_provider` is not a provider that resolves and none was "
+                "injected, so the linking stage never runs",
+                "set semantic.linking_provider to a real provider (e.g. "
+                "'dbpedia_spotlight'), inject a linker, or disable "
+                "semantic.entity_linking_enabled",
+            )
+        )
+
+    if outlier_detection_enabled and not graph_centrality_enabled:
+        # Outlier classification is a parameter OF the graph analyser, and the
+        # analyser is only built when centrality is on — so the flag is read into
+        # an object that is never constructed.
+        findings.append(
+            Finding(
+                BLOCK,
+                "outliers-without-centrality",
+                "outlier detection is enabled but graph centrality is not; "
+                "outlier classification is performed by the graph analyser, which "
+                "is only built when centrality is enabled",
+                "enable ontology_validation.graph_centrality_enabled, or disable "
+                "outlier_detection_enabled",
             )
         )
 

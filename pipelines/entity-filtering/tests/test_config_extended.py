@@ -12,12 +12,10 @@ from entity_filtering.config import (
     FilteringConfig,
     FuzzyDedupConfig,
     KGResolutionConfig,
-    LLMVerificationConfig,
     OntologyValidationConfig,
     SemanticConfig,
     SyntacticConfig,
 )
-
 
 # ------------------------------------------------------------------
 # Individual sub-config defaults
@@ -113,7 +111,6 @@ class TestKGResolutionConfigDefaults:
 
     def test_defaults(self):
         cfg = KGResolutionConfig()
-        assert cfg.match_strategy == "cascade"
         assert cfg.fuzzy_threshold == 0.85
         assert cfg.semantic_threshold == 0.90
         assert cfg.max_candidates == 100
@@ -139,18 +136,9 @@ class TestOntologyValidationConfigDefaults:
         assert cfg.centrality_min_score == 0.01
 
 
-class TestLLMVerificationConfigDefaults:
-    def test_disabled_by_default(self):
-        cfg = LLMVerificationConfig()
-        assert cfg.enabled is False
-
-    def test_defaults(self):
-        cfg = LLMVerificationConfig()
-        assert cfg.verify_triples is False
-        assert cfg.schema_alignment_enabled is False
-        assert cfg.self_correction_enabled is False
-        assert cfg.self_correction_max_iterations == 2
-        assert cfg.llm_model is None
+# TestLLMVerificationConfigDefaults removed with `LLMVerificationConfig` (PC.6).
+# It asserted the defaults of five flags no production code read — a test pinning
+# dead code rather than guarding behaviour, which is what let the surface survive.
 
 
 class TestEdgePredictionConfigDefaults:
@@ -185,8 +173,6 @@ class TestFilteringConfigSubConfigs:
         assert config.dedup_enabled is True
         assert config.dedup_similarity_threshold == 0.85
         assert config.edge_prediction_enabled is False
-        assert config.treekg_enabled is False
-        assert config.raptor_enabled is False
         assert config.strip_articles is True
         assert config.normalize_whitespace is True
         assert config.custom_noise_patterns == []
@@ -201,7 +187,6 @@ class TestFilteringConfigSubConfigs:
         assert isinstance(config.semantic, SemanticConfig)
         assert isinstance(config.kg_resolution, KGResolutionConfig)
         assert isinstance(config.ontology_validation, OntologyValidationConfig)
-        assert isinstance(config.llm_verification, LLMVerificationConfig)
         assert isinstance(config.edge_prediction, EdgePredictionConfig)
 
     def test_sub_configs_all_disabled_by_default(self):
@@ -216,7 +201,6 @@ class TestFilteringConfigSubConfigs:
         assert config.semantic.entity_linking_enabled is False
         assert config.kg_resolution.enabled is False
         assert config.ontology_validation.enabled is False
-        assert config.llm_verification.enabled is False
         assert config.edge_prediction.enabled is False
 
     def test_sub_configs_can_be_passed_at_construction(self):

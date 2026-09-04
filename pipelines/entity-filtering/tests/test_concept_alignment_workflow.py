@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import pytest
+import pytest
 from entity_filtering.config import (
     ConceptAlignmentConfig,
     FilteringConfig,
@@ -226,11 +227,23 @@ async def test_stage_absent_when_disabled():
     assert result.concept_alignment_report is None
 
 
-async def test_enabled_without_kg_resolution_is_a_safe_no_op(caplog):
-    # Nothing is marked is_new, so there is nothing to align. It must be a quiet
-    # no-op in the DATA and a loud one in the LOG (the Stage-14 house pattern).
-    result = await _run(_config(alignment=True, kg_resolution=False))
-    assert result.concept_alignment_report["aligned_count"] == 0
+async def test_enabled_without_kg_resolution_is_refused(caplog):
+    """PC.6 replaces the loud no-op with a refusal, and this records the change.
+
+    This was `test_enabled_without_kg_resolution_is_a_safe_no_op`, asserting a
+    quiet no-op in the data and a loud one in the log. That combination — the
+    "Stage-14 house pattern" — is exactly what PC.6's acceptance criterion calls
+    the failure: a flag that is on, does nothing, and leaves one warning behind.
+    The behaviour it described was real and is not disputed; what changed is that
+    the configuration can no longer be built.
+    """
+    from shared.config_coherence import ConfigurationError
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        await _run(_config(alignment=True, kg_resolution=False))
+    assert "alignment-without-resolution" in {
+        f.code for f in excinfo.value.findings
+    }
 
 
 async def test_enabled_without_a_repository_does_not_crash():
@@ -262,20 +275,21 @@ def _loguru_to_caplog():
     return loguru_logger.add(_PropagateHandler(), level="WARNING", format="{message}")
 
 
-async def test_warns_that_nothing_is_classified_when_kg_resolution_is_off(caplog):
-    import logging
+async def test_the_refusal_says_what_is_wrong_and_how_to_fix_it():
+    """The warning's content survives; only its severity changed.
 
-    from loguru import logger as loguru_logger
+    The old test asserted a WARNING saying "nothing will be classified" because
+    "kg_resolution is disabled". Both facts must still reach whoever hits this —
+    a refusal that does not name the fix is worse than the warning it replaced.
+    """
+    from shared.config_coherence import ConfigurationError
 
-    sink = _loguru_to_caplog()
-    try:
-        with caplog.at_level(logging.WARNING):
-            await _run(_config(alignment=True, kg_resolution=False))
-    finally:
-        loguru_logger.remove(sink)
-    messages = " | ".join(r.message for r in caplog.records)
-    assert "nothing will be classified" in messages
-    assert "kg_resolution is disabled" in messages
+    with pytest.raises(ConfigurationError) as excinfo:
+        await _run(_config(alignment=True, kg_resolution=False))
+    message = str(excinfo.value)
+    assert "nothing is marked" in message and "nothing is classified" in message
+    assert "enable kg_resolution" in message
+    assert "ENABLE_CONCEPT_ALIGNMENT=false" in message
 
 
 async def test_warns_that_the_stage_is_degraded_not_silent_without_a_repo(caplog):
@@ -319,28 +333,23 @@ async def test_warns_when_the_judge_is_enabled_but_has_no_caller(caplog):
     assert "alignment_llm_caller" in " | ".join(r.message for r in caplog.records)
 
 
-async def test_degraded_warning_is_silent_when_nothing_is_classified(caplog):
-    # Residual from the N.4b re-review: with kg_resolution OFF and a missing DI
-    # input, the accurate "nothing will be classified" line must not be
-    # contradicted by a DEGRADED line claiming verdicts are being recorded.
-    import logging
+async def test_the_contradictory_log_pair_is_now_unreachable():
+    """The N.4b residual this guarded against cannot occur any more.
 
-    from loguru import logger as loguru_logger
+    The old test pinned that with `kg_resolution` off and a missing DI input, the
+    accurate "nothing will be classified" line was not contradicted by a DEGRADED
+    line claiming verdicts were being recorded. Keeping two log lines consistent
+    with each other was only necessary while the configuration was allowed; it is
+    now refused before either line can be emitted.
+    """
+    from shared.config_coherence import ConfigurationError
 
-    sink = _loguru_to_caplog()
-    try:
-        with caplog.at_level(logging.WARNING):
-            workflow = FilteringWorkflow(
-                config=_config(alignment=True, kg_resolution=False),
-                entity_repo=None, ontology=_ontology(),
-            )
-            result = await workflow.process(_extraction())
-    finally:
-        loguru_logger.remove(sink)
-    messages = " | ".join(r.message for r in caplog.records)
-    assert "nothing will be classified" in messages
-    assert "DEGRADED" not in messages
-    assert result.concept_alignment_report["aligned_count"] == 0
+    with pytest.raises(ConfigurationError):
+        FilteringWorkflow(
+            config=_config(alignment=True, kg_resolution=False),
+            entity_repo=None,
+            ontology=_ontology(),
+        )
 
 
 # ---------------------------------------------------------------------------

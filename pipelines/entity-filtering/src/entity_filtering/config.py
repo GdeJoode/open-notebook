@@ -120,13 +120,24 @@ class SemanticConfig:
     contextual_clustering_enabled: bool = False
 
 
+# PC.6 removed four config surfaces that no production code read — each occurred
+# only here and in a test asserting its default:
+#
+#   * `LLMVerificationConfig` and the `llm_verification` field — the whole
+#     sub-config, five flags, zero consumers;
+#   * `treekg_enabled` / `raptor_enabled`;
+#   * `KGResolutionConfig.match_strategy` — never passed to `KGResolver`, so
+#     "semantic" and "fuzzy" were inert while looking like a choice.
+#
+# A knob nothing reads is not neutral: it is a promise the system does not keep,
+# and the tests asserting their defaults were pinning dead code rather than
+# guarding behaviour. Restore one only together with the code that reads it.
 @dataclass
 class KGResolutionConfig:
     """Knowledge-graph entity resolution settings.
 
     Attributes:
         enabled: Whether to resolve against an existing KG.
-        match_strategy: Resolution strategy -- "cascade", "fuzzy", or "semantic".
         fuzzy_threshold: Fuzzy similarity threshold for candidate matching.
         semantic_threshold: Embedding similarity threshold for candidate matching.
         max_candidates: Maximum KG candidates evaluated per entity.
@@ -158,7 +169,6 @@ class KGResolutionConfig:
     """
 
     enabled: bool = False
-    match_strategy: str = "cascade"
     fuzzy_threshold: float = 0.85
     semantic_threshold: float = 0.90
     max_candidates: int = 100
@@ -220,28 +230,6 @@ class OntologyValidationConfig:
     centrality_min_score: float = 0.01
     outlier_detection_enabled: bool = False
     outlier_centrality_low: float = 0.05
-
-
-@dataclass
-class LLMVerificationConfig:
-    """LLM-based verification and self-correction settings.
-
-    Attributes:
-        enabled: Whether to use an LLM for entity/relation verification.
-        verify_triples: Ask the LLM to verify extracted triples.
-        schema_alignment_enabled: Use the LLM to align types with the schema.
-        self_correction_enabled: Allow the LLM to iteratively refine results.
-        self_correction_max_iterations: Max self-correction rounds.
-        llm_model: Model identifier for the LLM provider.
-            ``None`` means use the pipeline default.
-    """
-
-    enabled: bool = False
-    verify_triples: bool = False
-    schema_alignment_enabled: bool = False
-    self_correction_enabled: bool = False
-    self_correction_max_iterations: int = 2
-    llm_model: Optional[str] = None
 
 
 @dataclass
@@ -373,15 +361,12 @@ class FilteringConfig:
         dedup_similarity_threshold: Threshold for considering two entities
             as duplicates (0.0-1.0).
         edge_prediction_enabled: Whether to run edge prediction scoring.
-        treekg_enabled: Whether to run TreeKG summarization.
-        raptor_enabled: Whether to run RAPTOR summarization.
         syntactic: Syntactic pre-processing sub-config.
         fuzzy_dedup: Fuzzy deduplication sub-config.
         embedding_dedup: Embedding deduplication sub-config.
         semantic: Semantic enrichment sub-config.
         kg_resolution: Knowledge-graph resolution sub-config.
         ontology_validation: Ontology validation sub-config.
-        llm_verification: LLM verification sub-config.
         edge_prediction: Edge prediction sub-config.
     """
 
@@ -405,8 +390,6 @@ class FilteringConfig:
     edge_prediction_enabled: bool = False
 
     # Summarization (TreeKG/RAPTOR)
-    treekg_enabled: bool = False
-    raptor_enabled: bool = False
 
     # Extended sub-configs (all disabled by default)
     syntactic: SyntacticConfig = field(default_factory=SyntacticConfig)
@@ -423,9 +406,6 @@ class FilteringConfig:
     )
     ontology_validation: OntologyValidationConfig = field(
         default_factory=OntologyValidationConfig
-    )
-    llm_verification: LLMVerificationConfig = field(
-        default_factory=LLMVerificationConfig
     )
     semantic_blocking: SemanticBlockingConfig = field(
         default_factory=SemanticBlockingConfig

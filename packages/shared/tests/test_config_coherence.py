@@ -449,3 +449,72 @@ def test_an_unreachable_runtime_reports_nothing_here() -> None:
 def test_rows_without_a_declared_window_are_skipped() -> None:
     assert check_ollama_context({"m:8b": 0}, probe=lambda _u, _m: None) == []
     assert check_ollama_context({"": 32768}, probe=lambda _u, _m: None) == []
+
+
+# --- the rest of the flag-on-zero-effect class ------------------------------
+
+
+def test_linking_without_a_linker_blocks() -> None:
+    """`linking_provider` defaults to "none", so linking alone does nothing.
+
+    Structurally identical to the flagship case and found by review AFTER the
+    phase claimed to have closed the class — which is why the refusal now sees
+    the whole config rather than the one flag someone thought of.
+    """
+    findings = check_feature_dependencies(
+        concept_alignment_enabled=False,
+        kg_resolution_enabled=False,
+        judge_enabled=False,
+        judge_model_configured=True,
+        entity_linking_enabled=True,
+        entity_linker_available=False,
+    )
+    assert [(f.code, f.severity) for f in findings] == [
+        ("linking-without-a-linker", BLOCK)
+    ]
+
+
+def test_outliers_without_centrality_blocks() -> None:
+    """Outlier classification is a parameter OF the graph analyser.
+
+    With centrality off the analyser is never built, so the flag is read into an
+    object that does not exist.
+    """
+    findings = check_feature_dependencies(
+        concept_alignment_enabled=False,
+        kg_resolution_enabled=False,
+        judge_enabled=False,
+        judge_model_configured=True,
+        outlier_detection_enabled=True,
+        graph_centrality_enabled=False,
+    )
+    assert [(f.code, f.severity) for f in findings] == [
+        ("outliers-without-centrality", BLOCK)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kwargs"),
+    [
+        {"entity_linking_enabled": True, "entity_linker_available": True},
+        {"entity_linking_enabled": False, "entity_linker_available": False},
+        {"outlier_detection_enabled": True, "graph_centrality_enabled": True},
+        {"outlier_detection_enabled": False, "graph_centrality_enabled": False},
+    ],
+)
+def test_the_new_dependencies_are_silent_when_they_can_work(kwargs) -> None:
+    """The counterweight for both, in both directions.
+
+    A check that refuses a working configuration gets disabled, and one that
+    refuses a DISABLED feature refuses every default startup.
+    """
+    assert (
+        check_feature_dependencies(
+            concept_alignment_enabled=False,
+            kg_resolution_enabled=False,
+            judge_enabled=False,
+            judge_model_configured=True,
+            **kwargs,
+        )
+        == []
+    )
