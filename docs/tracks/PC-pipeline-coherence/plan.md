@@ -260,8 +260,9 @@ Separately, the same six-line normalisation is copied four times
 - **AC**: the normalisation exists once; a test fails if a fifth copy appears;
   the measured 25 pairs are reachable by a curator.
 
-**Status: DONE** — `feature/track-pc2-one-identity`, 8 commits, report at
-[`phase-PC.2-report.md`](./phase-PC.2-report.md).
+**Status: DONE** — `feature/track-pc2-one-identity`, 12 commits, **APPROVED** after
+three review rounds. Report: [`phase-PC.2-report.md`](./phase-PC.2-report.md).
+Review: [`reviews/phase-PC.2-attempts-1-3.md`](./reviews/phase-PC.2-attempts-1-3.md).
 
 All four AC items met. `fold_for_comparison` replaces the four copies (verified
 byte-identical by execution over 18 adversarial inputs first) and an AST guard
@@ -283,8 +284,18 @@ Three things the plan did not anticipate, each with its measurement:
 - **Two labelling bugs in the apply path.** The frontend labelled the survivor
   `name_a` regardless of who won, contradicting the server-side rule it mirrors.
 
-Adversarial review returned REVISIONS_NEEDED on attempt 1 and changed two things
-materially, both of which the first report had claimed as done:
+Three review rounds, and every blocker plus two of three round-2 majors were the
+same defect: **a value produced for a surface that never consumes it** — the card
+helpers imported and never called, the containment head run computed and
+discarded, and a `.test.ts`/`.test.tsx` name collision that made `tsc` skip the
+file guarding the first blocker. PC.1b's producer-must-name-its-consumer invariant
+is Python-only and all three sat on the Python/TypeScript boundary. **A
+cross-boundary guard is the track-level follow-up this phase argues for.** Round
+3's sweep confirmed no fourth instance: 40 response-model fields against every
+identifier in `frontend/src`, 0 orphaned.
+
+Round 1 returned REVISIONS_NEEDED and changed two things materially, both of which
+the first report had claimed as done:
 
 - **The curator card was never wired.** `candidateTypeLabel` was written, tested
   and imported — and called nowhere, so a cross-type candidate still rendered one
@@ -299,7 +310,9 @@ And the correction that matters most for later phases: **an organ OF X is not X*
 The curated affix list was built from corpus frequency and carried the governance
 affixes, so it proposed `Burgemeester van Rotterdam` ~ `Rotterdam` and
 `Gemeenteraad van Amsterdam` ~ `Amsterdam` as merges — and the tests pinned one of
-them as correct. Cut from 40 affixes to 12. This gives up the plan's own
+them as correct. Cut from 40 affixes to 11 (`waterschap` went in round 2, once
+review showed it re-created the very class the cut removed). This gives up the
+plan's own
 `Minister van BZK` example: that class is real but belongs in a later phase as an
 **organ-of relation**, not a merge.
 
