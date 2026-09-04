@@ -145,6 +145,62 @@ them needs its reason on the record: deciding them here, without the surface tha
 would show whether the decision was right, is exactly how `FilteredResult`
 acquired four fields nobody reads.
 
+## Round 2 — what review disproved
+
+Attempt 1 returned REVISIONS_NEEDED with three blockers and nine majors, and each
+blocker contradicted a claim above.
+
+**The phase's sharpest new BLOCK was itself unreachable.** `collect_findings`'s
+single production caller never passed `ontology_validation_enabled` or
+`ontology_supplied`, so the finding was structurally impossible and the inventory's
+"**Made unreachable**" was true of the guard, not the behaviour. Built,
+unit-tested, never called — the same shape as the M6 mutation this report credits
+the phase with catching, one layer further out. The check now lives in
+`FilteringWorkflow.__init__`, the only place holding both facts.
+
+**`available: false` did nothing on the second of the two systems the phase exists
+to bridge.** `RouteResolver` filtered on API-key presence alone, so NVIDIA —
+retired in the YAML, key still in `.env`, which is exactly what a retired vendor
+leaves behind — stayed at the HEAD of the CLOUD chain for chat, the judge and
+agent extraction. Declaration on, zero effect on half the system: the acceptance
+criterion verbatim, failed by the phase's own mechanism.
+
+**A partially-pulled Ollama hard-refused startup** for steps an operator may never
+use, and worst in the common case — no Ollama at all degraded to one WARN while
+Ollama with *some* models refused. `model-not-installed` is now BLOCK only for
+`REQUIRED_STEPS`.
+
+### The class was wider than the phase surveyed
+
+The AC says "unreachable", and attempt 1 had closed the one case the plan named
+plus a judge case. Six more, measured on the shipped defaults:
+
+| flag | why it did nothing |
+|---|---|
+| `semantic.entity_linking_enabled` | `linking_provider` defaults to `"none"`, so stage 8 never runs |
+| `outlier_detection_enabled` | outlier classification belongs to the graph analyser, built only when centrality is on |
+| `llm_verification.*` | a whole sub-config, five flags, **zero** readers |
+| `kg_resolution.match_strategy` | never passed to `KGResolver` |
+| `treekg_enabled` / `raptor_enabled` | no consumer |
+| `EdgePredictionConfig` | `EdgePredictor()` built with no config, so every weight was ignored while the flag was honoured |
+
+The first two refuse. Four are deleted — each existed only in `config.py` and in a
+test asserting its default, which is what let them survive: a test pinning dead
+code rather than guarding behaviour. `EdgePredictionConfig` is wired instead, and
+that also makes the documented defaults the ones actually used, since the
+constructor's fallbacks differed.
+
+### And the correction in this report was itself wrong
+
+The `num_ctx` paragraph said both callers send it. Measured through the real
+esperanto factory: `num_ctx` appears **zero times** in the package and is filtered
+by `get_completion_kwargs` before the Ollama provider is reached. So the two
+callers differ — `_call_ollama` sends it, esperanto cannot — which means the M.4
+guard in `llm_call.py` was inert and every app-main LLM call runs at Ollama's 4096
+default. `check_ollama_context` reports a model row promising more than its model
+bakes; the remedy is a `PARAMETER num_ctx` variant, which is *not* inert on that
+path, contrary to what the first correction claimed.
+
 ## Mutation testing
 
 Eight mutations. Six caught on the first run; **two survived, and both are this
@@ -161,6 +217,11 @@ track's recurring defect rather than edge cases.**
 | M6b | the call kept but wrapped in a best-effort `try/except` | 1 |
 | M7 | the provider-availability gate removed | **nothing**, then 1 |
 | M8 | a dead env constant re-planted | 1 |
+| M13 | the context check silenced (round 2) | 1 |
+| M14 | a missing bake treated as unlimited (round 2) | 1 |
+| M15 | `REQUIRED_STEPS` emptied (round 2) | 1 |
+| M16 | required-step gating ignored (round 2) | 1 |
+| M17 | remedy blanked on a path no test exercised (round 2) | 1 |
 
 **M6 — the wiring, not the function.** Deleting
 `await _check_configuration_coherence()` from the lifespan left all three startup
