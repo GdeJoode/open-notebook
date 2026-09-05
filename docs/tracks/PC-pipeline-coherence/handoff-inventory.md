@@ -126,6 +126,46 @@ five would have fired a banner (coverage 0.45 / 0.48 / 0.55 / 0.58 →
 | `incremental_report` incl. `repair` | filtering stage 10b → `filtered.metadata` | **PC.3** | Belongs with the cross-document resolution decision |
 | ~~`find_by_alias` has no `verified` filter and no `ORDER BY`~~ **CLOSED (PC.2)** | `entity_alias` → KG resolver tier 1 | — | Now `ORDER BY verified DESC, similarity_score DESC, id ASC`: a human decision outranks a machine one, ranked not filtered so tier 1 does not go inert. Migration 78 was needed first — three of those columns did not exist on a fresh database. |
 
+## Settled by PC.6
+
+| row | disposition |
+|---|---|
+| `validation_report` — stage 11 inert | **Made unreachable.** The claim was "no production call site passes an ontology". Measured: with `enabled=True` and `ontology=None` the filter does not merely skip — it returns `{"valid_entities": 1, "invalid_entities": 0}`, i.e. a SUCCESS report for a validation that never ran, behind one DEBUG line. Now a BLOCK finding (`validation-without-ontology`). The report field itself stays; it is written when validation actually runs. |
+| `metrics` rows nothing reads | **Measured and reassigned to PC.5.** Only `routing.served` is read (`model_routes.py`); `export.jsonl` and `export.obsidian` are written and read nowhere. That is a question about what a run should REPORT to a human, which is PC.5's remit ("a door for the curator loop"), not configuration coherence. Reassigned with the measurement rather than deferred with a shrug. |
+| alignment report keys dropped at the `filtering_stats` copy | **Reassigned to PC.5**, same argument: which of the 11 keys a curator needs is a surface decision. PC.2 already closed the one key that had an owner (`alias_candidates`). |
+| `_save_result` stores pre-filter entities beside post-filter stats | **Reassigned to PC.5.** Needs a decision about what a stored run means, and that decision is visible only through the surface that renders it. |
+
+**Review pushed back on this, and the objection was checkable rather than
+rhetorical**: the first version of the reassignment edited only PC.6's section, so
+the rows lived in this table with a forwarding address and PC.5's scope and AC
+covered none of them. All three are now in PC.5's bullet list and its AC is
+widened. The `metrics` row also carries review's point that it has nothing to do
+with a curator door and needs no surface to decide — delete the writes or give
+them a reader.
+
+Reassigning three rows out of the phase that owned them needs its reason on the
+record: PC.6's remit is *configuration that expresses one intent* — a flag either
+works or says why it cannot. All three are about what a completed run reports,
+which is a different question with a different owner. The alternative was to
+"decide" them here without the surface that would show whether the decision was
+right, which is how `FilteredResult` acquired four fields nobody reads.
+
+## The dead-knob class beyond PC.6's scope
+
+Measured during PC.6's review, recorded so the next phase can scope it rather than
+rediscover it. Same defect, other packages, non-test consumers only:
+
+| module | fields with no consumer |
+|---|---|
+| `pipelines/summarization/.../config.py` | 11 — `critic_model`, `expansion_tokens`, `max_branch_depth`, `max_correction_rounds`, `max_skeleton_points`, `max_summary_words`, `min_entity_mentions`, `num_density_rounds`, `top_k_sentences`, `topic_threshold`, `use_pca_fallback` |
+| `packages/ontology-manager/.../config.py` | `ontologies_dir` |
+
+PC.6 swept `entity_filtering` — a field-level rescan there now finds none — and
+declared the rest out of scope rather than doing it badly at the end of a phase.
+The two guards it built (`tests/test_compose_env_is_consumed.py` and the AST guard
+in `services/extraction/tests/`) are both scoped to what they were written for and
+say so in their docstrings; widening either is the natural home for this.
+
 ## Found by PC.2's adversarial review
 
 | finding | boundary | owner | note |

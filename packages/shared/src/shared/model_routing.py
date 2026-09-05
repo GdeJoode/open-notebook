@@ -41,6 +41,29 @@ from loguru import logger
 # Privacy levels
 # ---------------------------------------------------------------------------
 
+class ProviderUnavailableError(RuntimeError):
+    """A route names a provider that is declared unavailable.
+
+    Track PC.6. Raised at RESOLUTION rather than at call time, because that is
+    the last point where the reason is still known — one step later the failure
+    is an HTTP error from a vendor, which cannot say that the route was retired
+    on purpose. The message names the step, the privacy level and the reason, so
+    the fix is readable from the exception alone.
+    """
+
+    def __init__(
+        self, *, provider: str, step: str, privacy: str, model: str, reason: str
+    ) -> None:
+        self.provider, self.step, self.privacy = provider, step, privacy
+        self.model, self.reason = model, reason
+        super().__init__(
+            f"routing {step!r}/{privacy!r} to provider {provider!r} "
+            f"(model {model!r}), which is declared unavailable: {reason} "
+            f"— set providers.{provider}.available: true in model_routing.yaml "
+            f"to restore it, or route this step elsewhere."
+        )
+
+
 PRIVACY_LEVELS = ("public", "internal", "confidential")
 DEFAULT_PRIVACY = os.getenv("DEFAULT_PRIVACY", "internal")
 
@@ -166,6 +189,21 @@ def get_model_config(
     # Resolve provider details
     provider_name = route.get("provider", "ollama")
     provider_conf = config.get("providers", {}).get(provider_name, {})
+
+    # PC.6: a provider declared unavailable raises here rather than being tried.
+    # Resolution is the last point where the reason is still known — one step
+    # later this is an HTTP 401 from a vendor, which says nothing about the fact
+    # that the route was deliberately retired. The routes themselves are kept:
+    # deleting them would lose what the cloud path was.
+    if provider_conf.get("available") is False:
+        raise ProviderUnavailableError(
+            provider=provider_name,
+            step=step,
+            privacy=privacy,
+            model=route.get("model", "?"),
+            reason=str(provider_conf.get("reason", "")).strip()
+            or "declared unavailable in model_routing.yaml",
+        )
 
     resolved = dict(route)
     resolved["base_url"] = provider_conf.get("base_url", os.getenv("OLLAMA_URL", "http://localhost:11434"))
@@ -331,14 +369,30 @@ def get_routing_summary() -> Dict[str, Any]:
     config = _load_config()
     routing = config.get("routing", {})
 
+    providers = config.get("providers", {})
+
+    # PC.6: a retired route is MARKED, not hidden. This is the only human-readable
+    # routing surface (`/routing` on the extraction service, and the app's
+    # services proxy), and it advertised `extraction/public → nvidia:…` exactly as
+    # it advertises a live route — while `get_model_config` raises on that same
+    # route. A summary that contradicts the resolver is worse than no summary.
     summary = {}
     for step, routes in routing.items():
         summary[step] = {}
         for privacy, route in routes.items():
-            summary[step][privacy] = f"{route.get('provider', '?')}:{route.get('model', '?')}"
+            provider = route.get("provider", "?")
+            entry = f"{provider}:{route.get('model', '?')}"
+            if providers.get(provider, {}).get("available") is False:
+                entry += " [UNAVAILABLE]"
+            summary[step][privacy] = entry
 
     return {
         "default_privacy": config.get("defaults", {}).get("default_privacy", DEFAULT_PRIVACY),
-        "providers": list(config.get("providers", {}).keys()),
+        "providers": list(providers.keys()),
+        "unavailable_providers": {
+            name: str(conf.get("reason", "")).strip()
+            for name, conf in providers.items()
+            if conf.get("available") is False
+        },
         "routing": summary,
     }

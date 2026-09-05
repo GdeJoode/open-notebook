@@ -8,6 +8,7 @@ edge prediction) into a single pipeline that transforms an
 ExtractionResult into a FilteredResult.
 """
 
+from dataclasses import asdict
 from typing import Any, Dict, Optional
 
 from loguru import logger
@@ -192,7 +193,32 @@ class FilteringWorkflow:
                 importance_threshold=self._config.kg_resolution.importance_threshold,
             )
 
+        # PC.6: one refusal point that sees the WHOLE config.
+        #
+        # The first attempt checked only the ontology case, inline, and review
+        # then found five more flags in the same shape — a feature reachable only
+        # by changing a second, unrelated setting. The acceptance criterion says
+        # that state must be UNREACHABLE, so the check has to be over the config
+        # rather than per-flag at the point each is read.
+        #
+        # Here rather than at app startup because this is where every fact is in
+        # hand at once: the flags, the injected collaborators, and the ontology.
+        self._refuse_incoherent_config(ontology, entity_linker)
+
         # Ontology validation
+        #
+        # PC.6: the check lives HERE, not at app startup, because this is the only
+        # place that holds both facts — the flag and the ontology. The first
+        # attempt put it in `collect_findings`, whose single production caller
+        # never passes either, so the finding was structurally unreachable: built,
+        # tested, never called, which is the defect this whole track keeps
+        # producing.
+        #
+        # What it prevents is worse than a no-op. `OntologyConstraintFilter` with
+        # `ontology=None` logs one DEBUG line and returns
+        # `{"total_entities": N, "valid_entities": N, "invalid_entities": 0}` — a
+        # SUCCESS report for a validation that never happened, so the run cannot
+        # be told apart from one that validated everything.
         self._ontology_filter: Optional[OntologyConstraintFilter] = None
         if self._config.ontology_validation.enabled:
             self._ontology_filter = OntologyConstraintFilter(
@@ -244,13 +270,73 @@ class FilteringWorkflow:
                 merge_threshold=self._config.incremental_resolution.merge_threshold,
             )
 
-        self._edge_predictor = EdgePredictor()
+        # PC.6: the config is PASSED. `EdgePredictor.__init__` takes one and the
+        # workflow supplied none, so every weight and threshold in
+        # `EdgePredictionConfig` was ignored while `edge_prediction_enabled` was
+        # honoured — a section of tunables that read as controls and tuned
+        # nothing. Note the constructor's own fallbacks differ from the
+        # dataclass's defaults (cosine 0.5 vs 0.6, adamic-adar 0.2 vs 0.3), so
+        # this also makes the documented defaults the ones actually used.
+        self._edge_predictor = EdgePredictor(
+            asdict(self._config.edge_prediction)
+        )
 
         # Cache for agentic context — populated during processing
         self._current_entities: list[dict[str, Any]] = []
 
         # Existing clusters for incremental resolution (injected externally)
         self._existing_clusters: list[EntityCluster] = []
+
+    def _refuse_incoherent_config(self, ontology, entity_linker) -> None:
+        """Refuse a config in which an enabled stage cannot do its job (PC.6).
+
+        Every case here was measured on the shipped defaults, and each is the same
+        shape as the finding that opened the phase — `ENABLE_CONCEPT_ALIGNMENT`
+        doing nothing because KG resolution was off:
+
+        * **ontology validation without an ontology.** The constraint filter does
+          not merely skip; it returns `{"valid_entities": N, "invalid_entities": 0}`
+          — a success report for a validation that never happened, so the run
+          cannot be told apart from one that validated everything.
+        * **entity linking without a linker.** `linking_provider` defaults to
+          `"none"`, so enabling linking alone leaves `_entity_linker` as None and
+          stage 8 never runs.
+        * **outlier detection without centrality.** Outlier classification is a
+          parameter of the graph analyser, and the analyser is built only when
+          centrality is on — the flag is read into an object never constructed.
+
+        One point that sees the whole config, not a check beside each flag: the
+        first version checked the ontology case inline, and review found five more
+        in the same shape. A per-flag check catches the flags someone thought of.
+        """
+        from shared.config_coherence import (
+            check_feature_dependencies,
+            raise_if_blocking,
+        )
+
+        semantic = self._config.semantic
+        linker_available = entity_linker is not None or semantic.linking_provider in (
+            "dbpedia_spotlight",
+        )
+        validation = self._config.ontology_validation
+
+        findings = check_feature_dependencies(
+            concept_alignment_enabled=self._config.concept_alignment.enabled,
+            kg_resolution_enabled=self._config.kg_resolution.enabled,
+            # The judge's model lives in the app layer, which this package cannot
+            # see; app-main's startup check owns that pair.
+            judge_enabled=False,
+            judge_model_configured=True,
+            ontology_validation_enabled=validation.enabled,
+            ontology_supplied=ontology is not None,
+            entity_linking_enabled=semantic.entity_linking_enabled,
+            entity_linker_available=linker_available,
+            outlier_detection_enabled=validation.outlier_detection_enabled,
+            graph_centrality_enabled=validation.graph_centrality_enabled,
+            semantic_blocking_enabled=self._config.semantic_blocking.enabled,
+            llm_matcher_enabled=self._config.llm_matcher.enabled,
+        )
+        raise_if_blocking(findings)
 
     def set_existing_clusters(self, clusters: list[EntityCluster]) -> None:
         """Inject existing KG clusters for incremental resolution."""
@@ -604,12 +690,21 @@ class FilteringWorkflow:
         # the module entry point.
         orphan_cfg = self._config.orphan_connector
 
-        # Minor-1 fix (review attempt 1): when the operator enabled the
-        # stage but the caller forgot to pass any DI input, log a
-        # WARNING so the silent-skip doesn't hide a misconfiguration.
-        # The skip predicate below mixes truthiness (``source_id``) and
-        # None-checks (``chunks``, repos, caller); mirror that here so
-        # the WARNING fires exactly when the stage would skip.
+        # PC.6: enabled-but-skipped is a REFUSAL, not a warning.
+        #
+        # A previous review answered this with a WARNING ("Minor-1 fix"), and that
+        # is precisely the state this phase's acceptance criterion names as the
+        # failure: a flag that is on, does nothing, and leaves one line behind.
+        # It was also the most likely instance in a real run, because
+        # `OrphanConnectorConfig.enabled` defaulted to True while neither
+        # production call site passes `chunks`, `orphan_entity_repo` or
+        # `orphan_llm_caller` — so every extraction logged it.
+        #
+        # The default is now False, so the flag means what it says, and turning it
+        # on without the collaborators refuses. The check lives HERE rather than in
+        # `__init__` because these are `process()` arguments, not configuration:
+        # "the check cannot see it from where the check lives" is a reason to move
+        # the check, not a reason for the state to stay reachable.
         if orphan_cfg.enabled:
             missing: list[str] = []
             if not source_id:
@@ -621,10 +716,24 @@ class FilteringWorkflow:
             if orphan_llm_caller is None:
                 missing.append("orphan_llm_caller")
             if missing:
-                logger.warning(
-                    "Orphan-connector enabled but skipped: missing DI "
-                    "input(s): {missing}",
-                    missing=missing,
+                from shared.config_coherence import (
+                    BLOCK,
+                    ConfigurationError,
+                    Finding,
+                )
+
+                raise ConfigurationError(
+                    [
+                        Finding(
+                            BLOCK,
+                            "orphan-connector-without-inputs",
+                            "the orphan connector is enabled but the caller "
+                            f"supplied none of {missing}, so the stage would be "
+                            "skipped while reporting nothing",
+                            "pass the missing argument(s) to `process()`, or "
+                            "disable orphan_connector.enabled",
+                        )
+                    ]
                 )
 
         if (

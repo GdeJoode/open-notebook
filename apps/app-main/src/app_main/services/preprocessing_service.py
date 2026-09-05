@@ -12,10 +12,9 @@ from typing import Any, Dict, List, Optional
 from esperanto import LanguageModel
 from loguru import logger
 from pydantic import BaseModel, Field
-
-from surrealdb_service.repositories import ChunkRepository
+from shared.model_routing import ProviderUnavailableError
 from surrealdb_service.connection import execute_query
-
+from surrealdb_service.repositories import ChunkRepository
 
 # ---------------------------------------------------------------------------
 # Classification schema
@@ -508,6 +507,13 @@ class PreprocessingService:
             return raw[:2000], DocumentClassification(
                 document_type="other", domain="other"
             )
+        except ProviderUnavailableError:
+            # PC.6: a deliberately retired route is not a transient fault, and the
+            # handler below would have relabelled it as one — it subclasses
+            # RuntimeError, so "Ollama API errors (e.g. out of memory)" would have
+            # swallowed a configuration decision and re-raised it as a ValueError.
+            # Propagate with the reason intact.
+            raise
         except RuntimeError as e:
             # Ollama API errors (e.g. out of memory)
             logger.error(f"LLM runtime error: {e}")

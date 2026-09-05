@@ -152,8 +152,11 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       - OLLAMA_URL=http://host.docker.internal:11434
-      - EXTRACTION_MODEL=qwen2.5:14b-instruct-q5_K_M
-      - EXTRACTION_NUM_CTX=8192
+      # No EXTRACTION_MODEL / EXTRACTION_NUM_CTX here: the extraction service
+      # routes through packages/shared/src/shared/model_routing.yaml
+      # (extraction.<privacy>.model / .num_ctx). Both were set here for a long
+      # time, read into constants nothing used, and configured nothing — which is
+      # exactly why they are gone rather than corrected.
       - EXTRACTION_CHUNK_SIZE=4000
       - EMBEDDING_MODEL=mxbai-embed-large
       - SURREALDB_URL=ws://surrealdb:8000/rpc
@@ -162,7 +165,10 @@ services:
       - SURREALDB_USER=root
       - SURREALDB_PASS=root
       - DEFAULT_ONTOLOGY=regiodeal
-      - DEFAULT_PRIVACY=internal
+      # No DEFAULT_PRIVACY here (PC.6): `shared/model_routing.py` reads it only as
+      # the fallback for `defaults.default_privacy`, which model_routing.yaml
+      # always sets — so setting it in compose changes nothing while reading as a
+      # working control. The constant stays for a YAML that omits the key.
       - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
       - NVIDIA_API_URL=https://integrate.api.nvidia.com/v1
     restart: always

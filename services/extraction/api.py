@@ -17,6 +17,7 @@ import math
 import os
 import re
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,10 +28,66 @@ from fastapi import FastAPI, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Validate this service's OWN copy of the routing config (PC.6).
+
+    app-main runs the same check, and that is not enough: this service is where
+    `model_routing.yaml` is consumed, it ships its own build-time COPY of both the
+    module and the YAML (see the Dockerfile), and `/routing` below is the surface
+    that advertises those routes to a human. Nothing enforces that the copy stays
+    in step with the repository, so a stale image would pass every check run
+    elsewhere.
+
+    Only the routing half is checked here. The feature-dependency half reads
+    app-layer state this service does not have, and inventing an answer for it
+    would produce findings nobody can act on.
+    """
+    try:
+        from config_coherence import (
+            BLOCK,
+            _installed_ollama_models,
+            check_routing,
+            raise_if_blocking,
+        )
+        from model_routing import _load_config
+
+        config = _load_config()
+        # PC.6 round 3: the probe is RUN. The first version called `check_routing`
+        # with no `installed=`, which means "skip the existence check" and emits an
+        # unconditional `ollama-unreachable` WARN — so this service reported a
+        # false alarm on every boot, about a runtime it reaches fine, while the
+        # model-existence half of the check never ran in the service that consumes
+        # those routes. `config_coherence`'s own docstring names that: a false
+        # alarm trains a reader to ignore the output.
+        base_url = (
+            config.get("providers", {}).get("ollama", {}).get("base_url")
+            or os.getenv("OLLAMA_URL")
+            or "http://localhost:11434"
+        )
+        findings = check_routing(
+            config, installed=_installed_ollama_models(base_url)
+        )
+        for finding in findings:
+            if finding.severity != BLOCK:
+                logger.warning(f"config coherence: {finding}")
+        raise_if_blocking(findings)
+    except ImportError:
+        # The shared checker is not part of this image's copy set on older
+        # builds; say so rather than skipping silently.
+        logger.warning(
+            "config coherence: shared.config_coherence not available in this "
+            "image — routing was NOT validated at startup"
+        )
+    yield
+
+
 app = FastAPI(
     title="Entity Extraction Service",
     description="Ontology-guided entity and relation extraction via LLM",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # ---------------------------------------------------------------------------
@@ -38,8 +95,15 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
-OLLAMA_MODEL = os.getenv("EXTRACTION_MODEL", "llama3.1:8b-instruct-q4_0")
-OLLAMA_NUM_CTX = int(os.getenv("EXTRACTION_NUM_CTX", "8192"))
+
+# `EXTRACTION_MODEL` and `EXTRACTION_NUM_CTX` were read into constants here and
+# REMOVED (PC.6). Each was assigned once and used nowhere: `_extract_from_chunk`
+# resolves the model through `model_routing.call_llm(step="extraction")`, which
+# reads `packages/shared/src/shared/model_routing.yaml`. Setting them in
+# docker-compose looked like configuring extraction and configured nothing —
+# verified live: with `EXTRACTION_MODEL=qwen2.5:14b-…` set, the resolver returned
+# `ollama / llama3.1:8b-instruct-q4_0 / num_ctx 8192`. That cost a fully reverted
+# branch. The lever is model_routing.yaml.
 
 SURREALDB_URL = os.getenv("SURREALDB_URL", "ws://host.docker.internal:8000/rpc")
 SURREALDB_NS = os.getenv("SURREALDB_NS", "open_notebook")
@@ -573,8 +637,16 @@ async def extract(req: ExtractRequest):
         raise HTTPException(status_code=400, detail="No content found in file")
 
     # Log routing info
-    from model_routing import get_model_config
-    route = get_model_config("extraction", privacy, model_override_dict)
+    from model_routing import ProviderUnavailableError, get_model_config
+
+    try:
+        route = get_model_config("extraction", privacy, model_override_dict)
+    except ProviderUnavailableError as exc:
+        # PC.6: the AC is "says why it cannot". Uncaught, this reached the caller
+        # as a bare 500, so the one place the reason was still known said nothing
+        # at the one place a human would read it. 503 rather than 500: the route
+        # is deliberately retired, not broken.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     logger.info(
         f"Extracting from {file_path.name}: {len(chunks)} chunks, "
         f"ontology={ontology_name}, privacy={privacy}, "

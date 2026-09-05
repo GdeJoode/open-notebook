@@ -372,33 +372,133 @@ API route, MCP tool, CLI or frontend reads either table. Meanwhile
   until something reads them. Writing into a room with no door is the one option
   to rule out.
 - **From PC.1b's inventory**: `ontology_gap` / `schema_proposal` have readers but no route; and `notebook_event` is now written by PC.1b, so a dismissal path is this phase's to design.
+- **Handed over by PC.6** (measured there, decided here — what a completed run
+  reports to a human is this phase's subject, not configuration coherence):
+  - the alignment report's 11 keys, of which the `filtering_stats` copy carries 7;
+  - `_save_result` storing pre-filter entities beside post-filter stats — an
+    inconsistency in what is PERSISTED, so it may turn out to be a bug rather
+    than a display decision;
+  - `export.jsonl` / `export.obsidian` metrics with no reader. PC.6's review
+    pushed back that this one has nothing to do with a curator door and that
+    "nothing reads it" is already the whole measurement — so the honest options
+    are to delete the writes or give them a reader, and it needs no new surface
+    to decide.
+- **Also from PC.2's review**: `POST /apply` performs no band or type check, so
+  the router docstring's "only `auto_merge` candidates may be applied" is
+  enforced only by the frontend; and `CandidatesResponse.auto_merge` plus its
+  counts are fetched by the resolution page and never rendered, which matters
+  more since PC.2 made `fold_equal` a new AUTO producer.
 - **AC**: a proposal created by the threshold is visible and actionable, or it is
-  not created.
+  not created; every run-report field handed over above is either rendered to a
+  curator, or deleted with the measurement recorded; and no destructive apply
+  path relies on the frontend for a check the API should make.
 
 ## PC.6 — Configuration that expresses one intent — ~1d
 
-**The finding (review R1, R4).** `ENABLE_CONCEPT_ALIGNMENT=true` did nothing in
-the measured run because alignment classifies only entities KG resolution marked
-`is_new`, and KG resolution is off by default — a feature reachable only by
-changing a second, unrelated default. Separately, with no `default_models` row the
-router falls back to Ollama `gemma2`, which is not installed, and the one
-configured model row returns HTTP 410; neither failure surfaces until an
-extraction dies.
+**Status: technically signed off, awaiting the owner's merge** —
+`feature/track-pc6-config-coherence`, 17 commits, five review rounds
+(3 blockers + 9 majors → 2 + 5 → 0 + 1 → 0 + 0 → 0 + 0).
+Report: [`phase-PC.6-report.md`](./phase-PC.6-report.md).
+Review: [`reviews/phase-PC.6-attempts-1-5.md`](./reviews/phase-PC.6-attempts-1-5.md).
 
-- One named profile per intent (e.g. "fast", "quality") rather than five
-  independent flags, or an explicit dependency check that refuses an incoherent
-  combination loudly.
+The reviewer's sign-off is technical and explicitly not consent to merge; that is
+the repository owner's call. Nothing was verified end-to-end against a corpus —
+`staging` was emptied for real data — so the first real extraction after this
+merges is the first real test of it.
+
+**The finding (review R1).** `ENABLE_CONCEPT_ALIGNMENT=true` did nothing in the
+measured run because alignment classifies only entities KG resolution marked
+`is_new`, and KG resolution is off by default — a feature reachable only by
+changing a second, unrelated default.
+
+- One named profile per intent, or an explicit dependency check that refuses an
+  incoherent combination loudly.
 - A startup or first-use check that the routed extraction model actually answers.
-- **Ollama context (review R4b, measured)**: esperanto never sends `num_ctx`, so
-  Ollama truncates every prompt over its runtime default (measured: 4096 of a
-  5507-token prompt) without erroring, and the JSON instructions in the prompt's
-  tail are what get cut. The `context_window` column cannot fix this on its own —
-  and filling it in FIRST makes the packer build larger prompts, so it makes
-  truncation worse. Either send `num_ctx`, or document that Ollama models must be
-  registered as variants that bake it in.
-- **From PC.1b's inventory**: `validation_report` (kept with no reader — stage 11 is inert because no production call site passes an ontology), the alignment report keys dropped at the `filtering_stats` copy, `metrics` rows nothing reads, and `_save_result` storing pre-filter entities beside post-filter stats.
+- **From PC.1b's inventory**: `validation_report` (kept with no reader — stage 11
+  is inert because no production call site passes an ontology), the alignment
+  report keys dropped at the `filtering_stats` copy, `metrics` rows nothing reads,
+  and `_save_result` storing pre-filter entities beside post-filter stats.
 - **AC**: enabling a feature either works or says why it cannot; the measured
   "flag on, zero effect, only a warning" state is unreachable.
+
+### Two claims in the original plan that measurement disproved
+
+Both were carried from review R1/R4 and are corrected here rather than left to be
+inherited as fact.
+
+**The Ollama `num_ctx` paragraph (R4b) — corrected twice, and the second
+correction is the one that holds.** The original said esperanto never sends
+`num_ctx`, so every long prompt is truncated and the JSON instructions in the tail
+are cut. My first correction said the opposite — that both callers send it — and
+was wrong on its load-bearing half. Measured through the real esperanto factory:
+
+```
+in   config={"num_ctx": 16384, "temperature": 0.1, "max_tokens": 8}
+out  {"options": {"num_predict": 8, "temperature": 0.1, "top_p": 0.9}}
+```
+
+`num_ctx` appears **zero times** in the esperanto package;
+`providers/llm/base.py::get_completion_kwargs` returns only
+max_tokens/temperature/top_p/streaming, so it is filtered before the Ollama
+provider is reached. The settled picture is that the two callers differ:
+
+| caller | used by | sends `num_ctx`? |
+|---|---|---|
+| `shared/model_routing._call_ollama` | extraction service, `preprocessing_service` | **yes** — posts to Ollama directly |
+| esperanto, behind `llm_call.RoutedLLMCaller` | app-main's chat, judge, agent extraction | **no** — filtered upstream |
+
+Consequences, all of them PC.6's business:
+
+* The M.4 guard's `kwargs.setdefault("num_ctx", num_ctx)` was inert. Removed, and
+  the code now states the limitation instead of implying it is handled.
+* On the esperanto path a Modelfile `PARAMETER num_ctx` is the ONLY thing that
+  sets the window — so the model-variant approach is *not* inert there, as the
+  first correction claimed. It was reverted on a premise that holds for the
+  extraction path and not for app-main.
+* `check_ollama_context` reports a model row promising more context than its model
+  bakes, with the variant as the remedy.
+
+What both corrections agree on, and what is confirmed: truncation discards the
+**head**, not the tail — verified with markers at both ends — and extraction is
+not truncating (~4,530-token worst case against 8,192 sent through a caller that
+does send it).
+
+**No router fallback resolves to `gemma2`.** The plan said that with no
+`default_models` row the router falls back to Ollama `gemma2`, which is not
+installed. Both fallbacks are `llama3.1:8b*` — `model_routing.py:184` and
+`route_resolver._DEFAULT_PROVIDER_MODEL_NAME`. (An earlier draft of this
+correction said "`gemma` appears nowhere in the repository", which is false: it
+appears in `docs/features/ai-models.md`, `docs/features/ollama.md` and a test
+fixture, and `ai-models.md:441` listing `gemma3` for transformations is the likely
+origin of the original claim. The substantive point stands; the sweeping version
+of it did not.)
+
+The real state, measured: every routed local model is installed — three distinct
+models across nine ollama routes, not "eleven", which is the number of tags pulled
+— `default_models` holds zero rows, and that empty row is a legitimate "not
+configured yet" rather than a fault, since models for summaries and
+transformations are added later.
+
+### What the phase found instead
+
+**Two model-configuration systems with opposite privacy defaults.**
+`model_routing.yaml` (pipeline steps × privacy) defaults to `internal`, local
+only; `default_models` + `route_resolver` (LLMTask × PrivacyMode) defaults to
+`CLOUD`, prefer cloud and fall back to local. Each is defensible alone; together
+they mean the same document is treated as local by one path and cloud-eligible by
+the other. **Decided (user): keep both, one authoritative per domain, with a
+bridge check that fails when they contradict** — merging touches both code paths,
+the `/api/models/defaults` surface and the J.4 telemetry for no behaviour anyone
+asked for.
+
+**Startup seeded model rows for a provider the config had retired.** `seed_nim_routes`
+runs on every boot and is where the single NVIDIA `model` row came from — a
+configuration contradicting itself once per startup, for a vendor nothing is
+allowed to call. Now skipped while the provider is declared unavailable.
+
+**NVIDIA is declared unavailable rather than deleted** (user's decision): the
+`public` routes stay as the record of what the cloud path was, and resolving one
+raises `ProviderUnavailableError` with the reason instead of reaching for a key.
 
 ---
 

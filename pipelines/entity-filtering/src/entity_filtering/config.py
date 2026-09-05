@@ -83,8 +83,6 @@ class EmbeddingDedupConfig:
         enabled: Whether to run embedding deduplication.
         similarity_threshold: Cosine similarity threshold for merging.
         k_candidates: Number of nearest neighbours to consider.
-        embedding_model: Model identifier for the embedding provider.
-            ``None`` means use the pipeline default.
         use_faiss: Use FAISS for approximate nearest-neighbour search.
         auto_merge_threshold: K.5 review-band split for embedding similarity —
             pairs at/above this auto-merge. Default 0.95 (embeddings are noisier
@@ -96,7 +94,6 @@ class EmbeddingDedupConfig:
     enabled: bool = False
     similarity_threshold: float = 0.90
     k_candidates: int = 5
-    embedding_model: Optional[str] = None
     use_faiss: bool = True
     # K.5 review-band thresholds (consumed by candidate_dedup_service).
     auto_merge_threshold: Optional[float] = 0.95
@@ -120,13 +117,24 @@ class SemanticConfig:
     contextual_clustering_enabled: bool = False
 
 
+# PC.6 removed four config surfaces that no production code read — each occurred
+# only here and in a test asserting its default:
+#
+#   * `LLMVerificationConfig` and the `llm_verification` field — the whole
+#     sub-config, five flags, zero consumers;
+#   * `treekg_enabled` / `raptor_enabled`;
+#   * `KGResolutionConfig.match_strategy` — never passed to `KGResolver`, so
+#     "semantic" and "fuzzy" were inert while looking like a choice.
+#
+# A knob nothing reads is not neutral: it is a promise the system does not keep,
+# and the tests asserting their defaults were pinning dead code rather than
+# guarding behaviour. Restore one only together with the code that reads it.
 @dataclass
 class KGResolutionConfig:
     """Knowledge-graph entity resolution settings.
 
     Attributes:
         enabled: Whether to resolve against an existing KG.
-        match_strategy: Resolution strategy -- "cascade", "fuzzy", or "semantic".
         fuzzy_threshold: Fuzzy similarity threshold for candidate matching.
         semantic_threshold: Embedding similarity threshold for candidate matching.
         max_candidates: Maximum KG candidates evaluated per entity.
@@ -158,7 +166,6 @@ class KGResolutionConfig:
     """
 
     enabled: bool = False
-    match_strategy: str = "cascade"
     fuzzy_threshold: float = 0.85
     semantic_threshold: float = 0.90
     max_candidates: int = 100
@@ -220,28 +227,6 @@ class OntologyValidationConfig:
     centrality_min_score: float = 0.01
     outlier_detection_enabled: bool = False
     outlier_centrality_low: float = 0.05
-
-
-@dataclass
-class LLMVerificationConfig:
-    """LLM-based verification and self-correction settings.
-
-    Attributes:
-        enabled: Whether to use an LLM for entity/relation verification.
-        verify_triples: Ask the LLM to verify extracted triples.
-        schema_alignment_enabled: Use the LLM to align types with the schema.
-        self_correction_enabled: Allow the LLM to iteratively refine results.
-        self_correction_max_iterations: Max self-correction rounds.
-        llm_model: Model identifier for the LLM provider.
-            ``None`` means use the pipeline default.
-    """
-
-    enabled: bool = False
-    verify_triples: bool = False
-    schema_alignment_enabled: bool = False
-    self_correction_enabled: bool = False
-    self_correction_max_iterations: int = 2
-    llm_model: Optional[str] = None
 
 
 @dataclass
@@ -320,7 +305,12 @@ class OrphanConnectorConfig:
     to confirm or deny each proposal.
 
     Attributes:
-        enabled: Whether to run the orphan connector. Default ``True``
+        enabled: Whether to run the orphan connector. Default ``False``
+            since PC.6: it defaulted to True while no production call site passed
+            the three collaborators `process()` needs, so the stage was skipped on
+            every run behind one warning — the "flag on, zero effect" state this
+            phase exists to make unreachable. Turning it on now REFUSES unless the
+            inputs are supplied. Original note
             so the pipeline picks up orphans automatically; flip to
             ``False`` for evaluation runs that want to measure orphan
             counts before reconnection.
@@ -332,12 +322,19 @@ class OrphanConnectorConfig:
             pipeline.
     """
 
-    enabled: bool = True
+    enabled: bool = False
     max_proposals_per_orphan: int = 3
     min_confidence: float = 0.6
 
 
 @dataclass
+# PC.6 removed `EdgePredictionConfig.enabled`: `EdgePredictor` reads no `enabled`
+# key, and the real gate is `FilteringConfig.edge_prediction_enabled`. Setting it
+# here alongside a False top-level flag did nothing, silently — and round 2's
+# `asdict()` wiring would have handed the dead key straight to the predictor,
+# making it look MORE connected than it was.
+# `EmbeddingDedupConfig.embedding_model` went for the same reason as
+# `match_strategy`: documented as a choice, read by nothing.
 class EdgePredictionConfig:
     """Edge (relation) prediction and scoring settings.
 
@@ -350,7 +347,6 @@ class EdgePredictionConfig:
         k_neighbors: Number of neighbours for graph-based signals.
     """
 
-    enabled: bool = False
     cosine_weight: float = 0.6
     adamic_adar_weight: float = 0.3
     common_ancestors_weight: float = 0.1
@@ -373,15 +369,12 @@ class FilteringConfig:
         dedup_similarity_threshold: Threshold for considering two entities
             as duplicates (0.0-1.0).
         edge_prediction_enabled: Whether to run edge prediction scoring.
-        treekg_enabled: Whether to run TreeKG summarization.
-        raptor_enabled: Whether to run RAPTOR summarization.
         syntactic: Syntactic pre-processing sub-config.
         fuzzy_dedup: Fuzzy deduplication sub-config.
         embedding_dedup: Embedding deduplication sub-config.
         semantic: Semantic enrichment sub-config.
         kg_resolution: Knowledge-graph resolution sub-config.
         ontology_validation: Ontology validation sub-config.
-        llm_verification: LLM verification sub-config.
         edge_prediction: Edge prediction sub-config.
     """
 
@@ -404,10 +397,7 @@ class FilteringConfig:
     # Edge scoring
     edge_prediction_enabled: bool = False
 
-    # Summarization (TreeKG/RAPTOR)
-    treekg_enabled: bool = False
-    raptor_enabled: bool = False
-
+    
     # Extended sub-configs (all disabled by default)
     syntactic: SyntacticConfig = field(default_factory=SyntacticConfig)
     fuzzy_dedup: FuzzyDedupConfig = field(default_factory=FuzzyDedupConfig)
@@ -423,9 +413,6 @@ class FilteringConfig:
     )
     ontology_validation: OntologyValidationConfig = field(
         default_factory=OntologyValidationConfig
-    )
-    llm_verification: LLMVerificationConfig = field(
-        default_factory=LLMVerificationConfig
     )
     semantic_blocking: SemanticBlockingConfig = field(
         default_factory=SemanticBlockingConfig

@@ -28,6 +28,7 @@ from ontology_extraction.multi_schema_orchestrator import (
 )
 from ontology_extraction.workflow import ExtractionWorkflow
 from ontology_manager.schema_projection import project_accepted_edits
+from shared.config_coherence import ConfigurationError
 from shared.services.metrics import record_metric
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories import (
@@ -1999,6 +2000,22 @@ class EntityExtractionService:
                     f"{filtering_stats}"
                 )
 
+            except ConfigurationError:
+                # PC.6: a REFUSAL is not a failure and must not be swallowed here.
+                #
+                # `ConfigurationError` subclasses RuntimeError, so the handler
+                # below caught it and turned the refusal into a log line — with an
+                # outcome worse than the state it replaced: the whole filtering
+                # stage is dropped (dedup, fuzzy, embedding, edge prediction,
+                # alignment) while the extraction completes and reports success.
+                #
+                # And it is reachable without a restart: `get_concept_alignment_enabled`
+                # reads the env at call time, deliberately, so flipping
+                # ENABLE_CONCEPT_ALIGNMENT on a running server produced exactly
+                # that on every subsequent extraction. `run_filtering_only` has no
+                # enclosing try and propagated correctly, so the two call sites
+                # disagreed about whether a refusal means anything. They agree now.
+                raise
             except Exception as e:
                 # Filtering itself failing is non-fatal — fall through and the
                 # raw extraction results are still saved below. ``filtered``

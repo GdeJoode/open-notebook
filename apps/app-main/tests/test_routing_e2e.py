@@ -148,6 +148,21 @@ def _cloud_route_row(task: str) -> ModelRoute:
     )
 
 
+def _allow_cloud(monkeypatch) -> None:
+    """Treat the cloud provider as NOT retired for this test.
+
+    PC.6 declared NVIDIA unavailable in `model_routing.yaml` and the resolver now
+    honours it, so a cloud candidate no longer appears at all. These tests are
+    about FAILOVER — cloud outage degrading to local — and need something to fail
+    over from. Steering the retirement rather than the key keeps them testing
+    failover instead of silently testing the retirement.
+    """
+    monkeypatch.setattr(
+        "app_main.services.model_routing.route_resolver._provider_is_retired",
+        lambda provider: False,
+    )
+
+
 def _models() -> Dict[str, Model]:
     return {
         "model:nim": Model(
@@ -168,6 +183,7 @@ def _models() -> Dict[str, Model]:
 async def test_e2e_forced_outage_fails_over_to_local(monkeypatch):
     """nvidia forced down -> extraction completes on local; telemetry records it."""
     monkeypatch.setenv("NVIDIA_API_KEY", "nim-key")  # cloud configured
+    _allow_cloud(monkeypatch)
     _install_resolver(
         monkeypatch,
         rows={"entity_extraction": _cloud_route_row("entity_extraction")},
@@ -215,6 +231,7 @@ async def test_e2e_forced_outage_fails_over_to_local(monkeypatch):
 async def test_e2e_private_never_constructs_cloud(monkeypatch):
     """A PRIVATE run never builds a cloud model, even with cloud key + cloud chain."""
     monkeypatch.setenv("NVIDIA_API_KEY", "nim-key")  # cloud IS available...
+    _allow_cloud(monkeypatch)
     _install_resolver(
         monkeypatch,
         # ...and the persisted chain even lists nvidia first.

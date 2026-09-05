@@ -35,6 +35,92 @@ from app_main.exceptions import (
 load_dotenv()
 
 
+async def _check_configuration_coherence() -> None:
+    """Log WARN findings, raise on BLOCK ones (Track PC.6).
+
+    Reads the live configuration rather than a snapshot: the routing YAML, the
+    two feature flags that gate concept alignment, and whether a chat model is
+    actually configured for the judge. `default_models` being empty is a
+    legitimate "not configured yet" and is only a finding when something enabled
+    depends on it.
+    """
+    from shared.config_coherence import (
+        BLOCK,
+        collect_findings,
+        raise_if_blocking,
+    )
+    from shared.model_routing import _load_config
+
+    from app_main.config import get_concept_alignment_enabled
+
+    try:
+        from app_main.dependencies import get_default_models_repo
+
+        defaults = await get_default_models_repo().get()
+        judge_model_configured = bool(
+            getattr(defaults, "default_chat_model", "") or ""
+        )
+    except Exception as exc:  # noqa: BLE001 — an unreadable row is not a verdict
+        logger.warning(f"Could not read default_models: {exc}")
+        judge_model_configured = True  # do not manufacture a BLOCK from an error
+
+    from entity_filtering.config import ConceptAlignmentConfig, KGResolutionConfig
+
+    # The resolver's default is READ, not assumed. A hardcoded "CLOUD" made the
+    # bridge check unable to observe one of the two things it compares: an
+    # operator who aligned the two by setting `default_privacy_mode="private"`
+    # would get the mismatch warning forever, and a genuine flip either way would
+    # be invisible.
+    from app_main.services.model_routing.privacy_resolver import _global_mode
+
+    try:
+        resolver_default = (await _global_mode()).value
+    except Exception as exc:  # noqa: BLE001 — mirror the resolver's own fallback
+        logger.warning(f"Could not read default_privacy_mode: {exc}")
+        resolver_default = "cloud"
+
+    findings = collect_findings(
+        routing_config=_load_config(),
+        concept_alignment_enabled=get_concept_alignment_enabled(),
+        kg_resolution_enabled=KGResolutionConfig().enabled,
+        judge_enabled=ConceptAlignmentConfig().judge_enabled,
+        judge_model_configured=judge_model_configured,
+        resolver_default_privacy=resolver_default,
+    )
+    # The esperanto path cannot send `num_ctx`, so a model row promising a window
+    # the model does not bake means the packer sizes prompts the runtime will
+    # truncate. Read from the rows rather than the YAML: YAML steps go through
+    # `_call_ollama`, which does send it, and are not affected.
+    from shared.config_coherence import ConfigurationError
+
+    try:
+        from shared.config_coherence import check_ollama_context
+
+        from app_main.dependencies import get_model_repo
+
+        rows = await get_model_repo().get_by_provider("ollama")
+        declared = {
+            str(getattr(r, "name", "") or ""): int(getattr(r, "context_window", 0) or 0)
+            for r in rows
+        }
+        findings = findings + check_ollama_context(declared)
+    except ConfigurationError:
+        raise
+    except (OSError, LookupError, AttributeError, ValueError) as exc:
+        # Narrow, deliberately. `except Exception` here is the M6b shape: a
+        # signature change, a renamed `context_window`, or a repo rename would
+        # make this check vanish behind one warning — and this is the check built
+        # BECAUSE the M.4 guard was inert. An unreadable model table is not a
+        # verdict about the configuration, so those specific failures degrade;
+        # anything else is a bug and propagates.
+        logger.warning(f"Could not check Ollama context windows: {exc}")
+
+    for finding in findings:
+        if finding.severity != BLOCK:
+            logger.warning(f"config coherence: {finding}")
+    raise_if_blocking(findings)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler - runs DB migrations and starts job worker."""
@@ -59,13 +145,34 @@ async def lifespan(app: FastAPI):
         logger.exception(e)
         raise RuntimeError(f"Failed to run database migrations: {e}") from e
 
+    # PC.6: refuse a configuration in which an enabled feature cannot do its job.
+    # Placed after migrations (so the DB is readable) and BEFORE the seeds and the
+    # worker (so nothing acts on an incoherent config). WARN findings are logged
+    # and startup continues; BLOCK findings raise, because the state this phase
+    # exists to abolish is "flag on, zero effect, one warning".
+    await _check_configuration_coherence()
+
     # Seed the NVIDIA NIM model row + per-task default routes (Track J.4).
     # Idempotent + best-effort: never blocks startup. Runs after migrations so
     # the model_route table (migration 51) exists.
+    #
+    # PC.6: skipped when the routing config declares NVIDIA unavailable. Seeding
+    # model rows for a provider the config has retired is how `model` came to hold
+    # exactly one row, for a vendor nothing is allowed to call — a configuration
+    # that contradicts itself once per startup.
     try:
-        from app_main.services.model_routing.seed import seed_nim_routes
+        from shared.model_routing import _load_config
 
-        await seed_nim_routes()
+        nvidia_conf = _load_config().get("providers", {}).get("nvidia", {})
+        if nvidia_conf.get("available") is False:
+            logger.info(
+                "NIM route seed skipped: provider 'nvidia' is declared "
+                "unavailable in model_routing.yaml"
+            )
+        else:
+            from app_main.services.model_routing.seed import seed_nim_routes
+
+            await seed_nim_routes()
     except Exception as e:
         logger.warning(f"NIM route seed skipped: {e}")
 

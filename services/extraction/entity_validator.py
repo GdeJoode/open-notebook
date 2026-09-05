@@ -21,14 +21,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from loguru import logger
-
 from vocabulary_manager import load_vocab
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
+# OLLAMA_URL was bound here and never read (PC.6, found by review): this module
+# does not call Ollama. Removed rather than kept "for symmetry" with api.py — a
+# constant that reads the environment and is never used is what makes an operator
+# believe a knob exists.
 SURREALDB_URL = os.getenv("SURREALDB_URL", "ws://host.docker.internal:8000/rpc")
 SURREALDB_NS = os.getenv("SURREALDB_NS", "open_notebook")
 SURREALDB_DB = os.getenv("SURREALDB_DB", "open_notebook")
