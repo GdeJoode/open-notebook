@@ -7,5 +7,13 @@
 -- migration 79 exists to end.
 -- ============================================================================
 
-REMOVE INDEX IF EXISTS idx_entity_name_key ON entity;
+-- Restore migration 39's index before dropping the identity one, so the table is
+-- never briefly without a uniqueness guarantee. Note this can FAIL on a database
+-- that used the history the identity index allows — two rows sharing a display
+-- name across statuses — which is the honest outcome: rolling back to a stricter
+-- constraint than the data satisfies should say so rather than silently drop it.
+DEFINE INDEX IF NOT EXISTS idx_entity_name_type ON entity
+    FIELDS canonical_name, entity_type UNIQUE;
+REMOVE INDEX IF EXISTS idx_entity_identity ON entity;
+REMOVE FIELD IF EXISTS identity_key ON entity;
 REMOVE FIELD IF EXISTS name_key ON entity;

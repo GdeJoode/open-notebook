@@ -57,7 +57,7 @@ async def test_case_variants_cannot_both_exist(live_surrealdb: SurrealDBConfig) 
 
     with pytest.raises(Exception) as excinfo:
         await _entity(live_surrealdb, stem.lower())
-    assert "idx_entity_name_key" in str(excinfo.value)
+    assert "idx_entity_identity" in str(excinfo.value)
 
 
 @pytest.mark.requires_docker
@@ -246,3 +246,64 @@ async def test_upsert_still_separates_genuinely_different_names(
                entity_type="organization", confidence=0.8)
     )
     assert a != b, "two distinct entities were collapsed by the identity rule"
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_history_may_share_a_key_with_the_live_row(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """A merged tombstone keeps its key; a second LIVE row still cannot exist.
+
+    Found by running the backfill against the working database rather than by
+    reasoning: of 854 rows in colliding groups, 571 were `archived` and 75
+    `merged` against 103 `active`. A UNIQUE index over every status would have
+    rejected the migration for history it should keep — and worse, it would break
+    the merge PC.2 ships, which produces exactly this pair: two case variants, one
+    surviving active and the other becoming `merged` with the SAME key.
+
+    The index sits on a computed column — the key while active, the row's own id
+    otherwise — so non-active rows occupy a namespace of one each.
+    """
+    stem = f"Brede Welvaart {uuid.uuid4().hex[:6]}"
+    live = await _entity(live_surrealdb, stem)
+
+    # The tombstone the merge flow leaves behind: same key, retired status.
+    await execute_query(
+        "CREATE entity SET canonical_name = $n, name = $n, entity_type = "
+        "'organization', confidence = 0.5, embedding = [], name_key = $k, "
+        f"status = 'merged', merged_into = '{live}';",
+        {"n": stem.lower(), "k": normalize_entity_name(stem)},
+        live_surrealdb,
+    )
+    await execute_query(
+        "CREATE entity SET canonical_name = $n, name = $n, entity_type = "
+        "'organization', confidence = 0.5, embedding = [], name_key = $k, "
+        "status = 'archived';",
+        {"n": stem.upper(), "k": normalize_entity_name(stem)},
+        live_surrealdb,
+    )
+
+    # But a second ACTIVE row with that key is still impossible.
+    with pytest.raises(Exception) as excinfo:
+        await _entity(live_surrealdb, stem.title())
+    assert "idx_entity_identity" in str(excinfo.value)
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_retiring_a_row_frees_its_key(live_surrealdb: SurrealDBConfig) -> None:
+    """`identity_key` is a VALUE clause, so it is recomputed on every write.
+
+    The transition that matters: a live row is merged away, and the name becomes
+    available again. Without recomputation the retired row would hold the key
+    forever and the entity could never be re-created — which is what a plain
+    stored column would have done.
+    """
+    stem = f"Regio Deal {uuid.uuid4().hex[:6]}"
+    first = await _entity(live_surrealdb, stem)
+    await execute_query(
+        f"UPDATE {first} SET status = 'merged';", config=live_surrealdb
+    )
+    second = await _entity(live_surrealdb, stem)
+    assert second != first

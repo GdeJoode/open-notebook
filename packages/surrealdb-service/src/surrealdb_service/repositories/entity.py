@@ -249,7 +249,24 @@ class EntityRepository:
             merged_properties: Dict[str, Any] = dict(
                 existing.get("properties") or {}
             )
+            # PC.3: `grounding` merges by SOURCE ID; every other key overlays.
+            #
+            # It maps `source_id -> {chunk_id, grounding, context}`, one entry per
+            # document a mention came from. Under the plain overlay below, the
+            # second document to mention an entity would replace where the first
+            # one found it — and with cross-document resolution on that is the
+            # normal case, not an edge one. The union is what lets a curator ask
+            # "why is this one entity" and get an answer per source.
+            incoming_grounding = entity.properties.get("grounding")
+            if isinstance(incoming_grounding, dict):
+                merged_grounding = dict(merged_properties.get("grounding") or {})
+                merged_grounding.update(incoming_grounding)
+            else:
+                merged_grounding = None
+
             merged_properties.update(entity.properties)
+            if merged_grounding:
+                merged_properties["grounding"] = merged_grounding
 
             update_payload = {
                 "id": existing["id"],

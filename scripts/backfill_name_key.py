@@ -61,7 +61,14 @@ def plan(rows: List[Dict[str, str]]) -> Tuple[Dict[str, str], List[List[Dict[str
     for row in rows:
         key = normalize_entity_name(row["canonical_name"])
         keys[row["id"]] = key
-        groups[(key, row["entity_type"])].append(row)
+        # Only ACTIVE rows share the identity namespace. A `merged` row is a
+        # tombstone pointing at its survivor and an `archived` row is retired;
+        # migration 79's index puts each of those in a namespace of one, so
+        # reporting them would send a curator after history that is meant to be
+        # kept. Measured on the working database: of 854 rows in colliding
+        # groups, 571 were archived and 75 merged against 103 active.
+        if (row.get("status") or "active") == "active":
+            groups[(key, row["entity_type"])].append(row)
     collisions = [g for g in groups.values() if len(g) > 1]
     return keys, collisions
 

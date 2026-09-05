@@ -39,10 +39,16 @@
 -- band). A migration that silently merged two entities would be the exact
 -- failure PC.6 spent five review rounds making unreachable.
 --
--- The old `(canonical_name, entity_type)` index is KEPT. It is strictly weaker
--- than the new one — one display name always maps to one key, while many display
--- names may map to one key — so it costs nothing and keeps existing readers
--- honest.
+-- THE MIGRATION-39 INDEX IS REPLACED, NOT KEPT. A first draft of this header
+-- called `idx_entity_name_type` "strictly weaker and therefore harmless". It is
+-- not harmless: being UNIQUE over every status, it forbids a retired row and a
+-- live row sharing a DISPLAY NAME — the same history problem one level down, and
+-- it made re-creating an entity after its predecessor was merged impossible.
+-- Found by test, not by reading.
+--
+-- Dropping it loses nothing. One display name always maps to one key, so two
+-- ACTIVE rows with the same name remain impossible under the identity index;
+-- what becomes possible is exactly the history that index was wrongly forbidding.
 -- ============================================================================
 
 LET $unkeyed = (SELECT count() FROM entity WHERE name_key = NONE GROUP ALL)[0].count ?? 0;
@@ -55,4 +61,36 @@ IF $unkeyed > 0 {
 };
 
 DEFINE FIELD IF NOT EXISTS name_key ON entity TYPE string;
-DEFINE INDEX IF NOT EXISTS idx_entity_name_key ON entity FIELDS name_key, entity_type UNIQUE;
+
+-- WHY THE INDEX IS NOT ON `name_key` DIRECTLY.
+--
+-- Identity means "one ACTIVE entity per key and type". A `merged` row is a
+-- tombstone pointing at its survivor and an `archived` row is a retired one; both
+-- legitimately share a key with a live row, and the fold-equal merge PC.2 ships
+-- produces exactly that pair — two case variants, one survives active, the other
+-- becomes `merged` with the SAME key. A UNIQUE index over every status forbids
+-- that, so it would break the merge flow it exists to support.
+--
+-- Measured on the working database (5,501 rows): of the 854 rows in colliding
+-- groups, 571 are `archived` and 75 `merged` against 103 `active`. A global
+-- unique index would have rejected the migration for history it should keep.
+--
+-- SurrealDB v2 has no filtered index — `UNIQUE ... WHERE status = 'active'` is a
+-- parse error, checked — and putting `status` in the key does not help, because
+-- two archived rows would still collide. So the index sits on a COMPUTED column:
+-- the identity key while active, and the row's own id otherwise. Non-active rows
+-- therefore occupy a namespace of one each, history is preserved, and two live
+-- rows with one identity remain impossible.
+-- `status ?? "active"`, not `status`. A VALUE clause is evaluated BEFORE the
+-- field DEFAULT is applied, so a writer that omits `status` — legal, and what
+-- `DEFINE FIELD status ... DEFAULT "active"` promises — saw NONE here and fell to
+-- the id branch, silently exempting that row from the uniqueness it is supposed
+-- to be under. Measured, not reasoned: with the status given, identity_key was
+-- the key; with it omitted, an id. The coalesce makes this column agree with the
+-- default rather than with the order the engine happens to apply things in.
+DEFINE FIELD IF NOT EXISTS identity_key ON entity
+    VALUE IF (status ?? "active") = "active" { name_key } ELSE { <string> id };
+DEFINE INDEX IF NOT EXISTS idx_entity_identity ON entity
+    FIELDS identity_key, entity_type UNIQUE;
+
+REMOVE INDEX IF EXISTS idx_entity_name_type ON entity;
