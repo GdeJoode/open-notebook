@@ -231,3 +231,102 @@ register (the bulk fetcher exists), give `reconcile_entity` a caller, and extend
 `tests/test_derived_state_has_readers.py` — or add a sibling — so that an
 exported capability with no production caller fails the way an orphaned field
 does.
+
+## E. The other 96% of the graph — and a candidate pool that could not work
+
+*Section B measured ONE entity type of twenty rows and section C recommended a
+global default from it. That is sampling, which is the failure this track keeps
+finding in itself, so here is the same measurement on every active type.*
+
+| type | active | → entities | merged | capped fetches |
+|---|---|---|---|---|
+| `topic` | 429 | 416 | 13 | **327** |
+| `administrative_area` | 52 | 52 | 0 | 0 |
+| `programme` | 27 | 27 | 0 | 0 |
+| `government_organization` | 20 | 15 | 5 | 0 |
+| `concept` | 3 | 3 | 0 | 0 |
+
+Three of five types produce **no merges at all**. Across the whole active graph
+stage 10 makes **18 merges out of 531 entities**, and the `topic` merges show the
+same ratio as the ministries — roughly five defensible against eight that are not:
+
+```
+✅ Leven Lang Ontwikkelen (LLO)          -> Leven Lang Ontwikkelen        [semantic 0.960]
+❌ coöperatief wonen                     -> wonen                         [semantic 0.936]
+❌ Versterken regionale samenwerking     -> Regionale samenwerking        [semantic 0.939]
+❌ Arbeidsmarkt en Economie              -> Economie, Onderwijs en Arb…   [semantic 0.940]
+❌ transformatie van het landelijk gebied-> Transitie van het landelijk…  [fuzzy    0.868]
+❌ Innovatie omgevingen                  -> Intensiveren innovaties in…   [semantic 0.934]
+```
+
+The dominant error has a name, and it is **the same one PC.2 identified for
+organisations**: a qualified concept absorbed into its own head noun.
+`coöperatief wonen` is not `wonen`; `Versterken regionale samenwerking` is not
+`Regionale samenwerking`. An organ of X is not X — now appearing for topics.
+And note the one clear success, `Leven Lang Ontwikkelen (LLO)`: it is the
+parenthetical case again.
+
+### The candidate pool could not have worked
+
+`find_by_type` selected every row of a type regardless of status, and capped at
+100. Measured on the live repository:
+
+| type | live rows | ALL rows | the capped 100 contained |
+|---|---|---|---|
+| `topic` | 785 | 1408 | **31 active** |
+| `concept` | 574 | 1892 | **0 active** |
+
+For `concept` the resolver could not reach one of the three active entities. Every
+candidate it was ever offered was archived or merged, so a correct match was
+**structurally impossible**, and nothing anywhere said so.
+
+This also means **section B was optimistic**: its stand-in repository served only
+active rows, so it measured stage 10 with a better candidate pool than production
+ever gave it. The real behaviour was worse than the numbers above.
+
+Fixed — `("active", "reference")` being the live set that `audit_service` and
+`deep_audit_service` already use, plus a declared ordering:
+
+| type | the capped 100 contained, after |
+|---|---|
+| `topic` | 63 active (was 31) |
+| `administrative_area` | all 52 (was 73 mixed) |
+| `programme` | all 27 (was 89 mixed) |
+| `government_organization` | all 20 (was 54 mixed) |
+| `concept` | **still 0 active** |
+
+`concept` remains broken: 571 of its 574 live rows are `reference`, and the three
+active ones do not fit inside a cap of 100. Reported rather than hidden — that is
+what `capped_fetches` is for — but it is a real remaining limitation, not a fix.
+
+### What this does and does not change
+
+It does **not** rescue stage 10's precision. The quality figures in sections B and
+E were already measured against an active-only pool, so they are the *after* the
+fix numbers. Five defensible merges out of eighteen, across 531 entities, is a
+property of the two tiers, not of the pool.
+
+It does change what an honest verdict rests on. Turning off a feature that had
+never been given a fair candidate set would have been the wrong reason for the
+right conclusion.
+
+**The recommendation therefore stands, on the whole graph rather than one type:
+stage 10 does not go on by default.** The order should be inverted — normalise
+the decoration, look up the authority, similarity last if at all — for a reason
+sections B, D and E now agree on from three directions: the one thing every
+mechanism fails on is the decoration, and the one class stage 10 gets right in
+both `topic` and `government_organization` is the parenthetical it happens to
+score above threshold.
+
+### A guard that could not fail, again
+
+The first version of `test_candidate_fetch_excludes_retired.py` asserted
+`"ORDER BY" in inspect.getsource(find_by_type)` — and the docstring above the
+query explains the ordering in prose, so the assertion held with the clause
+deleted. Verified by deleting it. The check now reads the function's string
+literals with the docstring removed.
+
+The behavioural half is weaker than it looks and says so: SurrealDB v2 returned id
+order with and without the clause on 20 rows, so no fixture here can catch the
+removal by behaviour. The claim in the repository docstring was corrected to what
+was measured rather than what was intended.

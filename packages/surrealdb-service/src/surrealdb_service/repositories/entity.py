@@ -176,6 +176,34 @@ class EntityRepository:
         Retrieves entities of a given type along with their embeddings,
         which can be used for similarity-based entity resolution.
 
+        **Retired rows are excluded (PC.3).** This used to select every row of
+        the type regardless of status, which made most of what the resolver
+        compared against rows triage had deliberately removed. Measured on
+        `staging`:
+
+            type                     live   ALL   the capped 100 held
+            topic                     785  1408    31 active rows
+            concept                   574  1892     0 active rows
+
+        For `concept` the resolver could not reach a single one of the three
+        active entities — every candidate it was offered was archived or merged,
+        so a correct match was structurally impossible. `("active", "reference")`
+        is the live set, and it is not a new rule: `audit_service` and
+        `deep_audit_service` already use exactly that pair to decide what counts
+        as graph content.
+
+        **The capped slice is now DECLARED rather than incidental.** `LIMIT` with
+        no `ORDER BY` is not guaranteed to return any particular rows. Measured,
+        rather than assumed: on SurrealDB v2 with 20 rows the fetch returned id
+        order with the clause and without it, so removing it changes nothing
+        today and the behavioural test cannot catch its removal — which is why
+        `test_the_query_states_both_rules` reads the query text instead, and says
+        so. The clause earns its place for two reasons: the ordering becomes a
+        real choice the moment `weight` carries centrality (it is uniformly 0.0
+        on this corpus), and an ordering nobody wrote down is one nobody can rely
+        on. The cap still truncates either way, and the resolver counts
+        `capped_fetches` so that stays visible.
+
         Args:
             entity_type: The entity type to filter by (e.g. "PERSON", "ORG").
             limit: Maximum number of entities to return. Defaults to 100.
@@ -189,7 +217,10 @@ class EntityRepository:
             return await execute_query(
                 "SELECT id, name, embedding, weight "
                 "FROM entity "
-                "WHERE entity_type = $entity_type LIMIT $limit",
+                "WHERE entity_type = $entity_type "
+                "AND status IN ['active', 'reference'] "
+                "ORDER BY weight DESC, id ASC "
+                "LIMIT $limit",
                 {"entity_type": entity_type, "limit": limit},
                 self.config,
             )
