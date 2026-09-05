@@ -112,6 +112,12 @@ _READ_PATTERNS = (
     # consumer of it, and counting them is the coincidental-collision class this
     # pattern set exists to close. No compose name relies on it today; the
     # exclusion is so none quietly starts to.
+    #
+    # Two residues, named rather than fixed. A wrapper *called* `_setenv` or
+    # `my_setenv` still matches, because the lookaheads block only the bare
+    # identifiers. And `os.environ.setdefault("X", d)` — which does read X — is
+    # no longer counted, a small risk in the false-positive direction this file
+    # calls the worse one. Neither occurs in the tree today.
     r"\b(?!setenv\b)(?!delenv\b)\w*env\w*\s*\(\s*[\"']{name}[\"']",
     # A name bound to a constant and read through it — the shape at
     # `grobid_reference_service.py`: `_GROBID_URL_ENV = "GROBID_URL"`, then
@@ -119,7 +125,7 @@ _READ_PATTERNS = (
     # only because an unrelated test happens to spell it literally, so deleting
     # that test would have reported a live production knob as dead — the
     # false-positive direction this file names as the worse failure.
-    r"_ENV\s*[:=][^\n=]*=\s*[\"']{name}[\"']",
+    r"_ENV\s*(?::[^=\n]*)?=\s*[\"']{name}[\"']",
     r"environ\s*\.\s*get\s*\(\s*[\"']{name}[\"']",
     r"environ\s*\[\s*[\"']{name}[\"']",
     r"\$\{{name}[:}]",
@@ -244,14 +250,36 @@ def test_the_detector_would_catch_a_planted_name() -> None:
 def test_a_name_read_through_a_constant_is_seen() -> None:
     """`_X_ENV = "NAME"` then `os.getenv(_X_ENV)` — the indirect read.
 
-    `GROBID_URL` is exactly this shape in
-    `references/grobid_reference_service.py`, and before this pattern the guard
-    cleared it only because an unrelated test happens to spell the name
-    literally. Deleting or refactoring that test would have reported a live
-    production knob as dead — the false-positive direction this file calls the
-    worse failure.
+    Asserted against the SOURCE LINE, not against `_referenced_names`. The first
+    version of this test did the latter and passed while the pattern it was
+    testing matched nothing at all: `GROBID_URL` was cleared by three unrelated
+    files that spell the name literally, so the aggregate was already true for
+    another reason. That is the fourth guard in this phase to report as a guard
+    while unable to fail for its own case — produced inside the round that fixed
+    the third.
+
+    The pattern also needed correcting: it required two separators and so matched
+    only the annotated form `_X_ENV: str = "NAME"`, which appears nowhere in this
+    repository. Both live instances are plain assignments.
     """
+    import re
+
+    constant = next(p for p in _READ_PATTERNS if "_ENV" in p)
+    for line in (
+        '_GROBID_URL_ENV = "GROBID_URL"',
+        '_GROBID_URL_ENV: str = "GROBID_URL"',
+    ):
+        assert re.search(constant.replace("{name}", "GROBID_URL"), line), line
+    # And it must not fire on an unrelated constant that merely ends in _ENV.
+    assert not re.search(
+        constant.replace("{name}", "GROBID_URL"), '_OTHER_ENV = "SOMETHING_ELSE"'
+    )
+
+    # Only then the aggregate, which is what production depends on.
     assert "GROBID_URL" in _referenced_names({"GROBID_URL"})
+    assert "ONB_ALIAS_OVERRIDES_PATH" in _referenced_names(
+        {"ONB_ALIAS_OVERRIDES_PATH"}
+    ), "the second instance of the shape was cleared by nothing before this"
 
 
 def test_setting_a_variable_is_not_reading_it() -> None:

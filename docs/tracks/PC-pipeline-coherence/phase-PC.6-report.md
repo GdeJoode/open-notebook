@@ -257,18 +257,54 @@ readers of _graph_analyzer removed   -> ['_graph_analyzer']
 readers of _llm_matcher removed      -> ['_llm_matcher']
 ```
 
-That single enumeration would have caught `entity_linker`, `outliers`,
-`orphan_connector` and `semantic_blocking` in one pass, instead of one per review
-round — and it is there to catch the tenth first. Excluding `__init__` from the
+What that enumeration actually asserts is narrower than the paragraph above it
+first claimed, and the claim is retracted in the file itself: it holds that
+nothing is constructed the class cannot reach. Replayed against `main` it finds
+none of the four historical findings, because in each the attribute IS read — the
+defect was that the reader sits on an unreachable path, or that the construction
+yields None. The guard still earns its place; the sentence claiming it would have
+pre-empted four review rounds did not. Excluding `__init__` from the
 reader scan is load-bearing: a stage's own construction reads the attribute it
 just set, so counting those would make every stage its own consumer, which is
 PC.1b's four-round trap in a new costume.
 
-**The transferable rule**, which belongs in the track's conventions rather than in
-this report: do not write "this guard is the class" until the guard *derives* the
-class from the code. If the claim is about a space, the test must enumerate the
-space by construction — by AST, by reflection, by walking the config — not by
-exhibiting members of it.
+**The transferable rule has two halves, and the second is the one that caught the
+fourth instance.** Both belong in the track's standing conventions rather than in
+one phase's report.
+
+> **1. Derive the space, do not sample it.** Do not write "this guard is the
+> class" until the guard derives the class from the code — by AST, by reflection,
+> by walking the config — rather than by exhibiting members of it.
+>
+> **2. Verify a guard by putting it in the state it claims to prevent, and
+> confirm it fails.** Not a state of that shape — *the* state. If the guard is
+> retroactive, replay the commit. If it is a pattern, feed it the literal source
+> line. If it is a wiring assertion, delete the call.
+
+The first half governs a guard's shape; it says nothing about how you check a
+guard once built, and all four failures were verification failures rather than
+design failures. In every case the guard was tested against a state that was
+**already true for another reason**:
+
+* the remedy check enumerated one input's output instead of the constructor space;
+* the compose scan matched tokens instead of read contexts;
+* the context check had no assertion on its call site;
+* the constant pattern was verified against an aggregate that three unrelated
+  files already satisfied.
+
+**Two instances of that happened in this phase after the failure mode was named
+out loud**, which is the evidence that half one is necessary and not sufficient.
+The stage-graph enumeration's own docstring claimed it "would have found all four
+in one pass"; replaying the detector against `main`, where all four defects were
+live, finds **zero** — the defect was never "no reader", and one of the four is
+not a `self._X` at all. The mutation that appeared to prove the claim deleted a
+stage's readers, i.e. tested the shape the guard checks rather than the state it
+claimed to catch. One command settles it: `git show main:workflow.py`.
+
+The same round produced a compose-guard pattern that matched nothing in the
+repository, under a test asserting `"GROBID_URL" in _referenced_names(...)` — true
+already, because three unrelated files spell the name literally. The test that
+settles that one is `re.search(pattern, '_GROBID_URL_ENV = "GROBID_URL"')`.
 
 ## Mutation testing
 

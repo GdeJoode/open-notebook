@@ -62,10 +62,15 @@ def _reads_environment(node: ast.AST) -> bool:
                 # branch as well as the Attribute one.
                 if isinstance(owner, ast.Attribute) and owner.attr == "environ":
                     return True
-                # `environ` however it was imported, including
-                # `from os import environ as env`. Matching the NAME would miss
-                # the alias, so the shape is "an attribute call on a bare name
-                # whose only plausible meaning here is the environment mapping".
+                # `environ` under the two spellings actually seen —
+                # `os.environ.get` and `from os import environ`. The alias form
+                # is matched only for the literal name `env`, NOT "however it was
+                # imported" as an earlier comment claimed: `from os import
+                # environ as e` is still missed, and is declared below rather
+                # than claimed. The cost of the `env` entry is a false positive
+                # on an unrelated module-level `env = {...}` followed by
+                # `env.get(...)`; harmless here, and named so nobody has to
+                # rediscover it.
                 if isinstance(owner, ast.Name) and owner.id in ("environ", "env"):
                     return True
         # os.environ["X"] / environ["X"]

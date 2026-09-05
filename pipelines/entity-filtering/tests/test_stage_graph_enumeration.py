@@ -1,30 +1,36 @@
-"""Every conditionally-built stage is reachable once built (PC.6, round 4).
+"""Every conditionally-built stage is reachable once built (PC.6).
 
-**Why this exists, in one sentence**: three review rounds each found another flag
-that was on and did nothing, because the check enumerated the pairs someone had
-thought of. Review named the habit precisely — *the generalisation was asserted in
-prose and sampled in a test* — and the fix that worked every time was the same
-move: stop exhibiting members of the space and start deriving it.
+`self._X` assigned under an `if` in `FilteringWorkflow.__init__`, and never read
+anywhere else in the class, is a stage constructed and never consulted. The class
+is DERIVED from the constructor by AST rather than listed, so a stage added later
+is covered by existing.
 
-So this derives the space. It reads `FilteringWorkflow.__init__` by AST, finds
-every `self._X: Optional[...] = None` that is then assigned inside an `if`, and
-asserts each one is READ somewhere in the class. A stage that is built under a
-condition and never consulted is exactly the shape of all four findings:
+**What this does NOT claim.** An earlier version of this docstring said it "would
+have found all four in one pass" — `entity_linker`, `graph_analyzer`,
+`orphan_connector`, `semantic_blocker`, one per review round. Review replayed the
+detector against `main`, where all four defects were live, and it finds **zero**:
 
-    entity_linker      built when linking is on, but only used if a provider resolves
-    graph_analyzer     built only when centrality is on — outlier detection reads it
-    orphan connector   gated on config, needs three arguments nobody passed
-    semantic_blocker   built when its flag is on, used only while matching runs
+    conditionally built (11), never read by the class: []
+    _entity_linker    built=True  read_outside_init=True
+    _graph_analyzer   built=True  read_outside_init=True
+    _semantic_blocker built=True  read_outside_init=True
 
-Each of those cost a review round. This is the enumeration that would have found
-all four in one pass, and it is here to find the next one before a reviewer does.
+In every case the attribute IS read — `if self._entity_linker is not None` — so
+the defect was never "no reader". It was "the reader sits on a path that cannot
+run" (`_semantic_blocker`, behind the matcher's gate) or "the construction yields
+None" (`_entity_linker`, because `linking_provider` defaults to `"none"`). The
+orphan connector is not a `self._X` at all, so it was never in this space.
 
-It deliberately does NOT assert the *dependency pairs* — that is
-`check_feature_dependencies`' job, and duplicating it here would be a second
-sampling. What this asserts is weaker and structural: nothing is constructed that
-the class cannot reach.
+The mutation that appeared to prove the claim — delete a stage's readers, watch
+the guard fire — tested the shape the guard checks, not the state it claimed to
+catch. That is `waterschap`'s misreading one level out, and the check that settles
+it is one command: run the detector against the commit where the defect was live.
+
+So this asserts something **weaker** than `check_feature_dependencies`, and
+deliberately: nothing is constructed that the class cannot reach. It does not
+re-assert the dependency pairs — duplicating them would be a second sampling of
+the same space, and would rot out of step with the checker that owns them.
 """
-
 from __future__ import annotations
 
 import ast
