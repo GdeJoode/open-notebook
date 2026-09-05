@@ -45,12 +45,15 @@ flowchart TB
 The identity decision happens at **G**, and nowhere else: `upsert_entity`
 derives `name_key = normalize_entity_name(canonical_name)` and looks up on
 `(name_key, entity_type)`. That single lookup is what actually consolidates
-entities across documents — 475 of 543 active entities span more than one source
-because of it.
+entities across documents.
+
+**46 of 531 active entities span more than one source — 8.7%, not the 87.5% an earlier draft of this document reported.** The figure 475 is the count over ALL 5,500 rows of every status (8.6% there too); presenting it against the 543 active ones inverted it. Corrected on re-measurement after review.
+
+And the inference built on it is withdrawn, not just the number. A spanning rate measures how much the SOURCES overlap, not whether consolidation works: ten of the fourteen documents are convenanten for different regions, so most topics genuinely appear once. Whether `upsert_entity`'s lookup HITS is not recorded anywhere, so neither figure settles the phase's original premise in either direction.
 
 ## 3. The filtering workflow, stage by stage
 
-`FilteringWorkflow.process` — 16 stages. "Production" is the config
+`FilteringWorkflow.process` — **17 stages** (1–15 plus 6b and 10b). "Production" is the config
 `entity_extraction_service.py:1918` builds, which is what every real run uses.
 
 | # | Stage | Enabled by | Production | Output | Who reads the output |
@@ -65,7 +68,7 @@ because of it.
 | 7 | Embedding resolution | `semantic.*` (two flags) | off | enrichment | — |
 | 8 | Entity linking | `semantic.entity_linking_enabled` | off | external URIs | — |
 | 9 | Contextual clustering | `semantic.contextual_clustering_enabled` | off | enrichment | — |
-| 10 | KG resolution | `kg_resolution.enabled` | **ON** (PC.3 set) | `kg_entity_id`, `kg_match_type`, `kg_similarity_score`, `is_new` | **first three: nothing.** `is_new`: stage 15 only |
+| 10 | KG resolution | `kg_resolution.enabled` | off (PC.3 set it on, measured it, set it back) | `kg_entity_id`, `kg_match_type`, `kg_similarity_score`, `is_new` | **first three: nothing.** `is_new`: stage 15 only |
 | 10b | Incremental clustering | `incremental_resolution.enabled` | off | `cluster_id/action/score`, `incremental_report` | inventory row, no reader |
 | 11 | Ontology constraint | `ontology_validation.enabled` | off | `validation_report` | `Owned("PC.6")` — no reader |
 | 12 | Graph centrality | `ontology_validation.graph_centrality_enabled` | off | `graph_report` | folded into `validation_report` |
@@ -73,8 +76,10 @@ because of it.
 | 14 | Orphan connector | `orphan_connector.enabled` | off | new relations | — |
 | 15 | Concept alignment | `ENABLE_CONCEPT_ALIGNMENT` | off (unset) | `concept_alignment_report` | `entity_extraction_service` |
 
-**Seven stages do work. One runs and produces nothing anyone reads. Eight never
-run in any shipped configuration.**
+**Seven stages do work. Ten never run in any shipped configuration.** Stage 10
+was ON while this document was first written and is off as of `e58a2c18`; it is
+counted among the ten. Corrected after review, which found the stage count off by
+one (17, not 16) and the off-count off by one with it.
 
 ## 4. Where the wiring is not logical
 
@@ -169,10 +174,10 @@ flowchart TB
     ING[INGEST] --> EMB[EMBED] --> EXT[EXTRACT] --> GRA[GRAPH] --> CMP[complete]
   end
 
-  subgraph FILTER["FilteringWorkflow — 16 stages, 7 do work"]
+  subgraph FILTER["FilteringWorkflow — 17 stages, 7 do work"]
     S1[1 noise] --> S2[2 normalize<br/>NOT the identity rule] --> S3[3 reclassify] --> S4[4 string dedup]
     S4 --> S5[5 fuzzy] --> S6[6 embedding dedup]
-    S6 --> S10[10 KG resolution<br/>ON — output unread]
+    S6 --> S10[10 KG resolution<br/>OFF — output unread]
     S10 --> S13[13 edge prediction]
   end
 
@@ -215,7 +220,7 @@ filtering workflow, and it has one cause:
 > Every capability that was ever built was added as a stage with its own flag,
 > and none was ever removed.
 
-Sixteen stages, nine flags, seven doing work. The result is that the pipeline's
+Seventeen stages, nine flags, seven doing work. The result is that the pipeline's
 behaviour cannot be read off its structure — you must trace a config three files
 away to know that stage 10 runs and stage 15 does not, and even then you must
 search the whole tree to learn that stage 10's answer is discarded.

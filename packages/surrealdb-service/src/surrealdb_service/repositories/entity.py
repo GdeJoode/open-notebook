@@ -37,8 +37,9 @@ def _union_preserve_order(
     return out
 
 
-#: Databases (namespace/database) whose `entity` table has been confirmed to
-#: declare `name_key`. One check per process per database, not per write.
+#: Databases whose `entity` table has been confirmed to declare `name_key`, keyed
+#: by the namespace/database the CONNECTION reports — not by the config object.
+#: One check per process per database, not per write.
 _IDENTITY_COLUMN_CHECKED: set = set()
 
 
@@ -58,28 +59,46 @@ class IdentityColumnMissing(RuntimeError):
 async def _assert_identity_column(config: Any) -> None:
     """Fail loudly, once per database, when `name_key` is not declared.
 
+    THE DATABASE IS ASKED, NOT THE CONFIG. An earlier version keyed this on
+    `config.namespace/config.database`, which review showed to be unsound:
+    `get_pool(config)` builds the global pool once and ignores the argument
+    afterwards, so `execute_query(q, p, config)` does NOT go where `config` says.
+    The check therefore inspected whichever database the pool was bound to,
+    reported a different one in its message, and cached the verdict under a third
+    — so one healthy database could vouch for a migration-31 one. Demonstrated
+    live before the fix.
+
+    `$session` reports the namespace and database the connection is actually on,
+    which is the only identity that means anything here. It also makes the cache
+    correct by construction: two configs that resolve to one connection share one
+    entry, which is what the pool actually does.
+
     PC.6's rule applied to a repository: a step that cannot do its job says why
-    rather than doing something else. Found by running PC.3's code against the
-    config-default database, which sits at migration 31.
+    rather than doing something else.
     """
-    # `self.config` is None on the common path, in which case `execute_query`
-    # falls back to the process config — so resolve the SAME one, or the message
-    # names a database nobody is connected to.
-    effective = config if config is not None else get_config()
-    key = f"{effective.namespace}/{effective.database}"
+    session = await execute_query(
+        "RETURN {ns: $session.ns, db: $session.db};", None, config
+    )
+    row = session[0] if isinstance(session, list) and session else session
+    if isinstance(row, dict):
+        key = f"{row.get('ns')}/{row.get('db')}"
+    else:  # a driver that does not answer cannot be cached under a real name
+        key = "<unknown>"
     if key in _IDENTITY_COLUMN_CHECKED:
         return
+
     info = await execute_query("INFO FOR TABLE entity;", None, config)
-    row = info if isinstance(info, dict) else (info[0] if info else {})
-    fields = row.get("fields") or {}
+    table = info if isinstance(info, dict) else (info[0] if info else {})
+    fields = table.get("fields") or {}
     if "name_key" not in fields:
         raise IdentityColumnMissing(
-            f"`entity.name_key` is not declared on `{key}`. This code identifies "
-            f"entities by `name_key` (migration 79); without it every upsert "
-            f"misses its lookup and creates a duplicate instead of updating. "
-            f"Run the migrations against this database — and note that migration "
-            f"79 refuses until `scripts/backfill_name_key.py` has run, because "
-            f"the key cannot be computed in SurrealQL."
+            f"`entity.name_key` is not declared on `{key}` (the database this "
+            f"connection is actually on). This code identifies entities by "
+            f"`name_key` (migration 79); without it every upsert misses its "
+            f"lookup and creates a duplicate instead of updating. Run the "
+            f"migrations against this database — and note that migration 79 "
+            f"refuses until `scripts/backfill_name_key.py` has run, because the "
+            f"key cannot be computed in SurrealQL."
         )
     _IDENTITY_COLUMN_CHECKED.add(key)
 

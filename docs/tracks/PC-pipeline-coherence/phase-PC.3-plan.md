@@ -137,10 +137,11 @@ Two things measured on `staging` moved them:
 
 * **Consolidation already happens.** `upsert_entity` looks up on
   `(canonical_name, entity_type)` and unions `source_documents`, so exact-name
-  matches merge across documents today. **475 of 543 active entities already span
-  more than one source.** The premise that "every document writes its entities
-  fresh" is true only of VARIANTS, which is a far smaller population than the
-  original figure implied.
+  matches merge across documents today, when they hit.
+
+  **46 of 531 active entities span more than one source — 8.7%, not the 87.5% an earlier draft of this document reported.** The figure 475 is the count over ALL 5,500 rows of every status (8.6% there too); presenting it against the 543 active ones inverted it. Corrected on re-measurement after review.
+  
+  And the inference built on it is withdrawn, not just the number. A spanning rate measures how much the SOURCES overlap, not whether consolidation works: ten of the fourteen documents are convenanten for different regions, so most topics genuinely appear once. Whether `upsert_entity`'s lookup HITS is not recorded anywhere, so neither figure settles the phase's original premise in either direction.
 * **There are no active persons at all.** The active graph is 440 `topic`, 53
   `administrative_area`, 27 `programme`, 20 `government_organization`, 3
   `concept`. `M.C.G. Keijzer` exists as 3 `reference` and 2 `archived` rows and

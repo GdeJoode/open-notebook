@@ -25,7 +25,7 @@ import ast
 import re
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -72,13 +72,45 @@ def _production_sources() -> List[Path]:
     ]
 
 
-def _literal_text(node: ast.Call) -> str:
-    """Every string literal anywhere inside a call, joined.
+def _sql_text(node: ast.Call) -> str:
+    """The QUERY literal of a call — its first positional argument, only.
 
-    Covers implicit concatenation across lines, the literal parts of f-strings,
-    and dict-literal KEYS — which is how the two `CREATE entity CONTENT $data`
-    writers name their fields.
+    Split out from the rest because the first version of this guard joined every
+    string constant in the call, INCLUDING the keys of the params dict. So
+    `execute_query("CREATE entity SET name = $name, …", {"name_key": …})` reported
+    `name_key` as present when the SQL no longer set it. Deleting
+    `name_key = $name_key` from `vault_sync_service`'s statement left this guard
+    green; the params key stood in for the column. Verified by doing it.
     """
+    if not node.args:
+        return ""
+    return " ".join(
+        sub.value
+        for sub in ast.walk(node.args[0])
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+    )
+
+
+def _payload_keys(node: ast.Call) -> Set[str]:
+    """Dict-literal KEYS in everything after the query.
+
+    `CREATE entity CONTENT $data` names its columns in the payload rather than in
+    the statement, so for that form the keys ARE the write. For the `SET` form
+    they are parameter bindings and prove nothing — which is the distinction the
+    first version collapsed.
+    """
+    keys: Set[str] = set()
+    for arg in list(node.args[1:]) + [kw.value for kw in node.keywords]:
+        for sub in ast.walk(arg):
+            if isinstance(sub, ast.Dict):
+                for key in sub.keys:
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        keys.add(key.value)
+    return keys
+
+
+def _literal_text(node: ast.Call) -> str:
+    """Every string literal in the call — used only to FIND write statements."""
     return " ".join(
         sub.value
         for sub in ast.walk(node)
@@ -140,11 +172,22 @@ def find_identity_violations(path: str, source: str) -> List[str]:
             continue
         line = node.lineno
 
-        if "name_key" not in text:
+        sql = _sql_text(node)
+        # SurrealQL names the columns in the statement for `SET`, and in the
+        # bound payload for `CONTENT $data`. Ask the right one of the two.
+        if re.search(r"\bCONTENT\b", sql, re.I):
+            states_identity = "name_key" in _payload_keys(node)
+            where_it_should_be = "the CONTENT payload"
+        else:
+            states_identity = "name_key" in sql
+            where_it_should_be = "the SET statement"
+
+        if not states_identity:
             problems.append(
-                f"{path}:{line}: `CREATE entity` does not set `name_key`. "
-                f"Migration 79 makes it the identity, TYPE string with no "
-                f"default, so this write is rejected outright."
+                f"{path}:{line}: `CREATE entity` does not set `name_key` in "
+                f"{where_it_should_be}. Migration 79 makes it the identity, "
+                f"TYPE string with no default, so this write is rejected "
+                f"outright."
             )
             continue
 
@@ -279,3 +322,111 @@ def test_guard_ignores_prose_that_merely_names_the_statement() -> None:
         "        raise RuntimeError('CREATE entity returned no rows for ' + name)\n"
     )
     assert not find_identity_violations("prose", prose)
+
+
+#: A `SELECT ... FROM entity WHERE ...` that exists to decide whether to CREATE.
+_ENTITY_LOOKUP = re.compile(r"\bSELECT\b[^;]*\bFROM\s+entity\b(?!_)[^;]*\bWHERE\b", re.I)
+#: The columns a lookup may key on. `name_key` is the identity; anything else is
+#: a DISPLAY form, and migration 79 made those two different keys.
+_DISPLAY_KEYS = ("canonical_name", "name")
+
+
+def find_lookup_violations(path: str, source: str) -> List[str]:
+    """A writer must look up on the key it writes.
+
+    Migration 79 split identity (`name_key`) from display (`canonical_name` /
+    `name`). A module that CREATEs entities but looks up on a display column now
+    misses on any variant the identity rule folds — and then CREATEs, hitting
+    `idx_entity_identity`. In `services/extraction/api.py` that exception unwound
+    the whole per-document loop and the endpoint returned HTTP 200 having written
+    nothing, relations included. Found by review, not by this suite, which is why
+    the rule is here rather than in a comment.
+
+    Scoped to modules that CREATE entities: a read-only consumer may legitimately
+    look up a display name.
+    """
+    problems: List[str] = []
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return [f"{path}: unparseable ({exc})"]
+
+    creates = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and _CREATE_STMT.search(_literal_text(n))
+    ]
+    if not creates:
+        return []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        sql = _sql_text(node)
+        if not _ENTITY_LOOKUP.search(sql):
+            continue
+        if "name_key" in sql:
+            continue
+        keyed_on = [k for k in _DISPLAY_KEYS if re.search(rf"\b{k}\s*=", sql)]
+        if keyed_on:
+            problems.append(
+                f"{path}:{node.lineno}: this module CREATEs entities but looks "
+                f"one up on {keyed_on} rather than `name_key`. Migration 79 made "
+                f"those different keys, so the lookup misses on a variant and "
+                f"the CREATE then collides with `idx_entity_identity`."
+            )
+    return problems
+
+
+def test_every_entity_writer_looks_up_on_the_key_it_writes() -> None:
+    sources = _production_sources()
+    offenders: List[str] = []
+    for path in sources:
+        rel = str(path.relative_to(REPO_ROOT))
+        if rel in _ALLOWED:
+            continue
+        offenders += find_lookup_violations(rel, path.read_text(encoding="utf-8"))
+    assert not offenders, (
+        "these decide whether to CREATE by asking about the DISPLAY name:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_the_lookup_guard_fails_on_the_real_prefix_shape() -> None:
+    """The two writers as review found them, verbatim."""
+    for label, source in {
+        "services/extraction/api.py": (
+            "async def w(db, name, etype):\n"
+            "    existing = await db.query(\n"
+            '        "SELECT id FROM entity WHERE canonical_name = $name '
+            'AND entity_type = $type LIMIT 1;",\n'
+            '        {"name": name, "type": etype},\n'
+            "    )\n"
+            "    await db.query(\n"
+            '        "CREATE entity CONTENT $data RETURN id;",\n'
+            '        {"data": {"name_key": nk(name)}},\n'
+            "    )\n"
+        ),
+        "vault_sync_service.py": (
+            "async def w(name):\n"
+            "    rows = await execute_query(\n"
+            '        "SELECT id FROM entity WHERE name = $name LIMIT 1",\n'
+            '        {"name": name},\n'
+            "    )\n"
+            "    await execute_query(\n"
+            '        "CREATE entity SET name = $name, name_key = $name_key",\n'
+            '        {"name": name, "name_key": nk(name)},\n'
+            "    )\n"
+        ),
+    }.items():
+        assert find_lookup_violations(label, source), f"not flagged: {label}"
+
+
+def test_the_lookup_guard_accepts_a_module_that_only_reads() -> None:
+    """A consumer that never CREATEs may look up whatever it likes."""
+    reader = (
+        "async def show(name):\n"
+        '    return await execute_query(\n'
+        '        "SELECT * FROM entity WHERE canonical_name = $n LIMIT 1", {"n": name}\n'
+        "    )\n"
+    )
+    assert not find_lookup_violations("reader.py", reader)

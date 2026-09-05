@@ -158,9 +158,14 @@ class VaultSyncService:
             entity_type = row.get("entity_type", "UNKNOWN")
 
             # Ensure a canonical entity exists
+            # BY IDENTITY, not by display name (PC.3) — the same split that
+            # breaks the extraction service: this looked up on `name` while the
+            # CREATE below writes `name_key`, and migration 79 made those two
+            # different keys.
+            vault_name_key = normalize_entity_name(canonical_name)
             entity_rows = await execute_query(
-                "SELECT id FROM entity WHERE name = $name LIMIT 1",
-                {"name": canonical_name},
+                "SELECT id FROM entity WHERE name_key = $name_key LIMIT 1",
+                {"name_key": vault_name_key},
             )
 
             if entity_rows:
@@ -178,7 +183,7 @@ class VaultSyncService:
                     "created = time::now(), updated = time::now()",
                     {
                         "name": canonical_name,
-                        "name_key": normalize_entity_name(canonical_name),
+                        "name_key": vault_name_key,
                         "entity_type": entity_type,
                     },
                 )

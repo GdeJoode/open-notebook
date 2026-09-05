@@ -124,10 +124,15 @@ async def write_entities_to_db(
         if not name:
             continue
 
-        # Check if entity already exists
+        # Check if entity already exists — BY IDENTITY (PC.3). Looking up on
+        # `canonical_name` while creating with `name_key` misses on any variant
+        # the identity rule folds, and the CREATE then collides with
+        # `idx_entity_identity`.
+        name_key = normalize_entity_name(name)
         existing = await execute_query(
-            "SELECT id FROM entity WHERE canonical_name = $name AND entity_type = $type LIMIT 1",
-            {"name": name, "type": etype},
+            "SELECT id FROM entity WHERE name_key = $name_key "
+            "AND entity_type = $type LIMIT 1",
+            {"name_key": name_key, "type": etype},
         )
 
         if existing:
@@ -155,7 +160,7 @@ async def write_entities_to_db(
                     # Migration 79 makes `name_key` the identity, and
                     # `normalize_entity_name` is the one rule that
                     # derives it. A writer that omits it is rejected.
-                    "name_key": normalize_entity_name(name),
+                    "name_key": name_key,
                     "entity_type": etype,
                     "description": desc,
                     "source_documents": [source_document] if source_document else [],

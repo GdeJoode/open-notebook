@@ -452,10 +452,21 @@ async def _write_to_surrealdb(
             if not name:
                 continue
 
-            # Check existing
+            # Check existing — BY IDENTITY, not by display name (PC.3).
+            #
+            # This looked up on `canonical_name` while the CREATE below writes
+            # `name_key`. Before migration 79 those were the same key, so a miss
+            # meant no row existed. They now disagree, and the failure is far
+            # worse than a duplicate: the lookup misses on a case variant, the
+            # CREATE hits `idx_entity_identity`, and `_write_to_surrealdb` has no
+            # `except` — so the exception unwinds the whole per-document loop and
+            # the caller returns HTTP 200 with `entities_written: 0` and every
+            # RELATION dropped too. One variant discards the document.
+            name_key = normalize_entity_name(name)
             existing = await db.query(
-                "SELECT id FROM entity WHERE canonical_name = $name AND entity_type = $type LIMIT 1;",
-                {"name": name, "type": etype},
+                "SELECT id FROM entity WHERE name_key = $name_key "
+                "AND entity_type = $type LIMIT 1;",
+                {"name_key": name_key, "type": etype},
             )
             if existing and isinstance(existing, list) and len(existing) > 0:
                 if isinstance(existing[0], dict):
@@ -489,7 +500,7 @@ async def _write_to_surrealdb(
                     # index sits on. `write_to_db` defaults to True and the
                     # app proxy exposes it that way, so this is a live writer
                     # — it must use the SAME function as the repository.
-                    "name_key": normalize_entity_name(name),
+                    "name_key": name_key,
                     "entity_type": etype,
                     "description": desc,
                     "source_documents": [doc_name],

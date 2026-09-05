@@ -71,17 +71,25 @@ def test_the_app_states_the_kg_resolution_choice_explicitly() -> None:
 
 
 def _reads_the_key(path: "Path", key: str) -> bool:
-    """Does this module READ `key`, in code?
+    """Does this module READ `key` — as opposed to mentioning it?
 
-    A substring search does not answer that, and the first version of this guard
-    proved it: it reported two "readers", and both were prose — the comment in
-    `entity_extraction_service` explaining why the stage is off, and the
-    measurement script that names the key in its own docstring. Matching a string
-    that also appears in commentary is the same defect this session already found
-    in an `"ORDER BY" in getsource(...)` check.
+    Three versions, and the first two were both satisfied by things that are not
+    reads. A substring search found the comment explaining why the stage is off
+    and the measurement script's docstring. Dropping comments and docstrings was
+    not enough either: review showed a pure WRITE (`props["kg_entity_id"] = v`),
+    a dead dict literal and a `logger.info("kg_entity_id")` all satisfied it,
+    while a genuine `e.kg_entity_id` was missed.
 
-    AST does not see comments at all, which removes that class by construction.
-    Docstrings survive as `ast.Constant`, so they are dropped explicitly.
+    So this asks for a READ CONTEXT, derived from the grammar rather than from a
+    list of shapes:
+
+    * ``x[key]`` where the subscript LOADS (an assignment target is a Store);
+    * ``x.get(key)`` / ``x.pop(key)``;
+    * ``x.<key>`` loaded as an attribute;
+    * ``key in x`` — a membership test is how a consumer asks whether it is set.
+
+    A bare string constant is none of those, which removes the prose class by
+    construction rather than by exclusion list.
     """
     import ast
 
@@ -90,21 +98,37 @@ def _reads_the_key(path: "Path", key: str) -> bool:
     except (OSError, UnicodeDecodeError, SyntaxError):
         return False
 
-    docstrings = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            body = getattr(node, "body", [])
-            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
-                docstrings.add(id(body[0].value))
+    def _is_key(node: "ast.AST") -> bool:
+        return isinstance(node, ast.Constant) and node.value == key
 
     for node in ast.walk(tree):
+        # x[key] in a load position
         if (
-            isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and node.value == key
-            and id(node) not in docstrings
+            isinstance(node, ast.Subscript)
+            and _is_key(node.slice)
+            and isinstance(node.ctx, ast.Load)
         ):
             return True
+        # x.get(key) / x.pop(key)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("get", "pop")
+            and node.args
+            and _is_key(node.args[0])
+        ):
+            return True
+        # x.<key> as an attribute read
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr == key
+            and isinstance(node.ctx, ast.Load)
+        ):
+            return True
+        # key in x
+        if isinstance(node, ast.Compare) and _is_key(node.left):
+            if any(isinstance(op, (ast.In, ast.NotIn)) for op in node.ops):
+                return True
     return False
 
 
@@ -160,36 +184,42 @@ def test_re_enabling_requires_the_destination_that_is_missing() -> None:
     )
 
 
-def test_the_reader_check_is_not_satisfied_by_prose() -> None:
-    """The guard above must not be satisfied by a comment or a docstring.
+def test_the_reader_check_distinguishes_a_read_from_a_mention() -> None:
+    """Every shape review used to break the previous version, pinned.
 
-    Both false readers the first version found were exactly that. This pins the
-    fix rather than trusting it.
+    The four NOT-reads each satisfied an earlier version of `_reads_the_key`, and
+    the attribute read was missed by it.
     """
     import tempfile
     from pathlib import Path
 
-    with tempfile.TemporaryDirectory() as tmp:
-        prose = Path(tmp) / "prose.py"
-        prose.write_text(
-            '"""A module docstring naming kg_entity_id."""\n'
-            "# a comment naming kg_entity_id\n"
-            "def f():\n"
-            '    """kg_entity_id in a function docstring."""\n'
-            "    return 1\n"
-        )
-        assert not _reads_the_key(prose, "kg_entity_id"), (
-            "prose satisfied the reader check"
-        )
+    not_reads = {
+        "module docstring": '"""names kg_entity_id."""\nx = 1\n',
+        "comment": "# names kg_entity_id\nx = 1\n",
+        "a pure write": 'def f(props, v):\n    props["kg_entity_id"] = v\n',
+        "a dead dict literal": 'junk = {"kg_entity_id": None}\n',
+        "prose in a log line": 'def f(log):\n    log.info("kg_entity_id")\n',
+    }
+    reads = {
+        "subscript load": 'def f(props):\n    return props["kg_entity_id"]\n',
+        "dict get": 'def f(props):\n    return props.get("kg_entity_id")\n',
+        "attribute read": "def f(e):\n    return e.kg_entity_id\n",
+        "membership test": 'def f(props):\n    return "kg_entity_id" in props\n',
+    }
 
-        real = Path(tmp) / "real.py"
-        real.write_text(
-            "def f(props):\n"
-            '    return props.get("kg_entity_id")\n'
-        )
-        assert _reads_the_key(real, "kg_entity_id"), (
-            "a genuine read was not recognised"
-        )
+    with tempfile.TemporaryDirectory() as tmp:
+        for label, src in not_reads.items():
+            f = Path(tmp) / "x.py"
+            f.write_text(src)
+            assert not _reads_the_key(f, "kg_entity_id"), (
+                f"a mention satisfied the reader check: {label}"
+            )
+        for label, src in reads.items():
+            f = Path(tmp) / "y.py"
+            f.write_text(src)
+            assert _reads_the_key(f, "kg_entity_id"), (
+                f"a genuine read was not recognised: {label}"
+            )
 
 
 def test_the_alias_policy_is_not_restated_here() -> None:

@@ -14,9 +14,11 @@ Both halves of that premise turned out to be wrong, in opposite directions.
 
 **Consolidation already happened.** `upsert_entity` looks up on
 `(canonical_name, entity_type)` and unions `source_documents`, so exact-name
-matches merged across documents before this phase existed. **475 of 543 active
-entities already spanned more than one source.** What did not consolidate was
-VARIANTS — a far smaller population than the premise implied.
+matches merged across documents before this phase existed — when they hit.
+
+**46 of 531 active entities span more than one source — 8.7%, not the 87.5% an earlier draft of this document reported.** The figure 475 is the count over ALL 5,500 rows of every status (8.6% there too); presenting it against the 543 active ones inverted it. Corrected on re-measurement after review.
+
+And the inference built on it is withdrawn, not just the number. A spanning rate measures how much the SOURCES overlap, not whether consolidation works: ten of the fourteen documents are convenanten for different regions, so most topics genuinely appear once. Whether `upsert_entity`'s lookup HITS is not recorded anywhere, so neither figure settles the phase's original premise in either direction.
 
 **And turning stage 10 on would not have fixed those.** Measured across the whole
 active graph: 18 merges over 531 entities, of which roughly five are defensible.
@@ -73,12 +75,18 @@ curator can ask why two mentions are one entity and get an answer per source.
 Stage 10 goes back to off. Not because the stage is bad — because its answer has
 nowhere to go, and because the answer is mostly the wrong SHAPE.
 
-**Seven of the eight clear errors are correct RELATIONS recorded as identity.**
-`coöperatief wonen` is narrower than `wonen`; `Versterken regionale samenwerking`
-is an action on it; the Staatssecretaris is an organ of IenW; VROM is the
-predecessor of VRO; `HG/BZK` is a joint construct; `ministeries van het Rijk: …`
-is a list containing its members. Only the `VRO (Ministerie van VWS)` pairing is a
-genuine extraction error.
+**18 merges across the active graph, 6 defensible and 12 not** — the full list
+is in the measurement's section G, so the classification is checkable rather than
+asserted. An earlier draft of this report claimed "seven of the eight errors are
+correct RELATIONS recorded as identity"; review disproved it, and section G2
+records why: it counted a merge that never happened (`HG/BZK` is one stage 10
+MISSES), and three of the errors are siblings with no subsumption between them.
+
+What the data does support is narrower and still the point: **the largest single
+class of error is a qualified concept absorbed into its own head noun** —
+`coöperatief wonen` into `wonen`, `Versterken regionale samenwerking` into
+`Regionale samenwerking`, the Staatssecretaris into IenW. Five of the twelve, and
+the same shape PC.2 removed 29 affixes to avoid.
 
 The similarity signal is real. The destination is missing — and the repository had
 already said so twice without acting: PC.2 filed the office-of class as "an
@@ -121,6 +129,23 @@ it guards* — two of them after the pattern was named aloud in this same sessio
 * **144 rows carry an empty `canonical_name`**, all `reference`.
 * **Three producers of entity embeddings use two different texts**, compared by
   cosine.
+* **Two inventory rows plan step 5 assigned to PC.3 are NOT closed** —
+  `relation_source` / `relation_sources` and `incremental_report`. Reassigned to
+  PC.7 in the inventory rather than left looking done. This phase spent itself on
+  entity identity and never reached relation provenance, and `incremental_report`
+  belongs with the decision about which dormant stages have a future.
+* **`POST /services/merge` interpolates unvalidated record ids into SurrealQL**
+  (`services/extraction/api.py`, 9 sites), proxied without auth. Pre-existing —
+  this branch introduced neither the endpoint nor the interpolation — but it
+  edits one of those statements, and the repository has a recorded prior incident
+  of this exact class (Track Y.1 dropped a table). Raised by review; the owner's
+  call whether it is fixed or filed.
+* **Migration 79 plus the 144 empty-key rows.** All 144 carry `name_key = ''`.
+  Promoting a second one of a type to `active` now collides on
+  `idx_entity_identity`, and `set_status` catches, logs and returns `False` — an
+  operator action that silently does nothing.
+* **`KGResolutionConfig`'s docstring is stale**: it says `entity_alias` holds 0
+  rows on the working database. It holds 12.
 * **The orphan invariant cannot see two shapes** — a key inside `properties`, and
   an exported class with no caller. Both orphans this phase found live there.
 

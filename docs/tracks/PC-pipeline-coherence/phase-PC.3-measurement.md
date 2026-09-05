@@ -397,5 +397,113 @@ decoration is normalised and the authority is consulted.
 ### What DOES resolve across documents
 
 `upsert_entity`'s lookup on `name_key` — PC.3 step 1. It is measured, it works,
-and it is why **475 of 543 active entities already span more than one source**.
-That is this phase's real deliverable, and it never depended on stage 10.
+**46 of 531 active entities span more than one source — 8.7%, not the 87.5% an earlier draft of this document reported.** The figure 475 is the count over ALL 5,500 rows of every status (8.6% there too); presenting it against the 543 active ones inverted it. Corrected on re-measurement after review.
+
+And the inference built on it is withdrawn, not just the number. A spanning rate measures how much the SOURCES overlap, not whether consolidation works: ten of the fourteen documents are convenanten for different regions, so most topics genuinely appear once. Whether `upsert_entity`'s lookup HITS is not recorded anywhere, so neither figure settles the phase's original premise in either direction.
+
+The identity key remains this phase's real deliverable, and it never depended on
+stage 10 — but that rests on the 12 collision groups it collapses and on the
+code, not on a spanning rate that answers a different question.
+
+## G. Corrections after review
+
+*Review checked the claims in sections A–F against the database rather than
+against each other, and three did not survive. They are corrected here rather
+than edited away, because the phase's argument was built on them.*
+
+### G1. The cross-document spanning rate was inverted
+
+`475 of 543` was reported as the share of ACTIVE entities spanning more than one
+source. 475 is the count over **all 5,500 rows of every status**. Re-measured:
+
+```
+ALL statuses    5500 rows | span >1 source:  475 (8.6%)
+active only      531 rows | span >1 source:   46 (8.7%)
+```
+
+8.7%, not 87.5%. **And the inference is withdrawn with the number.** A spanning
+rate measures how much the SOURCES overlap — ten of the fourteen documents are
+convenanten for different regions, so most topics genuinely appear once. Whether
+`upsert_entity`'s lookup HITS is recorded nowhere, so neither figure settles the
+phase's original premise in either direction. What survives is the code fact (the
+lookup unions `source_documents` when it matches) and the 12 collision groups.
+
+### G2. "Seven of the eight errors are relations recorded as identity" — withdrawn
+
+Three things were wrong with it.
+
+**`HG/BZK` was never merged.** Section B's own table lists the HG/BZK pair among
+the groups stage 10 MISSES. Citing it as one of the errors counted a correct
+non-merge as a defect.
+
+**Three real errors are not subsumption at all** — they are topical adjacency
+between siblings, where neither is broader than the other:
+
+```
+ketenontwikkeling en innovatie      -> Intensiveren innovaties in onderwijs…  [0.915]
+Innovatie omgevingen                -> Intensiveren innovaties in onderwijs…  [0.934]
+Arbeidsmarkt en Economie            -> Economie, Onderwijs en Arbeidsmarkt    [0.940]
+```
+
+**And the arithmetic did not reconcile across three documents** — 5/13, 6/12 and
+5/13 for the same 18 merges, because "roughly" was doing work a count should have
+done, and only 6 of the 13 `topic` merges were ever listed.
+
+### G3. The complete list, so the classification is checkable
+
+All 18 merges. `administrative_area` (52), `programme` (27) and `concept` (3)
+produce none.
+
+**`government_organization` — 5 merges of 20 rows**
+
+| | merge | tier | score |
+|---|---|---|---|
+| ✅ | `VRO (Volkshuisvesting en Ruimtelijke Ordening)` → `VRO (ministerie van …)` | semantic | 0.961 |
+| ❌ narrower/broader | `VRO (VROM, …)` → `VRO (ministerie van …)` | semantic | 0.937 |
+| ❌ organ-of | `De Staatssecretaris van IenW` → `IenW (Infrastructuur en Waterstaat)` | semantic | 0.916 |
+| ❌ extraction error | `VRO (Ministerie van VWS)` → `Ministerie van VWS` | fuzzy | 0.889 |
+| ❌ member-of | `ministeries van het Rijk: VRO` → `Volkshuisvesting en Ruimtelijke Ordening (Ministerie)` | semantic | 0.930 |
+
+**`topic` — 13 merges of 429 rows**
+
+| | merge | tier | score |
+|---|---|---|---|
+| ✅ | `Leven Lang Ontwikkelen (LLO)` → `Leven Lang Ontwikkelen` | semantic | 0.960 |
+| ✅ | `Programmalijn 3: Economie, Onderwijs en Arbe…` → same, truncated | fuzzy | 0.942 |
+| ✅ | `toegankelijkheid naar opleidingen en bijscho…` → same, truncated | semantic | 0.937 |
+| ✅ | `Behouden en aantrekken van talenten` → same, case variant | semantic | 0.940 |
+| ✅ | `Sociaal-emotionele ontwikkeling` → `sociaal-emotionele ontwikkeling va…` | semantic | 0.967 |
+| ❌ narrower/broader | `coöperatief wonen` → `wonen` | semantic | 0.936 |
+| ❌ narrower/broader | `Versterken regionale samenwerking` → `Regionale samenwerking` | semantic | 0.939 |
+| ❌ narrower/broader | `Krachtige Kernen: samenredzaamheid…` → `Programmalijn 1: Krachtige kernen:…` | semantic | 0.906 |
+| ❌ sibling | `Arbeidsmarkt en Economie` → `Economie, Onderwijs en Arbeidsmarkt` | semantic | 0.940 |
+| ❌ sibling | `ketenontwikkeling en innovatie` → `Intensiveren innovaties in onderwijs…` | semantic | 0.915 |
+| ❌ sibling | `Innovatie omgevingen` → `Intensiveren innovaties in onderwijs…` | semantic | 0.934 |
+| ❌ different words | `transformatie van het landelijk gebied` → `Transitie van het landelijk gebied` | fuzzy | 0.868 |
+| ❌ probably same | `strategische netwerkorganisatie in Noord-Holland` → `sterke strategische netwerkorganisatie…` | fuzzy | 0.885 |
+
+**The count, stated once: 18 merges, 6 defensible, 12 not.** Of the 12: four are
+narrower-into-broader, three are siblings with no subsumption between them, one
+is organ-of, one is member-of, one is an extraction error, one pairs two
+different words, and one is arguable either way.
+
+### G4. What the classification actually supports
+
+Not "the errors are relations". The defensible claim is narrower and still
+useful:
+
+> **The largest single class of error is a qualified concept absorbed into its
+> own head noun** — `coöperatief wonen` into `wonen`, `Versterken regionale
+> samenwerking` into `Regionale samenwerking`, the Staatssecretaris into IenW.
+> Five of the twelve are that shape, and it is the same shape PC.2 identified for
+> organisations and removed 29 affixes to avoid.
+
+The sibling cases are a different problem and a harder one: `Arbeidsmarkt en
+Economie` and `Economie, Onderwijs en Arbeidsmarkt` are neither the same nor
+one-inside-the-other, and no relation type in this graph expresses "overlapping
+compound topic". Routing similarity to a relation output would handle the first
+class and not the second.
+
+So the recommendation is unchanged — stage 10 off until its output has a
+destination — but the destination is smaller than "relations": it is subsumption
+for the narrower-into-broader class, and a curator's judgement for the rest.
