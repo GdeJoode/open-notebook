@@ -1,0 +1,7 @@
+-- Reverse of migration 80: restore migration 78's permissive declaration.
+--
+-- The rows repaired by 80 are NOT un-repaired: the value it moved is preserved
+-- in `method`, and re-deriving which rows once held an out-of-vocabulary
+-- `match_type` would be guesswork. Going down widens the type again, which
+-- accepts everything the narrower one did.
+DEFINE FIELD OVERWRITE match_type ON entity_alias TYPE option<string>;

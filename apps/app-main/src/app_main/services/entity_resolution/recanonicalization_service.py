@@ -285,7 +285,10 @@ class RecanonicalizationService:
             ok = await self.entity_repo.register_alias(
                 cluster.winner_id,
                 surface,
-                match_type="retroactive_merge",
+                # An identity-rule merge IS an exact match; the mechanism
+                # travels in `method`. `match_type` is a closed vocabulary
+                # (migration 80) and "retroactive_merge" is not in it.
+                match_type="exact",
                 similarity_score=1.0,
                 method="recanonicalization",
             )

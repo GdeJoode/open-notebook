@@ -13,7 +13,7 @@ from shared.models.entity import Entity, Relation
 from shared.models.export import ExportFilter
 from shared.utils.name_normalizer import normalize_entity_name
 
-from surrealdb_service.config import SurrealDBConfig
+from surrealdb_service.config import SurrealDBConfig, get_config
 from surrealdb_service.connection import ensure_record_id, execute_query
 
 
@@ -35,6 +35,53 @@ def _union_preserve_order(
         if item not in out:
             out.append(item)
     return out
+
+
+#: Databases (namespace/database) whose `entity` table has been confirmed to
+#: declare `name_key`. One check per process per database, not per write.
+_IDENTITY_COLUMN_CHECKED: set = set()
+
+
+class IdentityColumnMissing(RuntimeError):
+    """The database predates migration 79, so `upsert_entity` cannot identify.
+
+    Raised rather than degraded. Without `name_key` the lookup matches nothing
+    and every upsert falls through to CREATE — so a re-ingest of the same
+    document silently DOUBLES its entities. On a database between migrations 39
+    and 79 the old `idx_entity_name_type` turns that into a confusing index
+    error; below 39 there is no index and nothing complains at all. Migration 79
+    removes that index, which is correct and also removes the accident that was
+    catching this.
+    """
+
+
+async def _assert_identity_column(config: Any) -> None:
+    """Fail loudly, once per database, when `name_key` is not declared.
+
+    PC.6's rule applied to a repository: a step that cannot do its job says why
+    rather than doing something else. Found by running PC.3's code against the
+    config-default database, which sits at migration 31.
+    """
+    # `self.config` is None on the common path, in which case `execute_query`
+    # falls back to the process config — so resolve the SAME one, or the message
+    # names a database nobody is connected to.
+    effective = config if config is not None else get_config()
+    key = f"{effective.namespace}/{effective.database}"
+    if key in _IDENTITY_COLUMN_CHECKED:
+        return
+    info = await execute_query("INFO FOR TABLE entity;", None, config)
+    row = info if isinstance(info, dict) else (info[0] if info else {})
+    fields = row.get("fields") or {}
+    if "name_key" not in fields:
+        raise IdentityColumnMissing(
+            f"`entity.name_key` is not declared on `{key}`. This code identifies "
+            f"entities by `name_key` (migration 79); without it every upsert "
+            f"misses its lookup and creates a duplicate instead of updating. "
+            f"Run the migrations against this database — and note that migration "
+            f"79 refuses until `scripts/backfill_name_key.py` has run, because "
+            f"the key cannot be computed in SurrealQL."
+        )
+    _IDENTITY_COLUMN_CHECKED.add(key)
 
 
 class EntityRepository:
@@ -209,6 +256,10 @@ class EntityRepository:
         # is a key the caller could get wrong, and migration 79's UNIQUE index
         # would then reject the write with nothing to say about why.
         name_key = normalize_entity_name(entity.canonical_name)
+
+        # Refuse on a database that cannot express identity — see
+        # `_assert_identity_column`. Once per process per database.
+        await _assert_identity_column(self.config)
 
         try:
             existing_rows = await execute_query(

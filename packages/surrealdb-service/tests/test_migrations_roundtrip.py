@@ -151,6 +151,8 @@ async def test_entity_alias_roundtrip(live_surrealdb: SurrealDBConfig) -> None:
         """
         CREATE entity_alias SET
             alias_text = $alias,
+            -- migration 80: closed, non-optional vocabulary
+            match_type = 'exact',
             canonical_entity = type::thing($parent_id);
         """,
         {"alias": alias_text, "parent_id": parent_id},

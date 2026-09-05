@@ -19,6 +19,8 @@ from typing import Any, Dict, List
 
 from loguru import logger
 
+from shared.utils.name_normalizer import normalize_entity_name
+
 
 # ============================================================================
 # Entity extraction via Ollama (simplified — uses the LLM directly)
@@ -150,6 +152,10 @@ async def write_entities_to_db(
             {
                 "data": {
                     "canonical_name": name,
+                    # Migration 79 makes `name_key` the identity, and
+                    # `normalize_entity_name` is the one rule that
+                    # derives it. A writer that omits it is rejected.
+                    "name_key": normalize_entity_name(name),
                     "entity_type": etype,
                     "description": desc,
                     "source_documents": [source_document] if source_document else [],
@@ -168,7 +174,11 @@ async def write_entities_to_db(
 
             # Create alias
             await execute_query(
-                "CREATE entity_alias SET alias_text = $name, canonical_entity = $eid, confidence = 1.0",
+                # `match_type` is a closed vocabulary enforced by the
+                # database (migration 80); omitting it is rejected.
+                "CREATE entity_alias SET alias_text = $name, "
+                "canonical_entity = $eid, match_type = 'exact', "
+                "method = 'dedup_merge', confidence = 1.0",
                 {"name": name, "eid": eid},
             )
 

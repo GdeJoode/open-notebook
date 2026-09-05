@@ -192,7 +192,7 @@ class VaultSyncService:
                             "CREATE entity_alias SET "
                             "canonical_entity = $entity_id, "
                             "alias_text = $alias, "
-                            "match_type = 'vault_import', "
+                            "match_type = 'exact', "  # closed vocabulary; see `method` below
                             "similarity_score = 1.0, "
                             "method = 'obsidian_vault', "
                             "verified = true",
@@ -208,7 +208,7 @@ class VaultSyncService:
                         "CREATE entity_alias SET "
                         "canonical_entity = $entity_id, "
                         "alias_text = $alias, "
-                        "match_type = 'vault_import', "
+                        "match_type = 'exact', "  # closed vocabulary; see `method` below
                         "similarity_score = 1.0, "
                         "method = 'obsidian_vault', "
                         "verified = true",

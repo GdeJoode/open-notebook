@@ -1138,6 +1138,10 @@ async def merge(req: MergeRequest):
         if dup_name:
             await db.query(
                 "CREATE entity_alias SET alias_text = $name, "
+                # `match_type` is TYPE string on a long-lived database
+                # (migration 80); omitting it fails there and silently
+                # succeeds on a fresh one. A dedup merge is an exact match.
+                "match_type = 'exact', method = 'dedup_merge', "
                 f"canonical_entity = {req.canonical_id}, confidence = 1.0;",
                 {"name": dup_name},
             )

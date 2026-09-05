@@ -1,0 +1,69 @@
+-- ============================================================================
+-- Migration 80: entity_alias.match_type — one definition on every database, and
+-- a closed vocabulary the writers actually respect (Track PC.3).
+--
+-- THE RESIDUAL DRIFT MIGRATION 78 DID NOT CLOSE. 78 declared `match_type` as
+-- `option<string>` with `IF NOT EXISTS`, which is a no-op wherever the field
+-- already exists. On the long-lived `staging` database it already did, in a
+-- stricter shape that appears in NO migration:
+--
+--     DEFINE FIELD match_type ON entity_alias
+--         TYPE string ASSERT $value INSIDE ['exact', 'fuzzy', 'semantic']
+--
+-- So the same field has two definitions, and the same write succeeds on one
+-- database and fails on the other. Measured, by running each production write
+-- shape against both:
+--
+--   shape                                           staging   fresh (78)
+--   register_alias  match_type='retroactive_merge'   FAIL      OK
+--   vault_sync      match_type='vault_import'        FAIL      OK
+--   canonical_entities / extraction: no match_type   FAIL      OK
+--   kg_resolver     match_type='fuzzy'               OK        OK
+--
+-- Three of the four production writers cannot write an alias on the database
+-- that holds the data. PC.2 recorded `entity_alias` as empty because
+-- `register_aliases=False`; that is true of the pipeline path and incomplete as
+-- an explanation — a curator merge, a vault import and a dedup merge would each
+-- have failed as well, two of them into a swallowed exception.
+--
+-- 78 could not have found this. Its own header says its test "passes against
+-- staging and FAILS against a fresh container", so it was designed for the
+-- missing-column direction and verified there.
+--
+-- THE DECISION. The closed set wins, and the writers conform to it.
+-- `match_type` names the KIND of match — exact, fuzzy, semantic — and `method`
+-- names the mechanism that produced it. `retroactive_merge` and `vault_import`
+-- are mechanisms wearing a kind's clothes; both are exact matches, and both
+-- already pass the mechanism in `method`. Nothing is lost by moving them.
+--
+-- ORDER MATTERS, and this is migration 78's own lesson (via 61/64/65): a DEFAULT
+-- does not backfill, and a strict type then rejects the WHOLE record on the next
+-- UPDATE because a SCHEMAFULL update re-validates every field. So the rows are
+-- repaired BEFORE the field is redefined, and the repair preserves the value it
+-- replaces by folding it into `method` rather than discarding it.
+-- ============================================================================
+
+-- NOTE: `NOT IN` in a WHERE clause, `INSIDE` in the ASSERT. SurrealDB v2
+-- accepts `INSIDE` as a comparison operator but has no `NOT INSIDE` token:
+-- it parses `NOT` then expects `IN`.
+
+-- 1. Preserve any out-of-vocabulary value that would otherwise be overwritten.
+--    `method` is where the mechanism belongs; only fill it when it is empty.
+UPDATE entity_alias
+    SET method = match_type
+    WHERE match_type != NONE
+      AND match_type NOT IN ['exact', 'fuzzy', 'semantic']
+      AND (method = NONE OR method = "");
+
+-- 2. Bring every row into the vocabulary. A row with no match_type predates the
+--    column (migration 39 did not declare it) and is an exact alias by origin —
+--    both writers that omit it create the alias from a duplicate's own name.
+UPDATE entity_alias
+    SET match_type = "exact"
+    WHERE match_type = NONE
+       OR match_type NOT IN ['exact', 'fuzzy', 'semantic'];
+
+-- 3. One definition, everywhere. OVERWRITE rather than IF NOT EXISTS is the
+--    whole point: IF NOT EXISTS is what let the two databases disagree.
+DEFINE FIELD OVERWRITE match_type ON entity_alias
+    TYPE string ASSERT $value INSIDE ['exact', 'fuzzy', 'semantic'];

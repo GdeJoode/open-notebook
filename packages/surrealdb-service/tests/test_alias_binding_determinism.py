@@ -193,7 +193,10 @@ async def test_a_row_that_predates_the_field_is_repaired_not_bricked(
     )
     await execute_query(
         f"CREATE {rid} SET alias_text = $t, canonical_entity = {canonical}, "
-        "verified = NONE;",
+        # `match_type` became a closed, non-optional vocabulary in
+        # migration 80. This test is about `verified`; the value here is
+        # setup, not subject.
+        "match_type = 'exact', verified = NONE;",
         {"t": text},
         live_surrealdb,
     )
@@ -284,7 +287,10 @@ async def test_the_runner_actually_executes_the_repair(
     )
     await execute_query(
         f"CREATE {rid} SET alias_text = $t, canonical_entity = {canonical}, "
-        "verified = NONE;",
+        # `match_type` became a closed, non-optional vocabulary in
+        # migration 80. This test is about `verified`; the value here is
+        # setup, not subject.
+        "match_type = 'exact', verified = NONE;",
         {"t": f"runner-{uuid.uuid4().hex[:8]}"},
         live_surrealdb,
     )

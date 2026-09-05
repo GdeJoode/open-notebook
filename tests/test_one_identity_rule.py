@@ -21,10 +21,11 @@ why this scan covers production only and says so.
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,7 +34,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: add to: an entry here is a second identity rule.
 _ALLOWED: Dict[str, str] = {}
 
+#: File-level filter: does this file mention creating an entity at all?
 _CREATE = re.compile(r"CREATE entity\b(?!_)")
+
+#: Statement-level. A call whose literals merely CONTAIN the words is not a
+#: write — `RuntimeError("CREATE entity returned no rows")` sits three lines
+#: below the real one in `entity.py` and was flagged by the first version of
+#: this detector. SurrealQL creates a row with `SET` or `CONTENT`, or with
+#: `INSERT INTO`; nothing else writes.
+_CREATE_STMT = re.compile(
+    r"\b(?:CREATE\s+entity\b(?!_)\s*(?:SET|CONTENT)\b"
+    r"|INSERT\s+INTO\s+entity\b(?!_))",
+    re.I,
+)
 
 
 def _production_sources() -> List[Path]:
@@ -44,10 +57,107 @@ def _production_sources() -> List[Path]:
     return [
         REPO_ROOT / rel
         for rel in listed
-        if ("/src/" in rel or rel.startswith("services/"))
-        and "test" not in Path(rel).name
+        # `scripts/` counts. `semantic-intelligence/scripts/test_pipeline.py` is
+        # a documented entry point (named in the package's own __init__) that
+        # writes real entity rows, and it was invisible to this guard for two
+        # independent reasons: it is not under `/src/`, and its filename starts
+        # with `test_`. It was found by the entity_alias vocabulary guard, which
+        # walks a wider tree — a scope difference between two guards over the
+        # same question is itself a defect.
+        if ("/src/" in rel or rel.startswith("services/") or "scripts/" in rel)
+        # Exclude by PATH, not by filename: a file is a test because of where it
+        # lives, not because of what it is called.
         and "/tests/" not in rel
+        and not rel.startswith("tests/")
     ]
+
+
+def _literal_text(node: ast.Call) -> str:
+    """Every string literal anywhere inside a call, joined.
+
+    Covers implicit concatenation across lines, the literal parts of f-strings,
+    and dict-literal KEYS — which is how the two `CREATE entity CONTENT $data`
+    writers name their fields.
+    """
+    return " ".join(
+        sub.value
+        for sub in ast.walk(node)
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+    )
+
+
+def _enclosing_functions(tree: ast.AST) -> List[Tuple[int, int, ast.AST]]:
+    spans: List[Tuple[int, int, ast.AST]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = getattr(node, "end_lineno", node.lineno)
+            spans.append((node.lineno, end, node))
+    # Innermost first, so a nested function wins over its parent.
+    spans.sort(key=lambda s: s[1] - s[0])
+    return spans
+
+
+def _innermost(spans: List[Tuple[int, int, ast.AST]], line: int) -> Optional[ast.AST]:
+    for lo, hi, node in spans:
+        if lo <= line <= hi:
+            return node
+    return None
+
+
+def _calls_the_one_rule(scope: ast.AST) -> bool:
+    for sub in ast.walk(scope):
+        if not isinstance(sub, ast.Call):
+            continue
+        fn = sub.func
+        if isinstance(fn, ast.Name) and fn.id == "normalize_entity_name":
+            return True
+        if isinstance(fn, ast.Attribute) and fn.attr == "normalize_entity_name":
+            return True
+    return False
+
+
+def find_identity_violations(path: str, source: str) -> List[str]:
+    """One message per `CREATE entity` site that does not state its identity.
+
+    Statement-level on purpose. The first version of this guard asked whether the
+    FILE mentioned `normalize_entity_name` anywhere, which is a proxy for the
+    question and not the question: deleting `name_key = $name_key` from the real
+    production CREATE left the import in place and the suite green. Verified by
+    doing exactly that, against `entity.py` and the semantic-intelligence script.
+    """
+    problems: List[str] = []
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return [f"{path}: unparseable ({exc})"]
+
+    spans = _enclosing_functions(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        text = _literal_text(node)
+        if not _CREATE_STMT.search(text):
+            continue
+        line = node.lineno
+
+        if "name_key" not in text:
+            problems.append(
+                f"{path}:{line}: `CREATE entity` does not set `name_key`. "
+                f"Migration 79 makes it the identity, TYPE string with no "
+                f"default, so this write is rejected outright."
+            )
+            continue
+
+        fn = _innermost(spans, line)
+        scope = fn if fn is not None else tree
+        if not _calls_the_one_rule(scope):
+            where = getattr(fn, "name", "<module>")
+            problems.append(
+                f"{path}:{line}: `CREATE entity` sets `name_key`, but "
+                f"`{where}` never calls `normalize_entity_name` — the value "
+                f"comes from somewhere else, which is a second identity rule."
+            )
+    return problems
 
 
 def test_every_entity_writer_uses_the_one_identity_rule() -> None:
@@ -55,23 +165,80 @@ def test_every_entity_writer_uses_the_one_identity_rule() -> None:
     assert sources, "walker control: no production sources found"
 
     writers = [p for p in sources if _CREATE.search(p.read_text(encoding="utf-8"))]
-    assert len(writers) >= 3, (
+    assert len(writers) >= 4, (
         f"detector control: found only {len(writers)} entity writers "
         f"({[p.name for p in writers]}) — the scan is not seeing them"
     )
 
-    offenders = sorted(
-        str(p.relative_to(REPO_ROOT))
-        for p in writers
-        if "normalize_entity_name" not in p.read_text(encoding="utf-8")
-        and str(p.relative_to(REPO_ROOT)) not in _ALLOWED
-    )
+    offenders: List[str] = []
+    for path in writers:
+        rel = str(path.relative_to(REPO_ROOT))
+        if rel in _ALLOWED:
+            continue
+        offenders += find_identity_violations(rel, path.read_text(encoding="utf-8"))
+
     assert not offenders, (
-        f"these create `entity` rows without deriving `name_key` from "
-        f"`normalize_entity_name`: {offenders}. Two writers normalising one name "
-        f"differently produce two identities for it, which migration 79's UNIQUE "
-        f"index cannot catch — the keys differ, so both rows are accepted."
+        "these create `entity` rows without deriving `name_key` from "
+        "`normalize_entity_name`:\n" + "\n".join(offenders)
     )
+
+
+#: Three states a file-level guard passed. Each is a real writer's shape put in
+#: the state this guard claims to forbid — not a state of that shape.
+_FORBIDDEN_STATES = {
+    "name_key deleted from the CREATE, import left in place (entity.py)": (
+        "from shared.utils.name_normalizer import normalize_entity_name\n"
+        "class EntityRepository:\n"
+        "    async def upsert_entity(self, entity):\n"
+        "        name_key = normalize_entity_name(entity.canonical_name)\n"
+        "        result = await execute_query(\n"
+        "            'CREATE entity SET canonical_name = $canonical_name, '\n"
+        "            'entity_type = $entity_type, confidence = $confidence',\n"
+        "            params,\n"
+        "        )\n"
+    ),
+    "name_key deleted from the CONTENT payload (semantic-intelligence script)": (
+        "from shared.utils.name_normalizer import normalize_entity_name\n"
+        "async def ingest(name, etype, desc):\n"
+        "    result = await execute_query(\n"
+        "        'CREATE entity CONTENT $data RETURN id',\n"
+        "        {'data': {'canonical_name': name, 'entity_type': etype}},\n"
+        "    )\n"
+    ),
+    "name_key set from something that is not the one rule": (
+        "async def ingest(name, etype):\n"
+        "    result = await execute_query(\n"
+        "        'CREATE entity SET canonical_name = $n, name_key = $k',\n"
+        "        {'n': name, 'k': name.lower().strip()},\n"
+        "    )\n"
+    ),
+}
+
+
+def test_guard_fails_in_each_state_it_forbids() -> None:
+    """The half a green suite does not give you.
+
+    The first version of this guard passed all three of these. It was verified
+    by running the suite after a mutation, which is the same mistake one level
+    up: the suite was green because the guard could not see the statement.
+    """
+    for label, source in _FORBIDDEN_STATES.items():
+        assert find_identity_violations(label, source), f"guard did NOT flag: {label}"
+
+
+def test_guard_accepts_each_real_writer_as_it_stands() -> None:
+    """The mirror: a guard that flags everything would satisfy the test above."""
+    for rel in (
+        "packages/surrealdb-service/src/surrealdb_service/repositories/entity.py",
+        "apps/app-main/src/app_main/services/vault_sync_service.py",
+        "services/extraction/api.py",
+        "packages/semantic-intelligence/scripts/test_pipeline.py",
+    ):
+        path = REPO_ROOT / rel
+        assert path.exists(), f"writer moved: {rel}"
+        assert not find_identity_violations(rel, path.read_text(encoding="utf-8")), (
+            f"guard wrongly flagged the corrected writer: {rel}"
+        )
 
 
 def test_the_writers_agree_on_adversarial_names() -> None:
@@ -97,3 +264,18 @@ def test_the_writers_agree_on_adversarial_names() -> None:
             f"{normalize_entity_name(key)!r}; a re-normalised key must be itself, "
             f"or a second write of the same row lands on a different identity"
         )
+
+
+def test_guard_ignores_prose_that_merely_names_the_statement() -> None:
+    """A message is not a write.
+
+    `entity.py` raises `RuntimeError(f"CREATE entity returned no rows for ...")`
+    three lines below the real CREATE. The first version of this detector flagged
+    it, which would have made the guard unpassable and therefore useless.
+    """
+    prose = (
+        "def f():\n"
+        "    if not result:\n"
+        "        raise RuntimeError('CREATE entity returned no rows for ' + name)\n"
+    )
+    assert not find_identity_violations("prose", prose)
