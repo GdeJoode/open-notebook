@@ -330,3 +330,72 @@ The behavioural half is weaker than it looks and says so: SurrealDB v2 returned 
 order with and without the clause on 20 rows, so no fixture here can catch the
 removal by behaviour. The claim in the repository docstring was corrected to what
 was measured rather than what was intended.
+
+## F. Stage 10's verdict reaches nothing
+
+*The last check before recommending a default: what does persistence DO with a
+match? The answer reframes every number above.*
+
+The resolver writes four keys onto a matched mention
+(`kg_resolver._enrich_entity`):
+
+```python
+props["kg_entity_id"]        = kg_entity_id
+props["kg_match_type"]       = match_type
+props["kg_similarity_score"] = round(similarity_score, 6)
+props["is_new"]              = False
+```
+
+Searching every production module for consumers:
+
+| key | read by |
+|---|---|
+| `kg_entity_id` | **nothing** |
+| `kg_match_type` | **nothing** |
+| `kg_similarity_score` | **nothing** |
+| `is_new` | stage 15 only (`workflow.py:778`, concept alignment) |
+
+`entity_persistence_service.py` contains **zero** occurrences of `kg_`. It
+identifies the entity by `name_key` through `upsert_entity`, exactly as it does
+with stage 10 off. And `match_candidates` — the curator queue — is fed by the LLM
+matcher at stage 6b, not by stage 10, so a resolution match is not put in front of
+a human either.
+
+The properties bag IS persisted (`stored_props` copies it wholesale minus the
+embedding), so the verdict is **written to the graph and never read**. Concretely:
+`coöperatief wonen` gets its own row under its own `name_key`, carrying
+`kg_entity_id → wonen` as a stored annotation that nothing acts on.
+
+**So enabling stage 10 consolidates nothing.** Its only reachable effect is that
+matched entities are not marked `is_new`, which reduces what stage 15 classifies.
+
+### What that means for this phase, plainly
+
+PC.3 step 2 — "turn stage 10 on where the app builds its config, one field, and
+the phase's whole risk surface" — turned on a stage whose primary output is dead.
+That is the failure PC.6 spent five review rounds making unreachable, introduced
+by the phase that came after it: *flag on, zero effect*.
+
+It also explains why PC.6's own coherence check did not catch it. `config_coherence`
+reasons in the downstream direction — stage 15 needs the `is_new` that stage 10
+produces — and that dependency is real and satisfied. Nobody checked the other
+direction: whether stage 10's own headline output has a reader. Likewise
+`tests/test_derived_state_has_readers.py` enumerates fields on `FilteredResult`
+and pipeline metadata keys; `kg_entity_id` is a key inside an entity's
+`properties`, so the invariant does not reach it — the same blind spot that hid
+the unwired TOOI reconciler in section D.
+
+### The measurement keeps its value, as a forecast
+
+Sections B, C and E now read as the answer to a different question: *what would
+happen if someone wired `kg_entity_id` into persistence?* Five defensible merges
+against thirteen wrong ones across 531 entities, with no threshold that separates
+them and a ranking that puts an abolished ministry above the real one. So the
+answer to "should we wire it" is no — not in this form, and not before the
+decoration is normalised and the authority is consulted.
+
+### What DOES resolve across documents
+
+`upsert_entity`'s lookup on `name_key` — PC.3 step 1. It is measured, it works,
+and it is why **475 of 543 active entities already span more than one source**.
+That is this phase's real deliverable, and it never depended on stage 10.
