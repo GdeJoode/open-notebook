@@ -1926,22 +1926,35 @@ class EntityExtractionService:
                             similarity_threshold=0.90,
                         ),
                         edge_prediction_enabled=True,
-                        # PC.3: cross-document resolution ON by default. Stage 10
-                        # is what matches a new mention against entities the graph
-                        # already holds, and it never ran — the config default is
-                        # False and nothing here set it — so every document wrote
-                        # its entities fresh. Three convenanten naming the same
-                        # ministers produced 58 entities with no consolidation.
+                        # PC.3 turned stage 10 ON here and then measured it.
+                        # It goes back OFF, and the reason is NOT that the stage
+                        # is bad — it is that its answer has nowhere to go.
                         #
-                        # Tier 1 (the alias table) will not fire: PC.2 settled
-                        # that a fuzzy match may not register an alias by itself,
-                        # so `entity_alias` fills only through the curator queue.
-                        # What this turns on is tiers 2 and 3 — fuzzy and
-                        # semantic — against candidates the repository already
-                        # holds, with no API call. `register_aliases` is left at
-                        # its PC.2 default of False rather than restated, so the
-                        # policy lives in one place.
-                        kg_resolution=KGResolutionConfig(enabled=True),
+                        # `kg_entity_id`, `kg_match_type` and `kg_similarity_score`
+                        # have no consumer anywhere in the tree. Persistence holds
+                        # zero occurrences of `kg_` and identifies the entity by
+                        # `name_key` exactly as it does with the stage off, so the
+                        # verdict is written into the properties bag and never
+                        # read. Enabling it consolidates nothing and costs a
+                        # candidate fetch plus Levenshtein and cosine per entity.
+                        #
+                        # And the answer it produces is mostly the wrong SHAPE.
+                        # Measured over all five active entity types: 18 merges
+                        # across 531 entities, of which ~5 are defensible. Seven
+                        # of the eight clear errors are not failed identity calls
+                        # — they are correct RELATIONS recorded as identity.
+                        # `coöperatief wonen` is narrower than `wonen`; the
+                        # Staatssecretaris is an organ of IenW; VROM is the
+                        # predecessor of VRO. The signal is real; the destination
+                        # is missing. Stage 15's own docstring says subsumption is
+                        # "currently handled nowhere", and PC.2 filed the same gap
+                        # for the office-of class.
+                        #
+                        # It comes back when that destination exists — a relation
+                        # proposal, or the curator queue a human already reads —
+                        # not when a threshold is retuned. See
+                        # docs/tracks/PC-pipeline-coherence/phase-PC.3-measurement.md
+                        kg_resolution=KGResolutionConfig(enabled=False),
                         # N.4d.4 / D-N4-8: the stage was otherwise unreachable in
                         # every real run. An explicitly supplied filtering_config
                         # is the caller's own choice and is never overridden.
