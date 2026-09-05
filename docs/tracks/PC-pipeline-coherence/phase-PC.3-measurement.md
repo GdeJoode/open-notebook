@@ -130,3 +130,104 @@ Three things this phase should carry forward rather than fix here:
   against each other by cosine.
 * **`KGResolutionConfig`'s docstring is now stale** on both of its factual claims:
   `enabled` is no longer False, and `entity_alias` no longer holds 0 rows.
+
+## D. The authority check — asked for, and missing from everything above
+
+*Added after the question "where is the check against TOOI?", which the
+measurement above did not consider. It changes the recommendation's reasoning.*
+
+TOOI — the Dutch government's authoritative register — is **already in this
+repository**, and it holds exactly the mapping stage 10 cannot compute. Per
+organisation it carries the abbreviation, the official name without the
+organisation type, and the official name with it:
+
+```
+tooiont:afkorting              "BZK"
+tooiont:officieleNaamExclSoort "Binnenlandse Zaken en Koninkrijksrelaties"
+tooiont:officieleNaamInclSoort "ministerie van Binnenlandse Zaken en Koninkrijksrelaties"
+```
+
+Three surface forms, one stable URI. That is the abbreviation↔expansion class
+solved by LOOKUP rather than by similarity — the class section B shows both tiers
+failing at.
+
+**It runs nowhere.** `shared/vocabulary/tooi_provider.py` and
+`entity_resolution/vocabulary_reconciler.py` exist and are exported; the only
+entry points are three manual endpoints (`POST /vocabularies/refresh`,
+`POST /validate`, `POST /vocabulary/refresh`). **`reconcile_entity` has no
+production caller at all**, and `reference_entity` holds **0 rows** on `staging`
+— the register has never been loaded. Nothing in extraction or filtering
+references TOOI.
+
+This is PC.1b's own defect one level up: a producer with no consumer, except the
+orphan is a whole capability rather than a field. `tests/test_derived_state_has_
+readers.py` cannot see it — it enumerates fields on `FilteredResult` and the
+metadata keys the pipeline writes, and a service method that nobody calls is not
+a field. The handoff inventory does not mention vocabulary, TOOI or the
+reconciler anywhere.
+
+### Would it have helped? Measured, and the answer names the real defect
+
+Loading the bundled seed and posing the same twenty surface forms:
+
+| lookup | resolved |
+|---|---|
+| exact, as the names stand | **1 / 20** |
+| after stripping the decoration (`X (Ministerie)` → `X`, `ABBR (X)` → `ABBR`) | **7 / 20** |
+
+**The same thing defeats all three mechanisms**, and this is the finding that
+matters more than any of the individual numbers:
+
+| mechanism | result on the 20 | what defeats it |
+|---|---|---|
+| `normalize_entity_name` (identity key) | 20 rows → 20 keys | the parenthetical |
+| stage 10, fuzzy + semantic | 1 right, 4 wrong | the parenthetical |
+| TOOI authority lookup | 1 / 20 | the parenthetical |
+
+The problem was never *which matcher*. Nothing strips the decoration before
+matching, so every mechanism is asked to compare `Infrastructuur en Waterstaat
+(Ministerie)` against `Infrastructuur en Waterstaat` and each fails in its own
+way. Strip it first and the cheapest, most accurate mechanism — an exact lookup
+against a register maintained by the government itself — starts working.
+
+The thirteen remaining misses are not a failure of the method. They split into
+two clean groups:
+
+* **Register coverage, not matching.** `JenV`, `VRO`, `SZW` and `EZ` are real
+  ministries absent from the bundled 10-record seed (which holds AZ, BZK, BZ,
+  Def, EZK, IenW, LNV, LVVN, OCW, VWS). Four of the twenty rows hinge on VRO
+  alone. The full TOOI register has all of them; the seed is the offline floor,
+  not the register.
+* **Correctly unresolvable.** The two `ministeries van het Rijk: …` conjunctions,
+  the two Herstel-Groningen joint constructs, and the `VRO (Ministerie van VWS)`
+  extraction error. A register that returned a hit for any of these would be
+  wrong, and stage 10 merged three of them.
+
+### One warning, from the same measurement
+
+Stripping the decoration is not free. The crude rule used here resolved
+`De Staatssecretaris van Infrastructuur en Waterstaat (IenW)` to the IenW
+ministry — by pulling `IenW` out of the parenthetical. That is the **same
+over-merge** stage 10 made and the same one PC.2 spent a review round removing
+from the affix list: an organ OF X is not X. Decoration-stripping needs PC.2's
+discipline — the head run is evidence, and `(Ministerie)` as a type suffix is not
+the same shape as `(IenW)` as an abbreviation gloss, which is not the same shape
+as a `Staatssecretaris van …` office prefix.
+
+### What this changes
+
+The recommendation from section C stands — stage 10 does not go on by default —
+but the reason is sharper. It is not that resolution is hopeless; it is that the
+pipeline reaches for similarity FIRST while an authoritative register sits
+unloaded in the same repository. The order should be inverted:
+
+1. **Normalise the decoration**, with PC.2's care about what a head run means.
+2. **Look up the authority.** Exact, explainable, and it carries a stable URI
+   instead of a score.
+3. **Similarity last, if at all** — and on this evidence, not on by default.
+
+Concretely, before any of this is worth measuring end to end: load the full TOOI
+register (the bulk fetcher exists), give `reconcile_entity` a caller, and extend
+`tests/test_derived_state_has_readers.py` — or add a sibling — so that an
+exported capability with no production caller fails the way an orphaned field
+does.
