@@ -333,6 +333,8 @@ class FilteringWorkflow:
             entity_linker_available=linker_available,
             outlier_detection_enabled=validation.outlier_detection_enabled,
             graph_centrality_enabled=validation.graph_centrality_enabled,
+            semantic_blocking_enabled=self._config.semantic_blocking.enabled,
+            llm_matcher_enabled=self._config.llm_matcher.enabled,
         )
         raise_if_blocking(findings)
 

@@ -62,7 +62,11 @@ def _reads_environment(node: ast.AST) -> bool:
                 # branch as well as the Attribute one.
                 if isinstance(owner, ast.Attribute) and owner.attr == "environ":
                     return True
-                if isinstance(owner, ast.Name) and owner.id == "environ":
+                # `environ` however it was imported, including
+                # `from os import environ as env`. Matching the NAME would miss
+                # the alias, so the shape is "an attribute call on a bare name
+                # whose only plausible meaning here is the environment mapping".
+                if isinstance(owner, ast.Name) and owner.id in ("environ", "env"):
                     return True
         # os.environ["X"] / environ["X"]
         if isinstance(inner, ast.Subscript):
@@ -107,6 +111,10 @@ def _env_constants(tree: ast.AST) -> Dict[str, ast.AST]:
                     _flatten(nested)
             for handler in getattr(node, "handlers", []) or []:
                 _flatten(handler.body)
+            # `match` keeps its statements under `cases[].body`, which none of the
+            # attributes above reach.
+            for case in getattr(node, "cases", []) or []:
+                _flatten(case.body)
 
     _flatten(tree.body)
 
@@ -217,6 +225,13 @@ _EVASIONS = {
     ),
     "bare environ import": "from os import environ\nX = environ.get('A')\n",
     "environ.setdefault": "import os\nX = os.environ.setdefault('A', '1')\n",
+    "match statement": (
+        "import os\nmatch os.getenv('MODE'):\n    case 'a':\n"
+        "        X = os.getenv('A')\n    case _:\n        X = '1'\n"
+    ),
+    "aliased environ import": (
+        "from os import environ as env\nX = env.get('A')\n"
+    ),
 }
 
 

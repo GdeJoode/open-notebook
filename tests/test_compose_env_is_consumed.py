@@ -103,7 +103,23 @@ _READ_PATTERNS = (
     # `_bool_env("DOCLING_DO_OCR", …)`, `_int_env`, `_str_env` — and anchoring on
     # `getenv` alone reported 22 genuinely-read names as dead. A false positive
     # here is the worse failure: it trains a reader to add allow-list entries.
-    r"\w*env\w*\s*\(\s*[\"']{name}[\"']",
+    # Any env-shaped READER, not just `os.getenv`. The services wrap it —
+    # `_bool_env("DOCLING_DO_OCR", …)`, `_int_env`, `_str_env` — and anchoring on
+    # `getenv` alone reported 22 genuinely-read names as dead. A false positive
+    # here is the worse failure: it trains a reader to add allow-list entries.
+    #
+    # `setenv`/`delenv` are excluded: a test that merely SETS a variable is not a
+    # consumer of it, and counting them is the coincidental-collision class this
+    # pattern set exists to close. No compose name relies on it today; the
+    # exclusion is so none quietly starts to.
+    r"\b(?!setenv\b)(?!delenv\b)\w*env\w*\s*\(\s*[\"']{name}[\"']",
+    # A name bound to a constant and read through it — the shape at
+    # `grobid_reference_service.py`: `_GROBID_URL_ENV = "GROBID_URL"`, then
+    # `os.getenv(_GROBID_URL_ENV)`. Without this the guard cleared `GROBID_URL`
+    # only because an unrelated test happens to spell it literally, so deleting
+    # that test would have reported a live production knob as dead — the
+    # false-positive direction this file names as the worse failure.
+    r"_ENV\s*[:=][^\n=]*=\s*[\"']{name}[\"']",
     r"environ\s*\.\s*get\s*\(\s*[\"']{name}[\"']",
     r"environ\s*\[\s*[\"']{name}[\"']",
     r"\$\{{name}[:}]",
@@ -223,3 +239,37 @@ def test_the_detector_would_catch_a_planted_name() -> None:
     """
     sentinel = "PC6_" + "DEFINITELY_NOT_A_REAL" + "_ENV_NAME"
     assert sentinel not in _referenced_names({sentinel})
+
+
+def test_a_name_read_through_a_constant_is_seen() -> None:
+    """`_X_ENV = "NAME"` then `os.getenv(_X_ENV)` — the indirect read.
+
+    `GROBID_URL` is exactly this shape in
+    `references/grobid_reference_service.py`, and before this pattern the guard
+    cleared it only because an unrelated test happens to spell the name
+    literally. Deleting or refactoring that test would have reported a live
+    production knob as dead — the false-positive direction this file calls the
+    worse failure.
+    """
+    assert "GROBID_URL" in _referenced_names({"GROBID_URL"})
+
+
+def test_setting_a_variable_is_not_reading_it() -> None:
+    """`monkeypatch.setenv("X", …)` must not count as a consumer.
+
+    The env-shaped-reader pattern is deliberately loose about the function name,
+    which made `setenv`/`delenv` match. No compose name relies on that today; the
+    exclusion is so none quietly starts to, and it is the same coincidental-
+    collision class the read-context rewrite was built to close.
+    """
+    import re
+
+    for pattern in _READ_PATTERNS:
+        regex = re.compile(pattern.replace("{name}", "SOME_NAME"))
+        assert not regex.search('monkeypatch.setenv("SOME_NAME", "x")'), pattern
+        assert not regex.search('monkeypatch.delenv("SOME_NAME")'), pattern
+    # And the control: a real read still matches.
+    assert any(
+        re.compile(p.replace("{name}", "SOME_NAME")).search('os.getenv("SOME_NAME")')
+        for p in _READ_PATTERNS
+    )

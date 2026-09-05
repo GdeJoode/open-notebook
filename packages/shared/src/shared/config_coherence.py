@@ -289,6 +289,8 @@ def check_feature_dependencies(
     ontology_supplied: bool = True,
     entity_linking_enabled: bool = False,
     entity_linker_available: bool = True,
+    semantic_blocking_enabled: bool = False,
+    llm_matcher_enabled: bool = True,
     outlier_detection_enabled: bool = False,
     graph_centrality_enabled: bool = True,
 ) -> List[Finding]:
@@ -365,6 +367,25 @@ def check_feature_dependencies(
                 "set semantic.linking_provider to a real provider (e.g. "
                 "'dbpedia_spotlight'), inject a linker, or disable "
                 "semantic.entity_linking_enabled",
+            )
+        )
+
+    if semantic_blocking_enabled and not llm_matcher_enabled:
+        # The ninth case, and the one that shows the survey was still an
+        # enumeration of pairs someone thought of. `SemanticBlocker` is built when
+        # its own flag is on, but its only use is inside `_run_llm_matching`,
+        # which runs only when an LLM matcher exists — so enabling blocking alone
+        # constructs a UMAP/HDBSCAN blocker and never calls it. Identical in shape
+        # to `outliers-without-centrality`: a stage that is a PARAMETER of another
+        # stage, gated separately.
+        findings.append(
+            Finding(
+                BLOCK,
+                "blocking-without-a-matcher",
+                "semantic blocking is enabled but LLM matching is not; the "
+                "blocker is only consulted while matching runs, so it would be "
+                "built and never used",
+                "enable llm_matcher, or disable semantic_blocking.enabled",
             )
         )
 

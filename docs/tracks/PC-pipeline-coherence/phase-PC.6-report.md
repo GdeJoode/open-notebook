@@ -215,6 +215,61 @@ default. `check_ollama_context` reports a model row promising more than its mode
 bakes; the remedy is a `PARAMETER num_ctx` variant, which is *not* inert on that
 path, contrary to what the first correction claimed.
 
+## The habit behind the recurrence — named by review, and the fix
+
+Three rounds each found a guard of this phase that could not fail for the case it
+was written for. That is one habit, not five bugs, and review stated it precisely:
+
+> the generalisation was asserted in prose and sampled in a test
+
+* the remedy guard's docstring said "it holds for findings added later"; the test
+  ran one `collect_findings` call;
+* the AST guard's docstring said "this guard is the class"; the code matched one
+  spelling in one file;
+* the compose guard's docstring said "a name that appears there and nowhere else";
+  the scan matched bare tokens and read its own sources;
+* the context check's comment said the packer's promise is verified; nothing
+  asserted the call site.
+
+And the *survey* had the same shape: `check_feature_dependencies` enumerates the
+flag pairs someone thought of. Round 2 closed six; two more turned up in the
+dataclasses; round 3 closed those; a ninth turned up in the stage graph —
+`semantic_blocking` builds a UMAP/HDBSCAN blocker whose only use sits behind the
+LLM matcher's gate.
+
+**What fixed each one was the same move**: stop exhibiting members of the space
+and derive it. The remedy guard became sound by walking `Finding(...)`
+constructions by AST; the compose guard by matching read *contexts* and excluding
+its own sources; the AST guard when `_flatten` derived module scope from the tree
+rather than from `tree.body`.
+
+So the ninth case is fixed with a pair, and the habit is fixed with an
+enumeration. `pipelines/entity-filtering/tests/test_stage_graph_enumeration.py`
+reads `FilteringWorkflow.__init__` by AST, finds every `self._X` assigned under a
+condition, and asserts each is read elsewhere in the class. It detects 11 stages,
+and mutation — renaming a stage's readers OUTSIDE `__init__`, leaving construction
+intact — confirms it flags all four historical findings:
+
+```
+readers of _semantic_blocker removed -> ['_semantic_blocker']
+readers of _entity_linker removed    -> ['_entity_linker']
+readers of _graph_analyzer removed   -> ['_graph_analyzer']
+readers of _llm_matcher removed      -> ['_llm_matcher']
+```
+
+That single enumeration would have caught `entity_linker`, `outliers`,
+`orphan_connector` and `semantic_blocking` in one pass, instead of one per review
+round — and it is there to catch the tenth first. Excluding `__init__` from the
+reader scan is load-bearing: a stage's own construction reads the attribute it
+just set, so counting those would make every stage its own consumer, which is
+PC.1b's four-round trap in a new costume.
+
+**The transferable rule**, which belongs in the track's conventions rather than in
+this report: do not write "this guard is the class" until the guard *derives* the
+class from the code. If the claim is about a space, the test must enumerate the
+space by construction — by AST, by reflection, by walking the config — not by
+exhibiting members of it.
+
 ## Mutation testing
 
 Eight mutations. Six caught on the first run; **two survived, and both are this
