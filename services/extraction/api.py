@@ -1124,33 +1124,21 @@ async def get_duplicates(
     )
 
 
-#: A SurrealDB record id, strictly. Mirrors `_RECORD_ID_RE` in
-#: `surrealdb_service/repositories/base.py` — DUPLICATED on purpose: this service
-#: runs in a container that copies four `shared` modules and no `surrealdb_service`
-#: (see its Dockerfile), so it cannot import the canonical one. Kept character-for
-#: -character identical; if one changes, both must.
-#:
-#: WHY IT EXISTS. SurrealDB v2 cannot bind a record id as a `$param` in the
-#: positions these endpoints need (`FROM {id}`, `UPDATE {id}`, `WHERE in = {id}`),
-#: so the id is interpolated — and an interpolated value that nobody validates is
-#: SurrealQL injection. This repository has already lost a table to exactly that
-#: (Track Y.1). `RecordID.parse` / `startswith` are NOT sufficient: they split on
-#: the first colon and accept whatever follows.
-_RECORD_ID_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*:[a-zA-Z0-9_\-⟨⟩]+$")
+from record_ids import InvalidRecordId, validate_record_id
+from record_ids import _RECORD_ID_RE  # noqa: F401  (the pattern-sync guard reads it)
 
 
 def _validate_record_id(value: str, *, field: str = "record id") -> str:
-    """Return `value` if it is a record id, else refuse with a 400.
+    """`validate_record_id`, translated into the HTTP boundary's answer.
 
-    Refusing is the point: every caller interpolates the result into SurrealQL,
-    so a value that reaches the query without passing here is a hole.
+    The rule itself lives in `record_ids` so `entity_validator` can share it —
+    review found four unvalidated interpolations there after this file's were
+    closed, because the fix was scoped to the file the finding was in.
     """
-    if not isinstance(value, str) or not _RECORD_ID_RE.match(value):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid {field}: expected `table:id`, got {value!r}",
-        )
-    return value
+    try:
+        return validate_record_id(value, field=field)
+    except InvalidRecordId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class MergeRequest(BaseModel):
@@ -1166,9 +1154,10 @@ class MergeRequest(BaseModel):
         forgotten by the tenth interpolation, and it answers with a 422 before a
         connection is opened.
         """
-        if not isinstance(v, str) or not _RECORD_ID_RE.match(v):
-            raise ValueError(f"expected a record id `table:id`, got {v!r}")
-        return v
+        try:
+            return validate_record_id(v, field="record id")
+        except InvalidRecordId as exc:
+            raise ValueError(str(exc)) from exc
 
 
 @app.post("/merge")

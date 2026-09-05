@@ -22,7 +22,23 @@ import re
 from pathlib import Path
 from typing import Dict, List
 
-API = Path(__file__).resolve().parents[1] / "api.py"
+SERVICE = Path(__file__).resolve().parents[1]
+
+#: EVERY module in the service, not just `api.py`. Review found four unvalidated
+#: interpolations one file over, in `entity_validator.py`, which this guard did
+#: not walk — and the precedent for widening was already in the next file in this
+#: directory: `test_no_dead_env_constants.py` says "Every module in the service,
+#: not just `api.py`. Review found a live instance one file over", for the same
+#: sibling module. That lesson was learned before this guard was written and this
+#: guard pinned a single file anyway.
+SOURCES = sorted(p for p in SERVICE.glob("*.py") if p.name != "__init__.py")
+
+API = SERVICE / "api.py"
+
+#: The rule itself lives here so `entity_validator` can share it — see the module
+#: docstring. `api.py` re-exports the pattern and wraps the raise in an
+#: HTTPException at the boundary.
+RECORD_IDS = SERVICE / "record_ids.py"
 
 #: A statement that reaches the database. Interpolating into a `detail=` message
 #: or a log line is not an injection, so the guard asks whether the f-string
@@ -32,8 +48,8 @@ _QUERYISH = re.compile(
 )
 
 
-def _module() -> ast.Module:
-    return ast.parse(API.read_text(encoding="utf-8"))
+def _module(path: "Path" = None) -> ast.Module:
+    return ast.parse((path or API).read_text(encoding="utf-8"))
 
 
 def _interpolated_names(node: ast.JoinedStr) -> List[str]:
@@ -52,7 +68,7 @@ def _interpolated_names(node: ast.JoinedStr) -> List[str]:
 
 
 def _query_interpolations() -> Dict[int, List[str]]:
-    """Every f-string that looks like SurrealQL, with the names it interpolates."""
+    """Every f-string in `api.py` that looks like SurrealQL, with its names."""
     tree = _module()
     found: Dict[int, List[str]] = {}
     for node in ast.walk(tree):
@@ -81,7 +97,7 @@ def test_detector_control_sees_the_interpolations() -> None:
 
 def test_the_validator_rejects_what_it_must() -> None:
     """The pattern itself, against the shapes an attacker would send."""
-    src = API.read_text(encoding="utf-8")
+    src = RECORD_IDS.read_text(encoding="utf-8")
     m = re.search(r"_RECORD_ID_RE = re\.compile\(\s*r\"([^\"]+)\"", src)
     assert m, "the validator's pattern is not where this guard expects it"
     # The captured group is already valid regex source (`\u27e8` is handled by
@@ -141,6 +157,12 @@ def _fragment_is_parameterised(scope: ast.AST, name: str) -> bool:
     return True
 
 
+#: Functions that REFUSE a value that is not a record id. `validate_record_id`
+#: lives in `record_ids` and raises; `_validate_record_id` is `api.py`'s wrapper
+#: translating that into a 400.
+_VALIDATORS = frozenset({"validate_record_id", "_validate_record_id"})
+
+
 def _functions(tree: ast.Module) -> List[ast.AST]:
     return [
         n for n in ast.walk(tree)
@@ -160,7 +182,11 @@ def _validated_in(scope: ast.AST) -> Dict[str, int]:
     found: Dict[str, int] = {}
     for node in ast.walk(scope):
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-            if getattr(node.value.func, "id", "") == "_validate_record_id":
+            # Both names REFUSE — `validate_record_id` raises `InvalidRecordId`
+            # and `api.py`'s `_validate_record_id` translates that into a 400 at
+            # the HTTP boundary. Recognising both is a widening, not a loosening;
+            # a name that merely returns the value would not belong here.
+            if getattr(node.value.func, "id", "") in _VALIDATORS:
                 for target in node.targets:
                     if isinstance(target, ast.Name):
                         found.setdefault(target.id, node.lineno)
@@ -206,57 +232,67 @@ def test_the_request_model_really_validates_its_ids() -> None:
 
 
 def test_every_id_interpolated_into_a_query_was_validated() -> None:
-    tree = _module()
     offenders: List[str] = []
 
-    for scope in _functions(tree):
-        validated = _validated_in(scope)
-        for node in ast.walk(scope):
-            if not isinstance(node, ast.JoinedStr):
-                continue
-            literal = "".join(
-                p.value for p in node.values
-                if isinstance(p, ast.Constant) and isinstance(p.value, str)
-            )
-            if not _QUERYISH.search(literal):
-                continue
-            for name in _interpolated_names(node):
-                if name in _INT_TYPED:
+    for path in SOURCES:
+        rel = path.name
+        try:
+            tree = _module(path)
+        except SyntaxError as exc:
+            offenders.append(f"{rel}: unparseable ({exc})")
+            continue
+
+        for scope in _functions(tree):
+            validated = _validated_in(scope)
+            for node in ast.walk(scope):
+                if not isinstance(node, ast.JoinedStr):
                     continue
-                if name in validated:
+                literal = "".join(
+                    p.value for p in node.values
+                    if isinstance(p, ast.Constant) and isinstance(p.value, str)
+                )
+                if not _QUERYISH.search(literal):
                     continue
-                # A FRAGMENT is not a value. `where` used to sit on the skip list
-                # beside the int-typed names, and it was the one entry that
-                # needed checking: it is a query fragment assembled from
-                # user-supplied `status` / `entity_type` strings, so exempting it
-                # hid a second injection family in the very file the record-id
-                # fix had just closed. A fragment is in scope, and it passes only
-                # by containing no interpolation of its own.
-                if name in _FRAGMENTS:
-                    if _fragment_is_parameterised(scope, name):
+                for name in _interpolated_names(node):
+                    if name in _INT_TYPED:
                         continue
-                    offenders.append(
-                        f"api.py:{node.lineno}: the query fragment `{name}` is "
-                        f"built by interpolating a value rather than binding it"
-                    )
-                    continue
-                if name in _MODEL_VALIDATED:
-                    continue
-                line = validated.get(name)
-                if line is None:
-                    offenders.append(
-                        f"api.py:{node.lineno}: `{name}` reaches SurrealQL "
-                        f"without `_validate_record_id` in `{scope.name}`"
-                    )
-                elif line > node.lineno:
-                    offenders.append(
-                        f"api.py:{node.lineno}: `{name}` is validated at line "
-                        f"{line}, AFTER it is interpolated"
-                    )
+                    if name in validated:
+                        continue
+                    if name in _MODEL_VALIDATED:
+                        continue
+                    if name in _FRAGMENTS:
+                        if _fragment_is_parameterised(scope, name):
+                            continue
+                        offenders.append(
+                            f"{rel}:{node.lineno}: the query fragment `{name}` "
+                            f"is built by interpolating a value rather than "
+                            f"binding it"
+                        )
+                        continue
+                    line = validated.get(name)
+                    if line is None:
+                        offenders.append(
+                            f"{rel}:{node.lineno}: `{name}` reaches SurrealQL "
+                            f"without a record-id validator in `{scope.name}`"
+                        )
+                    elif line > node.lineno:
+                        offenders.append(
+                            f"{rel}:{node.lineno}: `{name}` is validated at line "
+                            f"{line}, AFTER it is interpolated"
+                        )
 
     assert not offenders, (
         "these interpolate a value into SurrealQL without validating it first:\n"
         + "\n".join(offenders)
+    )
+
+
+def test_walker_control_reaches_every_service_module() -> None:
+    """A guard scoped to one file is how the third injection family survived."""
+    names = {p.name for p in SOURCES}
+    assert {"api.py", "entity_validator.py"} <= names, (
+        f"the walk covers {sorted(names)}; it must reach every module the "
+        f"Dockerfile ships, not the one the last finding was in"
     )
 
 
@@ -316,7 +352,56 @@ def test_the_duplicated_pattern_matches_the_canonical_one() -> None:
         assert m, f"no _RECORD_ID_RE in {path}"
         return _ast.literal_eval(m.group(1))
 
-    assert _pattern(API) == _pattern(canonical), (
+    assert _pattern(RECORD_IDS) == _pattern(canonical), (
         "the duplicated record-id pattern has drifted from the canonical one in "
         "surrealdb_service/repositories/base.py"
+    )
+
+
+def test_the_int_typed_exemption_is_read_from_the_signature() -> None:
+    """`_INT_TYPED` was a prose claim; this checks it.
+
+    Review's round-4 minor 1: the guard trusted that `depth`, `limit` and
+    `offset` are `int` in every signature rather than reading the annotation. If
+    one became `str` the exemption would go silent — which is the `where` finding
+    one notch smaller, and it has the same fix.
+    """
+    offenders: List[str] = []
+    for path in SOURCES:
+        tree = _module(path)
+        for fn in _functions(tree):
+            for arg in list(fn.args.args) + list(fn.args.kwonlyargs):
+                if arg.arg not in _INT_TYPED:
+                    continue
+                ann = arg.annotation
+                name = getattr(ann, "id", None) or getattr(
+                    getattr(ann, "value", None), "id", None
+                )
+                if name != "int":
+                    offenders.append(
+                        f"{path.name}:{fn.lineno}: `{arg.arg}` is exempted as "
+                        f"int-typed but is annotated {ast.dump(ann) if ann else 'not at all'}"
+                    )
+    assert not offenders, (
+        "these are exempted from the injection guard on the grounds that FastAPI "
+        "coerces them to int, and they are not int:\n" + "\n".join(offenders)
+    )
+
+
+def test_the_container_ships_every_module_the_guard_walks() -> None:
+    """A module the guard covers but the image lacks fails at import, not here.
+
+    `record_ids.py` was added so `entity_validator` could share the validator;
+    forgetting its COPY line would break the container while every test stayed
+    green.
+    """
+    dockerfile = (SERVICE / "Dockerfile").read_text(encoding="utf-8")
+    missing = [
+        p.name
+        for p in SOURCES
+        if f"services/extraction/{p.name}" not in dockerfile
+    ]
+    assert not missing, (
+        f"the Dockerfile does not COPY {missing}; the service imports every "
+        f"module in this directory"
     )

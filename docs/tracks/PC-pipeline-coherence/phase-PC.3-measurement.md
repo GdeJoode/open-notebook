@@ -518,8 +518,8 @@ and reached that by folding in three rows the table above labels differently:
 noun is "Staatssecretaris"), `member-of` (a list containing VRO is not a
 qualification of VRO) and `predecessor` (an abolished organisation is not a
 qualified form of its successor). Review named it as the third appearance of one
-move: **sweeping distinct relation types into a single class to make a claim
-bigger.* G1 was a number over the wrong denominator, G3 a classification off a
+move — **sweeping distinct relation types into a single class to make a claim
+bigger**. G1 was a number over the wrong denominator, G3 a classification off a
 truncated console, and this a class boundary widened after the fact. All three
 make a claim larger than the data, and none of them changes the recommendation —
 which is what makes them easy to write and worth catching.*

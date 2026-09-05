@@ -31,6 +31,7 @@ COPY packages/shared/src/shared/utils/org_aliases.py /app/shared/utils/org_alias
 COPY packages/shared/src/shared/config/alias_overrides.py /app/shared/config/alias_overrides.py
 
 # Copy the service API and modules
+COPY services/extraction/record_ids.py /app/record_ids.py
 COPY services/extraction/api.py /app/api.py
 COPY services/extraction/vocabulary_manager.py /app/vocabulary_manager.py
 COPY services/extraction/entity_validator.py /app/entity_validator.py
