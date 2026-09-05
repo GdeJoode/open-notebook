@@ -26,7 +26,7 @@ import httpx
 import yaml
 from fastapi import FastAPI, HTTPException
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from shared.utils.name_normalizer import normalize_entity_name
 
 
@@ -534,6 +534,13 @@ async def _write_to_surrealdb(
             rtype = rel.get("type", "related_to").strip()
             if not src or not tgt or src == tgt:
                 continue
+            # These come from `entity_map`, i.e. from the database — which is the
+            # assumption a stored malformed id would exploit. SurrealDB v2 cannot
+            # bind a RELATE endpoint as a `$param` (it silently matches 0 rows),
+            # so the id must be interpolated and must therefore be validated.
+            # This is the shape Track Y.1 lost a table to.
+            src = _validate_record_id(src, field="relation source")
+            tgt = _validate_record_id(tgt, field="relation target")
 
             await db.query(
                 f"RELATE {src}->relation->{tgt} SET "
@@ -837,6 +844,9 @@ async def get_entities(
 @app.get("/entities/{entity_id:path}")
 async def get_entity(entity_id: str):
     """Get a single entity with its relations and aliases."""
+    # `{entity_id:path}` accepts slashes and every SurrealQL metacharacter, and
+    # the value is interpolated into four queries below.
+    entity_id = _validate_record_id(entity_id, field="entity id")
     entity = await _db_query(f"SELECT * FROM {entity_id};")
     if not entity:
         raise HTTPException(status_code=404, detail=f"Entity not found: {entity_id}")
@@ -851,7 +861,8 @@ async def get_entity(entity_id: str):
     )
     # Enrich with target names
     for rel in outgoing:
-        target = await _db_query(f"SELECT canonical_name, entity_type FROM {rel.get('out', '')};")
+        target_id = _validate_record_id(rel.get("out", ""), field="relation target")
+        target = await _db_query(f"SELECT canonical_name, entity_type FROM {target_id};")
         if target:
             rel["target_name"] = target[0].get("canonical_name", "")
             rel["target_type"] = target[0].get("entity_type", "")
@@ -862,7 +873,8 @@ async def get_entity(entity_id: str):
         f"WHERE out = {entity_id} AND status = 'active';"
     )
     for rel in incoming:
-        source = await _db_query(f"SELECT canonical_name, entity_type FROM {rel.get('in', '')};")
+        source_id = _validate_record_id(rel.get("in", ""), field="relation source")
+        source = await _db_query(f"SELECT canonical_name, entity_type FROM {source_id};")
         if source:
             rel["source_name"] = source[0].get("canonical_name", "")
             rel["source_type"] = source[0].get("entity_type", "")
@@ -884,6 +896,7 @@ async def get_entity(entity_id: str):
 @app.get("/entities/{entity_id:path}/graph")
 async def get_entity_graph(entity_id: str, depth: int = 2):
     """Get the local graph around an entity (nodes + edges within depth hops)."""
+    entity_id = _validate_record_id(entity_id, field="entity id")
     # BFS traversal
     visited_nodes: Dict[str, Dict] = {}
     edges: List[Dict] = []
@@ -892,6 +905,11 @@ async def get_entity_graph(entity_id: str, depth: int = 2):
 
     while queue:
         current_id, current_depth = queue.pop(0)
+        # Re-validated on the way back in: these come from the graph rather than
+        # from the caller, but the traversal interpolates them exactly like the
+        # entry point does, and "it came from the database" is the assumption a
+        # stored malformed id would exploit.
+        current_id = _validate_record_id(current_id, field="entity id")
 
         # Get node info
         node = await _db_query(
@@ -1092,9 +1110,51 @@ async def get_duplicates(
     )
 
 
+#: A SurrealDB record id, strictly. Mirrors `_RECORD_ID_RE` in
+#: `surrealdb_service/repositories/base.py` — DUPLICATED on purpose: this service
+#: runs in a container that copies four `shared` modules and no `surrealdb_service`
+#: (see its Dockerfile), so it cannot import the canonical one. Kept character-for
+#: -character identical; if one changes, both must.
+#:
+#: WHY IT EXISTS. SurrealDB v2 cannot bind a record id as a `$param` in the
+#: positions these endpoints need (`FROM {id}`, `UPDATE {id}`, `WHERE in = {id}`),
+#: so the id is interpolated — and an interpolated value that nobody validates is
+#: SurrealQL injection. This repository has already lost a table to exactly that
+#: (Track Y.1). `RecordID.parse` / `startswith` are NOT sufficient: they split on
+#: the first colon and accept whatever follows.
+_RECORD_ID_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*:[a-zA-Z0-9_\-⟨⟩]+$")
+
+
+def _validate_record_id(value: str, *, field: str = "record id") -> str:
+    """Return `value` if it is a record id, else refuse with a 400.
+
+    Refusing is the point: every caller interpolates the result into SurrealQL,
+    so a value that reaches the query without passing here is a hole.
+    """
+    if not isinstance(value, str) or not _RECORD_ID_RE.match(value):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field}: expected `table:id`, got {value!r}",
+        )
+    return value
+
+
 class MergeRequest(BaseModel):
     canonical_id: str = Field(..., description="Entity to keep")
     duplicate_id: str = Field(..., description="Entity to merge into canonical")
+
+    @field_validator("canonical_id", "duplicate_id")
+    @classmethod
+    def _must_be_a_record_id(cls, v: str) -> str:
+        """Both ids are interpolated into SurrealQL nine times below.
+
+        Validated HERE rather than at each use: a check at the boundary cannot be
+        forgotten by the tenth interpolation, and it answers with a 422 before a
+        connection is opened.
+        """
+        if not isinstance(v, str) or not _RECORD_ID_RE.match(v):
+            raise ValueError(f"expected a record id `table:id`, got {v!r}")
+        return v
 
 
 @app.post("/merge")

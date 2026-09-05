@@ -134,12 +134,31 @@ it guards* — two of them after the pattern was named aloud in this same sessio
   PC.7 in the inventory rather than left looking done. This phase spent itself on
   entity identity and never reached relation provenance, and `incremental_report`
   belongs with the decision about which dormant stages have a future.
-* **`POST /services/merge` interpolates unvalidated record ids into SurrealQL**
-  (`services/extraction/api.py`, 9 sites), proxied without auth. Pre-existing —
-  this branch introduced neither the endpoint nor the interpolation — but it
-  edits one of those statements, and the repository has a recorded prior incident
-  of this exact class (Track Y.1 dropped a table). Raised by review; the owner's
-  call whether it is fixed or filed.
+* **The SurrealQL injection is FIXED here** (owner's decision), and it was wider
+  than review found. `MergeRequest`'s two ids now carry a pydantic
+  `field_validator`, so the request is refused with a 422 before a connection
+  opens. The `{entity_id:path}` parameter — whose `:path` converter accepts every
+  metacharacter — is validated at both endpoints that take it. And a derived
+  guard over every query f-string in the module found **three sites review did not
+  name**: the `RELATE {src}->relation->{tgt}` write and two relation read-backs.
+  Those take ids from the database, which is precisely the assumption a stored
+  malformed id exploits, and `RELATE` is the exact shape Track Y.1 lost a table
+  to. All validated.
+
+  Building that guard reproduced this session's recurring defect a FOURTH time:
+  the first version collected validated names module-wide, so deleting the
+  validation from `get_entity` left the name "validated" by `get_entity_graph`
+  and the guard green. It is now scoped per function and ordered per line — a
+  validation that runs after the interpolation is reported too. Verified by four
+  real mutations against `api.py`.
+
+  **What is NOT fixed, and deliberately: the route is unauthenticated, and so is
+  the whole API.** `notebooks`, `sources`, `entity_resolution` and
+  `knowledge_graph` use no auth dependency; `require_agent_key` exists but is
+  reserved for the agent-facing routes. Putting a key on this one proxy would be
+  theatre — anyone who can reach `/services/merge` can reach
+  `DELETE /notebooks/{id}`. The app-wide posture is a decision for its own piece
+  of work, not for a PC.3 branch.
 * **Migration 79 plus the 144 empty-key rows.** All 144 carry `name_key = ''`.
   Promoting a second one of a type to `active` now collides on
   `idx_entity_identity`, and `set_status` catches, logs and returns `False` — an
