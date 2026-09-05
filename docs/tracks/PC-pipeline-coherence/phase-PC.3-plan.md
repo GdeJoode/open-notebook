@@ -1,7 +1,8 @@
 # PC.3 — Look at the graph that is already there
 
-*Plan. Measured 2026-09-05, against a repository at `bb715873` and an empty
-`staging` database.*
+*Plan. Measured 2026-09-05, against a repository at `bb715873` and the
+`open_notebook/staging` database — which holds the corpus, contrary to what an
+earlier draft of this plan said.*
 
 ## What the original plan said, and what measurement changes
 
@@ -30,10 +31,17 @@ Three further corrections to what the phase can assume:
   of the graph is even looked at, and on a corpus with hundreds of entities of one
   type that silently decides the answer — the same capped-sample problem
   `concept_alignment` documents for its own fetch.
-- **The AC's numbers are gone.** "Materially fewer than 117 rows" and
-  `M.C.G. Keijzer` came from a corpus cleared for real data. They must be
-  re-derived from a fresh ingestion of the eight documents in `docling_input/`,
-  which is also the first end-to-end test of PC.6.
+- **The AC's numbers are NOT gone** — an earlier version of this plan said they
+  were, on a zero-row reading taken while the SurrealDB container was up without
+  its volume after a Docker restart. `open_notebook/staging` holds the corpus it
+  always did: 14 sources, 3,824 chunks, 5,501 entities, 1,895 relations, 68 names
+  containing "Regio Deal", ingested 20 June – 1 July.
+
+  That changes the shape of the measurement for the better. **The graph as it
+  stands IS the before-state** — built with stage 10 off, because stage 10 has
+  never run. So the AC needs only the after: the same sources re-extracted with
+  cross-document resolution on, into a SEPARATE database, leaving `staging`
+  untouched as the control.
 
 ## Decided
 
@@ -67,8 +75,11 @@ the colliding pairs and pointing at the curator queue. That is PC.6's rule appli
 to a migration: a step that cannot do its job says why rather than doing something
 else.
 
-On today's database this is free — `entity` holds zero rows — which is precisely
-why it must be written for a populated one and tested against a forged collision.
+**And it is not free on this database.** An earlier draft said `entity` holds
+zero rows and the migration would apply unopposed. It holds 5,501, and running the
+backfill against them is what found the design error in the index — see step 1's
+outcome below. The refusal is not a hypothetical for a future operator; it fired
+here first.
 
 ### 2. Turn stage 10 on where the app builds its config
 
@@ -97,22 +108,29 @@ figure it holds. It reaches `filtering_stats` the way N.5's counters do, so the
 - `relation_source` / `relation_sources`, reassigned here by PC.2: relation
   provenance, not entity identity.
 
-### 6. Measure it, on real content
+### 6. Measure it, against the corpus that is already there
 
-Ingest the eight documents in `docling_input/` and record, before and after:
-entity rows, distinct canonical names, wall time per document, cap-hit count, and
-whether the ministers named across the three convenanten resolve to one entity
-each. **This doubles as PC.6's first end-to-end test** — nothing in that phase was
-verified against a corpus.
+`staging` IS the before-state: 14 sources, 3,824 chunks, 5,501 entities, built
+with stage 10 off because stage 10 has never run. So the measurement is the after,
+and it goes into a **separate database** — `staging` stays untouched as the
+control rather than being overwritten by the thing it is the control for.
+
+Record, for both: entity rows, distinct identity keys, wall time per source,
+cap-hit count, and whether the ministers named across the three convenanten
+resolve to one entity each. **This doubles as PC.6's first end-to-end test** —
+nothing in that phase was verified against a corpus, and the reason given at the
+time (that there was none) was wrong.
 
 ## Acceptance criteria
 
-Restated, because the original figures cannot be reproduced:
+Restated. Not because the original figures are unreproducible — they are, and an
+earlier draft wrongly said otherwise — but because the before-state already exists
+and the comparison should use it rather than manufacture a second one:
 
-1. Re-ingesting the eight documents produces **materially fewer entity rows than
-   the same ingestion with stage 10 off**, with both figures named and measured in
-   the same run — a before/after on one corpus, not a comparison against a number
-   from a database that no longer exists.
+1. Re-extracting the corpus with stage 10 on produces **materially fewer entity
+   rows** than the same corpus without it, both figures named. The before-state
+   already exists — `staging`, built with resolution off — so the after-run goes
+   into a separate database and `staging` is the control rather than the casualty.
 2. A person named in more than one of the three convenanten is **one entity**.
 3. No two active entities differ only by case or spacing — enforced by the UNIQUE
    index, not by a sweep.

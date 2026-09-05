@@ -317,10 +317,11 @@ plan's own
 **organ-of relation**, not a merge.
 
 Handed to **PC.4**: 8 names the graph held twice under two types, six of them
-`programme` against `topic`. The working corpus was emptied after the measurement,
-so PC.4 should re-derive the list from the cross-type band on real data — what
-carries forward is the shape of the finding, not the rows. The report records
-three figures that do not reconcile rather than picking one.
+`programme` against `topic`. An earlier version of this paragraph said the corpus
+had been emptied and that only the shape of the finding carried forward; that was
+wrong (correction of 2026-09-05). `staging` holds the corpus, so PC.4 can re-derive
+the list AND check the three figures the report records as not reconciling —
+which is now a resolvable question rather than a recorded discrepancy.
 
 ## PC.3 — Look at the graph that is already there — ~1.5d
 
@@ -402,9 +403,11 @@ Report: [`phase-PC.6-report.md`](./phase-PC.6-report.md).
 Review: [`reviews/phase-PC.6-attempts-1-5.md`](./reviews/phase-PC.6-attempts-1-5.md).
 
 The reviewer's sign-off is technical and explicitly not consent to merge; that is
-the repository owner's call. Nothing was verified end-to-end against a corpus —
-`staging` was emptied for real data — so the first real extraction after this
-merges is the first real test of it.
+the repository owner's call. Nothing was verified end-to-end against a corpus, so
+the first real extraction after this merges is the first real test of it. The
+reason given at the time — that `staging` had been emptied — was wrong
+(correction of 2026-09-05); the corpus was there throughout, so that verification
+was available and simply not done.
 
 **The finding (review R1).** `ENABLE_CONCEPT_ALIGNMENT=true` did nothing in the
 measured run because alignment classifies only entities KG resolution marked
