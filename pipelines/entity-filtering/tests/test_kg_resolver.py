@@ -501,6 +501,14 @@ class TestKGResolverReport:
             "new_count": 0,
             "aliases_registered": 0,
             "match_type_counts": {"alias": 0, "fuzzy": 0, "semantic": 0},
+            # PC.3: the cap counters are part of the report from the start, so a
+            # run that fetched nothing is distinguishable from one whose fetches
+            # were all bounded — `capped_fetches` of 0 out of 0 says "no look",
+            # not "looked and found nothing".
+            "candidate_fetches": 0,
+            "capped_fetches": 0,
+            "capped_types": [],
+            "candidate_cap": 100,
         }
 
 
@@ -951,3 +959,89 @@ class TestKGResolverCentralityAware:
         assert props["kg_match_type"] == "fuzzy"
         assert props["is_new"] is False
         assert report["matched_count"] == 1
+
+
+# ------------------------------------------------------------------
+# PC.3: the candidate cap is visible
+# ------------------------------------------------------------------
+
+
+class TestCandidateCapVisibility:
+    """A miss must be distinguishable from a look that never happened.
+
+    Tiers 2 and 3 compare against `find_by_type(limit=max_candidates)` — a SAMPLE
+    of the graph. On a corpus with more entities of a type than the cap, "not
+    matched" can mean the match was outside the window, and nothing said so. This
+    phase's acceptance criterion is a measured figure for how many rows
+    consolidation removed; that figure is worth nothing if the resolver cannot
+    say how much of the graph it looked at.
+    """
+
+    class _CappingRepo:
+        """Returns exactly `limit` rows — the shape of a capped fetch."""
+
+        def __init__(self, per_type: int) -> None:
+            self._per_type = per_type
+
+        async def find_by_type(self, entity_type, limit=100):
+            return [
+                {
+                    "id": f"entity:{entity_type}-{i}",
+                    "canonical_name": f"{entity_type} {i}",
+                    "name": f"{entity_type} {i}",
+                    "entity_type": entity_type,
+                    "embedding": [],
+                }
+                for i in range(min(self._per_type, limit))
+            ]
+
+        async def find_by_alias(self, alias_text):
+            return None
+
+    async def test_a_capped_fetch_is_reported(self):
+        resolver = KGResolver(
+            entity_repo=self._CappingRepo(per_type=500), max_candidates=5
+        )
+        _, report = await resolver.resolve(
+            [{"text": "Something Novel", "label": "org", "properties": {}}]
+        )
+        assert report["candidate_fetches"] == 1
+        assert report["capped_fetches"] == 1
+        assert report["capped_types"] == ["org"]
+        assert report["candidate_cap"] == 5
+
+    async def test_an_uncapped_fetch_is_not_reported_as_capped(self):
+        """The counterweight: a fetch that saw the whole type must read as clean.
+
+        Without it the counter could be incremented unconditionally and every
+        report would claim a capped look — a signal that always fires is one a
+        reader learns to ignore, which is what this counter exists to avoid.
+        """
+        resolver = KGResolver(
+            entity_repo=self._CappingRepo(per_type=2), max_candidates=100
+        )
+        _, report = await resolver.resolve(
+            [{"text": "Something Novel", "label": "org", "properties": {}}]
+        )
+        assert report["candidate_fetches"] == 1
+        assert report["capped_fetches"] == 0
+        assert report["capped_types"] == []
+
+    async def test_each_type_is_named_once(self):
+        """`capped_types` is what makes the number actionable.
+
+        "3 of 5 fetches were capped" says a look was bounded; naming the types
+        says WHERE to raise the cap or split the query.
+        """
+        resolver = KGResolver(
+            entity_repo=self._CappingRepo(per_type=500), max_candidates=3
+        )
+        _, report = await resolver.resolve(
+            [
+                {"text": "A", "label": "org", "properties": {}},
+                {"text": "B", "label": "org", "properties": {}},
+                {"text": "C", "label": "person", "properties": {}},
+            ]
+        )
+        assert report["capped_fetches"] == 3
+        assert sorted(report["capped_types"]) == ["org", "person"]

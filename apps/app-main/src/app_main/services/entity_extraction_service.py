@@ -1911,6 +1911,7 @@ class EntityExtractionService:
                         ConceptAlignmentConfig,
                         EmbeddingDedupConfig,
                         FuzzyDedupConfig,
+                        KGResolutionConfig,
                     )
 
                     f_config = FilteringConfig(
@@ -1925,6 +1926,22 @@ class EntityExtractionService:
                             similarity_threshold=0.90,
                         ),
                         edge_prediction_enabled=True,
+                        # PC.3: cross-document resolution ON by default. Stage 10
+                        # is what matches a new mention against entities the graph
+                        # already holds, and it never ran — the config default is
+                        # False and nothing here set it — so every document wrote
+                        # its entities fresh. Three convenanten naming the same
+                        # ministers produced 58 entities with no consolidation.
+                        #
+                        # Tier 1 (the alias table) will not fire: PC.2 settled
+                        # that a fuzzy match may not register an alias by itself,
+                        # so `entity_alias` fills only through the curator queue.
+                        # What this turns on is tiers 2 and 3 — fuzzy and
+                        # semantic — against candidates the repository already
+                        # holds, with no API call. `register_aliases` is left at
+                        # its PC.2 default of False rather than restated, so the
+                        # policy lives in one place.
+                        kg_resolution=KGResolutionConfig(enabled=True),
                         # N.4d.4 / D-N4-8: the stage was otherwise unreachable in
                         # every real run. An explicitly supplied filtering_config
                         # is the caller's own choice and is never overridden.
