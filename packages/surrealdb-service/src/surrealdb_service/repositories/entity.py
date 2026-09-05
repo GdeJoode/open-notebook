@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from shared.models.entity import Entity, Relation
 from shared.models.export import ExportFilter
+from shared.utils.name_normalizer import normalize_entity_name
 
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
@@ -201,13 +202,21 @@ class EntityRepository:
             the merge into a SurrealDB transaction** before introducing
             parallel writers.
         """
+        # PC.3: identity is `name_key`, not the display name. Looking up on the
+        # RAW `canonical_name` is why `Brede Welvaart` and `brede welvaart` were
+        # two rows — the lookup missed, so the create path ran twice. Derived
+        # here rather than taken from the caller: a key the caller could supply
+        # is a key the caller could get wrong, and migration 79's UNIQUE index
+        # would then reject the write with nothing to say about why.
+        name_key = normalize_entity_name(entity.canonical_name)
+
         try:
             existing_rows = await execute_query(
                 "SELECT * FROM entity "
-                "WHERE canonical_name = $canonical_name "
+                "WHERE name_key = $name_key "
                 "AND entity_type = $entity_type LIMIT 1",
                 {
-                    "canonical_name": entity.canonical_name,
+                    "name_key": name_key,
                     "entity_type": entity.entity_type,
                 },
                 self.config,
@@ -296,6 +305,10 @@ class EntityRepository:
         _hash_basis = f"{entity.canonical_name}|{entity.entity_type}"
         create_payload: Dict[str, Any] = {
             "canonical_name": entity.canonical_name,
+            # PC.3: identity, and the UNIQUE index's column. Note it is derived
+            # from the SAME string the lookup used, so a create can only be
+            # reached when that key genuinely had no row.
+            "name_key": name_key,
             "entity_type": entity.entity_type,
             "hash_id": hashlib.md5(_hash_basis.encode("utf-8")).hexdigest(),
             "description": entity.description,
@@ -321,6 +334,7 @@ class EntityRepository:
                 CREATE entity SET
                     canonical_name = $canonical_name,
                     name = $canonical_name,
+                    name_key = $name_key,
                     entity_type = $entity_type,
                     hash_id = $hash_id,
                     description = $description,

@@ -176,3 +176,73 @@ async def test_down_leaves_the_table_usable(live_surrealdb: SurrealDBConfig) -> 
             "DELETE entity WHERE canonical_name = $n;", {"n": name}, live_surrealdb
         )
         await execute_transaction(_migration(79), config=live_surrealdb)
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_upsert_merges_case_variants_into_one_row(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """Two spellings, one row — through the production writer.
+
+    Found by mutation: reverting `upsert_entity`'s lookup to `canonical_name`
+    broke nothing. It would not have merged; it would have missed, taken the
+    create path, and been rejected by the UNIQUE index — turning a merge into an
+    exception with nothing to say about why. The index alone cannot prove this,
+    because the index only proves the second row is refused.
+    """
+    from shared.models import Entity
+    from surrealdb_service.repositories.entity import EntityRepository
+
+    repo = EntityRepository(config=live_surrealdb)
+    stem = f"Brede Welvaart {uuid.uuid4().hex[:6]}"
+
+    first = await repo.upsert_entity(
+        Entity(canonical_name=stem, entity_type="topic", confidence=0.6,
+               source_documents=["source:a"])
+    )
+    second = await repo.upsert_entity(
+        Entity(canonical_name=stem.lower(), entity_type="topic", confidence=0.9,
+               source_documents=["source:b"])
+    )
+
+    assert first == second, "the case variant created a second row"
+
+    rows = await execute_query(
+        f"SELECT canonical_name, name_key, confidence, source_documents "
+        f"FROM {first};", config=live_surrealdb
+    )
+    row = rows[0]
+    # The merge semantics still hold across the two spellings.
+    assert row["confidence"] == pytest.approx(0.9)
+    assert set(row["source_documents"]) == {"source:a", "source:b"}
+    # And the display name is the one written first, not the lowercased variant.
+    assert row["canonical_name"] == stem
+    assert row["name_key"] == normalize_entity_name(stem)
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_upsert_still_separates_genuinely_different_names(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """The counterweight: keying on the identity rule must not over-merge.
+
+    `normalize_entity_name` expands curated org aliases, which is a stronger
+    transform than a fold — so this is the pair PC.2 warned about, checked at the
+    write path rather than assumed from the function's docstring.
+    """
+    from shared.models import Entity
+    from surrealdb_service.repositories.entity import EntityRepository
+
+    repo = EntityRepository(config=live_surrealdb)
+    suffix = uuid.uuid4().hex[:6]
+    a = await repo.upsert_entity(
+        Entity(canonical_name=f"Ministerie van Onderwijs {suffix}",
+               entity_type="organization", confidence=0.8)
+    )
+    b = await repo.upsert_entity(
+        Entity(canonical_name=f"Onderwijs {suffix}",
+               entity_type="organization", confidence=0.8)
+    )
+    assert a != b, "two distinct entities were collapsed by the identity rule"

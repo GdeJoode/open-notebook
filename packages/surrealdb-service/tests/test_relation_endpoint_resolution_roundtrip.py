@@ -140,17 +140,17 @@ async def test_legacy_name_only_query_mis_attaches_homograph(
     bzk = _u("BZK-legacy")
     wet = _u("Wet-legacy")
     await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='person', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='person', "
         "embedding=[], confidence=0.95, source_documents=[], status='active';",
         {"n": bzk}, config=live_surrealdb,
     )
     await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='organization', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='organization', "
         "embedding=[], confidence=0.80, source_documents=[], status='active';",
         {"n": bzk}, config=live_surrealdb,
     )
     await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='legislation', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='legislation', "
         "embedding=[], confidence=0.9, source_documents=[], status='active';",
         {"n": wet}, config=live_surrealdb,
     )
@@ -188,7 +188,7 @@ async def test_cross_batch_endpoint_falls_back_to_name_only(
     # Seed the target entity in a PRIOR (separate) write — it is not in the
     # batch below, so its type is unknown to the relation resolver.
     await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='organization', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='organization', "
         "embedding=[], confidence=0.9, source_documents=[], status='active';",
         {"n": other}, config=live_surrealdb,
     )
@@ -318,12 +318,12 @@ async def test_typed_miss_falls_back_to_name_only_and_creates_edge(
     name = _u("SoloOrg")
     tgt = _u("SoloTarget")
     await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='organization', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='organization', "
         "embedding=[], confidence=0.9, source_documents=[], status='active';",
         {"n": name}, config=live_surrealdb,
     )
     await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='legislation', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='legislation', "
         "embedding=[], confidence=0.9, source_documents=[], status='active';",
         {"n": tgt}, config=live_surrealdb,
     )
@@ -369,17 +369,17 @@ async def test_audit_flags_ambiguous_endpoint_and_is_read_only(
     target = _u("Wet-audit")
     # Two active entities sharing a name across types → an ambiguous endpoint.
     pid = (await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='person', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='person', "
         "embedding=[], confidence=0.9, source_documents=[], status='active';",
         {"n": homograph}, config=live_surrealdb,
     ))[0]["id"]
     oid = (await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='organization', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='organization', "
         "embedding=[], confidence=0.8, source_documents=[], status='active';",
         {"n": homograph}, config=live_surrealdb,
     ))[0]["id"]
     tid = (await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='legislation', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='legislation', "
         "embedding=[], confidence=0.9, source_documents=[], status='active';",
         {"n": target}, config=live_surrealdb,
     ))[0]["id"]

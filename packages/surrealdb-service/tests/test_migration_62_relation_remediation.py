@@ -101,12 +101,12 @@ async def _relation_table_def(config: SurrealDBConfig) -> str:
 
 async def _make_two_entities(config: SurrealDBConfig) -> tuple[str, str]:
     a = await execute_query(
-        "CREATE entity SET canonical_name = $n, entity_type = 'Person', embedding = [];",
+        "CREATE entity SET canonical_name = $n, name_key = string::lowercase(string::trim($n)), entity_type = 'Person', embedding = [];",
         {"n": _unique("ent_a")},
         config=config,
     )
     b = await execute_query(
-        "CREATE entity SET canonical_name = $n, entity_type = 'Org', embedding = [];",
+        "CREATE entity SET canonical_name = $n, name_key = string::lowercase(string::trim($n)), entity_type = 'Org', embedding = [];",
         {"n": _unique("ent_b")},
         config=config,
     )

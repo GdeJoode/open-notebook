@@ -107,14 +107,14 @@ async def _seed_notebook_with_graph(cfg: SurrealDBConfig, uid: str) -> str:
     )
 
     a_rows = await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='person', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='person', "
         "primary_type='Person', type_tags=['Person'], embedding=[], "
         "confidence=0.95, source_documents=[$src], status='active';",
         {"n": f"Ada {uid}", "src": source_id},
         config=cfg,
     )
     b_rows = await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='person', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='person', "
         "primary_type='Person', type_tags=['Person'], embedding=[], "
         "confidence=0.95, source_documents=[$src], status='active';",
         {"n": f"Babbage {uid}", "src": source_id},

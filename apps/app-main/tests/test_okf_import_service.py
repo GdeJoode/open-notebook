@@ -490,7 +490,7 @@ async def test_db_fuzzy_dedup_collapses_near_duplicate(monkeypatch, live_surreal
 
     # Seed the "already present" entity natively (not via OKF).
     await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='organization', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='organization', "
         "embedding=[], confidence=0.9, source_documents=[], status='active';",
         {"n": seeded_name}, config=config,
     )

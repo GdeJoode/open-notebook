@@ -27,6 +27,7 @@ import yaml
 from fastapi import FastAPI, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
+from shared.utils.name_normalizer import normalize_entity_name
 
 
 @asynccontextmanager
@@ -484,6 +485,11 @@ async def _write_to_surrealdb(
                 "CREATE entity CONTENT $data RETURN id;",
                 {"data": {
                     "canonical_name": name,
+                    # PC.3: identity, and the column migration 79's UNIQUE
+                    # index sits on. `write_to_db` defaults to True and the
+                    # app proxy exposes it that way, so this is a live writer
+                    # — it must use the SAME function as the repository.
+                    "name_key": normalize_entity_name(name),
                     "entity_type": etype,
                     "description": desc,
                     "source_documents": [doc_name],

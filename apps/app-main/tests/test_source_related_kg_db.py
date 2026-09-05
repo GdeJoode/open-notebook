@@ -43,7 +43,7 @@ async def _make_entity(
     status: str = "active",
 ) -> str:
     created = await execute_query(
-        "CREATE entity SET canonical_name = $n, name = $n, "
+        "CREATE entity SET canonical_name = $n, name_key = string::lowercase(string::trim($n)), name = $n, "
         "entity_type = $et, status = $st, source_documents = $sd, "
         "embedding = [], hash_id = $h;",
         {

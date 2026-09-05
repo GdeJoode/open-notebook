@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from shared.utils.name_normalizer import normalize_entity_name
 from surrealdb_service.connection import execute_query
 
 
@@ -167,10 +168,19 @@ class VaultSyncService:
             else:
                 # Create the entity
                 created = await execute_query(
-                    "CREATE entity SET name = $name, entity_type = $entity_type, "
+                    # PC.3: `name_key` is required and is the identity column.
+                    # `canonical_name` is set alongside `name` because migration
+                    # 39's UNIQUE index and every canonical reader use it, and a
+                    # vault-created row that lacked it was invisible to both.
+                    "CREATE entity SET name = $name, canonical_name = $name, "
+                    "name_key = $name_key, entity_type = $entity_type, "
                     "weight = 1, properties = {}, source_ids = [], "
                     "created = time::now(), updated = time::now()",
-                    {"name": canonical_name, "entity_type": entity_type},
+                    {
+                        "name": canonical_name,
+                        "name_key": normalize_entity_name(canonical_name),
+                        "entity_type": entity_type,
+                    },
                 )
                 entity_id = str(created[0]["id"]) if created else None
 

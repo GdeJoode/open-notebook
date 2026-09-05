@@ -95,7 +95,7 @@ async def test_entity_roundtrip(live_surrealdb: SurrealDBConfig) -> None:
     inserted = await execute_query(
         """
         CREATE entity SET
-            canonical_name = $name,
+            canonical_name = $name, name_key = string::lowercase(string::trim($name)),
             entity_type = $etype,
             description = $desc,
             confidence = $confidence,
@@ -135,7 +135,7 @@ async def test_entity_alias_roundtrip(live_surrealdb: SurrealDBConfig) -> None:
     parent = await execute_query(
         """
         CREATE entity SET
-            canonical_name = $name,
+            canonical_name = $name, name_key = string::lowercase(string::trim($name)),
             entity_type = "Org",
             embedding = [];
         """,
@@ -175,12 +175,12 @@ async def test_relation_roundtrip(live_surrealdb: SurrealDBConfig) -> None:
     b_name = _unique("rel-dst")
 
     a = await execute_query(
-        "CREATE entity SET canonical_name = $n, entity_type = 'Person', embedding = [];",
+        "CREATE entity SET canonical_name = $n, name_key = string::lowercase(string::trim($n)), entity_type = 'Person', embedding = [];",
         {"n": a_name},
         config=live_surrealdb,
     )
     b = await execute_query(
-        "CREATE entity SET canonical_name = $n, entity_type = 'Org', embedding = [];",
+        "CREATE entity SET canonical_name = $n, name_key = string::lowercase(string::trim($n)), entity_type = 'Org', embedding = [];",
         {"n": b_name},
         config=live_surrealdb,
     )
@@ -528,7 +528,7 @@ async def test_migration_54_aliases_roundtrip_and_idempotent(
 
     name = _unique("alias-rt")
     await execute_query(
-        "CREATE entity SET canonical_name = $n, name = $n, "
+        "CREATE entity SET canonical_name = $n, name_key = string::lowercase(string::trim($n)), name = $n, "
         "entity_type = 'organization', embedding = [];",
         {"n": name},
         config=live_surrealdb,
