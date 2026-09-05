@@ -85,9 +85,17 @@ MISSES), and three of the errors are siblings with no subsumption between them.
 What the data does support is narrower and still the point: **the largest single
 class of error is a qualified concept absorbed into its own head noun** —
 `coöperatief wonen` into `wonen`, `Versterken regionale samenwerking` into
-`Regionale samenwerking`, the Staatssecretaris into IenW. **Eight of the
-fourteen** — a majority, not a plurality — and the same shape PC.2 removed 29
+`Regionale samenwerking`, `toegankelijkheid … en bijscholing` into
+`toegankelijkheid naar opleidingen`. **Five of the fourteen — the largest single
+class**, the next being `sibling` at three, and the same shape PC.2 removed 29
 affixes to avoid.
+
+A draft of this sentence said eight and "a clear majority", by folding in the
+organ-of, member-of and predecessor rows that the measurement's own table labels
+separately. Review named that as one move appearing three times in this phase —
+widening a class boundary, reading a count off a display, taking a rate over the
+wrong denominator — each making a claim larger than the data and none of them
+changing the conclusion.
 
 A second correction was needed to get there: three of the six merges the first
 count called defensible were classified from a 40-character console line, and

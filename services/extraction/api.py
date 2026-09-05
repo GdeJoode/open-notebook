@@ -813,23 +813,33 @@ async def get_entities(
     offset: int = 0,
 ):
     """List entities with optional type filter."""
-    where = f"WHERE status = '{status}'"
+    # BOUND, not interpolated. `status` and `type` are user-supplied strings that
+    # arrive unauthenticated through `services_proxy`, and an earlier version
+    # spliced them into a quoted literal — so `?status=active'; REMOVE TABLE
+    # entity; --` became a second statement. These are plain VALUES, not record
+    # ids or table names, so SurrealDB binds them and no interpolation is needed
+    # at all; the record-id validator exists only where binding is impossible.
+    where = "WHERE status = $status"
+    params: Dict[str, Any] = {"status": status}
     if type:
-        where += f" AND entity_type = '{type}'"
+        where += " AND entity_type = $entity_type"
+        params["entity_type"] = type
 
     entities = await _db_query(
         f"SELECT id, canonical_name, entity_type, description, confidence, "
         f"pagerank, community_id, array::len(source_documents) AS source_count "
         f"FROM entity {where} "
         f"ORDER BY entity_type, canonical_name "
-        f"LIMIT {limit} START {offset};"
+        f"LIMIT {limit} START {offset};",
+        params,
     )
-    total = await _db_query(f"SELECT count() FROM entity {where} GROUP ALL;")
+    total = await _db_query(f"SELECT count() FROM entity {where} GROUP ALL;", params)
     total_count = total[0].get("count", 0) if total else 0
 
     # Entity type counts
     type_counts = await _db_query(
-        f"SELECT entity_type, count() AS cnt FROM entity {where} GROUP BY entity_type;"
+        f"SELECT entity_type, count() AS cnt FROM entity {where} GROUP BY entity_type;",
+        params,
     )
 
     return {
@@ -1013,11 +1023,15 @@ async def deduplicate(
     """
     t0 = time.time()
 
+    # BOUND, not interpolated — `entity_type` is a user-supplied string reaching
+    # here unauthenticated through `services_proxy`.
     where = "WHERE status = 'active'"
+    params: Dict[str, Any] = {}
     if entity_type:
-        where += f" AND entity_type = '{entity_type}'"
+        where += " AND entity_type = $entity_type"
+        params["entity_type"] = entity_type
 
-    entities = await _db_query(f"SELECT * FROM entity {where};")
+    entities = await _db_query(f"SELECT * FROM entity {where};", params)
 
     if len(entities) < 2:
         return DeduplicateResponse(
@@ -1302,10 +1316,13 @@ async def validate_endpoint(
 
     t0 = time.time()
 
+    # BOUND, not interpolated — see `GET /entities`.
     where = "WHERE status = 'active'"
+    params: Dict[str, Any] = {}
     if entity_type:
-        where += f" AND entity_type = '{entity_type}'"
-    entities = await _db_query(f"SELECT * FROM entity {where};")
+        where += " AND entity_type = $entity_type"
+        params["entity_type"] = entity_type
+    entities = await _db_query(f"SELECT * FROM entity {where};", params)
 
     if not entities:
         return {"message": "No entities to validate", "total": 0}

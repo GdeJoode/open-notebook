@@ -102,6 +102,45 @@ def test_the_validator_rejects_what_it_must() -> None:
         assert not pattern.match(bad), f"ACCEPTED an injection shape: {bad!r}"
 
 
+
+#: Names that cannot carry SurrealQL because FastAPI has already coerced them.
+#: `depth`, `limit` and `offset` are `int`-typed in every signature that takes
+#: them; a non-numeric value is rejected with a 422 before the handler runs.
+_INT_TYPED = frozenset({"depth", "limit", "offset"})
+
+#: Names that hold a QUERY FRAGMENT rather than a value. These are in scope: a
+#: fragment is safe only if it was assembled by binding, never by interpolation.
+_FRAGMENTS = frozenset({"where"})
+
+
+def _fragment_is_parameterised(scope: ast.AST, name: str) -> bool:
+    """Was this fragment built without interpolating anything into it?
+
+    Every assignment and augmented assignment to `name` inside the function must
+    be a plain string. One f-string means a value was spliced into SurrealQL —
+    which is the whole defect, wherever the fragment is later used.
+    """
+    for node in ast.walk(scope):
+        target = None
+        if isinstance(node, ast.Assign):
+            target = next(
+                (t.id for t in node.targets if isinstance(t, ast.Name)), None
+            )
+            value = node.value
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            target = node.target.id
+            value = node.value
+        else:
+            continue
+        if target != name:
+            continue
+        if isinstance(value, ast.JoinedStr) and any(
+            isinstance(p, ast.FormattedValue) for p in value.values
+        ):
+            return False
+    return True
+
+
 def _functions(tree: ast.Module) -> List[ast.AST]:
     return [
         n for n in ast.walk(tree)
@@ -182,7 +221,24 @@ def test_every_id_interpolated_into_a_query_was_validated() -> None:
             if not _QUERYISH.search(literal):
                 continue
             for name in _interpolated_names(node):
-                if name in ("depth", "limit", "offset", "where"):
+                if name in _INT_TYPED:
+                    continue
+                if name in validated:
+                    continue
+                # A FRAGMENT is not a value. `where` used to sit on the skip list
+                # beside the int-typed names, and it was the one entry that
+                # needed checking: it is a query fragment assembled from
+                # user-supplied `status` / `entity_type` strings, so exempting it
+                # hid a second injection family in the very file the record-id
+                # fix had just closed. A fragment is in scope, and it passes only
+                # by containing no interpolation of its own.
+                if name in _FRAGMENTS:
+                    if _fragment_is_parameterised(scope, name):
+                        continue
+                    offenders.append(
+                        f"api.py:{node.lineno}: the query fragment `{name}` is "
+                        f"built by interpolating a value rather than binding it"
+                    )
                     continue
                 if name in _MODEL_VALIDATED:
                     continue

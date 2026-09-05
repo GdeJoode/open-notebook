@@ -504,28 +504,43 @@ authority lookup solving.
 
 ### G4. What the classification supports
 
-> **A qualified concept and its head noun merged as one entity: 8 of the 14
-> errors.** `coöperatief wonen` / `wonen`; `Versterken regionale samenwerking` /
+> **A qualified concept and its head noun merged as one entity: 5 of the 14
+> errors** — `coöperatief wonen` / `wonen`; `Versterken regionale samenwerking` /
 > `Regionale samenwerking`; `toegankelijkheid … en bijscholing` /
-> `toegankelijkheid …`; `Behouden … van talenten` / `… naar de Regio`;
-> `Sociaal-emotionele ontwikkeling` / `… van jongeren`; the Staatssecretaris /
-> IenW; `ministeries van het Rijk: VRO` / VRO; and VROM / VRO.
+> `toegankelijkheid naar opleidingen`; `Behouden … van talenten` / `… naar de
+> Regio`; `Sociaal-emotionele ontwikkeling` / `… van jongeren`. **The largest
+> single class** — the next is `sibling` at 3 — and the same shape PC.2
+> identified for organisations and removed 29 affixes to avoid.
 
-A clear majority, in both directions (sometimes the qualified form absorbed the
-head, sometimes the reverse — which is itself telling: the resolver has no notion
-of which is broader). It is the same shape PC.2 identified for organisations and
-removed 29 affixes to avoid, appearing again for topics.
+*An earlier version of this paragraph said "8 of the 14" and "a clear majority",
+and reached that by folding in three rows the table above labels differently:
+`organ-of` (a Staatssecretaris is not a qualified form of a ministry — its head
+noun is "Staatssecretaris"), `member-of` (a list containing VRO is not a
+qualification of VRO) and `predecessor` (an abolished organisation is not a
+qualified form of its successor). Review named it as the third appearance of one
+move: **sweeping distinct relation types into a single class to make a claim
+bigger.* G1 was a number over the wrong denominator, G3 a classification off a
+truncated console, and this a class boundary widened after the fact. All three
+make a claim larger than the data, and none of them changes the recommendation —
+which is what makes them easy to write and worth catching.*
+
+Note the direction is not consistent even within those five: sometimes the
+qualified form absorbed the head, sometimes the head absorbed the qualified form.
+The resolver has no notion of which is broader, and that is the point — a
+similarity score cannot express subsumption, only proximity.
 
 The three sibling cases are a different and harder problem: `Arbeidsmarkt en
 Economie` and `Economie, Onderwijs en Arbeidsmarkt` are neither the same nor one
 inside the other, and no relation type in this graph expresses "overlapping
-compound topic". A relation output would handle the first class and not the
-second.
+compound topic". So a subsumption output would handle 5 of the 14; the three
+siblings and the three relation-typed errors (organ-of, member-of, predecessor)
+would still need somewhere else to go, and one is not a relation at all but an
+extraction error.
 
 So the recommendation is unchanged — stage 10 off until its output has a
 destination — and the destination is smaller than "relations": subsumption for
-the qualified/head class, and a curator for the rest. With a human reading the
-queue daily or weekly, that second half is a real route rather than a bin.
+the largest class, and a curator for the rest. With a human reading the queue
+daily or weekly, that second half is a real route rather than a bin.
 
 ### G5. The same defect, twice, one section apart
 

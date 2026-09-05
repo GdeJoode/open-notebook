@@ -11,6 +11,20 @@ The guard is DERIVED, not sampled: it finds every `CREATE entity` in production
 source by AST/regex and asserts each supplies `name_key` from
 `normalize_entity_name`. A writer added later is covered by existing.
 
+DECLARED LIMITS, found by review against the structural rewrite and left open
+because no writer in the tree has these shapes:
+
+* two `CREATE … SET` statements in one string — the first vouches for the second,
+  because `_set_body` stops at the first `;`;
+* `name_key` assigned only inside a nested subquery in the SET body;
+* a lookup written as `UPDATE entity … WHERE canonical_name = $n` (the lookup
+  guard treats only `SELECT` as a lookup);
+* `WHERE canonical_name = $n OR name_key = $k` — an identity term anywhere in the
+  clause satisfies it, even in an OR branch;
+* `FROM type::table('entity')` rather than `FROM entity`;
+* SQL assembled into a variable before the call, which is invisible to both
+  guards.
+
 Test fixtures are deliberately out of scope. They use a SurrealQL-side
 `string::lowercase(string::trim(...))`, which equals `normalize_entity_name` for
 names without a leading article or a curated org alias — true of invented fixture
@@ -130,8 +144,16 @@ _WHERE_CLAUSE = re.compile(
 
 
 def _assigns(clause: str, column: str) -> bool:
-    """Is `column` given a value here — not merely mentioned?"""
-    return bool(re.search(rf"(?<![_a-zA-Z]){re.escape(column)}\s*=", clause))
+    """Is `column` given a value here — not merely mentioned, not compared?
+
+    `=` and not `==`: review pointed out that `SET flag = (name_key == $k)`
+    satisfied the previous predicate, which both guards rest on. SurrealQL
+    compares with `==` (and `!=`, `<=`, `>=`), so a lookahead excluding a second
+    `=` is the difference between an assignment and a test.
+    """
+    return bool(
+        re.search(rf"(?<![_a-zA-Z!<>=]){re.escape(column)}\s*=(?!=)", clause)
+    )
 
 
 def _set_body(sql: str) -> str:
@@ -233,7 +255,11 @@ def find_identity_violations(path: str, source: str) -> List[str]:
         # ask whether the column is ASSIGNED rather than whether the word
         # appears: `CREATE entity SET canonical_name = $n RETURN id, name_key`
         # mentions it in a projection and sets nothing.
-        if re.search(r"\bCONTENT\b", sql, re.I):
+        # `CONTENT` as a CLAUSE, not as a column name. `\bCONTENT\b` matched
+        # `CREATE entity SET content = $c, …, name_key = $k` and routed a correct
+        # writer to the payload branch, refusing it with a message about a
+        # payload it does not have. The clause is always `CONTENT $param`.
+        if re.search(r"\bCONTENT\s+\$\w+", sql, re.I):
             states_identity = "name_key" in _content_payload_keys(node, sql)
             where_it_should_be = "the CONTENT payload"
         else:
@@ -573,3 +599,28 @@ def test_the_guards_still_accept_the_real_writers() -> None:
         source = path.read_text(encoding="utf-8")
         assert not find_identity_violations(rel, source), f"identity guard: {rel}"
         assert not find_lookup_violations(rel, source), f"lookup guard: {rel}"
+
+
+def test_a_comparison_is_not_an_assignment() -> None:
+    """`==` satisfied the predicate both guards rest on (review, round 3)."""
+    assert _assigns("SET name_key = $k", "name_key")
+    assert not _assigns("SET flag = (name_key == $k)", "name_key")
+    assert not _assigns("WHERE name_key != $k", "name_key")
+    assert not _assigns("WHERE name_key >= $k", "name_key")
+
+
+def test_a_column_named_content_is_not_a_CONTENT_clause() -> None:
+    """A correct SET writer must not be routed to the payload branch.
+
+    `\\bCONTENT\\b` matched the column and refused correct code with a message
+    about a payload the statement does not have.
+    """
+    src = (
+        "async def w(name, c):\n"
+        "    await execute_query(\n"
+        '        "CREATE entity SET content = $c, canonical_name = $n, '
+        'name_key = $k",\n'
+        '        {"c": c, "n": name, "k": normalize_entity_name(name)},\n'
+        "    )\n"
+    )
+    assert not find_identity_violations("content-column.py", src)
