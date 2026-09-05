@@ -1,0 +1,58 @@
+-- ============================================================================
+-- Migration 79: `name_key` — identity, separate from the display name (PC.3).
+--
+-- THE DEFECT. `upsert_entity` looks up on `(canonical_name, entity_type)`, the
+-- UNIQUE index from migration 39, and `entity_persistence_service` sets
+-- `canonical_name` to the RAW surface form. So `Brede Welvaart` and
+-- `brede welvaart` are two rows — not because cross-document resolution is off,
+-- but because the write key is unnormalised. Enabling resolution leaves every
+-- pair the resolver misses, and its candidate fetch is capped, so it misses some
+-- by construction.
+--
+-- `canonical_name` stays the DISPLAY form — the curator queue, the exports and
+-- the graph all render it. `name_key` carries
+-- `shared.utils.name_normalizer.normalize_entity_name(...)` and takes the
+-- identity role. PC.2 drew that distinction and named this function as the
+-- identity rule, as against `fold_for_comparison` for comparison.
+--
+-- WHY THIS REFUSES ON A POPULATED TABLE. The value cannot be computed here:
+-- `normalize_entity_name` is Python — it strips leading articles, canonicalises
+-- documented spelling variants and expands curated org aliases — and a migration
+-- body is SurrealQL. Two consequences, both measured against a container rather
+-- than assumed:
+--
+--   * A UNIQUE index treats NONE as a VALUE. Two rows with `name_key = NONE` and
+--     the same `entity_type` collide ("Database index already contains
+--     [NONE, 'org']"), so adding the column nullable and backfilling afterwards
+--     would reject every second row per type. The column must be populated
+--     before the index exists.
+--   * `THROW` inside `IF { }` does surface: the runner routes bodies through
+--     `execute_transaction`, which inspects every statement, so a refusal rolls
+--     the migration back and does not bump the version. (The plain
+--     `execute_query` seam would have swallowed it — that path returns only the
+--     first statement's result.)
+--
+-- So a populated database is told to run `scripts/backfill_name_key.py` first.
+-- That tool computes the keys in Python, and REFUSES when two rows normalise to
+-- one key rather than merging them: merging is destructive and is a curator's
+-- decision, for which PC.2 shipped the door (`fold_equal`, same type, auto-merge
+-- band). A migration that silently merged two entities would be the exact
+-- failure PC.6 spent five review rounds making unreachable.
+--
+-- The old `(canonical_name, entity_type)` index is KEPT. It is strictly weaker
+-- than the new one — one display name always maps to one key, while many display
+-- names may map to one key — so it costs nothing and keeps existing readers
+-- honest.
+-- ============================================================================
+
+LET $unkeyed = (SELECT count() FROM entity WHERE name_key = NONE GROUP ALL)[0].count ?? 0;
+IF $unkeyed > 0 {
+    THROW "migration 79 refuses: " + <string> $unkeyed + " entity row(s) have no "
+        + "`name_key`. It cannot be computed in SurrealQL — run "
+        + "`uv run python scripts/backfill_name_key.py` first. That tool reports "
+        + "any rows that normalise to the same key instead of merging them; "
+        + "resolve those through the curator queue, then re-run migrations.";
+};
+
+DEFINE FIELD IF NOT EXISTS name_key ON entity TYPE string;
+DEFINE INDEX IF NOT EXISTS idx_entity_name_key ON entity FIELDS name_key, entity_type UNIQUE;

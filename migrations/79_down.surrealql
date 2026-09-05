@@ -1,0 +1,11 @@
+-- ============================================================================
+-- Down for migration 79: drop the identity index and column.
+--
+-- The `(canonical_name, entity_type)` UNIQUE index from migration 39 is
+-- untouched and still enforced, so the table keeps a uniqueness guarantee — a
+-- weaker one, under which case variants are again two rows. That is the state
+-- migration 79 exists to end.
+-- ============================================================================
+
+REMOVE INDEX IF EXISTS idx_entity_name_key ON entity;
+REMOVE FIELD IF EXISTS name_key ON entity;

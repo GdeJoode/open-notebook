@@ -1,0 +1,178 @@
+"""`name_key` is identity; `canonical_name` is display (PC.3, migration 79).
+
+The defect: `upsert_entity` keys on `(canonical_name, entity_type)` with the raw
+surface form, so `Brede Welvaart` and `brede welvaart` are two rows regardless of
+whether cross-document resolution runs.
+
+Every fact these tests rest on was measured against a container rather than
+assumed, because two of them are counter-intuitive:
+
+* a UNIQUE index treats NONE as a **value**, so a nullable column plus a later
+  backfill would reject every second row per type;
+* `THROW` inside `IF { }` surfaces only because the runner routes bodies through
+  `execute_transaction`; the plain `execute_query` seam returns the first
+  statement's result and swallows the rest.
+"""
+
+from __future__ import annotations
+
+import uuid
+
+import pytest
+from shared.utils.name_normalizer import normalize_entity_name
+from surrealdb_service.config import SurrealDBConfig
+from surrealdb_service.connection import execute_query, execute_transaction
+from surrealdb_service.testing import fixtures as fx
+
+
+def _migration(version: int, *, down: bool = False) -> str:
+    from surrealdb_service.migrations import AsyncMigration
+
+    suffix = "_down" if down else ""
+    return AsyncMigration.from_file(
+        fx._MIGRATIONS_DIR / f"{version}{suffix}.surrealql"
+    ).sql
+
+
+async def _entity(config, name: str, etype: str = "organization") -> str:
+    rows = await execute_query(
+        "CREATE entity SET canonical_name = $n, name = $n, entity_type = $t, "
+        "confidence = 0.5, embedding = [], name_key = $k RETURN id;",
+        {"n": name, "t": etype, "k": normalize_entity_name(name)},
+        config,
+    )
+    return str(rows[0]["id"])
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_case_variants_cannot_both_exist(live_surrealdb: SurrealDBConfig) -> None:
+    """The point of the phase, at the storage layer.
+
+    Before migration 79 both of these are accepted, because the UNIQUE index is on
+    the raw `canonical_name`.
+    """
+    stem = f"Brede Welvaart {uuid.uuid4().hex[:6]}"
+    await _entity(live_surrealdb, stem)
+
+    with pytest.raises(Exception) as excinfo:
+        await _entity(live_surrealdb, stem.lower())
+    assert "idx_entity_name_key" in str(excinfo.value)
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_the_display_name_survives(live_surrealdb: SurrealDBConfig) -> None:
+    """`canonical_name` is not normalised — the curator and the exports read it.
+
+    The whole reason for a second column rather than normalising in place.
+    """
+    name = f"Gemeente Súdwest-Fryslân {uuid.uuid4().hex[:6]}"
+    row_id = await _entity(live_surrealdb, name)
+    rows = await execute_query(
+        f"SELECT canonical_name, name_key FROM {row_id};", config=live_surrealdb
+    )
+    assert rows[0]["canonical_name"] == name
+    assert rows[0]["name_key"] == normalize_entity_name(name)
+    assert rows[0]["name_key"] != name
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_the_same_key_under_two_types_is_not_a_collision(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """The index is on `(name_key, entity_type)`, and that is deliberate.
+
+    PC.2 measured names the graph holds twice under two types and routed them to
+    a curator as `fold_equal_cross_type`, review-only, precisely because a
+    machine must not decide that one. A UNIQUE index on `name_key` alone would
+    decide it at write time.
+    """
+    stem = f"Regio Deal {uuid.uuid4().hex[:6]}"
+    await _entity(live_surrealdb, stem, etype="programme")
+    await _entity(live_surrealdb, stem, etype="topic")  # must not raise
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_the_migration_refuses_on_an_unkeyed_row(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """The refusal, in the state it claims to prevent — not one of that shape.
+
+    Forged the way migrations 61/64/65's tests forge drift: make the column
+    nullable, create a row without a key, then re-run the real migration body
+    through the real runner path. Asserting on a hand-written THROW would prove
+    nothing about migration 79.
+    """
+    await execute_query(
+        "DEFINE FIELD OVERWRITE name_key ON entity TYPE option<string>;",
+        config=live_surrealdb,
+    )
+    await execute_query(
+        "CREATE entity SET canonical_name = $n, name = $n, entity_type = 'org', "
+        "confidence = 0.5, embedding = [], name_key = NONE;",
+        {"n": f"unkeyed-{uuid.uuid4().hex[:8]}"},
+        live_surrealdb,
+    )
+    try:
+        with pytest.raises(RuntimeError) as excinfo:
+            await execute_transaction(_migration(79), config=live_surrealdb)
+        message = str(excinfo.value)
+        assert "migration 79 refuses" in message
+        assert "backfill_name_key.py" in message, "the refusal must name the fix"
+        assert "curator queue" in message
+    finally:
+        await execute_query(
+            "DELETE entity WHERE name_key = NONE;", config=live_surrealdb
+        )
+        await execute_query(
+            "DEFINE FIELD OVERWRITE name_key ON entity TYPE string;",
+            config=live_surrealdb,
+        )
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_the_migration_applies_when_every_row_is_keyed(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """The counterweight: a refusal that fires on a clean database is a blocker.
+
+    Re-applying the real body over an already-migrated table must be a no-op,
+    which is also what makes the migration safe to re-run after a backfill.
+    """
+    await _entity(live_surrealdb, f"Keyed {uuid.uuid4().hex[:6]}")
+    await execute_transaction(_migration(79), config=live_surrealdb)
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_down_leaves_the_table_usable(live_surrealdb: SurrealDBConfig) -> None:
+    """And the migration-39 index still guards, weakly, after a rollback."""
+    name = f"After down {uuid.uuid4().hex[:6]}"
+    try:
+        await execute_transaction(_migration(79, down=True), config=live_surrealdb)
+        await execute_query(
+            "CREATE entity SET canonical_name = $n, name = $n, "
+            "entity_type = 'org', confidence = 0.5, embedding = [];",
+            {"n": name},
+            live_surrealdb,
+        )
+        with pytest.raises(Exception) as excinfo:
+            await execute_query(
+                "CREATE entity SET canonical_name = $n, name = $n, "
+                "entity_type = 'org', confidence = 0.5, embedding = [];",
+                {"n": name},
+                live_surrealdb,
+            )
+        assert "idx_entity_name_type" in str(excinfo.value)
+    finally:
+        # Rows created while the column was gone have no key, so re-applying 79
+        # would refuse — which is the migration working, not a fault. The test
+        # clears its own rows before restoring the state it borrowed.
+        await execute_query(
+            "DELETE entity WHERE canonical_name = $n;", {"n": name}, live_surrealdb
+        )
+        await execute_transaction(_migration(79), config=live_surrealdb)
