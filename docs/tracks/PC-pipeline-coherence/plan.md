@@ -395,8 +395,16 @@ API route, MCP tool, CLI or frontend reads either table. Meanwhile
 
 ## PC.6 — Configuration that expresses one intent — ~1d
 
-**Status: DONE (review pending)** — `feature/track-pc6-config-coherence`.
+**Status: technically signed off, awaiting the owner's merge** —
+`feature/track-pc6-config-coherence`, 17 commits, five review rounds
+(3 blockers + 9 majors → 2 + 5 → 0 + 1 → 0 + 0 → 0 + 0).
 Report: [`phase-PC.6-report.md`](./phase-PC.6-report.md).
+Review: [`reviews/phase-PC.6-attempts-1-5.md`](./reviews/phase-PC.6-attempts-1-5.md).
+
+The reviewer's sign-off is technical and explicitly not consent to merge; that is
+the repository owner's call. Nothing was verified end-to-end against a corpus —
+`staging` was emptied for real data — so the first real extraction after this
+merges is the first real test of it.
 
 **The finding (review R1).** `ENABLE_CONCEPT_ALIGNMENT=true` did nothing in the
 measured run because alignment classifies only entities KG resolution marked
