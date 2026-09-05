@@ -13,8 +13,12 @@ from shared.models.entity import Entity, Relation
 from shared.models.export import ExportFilter
 from shared.utils.name_normalizer import normalize_entity_name
 
-from surrealdb_service.config import SurrealDBConfig, get_config
-from surrealdb_service.connection import ensure_record_id, execute_query
+from surrealdb_service.config import SurrealDBConfig
+from surrealdb_service.connection import (
+    ensure_record_id,
+    execute_query,
+    get_pool,
+)
 
 
 def _union_preserve_order(
@@ -59,31 +63,33 @@ class IdentityColumnMissing(RuntimeError):
 async def _assert_identity_column(config: Any) -> None:
     """Fail loudly, once per database, when `name_key` is not declared.
 
-    THE DATABASE IS ASKED, NOT THE CONFIG. An earlier version keyed this on
-    `config.namespace/config.database`, which review showed to be unsound:
-    `get_pool(config)` builds the global pool once and ignores the argument
-    afterwards, so `execute_query(q, p, config)` does NOT go where `config` says.
-    The check therefore inspected whichever database the pool was bound to,
-    reported a different one in its message, and cached the verdict under a third
-    — so one healthy database could vouch for a migration-31 one. Demonstrated
-    live before the fix.
+    THE CONNECTION IS ASKED, NOT THE CONFIG — and asked in-process. An earlier
+    version keyed this on `config.namespace/config.database`, which review showed
+    to be unsound: `get_pool(config)` builds the global pool once and ignores the
+    argument afterwards, so `execute_query(q, p, config)` does NOT go where
+    `config` says. The check inspected whichever database the pool was bound to,
+    reported a different one, and cached the verdict under a third — so one
+    healthy database could vouch for a migration-31 one.
 
-    `$session` reports the namespace and database the connection is actually on,
-    which is the only identity that means anything here. It also makes the cache
-    correct by construction: two configs that resolve to one connection share one
-    entry, which is what the pool actually does.
+    The fix after that asked the database (`RETURN $session.…`), which was correct
+    and cost a network round trip on EVERY upsert — ~20 ms each, so ~10 s on a
+    500-entity document — because the query ran before the cache was consulted.
+    Review measured it. `ConnectionPool.__init__` does `self.config = config or
+    get_config()`, so the pool already knows which database it is on and the same
+    answer is available without leaving the process.
 
     PC.6's rule applied to a repository: a step that cannot do its job says why
     rather than doing something else.
     """
-    session = await execute_query(
-        "RETURN {ns: $session.ns, db: $session.db};", None, config
-    )
-    row = session[0] if isinstance(session, list) and session else session
-    if isinstance(row, dict):
-        key = f"{row.get('ns')}/{row.get('db')}"
-    else:  # a driver that does not answer cannot be cached under a real name
-        key = "<unknown>"
+    pool = get_pool(config)
+    connected = getattr(pool, "config", None)
+    if connected is None:  # a pool shape this function does not understand
+        raise IdentityColumnMissing(
+            "cannot determine which database this connection is on, so the "
+            "identity column cannot be verified. Refusing rather than assuming — "
+            "an unverified write is how a re-ingest silently doubles a document."
+        )
+    key = f"{connected.namespace}/{connected.database}"
     if key in _IDENTITY_COLUMN_CHECKED:
         return
 

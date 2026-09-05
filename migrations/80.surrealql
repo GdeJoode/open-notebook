@@ -36,11 +36,22 @@
 -- are mechanisms wearing a kind's clothes; both are exact matches, and both
 -- already pass the mechanism in `method`. Nothing is lost by moving them.
 --
--- ORDER MATTERS, and this is migration 78's own lesson (via 61/64/65): a DEFAULT
--- does not backfill, and a strict type then rejects the WHOLE record on the next
--- UPDATE because a SCHEMAFULL update re-validates every field. So the rows are
--- repaired BEFORE the field is redefined, and the repair preserves the value it
--- replaces by folding it into `method` rather than discarding it.
+-- ORDER. The rows are repaired BEFORE the field is redefined, and the repair
+-- preserves the value it replaces by folding it into `method` rather than
+-- discarding it.
+--
+-- An earlier version of this header justified that with migration 78's lesson
+-- (via 61/64/65): a DEFAULT does not backfill, and a strict type then rejects the
+-- WHOLE record on the next UPDATE because a SCHEMAFULL update re-validates every
+-- field. Review TESTED that and it does not transfer to this shape — on a
+-- container at 79 with a NONE row and two out-of-vocabulary rows, the REVERSED
+-- order applies just as cleanly, because SurrealDB v2 does not re-evaluate an
+-- ASSERT on a field an UPDATE does not assign.
+--
+-- So the order here is DEFENSIVE, not required: it costs nothing, it is the same
+-- shape 61/64/65 established, and it stays correct if that engine behaviour ever
+-- changes. Stated as what it is, because the next migration would otherwise
+-- inherit a rule that is not true.
 -- ============================================================================
 
 -- NOTE: `NOT IN` in a WHERE clause, `INSIDE` in the ASSERT. SurrealDB v2

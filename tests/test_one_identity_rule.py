@@ -118,6 +118,61 @@ def _literal_text(node: ast.Call) -> str:
     )
 
 
+#: Clause extractors. Both guards previously asked whether a token APPEARED in
+#: the query; the questions are structural — "is the column ASSIGNED" and "is the
+#: lookup KEYED on it" — and a token can appear in a projection, a sibling dict or
+#: an unrelated clause without answering either. Review demonstrated all three.
+_SET_CLAUSE = re.compile(r"\bSET\b(?P<body>.*?)(?:\bRETURN\b|;|$)", re.I | re.S)
+_WHERE_CLAUSE = re.compile(
+    r"\bWHERE\b(?P<body>.*?)(?:\bLIMIT\b|\bORDER\b|\bGROUP\b|\bFETCH\b|;|$)",
+    re.I | re.S,
+)
+
+
+def _assigns(clause: str, column: str) -> bool:
+    """Is `column` given a value here — not merely mentioned?"""
+    return bool(re.search(rf"(?<![_a-zA-Z]){re.escape(column)}\s*=", clause))
+
+
+def _set_body(sql: str) -> str:
+    m = _SET_CLAUSE.search(sql)
+    return m.group("body") if m else ""
+
+
+def _where_body(sql: str) -> str:
+    m = _WHERE_CLAUSE.search(sql)
+    return m.group("body") if m else ""
+
+
+def _content_payload_keys(node: ast.Call, sql: str) -> Set[str]:
+    """Keys of the dict bound to the param the CONTENT clause names.
+
+    `CONTENT $data` means the payload is whatever `$data` holds, so the guard
+    resolves THAT key rather than walking every dict in the call: review showed a
+    sibling dict (`{"data": {...}, "audit": {"name_key": k}}`) vouching for a
+    payload that did not set the column.
+    """
+    m = re.search(r"\bCONTENT\s+\$(?P<param>\w+)", sql, re.I)
+    if not m:
+        return set()
+    param = m.group("param")
+    keys: Set[str] = set()
+    for arg in list(node.args[1:]) + [kw.value for kw in node.keywords]:
+        for sub in ast.walk(arg):
+            if not isinstance(sub, ast.Dict):
+                continue
+            for key, value in zip(sub.keys, sub.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == param
+                    and isinstance(value, ast.Dict)
+                ):
+                    for inner in value.keys:
+                        if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+                            keys.add(inner.value)
+    return keys
+
+
 def _enclosing_functions(tree: ast.AST) -> List[Tuple[int, int, ast.AST]]:
     spans: List[Tuple[int, int, ast.AST]] = []
     for node in ast.walk(tree):
@@ -174,12 +229,15 @@ def find_identity_violations(path: str, source: str) -> List[str]:
 
         sql = _sql_text(node)
         # SurrealQL names the columns in the statement for `SET`, and in the
-        # bound payload for `CONTENT $data`. Ask the right one of the two.
+        # bound payload for `CONTENT $data`. Ask the right one of the two, and
+        # ask whether the column is ASSIGNED rather than whether the word
+        # appears: `CREATE entity SET canonical_name = $n RETURN id, name_key`
+        # mentions it in a projection and sets nothing.
         if re.search(r"\bCONTENT\b", sql, re.I):
-            states_identity = "name_key" in _payload_keys(node)
+            states_identity = "name_key" in _content_payload_keys(node, sql)
             where_it_should_be = "the CONTENT payload"
         else:
-            states_identity = "name_key" in sql
+            states_identity = _assigns(_set_body(sql), "name_key")
             where_it_should_be = "the SET statement"
 
         if not states_identity:
@@ -328,7 +386,9 @@ def test_guard_ignores_prose_that_merely_names_the_statement() -> None:
 _ENTITY_LOOKUP = re.compile(r"\bSELECT\b[^;]*\bFROM\s+entity\b(?!_)[^;]*\bWHERE\b", re.I)
 #: The columns a lookup may key on. `name_key` is the identity; anything else is
 #: a DISPLAY form, and migration 79 made those two different keys.
-_DISPLAY_KEYS = ("canonical_name", "name")
+#: `hash_id` is `md5(f"{canonical_name}|{entity_type}")` — keying a lookup on it
+#: is keying on the display name with an extra step, which review pointed out.
+_DISPLAY_KEYS = ("canonical_name", "name", "hash_id")
 
 
 def find_lookup_violations(path: str, source: str) -> List[str]:
@@ -364,9 +424,15 @@ def find_lookup_violations(path: str, source: str) -> List[str]:
         sql = _sql_text(node)
         if not _ENTITY_LOOKUP.search(sql):
             continue
-        if "name_key" in sql:
+        where = _where_body(sql)
+        # Keyed on the identity? Then fine. Asking whether `name_key` appears
+        # ANYWHERE in the query was the previous rule, and review broke it with
+        # `SELECT id, name_key FROM entity WHERE canonical_name = $n` — the
+        # identity in the projection exempting a lookup on the display column,
+        # which is blocker B2 exactly.
+        if _assigns(where, "name_key"):
             continue
-        keyed_on = [k for k in _DISPLAY_KEYS if re.search(rf"\b{k}\s*=", sql)]
+        keyed_on = [k for k in _DISPLAY_KEYS if _assigns(where, k)]
         if keyed_on:
             problems.append(
                 f"{path}:{node.lineno}: this module CREATEs entities but looks "
@@ -430,3 +496,80 @@ def test_the_lookup_guard_accepts_a_module_that_only_reads() -> None:
         "    )\n"
     )
     assert not find_lookup_violations("reader.py", reader)
+
+
+#: The evasions review found in the NARROWED guards. Each satisfied the previous
+#: version by putting the token somewhere that does not answer the question.
+_EVASIONS = {
+    "B1 — the identity in the PROJECTION, the lookup on the display column": (
+        "async def w(name):\n"
+        "    rows = await execute_query(\n"
+        '        "SELECT id, name_key FROM entity WHERE canonical_name = $n LIMIT 1",\n'
+        '        {"n": name},\n'
+        "    )\n"
+        "    await execute_query(\n"
+        '        "CREATE entity SET canonical_name = $n, name_key = $k",\n'
+        '        {"n": name, "k": nk(name)},\n'
+        "    )\n",
+        "lookup",
+    ),
+    "A1 — `name_key` in a RETURN clause, assigned nowhere": (
+        "async def w(name):\n"
+        "    await execute_query(\n"
+        '        "CREATE entity SET canonical_name = $n RETURN id, name_key",\n'
+        '        {"n": name},\n'
+        "    )\n",
+        "identity",
+    ),
+    "A3 — a SIBLING dict vouching for the CONTENT payload": (
+        "async def w(name):\n"
+        "    await execute_query(\n"
+        '        "CREATE entity CONTENT $data RETURN id",\n'
+        '        {"data": {"canonical_name": name},\n'
+        '         "audit": {"name_key": nk(name)}},\n'
+        "    )\n",
+        "identity",
+    ),
+    "B2 — keyed on `hash_id`, the display name with an extra step": (
+        "async def w(name, h):\n"
+        "    rows = await execute_query(\n"
+        '        "SELECT id FROM entity WHERE hash_id = $h LIMIT 1", {"h": h}\n'
+        "    )\n"
+        "    await execute_query(\n"
+        '        "CREATE entity SET canonical_name = $n, name_key = $k",\n'
+        '        {"n": name, "k": nk(name)},\n'
+        "    )\n",
+        "lookup",
+    ),
+}
+
+
+def test_the_guards_catch_every_evasion_review_found() -> None:
+    """The narrowing must not have traded one blind spot for a smaller one.
+
+    Each of these satisfied the guard AFTER round 2's fix, because the token was
+    present in a place that does not answer the question — a projection, a RETURN
+    clause, a sibling dict, a derived column. B1 is the one that matters: it is
+    blocker B2 wearing a projection.
+    """
+    for label, (source, which) in _EVASIONS.items():
+        found = (
+            find_identity_violations(label, source)
+            if which == "identity"
+            else find_lookup_violations(label, source)
+        )
+        assert found, f"guard did NOT flag: {label}"
+
+
+def test_the_guards_still_accept_the_real_writers() -> None:
+    """The mirror: narrowing must not start flagging correct code either."""
+    for rel in (
+        "packages/surrealdb-service/src/surrealdb_service/repositories/entity.py",
+        "apps/app-main/src/app_main/services/vault_sync_service.py",
+        "services/extraction/api.py",
+        "packages/semantic-intelligence/scripts/test_pipeline.py",
+    ):
+        path = REPO_ROOT / rel
+        source = path.read_text(encoding="utf-8")
+        assert not find_identity_violations(rel, source), f"identity guard: {rel}"
+        assert not find_lookup_violations(rel, source), f"lookup guard: {rel}"

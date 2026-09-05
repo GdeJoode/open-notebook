@@ -75,7 +75,7 @@ curator can ask why two mentions are one entity and get an answer per source.
 Stage 10 goes back to off. Not because the stage is bad — because its answer has
 nowhere to go, and because the answer is mostly the wrong SHAPE.
 
-**18 merges across the active graph, 6 defensible and 12 not** — the full list
+**18 merges across the active graph, 4 defensible and 14 not** — the full list
 is in the measurement's section G, so the classification is checkable rather than
 asserted. An earlier draft of this report claimed "seven of the eight errors are
 correct RELATIONS recorded as identity"; review disproved it, and section G2
@@ -85,8 +85,15 @@ MISSES), and three of the errors are siblings with no subsumption between them.
 What the data does support is narrower and still the point: **the largest single
 class of error is a qualified concept absorbed into its own head noun** —
 `coöperatief wonen` into `wonen`, `Versterken regionale samenwerking` into
-`Regionale samenwerking`, the Staatssecretaris into IenW. Five of the twelve, and
-the same shape PC.2 removed 29 affixes to avoid.
+`Regionale samenwerking`, the Staatssecretaris into IenW. **Eight of the
+fourteen** — a majority, not a plurality — and the same shape PC.2 removed 29
+affixes to avoid.
+
+A second correction was needed to get there: three of the six merges the first
+count called defensible were classified from a 40-character console line, and
+their full names show real qualifiers the display had cut off. G1 exists because
+a number was read off a display; G3 did it again one section later, and review
+caught it. The tables now carry untruncated names so the split is checkable.
 
 The similarity signal is real. The destination is missing — and the repository had
 already said so twice without acting: PC.2 filed the office-of class as "an

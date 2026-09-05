@@ -449,7 +449,15 @@ Arbeidsmarkt en Economie            -> Economie, Onderwijs en Arbeidsmarkt    [0
 5/13 for the same 18 merges, because "roughly" was doing work a count should have
 done, and only 6 of the 13 `topic` merges were ever listed.
 
-### G3. The complete list, so the classification is checkable
+### G3. The complete list, with FULL names
+
+*Corrected after review. The first version of this table labelled three merges
+"same, truncated" / "same, case variant" — descriptions of the 40-character
+console the measurement printed, not of the entities. Three of the six
+"defensible" verdicts rested on that, and one error was misfiled as a merge that
+should not have happened. **G1 exists because a number was read off a display, and
+G3 did it again one section later.** The names below are the untruncated values
+from the database.*
 
 All 18 merges. `administrative_area` (52), `programme` (27) and `concept` (3)
 produce none.
@@ -458,52 +466,72 @@ produce none.
 
 | | merge | tier | score |
 |---|---|---|---|
-| ✅ | `VRO (Volkshuisvesting en Ruimtelijke Ordening)` → `VRO (ministerie van …)` | semantic | 0.961 |
-| ❌ narrower/broader | `VRO (VROM, …)` → `VRO (ministerie van …)` | semantic | 0.937 |
-| ❌ organ-of | `De Staatssecretaris van IenW` → `IenW (Infrastructuur en Waterstaat)` | semantic | 0.916 |
-| ❌ extraction error | `VRO (Ministerie van VWS)` → `Ministerie van VWS` | fuzzy | 0.889 |
-| ❌ member-of | `ministeries van het Rijk: VRO` → `Volkshuisvesting en Ruimtelijke Ordening (Ministerie)` | semantic | 0.930 |
+| ✅ | `VRO (Volkshuisvesting en Ruimtelijke Ordening)` → `VRO (ministerie van Volkshuisvesting en Ruimtelijke Ordening)` | semantic | 0.961 |
+| ❌ predecessor | `VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)` → `VRO (ministerie van …)` | semantic | 0.937 |
+| ❌ organ-of | `De Staatssecretaris van Infrastructuur en Waterstaat (IenW)` → `IenW (Infrastructuur en Waterstaat)` | semantic | 0.916 |
+| ❌ extraction error | `VRO (Ministerie van Volksgezondheid, Welzijn en Sport)` → `Ministerie van Volksgezondheid, Welzijn en Sport` | fuzzy | 0.889 |
+| ❌ member-of | `ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening` → `Volkshuisvesting en Ruimtelijke Ordening (Ministerie)` | semantic | 0.930 |
 
 **`topic` — 13 merges of 429 rows**
 
-| | merge | tier | score |
+| | merge (full names) | tier | score |
 |---|---|---|---|
 | ✅ | `Leven Lang Ontwikkelen (LLO)` → `Leven Lang Ontwikkelen` | semantic | 0.960 |
-| ✅ | `Programmalijn 3: Economie, Onderwijs en Arbe…` → same, truncated | fuzzy | 0.942 |
-| ✅ | `toegankelijkheid naar opleidingen en bijscho…` → same, truncated | semantic | 0.937 |
-| ✅ | `Behouden en aantrekken van talenten` → same, case variant | semantic | 0.940 |
-| ✅ | `Sociaal-emotionele ontwikkeling` → `sociaal-emotionele ontwikkeling va…` | semantic | 0.967 |
-| ❌ narrower/broader | `coöperatief wonen` → `wonen` | semantic | 0.936 |
-| ❌ narrower/broader | `Versterken regionale samenwerking` → `Regionale samenwerking` | semantic | 0.939 |
-| ❌ narrower/broader | `Krachtige Kernen: samenredzaamheid…` → `Programmalijn 1: Krachtige kernen:…` | semantic | 0.906 |
+| ✅ | `Programmalijn 3: Economie, Onderwijs en Arbeidsmarkt` → `Programmalijn 3: Economie, Onderwijs, Arbeidsmarkt` | fuzzy | 0.942 |
+| ✅ | `Krachtige Kernen: samenredzaamheid in de dorpen` → `Programmalijn 1: Krachtige kernen: samenredzaamheid in de dorpen` | semantic | 0.906 |
+| ❌ qualified/head | `toegankelijkheid naar opleidingen en bijscholing` → `toegankelijkheid naar opleidingen` | semantic | 0.937 |
+| ❌ qualified/head | `coöperatief wonen` → `wonen` | semantic | 0.936 |
+| ❌ qualified/head | `Behouden en aantrekken van talenten` → `behouden en aantrekken van talenten naar de Regio` | semantic | 0.940 |
+| ❌ qualified/head | `Sociaal-emotionele ontwikkeling` → `sociaal-emotionele ontwikkeling van jongeren` | semantic | 0.967 |
+| ❌ qualified/head | `Versterken regionale samenwerking` → `Regionale samenwerking` | semantic | 0.939 |
 | ❌ sibling | `Arbeidsmarkt en Economie` → `Economie, Onderwijs en Arbeidsmarkt` | semantic | 0.940 |
-| ❌ sibling | `ketenontwikkeling en innovatie` → `Intensiveren innovaties in onderwijs…` | semantic | 0.915 |
-| ❌ sibling | `Innovatie omgevingen` → `Intensiveren innovaties in onderwijs…` | semantic | 0.934 |
+| ❌ sibling | `ketenontwikkeling en innovatie` → `Intensiveren innovaties in onderwijs en beroepspraktijk` | semantic | 0.915 |
+| ❌ sibling | `Innovatie omgevingen` → `Intensiveren innovaties in onderwijs en beroepspraktijk` | semantic | 0.934 |
 | ❌ different words | `transformatie van het landelijk gebied` → `Transitie van het landelijk gebied` | fuzzy | 0.868 |
-| ❌ probably same | `strategische netwerkorganisatie in Noord-Holland` → `sterke strategische netwerkorganisatie…` | fuzzy | 0.885 |
+| ❌ arguable | `strategische netwerkorganisatie in Noord-Holland Noord` → `sterke strategische netwerkorganisatie in Noord-Holland Noord` | fuzzy | 0.885 |
 
-**The count, stated once: 18 merges, 6 defensible, 12 not.** Of the 12: four are
-narrower-into-broader, three are siblings with no subsumption between them, one
-is organ-of, one is member-of, one is an extraction error, one pairs two
-different words, and one is arguable either way.
+**The count, from the full names: 18 merges, 4 defensible, 14 not.** The three
+that changed verdict all differ by a real qualifier the console had cut off
+(`… naar de Regio`, `… van jongeren`, `en bijscholing`), and
+`Krachtige Kernen` moves the other way — it differs from its target only by the
+`Programmalijn 1: ` prefix, which is the same shape as the `Programmalijn 3` pair
+already marked ✅.
 
-### G4. What the classification actually supports
+The three ✅ that survive share one property worth naming: **each is a pair where
+one form carries a bracket, a prefix or a punctuation difference and nothing
+else.** That is a normalisation problem, and it is the class section D shows an
+authority lookup solving.
 
-Not "the errors are relations". The defensible claim is narrower and still
-useful:
+### G4. What the classification supports
 
-> **The largest single class of error is a qualified concept absorbed into its
-> own head noun** — `coöperatief wonen` into `wonen`, `Versterken regionale
-> samenwerking` into `Regionale samenwerking`, the Staatssecretaris into IenW.
-> Five of the twelve are that shape, and it is the same shape PC.2 identified for
-> organisations and removed 29 affixes to avoid.
+> **A qualified concept and its head noun merged as one entity: 8 of the 14
+> errors.** `coöperatief wonen` / `wonen`; `Versterken regionale samenwerking` /
+> `Regionale samenwerking`; `toegankelijkheid … en bijscholing` /
+> `toegankelijkheid …`; `Behouden … van talenten` / `… naar de Regio`;
+> `Sociaal-emotionele ontwikkeling` / `… van jongeren`; the Staatssecretaris /
+> IenW; `ministeries van het Rijk: VRO` / VRO; and VROM / VRO.
 
-The sibling cases are a different problem and a harder one: `Arbeidsmarkt en
-Economie` and `Economie, Onderwijs en Arbeidsmarkt` are neither the same nor
-one-inside-the-other, and no relation type in this graph expresses "overlapping
-compound topic". Routing similarity to a relation output would handle the first
-class and not the second.
+A clear majority, in both directions (sometimes the qualified form absorbed the
+head, sometimes the reverse — which is itself telling: the resolver has no notion
+of which is broader). It is the same shape PC.2 identified for organisations and
+removed 29 affixes to avoid, appearing again for topics.
+
+The three sibling cases are a different and harder problem: `Arbeidsmarkt en
+Economie` and `Economie, Onderwijs en Arbeidsmarkt` are neither the same nor one
+inside the other, and no relation type in this graph expresses "overlapping
+compound topic". A relation output would handle the first class and not the
+second.
 
 So the recommendation is unchanged — stage 10 off until its output has a
-destination — but the destination is smaller than "relations": it is subsumption
-for the narrower-into-broader class, and a curator's judgement for the rest.
+destination — and the destination is smaller than "relations": subsumption for
+the qualified/head class, and a curator for the rest. With a human reading the
+queue daily or weekly, that second half is a real route rather than a bin.
+
+### G5. The same defect, twice, one section apart
+
+G1 corrected a figure read off the wrong denominator. G3 then classified three
+merges from a 40-character console line. Both are the same failure the guards in
+this phase kept committing — **checking something adjacent to the claim** — and
+prose has no mutation test. The only mitigation applied here is the one review
+demonstrated: publish the raw values, so the next reader can check the
+classification instead of trusting it.
