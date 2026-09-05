@@ -327,6 +327,7 @@ async def run_filtering(
             EmbeddingDedupConfig,
             FilteringConfig,
             FuzzyDedupConfig,
+            KGResolutionConfig,
         )
 
         from app_main.dependencies import get_entity_extraction_service
@@ -345,6 +346,18 @@ async def run_filtering(
                 similarity_threshold=body.embedding_similarity_threshold,
             ),
             edge_prediction_enabled=body.edge_prediction_enabled,
+            # PC.3: state the choice rather than inherit a default three files
+            # away. This is the second production `FilteringConfig` and it set no
+            # `kg_resolution` at all, so a re-filter ran on whatever the dataclass
+            # happened to say — the silent state the phase was opened to end.
+            #
+            # OFF, matching the main extraction path, and for the same measured
+            # reason: stage 10's `kg_entity_id` has no consumer, so enabling it
+            # here would cost a candidate fetch plus Levenshtein and cosine per
+            # entity and change nothing. `RunFilteringRequest` deliberately does
+            # not expose it — an operator re-filtering a source should not be the
+            # one deciding whether an identity mechanism is wired.
+            kg_resolution=KGResolutionConfig(enabled=False),
         )
 
         result = await service.run_filtering_only(

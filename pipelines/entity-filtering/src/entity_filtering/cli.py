@@ -14,7 +14,7 @@ from pathlib import Path
 from loguru import logger
 from shared.models.extraction import ExtractionResult
 
-from entity_filtering.config import FilteringConfig
+from entity_filtering.config import FilteringConfig, KGResolutionConfig
 from entity_filtering.workflow import FilteringWorkflow
 
 
@@ -84,6 +84,13 @@ async def _run(args: argparse.Namespace) -> None:
             min_entity_length=args.min_entity_length,
             dedup_enabled=not args.no_dedup,
             dedup_similarity_threshold=args.dedup_threshold,
+            # PC.3: this branch is the CLI's OWN default — nobody chose it — so
+            # it states the choice instead of inheriting one. Off, matching the
+            # app: stage 10's verdict has no consumer, so running it costs a
+            # candidate fetch plus Levenshtein and cosine per entity and changes
+            # nothing. A `--config` file overrides everything here and is the
+            # operator's own decision.
+            kg_resolution=KGResolutionConfig(enabled=False),
         )
 
     # Load input

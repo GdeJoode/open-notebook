@@ -30,20 +30,62 @@ from __future__ import annotations
 
 import ast
 import inspect
-from typing import List
+from typing import List, Tuple
 
 from app_main.services import entity_extraction_service
 
 
-def _filtering_config_calls() -> List[ast.Call]:
-    tree = ast.parse(inspect.getsource(entity_extraction_service))
-    return [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and getattr(node.func, "id", "") == "FilteringConfig"
-        and node.keywords  # the bare `FilteringConfig()` fallback is a different site
-    ]
+def _filtering_config_calls() -> List[Tuple[str, ast.Call]]:
+    """Every production `FilteringConfig(...)` in the tree, with its file.
+
+    DERIVED, not sampled. An earlier version parsed only
+    `entity_extraction_service`, and review found a second production site —
+    `api/routers/sources_processing.py`, which builds the config for
+    `run_filtering_only` and sets no `kg_resolution` at all. A guard about "the
+    config the app builds" that reads one of the two files is exactly the shape
+    this track keeps rejecting elsewhere.
+    """
+    import subprocess
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    listed = subprocess.run(
+        ["git", "ls-files", "--", "*.py"],
+        cwd=repo, capture_output=True, text=True,
+    ).stdout.splitlines()
+
+    out: List[Tuple[str, ast.Call]] = []
+    for rel in listed:
+        if "/tests/" in rel or Path(rel).name.startswith("test_"):
+            continue
+        if "/src/" not in rel and not rel.startswith("services/"):
+            continue
+        try:
+            text = (repo / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "FilteringConfig(" not in text:
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "id", "") == "FilteringConfig"
+                and node.keywords  # the bare `FilteringConfig()` fallback differs
+            ):
+                continue
+            # DECLARED LIMIT: `FilteringConfig(**data)` is whatever the caller
+            # supplied — the CLI's `--config` JSON — and cannot be read from the
+            # source. That is the operator's own choice and not the silent
+            # default this guard exists to catch, so it is skipped rather than
+            # failed. Every call that names its keywords is in scope.
+            if any(kw.arg is None for kw in node.keywords):
+                continue
+            out.append((rel, node))
+    return out
 
 
 def test_the_app_states_the_kg_resolution_choice_explicitly() -> None:
@@ -51,10 +93,10 @@ def test_the_app_states_the_kg_resolution_choice_explicitly() -> None:
     calls = _filtering_config_calls()
     assert calls, "walker control: no keyword FilteringConfig(...) call found"
 
-    for call in calls:
+    for rel, call in calls:
         keywords = {k.arg for k in call.keywords}
         assert "kg_resolution" in keywords, (
-            f"the FilteringConfig at line {call.lineno} does not set "
+            f"the FilteringConfig at {rel}:{call.lineno} does not set "
             f"`kg_resolution` at all. Omitting it is how stage 10 sat at a "
             f"config default nothing set — the silent state PC.3 was opened to "
             f"end. State the choice, either way."
@@ -62,11 +104,11 @@ def test_the_app_states_the_kg_resolution_choice_explicitly() -> None:
         kg = next(k.value for k in call.keywords if k.arg == "kg_resolution")
         enabled = [k for k in getattr(kg, "keywords", []) if k.arg == "enabled"]
         assert enabled, (
-            f"line {call.lineno}: kg_resolution passed without an explicit "
+            f"{rel}:{call.lineno}: kg_resolution passed without an explicit "
             f"`enabled`, so the behaviour comes from a default three files away"
         )
         assert isinstance(getattr(enabled[0].value, "value", None), bool), (
-            f"line {call.lineno}: `enabled` must be a literal True or False"
+            f"{rel}:{call.lineno}: `enabled` must be a literal True or False"
         )
 
 
@@ -152,7 +194,7 @@ def test_re_enabling_requires_the_destination_that_is_missing() -> None:
     repo = Path(__file__).resolve().parents[3]
     enabled_anywhere = any(
         getattr(kw.value, "value", None) is True
-        for call in _filtering_config_calls()
+        for rel, call in _filtering_config_calls()
         for kg in [next((k.value for k in call.keywords if k.arg == "kg_resolution"), None)]
         if kg is not None
         for kw in getattr(kg, "keywords", [])
@@ -235,7 +277,7 @@ def test_the_alias_policy_is_not_restated_here() -> None:
 
     assert KGResolutionConfig().register_aliases is False
 
-    for call in _filtering_config_calls():
+    for rel, call in _filtering_config_calls():
         kg = next(
             (k.value for k in call.keywords if k.arg == "kg_resolution"), None
         )
@@ -243,6 +285,6 @@ def test_the_alias_policy_is_not_restated_here() -> None:
             continue
         restated = {k.arg for k in getattr(kg, "keywords", [])} & {"register_aliases"}
         assert not restated, (
-            f"line {call.lineno} restates {restated}; leave it to "
+            f"{rel}:{call.lineno} restates {restated}; leave it to "
             f"KGResolutionConfig so the policy lives in one place"
         )

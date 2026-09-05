@@ -38,7 +38,7 @@ review rounds making unreachable, reintroduced by the phase after it.
 `normalize_entity_name(canonical_name)`; migration 79 puts a UNIQUE index on
 `(identity_key, entity_type)` where `identity_key` is the name key for ACTIVE
 rows and the record id otherwise — so a retired row and a live row may share a
-name without competing. Three production writers derive it through the one rule,
+name without competing. Four production writers derive it through the one rule,
 and a statement-level guard says so.
 
 **Migration 79 refuses rather than merges.** The key cannot be computed in
