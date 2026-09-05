@@ -45,10 +45,30 @@ async def lifespan(_app: FastAPI):
     would produce findings nobody can act on.
     """
     try:
-        from config_coherence import BLOCK, check_routing, raise_if_blocking
+        from config_coherence import (
+            BLOCK,
+            _installed_ollama_models,
+            check_routing,
+            raise_if_blocking,
+        )
         from model_routing import _load_config
 
-        findings = check_routing(_load_config())
+        config = _load_config()
+        # PC.6 round 3: the probe is RUN. The first version called `check_routing`
+        # with no `installed=`, which means "skip the existence check" and emits an
+        # unconditional `ollama-unreachable` WARN — so this service reported a
+        # false alarm on every boot, about a runtime it reaches fine, while the
+        # model-existence half of the check never ran in the service that consumes
+        # those routes. `config_coherence`'s own docstring names that: a false
+        # alarm trains a reader to ignore the output.
+        base_url = (
+            config.get("providers", {}).get("ollama", {}).get("base_url")
+            or os.getenv("OLLAMA_URL")
+            or "http://localhost:11434"
+        )
+        findings = check_routing(
+            config, installed=_installed_ollama_models(base_url)
+        )
         for finding in findings:
             if finding.severity != BLOCK:
                 logger.warning(f"config coherence: {finding}")

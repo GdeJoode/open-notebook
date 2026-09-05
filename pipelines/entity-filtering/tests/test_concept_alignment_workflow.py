@@ -26,7 +26,6 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import pytest
-import pytest
 from entity_filtering.config import (
     ConceptAlignmentConfig,
     FilteringConfig,

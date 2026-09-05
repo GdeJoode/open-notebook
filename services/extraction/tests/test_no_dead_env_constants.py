@@ -53,13 +53,17 @@ def _reads_environment(node: ast.AST) -> bool:
             if name == "getenv":
                 return True
             # os.environ.get(...)
-            if (
-                isinstance(func, ast.Attribute)
-                and func.attr == "get"
-                and isinstance(func.value, ast.Attribute)
-                and func.value.attr == "environ"
+            if isinstance(func, ast.Attribute) and func.attr in (
+                "get", "setdefault", "pop"
             ):
-                return True
+                owner = func.value
+                # `os.environ.get(...)` and, after `from os import environ`,
+                # `environ.get(...)` — the bare-import spelling needed a Name
+                # branch as well as the Attribute one.
+                if isinstance(owner, ast.Attribute) and owner.attr == "environ":
+                    return True
+                if isinstance(owner, ast.Name) and owner.id == "environ":
+                    return True
         # os.environ["X"] / environ["X"]
         if isinstance(inner, ast.Subscript):
             value = inner.value
@@ -86,7 +90,27 @@ def _env_constants(tree: ast.AST) -> Dict[str, ast.AST]:
             elif isinstance(target, (ast.Tuple, ast.List)):
                 _bind(target.elts, statement)
 
-    for node in tree.body:
+    # Module level includes bindings nested in a module-level `if`/`try`/`for`/
+    # `with` — a conditional or fallback assignment is still a module constant.
+    # The first version walked `tree.body` only, so
+    # `try: X = os.getenv('A') except: X = '1'` was invisible.
+    statements: list = []
+
+    def _flatten(body) -> None:
+        for node in body:
+            statements.append(node)
+            for attr in ("body", "orelse", "finalbody"):
+                nested = getattr(node, attr, None)
+                if isinstance(nested, list) and not isinstance(
+                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    _flatten(nested)
+            for handler in getattr(node, "handlers", []) or []:
+                _flatten(handler.body)
+
+    _flatten(tree.body)
+
+    for node in statements:
         if isinstance(node, ast.AnnAssign):
             if node.value is not None and _reads_environment(node.value):
                 _bind([node.target], node)
@@ -184,6 +208,15 @@ _EVASIONS = {
     "bare getenv import": "from os import getenv\nX = getenv('A')\n",
     "walrus at module level": "import os\nif (X := os.getenv('A')):\n    pass\n",
     "wrapped in a cast": "import os\nX = int(os.getenv('A', '1'))\n",
+    "nested in a module-level if": (
+        "import os\nif os.getenv('MODE'):\n    X = os.getenv('A')\n"
+    ),
+    "nested in a module-level try": (
+        "import os\ntry:\n    X = os.getenv('A')\nexcept Exception:\n"
+        "    X = '1'\n"
+    ),
+    "bare environ import": "from os import environ\nX = environ.get('A')\n",
+    "environ.setdefault": "import os\nX = os.environ.setdefault('A', '1')\n",
 }
 
 
@@ -197,6 +230,18 @@ def test_the_detector_sees_every_spelling(shape: str) -> None:
     and `os.environ[...]` is not a Call at all.
     """
     assert "X" in _env_constants(ast.parse(_EVASIONS[shape])), shape
+
+
+def test_a_binding_inside_a_function_is_not_a_module_constant() -> None:
+    """The counterweight to flattening nested statements.
+
+    Widening to module-level `if`/`try` must not reach INTO function bodies: a
+    local that reads the environment and is used once is normal code, and
+    reporting it would make the guard cry wolf. `_flatten` stops at `FunctionDef`,
+    `AsyncFunctionDef` and `ClassDef` for that reason.
+    """
+    src = "import os\ndef f():\n    x = os.getenv('A')\n    return 1\n"
+    assert _env_constants(ast.parse(src)) == {}
 
 
 def test_a_value_that_is_used_is_not_reported() -> None:

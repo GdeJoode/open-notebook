@@ -150,6 +150,22 @@ which is a different question with a different owner. The alternative was to
 "decide" them here without the surface that would show whether the decision was
 right, which is how `FilteredResult` acquired four fields nobody reads.
 
+## The dead-knob class beyond PC.6's scope
+
+Measured during PC.6's review, recorded so the next phase can scope it rather than
+rediscover it. Same defect, other packages, non-test consumers only:
+
+| module | fields with no consumer |
+|---|---|
+| `pipelines/summarization/.../config.py` | 11 — `critic_model`, `expansion_tokens`, `max_branch_depth`, `max_correction_rounds`, `max_skeleton_points`, `max_summary_words`, `min_entity_mentions`, `num_density_rounds`, `top_k_sentences`, `topic_threshold`, `use_pca_fallback` |
+| `packages/ontology-manager/.../config.py` | `ontologies_dir` |
+
+PC.6 swept `entity_filtering` — a field-level rescan there now finds none — and
+declared the rest out of scope rather than doing it badly at the end of a phase.
+The two guards it built (`tests/test_compose_env_is_consumed.py` and the AST guard
+in `services/extraction/tests/`) are both scoped to what they were written for and
+say so in their docstrings; widening either is the natural home for this.
+
 ## Found by PC.2's adversarial review
 
 | finding | boundary | owner | note |

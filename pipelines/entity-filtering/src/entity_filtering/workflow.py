@@ -310,7 +310,6 @@ class FilteringWorkflow:
         in the same shape. A per-flag check catches the flags someone thought of.
         """
         from shared.config_coherence import (
-            ConfigurationError,
             check_feature_dependencies,
             raise_if_blocking,
         )
@@ -335,10 +334,7 @@ class FilteringWorkflow:
             outlier_detection_enabled=validation.outlier_detection_enabled,
             graph_centrality_enabled=validation.graph_centrality_enabled,
         )
-        try:
-            raise_if_blocking(findings)
-        except ConfigurationError:
-            raise
+        raise_if_blocking(findings)
 
     def set_existing_clusters(self, clusters: list[EntityCluster]) -> None:
         """Inject existing KG clusters for incremental resolution."""
@@ -692,12 +688,21 @@ class FilteringWorkflow:
         # the module entry point.
         orphan_cfg = self._config.orphan_connector
 
-        # Minor-1 fix (review attempt 1): when the operator enabled the
-        # stage but the caller forgot to pass any DI input, log a
-        # WARNING so the silent-skip doesn't hide a misconfiguration.
-        # The skip predicate below mixes truthiness (``source_id``) and
-        # None-checks (``chunks``, repos, caller); mirror that here so
-        # the WARNING fires exactly when the stage would skip.
+        # PC.6: enabled-but-skipped is a REFUSAL, not a warning.
+        #
+        # A previous review answered this with a WARNING ("Minor-1 fix"), and that
+        # is precisely the state this phase's acceptance criterion names as the
+        # failure: a flag that is on, does nothing, and leaves one line behind.
+        # It was also the most likely instance in a real run, because
+        # `OrphanConnectorConfig.enabled` defaulted to True while neither
+        # production call site passes `chunks`, `orphan_entity_repo` or
+        # `orphan_llm_caller` — so every extraction logged it.
+        #
+        # The default is now False, so the flag means what it says, and turning it
+        # on without the collaborators refuses. The check lives HERE rather than in
+        # `__init__` because these are `process()` arguments, not configuration:
+        # "the check cannot see it from where the check lives" is a reason to move
+        # the check, not a reason for the state to stay reachable.
         if orphan_cfg.enabled:
             missing: list[str] = []
             if not source_id:
@@ -709,10 +714,24 @@ class FilteringWorkflow:
             if orphan_llm_caller is None:
                 missing.append("orphan_llm_caller")
             if missing:
-                logger.warning(
-                    "Orphan-connector enabled but skipped: missing DI "
-                    "input(s): {missing}",
-                    missing=missing,
+                from shared.config_coherence import (
+                    BLOCK,
+                    ConfigurationError,
+                    Finding,
+                )
+
+                raise ConfigurationError(
+                    [
+                        Finding(
+                            BLOCK,
+                            "orphan-connector-without-inputs",
+                            "the orphan connector is enabled but the caller "
+                            f"supplied none of {missing}, so the stage would be "
+                            "skipped while reporting nothing",
+                            "pass the missing argument(s) to `process()`, or "
+                            "disable orphan_connector.enabled",
+                        )
+                    ]
                 )
 
         if (

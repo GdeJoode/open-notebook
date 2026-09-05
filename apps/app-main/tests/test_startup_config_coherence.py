@@ -119,3 +119,41 @@ async def test_the_lifespan_actually_calls_the_check_and_lets_it_refuse(
             pass
 
     assert calls == [1], "the lifespan did not call the coherence check"
+
+
+@pytest.mark.asyncio
+async def test_the_context_check_is_actually_called(monkeypatch) -> None:
+    """The wiring for `check_ollama_context`, not the function — M7.
+
+    Review found this reachable but unasserted: deleting the whole `try:` block
+    that calls it would have left every suite green, and on this deployment it
+    checks zero rows (the `model` table holds one NVIDIA row), so nothing observed
+    it in production either. That is the same hole M6 had, in the check built
+    BECAUSE the M.4 guard was inert.
+
+    Asserts it is called with what the model rows actually provide — a name/window
+    mapping — rather than merely that something ran.
+    """
+    seen: list = []
+
+    def _spy(declared, **_kwargs):
+        seen.append(declared)
+        return []
+
+    class _Row:
+        name = "llama3.1:8b-instruct-q4_0"
+        context_window = 32768
+
+    class _Repo:
+        async def get_by_provider(self, provider):
+            assert provider == "ollama"
+            return [_Row()]
+
+    monkeypatch.setattr("shared.config_coherence.check_ollama_context", _spy)
+    monkeypatch.setattr("app_main.dependencies.get_model_repo", lambda: _Repo())
+
+    await _check_configuration_coherence()
+
+    assert seen == [{"llama3.1:8b-instruct-q4_0": 32768}], (
+        "the startup path did not call check_ollama_context with the model rows"
+    )

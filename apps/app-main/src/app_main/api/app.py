@@ -91,6 +91,8 @@ async def _check_configuration_coherence() -> None:
     # the model does not bake means the packer sizes prompts the runtime will
     # truncate. Read from the rows rather than the YAML: YAML steps go through
     # `_call_ollama`, which does send it, and are not affected.
+    from shared.config_coherence import ConfigurationError
+
     try:
         from shared.config_coherence import check_ollama_context
 
@@ -102,7 +104,15 @@ async def _check_configuration_coherence() -> None:
             for r in rows
         }
         findings = findings + check_ollama_context(declared)
-    except Exception as exc:  # noqa: BLE001 — an unreadable model table is not a verdict
+    except ConfigurationError:
+        raise
+    except (OSError, LookupError, AttributeError, ValueError) as exc:
+        # Narrow, deliberately. `except Exception` here is the M6b shape: a
+        # signature change, a renamed `context_window`, or a repo rename would
+        # make this check vanish behind one warning — and this is the check built
+        # BECAUSE the M.4 guard was inert. An unreadable model table is not a
+        # verdict about the configuration, so those specific failures degrade;
+        # anything else is a bug and propagates.
         logger.warning(f"Could not check Ollama context windows: {exc}")
 
     for finding in findings:

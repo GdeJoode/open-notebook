@@ -4,17 +4,15 @@ import json
 from typing import Any, Dict, List
 
 import pytest
-
+from entity_filtering.config import FilteringConfig, OrphanConnectorConfig
+from entity_filtering.resolution import orphan_connector as _orphan_connector
+from entity_filtering.workflow import FilteringWorkflow
 from shared.models.extraction import (
     ExtractedEntity,
     ExtractedRelation,
     ExtractionResult,
     FilteredResult,
 )
-
-from entity_filtering.config import FilteringConfig, OrphanConnectorConfig
-from entity_filtering.resolution import orphan_connector as _orphan_connector
-from entity_filtering.workflow import FilteringWorkflow
 
 
 def _extraction_result(entities=None, relations=None, metadata=None):
@@ -406,62 +404,57 @@ class TestStage14OrphanConnector:
         ]
         assert orphan_relations == []
 
-    async def test_stage14_enabled_missing_di_logs_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Minor-1 (review attempt 1): missing DI inputs while enabled
-        emits a WARNING listing the missing fields.
+    async def test_stage14_enabled_missing_di_is_refused(self) -> None:
+        """PC.6 replaces the warning with a refusal, and this records the change.
 
-        Until the production caller threads all four inputs through, a
-        silent skip would hide the misconfiguration; the WARNING makes
-        it diagnosable from the logs.
+        This was `test_stage14_enabled_missing_di_logs_warning`, pinning a
+        "Minor-1 fix" from an earlier review: with the stage enabled and no DI
+        inputs, log a WARNING so the silent skip is diagnosable. That is exactly
+        the state PC.6's acceptance criterion names as the failure — a flag on,
+        doing nothing, one line behind — and it was the most likely instance in a
+        real run, because `enabled` defaulted to True while neither production
+        call site passes the three collaborators. Every extraction logged it.
 
-        loguru routes through the standard logging stack here via
-        ``loguru.logger`` -> root logger when ``caplog`` is in use; we
-        check both ``caplog.text`` and ``caplog.messages`` for the
-        substring to keep the assert robust to logger configuration.
+        The diagnostic content survives: all four missing names still reach
+        whoever hits this. Only the severity changed, and the default is now
+        False so the flag means what it says.
         """
-        from loguru import logger as loguru_logger
+        from shared.config_coherence import ConfigurationError
 
-        # Bridge loguru's WARNING to the standard logging stack so
-        # caplog can capture it.
-        import logging
-
-        class _PropagateHandler(logging.Handler):
-            def emit(self, record: logging.LogRecord) -> None:
-                logging.getLogger(record.name).handle(record)
-
-        sink_id = loguru_logger.add(
-            _PropagateHandler(),
-            level="WARNING",
-            format="{message}",
+        config = FilteringConfig(
+            orphan_connector=OrphanConnectorConfig(enabled=True)
         )
-        try:
-            config = FilteringConfig(
-                orphan_connector=OrphanConnectorConfig(enabled=True)
-            )
-            workflow = FilteringWorkflow(config=config)
-            extraction = _extraction_result(
-                entities=[_entity("Alice", "PERSON")],
-                relations=[],
-            )
+        workflow = FilteringWorkflow(config=config)
+        extraction = _extraction_result(
+            entities=[_entity("Alice", "PERSON")], relations=[]
+        )
 
-            with caplog.at_level(logging.WARNING):
-                # Pass NONE of the DI inputs.
-                await workflow.process(extraction)
-        finally:
-            loguru_logger.remove(sink_id)
+        with pytest.raises(ConfigurationError) as excinfo:
+            await workflow.process(extraction)
 
-        joined = "\n".join(caplog.messages) + "\n" + caplog.text
-        assert "Orphan-connector enabled but skipped" in joined
-        # All four fields should be flagged as missing.
+        message = str(excinfo.value)
+        assert "orphan-connector-without-inputs" in {
+            f.code for f in excinfo.value.findings
+        }
         for field in (
             "source_id",
             "chunks",
             "orphan_entity_repo",
             "orphan_llm_caller",
         ):
-            assert field in joined
+            assert field in message
+        assert "disable orphan_connector.enabled" in message
+
+    async def test_the_shipped_default_leaves_the_stage_off(self) -> None:
+        """The counterweight: the refusal must not fire on a default run.
+
+        `enabled` is False by default now, so a caller that passes no DI inputs —
+        which is what both production call sites do — proceeds normally.
+        """
+        workflow = FilteringWorkflow(config=FilteringConfig())
+        await workflow.process(
+            _extraction_result(entities=[_entity("Alice", "PERSON")], relations=[])
+        )
 
     async def test_orphan_relation_type_bypasses_ontology(self) -> None:
         """M3: orphan-confirmed relations bypass Stage 11 (ontology filter).

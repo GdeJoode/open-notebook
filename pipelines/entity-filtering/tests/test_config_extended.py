@@ -88,7 +88,6 @@ class TestEmbeddingDedupConfigDefaults:
         cfg = EmbeddingDedupConfig()
         assert cfg.similarity_threshold == 0.90
         assert cfg.k_candidates == 5
-        assert cfg.embedding_model is None
         assert cfg.use_faiss is True
 
 
@@ -142,9 +141,10 @@ class TestOntologyValidationConfigDefaults:
 
 
 class TestEdgePredictionConfigDefaults:
-    def test_disabled_by_default(self):
-        cfg = EdgePredictionConfig()
-        assert cfg.enabled is False
+    # `test_disabled_by_default` removed with `EdgePredictionConfig.enabled`
+    # (PC.6): the predictor read no such key and the real gate is
+    # `FilteringConfig.edge_prediction_enabled`, asserted below. The test pinned a
+    # flag that gated nothing.
 
     def test_defaults(self):
         cfg = EdgePredictionConfig()
@@ -201,7 +201,6 @@ class TestFilteringConfigSubConfigs:
         assert config.semantic.entity_linking_enabled is False
         assert config.kg_resolution.enabled is False
         assert config.ontology_validation.enabled is False
-        assert config.edge_prediction.enabled is False
 
     def test_sub_configs_can_be_passed_at_construction(self):
         syn = SyntacticConfig(remove_diacritics=True)

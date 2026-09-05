@@ -42,15 +42,27 @@ from typing import Any, Callable, Dict, List, Optional
 BLOCK = "block"
 WARN = "warn"
 
-#: Steps every run exercises, so a missing model there stops work outright.
-#: Everything else — `vlm`, `classification`, `summarization` — is reached only by
-#: a caller that asks for it, and an operator who never touches the VLM path must
-#: still be able to boot. Refusing startup over a model they will never load is
-#: the over-reach `check_feature_dependencies` already refuses to commit, and it
-#: is worst in the COMMON case: no Ollama at all degrades to one WARN, while
-#: Ollama with some models would refuse. Declared rather than inferred, because
-#: the inference ("is this step used?") is not available at startup.
-REQUIRED_STEPS = frozenset({"extraction", "embedding"})
+#: Steps with a real consumer that every run exercises, so a missing model there
+#: stops work outright. Everything else is reached only by a caller that asks for
+#: it, and an operator who never touches the VLM path must still be able to boot:
+#: refusing over a model they will never load is the over-reach
+#: `check_feature_dependencies` refuses to commit, and it is worst in the COMMON
+#: case, since no Ollama at all degrades to one WARN while Ollama with SOME models
+#: would refuse.
+#:
+#: `embedding` was in this set and is REMOVED. `shared.model_routing.embed_text`
+#: has no production caller — `semantic_intelligence` defines its own — so
+#: `routing.embedding.any` is read by nothing, and gating startup on it was right
+#: about the model by coincidence and wrong about the mechanism: re-point that
+#: route and the verdict changes while nothing at runtime does; change
+#: `default_embedding_model`, which is the real lever, and the check never
+#: notices. For a phase arguing that configuration must express one intent, a
+#: gate on an entry nothing reads is the wrong lever even when it names the right
+#: model.
+#:
+#: Membership requires a named consumer. `extraction` has one at
+#: `services/extraction/api.py`.
+REQUIRED_STEPS = frozenset({"extraction"})
 
 
 @dataclass(frozen=True)
