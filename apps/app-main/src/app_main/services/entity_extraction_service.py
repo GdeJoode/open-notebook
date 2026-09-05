@@ -1979,6 +1979,27 @@ class EntityExtractionService:
                     "merge_groups": len(merge_groups) if merge_groups else 0,
                     "predicted_edges": len(filtered.predicted_edges),
                 }
+                # PC.3: `kg_resolution_report` gets its reader. PC.1b filed it as
+                # derived state carried faithfully to a place nothing reads, and
+                # this phase's acceptance criterion needs the figure it holds —
+                # "materially fewer rows" has no producer without it.
+                #
+                # `capped_fetches` travels with the counts on purpose. `matched`
+                # says how many mentions were consolidated; the cap ratio says how
+                # much of the graph was looked at to decide that. A high match
+                # count from a capped look is a different claim from the same
+                # count from a complete one, and only one of them supports the AC.
+                kg_report = filtered.kg_resolution_report
+                if kg_report:
+                    filtering_stats["kg_resolution"] = {
+                        "matched": kg_report.get("matched_count", 0),
+                        "new": kg_report.get("new_count", 0),
+                        "by_tier": dict(kg_report.get("match_type_counts", {})),
+                        "candidate_fetches": kg_report.get("candidate_fetches", 0),
+                        "capped_fetches": kg_report.get("capped_fetches", 0),
+                        "capped_types": list(kg_report.get("capped_types", [])),
+                        "candidate_cap": kg_report.get("candidate_cap"),
+                    }
                 # N.4d.4: the gap counters are the phase's only operator-visible
                 # output. Left on `concept_alignment_report` alone they never
                 # reach anyone — this dict is what lands in
