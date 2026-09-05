@@ -95,8 +95,9 @@ looked".
 ### 4. Give `kg_resolution_report` its reader
 
 PC.1b filed it as derived state with no consumer, and this phase's AC needs the
-figure it holds. It reaches `filtering_stats` the way N.5's counters do, so the
-"materially fewer rows" claim has a producer instead of a promise.
+figures it holds — matched, new, by tier, and the cap counters from step 3. It
+reaches `filtering_stats` the way N.5's counters do, so AC #2's count of what the
+run consolidated has a producer instead of a promise.
 
 ### 5. The inventory rows this phase owns
 
@@ -116,28 +117,127 @@ and it goes into a **separate database** — `staging` stays untouched as the
 control rather than being overwritten by the thing it is the control for.
 
 Record, for both: entity rows, distinct identity keys, wall time per source,
-cap-hit count, and whether the ministers named across the three convenanten
-resolve to one entity each. **This doubles as PC.6's first end-to-end test** —
-nothing in that phase was verified against a corpus, and the reason given at the
-time (that there was none) was wrong.
+cap-hit count, and **the state of the 20 active `government_organization` rows** —
+which of AC #2's four groups collapsed, and a reason for each pair that did not.
+That class is the measurement because it is where the variants this phase targets
+actually live; the ministers the original plan named are not in the active graph at
+all.
+
+**This doubles as PC.6's first end-to-end test** — nothing in that phase was
+verified against a corpus, and the reason given at the time (that there was none)
+was wrong.
 
 ## Acceptance criteria
 
-Restated. Not because the original figures are unreproducible — they are, and an
-earlier draft wrongly said otherwise — but because the before-state already exists
-and the comparison should use it rather than manufacture a second one:
+**Rewritten on measurement (2026-09-05), and the reason matters more than the
+criteria.** The originals — "materially fewer than 117 rows" and "`M.C.G. Keijzer`
+is one entity" — describe a graph this corpus does not have.
 
-1. Re-extracting the corpus with stage 10 on produces **materially fewer entity
-   rows** than the same corpus without it, both figures named. The before-state
-   already exists — `staging`, built with resolution off — so the after-run goes
-   into a separate database and `staging` is the control rather than the casualty.
-2. A person named in more than one of the three convenanten is **one entity**.
-3. No two active entities differ only by case or spacing — enforced by the UNIQUE
-   index, not by a sweep.
-4. The candidate cap's bite is reported, so a miss is distinguishable from a
+Two things measured on `staging` moved them:
+
+* **Consolidation already happens.** `upsert_entity` looks up on
+  `(canonical_name, entity_type)` and unions `source_documents`, so exact-name
+  matches merge across documents today. **475 of 543 active entities already span
+  more than one source.** The premise that "every document writes its entities
+  fresh" is true only of VARIANTS, which is a far smaller population than the
+  original figure implied.
+* **There are no active persons at all.** The active graph is 440 `topic`, 53
+  `administrative_area`, 27 `programme`, 20 `government_organization`, 3
+  `concept`. `M.C.G. Keijzer` exists as 3 `reference` and 2 `archived` rows and
+  has never been active, so AC #2 as written could not be evaluated — not because
+  the corpus is missing but because triage has retired that whole class.
+
+Stating an unmeasurable criterion and reporting against it anyway is the failure
+this track keeps finding in itself, so the criteria now name what this corpus can
+actually answer.
+
+1. **The identity key's effect, named — and it is small.** The backfill reports
+   **12 collision groups over the 5,501 rows, each holding exactly 2 active rows**,
+   so the identity key takes 543 active entities to 531. Eleven of the twelve are
+   pure case variants of a `topic` (`brede welvaart`/`Brede welvaart`,
+   `PROGRAMMALIJN 1: BETER LEREN`/`Programmalijn 1: Beter Leren`); exactly one is
+   the article variant, `Regio`/`de Regio`, and it is an `administrative_area`.
+
+   Naming that it is 12 and not hundreds is the point of the criterion. The plan
+   was written expecting the key to be the main lever and it is not — 3,414
+   distinct keys over 5,501 rows means the duplication that remains is
+   overwhelmingly *not* case and spacing.
+
+2. **The variant class the identity key does not touch — measured, not assumed.**
+   Every one of the 20 active `government_organization` rows carries a DISTINCT
+   `normalize_entity_name` key. **20 rows → 20 keys: the identity key changes
+   nothing here at all.** The normaliser is doing real work on this class — it
+   expands `IenW` to `infrastructuur en waterstaat`, `JenV` to `justitie en
+   veiligheid`, and repairs the misspelled `Koninkrijkrelaties` to
+   `koninkrijksrelaties` — and it still separates all twenty, because **13 of the
+   20 names carry a parenthetical** and the parenthetical is part of the key:
+
+   ```
+   IenW                                    → infrastructuur en waterstaat
+   IenW (Infrastructuur en Waterstaat)     → ienw (infrastructuur en waterstaat)
+   Infrastructuur en Waterstaat (Ministerie) → infrastructuur en waterstaat (ministerie)
+   ```
+
+   Three surface forms of one ministry, three keys. `Ministerie van X` against
+   `X (Ministerie)` against `ABBR (X)` is a structural difference, not a spelling
+   one, so only stage 10's semantic tier can reach it.
+
+   **The criterion is a named count against a named target.** Four groups here are
+   the same organisation under different surface forms, and consolidating them
+   takes 20 rows to 14:
+
+   | group | rows | |
+   |---|---|---|
+   | BZK | `Binnenlandse Zaken en Koninkrijkrelaties (Ministerie)`, `BZK (Binnenlandse Zaken en Koninkrijkrelaties)` | 2 → 1 |
+   | IenW | `IenW`, `IenW (Infrastructuur en Waterstaat)`, `Infrastructuur en Waterstaat (Ministerie)` | 3 → 1 |
+   | VRO | `Volkshuisvesting en Ruimtelijke Ordening (Ministerie)`, `VRO (Volkshuisvesting en Ruimtelijke Ordening)`, `VRO (ministerie van Volkshuisvesting en Ruimtelijke Ordening)` | 3 → 1 |
+   | HG/BZK | `Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen`, `HG/BZK (Herstel Groningen/Binnenlandse Zaken en Koninkrijkrelaties)` | 2 → 1 |
+
+   How many of the six the run removes is the number, and **every pair it leaves
+   gets a named reason**. Six of six with reasons for none is not a better result
+   than two of six with four reasons; the reasons are the deliverable.
+
+3. **Nothing that must stay apart merges.** All six of these are live in this
+   corpus, which makes them a regression test rather than a hypothetical. Each
+   pairs with something in the table above and each must survive:
+
+   * `De Staatssecretaris van Infrastructuur en Waterstaat (IenW)` — the office-of
+     shape PC.2 cut 29 affixes to exclude, and it shares its parenthetical with the
+     IenW group. An organ OF X is not X.
+   * `Economische Zaken (Ministerie)` against `Ministerie van Economische Zaken en
+     Klimaat` — EZ and EZK are different ministries however similar the strings.
+   * `VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)` — VROM is
+     the abolished predecessor, not a spelling of VRO.
+   * `HG/BZK (…)` against BZK — a joint programme is not one of its participants.
+   * `ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening` and
+     `ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening,
+     Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen, Sociale Zaken en
+     Werkgelegenheid, Justitie en Veiligheid` — a conjunction of four ministries
+     captured as one entity. It must not merge into any of the four it names, and
+     it must not merge into the shorter one either: a list of one and a list of
+     four are not the same list.
+   * `VRO (Ministerie van Volksgezondheid, Welzijn en Sport)` — see below.
+
+4. **The candidate cap's bite is reported**, so a miss is distinguishable from a
    look that never happened.
-5. `normalize_entity_name`'s collision-safety claim is **tested**, not inherited:
+
+5. **`normalize_entity_name`'s collision-safety claim is tested**, not inherited:
    a case that would collapse two distinct entities fails.
+
+6. **The measurement runs against a separate database.** `staging` is the
+   before-state — built with stage 10 off, because stage 10 has never run — so it
+   is the control and stays untouched.
+
+### Recorded, not fixed here
+
+* **An extraction error, not a resolution one.** `VRO (Ministerie van
+  Volksgezondheid, Welzijn en Sport)` is wrong on its face: VRO is
+  Volkshuisvesting, not Volksgezondheid. Resolution must not "fix" it — merging it
+  into either ministry propagates a false claim. It belongs to whatever phase owns
+  extraction quality.
+* **144 rows carry an empty `canonical_name`**, all `reference`. An entity with no
+  name is meaningless and they all fold onto the empty key. That something writes
+  them is a code defect, independent of what happens to these rows.
 
 ## Risks
 
