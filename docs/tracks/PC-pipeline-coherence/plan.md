@@ -325,8 +325,9 @@ which is now a resolvable question rather than a recorded discrepancy.
 
 ## PC.3 — Look at the graph that is already there — ~1.5d
 
-**Status: DONE.** Report: `phase-PC.3-report.md`. Measurement:
-`phase-PC.3-measurement.md`. Plan: `phase-PC.3-plan.md`.
+**Status: MERGED** (`6d81c453`, 2026-09-06). Report: `phase-PC.3-report.md`.
+Measurement: `phase-PC.3-measurement.md`. Plan: `phase-PC.3-plan.md`. Review:
+`reviews/phase-PC.3-attempts-1-5.md`. Wiring map: `pipeline-wiring.md`.
 
 **The finding as written, and what measurement did to it.** The premise was that
 stage 10 never runs, so every document's entities are written fresh. Both halves
@@ -363,6 +364,27 @@ filter, and a refusal on a database that predates 79.
   holds.
 - **Watch**: stage 10 is also where the automatic alias registration lives, so
   PC.2's policy decision lands before this is switched on.
+
+## PC.7 — The extraction service's boundaries — NOT STARTED
+
+**Why it exists.** PC.3 was asked to fix one SurrealQL injection and closed three
+families across two modules over three review rounds, finding the next one each
+time. The reviewer's diagnosis is that this is not a quality problem but a scope
+one: *the security surface of an unauthenticated service is not bounded by the
+phase that happened to touch one line of it.*
+
+- Derive the space ONCE, before fixing anything: every statement form that writes,
+  every module the container ships, every boundary that accepts user input.
+- `POST /extract` takes `file_path: str` with no root confinement, reads it, and
+  writes beside it. Arbitrary read/write in the container, unauthenticated.
+- The app-wide auth posture. `notebooks`, `sources`, `entity_resolution` and
+  `knowledge_graph` use no auth dependency; `require_agent_key` exists and is
+  reserved for the agent routes. Deciding this is a precondition for calling any
+  of the above "fixed" rather than "narrowed".
+- **Inherited inventory rows**: `relation_source` / `relation_sources` (relation
+  provenance, reassigned from PC.3) and `incremental_report` (stage 10b is off in
+  every shipped configuration, so giving its report a reader before the stage has
+  one would repeat what PC.3 measured in stage 10).
 
 ## PC.4 — Stable typing — ~1d
 
