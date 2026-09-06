@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import ast
 import re
+
+import pytest
 from pathlib import Path
 from typing import Dict, List
 
@@ -44,7 +46,7 @@ RECORD_IDS = SERVICE / "record_ids.py"
 #: or a log line is not an injection, so the guard asks whether the f-string
 #: looks like SurrealQL.
 _QUERYISH = re.compile(
-    r"\b(SELECT|UPDATE|CREATE|DELETE|RELATE|INSERT|REMOVE)\b", re.I
+    r"\b(SELECT|UPDATE|UPSERT|CREATE|DELETE|RELATE|INSERT|REMOVE)\b", re.I
 )
 
 
@@ -405,3 +407,111 @@ def test_the_container_ships_every_module_the_guard_walks() -> None:
         f"the Dockerfile does not COPY {missing}; the service imports every "
         f"module in this directory"
     )
+
+
+# ---------------------------------------------------------------------------
+# The validator must actually REFUSE. Everything above checks that it is called
+# and that a pattern exists in the file; neither calls it. Review replaced the
+# body with `return value`, left the pattern in place, and watched 27 tests pass
+# — every injection closed over two rounds open again, silently. These call the
+# real function.
+# ---------------------------------------------------------------------------
+
+_INJECTIONS = (
+    "entity:x; REMOVE TABLE entity; --",
+    "entity:x' OR '1'='1",
+    "entity:⟨x; REMOVE TABLE entity⟩",
+    "entity:x WHERE 1=1",
+    "../../etc/passwd",
+    "entity:",
+    "nocolon",
+    "",
+    "entity:x\nDELETE entity",
+)
+
+
+def test_the_validator_itself_refuses_every_injection() -> None:
+    """Call the real function. A pass-through body must fail this."""
+    import sys
+
+    sys.path.insert(0, str(SERVICE))
+    try:
+        from record_ids import InvalidRecordId, validate_record_id
+    finally:
+        sys.path.remove(str(SERVICE))
+
+    for payload in _INJECTIONS:
+        try:
+            got = validate_record_id(payload)
+        except InvalidRecordId:
+            continue
+        raise AssertionError(
+            f"validate_record_id RETURNED {got!r} for {payload!r} instead of "
+            f"raising. Every caller interpolates the result into SurrealQL."
+        )
+
+    for legitimate in ("entity:abc123", "entity:a_b-c", "entity:⟨quoted⟩"):
+        assert validate_record_id(legitimate) == legitimate, (
+            f"a validator that refuses everything is no more use than one that "
+            f"refuses nothing: {legitimate!r}"
+        )
+
+
+def test_the_api_wrapper_refuses_too_and_answers_with_a_400() -> None:
+    """`api.py`'s wrapper is what the endpoints call; test THAT, not the callee.
+
+    The wrapper could translate the refusal into a return just as easily as the
+    shared function could stop raising.
+    """
+    import importlib.util
+    import sys
+
+    sys.path.insert(0, str(SERVICE))
+    try:
+        spec = importlib.util.spec_from_file_location("_probe_api", API)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["_probe_api"] = module
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(SERVICE))
+        sys.modules.pop("_probe_api", None)
+
+    from fastapi import HTTPException
+
+    for payload in _INJECTIONS:
+        try:
+            got = module._validate_record_id(payload)
+        except HTTPException as exc:
+            assert exc.status_code == 400, f"answered {exc.status_code}"
+            continue
+        raise AssertionError(
+            f"_validate_record_id RETURNED {got!r} for {payload!r}"
+        )
+
+    assert module._validate_record_id("entity:abc") == "entity:abc"
+
+
+def test_the_merge_request_model_refuses_a_non_record_id() -> None:
+    """The field_validator is the boundary for nine interpolations."""
+    import importlib.util
+    import sys
+
+    sys.path.insert(0, str(SERVICE))
+    try:
+        spec = importlib.util.spec_from_file_location("_probe_api2", API)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["_probe_api2"] = module
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(SERVICE))
+        sys.modules.pop("_probe_api2", None)
+
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        module.MergeRequest(
+            canonical_id="entity:x; REMOVE TABLE entity; --",
+            duplicate_id="entity:ok",
+        )
+    ok = module.MergeRequest(canonical_id="entity:a", duplicate_id="entity:b")
+    assert ok.canonical_id == "entity:a"

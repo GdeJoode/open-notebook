@@ -56,8 +56,15 @@ _CREATE = re.compile(r"CREATE entity\b(?!_)")
 #: below the real one in `entity.py` and was flagged by the first version of
 #: this detector. SurrealQL creates a row with `SET` or `CONTENT`, or with
 #: `INSERT INTO`; nothing else writes.
+#: `UPSERT` is here because it CREATES when the row is absent, so an
+#: `UPSERT entity SET …` without `name_key` produces exactly the row migration 79
+#: rejects — and review found the statement space stopped one form short while
+#: `repositories/base.py:241,418` writes `UPSERT {id} MERGE $data` today. The
+#: forms are derived from the engine's write statements, not from the shapes this
+#: repository happens to use; `test_the_statement_space_covers_what_the_repo_writes`
+#: fails if a form appears in production SQL that neither guard recognises.
 _CREATE_STMT = re.compile(
-    r"\b(?:CREATE\s+entity\b(?!_)\s*(?:SET|CONTENT)\b"
+    r"\b(?:(?:CREATE|UPSERT)\s+entity\b(?!_)\s*(?:SET|CONTENT|MERGE)\b"
     r"|INSERT\s+INTO\s+entity\b(?!_))",
     re.I,
 )
@@ -624,3 +631,53 @@ def test_a_column_named_content_is_not_a_CONTENT_clause() -> None:
         "    )\n"
     )
     assert not find_identity_violations("content-column.py", src)
+
+
+def test_the_statement_space_covers_what_the_repo_writes() -> None:
+    """Both guards enumerate SurrealQL write statements. Derive the list.
+
+    Review found `UPSERT` missing from both, and unlike the limits declared
+    above, `UPSERT` HAS a writer — `repositories/base.py` uses
+    `UPSERT {id} MERGE $data`. "Nobody writes this" carried the other omissions
+    and does not carry that one, so the space is derived from the SQL the
+    repository actually contains rather than typed from memory.
+    """
+    import subprocess
+
+    WRITES = {"CREATE", "UPSERT", "INSERT", "UPDATE", "DELETE", "RELATE", "REMOVE"}
+    listed = subprocess.run(
+        ["git", "ls-files", "--", "*.py"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    ).stdout.splitlines()
+
+    found: set = set()
+    for rel in listed:
+        if "/tests/" in rel or Path(rel).name.startswith("test_"):
+            continue
+        if "/src/" not in rel and not rel.startswith(("services/", "scripts/")):
+            continue
+        try:
+            tree = ast.parse((REPO_ROOT / rel).read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                for m in re.finditer(r"\b([A-Z]+)\b", node.value):
+                    if m.group(1) in WRITES:
+                        found.add(m.group(1))
+
+    assert found, "detector control: no write statements found in production SQL"
+
+    # Every write form the repository uses must be a form `_CREATE_STMT` can
+    # recognise when it targets `entity`.
+    unrecognised = [
+        kw
+        for kw in sorted(found)
+        if kw in {"CREATE", "UPSERT"}
+        and not _CREATE_STMT.search(f"{kw} entity SET canonical_name = $n")
+    ]
+    assert not unrecognised, (
+        f"these write statements are used in the repository and the identity "
+        f"guard does not recognise them against `entity`: {unrecognised}. A form "
+        f"that creates a row must supply `name_key`."
+    )
