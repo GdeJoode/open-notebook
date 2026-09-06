@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from shared.utils.name_normalizer import normalize_entity_name
 from surrealdb_service.connection import execute_query
 
 
@@ -157,9 +158,14 @@ class VaultSyncService:
             entity_type = row.get("entity_type", "UNKNOWN")
 
             # Ensure a canonical entity exists
+            # BY IDENTITY, not by display name (PC.3) — the same split that
+            # breaks the extraction service: this looked up on `name` while the
+            # CREATE below writes `name_key`, and migration 79 made those two
+            # different keys.
+            vault_name_key = normalize_entity_name(canonical_name)
             entity_rows = await execute_query(
-                "SELECT id FROM entity WHERE name = $name LIMIT 1",
-                {"name": canonical_name},
+                "SELECT id FROM entity WHERE name_key = $name_key LIMIT 1",
+                {"name_key": vault_name_key},
             )
 
             if entity_rows:
@@ -167,10 +173,19 @@ class VaultSyncService:
             else:
                 # Create the entity
                 created = await execute_query(
-                    "CREATE entity SET name = $name, entity_type = $entity_type, "
+                    # PC.3: `name_key` is required and is the identity column.
+                    # `canonical_name` is set alongside `name` because migration
+                    # 39's UNIQUE index and every canonical reader use it, and a
+                    # vault-created row that lacked it was invisible to both.
+                    "CREATE entity SET name = $name, canonical_name = $name, "
+                    "name_key = $name_key, entity_type = $entity_type, "
                     "weight = 1, properties = {}, source_ids = [], "
                     "created = time::now(), updated = time::now()",
-                    {"name": canonical_name, "entity_type": entity_type},
+                    {
+                        "name": canonical_name,
+                        "name_key": vault_name_key,
+                        "entity_type": entity_type,
+                    },
                 )
                 entity_id = str(created[0]["id"]) if created else None
 
@@ -182,7 +197,7 @@ class VaultSyncService:
                             "CREATE entity_alias SET "
                             "canonical_entity = $entity_id, "
                             "alias_text = $alias, "
-                            "match_type = 'vault_import', "
+                            "match_type = 'exact', "  # closed vocabulary; see `method` below
                             "similarity_score = 1.0, "
                             "method = 'obsidian_vault', "
                             "verified = true",
@@ -198,7 +213,7 @@ class VaultSyncService:
                         "CREATE entity_alias SET "
                         "canonical_entity = $entity_id, "
                         "alias_text = $alias, "
-                        "match_type = 'vault_import', "
+                        "match_type = 'exact', "  # closed vocabulary; see `method` below
                         "similarity_score = 1.0, "
                         "method = 'obsidian_vault', "
                         "verified = true",

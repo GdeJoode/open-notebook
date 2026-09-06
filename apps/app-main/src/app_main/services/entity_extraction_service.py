@@ -1911,6 +1911,7 @@ class EntityExtractionService:
                         ConceptAlignmentConfig,
                         EmbeddingDedupConfig,
                         FuzzyDedupConfig,
+                        KGResolutionConfig,
                     )
 
                     f_config = FilteringConfig(
@@ -1925,6 +1926,35 @@ class EntityExtractionService:
                             similarity_threshold=0.90,
                         ),
                         edge_prediction_enabled=True,
+                        # PC.3 turned stage 10 ON here and then measured it.
+                        # It goes back OFF, and the reason is NOT that the stage
+                        # is bad — it is that its answer has nowhere to go.
+                        #
+                        # `kg_entity_id`, `kg_match_type` and `kg_similarity_score`
+                        # have no consumer anywhere in the tree. Persistence holds
+                        # zero occurrences of `kg_` and identifies the entity by
+                        # `name_key` exactly as it does with the stage off, so the
+                        # verdict is written into the properties bag and never
+                        # read. Enabling it consolidates nothing and costs a
+                        # candidate fetch plus Levenshtein and cosine per entity.
+                        #
+                        # And the answer it produces is mostly the wrong SHAPE.
+                        # Measured over all five active entity types: 18 merges
+                        # across 531 entities, of which ~5 are defensible. Seven
+                        # of the eight clear errors are not failed identity calls
+                        # — they are correct RELATIONS recorded as identity.
+                        # `coöperatief wonen` is narrower than `wonen`; the
+                        # Staatssecretaris is an organ of IenW; VROM is the
+                        # predecessor of VRO. The signal is real; the destination
+                        # is missing. Stage 15's own docstring says subsumption is
+                        # "currently handled nowhere", and PC.2 filed the same gap
+                        # for the office-of class.
+                        #
+                        # It comes back when that destination exists — a relation
+                        # proposal, or the curator queue a human already reads —
+                        # not when a threshold is retuned. See
+                        # docs/tracks/PC-pipeline-coherence/phase-PC.3-measurement.md
+                        kg_resolution=KGResolutionConfig(enabled=False),
                         # N.4d.4 / D-N4-8: the stage was otherwise unreachable in
                         # every real run. An explicitly supplied filtering_config
                         # is the caller's own choice and is never overridden.
@@ -1962,6 +1992,27 @@ class EntityExtractionService:
                     "merge_groups": len(merge_groups) if merge_groups else 0,
                     "predicted_edges": len(filtered.predicted_edges),
                 }
+                # PC.3: `kg_resolution_report` gets its reader. PC.1b filed it as
+                # derived state carried faithfully to a place nothing reads, and
+                # this phase's acceptance criterion needs the figure it holds —
+                # "materially fewer rows" has no producer without it.
+                #
+                # `capped_fetches` travels with the counts on purpose. `matched`
+                # says how many mentions were consolidated; the cap ratio says how
+                # much of the graph was looked at to decide that. A high match
+                # count from a capped look is a different claim from the same
+                # count from a complete one, and only one of them supports the AC.
+                kg_report = filtered.kg_resolution_report
+                if kg_report:
+                    filtering_stats["kg_resolution"] = {
+                        "matched": kg_report.get("matched_count", 0),
+                        "new": kg_report.get("new_count", 0),
+                        "by_tier": dict(kg_report.get("match_type_counts", {})),
+                        "candidate_fetches": kg_report.get("candidate_fetches", 0),
+                        "capped_fetches": kg_report.get("capped_fetches", 0),
+                        "capped_types": list(kg_report.get("capped_types", [])),
+                        "candidate_cap": kg_report.get("candidate_cap"),
+                    }
                 # N.4d.4: the gap counters are the phase's only operator-visible
                 # output. Left on `concept_alignment_report` alone they never
                 # reach anyone — this dict is what lands in

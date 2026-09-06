@@ -158,9 +158,12 @@ class KGResolutionConfig:
     every row it writes is `verified = false`, so nothing downstream can tell it
     apart from a checked one except by rank.
 
-    Flipping the default costs nothing today — `enabled` is False, and
-    `entity_alias` holds 0 rows on the working database — which is exactly why it
-    is the moment to flip it, rather than after the writer wakes up. PC.2's
+    Flipping the default cost nothing when it was done: `enabled` was False and
+    `entity_alias` held 0 rows, which was the moment to do it rather than after
+    the writer woke up. Both facts have since changed — PC.3 turned stage 10 on,
+    measured it and turned it back off, and `entity_alias` now holds rows written
+    through the curator merge path — so this paragraph records history, not the
+    current state. PC.2's
     curator queue is where a surface form now becomes an alias: proposed, shown,
     and decided.
     """

@@ -41,7 +41,7 @@ async def _create_entity(
 ) -> str:
     """Create an entity and return its record-id string."""
     rows = await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type=$t, "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type=$t, "
         "embedding=[], confidence=0.9, source_documents=[], "
         "status=$s, weight=$w;",
         {"n": name, "t": entity_type, "s": status, "w": weight},

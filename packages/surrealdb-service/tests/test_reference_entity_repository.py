@@ -110,7 +110,7 @@ async def test_update_external_ids_unions_onto_entity(
     """K.4 persistence: external_ids/aliases union onto an entity (migration 55)."""
     name = _u("BZK-entity")
     rows = await execute_query(
-        "CREATE entity SET canonical_name = $n, name = $n, "
+        "CREATE entity SET canonical_name = $n, name_key = string::lowercase(string::trim($n)), name = $n, "
         "entity_type = 'organization', embedding = [], status = 'active';",
         {"n": name},
         config=live_surrealdb,

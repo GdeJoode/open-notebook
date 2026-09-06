@@ -47,7 +47,7 @@ def _bind_queue(
 
 async def _seed_entity(config: SurrealDBConfig, name: str) -> str:
     rows = await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='organization', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='organization', "
         "primary_type='Organisatie', embedding=[], confidence=0.9, "
         "source_documents=[], status='active' RETURN VALUE id;",
         {"n": name},

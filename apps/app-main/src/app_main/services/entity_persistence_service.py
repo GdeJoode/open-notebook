@@ -586,6 +586,34 @@ class EntityPersistenceService:
             if resolved.is_noise:
                 stored_props["non_type_label"] = True
 
+            # PC.3: mention provenance survives the persist boundary.
+            #
+            # `source_chunk_id`, `source_grounding` and `extraction_context` are
+            # first-class fields on `ExtractedEntity` and this method reads only
+            # `entity["properties"]`, so all three were dropped here — the
+            # boundary PC.1b's inventory named. They are what makes a
+            # cross-document match explainable: with resolution on, one row now
+            # answers for mentions in several documents, and "why is this one
+            # entity" is unanswerable without knowing where each mention was.
+            #
+            # Keyed BY SOURCE, not stored flat. A canonical row is merged across
+            # documents while grounding is per mention, so a flat key would mean
+            # the last document to mention an entity overwrites where every
+            # earlier one found it — losing exactly the evidence this is for.
+            # `upsert_entity` merges this key by source id rather than replacing
+            # it wholesale; see the rule there.
+            grounding = {
+                k: v
+                for k, v in (
+                    ("chunk_id", entity.get("source_chunk_id")),
+                    ("grounding", entity.get("source_grounding")),
+                    ("context", entity.get("extraction_context")),
+                )
+                if v
+            }
+            if grounding:
+                stored_props["grounding"] = {source_id: grounding}
+
             # Add merge history if available
             if text in merge_lookup:
                 stored_props["merged_from"] = merge_lookup[text]

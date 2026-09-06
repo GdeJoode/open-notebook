@@ -164,6 +164,16 @@ class KGResolver:
                 "fuzzy": 0,
                 "semantic": 0,
             },
+            # PC.3: the candidate fetch is capped at `max_candidates` per type,
+            # so tiers 2 and 3 compare against a SAMPLE of the graph, not the
+            # graph. Without this a miss is indistinguishable from a look that
+            # never happened — the same distinction `concept_alignment` records
+            # as `capped_type_fetches`, and the reason this phase can say
+            # "materially fewer rows" rather than "fewer rows, we think".
+            "candidate_fetches": 0,
+            "capped_fetches": 0,
+            "capped_types": [],
+            "candidate_cap": self._max_candidates,
         }
 
         if not entities:
@@ -201,13 +211,16 @@ class KGResolver:
 
         logger.info(
             "KGResolver: {} matched, {} new, {} aliases registered "
-            "(alias={}, fuzzy={}, semantic={})",
+            "(alias={}, fuzzy={}, semantic={}); {} of {} candidate fetches hit "
+            "the cap",
             report["matched_count"],
             report["new_count"],
             report["aliases_registered"],
             report["match_type_counts"]["alias"],
             report["match_type_counts"]["fuzzy"],
             report["match_type_counts"]["semantic"],
+            report["capped_fetches"],
+            report["candidate_fetches"],
         )
 
         return entities, report
@@ -256,6 +269,14 @@ class KGResolver:
             candidates = await self._repo.find_by_type(  # type: ignore[union-attr]
                 entity_type, limit=self._max_candidates
             )
+            report["candidate_fetches"] += 1
+            if len(candidates) >= self._max_candidates:
+                # `>=` rather than `==`: a repository that ignores the limit
+                # would return more, and that is still a fetch whose result was
+                # bounded by something other than the graph.
+                report["capped_fetches"] += 1
+                if entity_type not in report["capped_types"]:
+                    report["capped_types"].append(entity_type)
         except Exception:
             logger.debug(
                 "KGResolver: candidate fetch failed for type '{}'",

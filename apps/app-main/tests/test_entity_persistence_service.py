@@ -1260,3 +1260,74 @@ class TestTheMergedTypeTagsReachTheDatabase:
             }
         )
         assert written.primary_type != "RegioDeal"
+
+
+class TestGroundingReachesPersistence:
+    """PC.3 step 5: the persist boundary stops dropping mention provenance.
+
+    `source_chunk_id`, `source_grounding` and `extraction_context` are first-class
+    fields on the entity and this service read only `entity["properties"]`, so all
+    three were lost. `packages/surrealdb-service/tests/test_grounding_survives_merge.py`
+    covers the merge; this covers the read — the two halves of the same boundary,
+    and the half that made it a boundary.
+    """
+
+    @pytest.mark.asyncio
+    async def test_grounding_is_carried_keyed_by_source(self):
+        svc, mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await svc.persist_filtered_result(
+                source_id="source:doc1",
+                entities=[
+                    {
+                        "text": "Brede Welvaart",
+                        "label": "topic",
+                        "confidence": 0.9,
+                        "properties": {},
+                        "source_chunk_id": "chunk:7",
+                        "source_grounding": {"page": 3},
+                    }
+                ],
+                relations=[],
+            )
+
+        entity = mock_upsert.call_args.args[0]
+        grounding = entity.properties["grounding"]
+        assert set(grounding) == {"source:doc1"}, (
+            "grounding must be keyed by the source it came from — a flat key means "
+            "the next document overwrites where this one found the entity"
+        )
+        assert grounding["source:doc1"] == {
+            "chunk_id": "chunk:7",
+            "grounding": {"page": 3},
+        }
+
+    @pytest.mark.asyncio
+    async def test_an_entity_without_grounding_gains_no_key(self):
+        """The counterweight: presence of the key must mean something.
+
+        The single-schema path does not always carry grounding, so inventing an
+        empty entry would make the field useless as a signal — and would put a
+        key on every row for a phase that is trying to make provenance legible.
+        """
+        svc, mock_upsert = _make_service_with_mock_repo()
+
+        with patch(
+            "app_main.services.entity_persistence_service.execute_query",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await svc.persist_filtered_result(
+                source_id="source:doc1",
+                entities=[
+                    {"text": "BZK", "label": "ORG", "confidence": 0.9, "properties": {}}
+                ],
+                relations=[],
+            )
+
+        assert "grounding" not in mock_upsert.call_args.args[0].properties

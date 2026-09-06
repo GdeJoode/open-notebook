@@ -66,7 +66,7 @@ async def _seed_entity(
 ) -> str:
     """Create a minimal entity, return its id string."""
     rows = await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type='org', "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type='org', "
         "embedding=[], confidence=0.9, source_documents=[], status=$s "
         "RETURN VALUE id;",
         {"n": name, "s": status},

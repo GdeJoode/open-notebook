@@ -41,7 +41,7 @@ async def _create_entity(
     sources: list | None = None,
 ) -> str:
     rows = await execute_query(
-        "CREATE entity SET canonical_name = $n, name = $n, entity_type = $t, "
+        "CREATE entity SET canonical_name = $n, name_key = string::lowercase(string::trim($n)), name = $n, entity_type = $t, "
         "embedding = [], confidence = $c, source_documents = $s, "
         "status = 'active';",
         {"n": name, "t": etype, "c": confidence, "s": sources or []},

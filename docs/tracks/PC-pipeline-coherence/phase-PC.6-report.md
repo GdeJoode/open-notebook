@@ -7,6 +7,16 @@ The acceptance criterion is negative: **enabling a feature either works or says
 why it cannot, and "flag on, zero effect, one warning" must be unreachable.** So
 most of this phase is about making things refuse.
 
+> **Correction (2026-09-05).** This document said the working corpus had been
+> emptied and its figures could no longer be re-measured. That was wrong. The
+> `open_notebook/staging` database holds the corpus it always did — 14 sources,
+> 3,824 chunks, 5,501 entities, 68 of them naming a Regio Deal, ingested
+> 20 June – 1 July. The zero-row reading behind the claim was taken in the window
+> after Docker Desktop restarted and the SurrealDB container came back without
+> its volume; a single measurement on a just-restarted stack was treated as a
+> fact about the data. Every figure below is therefore re-measurable, and the
+> graph as it stands is the before-state for PC.3's acceptance criterion —
+> the corpus built WITHOUT cross-document resolution.
 ## What the phase found that the plan did not
 
 ### Two model-configuration systems with opposite privacy defaults

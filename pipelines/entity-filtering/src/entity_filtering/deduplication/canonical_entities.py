@@ -352,7 +352,12 @@ async def merge_entities(
         if dup_name:
             await execute_query(
                 "CREATE entity_alias SET "
-                "alias_text = $name, canonical_entity = $eid, confidence = 1.0",
+                "alias_text = $name, canonical_entity = $eid, "
+                # `match_type` is TYPE string on a long-lived database
+                # (migration 80); omitting it fails there and silently
+                # succeeds on a fresh one. A dedup merge is an exact match.
+                "match_type = 'exact', method = 'dedup_merge', "
+                "confidence = 1.0",
                 {"name": dup_name, "eid": canonical_id},
             )
 

@@ -123,7 +123,7 @@ async def _create_test_entity(
     result = await execute_query(
         """
         CREATE entity SET
-            canonical_name = $canonical_name,
+            canonical_name = $canonical_name, name_key = string::lowercase(string::trim($canonical_name)),
             entity_type = $entity_type,
             description = NONE,
             source_documents = $source_documents,

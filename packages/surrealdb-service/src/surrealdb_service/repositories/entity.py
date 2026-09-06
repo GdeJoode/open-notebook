@@ -11,9 +11,14 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from shared.models.entity import Entity, Relation
 from shared.models.export import ExportFilter
+from shared.utils.name_normalizer import normalize_entity_name
 
 from surrealdb_service.config import SurrealDBConfig
-from surrealdb_service.connection import ensure_record_id, execute_query
+from surrealdb_service.connection import (
+    ensure_record_id,
+    execute_query,
+    get_pool,
+)
 
 
 def _union_preserve_order(
@@ -34,6 +39,74 @@ def _union_preserve_order(
         if item not in out:
             out.append(item)
     return out
+
+
+#: Databases whose `entity` table has been confirmed to declare `name_key`, keyed
+#: by the namespace/database the CONNECTION reports — not by the config object.
+#: One check per process per database, not per write.
+_IDENTITY_COLUMN_CHECKED: set = set()
+
+
+class IdentityColumnMissing(RuntimeError):
+    """The database predates migration 79, so `upsert_entity` cannot identify.
+
+    Raised rather than degraded. Without `name_key` the lookup matches nothing
+    and every upsert falls through to CREATE — so a re-ingest of the same
+    document silently DOUBLES its entities. On a database between migrations 39
+    and 79 the old `idx_entity_name_type` turns that into a confusing index
+    error; below 39 there is no index and nothing complains at all. Migration 79
+    removes that index, which is correct and also removes the accident that was
+    catching this.
+    """
+
+
+async def _assert_identity_column(config: Any) -> None:
+    """Fail loudly, once per database, when `name_key` is not declared.
+
+    THE CONNECTION IS ASKED, NOT THE CONFIG — and asked in-process. An earlier
+    version keyed this on `config.namespace/config.database`, which review showed
+    to be unsound: `get_pool(config)` builds the global pool once and ignores the
+    argument afterwards, so `execute_query(q, p, config)` does NOT go where
+    `config` says. The check inspected whichever database the pool was bound to,
+    reported a different one, and cached the verdict under a third — so one
+    healthy database could vouch for a migration-31 one.
+
+    The fix after that asked the database (`RETURN $session.…`), which was correct
+    and cost a network round trip on EVERY upsert — ~20 ms each, so ~10 s on a
+    500-entity document — because the query ran before the cache was consulted.
+    Review measured it. `ConnectionPool.__init__` does `self.config = config or
+    get_config()`, so the pool already knows which database it is on and the same
+    answer is available without leaving the process.
+
+    PC.6's rule applied to a repository: a step that cannot do its job says why
+    rather than doing something else.
+    """
+    pool = get_pool(config)
+    connected = getattr(pool, "config", None)
+    if connected is None:  # a pool shape this function does not understand
+        raise IdentityColumnMissing(
+            "cannot determine which database this connection is on, so the "
+            "identity column cannot be verified. Refusing rather than assuming — "
+            "an unverified write is how a re-ingest silently doubles a document."
+        )
+    key = f"{connected.namespace}/{connected.database}"
+    if key in _IDENTITY_COLUMN_CHECKED:
+        return
+
+    info = await execute_query("INFO FOR TABLE entity;", None, config)
+    table = info if isinstance(info, dict) else (info[0] if info else {})
+    fields = table.get("fields") or {}
+    if "name_key" not in fields:
+        raise IdentityColumnMissing(
+            f"`entity.name_key` is not declared on `{key}` (the database this "
+            f"connection is actually on). This code identifies entities by "
+            f"`name_key` (migration 79); without it every upsert misses its "
+            f"lookup and creates a duplicate instead of updating. Run the "
+            f"migrations against this database — and note that migration 79 "
+            f"refuses until `scripts/backfill_name_key.py` has run, because the "
+            f"key cannot be computed in SurrealQL."
+        )
+    _IDENTITY_COLUMN_CHECKED.add(key)
 
 
 class EntityRepository:
@@ -128,6 +201,34 @@ class EntityRepository:
         Retrieves entities of a given type along with their embeddings,
         which can be used for similarity-based entity resolution.
 
+        **Retired rows are excluded (PC.3).** This used to select every row of
+        the type regardless of status, which made most of what the resolver
+        compared against rows triage had deliberately removed. Measured on
+        `staging`:
+
+            type                     live   ALL   the capped 100 held
+            topic                     785  1408    31 active rows
+            concept                   574  1892     0 active rows
+
+        For `concept` the resolver could not reach a single one of the three
+        active entities — every candidate it was offered was archived or merged,
+        so a correct match was structurally impossible. `("active", "reference")`
+        is the live set, and it is not a new rule: `audit_service` and
+        `deep_audit_service` already use exactly that pair to decide what counts
+        as graph content.
+
+        **The capped slice is now DECLARED rather than incidental.** `LIMIT` with
+        no `ORDER BY` is not guaranteed to return any particular rows. Measured,
+        rather than assumed: on SurrealDB v2 with 20 rows the fetch returned id
+        order with the clause and without it, so removing it changes nothing
+        today and the behavioural test cannot catch its removal — which is why
+        `test_the_query_states_both_rules` reads the query text instead, and says
+        so. The clause earns its place for two reasons: the ordering becomes a
+        real choice the moment `weight` carries centrality (it is uniformly 0.0
+        on this corpus), and an ordering nobody wrote down is one nobody can rely
+        on. The cap still truncates either way, and the resolver counts
+        `capped_fetches` so that stays visible.
+
         Args:
             entity_type: The entity type to filter by (e.g. "PERSON", "ORG").
             limit: Maximum number of entities to return. Defaults to 100.
@@ -141,7 +242,10 @@ class EntityRepository:
             return await execute_query(
                 "SELECT id, name, embedding, weight "
                 "FROM entity "
-                "WHERE entity_type = $entity_type LIMIT $limit",
+                "WHERE entity_type = $entity_type "
+                "AND status IN ['active', 'reference'] "
+                "ORDER BY weight DESC, id ASC "
+                "LIMIT $limit",
                 {"entity_type": entity_type, "limit": limit},
                 self.config,
             )
@@ -201,13 +305,25 @@ class EntityRepository:
             the merge into a SurrealDB transaction** before introducing
             parallel writers.
         """
+        # PC.3: identity is `name_key`, not the display name. Looking up on the
+        # RAW `canonical_name` is why `Brede Welvaart` and `brede welvaart` were
+        # two rows — the lookup missed, so the create path ran twice. Derived
+        # here rather than taken from the caller: a key the caller could supply
+        # is a key the caller could get wrong, and migration 79's UNIQUE index
+        # would then reject the write with nothing to say about why.
+        name_key = normalize_entity_name(entity.canonical_name)
+
+        # Refuse on a database that cannot express identity — see
+        # `_assert_identity_column`. Once per process per database.
+        await _assert_identity_column(self.config)
+
         try:
             existing_rows = await execute_query(
                 "SELECT * FROM entity "
-                "WHERE canonical_name = $canonical_name "
+                "WHERE name_key = $name_key "
                 "AND entity_type = $entity_type LIMIT 1",
                 {
-                    "canonical_name": entity.canonical_name,
+                    "name_key": name_key,
                     "entity_type": entity.entity_type,
                 },
                 self.config,
@@ -240,7 +356,24 @@ class EntityRepository:
             merged_properties: Dict[str, Any] = dict(
                 existing.get("properties") or {}
             )
+            # PC.3: `grounding` merges by SOURCE ID; every other key overlays.
+            #
+            # It maps `source_id -> {chunk_id, grounding, context}`, one entry per
+            # document a mention came from. Under the plain overlay below, the
+            # second document to mention an entity would replace where the first
+            # one found it — and with cross-document resolution on that is the
+            # normal case, not an edge one. The union is what lets a curator ask
+            # "why is this one entity" and get an answer per source.
+            incoming_grounding = entity.properties.get("grounding")
+            if isinstance(incoming_grounding, dict):
+                merged_grounding = dict(merged_properties.get("grounding") or {})
+                merged_grounding.update(incoming_grounding)
+            else:
+                merged_grounding = None
+
             merged_properties.update(entity.properties)
+            if merged_grounding:
+                merged_properties["grounding"] = merged_grounding
 
             update_payload = {
                 "id": existing["id"],
@@ -296,6 +429,10 @@ class EntityRepository:
         _hash_basis = f"{entity.canonical_name}|{entity.entity_type}"
         create_payload: Dict[str, Any] = {
             "canonical_name": entity.canonical_name,
+            # PC.3: identity, and the UNIQUE index's column. Note it is derived
+            # from the SAME string the lookup used, so a create can only be
+            # reached when that key genuinely had no row.
+            "name_key": name_key,
             "entity_type": entity.entity_type,
             "hash_id": hashlib.md5(_hash_basis.encode("utf-8")).hexdigest(),
             "description": entity.description,
@@ -321,6 +458,7 @@ class EntityRepository:
                 CREATE entity SET
                     canonical_name = $canonical_name,
                     name = $canonical_name,
+                    name_key = $name_key,
                     entity_type = $entity_type,
                     hash_id = $hash_id,
                     description = $description,

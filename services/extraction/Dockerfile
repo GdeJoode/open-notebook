@@ -14,7 +14,24 @@ COPY packages/shared/src/shared/model_routing.yaml /app/model_routing.yaml
 # PC.6: the coherence checks travel with the routing they check.
 COPY packages/shared/src/shared/config_coherence.py /app/config_coherence.py
 
+# PC.3: the identity rule, so this service derives `name_key` with the SAME
+# function `EntityRepository` uses — two writers deriving identity
+# independently is how one name becomes two rows.
+#
+# The four modules are copied WITHOUT any `__init__.py`, deliberately.
+# `shared/__init__.py` imports the whole package and pulls in `packaging`,
+# `tiktoken` and `surrealdb_service`, none of which belong in this image —
+# it crash-looped the container when tried. Omitting the `__init__` files
+# makes `shared` a namespace package, so only these four load. Their own
+# imports are `re`, `json`, `os`, `pathlib` and `loguru`, which is already a
+# dependency here.
+COPY packages/shared/src/shared/utils/name_normalizer.py /app/shared/utils/name_normalizer.py
+COPY packages/shared/src/shared/utils/nl_normalization.py /app/shared/utils/nl_normalization.py
+COPY packages/shared/src/shared/utils/org_aliases.py /app/shared/utils/org_aliases.py
+COPY packages/shared/src/shared/config/alias_overrides.py /app/shared/config/alias_overrides.py
+
 # Copy the service API and modules
+COPY services/extraction/record_ids.py /app/record_ids.py
 COPY services/extraction/api.py /app/api.py
 COPY services/extraction/vocabulary_manager.py /app/vocabulary_manager.py
 COPY services/extraction/entity_validator.py /app/entity_validator.py

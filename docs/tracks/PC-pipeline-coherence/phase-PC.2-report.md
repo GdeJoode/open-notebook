@@ -9,6 +9,16 @@ The phase closes the four AC items in the plan: one normalisation, one alias
 policy, the long-form/short-form pairs reachable by a curator, and a guard that
 fails if a fifth copy of the fold appears.
 
+> **Correction (2026-09-05).** This document said the working corpus had been
+> emptied and its figures could no longer be re-measured. That was wrong. The
+> `open_notebook/staging` database holds the corpus it always did — 14 sources,
+> 3,824 chunks, 5,501 entities, 68 of them naming a Regio Deal, ingested
+> 20 June – 1 July. The zero-row reading behind the claim was taken in the window
+> after Docker Desktop restarted and the SurrealDB container came back without
+> its volume; a single measurement on a just-restarted stack was treated as a
+> fact about the data. Every figure below is therefore re-measurable, and the
+> graph as it stands is the before-state for PC.3's acceptance criterion —
+> the corpus built WITHOUT cross-document resolution.
 ## 1. One comparison fold
 
 Four stages carried a byte-identical four-line transform —
@@ -290,10 +300,12 @@ alignment verdict — plus an assertion that the report key does not come back.
 
 ## Measured end to end — and what can no longer be checked
 
-**The working database has since been emptied.** Every figure below was taken
-against `staging` on 2026-09-03, before the corpus was cleared for real data.
-They are a record of what was observed, not something a later reader can re-run,
-and where they disagree with each other I have said so rather than picked one.
+**These figures ARE re-measurable.** An earlier version of this paragraph said the
+working database had been emptied and that they were a record only. That was
+wrong — see the correction at the top. Every figure below was taken against
+`staging` on 2026-09-03, and `staging` still holds that corpus, so a later reader
+can re-run them. Where they disagree with each other I have said so rather than
+picked one; that part stands and is now checkable rather than merely recorded.
 
 Against 543 active entities, global scope:
 

@@ -117,9 +117,11 @@ _DECLARED: Dict[str, "Reads | Owned"] = {
     "concept_alignment_report": Reads(
         "apps/app-main/src/app_main/services/entity_extraction_service.py"
     ),
-    "kg_resolution_report": Owned(
-        "PC.3 — its AC needs a measured figure for how many rows cross-document "
-        "resolution collapses"
+    # PC.3 delivered the reader this row was waiting for: the counts and the
+    # candidate-cap ratio now reach `filtering_stats["kg_resolution"]`, which is
+    # what lands in `extraction_result.metadata["filtering"]`. Owned → Reads.
+    "kg_resolution_report": Reads(
+        "apps/app-main/src/app_main/services/entity_extraction_service.py"
     ),
     "validation_report": Owned(
         "PC.6 — stage 11 is inert because no production call site passes an "

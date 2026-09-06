@@ -148,6 +148,12 @@ async def test_entity_drift_fails_pre_passes_post(
         # entity has other strict required fields with no default — supply them.
         create_extra=(
             "canonical_name = $n, name = $n, entity_type = 'org', "
+            # PC.3: `name_key` is strict (migration 79) and has no safe
+            # coalesce default, so it is NOT in migration 65's sweep — 65
+            # runs before 79 and could not know about it. A forged row must
+            # therefore supply it, or the drift being tested is masked by a
+            # different strict field failing first.
+            "name_key = string::lowercase(string::trim($n)), "
             "embedding = [], confidence = 0.9, source_documents = [], "
         ).replace("$n", f"'{_u('Ent')}'"),
     )
@@ -328,7 +334,7 @@ async def test_migration_65_clean_row_unchanged(
     """
     name = _u("Clean")
     created = await execute_query(
-        "CREATE entity SET canonical_name = $n, name = $n, entity_type = 'org', "
+        "CREATE entity SET canonical_name = $n, name_key = string::lowercase(string::trim($n)), name = $n, entity_type = 'org', "
         "embedding = [], confidence = 0.9, source_documents = [], "
         "manual_override = true, status = 'reference' "
         "RETURN VALUE id;",

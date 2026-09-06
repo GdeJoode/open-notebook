@@ -88,7 +88,7 @@ async def _make_source(cfg: SurrealDBConfig, title: str, content: str) -> str:
 
 async def _make_entity(cfg: SurrealDBConfig, name: str, etype: str) -> str:
     rows = await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, entity_type=$t, "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, entity_type=$t, "
         "embedding=[], confidence=0.9, source_documents=[], status='active';",
         {"n": name, "t": etype},
         config=cfg,

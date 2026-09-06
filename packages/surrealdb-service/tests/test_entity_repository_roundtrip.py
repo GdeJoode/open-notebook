@@ -243,7 +243,7 @@ async def test_list_entities_survives_order_by_name_with_fulltext_index(
     names = [f"{prefix}-charlie", f"{prefix}-alpha", f"{prefix}-bravo"]
     for n in names:
         await execute_query(
-            "CREATE entity SET canonical_name = $n, name = $n, hash_id = $n, "
+            "CREATE entity SET canonical_name = $n, name_key = string::lowercase(string::trim($n)), name = $n, hash_id = $n, "
             "entity_type = 'concept', confidence = 0.9, embedding = [];",
             {"n": n},
             config=cfg,
@@ -291,13 +291,13 @@ async def test_list_entities_status_filter(
     active_name = f"{prefix}-active"
     reference_name = f"{prefix}-reference"
     await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, hash_id=$n, "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, hash_id=$n, "
         "entity_type='concept', confidence=0.9, embedding=[], status='active';",
         {"n": active_name},
         config=cfg,
     )
     await execute_query(
-        "CREATE entity SET canonical_name=$n, name=$n, hash_id=$n, "
+        "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, hash_id=$n, "
         "entity_type='concept', confidence=0.9, embedding=[], status='reference';",
         {"n": reference_name},
         config=cfg,
@@ -350,7 +350,7 @@ async def test_list_entities_source_filter(
         (out_c, [other_src]),
     ):
         await execute_query(
-            "CREATE entity SET canonical_name=$n, name=$n, hash_id=$n, "
+            "CREATE entity SET canonical_name=$n, name_key = string::lowercase(string::trim($n)), name=$n, hash_id=$n, "
             "entity_type='concept', primary_type='Concept', confidence=0.9, "
             "embedding=[], status='active', source_documents=$docs;",
             {"n": nm, "docs": docs},
@@ -392,14 +392,14 @@ async def test_backfill_lists_missing_and_updates_embedding(
     # One active entity with embedding=[] (the backfill target) and one that
     # already carries a vector (must be skipped — idempotency).
     await execute_query(
-        "CREATE entity SET canonical_name = $n, name = $n, hash_id = $n, "
+        "CREATE entity SET canonical_name = $n, name_key = string::lowercase(string::trim($n)), name = $n, hash_id = $n, "
         "entity_type = 'concept', confidence = 0.9, status = 'active', "
         "embedding = [];",
         {"n": missing_name},
         config=live_surrealdb,
     )
     await execute_query(
-        "CREATE entity SET canonical_name = $n, name = $n, hash_id = $n, "
+        "CREATE entity SET canonical_name = $n, name_key = string::lowercase(string::trim($n)), name = $n, hash_id = $n, "
         "entity_type = 'concept', confidence = 0.9, status = 'active', "
         "embedding = $emb;",
         {"n": has_vec_name, "emb": [0.5, 0.5]},

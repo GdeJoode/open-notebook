@@ -26,7 +26,8 @@ import httpx
 import yaml
 from fastapi import FastAPI, HTTPException
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from shared.utils.name_normalizer import normalize_entity_name
 
 
 @asynccontextmanager
@@ -451,10 +452,21 @@ async def _write_to_surrealdb(
             if not name:
                 continue
 
-            # Check existing
+            # Check existing — BY IDENTITY, not by display name (PC.3).
+            #
+            # This looked up on `canonical_name` while the CREATE below writes
+            # `name_key`. Before migration 79 those were the same key, so a miss
+            # meant no row existed. They now disagree, and the failure is far
+            # worse than a duplicate: the lookup misses on a case variant, the
+            # CREATE hits `idx_entity_identity`, and `_write_to_surrealdb` has no
+            # `except` — so the exception unwinds the whole per-document loop and
+            # the caller returns HTTP 200 with `entities_written: 0` and every
+            # RELATION dropped too. One variant discards the document.
+            name_key = normalize_entity_name(name)
             existing = await db.query(
-                "SELECT id FROM entity WHERE canonical_name = $name AND entity_type = $type LIMIT 1;",
-                {"name": name, "type": etype},
+                "SELECT id FROM entity WHERE name_key = $name_key "
+                "AND entity_type = $type LIMIT 1;",
+                {"name_key": name_key, "type": etype},
             )
             if existing and isinstance(existing, list) and len(existing) > 0:
                 if isinstance(existing[0], dict):
@@ -484,6 +496,11 @@ async def _write_to_surrealdb(
                 "CREATE entity CONTENT $data RETURN id;",
                 {"data": {
                     "canonical_name": name,
+                    # PC.3: identity, and the column migration 79's UNIQUE
+                    # index sits on. `write_to_db` defaults to True and the
+                    # app proxy exposes it that way, so this is a live writer
+                    # — it must use the SAME function as the repository.
+                    "name_key": name_key,
                     "entity_type": etype,
                     "description": desc,
                     "source_documents": [doc_name],
@@ -517,6 +534,13 @@ async def _write_to_surrealdb(
             rtype = rel.get("type", "related_to").strip()
             if not src or not tgt or src == tgt:
                 continue
+            # These come from `entity_map`, i.e. from the database — which is the
+            # assumption a stored malformed id would exploit. SurrealDB v2 cannot
+            # bind a RELATE endpoint as a `$param` (it silently matches 0 rows),
+            # so the id must be interpolated and must therefore be validated.
+            # This is the shape Track Y.1 lost a table to.
+            src = _validate_record_id(src, field="relation source")
+            tgt = _validate_record_id(tgt, field="relation target")
 
             await db.query(
                 f"RELATE {src}->relation->{tgt} SET "
@@ -789,23 +813,33 @@ async def get_entities(
     offset: int = 0,
 ):
     """List entities with optional type filter."""
-    where = f"WHERE status = '{status}'"
+    # BOUND, not interpolated. `status` and `type` are user-supplied strings that
+    # arrive unauthenticated through `services_proxy`, and an earlier version
+    # spliced them into a quoted literal — so `?status=active'; REMOVE TABLE
+    # entity; --` became a second statement. These are plain VALUES, not record
+    # ids or table names, so SurrealDB binds them and no interpolation is needed
+    # at all; the record-id validator exists only where binding is impossible.
+    where = "WHERE status = $status"
+    params: Dict[str, Any] = {"status": status}
     if type:
-        where += f" AND entity_type = '{type}'"
+        where += " AND entity_type = $entity_type"
+        params["entity_type"] = type
 
     entities = await _db_query(
         f"SELECT id, canonical_name, entity_type, description, confidence, "
         f"pagerank, community_id, array::len(source_documents) AS source_count "
         f"FROM entity {where} "
         f"ORDER BY entity_type, canonical_name "
-        f"LIMIT {limit} START {offset};"
+        f"LIMIT {limit} START {offset};",
+        params,
     )
-    total = await _db_query(f"SELECT count() FROM entity {where} GROUP ALL;")
+    total = await _db_query(f"SELECT count() FROM entity {where} GROUP ALL;", params)
     total_count = total[0].get("count", 0) if total else 0
 
     # Entity type counts
     type_counts = await _db_query(
-        f"SELECT entity_type, count() AS cnt FROM entity {where} GROUP BY entity_type;"
+        f"SELECT entity_type, count() AS cnt FROM entity {where} GROUP BY entity_type;",
+        params,
     )
 
     return {
@@ -820,6 +854,9 @@ async def get_entities(
 @app.get("/entities/{entity_id:path}")
 async def get_entity(entity_id: str):
     """Get a single entity with its relations and aliases."""
+    # `{entity_id:path}` accepts slashes and every SurrealQL metacharacter, and
+    # the value is interpolated into four queries below.
+    entity_id = _validate_record_id(entity_id, field="entity id")
     entity = await _db_query(f"SELECT * FROM {entity_id};")
     if not entity:
         raise HTTPException(status_code=404, detail=f"Entity not found: {entity_id}")
@@ -834,7 +871,8 @@ async def get_entity(entity_id: str):
     )
     # Enrich with target names
     for rel in outgoing:
-        target = await _db_query(f"SELECT canonical_name, entity_type FROM {rel.get('out', '')};")
+        target_id = _validate_record_id(rel.get("out", ""), field="relation target")
+        target = await _db_query(f"SELECT canonical_name, entity_type FROM {target_id};")
         if target:
             rel["target_name"] = target[0].get("canonical_name", "")
             rel["target_type"] = target[0].get("entity_type", "")
@@ -845,7 +883,8 @@ async def get_entity(entity_id: str):
         f"WHERE out = {entity_id} AND status = 'active';"
     )
     for rel in incoming:
-        source = await _db_query(f"SELECT canonical_name, entity_type FROM {rel.get('in', '')};")
+        source_id = _validate_record_id(rel.get("in", ""), field="relation source")
+        source = await _db_query(f"SELECT canonical_name, entity_type FROM {source_id};")
         if source:
             rel["source_name"] = source[0].get("canonical_name", "")
             rel["source_type"] = source[0].get("entity_type", "")
@@ -867,6 +906,7 @@ async def get_entity(entity_id: str):
 @app.get("/entities/{entity_id:path}/graph")
 async def get_entity_graph(entity_id: str, depth: int = 2):
     """Get the local graph around an entity (nodes + edges within depth hops)."""
+    entity_id = _validate_record_id(entity_id, field="entity id")
     # BFS traversal
     visited_nodes: Dict[str, Dict] = {}
     edges: List[Dict] = []
@@ -875,6 +915,11 @@ async def get_entity_graph(entity_id: str, depth: int = 2):
 
     while queue:
         current_id, current_depth = queue.pop(0)
+        # Re-validated on the way back in: these come from the graph rather than
+        # from the caller, but the traversal interpolates them exactly like the
+        # entry point does, and "it came from the database" is the assumption a
+        # stored malformed id would exploit.
+        current_id = _validate_record_id(current_id, field="entity id")
 
         # Get node info
         node = await _db_query(
@@ -978,11 +1023,15 @@ async def deduplicate(
     """
     t0 = time.time()
 
+    # BOUND, not interpolated — `entity_type` is a user-supplied string reaching
+    # here unauthenticated through `services_proxy`.
     where = "WHERE status = 'active'"
+    params: Dict[str, Any] = {}
     if entity_type:
-        where += f" AND entity_type = '{entity_type}'"
+        where += " AND entity_type = $entity_type"
+        params["entity_type"] = entity_type
 
-    entities = await _db_query(f"SELECT * FROM entity {where};")
+    entities = await _db_query(f"SELECT * FROM entity {where};", params)
 
     if len(entities) < 2:
         return DeduplicateResponse(
@@ -1075,9 +1124,40 @@ async def get_duplicates(
     )
 
 
+from record_ids import InvalidRecordId, validate_record_id
+from record_ids import _RECORD_ID_RE  # noqa: F401  (the pattern-sync guard reads it)
+
+
+def _validate_record_id(value: str, *, field: str = "record id") -> str:
+    """`validate_record_id`, translated into the HTTP boundary's answer.
+
+    The rule itself lives in `record_ids` so `entity_validator` can share it —
+    review found four unvalidated interpolations there after this file's were
+    closed, because the fix was scoped to the file the finding was in.
+    """
+    try:
+        return validate_record_id(value, field=field)
+    except InvalidRecordId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 class MergeRequest(BaseModel):
     canonical_id: str = Field(..., description="Entity to keep")
     duplicate_id: str = Field(..., description="Entity to merge into canonical")
+
+    @field_validator("canonical_id", "duplicate_id")
+    @classmethod
+    def _must_be_a_record_id(cls, v: str) -> str:
+        """Both ids are interpolated into SurrealQL nine times below.
+
+        Validated HERE rather than at each use: a check at the boundary cannot be
+        forgotten by the tenth interpolation, and it answers with a 422 before a
+        connection is opened.
+        """
+        try:
+            return validate_record_id(v, field="record id")
+        except InvalidRecordId as exc:
+            raise ValueError(str(exc)) from exc
 
 
 @app.post("/merge")
@@ -1132,6 +1212,10 @@ async def merge(req: MergeRequest):
         if dup_name:
             await db.query(
                 "CREATE entity_alias SET alias_text = $name, "
+                # `match_type` is TYPE string on a long-lived database
+                # (migration 80); omitting it fails there and silently
+                # succeeds on a fresh one. A dedup merge is an exact match.
+                "match_type = 'exact', method = 'dedup_merge', "
                 f"canonical_entity = {req.canonical_id}, confidence = 1.0;",
                 {"name": dup_name},
             )
@@ -1221,10 +1305,13 @@ async def validate_endpoint(
 
     t0 = time.time()
 
+    # BOUND, not interpolated — see `GET /entities`.
     where = "WHERE status = 'active'"
+    params: Dict[str, Any] = {}
     if entity_type:
-        where += f" AND entity_type = '{entity_type}'"
-    entities = await _db_query(f"SELECT * FROM entity {where};")
+        where += " AND entity_type = $entity_type"
+        params["entity_type"] = entity_type
+    entities = await _db_query(f"SELECT * FROM entity {where};", params)
 
     if not entities:
         return {"message": "No entities to validate", "total": 0}

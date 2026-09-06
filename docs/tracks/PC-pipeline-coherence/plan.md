@@ -317,24 +317,50 @@ plan's own
 **organ-of relation**, not a merge.
 
 Handed to **PC.4**: 8 names the graph held twice under two types, six of them
-`programme` against `topic`. The working corpus was emptied after the measurement,
-so PC.4 should re-derive the list from the cross-type band on real data — what
-carries forward is the shape of the finding, not the rows. The report records
-three figures that do not reconcile rather than picking one.
+`programme` against `topic`. An earlier version of this paragraph said the corpus
+had been emptied and that only the shape of the finding carried forward; that was
+wrong (correction of 2026-09-05). `staging` holds the corpus, so PC.4 can re-derive
+the list AND check the three figures the report records as not reconciling —
+which is now a resolvable question rather than a recorded discrepancy.
 
 ## PC.3 — Look at the graph that is already there — ~1.5d
 
-**The finding.** KG resolution (stage 10) is what matches a new mention against
-existing entities, and the app's default `FilteringConfig` does not enable it. So
-every document's entities are written fresh. Three convenanten naming the same
-ministers produced 58 entities with no consolidation.
+**Status: DONE.** Report: `phase-PC.3-report.md`. Measurement:
+`phase-PC.3-measurement.md`. Plan: `phase-PC.3-plan.md`.
 
-- Decide whether cross-document resolution belongs in the default path. If yes,
-  enable it and measure the cost; if no, say so in the config docstring and accept
-  that the graph is per-document.
+**The finding as written, and what measurement did to it.** The premise was that
+stage 10 never runs, so every document's entities are written fresh. Both halves
+moved under measurement, and the section below is kept as written so the change is
+visible rather than tidied away.
+
+*What was disproved.* "Every document writes its entities fresh" is not something
+this corpus can confirm or deny: only 8.7% of entities span more than one source,
+whether measured over the active graph or over all rows, and ten of the fourteen
+documents are convenanten for different regions — so a low rate is what overlap
+predicts, not evidence about the mechanism. Whether `upsert_entity`'s lookup HITS
+is recorded nowhere.
+
+*What was measured instead.* Enabling stage 10 consolidates NOTHING: its
+`kg_entity_id` / `kg_match_type` / `kg_similarity_score` have no consumer anywhere,
+and persistence identifies entities by `name_key` exactly as it does with the
+stage off. Turned on, measured across all five active entity types — 18 merges
+over 531 entities, 6 defensible — and turned back off, with the condition for its
+return encoded in `test_kg_resolution_default.py` rather than left as a note.
+
+*What shipped* is the identity key: `name_key`, migration 79's computed
+`identity_key`, migration 80's alias vocabulary, the candidate-fetch status
+filter, and a refusal on a database that predates 79.
+
+- Decide whether cross-document resolution belongs in the default path. **Decided:
+  no, not until its output has a destination.** See the report.
 - **From PC.1b's inventory**: `kg_resolution_report` (kept with no reader — this phase's AC needs its measured figure), `source_chunk_id`/`source_grounding`/`extraction_context` never persisted, `incremental_report`, and the raw write key (`upsert_entity` keys on the unfolded `canonical_name`, which is why case-variants are two rows).
-- **AC**: re-running the review corpus produces materially fewer than 117 rows,
-  with a named, measured figure; `M.C.G. Keijzer` is one entity.
+- **AC**: ~~re-running the review corpus produces materially fewer than 117 rows,
+  with a named, measured figure; `M.C.G. Keijzer` is one entity~~ — **RETIRED as
+  unmeasurable.** There are zero active persons in this graph (`M.C.G. Keijzer`
+  exists only as 3 `reference` + 2 `archived` rows), and the row-count target
+  assumed no consolidation existed. Replaced by the criteria in
+  `phase-PC.3-plan.md`, which are measured on the classes this corpus actually
+  holds.
 - **Watch**: stage 10 is also where the automatic alias registration lives, so
   PC.2's policy decision lands before this is switched on.
 
@@ -402,9 +428,11 @@ Report: [`phase-PC.6-report.md`](./phase-PC.6-report.md).
 Review: [`reviews/phase-PC.6-attempts-1-5.md`](./reviews/phase-PC.6-attempts-1-5.md).
 
 The reviewer's sign-off is technical and explicitly not consent to merge; that is
-the repository owner's call. Nothing was verified end-to-end against a corpus —
-`staging` was emptied for real data — so the first real extraction after this
-merges is the first real test of it.
+the repository owner's call. Nothing was verified end-to-end against a corpus, so
+the first real extraction after this merges is the first real test of it. The
+reason given at the time — that `staging` had been emptied — was wrong
+(correction of 2026-09-05); the corpus was there throughout, so that verification
+was available and simply not done.
 
 **The finding (review R1).** `ENABLE_CONCEPT_ALIGNMENT=true` did nothing in the
 measured run because alignment classifies only entities KG resolution marked

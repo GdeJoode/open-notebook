@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from loguru import logger
+from record_ids import validate_record_id
 from vocabulary_manager import load_vocab
 
 # ---------------------------------------------------------------------------
@@ -371,7 +372,11 @@ async def validate_entities(
 
     try:
         for ent in entities:
-            eid = str(ent.get("id", ""))
+            # Validated HERE, once, before any of the four UPDATEs below
+            # interpolate it. `eid` comes from the database, which is precisely
+            # the assumption a stored malformed id exploits — the argument
+            # `api.py` already makes for its own read-back ids.
+            eid = validate_record_id(str(ent.get("id", "")), field="entity id")
             name = ent.get("canonical_name", "")
             etype = ent.get("entity_type", "")
 
