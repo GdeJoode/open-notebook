@@ -121,7 +121,7 @@ class RunFilteringRequest(BaseModel):
     fuzzy_similarity_threshold: float = 0.85
     embedding_dedup_enabled: bool = False
     embedding_similarity_threshold: float = 0.90
-    edge_prediction_enabled: bool = False
+    # D6: no `edge_prediction_enabled` — see the FilteringConfig below.
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +345,10 @@ async def run_filtering(
                 enabled=body.embedding_dedup_enabled,
                 similarity_threshold=body.embedding_similarity_threshold,
             ),
-            edge_prediction_enabled=body.edge_prediction_enabled,
+            # D6: stage 13 is off and not a request option, for the reason PC.3
+            # gave for stage 10 below. Its output was written as unmarked
+            # relations; it returns only as a proposer with its own provenance.
+            edge_prediction_enabled=False,
             # PC.3: state the choice rather than inherit a default three files
             # away. This is the second production `FilteringConfig` and it set no
             # `kg_resolution` at all, so a re-filter ran on whatever the dataclass

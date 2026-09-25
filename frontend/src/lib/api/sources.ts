@@ -206,7 +206,6 @@ export const sourcesApi = {
     fuzzy_similarity_threshold?: number
     embedding_dedup_enabled?: boolean
     embedding_similarity_threshold?: number
-    edge_prediction_enabled?: boolean
   }) => {
     const response = await apiClient.post<{
       source_id: string

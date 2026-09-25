@@ -44,7 +44,7 @@ identity, and grounding records provenance. Everything else removes or labels.
 | **KG resolution (10)** | `kg_entity_id`, `kg_match_type`, score | **score** | **nothing reads it** | off (PC.3) |
 | incremental clustering (10b) | cluster ids + report | score | no reader | off |
 | ontology constraint (11) + centrality (12) | `validation_report` | checkable | no reader | off |
-| **edge prediction (13)** | **relations** | **score** | written to the graph, **unmarked** | **on** |
+| **edge prediction (13)** | **relations** | **score** | written to the graph, **unmarked** | **on** (off since D6) |
 | orphan connector (14) | relations | score | — | off |
 | concept alignment (15) | RELATED_TO / NOVEL | score | emits no relations; needs 10's `is_new` | off |
 | **`upsert_entity`** | **identity** | **checkable** (exact key on `normalize_entity_name`) | the graph | on |
@@ -60,7 +60,8 @@ checkable, it works, and it is the phase's real deliverable. Everything upstream
 that touches identity is either scoped to a single document, or produces a score,
 or is off.
 
-**2. Edge prediction is on, creates relations, and stamps no provenance.**
+**2. Edge prediction is on, creates relations, and stamps no provenance.** *(Off
+since D6, 2026-09-25; the 538 edges it wrote remain.)*
 `edge_predictor` sets no `extraction_method`; predicted edges are appended to
 `filtered.relations` and persisted identically. Measured on `staging`: all 1,892
 relations read `extraction_method = 'llm'`. **A machine-inferred edge is
