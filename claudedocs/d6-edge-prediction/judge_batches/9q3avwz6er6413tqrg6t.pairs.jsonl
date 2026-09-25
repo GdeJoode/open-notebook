@@ -1,0 +1,15 @@
+{"item": "E011", "entity_a": "Regiokassier", "type_a": "concept", "entity_b": "Regionale publieke financiering", "type_b": "concept"}
+{"item": "E023", "entity_a": "Regionale publieke financiering", "type_a": "concept", "entity_b": "Regionale private financiering", "type_b": "concept"}
+{"item": "E035", "entity_a": "D.M. van Weel", "type_a": "person", "entity_b": "Gemeente Zwolle", "type_b": "administrative_area"}
+{"item": "E036", "entity_a": "J.J.M. Uitermark", "type_a": "person", "entity_b": "het Rijk", "type_b": "concept"}
+{"item": "E039", "entity_a": "Partijen", "type_a": "organization", "entity_b": "Gemeente Zwolle", "type_b": "administrative_area"}
+{"item": "E041", "entity_a": "B. Madlener", "type_a": "person", "entity_b": "V.P.G. Karremans", "type_b": "person"}
+{"item": "E051", "entity_a": "Regionale publieke financiering", "type_a": "concept", "entity_b": "J.J.M. Uitermark", "type_b": "person"}
+{"item": "E056", "entity_a": "B. Madlener", "type_a": "person", "entity_b": "D.S. Beljaarts", "type_b": "person"}
+{"item": "E064", "entity_a": "regiokassier", "type_a": "person", "entity_b": "beschikking Specifieke uitkering", "type_b": "concept"}
+{"item": "E078", "entity_a": "Regionale private financiering", "type_a": "concept", "entity_b": "M.C.G. Keijzer", "type_b": "person"}
+{"item": "E082", "entity_a": "Regionale private financiering", "type_a": "concept", "entity_b": "B. Madlener", "type_b": "person"}
+{"item": "E085", "entity_a": "M.C.G. Keijzer", "type_a": "person", "entity_b": "B. Madlener", "type_b": "person"}
+{"item": "E088", "entity_a": "zorg- en welzijnsaanbod", "type_a": "topic", "entity_b": "gezondheid en gezondheidszorg", "type_b": "topic"}
+{"item": "E090", "entity_a": "V.P.G. Karremans", "type_a": "person", "entity_b": "J.J.M. Uitermark", "type_b": "person"}
+{"item": "E092", "entity_a": "Regio Envelop", "type_a": "concept", "entity_b": "Regio Deal", "type_b": "topic"}

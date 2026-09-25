@@ -140,6 +140,13 @@ week.* It is on, it creates, and nobody has ever looked. If its precision
 resembles stage 10's, it has been writing unmarked machine guesses into the graph
 for the life of the corpus.
 
+> **Measured 2026-09-25** — `phase-D6-edge-prediction.md`. 538 of 1,892 relations
+> are predicted. About one in six is a relation the text states (16.8%, 95% CI
+> 8.5–26.8%, against 90% for extracted edges), and 528 of the 538 are two-hop
+> shortcuts through a deal the graph already holds. The decision (stop enabling
+> it at `entity_extraction_service.py:1928`, or make it propose) is still the
+> owner's.
+
 ## What must not be repeated
 
 PC.3 spent five review rounds mostly on its own instruments. The two rules that
