@@ -1925,7 +1925,15 @@ class EntityExtractionService:
                             enabled=True,
                             similarity_threshold=0.90,
                         ),
-                        edge_prediction_enabled=True,
+                        # D6 measured stage 13 and it goes OFF. 538 of 1,892
+                        # relations were its output, stamped `llm` like extracted
+                        # edges; about one in six is a relation the text states,
+                        # and 528 of 538 join two entities that already share an
+                        # extracted neighbour, typically the deal. It comes back
+                        # only as a proposer with its own provenance
+                        # (phase-D6-edge-prediction.md;
+                        # guarded by tests/test_edge_prediction_default.py).
+                        edge_prediction_enabled=False,
                         # PC.3 turned stage 10 ON here and then measured it.
                         # It goes back OFF, and the reason is NOT that the stage
                         # is bad — it is that its answer has nowhere to go.

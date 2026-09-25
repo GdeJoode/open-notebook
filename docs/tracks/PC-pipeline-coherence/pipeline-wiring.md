@@ -72,13 +72,14 @@ And the inference built on it is withdrawn, not just the number. A spanning rate
 | 10b | Incremental clustering | `incremental_resolution.enabled` | off | `cluster_id/action/score`, `incremental_report` | inventory row, no reader |
 | 11 | Ontology constraint | `ontology_validation.enabled` | off | `validation_report` | `Owned("PC.6")` — no reader |
 | 12 | Graph centrality | `ontology_validation.graph_centrality_enabled` | off | `graph_report` | folded into `validation_report` |
-| 13 | Edge prediction | `edge_prediction_enabled` | **ON** (app sets) | `predicted_edges` | payload → relations |
+| 13 | Edge prediction | `edge_prediction_enabled` | off (D6 measured it; the app states False) | `predicted_edges` | payload → relations |
 | 14 | Orphan connector | `orphan_connector.enabled` | off | new relations | — |
 | 15 | Concept alignment | `ENABLE_CONCEPT_ALIGNMENT` | off (unset) | `concept_alignment_report` | `entity_extraction_service` |
 
 **Seven stages do work. Ten never run in any shipped configuration.** Stage 10
 was ON while this document was first written and is off as of `e58a2c18`; it is
-counted among the ten. Corrected after review, which found the stage count off by
+counted among the ten. Stage 13 was ON until D6 (2026-09-25) and is off since;
+with it, six stages do work and eleven never run. Corrected after review, which found the stage count off by
 one (17, not 16) and the off-count off by one with it.
 
 ## 4. Where the wiring is not logical
@@ -174,11 +175,11 @@ flowchart TB
     ING[INGEST] --> EMB[EMBED] --> EXT[EXTRACT] --> GRA[GRAPH] --> CMP[complete]
   end
 
-  subgraph FILTER["FilteringWorkflow — 17 stages, 7 do work"]
+  subgraph FILTER["FilteringWorkflow — 17 stages, 6 do work"]
     S1[1 noise] --> S2[2 normalize<br/>NOT the identity rule] --> S3[3 reclassify] --> S4[4 string dedup]
     S4 --> S5[5 fuzzy] --> S6[6 embedding dedup]
     S6 --> S10[10 KG resolution<br/>OFF — output unread]
-    S10 --> S13[13 edge prediction]
+    S10 --> S13[13 edge prediction<br/>OFF since D6]
   end
 
   subgraph DORMANT["Never run"]
