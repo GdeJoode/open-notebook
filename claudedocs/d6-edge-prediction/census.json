@@ -1,0 +1,275 @@
+{
+ "total_relations": 1892,
+ "predicted": 538,
+ "llm": 1354,
+ "status": {
+  "predicted": {
+   "active": 538
+  },
+  "llm": {
+   "active": 1354
+  }
+ },
+ "extraction_method_on_predicted": {
+  "llm": 538
+ },
+ "relation_type_on_predicted": {
+  "RELATED": 538
+ },
+ "llm_edges_typed_RELATED": 0,
+ "confidence_predicted": {
+  "0.5": 82,
+  "0.75": 19,
+  "0.55": 9,
+  "0.57": 15,
+  "0.79": 21,
+  "0.84": 14,
+  "0.91": 1,
+  "0.51": 16,
+  "0.54": 14,
+  "0.69": 2,
+  "0.77": 22,
+  "0.56": 17,
+  "0.74": 13,
+  "0.62": 8,
+  "0.61": 11,
+  "0.8": 28,
+  "0.71": 5,
+  "0.82": 21,
+  "0.58": 21,
+  "0.83": 27,
+  "0.81": 27,
+  "0.85": 5,
+  "0.6": 6,
+  "0.87": 6,
+  "0.53": 11,
+  "0.72": 6,
+  "0.78": 13,
+  "0.52": 17,
+  "0.7": 3,
+  "0.76": 19,
+  "0.65": 2,
+  "0.66": 5,
+  "0.86": 12,
+  "0.73": 13,
+  "0.59": 10,
+  "0.64": 6,
+  "0.88": 5,
+  "0.63": 3,
+  "0.68": 2,
+  "0.89": 1
+ },
+ "signal_pattern": {
+  "cooccurrence+adamic+jaccard": 80,
+  "cosine+cooccurrence+adamic+jaccard": 448,
+  "cosine+cooccurrence": 10
+ },
+ "dominant_signal": {
+  "adamic": 82,
+  "cosine": 445,
+  "jaccard": 11
+ },
+ "predicted_pair_also_has_llm_edge": 1,
+ "predicted_extra_property_keys": {},
+ "endpoint_status_predicted": {
+  "active+active": 239,
+  "reference+reference": 139,
+  "active+reference": 160
+ },
+ "endpoint_status_llm": {
+  "active+active": 418,
+  "active+reference": 433,
+  "reference+reference": 272,
+  "archived+archived": 46,
+  "active+archived": 154,
+  "archived+reference": 31
+ },
+ "endpoint_types_predicted": [
+  [
+   "administrative_area|administrative_area",
+   195
+  ],
+  [
+   "administrative_area|person",
+   70
+  ],
+  [
+   "administrative_area|concept",
+   55
+  ],
+  [
+   "concept|person",
+   53
+  ],
+  [
+   "person|person",
+   42
+  ],
+  [
+   "administrative_area|topic",
+   29
+  ],
+  [
+   "concept|concept",
+   15
+  ],
+  [
+   "administrative_area|government_organization",
+   11
+  ],
+  [
+   "concept|topic",
+   8
+  ],
+  [
+   "organization|person",
+   7
+  ],
+  [
+   "person|topic",
+   6
+  ],
+  [
+   "concept|government_organization",
+   4
+  ],
+  [
+   "government_organization|person",
+   4
+  ],
+  [
+   "concept|organization",
+   4
+  ],
+  [
+   "other|person",
+   4
+  ]
+ ],
+ "per_source": {
+  "source:052dtl7jrwu1czlpnui4": {
+   "predicted": 54,
+   "llm": 207
+  },
+  "source:0o96pew25fovpoom5n6r": {
+   "predicted": 31,
+   "llm": 230
+  },
+  "source:1k3c41i456l7ywu6y7iv": {
+   "predicted": 1,
+   "llm": 64
+  },
+  "source:9q3avwz6er6413tqrg6t": {
+   "predicted": 95,
+   "llm": 189
+  },
+  "source:dndibxmjveoxk7tfqfsl": {
+   "predicted": 6,
+   "llm": 224
+  },
+  "source:hjrb1cjvzv86oyaojblj": {
+   "predicted": 342,
+   "llm": 370
+  },
+  "source:niqnh6775y0xxwpz0nzd": {
+   "predicted": 9,
+   "llm": 70
+  }
+ },
+ "created_at_range_predicted": [
+  "2026-06-23T19:18:25.212686759Z",
+  "2026-09-02T17:52:44.312468581Z"
+ ],
+ "pairs": {
+  "predicted": {
+   "rows": 538,
+   "distinct_pairs": 456,
+   "pairs_seen_twice_or_more": 82,
+   "same_direction_duplicates": 37
+  },
+  "llm": {
+   "rows": 1354,
+   "distinct_pairs": 1240,
+   "pairs_seen_twice_or_more": 107,
+   "same_direction_duplicates": 32
+  }
+ },
+ "predicted_sharing_an_llm_neighbour": 528,
+ "top_shared_hubs": [
+  [
+   "Regio Deal Noord-Holland Noord",
+   353
+  ],
+  [
+   "Regio Deal Regio Zwolle II",
+   97
+  ],
+  [
+   "Regio Deal Zuidwest-Friesland",
+   50
+  ],
+  [
+   "Regio Deal Het Hogeland",
+   34
+  ],
+  [
+   "Rijk-Regio-overleg",
+   6
+  ]
+ ],
+ "llm_relation_types_near_RELATED": {
+  "RELATED": 0,
+  "RELATED_TO": 18,
+  "": 2
+ },
+ "largest_source_subgraph": {
+  "source": "source:hjrb1cjvzv86oyaojblj",
+  "rows": 342,
+  "distinct_pairs": 264,
+  "entities": 25,
+  "possible_pairs": 300,
+  "degree_histogram": {
+   "24": 13,
+   "18": 12
+  },
+  "entity_names": [
+   "14-11-2024",
+   "De Minister van Binnenlandse Zaken en Koninkrijksrelaties (BZK)",
+   "De Minister van Economische Zaken (EZ)",
+   "De Minister van Sociale Zaken en Werkgelegenheid (SZW)",
+   "De Minister van Volkshuisvesting en Ruimtelijke Ordening (VRO)",
+   "De Staatssecretaris van Infrastructuur en Waterstaat (IenW)",
+   "Gemeente Alkmaar",
+   "Gemeente Bergen",
+   "Gemeente Castricum",
+   "Gemeente Den Helder",
+   "Gemeente Dijk en Waard",
+   "Gemeente Drechterland",
+   "Gemeente Enkhuizen",
+   "Gemeente Heiloo",
+   "Gemeente Hollands Kroon",
+   "Gemeente Hoorn",
+   "Gemeente Koggeland",
+   "Gemeente Medemblik",
+   "Gemeente Opmeer",
+   "Gemeente Schagen",
+   "Gemeente Stede Broec",
+   "Gemeente Texel",
+   "Provincie Noord-Holland",
+   "Samen Noord-Holland Noord versterken",
+   "het Rijk"
+  ],
+  "rows_per_minute": {
+   "2026-06-23T19:46": 171,
+   "2026-06-23T20:52": 159,
+   "2026-06-23T20:53": 12
+  }
+ },
+ "rescore": {
+  "stored_confidence_equals_fallback_weights": 538,
+  "graph_signals_only_max_fallback": 0.5,
+  "graph_signals_only_max_current": 0.6000000000000001,
+  "cooccurrence_signal_is_1_on": 538,
+  "clear_threshold_without_cosine_fallback": 343
+ }
+}

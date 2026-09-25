@@ -1,0 +1,52 @@
+{"item": "E000", "entity_a": "Gemeente Alkmaar", "type_a": "administrative_area", "entity_b": "Gemeente Heiloo", "type_b": "administrative_area"}
+{"item": "E002", "entity_a": "Provincie Noord-Holland", "type_a": "administrative_area", "entity_b": "Gemeente Bergen", "type_b": "administrative_area"}
+{"item": "E004", "entity_a": "Gemeente Alkmaar", "type_a": "administrative_area", "entity_b": "Gemeente Schagen", "type_b": "administrative_area"}
+{"item": "E010", "entity_a": "Gemeente Heiloo", "type_a": "administrative_area", "entity_b": "Gemeente Schagen", "type_b": "administrative_area"}
+{"item": "E014", "entity_a": "De Minister van Sociale Zaken en Werkgelegenheid (SZW)", "type_a": "person", "entity_b": "De Minister van Binnenlandse Zaken en Koninkrijksrelaties (BZK)", "type_b": "person"}
+{"item": "E015", "entity_a": "Bloembollenareaal", "type_a": "topic", "entity_b": "Noord-Holland Noord", "type_b": "programme"}
+{"item": "E016", "entity_a": "Gemeente Hollands Kroon", "type_a": "administrative_area", "entity_b": "Gemeente Stede Broec", "type_b": "administrative_area"}
+{"item": "E017", "entity_a": "Gemeente Opmeer", "type_a": "administrative_area", "entity_b": "Gemeente Hoorn", "type_b": "administrative_area"}
+{"item": "E018", "entity_a": "Gemeente Opmeer", "type_a": "administrative_area", "entity_b": "Gemeente Texel", "type_b": "administrative_area"}
+{"item": "E019", "entity_a": "Gemeente Schagen", "type_a": "administrative_area", "entity_b": "Gemeente Castricum", "type_b": "administrative_area"}
+{"item": "E022", "entity_a": "Gemeente Den Helder", "type_a": "administrative_area", "entity_b": "Gemeente Hoorn", "type_b": "administrative_area"}
+{"item": "E024", "entity_a": "Beter Werken", "type_a": "topic", "entity_b": "Bereikbare en duurzame bedrijventerreinen (Beter Werken)", "type_b": "topic"}
+{"item": "E027", "entity_a": "Gemeente Enkhuizen", "type_a": "administrative_area", "entity_b": "Samen Noord-Holland Noord versterken", "type_b": "topic"}
+{"item": "E028", "entity_a": "Gemeente Alkmaar", "type_a": "administrative_area", "entity_b": "Provincie Noord-Holland", "type_b": "administrative_area"}
+{"item": "E029", "entity_a": "Gemeente Stede Broec", "type_a": "administrative_area", "entity_b": "Regio Deal Noord-Holland Noord", "type_b": "programme"}
+{"item": "E030", "entity_a": "geïntegreerde opleidingstrajecten", "type_a": "topic", "entity_b": "erkenning van eerder verworven competenties", "type_b": "topic"}
+{"item": "E031", "entity_a": "innovatieslagkracht", "type_a": "topic", "entity_b": "onderwijscampussen", "type_b": "topic"}
+{"item": "E032", "entity_a": "Gemeente Hollands Kroon", "type_a": "administrative_area", "entity_b": "Gemeente Medemblik", "type_b": "administrative_area"}
+{"item": "E033", "entity_a": "De Minister van Economische Zaken (EZ)", "type_a": "person", "entity_b": "Gemeente Drechterland", "type_b": "administrative_area"}
+{"item": "E034", "entity_a": "Gemeente Medemblik", "type_a": "administrative_area", "entity_b": "Gemeente Texel", "type_b": "administrative_area"}
+{"item": "E038", "entity_a": "Gemeente Koggeland", "type_a": "administrative_area", "entity_b": "Gemeente Den Helder", "type_b": "administrative_area"}
+{"item": "E040", "entity_a": "Regio Deal Noord-Holland Noord", "type_a": "programme", "entity_b": "Triple Helix", "type_b": "concept"}
+{"item": "E042", "entity_a": "Herenboerderij", "type_a": "topic", "entity_b": "natuur gedreven", "type_b": "topic"}
+{"item": "E043", "entity_a": "Regio Deal Noord-Holland Noord", "type_a": "programme", "entity_b": "Regio Alkmaar", "type_b": "concept"}
+{"item": "E047", "entity_a": "14-11-2024", "type_a": "concept", "entity_b": "Gemeente Heiloo", "type_b": "administrative_area"}
+{"item": "E048", "entity_a": "14-11-2024", "type_a": "concept", "entity_b": "Samen Noord-Holland Noord versterken", "type_b": "topic"}
+{"item": "E049", "entity_a": "Provincie Noord-Holland", "type_a": "administrative_area", "entity_b": "het Rijk", "type_b": "concept"}
+{"item": "E050", "entity_a": "Gemeente Drechterland", "type_a": "administrative_area", "entity_b": "Gemeente Hoorn", "type_b": "administrative_area"}
+{"item": "E055", "entity_a": "Gemeente Dijk en Waard", "type_a": "administrative_area", "entity_b": "Gemeente Heiloo", "type_b": "administrative_area"}
+{"item": "E057", "entity_a": "Regio", "type_a": "programme", "entity_b": "coöperatief wonen", "type_b": "topic"}
+{"item": "E058", "entity_a": "het Rijk", "type_a": "concept", "entity_b": "De Minister van Volkshuisvesting en Ruimtelijke Ordening (VRO)", "type_b": "person"}
+{"item": "E060", "entity_a": "De Minister van Economische Zaken (EZ)", "type_a": "person", "entity_b": "Gemeente Castricum", "type_b": "administrative_area"}
+{"item": "E063", "entity_a": "De Minister van Economische Zaken (EZ)", "type_a": "person", "entity_b": "Gemeente Enkhuizen", "type_b": "administrative_area"}
+{"item": "E067", "entity_a": "Gemeente Heiloo", "type_a": "administrative_area", "entity_b": "Gemeente Den Helder", "type_b": "administrative_area"}
+{"item": "E070", "entity_a": "Regio", "type_a": "programme", "entity_b": "netcongestieproblematiek", "type_b": "topic"}
+{"item": "E072", "entity_a": "De Staatssecretaris van Infrastructuur en Waterstaat (IenW)", "type_a": "government_organization", "entity_b": "Gemeente Dijk en Waard", "type_b": "administrative_area"}
+{"item": "E073", "entity_a": "De Staatssecretaris van Infrastructuur en Waterstaat (IenW)", "type_a": "government_organization", "entity_b": "Gemeente Alkmaar", "type_b": "administrative_area"}
+{"item": "E074", "entity_a": "Gemeente Dijk en Waard", "type_a": "administrative_area", "entity_b": "Gemeente Hoorn", "type_b": "administrative_area"}
+{"item": "E075", "entity_a": "praktijkgerichte en inspirerende leeromgevingen", "type_a": "topic", "entity_b": "ontwikkeling en groei van individuen", "type_b": "topic"}
+{"item": "E076", "entity_a": "Groene energie", "type_a": "topic", "entity_b": "Noord-Holland Noord", "type_b": "programme"}
+{"item": "E077", "entity_a": "Gemeente Schagen", "type_a": "administrative_area", "entity_b": "Gemeente Hollands Kroon", "type_b": "administrative_area"}
+{"item": "E079", "entity_a": "Gemeente Dijk en Waard", "type_a": "administrative_area", "entity_b": "Gemeente Hoorn", "type_b": "administrative_area"}
+{"item": "E080", "entity_a": "Leven Lang Ontwikkelen (LLO)", "type_a": "topic", "entity_b": "Regio Deal Noord-Holland Noord", "type_b": "programme"}
+{"item": "E084", "entity_a": "De Staatssecretaris van Infrastructuur en Waterstaat (IenW)", "type_a": "government_organization", "entity_b": "Gemeente Hoorn", "type_b": "administrative_area"}
+{"item": "E091", "entity_a": "Mismatch op de arbeidsmarkt", "type_a": "topic", "entity_b": "Regio Deal Noord-Holland Noord", "type_b": "programme"}
+{"item": "E096", "entity_a": "Gemeente Drechterland", "type_a": "administrative_area", "entity_b": "het Rijk", "type_b": "concept"}
+{"item": "E097", "entity_a": "Gemeente Enkhuizen", "type_a": "administrative_area", "entity_b": "Gemeente Alkmaar", "type_b": "administrative_area"}
+{"item": "E099", "entity_a": "het Rijk", "type_a": "concept", "entity_b": "Gemeente Alkmaar", "type_b": "administrative_area"}
+{"item": "E100", "entity_a": "Gemeente Alkmaar", "type_a": "administrative_area", "entity_b": "Regio Deal Noord-Holland Noord", "type_b": "programme"}
+{"item": "E101", "entity_a": "Regio Deal Noord-Holland Noord", "type_a": "programme", "entity_b": "Groene energie", "type_b": "topic"}
+{"item": "E102", "entity_a": "Gemeente Koggeland", "type_a": "administrative_area", "entity_b": "Gemeente Dijk en Waard", "type_b": "administrative_area"}
+{"item": "E103", "entity_a": "Gemeente Hoorn", "type_a": "administrative_area", "entity_b": "Gemeente Alkmaar", "type_b": "administrative_area"}

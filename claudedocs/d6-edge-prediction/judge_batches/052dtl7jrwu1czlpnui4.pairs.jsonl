@@ -1,0 +1,13 @@
+{"item": "E001", "entity_a": "Regio Deal", "type_a": "programme", "entity_b": "Provincie Fryslân", "type_b": "administrative_area"}
+{"item": "E007", "entity_a": "Staatssecretaris voor Volksgezondheid, Welzijn en Sport", "type_a": "person", "entity_b": "Gemeente Súdwest-Fryslân", "type_b": "administrative_area"}
+{"item": "E013", "entity_a": "Toekomstbestendig voortgezet onderwijs", "type_a": "topic", "entity_b": "CVO", "type_b": "concept"}
+{"item": "E020", "entity_a": "Gemeente Súdwest-Fryslân", "type_a": "administrative_area", "entity_b": "Minister van Volkshuisvesting en Ruimtelijke Ordening", "type_b": "other"}
+{"item": "E026", "entity_a": "Opgave 4: economie", "type_a": "topic", "entity_b": "midden- en kleine bedrijven", "type_b": "topic"}
+{"item": "E054", "entity_a": "veerkracht", "type_a": "topic", "entity_b": "ruimtelijke kwaliteit", "type_b": "topic"}
+{"item": "E062", "entity_a": "Regio Envelop", "type_a": "concept", "entity_b": "Regio Deal", "type_b": "programme"}
+{"item": "E066", "entity_a": "sterke vergrijzing", "type_a": "topic", "entity_b": "regionale arbeidsmarkt", "type_b": "topic"}
+{"item": "E081", "entity_a": "Staatssecretaris van Infrastructuur en Waterstaat", "type_a": "person", "entity_b": "Wetterskip Fryslân", "type_b": "concept"}
+{"item": "E086", "entity_a": "Staatssecretaris voor Volksgezondheid, Welzijn en Sport", "type_a": "person", "entity_b": "Staatssecretaris van Infrastructuur en Waterstaat", "type_b": "person"}
+{"item": "E094", "entity_a": "Regio Deal Zuidwest-Friesland", "type_a": "topic", "entity_b": "Staatssecretaris van Infrastructuur en Waterstaat", "type_b": "person"}
+{"item": "E095", "entity_a": "Regio", "type_a": "administrative_area", "entity_b": "Regio Deal", "type_b": "programme"}
+{"item": "E098", "entity_a": "Regio Envelop", "type_a": "concept", "entity_b": "Regio", "type_b": "administrative_area"}

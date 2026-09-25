@@ -1,0 +1,267 @@
+{
+ "predicted_direct_rate_population_weighted": 0.168,
+ "predicted_by_document": {
+  "source:052dtl7jrwu1czlpnui4": {
+   "n": 8,
+   "direct": 4,
+   "indirect": 4,
+   "direct_rate": 0.5,
+   "direct_ci95": [
+    0.215,
+    0.785
+   ],
+   "direct_or_indirect_rate": 1.0
+  },
+  "source:0o96pew25fovpoom5n6r": {
+   "n": 5,
+   "indirect": 2,
+   "direct": 3,
+   "direct_rate": 0.6,
+   "direct_ci95": [
+    0.231,
+    0.882
+   ],
+   "direct_or_indirect_rate": 1.0
+  },
+  "source:1k3c41i456l7ywu6y7iv": {
+   "n": 1,
+   "direct": 1,
+   "direct_rate": 1.0,
+   "direct_ci95": [
+    0.207,
+    1.0
+   ],
+   "direct_or_indirect_rate": 1.0
+  },
+  "source:9q3avwz6er6413tqrg6t": {
+   "n": 13,
+   "indirect": 6,
+   "direct": 4,
+   "none": 3,
+   "direct_rate": 0.308,
+   "direct_ci95": [
+    0.127,
+    0.576
+   ],
+   "direct_or_indirect_rate": 0.769
+  },
+  "source:hjrb1cjvzv86oyaojblj": {
+   "n": 36,
+   "indirect": 34,
+   "direct": 2,
+   "direct_rate": 0.056,
+   "direct_ci95": [
+    0.015,
+    0.181
+   ],
+   "direct_or_indirect_rate": 1.0
+  },
+  "source:niqnh6775y0xxwpz0nzd": {
+   "n": 1,
+   "indirect": 1,
+   "direct_rate": 0.0,
+   "direct_ci95": [
+    0.0,
+    0.793
+   ],
+   "direct_or_indirect_rate": 1.0
+  }
+ },
+ "confidence_band_within_cosine+cooccurrence+adamic+jaccard": {
+  "<0.6": {
+   "n": 15,
+   "direct": 4,
+   "indirect": 8,
+   "none": 3,
+   "direct_rate": 0.267,
+   "direct_ci95": [
+    0.109,
+    0.52
+   ],
+   "direct_or_indirect_rate": 0.8
+  },
+  "0.6-0.75": {
+   "n": 10,
+   "indirect": 7,
+   "direct": 3,
+   "direct_rate": 0.3,
+   "direct_ci95": [
+    0.108,
+    0.603
+   ],
+   "direct_or_indirect_rate": 1.0
+  },
+  ">=0.75": {
+   "n": 25,
+   "indirect": 23,
+   "direct": 2,
+   "direct_rate": 0.08,
+   "direct_ci95": [
+    0.022,
+    0.25
+   ],
+   "direct_or_indirect_rate": 1.0
+  }
+ },
+ "by_origin": {
+  "predicted": {
+   "n": 64,
+   "indirect": 47,
+   "direct": 14,
+   "none": 3,
+   "direct_rate": 0.219,
+   "direct_ci95": [
+    0.135,
+    0.334
+   ],
+   "direct_or_indirect_rate": 0.953
+  },
+  "llm": {
+   "n": 40,
+   "direct": 36,
+   "indirect": 2,
+   "none": 2,
+   "direct_rate": 0.9,
+   "direct_ci95": [
+    0.769,
+    0.96
+   ],
+   "direct_or_indirect_rate": 0.95
+  }
+ },
+ "predicted_by_pattern": {
+  "cooccurrence+adamic+jaccard": {
+   "n": 9,
+   "indirect": 9,
+   "direct_rate": 0.0,
+   "direct_ci95": [
+    0.0,
+    0.299
+   ],
+   "direct_or_indirect_rate": 1.0
+  },
+  "cosine+cooccurrence": {
+   "n": 5,
+   "direct": 5,
+   "direct_rate": 1.0,
+   "direct_ci95": [
+    0.566,
+    1.0
+   ],
+   "direct_or_indirect_rate": 1.0
+  },
+  "cosine+cooccurrence+adamic+jaccard": {
+   "n": 50,
+   "indirect": 38,
+   "direct": 9,
+   "none": 3,
+   "direct_rate": 0.18,
+   "direct_ci95": [
+    0.098,
+    0.308
+   ],
+   "direct_or_indirect_rate": 0.94
+  }
+ },
+ "predicted_by_dominant": {
+  "adamic": {
+   "n": 9,
+   "indirect": 9,
+   "direct_rate": 0.0,
+   "direct_ci95": [
+    0.0,
+    0.299
+   ],
+   "direct_or_indirect_rate": 1.0
+  },
+  "cosine": {
+   "n": 54,
+   "indirect": 38,
+   "direct": 14,
+   "none": 2,
+   "direct_rate": 0.259,
+   "direct_ci95": [
+    0.161,
+    0.389
+   ],
+   "direct_or_indirect_rate": 0.963
+  },
+  "jaccard": {
+   "n": 1,
+   "none": 1,
+   "direct_rate": 0.0,
+   "direct_ci95": [
+    0.0,
+    0.793
+   ],
+   "direct_or_indirect_rate": 0.0
+  }
+ },
+ "by_origin_with_shared_chunk": {
+  "predicted": {
+   "n": 10,
+   "indirect": 4,
+   "direct": 6,
+   "direct_rate": 0.6,
+   "direct_ci95": [
+    0.313,
+    0.832
+   ],
+   "direct_or_indirect_rate": 1.0
+  },
+  "llm": {
+   "n": 18,
+   "direct": 17,
+   "indirect": 1,
+   "direct_rate": 0.944,
+   "direct_ci95": [
+    0.742,
+    0.99
+   ],
+   "direct_or_indirect_rate": 1.0
+  }
+ },
+ "predicted_direct_rate_population_weighted_ci95_bootstrap": [
+  0.085,
+  0.268
+ ],
+ "fisher_p_high_vs_low_band": 0.174,
+ "predicted_indirect_by_category": {
+  "co_listed": 36,
+  "party_to_deal_vs_deal_attribute": 2,
+  "rijk_regio_link": 9
+ },
+ "quote_fidelity": {
+  "verbatim": 91,
+  "verbatim_after_ellipsis_split": 3,
+  "empty": 5,
+  "not_found": 5,
+  "not_found_items": [
+   {
+    "item": "E052",
+    "origin": "llm",
+    "verdict": "direct"
+   },
+   {
+    "item": "E054",
+    "origin": "llm",
+    "verdict": "direct"
+   },
+   {
+    "item": "E069",
+    "origin": "llm",
+    "verdict": "direct"
+   },
+   {
+    "item": "E087",
+    "origin": "llm",
+    "verdict": "direct"
+   },
+   {
+    "item": "E091",
+    "origin": "llm",
+    "verdict": "direct"
+   }
+  ]
+ }
+}

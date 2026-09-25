@@ -1,0 +1,152 @@
+[
+ {
+  "item": "E001",
+  "origin": "predicted",
+  "A": "Regio Deal",
+  "B": "Provincie Fryslân",
+  "judge": "direct",
+  "quote": "Regio Deal Zuidwest-Friesland ... Gedeputeerde staten van de provincie Fryslân, namens deze: de heer R.F. Douwstra (gedeputeerde), hierna te noemen: Provincie Fryslân;",
+  "reason": "Provincie Fryslân is named as a signing Partij to this Regio Deal.",
+  "owner": "agree"
+ },
+ {
+  "item": "E002",
+  "origin": "predicted",
+  "A": "Provincie Noord-Holland",
+  "B": "Gemeente Bergen",
+  "judge": "indirect",
+  "quote": "Partijen genoemd onder 6 tot en met 29 hierna samen te noemen: Regio.",
+  "reason": "Provincie Noord-Holland and Gemeente Bergen are both parties in the same 'Regio' list, no direct statement between them.",
+  "owner": "agree"
+ },
+ {
+  "item": "E017",
+  "origin": "predicted",
+  "A": "Gemeente Opmeer",
+  "B": "Gemeente Hoorn",
+  "judge": "indirect",
+  "quote": "Partijen genoemd onder 6 tot en met 29 hierna samen te noemen: Regio.",
+  "reason": "Opmeer and Hoorn are both parties in the same 'Regio' list, no direct statement between them.",
+  "owner": "agree"
+ },
+ {
+  "item": "E025",
+  "origin": "predicted",
+  "A": "De Minister van Volkshuisvesting en Ruimtelijke Ordening, M.C.G. Keijzer",
+  "B": "De Minister van Justitie en Veiligheid, D.M. van Weel",
+  "judge": "indirect",
+  "quote": "Partijen genoemd onder 1 tot en met 5, ieder handelend als bestuursorgaan en als vertegenwoordiger van de Staat der Nederlanden, hierna samen te noemen: het Rijk;",
+  "reason": "Both ministers are only co-listed as signatory parties grouped under 'het Rijk', with no stated relation between them.",
+  "owner": "agree"
+ },
+ {
+  "item": "E036",
+  "origin": "predicted",
+  "A": "J.J.M. Uitermark",
+  "B": "het Rijk",
+  "judge": "direct",
+  "quote": "Partijen genoemd onder 1 tot en met 7 ieder handelend als bestuursorgaan en als vertegenwoordiger  van de Staat der Nederlanden, hierna samen te noemen: het Rijk;",
+  "reason": "J.J.M. Uitermark is party 2 (BZK), one of parties 1-7 explicitly collectively named 'het Rijk'.",
+  "owner": "agree"
+ },
+ {
+  "item": "E046",
+  "origin": "llm",
+  "A": "Ministerie van Economische Zaken en Klimaat",
+  "B": "Innovation for Jobs",
+  "judge": "none",
+  "quote": "",
+  "reason": "Neither the Ministerie van Economische Zaken en Klimaat nor Innovation for Jobs occurs anywhere in the document.",
+  "owner": "agree"
+ },
+ {
+  "item": "E047",
+  "origin": "predicted",
+  "A": "14-11-2024",
+  "B": "Gemeente Heiloo",
+  "judge": "indirect",
+  "quote": "Regio Deal Noord-Holland Noord         14-11-2024",
+  "reason": "14-11-2024 is the convenant's date and Gemeente Heiloo is a party to that same convenant, but no statement ties the date specifically to Heiloo.",
+  "owner": "agree"
+ },
+ {
+  "item": "E049",
+  "origin": "predicted",
+  "A": "Provincie Noord-Holland",
+  "B": "het Rijk",
+  "judge": "indirect",
+  "quote": "Rijk en Regio werken samen in Regio Deals aan complexe, regionale opgaven gericht op het vergroten van de kwaliteit van leven, wonen en werken in de regio ('brede welvaart').",
+  "reason": "Provincie Noord-Holland (part of de Regio) and het Rijk are only connected through the general Rijk-Regio cooperation statement.",
+  "owner": "agree"
+ },
+ {
+  "item": "E051",
+  "origin": "predicted",
+  "A": "Regionale publieke financiering",
+  "B": "J.J.M. Uitermark",
+  "judge": "none",
+  "quote": "",
+  "reason": "J.J.M. Uitermark (BZK) is not mentioned in connection with Regionale publieke financiering, which is defined only in relation to regional (not Rijk) parties.",
+  "owner": "agree"
+ },
+ {
+  "item": "E054",
+  "origin": "llm",
+  "A": "veerkracht",
+  "B": "ruimtelijke kwaliteit",
+  "judge": "direct",
+  "quote": "Partijen veronderstellen dat ruimtelijke kwaliteit kan worden gebruikt om de gezondheid van de inwoners te faciliteren, bevorderen en beschermen. Positieve gezondheid gaat over welzijn, meedoen, en over veerkracht om met het leven om te gaan zoals het zich voordoet.",
+  "reason": "The document directly links ruimtelijke kwaliteit to veerkracht via its effect on (positieve) gezondheid.",
+  "owner": "agree"
+ },
+ {
+  "item": "E061",
+  "origin": "llm",
+  "A": "Programmalijn 1: Leefbaarheid",
+  "B": "triple helix",
+  "judge": "none",
+  "quote": "",
+  "reason": "Programmalijn 1: Leefbaarheid and triple helix are discussed in separate sections of the document with no stated connection between them.",
+  "owner": "agree"
+ },
+ {
+  "item": "E062",
+  "origin": "predicted",
+  "A": "Regio Envelop",
+  "B": "Regio Deal",
+  "judge": "direct",
+  "quote": "Regio Envelop : het bedrag van € 900 miljoen dat het kabinet Rutte IV beschikbaar heeft gesteld om in de periode van 2022 - 2025 nieuwe Regio Deals af te sluiten;",
+  "reason": "Regio Envelop is defined as the fund used to close Regio Deals.",
+  "owner": "agree"
+ },
+ {
+  "item": "E069",
+  "origin": "llm",
+  "A": "Krachtige Kernen",
+  "B": "natuurlijk eigenaarschap",
+  "judge": "direct",
+  "quote": "De Regio werkt aan 'natuurlijk eigenaarschap' en betrokkenheid vanuit de dorpen.",
+  "reason": "Natuurlijk eigenaarschap is described as a specific activity within the Krachtige Kernen programmalijn.",
+  "owner": "agree"
+ },
+ {
+  "item": "E082",
+  "origin": "predicted",
+  "A": "Regionale private financiering",
+  "B": "B. Madlener",
+  "judge": "none",
+  "quote": "",
+  "reason": "B. Madlener (IenW) is not mentioned in connection with Regionale private financiering anywhere in the document.",
+  "owner": "agree"
+ },
+ {
+  "item": "E095",
+  "origin": "predicted",
+  "A": "Regio",
+  "B": "Regio Deal",
+  "judge": "direct",
+  "quote": "Rijk en Regio werken samen in Regio Deals aan complexe, regionale opgaven gericht op het vergroten van de kwaliteit van leven, wonen en werken in de regio ('brede welvaart').",
+  "reason": "Regio is stated to work together with Rijk within Regio Deals.",
+  "owner": "agree"
+ }
+]

@@ -1,0 +1,237 @@
+[
+ {
+  "item": "E000",
+  "category": "co_listed",
+  "reason": "Alkmaar and Heiloo are both listed among the many municipal parties grouped as 'Regio', with no direct statement linking them to each other."
+ },
+ {
+  "item": "E002",
+  "category": "co_listed",
+  "reason": "Provincie Noord-Holland and Gemeente Bergen are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E004",
+  "category": "co_listed",
+  "reason": "Alkmaar and Schagen are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E006",
+  "category": "co_listed",
+  "reason": "Both ministers are only co-listed as signatory parties grouped under 'het Rijk', with no stated relation between them."
+ },
+ {
+  "item": "E007",
+  "category": "co_listed",
+  "reason": "Both only co-occur as members of the same Rijk-Regio-overleg list; no statement links VWS and Gemeente Súdwest-Fryslân directly."
+ },
+ {
+  "item": "E008",
+  "category": "co_listed",
+  "reason": "Russia and China are only co-listed as countries interested in Canadian federalism, with no stated relation between them."
+ },
+ {
+  "item": "E010",
+  "category": "co_listed",
+  "reason": "Heiloo and Schagen are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E011",
+  "category": "co_listed",
+  "reason": "Both are defined terms in the same Begripsbepaling list built around 'publieke regionale Partij', but no statement relates Regiokassier to Regionale publieke financiering directly."
+ },
+ {
+  "item": "E014",
+  "category": "co_listed",
+  "reason": "SZW and BZK ministers are both grouped as signatories forming 'het Rijk', with no statement relating them to each other specifically."
+ },
+ {
+  "item": "E016",
+  "category": "co_listed",
+  "reason": "Hollands Kroon and Stede Broec are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E017",
+  "category": "co_listed",
+  "reason": "Opmeer and Hoorn are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E018",
+  "category": "co_listed",
+  "reason": "Opmeer and Texel are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E019",
+  "category": "co_listed",
+  "reason": "Schagen and Castricum are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E020",
+  "category": "co_listed",
+  "reason": "Both are named among the Partijen to the same convenant, but no statement connects VRO and Gemeente Súdwest-Fryslân specifically."
+ },
+ {
+  "item": "E022",
+  "category": "co_listed",
+  "reason": "Den Helder and Hoorn are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E025",
+  "category": "co_listed",
+  "reason": "Both ministers are only co-listed as signatory parties grouped under 'het Rijk', with no stated relation between them."
+ },
+ {
+  "item": "E027",
+  "category": "party_to_deal_vs_deal_attribute",
+  "reason": "Enkhuizen is a party to the convenant whose subtitle is 'Samen Noord-Holland Noord versterken', but no statement directly links the municipality to that phrase."
+ },
+ {
+  "item": "E028",
+  "category": "co_listed",
+  "reason": "Alkmaar and Provincie Noord-Holland are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E032",
+  "category": "co_listed",
+  "reason": "Hollands Kroon and Medemblik are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E033",
+  "category": "rijk_regio_link",
+  "reason": "Minister EZ (part of het Rijk) and Gemeente Drechterland (part of de Regio) are only connected through the general Rijk-Regio cooperation, not a direct statement about each other."
+ },
+ {
+  "item": "E034",
+  "category": "co_listed",
+  "reason": "Medemblik and Texel are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E035",
+  "category": "co_listed",
+  "reason": "D.M. van Weel (as JenV, party 5) and Gemeente Zwolle (party 8) are both listed as signatory Partijen, with no statement relating them to each other directly."
+ },
+ {
+  "item": "E038",
+  "category": "co_listed",
+  "reason": "Koggeland and Den Helder are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E041",
+  "category": "co_listed",
+  "reason": "B. Madlener (IenW) and V.P.G. Karremans (VWS) are both listed among parties 1-7 (het Rijk) with no statement linking them to each other directly."
+ },
+ {
+  "item": "E047",
+  "category": "party_to_deal_vs_deal_attribute",
+  "reason": "14-11-2024 is the convenant's date and Gemeente Heiloo is a party to that same convenant, but no statement ties the date specifically to Heiloo."
+ },
+ {
+  "item": "E049",
+  "category": "rijk_regio_link",
+  "reason": "Provincie Noord-Holland (part of de Regio) and het Rijk are only connected through the general Rijk-Regio cooperation statement."
+ },
+ {
+  "item": "E050",
+  "category": "co_listed",
+  "reason": "Drechterland and Hoorn are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E055",
+  "category": "co_listed",
+  "reason": "Dijk en Waard and Heiloo are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E056",
+  "category": "co_listed",
+  "reason": "B. Madlener (IenW) and D.S. Beljaarts (EZ) are both listed among parties 1-7 (het Rijk) with no direct statement connecting them to each other."
+ },
+ {
+  "item": "E060",
+  "category": "rijk_regio_link",
+  "reason": "Minister EZ and Gemeente Castricum are only connected through the general Rijk-Regio cooperation, not a direct statement about each other."
+ },
+ {
+  "item": "E063",
+  "category": "rijk_regio_link",
+  "reason": "Minister EZ and Gemeente Enkhuizen are only connected through the general Rijk-Regio cooperation, not a direct statement about each other."
+ },
+ {
+  "item": "E067",
+  "category": "co_listed",
+  "reason": "Heiloo and Den Helder are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E072",
+  "category": "rijk_regio_link",
+  "reason": "Staatssecretaris IenW and Gemeente Dijk en Waard are only connected through the general Rijk-Regio cooperation, not a direct statement about each other."
+ },
+ {
+  "item": "E073",
+  "category": "rijk_regio_link",
+  "reason": "Staatssecretaris IenW and Gemeente Alkmaar are only connected through the general Rijk-Regio cooperation, not a direct statement about each other."
+ },
+ {
+  "item": "E074",
+  "category": "co_listed",
+  "reason": "Dijk en Waard and Hoorn are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E077",
+  "category": "co_listed",
+  "reason": "Schagen and Hollands Kroon are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E079",
+  "category": "co_listed",
+  "reason": "Dijk en Waard and Hoorn are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E081",
+  "category": "co_listed",
+  "reason": "Both only appear together as members of the same Rijk-Regio-overleg list, no direct statement links them."
+ },
+ {
+  "item": "E084",
+  "category": "rijk_regio_link",
+  "reason": "Staatssecretaris IenW and Gemeente Hoorn are only connected through the general Rijk-Regio cooperation, not a direct statement about each other."
+ },
+ {
+  "item": "E085",
+  "category": "co_listed",
+  "reason": "M.C.G. Keijzer (VRO) and B. Madlener (IenW) are both listed among parties 1-7 (het Rijk) with no direct statement connecting them to each other."
+ },
+ {
+  "item": "E086",
+  "category": "co_listed",
+  "reason": "Both are listed as separate Partijen/ministers to the same convenant, with no statement relating them to each other."
+ },
+ {
+  "item": "E090",
+  "category": "co_listed",
+  "reason": "V.P.G. Karremans (VWS) and J.J.M. Uitermark (BZK) are both listed among parties 1-7 (het Rijk) with no direct statement connecting them to each other."
+ },
+ {
+  "item": "E096",
+  "category": "rijk_regio_link",
+  "reason": "Gemeente Drechterland (part of de Regio) and het Rijk are only connected through the general Rijk-Regio cooperation statement."
+ },
+ {
+  "item": "E097",
+  "category": "co_listed",
+  "reason": "Enkhuizen and Alkmaar are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E099",
+  "category": "rijk_regio_link",
+  "reason": "Het Rijk and Gemeente Alkmaar are only connected through the general Rijk-Regio cooperation and the separately defined regiokassier mechanism, not a direct joint statement."
+ },
+ {
+  "item": "E102",
+  "category": "co_listed",
+  "reason": "Koggeland and Dijk en Waard are both parties in the same 'Regio' list, no direct statement between them."
+ },
+ {
+  "item": "E103",
+  "category": "co_listed",
+  "reason": "Hoorn and Alkmaar are both parties in the same 'Regio' list, no direct statement between them."
+ }
+]

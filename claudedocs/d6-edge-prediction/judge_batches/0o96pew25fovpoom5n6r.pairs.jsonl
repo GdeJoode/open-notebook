@@ -1,0 +1,11 @@
+{"item": "E005", "entity_a": "Regio Deal Het Hogeland", "type_a": "topic", "entity_b": "Algemeen Bestuur van de gemeenteraad", "type_b": "concept"}
+{"item": "E006", "entity_a": "De Minister van Volkshuisvesting en Ruimtelijke Ordening, M.C.G. Keijzer", "type_a": "person", "entity_b": "De Minister van Binnenlandse Zaken en Koninkrijksrelaties, J.J.M. Uitermark", "type_b": "person"}
+{"item": "E012", "entity_a": "Gebiedscoöperatie Het Hogeland", "type_a": "organization", "entity_b": "Regio Deal Het Hogeland", "type_b": "topic"}
+{"item": "E025", "entity_a": "De Minister van Volkshuisvesting en Ruimtelijke Ordening, M.C.G. Keijzer", "type_a": "person", "entity_b": "De Minister van Justitie en Veiligheid, D.M. van Weel", "type_b": "person"}
+{"item": "E037", "entity_a": "De Minister van Volkshuisvesting en Ruimtelijke Ordening, M.C.G. Keijzer", "type_a": "person", "entity_b": "Regio Deal", "type_b": "topic"}
+{"item": "E045", "entity_a": "Rijk–Regio-overleg", "type_a": "other", "entity_b": "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening, Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen, Sociale Zaken en Werkgelegenheid, Justitie en Veiligheid", "type_b": "government_organization"}
+{"item": "E053", "entity_a": "Regio Deal Het Hogeland", "type_a": "topic", "entity_b": "Nij Begun Academie", "type_b": "topic"}
+{"item": "E065", "entity_a": "De Staatssecretaris Herstel Groningen, E. van Marum", "type_a": "person", "entity_b": "Nij Begun", "type_b": "topic"}
+{"item": "E068", "entity_a": "gemeente Het Hogeland", "type_a": "administrative_area", "entity_b": "regiokassier", "type_b": "person"}
+{"item": "E069", "entity_a": "Krachtige Kernen", "type_a": "topic", "entity_b": "natuurlijk eigenaarschap", "type_b": "topic"}
+{"item": "E083", "entity_a": "gemeente Het Hogeland", "type_a": "administrative_area", "entity_b": "Het college van burgemeester en wethouders van de gemeente Het Hogeland", "type_b": "concept"}
