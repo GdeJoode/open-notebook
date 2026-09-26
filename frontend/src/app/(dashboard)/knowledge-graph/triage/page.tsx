@@ -10,9 +10,18 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useDecideQueueRow, useTriageQueue } from '@/lib/hooks/use-triage'
-import type { QueueItem } from '@/lib/api/triage'
-import { buildDecision, groupByReason } from '@/lib/utils/triage'
+import {
+  useDecideQueueRow,
+  useDecideTooiRow,
+  useTriageQueue,
+} from '@/lib/hooks/use-triage'
+import type { QueueItem, TooiDecisionInput } from '@/lib/api/triage'
+import {
+  buildDecision,
+  groupByReason,
+  isTooiRow,
+  tooiCandidateLabel,
+} from '@/lib/utils/triage'
 
 /**
  * Triage review queue (Q.5). Lists the open queue rows surfaced by the
@@ -28,6 +37,7 @@ import { buildDecision, groupByReason } from '@/lib/utils/triage'
 export default function TriageQueuePage() {
   const queueQuery = useTriageQueue(false)
   const decide = useDecideQueueRow()
+  const decideTooi = useDecideTooiRow()
 
   // Hide rows the operator just decided so the queue updates instantly while the
   // query re-fetches in the background (mirrors the resolution hub's `dismissed`).
@@ -44,6 +54,12 @@ export default function TriageQueuePage() {
       queueId: item.id,
       body: buildDecision(action, item.structural_degree > 0 ? 'active' : undefined),
     })
+    setDismissed((prev) => new Set(prev).add(item.id))
+  }
+
+  // A TOOI row is answered with link/dismiss and never pins status (migration 83).
+  const onDecideTooi = (item: QueueItem, body: TooiDecisionInput) => {
+    decideTooi.mutate({ queueId: item.id, body })
     setDismissed((prev) => new Set(prev).add(item.id))
   }
 
@@ -64,8 +80,9 @@ export default function TriageQueuePage() {
               Edge cases the after-extraction triage flagged for a human:
               isolated core actors, well-connected reference candidates, unsure
               types, and match conflicts. Decide each — promote it into the active
-              graph, keep it as reference, or pin it by hand. Decisions stick
-              across re-runs.
+              graph, keep it as reference, or pin it by hand. TOOI link candidates
+              are answered separately: link the right organisation, or dismiss —
+              neither changes the entity&apos;s status. Decisions stick across re-runs.
             </p>
           </div>
 
@@ -152,9 +169,41 @@ export default function TriageQueuePage() {
                               {item.doc_count}
                             </td>
                             <td className="p-3 text-xs text-muted-foreground max-w-xs">
-                              {item.reason}
+                              {isTooiRow(item) ? (
+                                <ul className="space-y-1" data-testid={`tooi-candidates-${item.id}`}>
+                                  {(item.candidates ?? []).map((c) => (
+                                    <li key={c.uri} className="flex items-center justify-between gap-2">
+                                      <span>{tooiCandidateLabel(c)}</span>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={decideTooi.isPending}
+                                        aria-label={`Link ${item.name || item.entity} to ${c.label}`}
+                                        onClick={() => onDecideTooi(item, { action: 'link', uri: c.uri })}
+                                      >
+                                        Link
+                                      </Button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                item.reason
+                              )}
                             </td>
                             <td className="p-3">
+                              {isTooiRow(item) ? (
+                                <div className="flex justify-end gap-1.5">
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    disabled={decideTooi.isPending}
+                                    aria-label={`Dismiss the TOOI candidates for ${item.name || item.entity}`}
+                                    onClick={() => onDecideTooi(item, { action: 'dismiss' })}
+                                  >
+                                    Dismiss
+                                  </Button>
+                                </div>
+                              ) : (
                               <div className="flex justify-end gap-1.5">
                                 <Button
                                   size="sm"
@@ -184,6 +233,7 @@ export default function TriageQueuePage() {
                                   Override
                                 </Button>
                               </div>
+                              )}
                             </td>
                           </tr>
                         ))}

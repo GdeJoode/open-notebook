@@ -23,4 +23,6 @@
 -- ============================================================================
 
 DEFINE FIELD OVERWRITE external_ids ON entity FLEXIBLE TYPE array DEFAULT [];
-UPDATE entity SET external_ids = [] WHERE !type::is::array(external_ids);
+-- RETURN NONE: without it the runner receives all 5,500 rows, embeddings
+-- included (D2 review).
+UPDATE entity SET external_ids = [] WHERE !type::is::array(external_ids) RETURN NONE;

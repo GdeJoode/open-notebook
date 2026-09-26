@@ -17,7 +17,7 @@ in ``migrations/60.surrealql``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -27,6 +27,14 @@ from surrealdb_service.connection import ensure_record_id, execute_query
 # Decision states. 'open' is the default (awaiting an operator); the operator
 # router writes one of the others. Kept here so the service and router agree.
 DECISION_OPEN = "open"
+
+# Row kinds (migration 83). One queue, one row per (entity, kind): a STATUS
+# decision (Q.4) and a TOOI link decision (D2) about the same entity never share
+# a row, so neither overwrites the other's reason or closes the other's row.
+KIND_STATUS = "status"
+KIND_TOOI = "tooi"
+DECISION_LINKED = "linked"
+DECISION_DISMISSED = "dismissed"
 
 # Reason separator. Multiple surfacing paths (a status flag + a match conflict)
 # can flag the same entity; their reasons are joined with this so one queue row
@@ -71,6 +79,10 @@ class QueueItem:
     reason: str
     decision: str
     batch_id: str
+    kind: str = KIND_STATUS
+    #: For a TOOI row: the authority records a curator chooses between.
+    candidates: List[Dict[str, Any]] = field(default_factory=list)
+    candidate_key: str = ""
 
     @classmethod
     def from_row(cls, row: Dict[str, Any]) -> "QueueItem":
@@ -85,6 +97,9 @@ class QueueItem:
             reason=str(row.get("reason") or ""),
             decision=str(row.get("decision") or DECISION_OPEN),
             batch_id=str(row.get("batch_id") or ""),
+            kind=str(row.get("kind") or KIND_STATUS),
+            candidates=list(row.get("candidates") or []),
+            candidate_key=str(row.get("candidate_key") or ""),
         )
 
 
@@ -161,9 +176,12 @@ class TriageQueueRepository:
         """
         rid = ensure_record_id(entity_id)
         existing = await execute_query(
+            # Status rows only (migration 83): a TOOI row for the same entity is
+            # a different decision and must not be refreshed — or have its
+            # reason replaced — by a status flag.
             "SELECT id, structural_degree, doc_count, reason FROM triage_queue "
-            "WHERE entity = $entity AND decision = $open LIMIT 1;",
-            {"entity": rid, "open": DECISION_OPEN},
+            "WHERE entity = $entity AND decision = $open AND kind = $kind LIMIT 1;",
+            {"entity": rid, "open": DECISION_OPEN, "kind": KIND_STATUS},
             self.config,
         )
         if existing:
@@ -214,7 +232,7 @@ class TriageQueueRepository:
                 "CREATE triage_queue SET "
                 "entity = $entity, name = $name, type = $type, "
                 "structural_degree = $degree, doc_count = $doc_count, "
-                "reason = $reason, batch_id = $batch_id;",
+                "reason = $reason, batch_id = $batch_id, kind = 'status';",
                 params,
                 self.config,
             )
@@ -231,6 +249,64 @@ class TriageQueueRepository:
             batch_id,
         )
         return new_id
+
+    async def upsert_tooi(
+        self,
+        entity_id: str,
+        *,
+        name: str,
+        type: str,
+        reason: str,
+        candidates: List[Dict[str, Any]],
+        batch_id: str,
+    ) -> Optional[str]:
+        """Queue a TOOI link decision for ``entity_id`` (D2, migration 83).
+
+        One open TOOI row per entity, refreshed in place. **A decision sticks:**
+        when a TOOI row for this entity was already decided (linked or dismissed)
+        for the SAME candidate set, nothing is queued and ``None`` is returned. A
+        different set — the authority added or ended an organisation — is a new
+        question and is queued. Status rows are never read or written here.
+        """
+        rid = ensure_record_id(entity_id)
+        key = candidate_key(candidates)
+        decided = await execute_query(
+            "SELECT id FROM triage_queue WHERE entity = $entity AND kind = $kind "
+            "AND decision != $open AND candidate_key = $key LIMIT 1;",
+            {"entity": rid, "kind": KIND_TOOI, "open": DECISION_OPEN, "key": key},
+            self.config,
+        )
+        if decided:
+            return None
+        params: Dict[str, Any] = {
+            "entity": rid, "name": name, "type": type, "reason": reason,
+            "candidates": candidates, "key": key, "batch_id": batch_id,
+        }
+        existing = await execute_query(
+            "SELECT id FROM triage_queue WHERE entity = $entity AND kind = $kind "
+            "AND decision = $open LIMIT 1;",
+            {"entity": rid, "kind": KIND_TOOI, "open": DECISION_OPEN},
+            self.config,
+        )
+        if existing:
+            rows = await execute_query(
+                "UPDATE $id SET name = $name, type = $type, reason = $reason, "
+                "candidates = $candidates, candidate_key = $key, batch_id = $batch_id, "
+                "updated_at = time::now() RETURN AFTER;",
+                {**params, "id": ensure_record_id(str(existing[0]["id"]))},
+                self.config,
+            )
+        else:
+            rows = await execute_query(
+                "CREATE triage_queue SET entity = $entity, name = $name, type = $type, "
+                "reason = $reason, candidates = $candidates, candidate_key = $key, "
+                "batch_id = $batch_id, kind = 'tooi';",
+                params,
+                self.config,
+            )
+        if not rows:
+            raise RuntimeError(f"triage_queue upsert_tooi returned no row for {entity_id}")
+        return str(rows[0]["id"])
 
     async def list_open(self) -> List[QueueItem]:
         """Return every OPEN queue row, newest first."""
@@ -282,3 +358,8 @@ class TriageQueueRepository:
         if not rows:
             return None
         return QueueItem.from_row(rows[0])
+
+
+def candidate_key(candidates: List[Dict[str, Any]]) -> str:
+    """The identity of a TOOI question: its sorted candidate URIs."""
+    return "|".join(sorted(str(c.get("uri") or "") for c in candidates))

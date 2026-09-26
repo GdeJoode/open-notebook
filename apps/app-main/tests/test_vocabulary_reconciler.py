@@ -478,8 +478,8 @@ async def test_candidates_reach_the_curator_queue_on_a_real_run_only():
     calls = []
 
     class Queue:
-        async def upsert(self, **kw):
-            calls.append(kw)
+        async def upsert_tooi(self, entity_id, **kw):
+            calls.append({"entity_id": entity_id, **kw})
             return "triage_queue:x"
 
     rows = [_row("e:3", "Groningen", "administrative_area", status="active")]
@@ -493,6 +493,22 @@ async def test_candidates_reach_the_curator_queue_on_a_real_run_only():
     report = await _run(rows, dry_run=False, entity_repo=Repo(), queue=Queue())
     assert report.queued == 1
     [call] = calls
-    assert call["entity_id"] == "e:3" and call["merge_reason"] is True
+    assert call["entity_id"] == "e:3"
     assert call["reason"].startswith("tooi: ambiguous_multiple_candidates: ")
-    assert "gemeente/gm0014" in call["reason"] and "provincie/pv20" in call["reason"]
+    assert {c["uri"].rsplit("/", 2)[-2] for c in call["candidates"]} == {"gemeente", "provincie"}
+    assert all("current_names" in c for c in call["candidates"])
+
+
+@pytest.mark.asyncio
+async def test_an_answered_candidate_is_counted_not_requeued():
+    class Queue:
+        async def upsert_tooi(self, entity_id, **kw):
+            return None  # the repository's "already decided for this set"
+
+    class Repo:
+        async def update_external_ids(self, entity_id, uris, aliases=None):
+            return True
+
+    report = await _run([_row("e:3", "Groningen", "administrative_area", status="active")],
+                        dry_run=False, entity_repo=Repo(), queue=Queue())
+    assert (report.queued, report.already_decided) == (0, 1)

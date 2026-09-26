@@ -130,6 +130,7 @@ class ReconcileResponse(BaseModel):
     no_match: List[dict]
     write_failed: List[dict]
     queued: int
+    already_decided: int
 
 
 # --- Endpoints ---------------------------------------------------------------
@@ -230,4 +231,5 @@ async def reconcile_vocabulary(
         skipped_no_name=report.skipped_no_name, by_type=report.by_type,
         linked=report.linked, candidates=report.candidates, no_match=report.no_match,
         write_failed=report.write_failed, queued=report.queued,
+        already_decided=report.already_decided,
     )

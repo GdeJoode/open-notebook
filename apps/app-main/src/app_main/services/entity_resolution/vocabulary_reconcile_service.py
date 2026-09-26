@@ -15,10 +15,12 @@ the owner chose (2026-09-26): explicit, repeatable, nothing runs unasked.
 * a link writes the URI and the record's current names, not its alias history.
 
 **Candidates reach a human.** On a real run every refused match — ambiguous,
-one-sided, ended — is appended to the entity's open ``triage_queue`` row (Q.4),
-the queue a curator reads, with every candidate URI in the reason. Accepting one
-of them is not a queue action yet (a queue decision pins the entity's STATUS);
-that door is PC.5's. A dry run writes nothing, queue included.
+one-sided, ended — becomes a ``kind = 'tooi'`` row in ``triage_queue`` (migration
+83): the queue and the screen a curator already reads, but a row of its own, so
+a status flag never overwrites it and a status decision never closes it. The
+curator links one candidate or dismisses the row (``POST
+/triage/queue/{id}/tooi-decision``); a decision sticks until TOOI offers a
+different candidate set. A dry run writes nothing, queue included.
 """
 
 from __future__ import annotations
@@ -62,6 +64,8 @@ class ReconcileReport:
     write_failed: List[Dict[str, Any]] = field(default_factory=list)
     skipped_no_name: int = 0
     queued: int = 0
+    #: Candidates a curator already answered for the same candidate set.
+    already_decided: int = 0
 
 
 async def _rows(types: Sequence[str], statuses: Sequence[str]) -> List[Dict[str, Any]]:
@@ -137,19 +141,21 @@ async def reconcile_active_entities(
             cands = [
                 {"uri": c.external_uri, "label": c.canonical_name,
                  "confidence": c.confidence, "matched_on": c.matched_on,
-                 "valid_until": c.valid_until}
+                 "valid_until": c.valid_until, "current_names": list(c.current_names)}
                 for c in result.candidates
             ]
             report.candidates.append({**base, "reason": result.reason, "candidates": cands})
             if not dry_run and queue is not None:
                 try:
-                    await queue.upsert(
-                        entity_id=str(row["id"]), name=name, type=etype,
-                        structural_degree=0, doc_count=0,
+                    queued = await queue.upsert_tooi(
+                        str(row["id"]), name=name, type=etype,
                         reason=_queue_reason(result.reason, cands),
-                        batch_id=batch, merge_reason=True,
+                        candidates=cands, batch_id=batch,
                     )
-                    report.queued += 1
+                    if queued is None:
+                        report.already_decided += 1
+                    else:
+                        report.queued += 1
                 except Exception as exc:  # the report still carries the candidate
                     logger.error("reconcile: could not queue {id}: {e}", id=row["id"], e=exc)
         else:

@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   DecisionInput,
   EntityPinInput,
+  TooiDecisionInput,
   triageApi,
 } from '@/lib/api/triage'
 import { useToast } from '@/lib/hooks/use-toast'
@@ -63,6 +64,32 @@ export function useDecideQueueRow() {
       toast({
         title: 'Error',
         description: 'Failed to record decision',
+        variant: 'destructive',
+      })
+    },
+  })
+}
+
+/** Answer a TOOI row: link one candidate URI, or dismiss (D2). */
+export function useDecideTooiRow() {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+
+  return useMutation({
+    mutationFn: ({ queueId, body }: { queueId: string; body: TooiDecisionInput }) =>
+      triageApi.decideTooi(queueId, body),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['triage', 'queue'] })
+      queryClient.invalidateQueries({ queryKey: ['knowledge-graph'] })
+      toast({
+        title: res.decision === 'linked' ? 'Linked' : 'Dismissed',
+        description: res.uri ? `Linked to ${res.uri}` : 'No TOOI link recorded',
+      })
+    },
+    onError: () => {
+      toast({
+        title: 'Error',
+        description: 'Failed to record the TOOI decision',
         variant: 'destructive',
       })
     },
