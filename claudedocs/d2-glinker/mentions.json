@@ -1,0 +1,230 @@
+[
+ {
+  "entity_id": "entity:wgcdx6urtd6bmgp15mwu",
+  "name": "IenW",
+  "aliases": [],
+  "source": "source:dndibxmjveoxk7tfqfsl",
+  "context": "De Minister van Infrastructuur en Waterstaat, B. Madlener, hierna te noemen: IenW;",
+  "span": [
+   77,
+   81
+  ],
+  "span_text": "IenW"
+ },
+ {
+  "entity_id": "entity:6y3woaib3ttjjitunypg",
+  "name": "JenV",
+  "aliases": [],
+  "source": "source:0o96pew25fovpoom5n6r",
+  "context": "De Minister van Justitie en Veiligheid, D.M. van Weel, hierna te noemen: JenV;",
+  "span": [
+   73,
+   77
+  ],
+  "span_text": "JenV"
+ },
+ {
+  "entity_id": "entity:o5jydq80tslfequxik54",
+  "name": "Ministerie van Economische Zaken en Klimaat",
+  "aliases": [],
+  "source": "source:dndibxmjveoxk7tfqfsl",
+  "context": null,
+  "span": null,
+  "span_text": null
+ },
+ {
+  "entity_id": "entity:btpsat9a8ub8tvfnjw3j",
+  "name": "VRO (ministerie van Volkshuisvesting en Ruimtelijke Ordening)",
+  "aliases": [],
+  "source": "source:0o96pew25fovpoom5n6r",
+  "context": "De Minister van Volkshuisvesting en Ruimtelijke Ordening, M.C.G. Keijzer, hierna te noemen: VRO;",
+  "span": [
+   92,
+   95
+  ],
+  "span_text": "VRO"
+ },
+ {
+  "entity_id": "entity:4ai5ium9fsa7qkwxttwi",
+  "name": "Ministerie van Volksgezondheid, Welzijn en Sport",
+  "aliases": [],
+  "source": "source:dndibxmjveoxk7tfqfsl",
+  "context": null,
+  "span": null,
+  "span_text": null
+ },
+ {
+  "entity_id": "entity:6v6ebl6n9d13054tnt07",
+  "name": "VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)",
+  "aliases": [],
+  "source": "source:dndibxmjveoxk7tfqfsl",
+  "context": "De Minister van Volkshuisvesting en Ruimtelijke Ordening, M.C.G. Keijzer, hierna te noemen: VRO;",
+  "span": [
+   92,
+   95
+  ],
+  "span_text": "VRO"
+ },
+ {
+  "entity_id": "entity:rratdyul5v149w9w8t3h",
+  "name": "BZK (Binnenlandse Zaken en Koninkrijkrelaties)",
+  "aliases": [],
+  "source": "source:dndibxmjveoxk7tfqfsl",
+  "context": "De Minister van Binnenlandse Zaken en Koninkrijksrelaties, J.J.M. Uitermark, hierna te noemen: BZK;",
+  "span": [
+   95,
+   98
+  ],
+  "span_text": "BZK"
+ },
+ {
+  "entity_id": "entity:hdiugivodjjwnpt8k9h8",
+  "name": "IenW (Infrastructuur en Waterstaat)",
+  "aliases": [],
+  "source": "source:hjrb1cjvzv86oyaojblj",
+  "context": "De Staatssecretaris van Infrastructuur en Waterstaat, C.A. Jansen, hierna te noemen: IenW",
+  "span": [
+   85,
+   89
+  ],
+  "span_text": "IenW"
+ },
+ {
+  "entity_id": "entity:322bzzeei7mndqogpwvr",
+  "name": "VRO (Volkshuisvesting en Ruimtelijke Ordening)",
+  "aliases": [],
+  "source": "source:hjrb1cjvzv86oyaojblj",
+  "context": "De Minister van Volkshuisvesting en Ruimtelijke Ordening, M.C.G. Keijzer, hierna te noemen: VRO;",
+  "span": [
+   92,
+   95
+  ],
+  "span_text": "VRO"
+ },
+ {
+  "entity_id": "entity:di62hb83xu4ilwv0s3qj",
+  "name": "Volkshuisvesting en Ruimtelijke Ordening (Ministerie)",
+  "aliases": [],
+  "source": "source:hjrb1cjvzv86oyaojblj",
+  "context": "De Minister van Volkshuisvesting en Ruimtelijke Ordening, M.C.G. Keijzer, hierna te noemen: VRO;",
+  "span": [
+   16,
+   56
+  ],
+  "span_text": "Volkshuisvesting en Ruimtelijke Ordening"
+ },
+ {
+  "entity_id": "entity:8csnxydjjzl7e8ziyric",
+  "name": "Binnenlandse Zaken en Koninkrijkrelaties (Ministerie)",
+  "aliases": [],
+  "source": "source:hjrb1cjvzv86oyaojblj",
+  "context": "Binnenlandse Zaken en Koninkrijkrelaties;",
+  "span": [
+   0,
+   40
+  ],
+  "span_text": "Binnenlandse Zaken en Koninkrijkrelaties"
+ },
+ {
+  "entity_id": "entity:82q4ugerjngeptm9b95b",
+  "name": "Economische Zaken (Ministerie)",
+  "aliases": [],
+  "source": "source:hjrb1cjvzv86oyaojblj",
+  "context": "De Minister van Economische Zaken, D.S. Beljaarts, hierna te noemen: EZ;",
+  "span": [
+   16,
+   33
+  ],
+  "span_text": "Economische Zaken"
+ },
+ {
+  "entity_id": "entity:grhgds77kw3qwf6zwl95",
+  "name": "Sociale Zaken en Werkgelegenheid (Ministerie)",
+  "aliases": [],
+  "source": "source:hjrb1cjvzv86oyaojblj",
+  "context": "De Minister van Sociale Zaken en Werkgelegenheid, Y.J. van Hijum, hierna te noemen: SZW;",
+  "span": [
+   16,
+   48
+  ],
+  "span_text": "Sociale Zaken en Werkgelegenheid"
+ },
+ {
+  "entity_id": "entity:cx1xf1gx1sow5oas3oyr",
+  "name": "Infrastructuur en Waterstaat (Ministerie)",
+  "aliases": [],
+  "source": "source:hjrb1cjvzv86oyaojblj",
+  "context": "De Staatssecretaris van Infrastructuur en Waterstaat, C.A. Jansen, hierna te noemen: IenW",
+  "span": [
+   24,
+   52
+  ],
+  "span_text": "Infrastructuur en Waterstaat"
+ },
+ {
+  "entity_id": "entity:qmqufzo4mqmuv73stbhv",
+  "name": "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening, Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen, Sociale Zaken en Werkgelegenheid, Justitie en Veiligheid",
+  "aliases": [],
+  "source": "source:0o96pew25fovpoom5n6r",
+  "context": null,
+  "span": null,
+  "span_text": null
+ },
+ {
+  "entity_id": "entity:087ifqcmejumgo5esapx",
+  "name": "HG/BZK (Herstel Groningen/Binnenlandse Zaken en Koninkrijkrelaties)",
+  "aliases": [],
+  "source": "source:0o96pew25fovpoom5n6r",
+  "context": "De Staatssecretaris Herstel Groningen, E. van Marum, hierna te noemen: HG/BZK;",
+  "span": [
+   71,
+   77
+  ],
+  "span_text": "HG/BZK"
+ },
+ {
+  "entity_id": "entity:x21fq73vghsiv3vmzar3",
+  "name": "De Staatssecretaris van Infrastructuur en Waterstaat (IenW)",
+  "aliases": [],
+  "source": "source:hjrb1cjvzv86oyaojblj",
+  "context": "De Staatssecretaris van Infrastructuur en Waterstaat, C.A. Jansen, hierna te noemen: IenW",
+  "span": [
+   0,
+   52
+  ],
+  "span_text": "De Staatssecretaris van Infrastructuur en Waterstaat"
+ },
+ {
+  "entity_id": "entity:r9p9wr8ic5vh8awevipz",
+  "name": "VRO (Ministerie van Volksgezondheid, Welzijn en Sport)",
+  "aliases": [],
+  "source": "source:0o96pew25fovpoom5n6r",
+  "context": "De Minister van Volkshuisvesting en Ruimtelijke Ordening, M.C.G. Keijzer, hierna te noemen: VRO;",
+  "span": [
+   92,
+   95
+  ],
+  "span_text": "VRO"
+ },
+ {
+  "entity_id": "entity:zyi9gcb6a1kb3fe3y5xg",
+  "name": "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening",
+  "aliases": [],
+  "source": "source:0o96pew25fovpoom5n6r",
+  "context": null,
+  "span": null,
+  "span_text": null
+ },
+ {
+  "entity_id": "entity:ccf5zsot67wlivvp7x27",
+  "name": "Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen",
+  "aliases": [],
+  "source": "source:0o96pew25fovpoom5n6r",
+  "context": "Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen;",
+  "span": [
+   0,
+   58
+  ],
+  "span_text": "Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen"
+ }
+]

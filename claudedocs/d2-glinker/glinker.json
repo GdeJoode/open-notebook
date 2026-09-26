@@ -1,0 +1,788 @@
+{
+ "config": {
+  "fuzzy_min_similarity": 0.6,
+  "prefix_length": 1,
+  "max_candidates": 5,
+  "template": "{label}: {description}",
+  "kb_size": 1438,
+  "ministries": 19
+ },
+ "mentions": {
+  "IenW": {
+   "l2_stored_name": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130"
+    ],
+    "fuzzy": []
+   },
+   "l2_text_surface": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130"
+    ],
+    "fuzzy": []
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+    "score": 0.3409,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+    "score": 0.7271,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+    "score": 0.5166,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+    "score": 0.5166,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "JenV": {
+   "l2_stored_name": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1058"
+    ],
+    "fuzzy": []
+   },
+   "l2_text_surface": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1058"
+    ],
+    "fuzzy": []
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1058",
+    "score": 0.5042,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+    "score": 0.5449,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1058",
+    "score": 0.4046,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.6194,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "Ministerie van Economische Zaken en Klimaat": {
+   "l2_stored_name": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045"
+    ],
+    "fuzzy": []
+   },
+   "l2_text_surface": null,
+   "context_from": "name_only",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045",
+    "score": 0.8118,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1073",
+    "score": 0.8287,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045",
+    "score": 0.8043,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1109",
+    "score": 0.8278,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "VRO (ministerie van Volkshuisvesting en Ruimtelijke Ordening)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180"
+    ]
+   },
+   "l2_text_surface": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"
+    ],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+     "https://identifier.overheid.nl/tooi/id/so/so0639",
+     "https://identifier.overheid.nl/tooi/id/so/so0044",
+     "https://identifier.overheid.nl/tooi/id/so/so0460",
+     "https://identifier.overheid.nl/tooi/id/so/so0588"
+    ]
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+    "score": 0.8209,
+    "n_candidates": 2,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0170",
+    "score": 0.911,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+    "score": 0.5354,
+    "n_candidates": 2,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+    "score": 0.549,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "Ministerie van Volksgezondheid, Welzijn en Sport": {
+   "l2_stored_name": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025"
+    ],
+    "fuzzy": []
+   },
+   "l2_text_surface": null,
+   "context_from": "name_only",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+    "score": 0.9139,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+    "score": 0.9139,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+    "score": 0.8717,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+    "score": 0.8717,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"
+    ]
+   },
+   "l2_text_surface": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"
+    ],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+     "https://identifier.overheid.nl/tooi/id/so/so0639",
+     "https://identifier.overheid.nl/tooi/id/so/so0044",
+     "https://identifier.overheid.nl/tooi/id/so/so0460",
+     "https://identifier.overheid.nl/tooi/id/so/so0588"
+    ]
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+    "score": 0.8209,
+    "n_candidates": 2,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0170",
+    "score": 0.911,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+    "score": 0.5354,
+    "n_candidates": 2,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+    "score": 0.549,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "BZK (Binnenlandse Zaken en Koninkrijkrelaties)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+    ]
+   },
+   "l2_text_surface": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+    ],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1013"
+    ]
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.6922,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.6922,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.5344,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.5344,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "IenW (Infrastructuur en Waterstaat)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130"
+    ]
+   },
+   "l2_text_surface": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130"
+    ],
+    "fuzzy": []
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+    "score": 0.0409,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+    "score": 0.2506,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+    "score": 0.3309,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1109",
+    "score": 0.4246,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "VRO (Volkshuisvesting en Ruimtelijke Ordening)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180"
+    ]
+   },
+   "l2_text_surface": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"
+    ],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+     "https://identifier.overheid.nl/tooi/id/so/so0639",
+     "https://identifier.overheid.nl/tooi/id/so/so0044",
+     "https://identifier.overheid.nl/tooi/id/so/so0460",
+     "https://identifier.overheid.nl/tooi/id/so/so0588"
+    ]
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+    "score": 0.8209,
+    "n_candidates": 2,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0170",
+    "score": 0.911,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+    "score": 0.5354,
+    "n_candidates": 2,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+    "score": 0.549,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "Volkshuisvesting en Ruimtelijke Ordening (Ministerie)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180"
+    ]
+   },
+   "l2_text_surface": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"
+    ],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180"
+    ]
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+    "score": 0.9226,
+    "n_candidates": 2,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+    "score": 0.9226,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+    "score": 0.8833,
+    "n_candidates": 2,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+    "score": 0.8833,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "Binnenlandse Zaken en Koninkrijkrelaties (Ministerie)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+    ]
+   },
+   "l2_text_surface": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+    ]
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.9221,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.9221,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.8937,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.8937,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "Economische Zaken (Ministerie)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045",
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1040"
+    ]
+   },
+   "l2_text_surface": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1040",
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045"
+    ],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/oorg/oorg10258"
+    ]
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045",
+    "score": 0.8854,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045",
+    "score": 0.8854,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045",
+    "score": 0.875,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045",
+    "score": 0.875,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "Sociale Zaken en Werkgelegenheid (Ministerie)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1073"
+    ]
+   },
+   "l2_text_surface": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1073"
+    ],
+    "fuzzy": []
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1073",
+    "score": 0.9022,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1073",
+    "score": 0.9022,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1073",
+    "score": 0.8672,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1073",
+    "score": 0.8672,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "Infrastructuur en Waterstaat (Ministerie)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130"
+    ]
+   },
+   "l2_text_surface": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130"
+    ],
+    "fuzzy": []
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+    "score": 0.5114,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0170",
+    "score": 0.8117,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+    "score": 0.8423,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+    "score": 0.8423,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening, Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen, Sociale Zaken en Werkgelegenheid, Justitie en Veiligheid": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": []
+   },
+   "l2_text_surface": null,
+   "context_from": "name_only",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": null,
+    "score": null,
+    "n_candidates": 0
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+    "score": 0.6792,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": null,
+    "score": null,
+    "n_candidates": 0
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+    "score": 0.5603,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "HG/BZK (Herstel Groningen/Binnenlandse Zaken en Koninkrijkrelaties)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": []
+   },
+   "l2_text_surface": {
+    "exact": [],
+    "fuzzy": []
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": null,
+    "score": null,
+    "n_candidates": 0
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+    "score": 0.7142,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": null,
+    "score": null,
+    "n_candidates": 0
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+    "score": 0.7353,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "De Staatssecretaris van Infrastructuur en Waterstaat (IenW)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": []
+   },
+   "l2_text_surface": {
+    "exact": [],
+    "fuzzy": []
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": null,
+    "score": null,
+    "n_candidates": 0
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0170",
+    "score": 0.8533,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": null,
+    "score": null,
+    "n_candidates": 0
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0170",
+    "score": 0.864,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "VRO (Ministerie van Volksgezondheid, Welzijn en Sport)": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025"
+    ]
+   },
+   "l2_text_surface": {
+    "exact": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"
+    ],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+     "https://identifier.overheid.nl/tooi/id/so/so0639",
+     "https://identifier.overheid.nl/tooi/id/so/so0044",
+     "https://identifier.overheid.nl/tooi/id/so/so0460",
+     "https://identifier.overheid.nl/tooi/id/so/so0588"
+    ]
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+    "score": 0.7591,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0170",
+    "score": 0.911,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+    "score": 0.549,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+    "score": 0.549,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": []
+   },
+   "l2_text_surface": null,
+   "context_from": "name_only",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": null,
+    "score": null,
+    "n_candidates": 0
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+    "score": 0.8419,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": null,
+    "score": null,
+    "n_candidates": 0
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre0180",
+    "score": 0.6511,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  },
+  "Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen": {
+   "l2_stored_name": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+    ]
+   },
+   "l2_text_surface": {
+    "exact": [],
+    "fuzzy": [
+     "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+    ]
+   },
+   "context_from": "chunk",
+   "l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.9084,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.9084,
+    "n_candidates": 17,
+    "probs": {}
+   },
+   "l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.5997,
+    "n_candidates": 1,
+    "probs": {}
+   },
+   "l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+    "top": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+    "score": 0.5997,
+    "n_candidates": 17,
+    "probs": {}
+   }
+  }
+ }
+}
