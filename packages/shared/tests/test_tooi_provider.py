@@ -358,3 +358,81 @@ async def test_refresh_keeps_distinct_same_named_orgs_as_two_rows():
         "https://identifier.overheid.nl/tooi/id/gemeente/gm0373",
         "https://identifier.overheid.nl/tooi/id/gemeente/gm0893",
     ]
+
+
+# ---------------------------------------------------------------------------
+# D1: a decorated name resolves through its parts, and only when they agree
+# ---------------------------------------------------------------------------
+
+GOV = "government_organization"
+_D1_BULK = [
+    {"organisatiecode": "mnre1171", "afkorting": "VRO",
+     "naam_excl_soort": "Volkshuisvesting en Ruimtelijke Ordening",
+     "naam_incl_soort": "ministerie van Volkshuisvesting en Ruimtelijke Ordening",
+     "soort": "ministerie"},
+    {"organisatiecode": "mnre1025", "afkorting": "VWS",
+     "naam_excl_soort": "Volksgezondheid, Welzijn en Sport",
+     "naam_incl_soort": "ministerie van Volksgezondheid, Welzijn en Sport",
+     "soort": "ministerie"},
+    {"organisatiecode": "mnre1130", "afkorting": "IenW",
+     "naam_excl_soort": "Infrastructuur en Waterstaat",
+     "naam_incl_soort": "ministerie van Infrastructuur en Waterstaat",
+     "soort": "ministerie"},
+]
+
+
+async def _d1_provider(tmp_path) -> TOOIProvider:
+    f = tmp_path / "tooi_d1.json"
+    f.write_text(json.dumps(_D1_BULK), encoding="utf-8")
+    provider = TOOIProvider(FakeReferenceRepo(), source=str(f))
+    await provider.refresh()
+    return provider
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name, code", [
+    ("Volkshuisvesting en Ruimtelijke Ordening (Ministerie)", "mnre1171"),
+    ("VRO (Volkshuisvesting en Ruimtelijke Ordening)", "mnre1171"),
+    # The gloss is the extractor's and matches nothing; the abbreviation decides.
+    ("VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)", "mnre1171"),
+    ("IenW (Infrastructuur en Waterstaat)", "mnre1130"),
+    ("ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening", "mnre1171"),
+])
+async def test_a_decorated_name_resolves_through_its_parts(tmp_path, name, code):
+    """Corpus strings that K.4 as shipped resolved to nothing (D2 experiment)."""
+    provider = await _d1_provider(tmp_path)
+    matches = await provider.lookup(name, GOV)
+    assert [m.external_id for m in matches] == [code]
+    assert matches[0].matched_on  # the rule that made the call is recorded
+
+
+@pytest.mark.asyncio
+async def test_parts_that_disagree_return_both_so_the_reconciler_refuses(tmp_path):
+    """The text names VRO; the extractor glossed it as VWS. Both are returned —
+    `reconcile_entity` links only a single match, so this is a refusal with the
+    candidates recorded, never a pick."""
+    provider = await _d1_provider(tmp_path)
+    matches = await provider.lookup(
+        "VRO (Ministerie van Volksgezondheid, Welzijn en Sport)", GOV)
+    assert sorted(m.external_id for m in matches) == ["mnre1025", "mnre1171"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [
+    "De Staatssecretaris van Infrastructuur en Waterstaat (IenW)",
+    "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening, "
+    "Sociale Zaken en Werkgelegenheid",
+])
+async def test_an_organ_or_a_list_resolves_to_nothing(tmp_path, name):
+    """The D1 simulation linked the Staatssecretaris to IenW via `(IenW)`."""
+    provider = await _d1_provider(tmp_path)
+    assert await provider.lookup(name, GOV) == []
+
+
+@pytest.mark.asyncio
+async def test_a_whole_name_hit_is_unchanged_and_unmarked(tmp_path):
+    """The K.4 path is untouched: a name that hits as written never decomposes."""
+    provider = await _d1_provider(tmp_path)
+    matches = await provider.lookup("VRO", GOV)
+    assert [m.external_id for m in matches] == ["mnre1171"]
+    assert matches[0].matched_on == ""

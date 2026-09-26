@@ -732,3 +732,68 @@ async def test_the_head_run_travels_only_when_containment_won_the_band() -> None
     assert winners[0].evidence == "", (
         f"a head run rode along on {winners[0].method!r}"
     )
+
+
+# --- D1: a shared decomposed name reaches review, and nothing more -----------
+
+GOV = "government_organization"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("decorated, plain, shape", [
+    ("Economische Zaken (Ministerie)", "Economische Zaken", "type_suffix"),
+    ("VRO (Volkshuisvesting en Ruimtelijke Ordening)", "VRO", "abbreviation"),
+    ("Ministerie van Volksgezondheid, Welzijn en Sport",
+     "Volksgezondheid, Welzijn en Sport", "type_prefix"),
+])
+async def test_a_decorated_name_and_its_part_reach_review(decorated, plain, shape) -> None:
+    """Corpus pairs that sat under two identity keys with no proposal between them."""
+    rows = [_entity("entity:a", decorated, GOV), _entity("entity:b", plain, GOV)]
+    report = await _service(rows).propose_candidates()
+    assert report.auto_merge_count == 0
+    surface = [c for c in report.review if c.method == "surface_parts"]
+    assert len(surface) == 1
+    assert surface[0].evidence.startswith(f"{shape}: ")
+
+
+@pytest.mark.asyncio
+async def test_two_glosses_of_one_abbreviation_are_proposed() -> None:
+    rows = [
+        _entity("entity:a", "VRO (Volkshuisvesting en Ruimtelijke Ordening)", GOV),
+        _entity("entity:b", "VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)", GOV),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert [c.method for c in report.review] == ["surface_parts"]
+    assert report.review[0].evidence == "abbreviation: vro"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("a, b, etype", [
+    # An office of the ministry is not the ministry.
+    ("De Staatssecretaris van Infrastructuur en Waterstaat (IenW)", "IenW", GOV),
+    # A list of several ministries is none of them.
+    ("ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening, "
+     "Sociale Zaken en Werkgelegenheid", "Sociale Zaken en Werkgelegenheid", GOV),
+    # A qualifier is not a decoration.
+    ("sterk regionaal netwerk (op onderwerpen)", "sterk regionaal netwerk", "topic"),
+    # The municipality and the province share a place name, not an identity.
+    ("Gemeente Utrecht", "Provincie Utrecht", "administrative_area"),
+])
+async def test_the_blocked_and_whole_shapes_propose_nothing(a, b, etype) -> None:
+    rows = [_entity("entity:a", a, etype), _entity("entity:b", b, etype)]
+    report = await _service(rows).propose_candidates()
+    assert not [c for c in [*report.auto_merge, *report.review]
+                if c.method == "surface_parts"]
+
+
+@pytest.mark.asyncio
+async def test_surface_parts_never_auto_merges_even_beside_an_exact_part() -> None:
+    """Three rows sharing `VRO`: every pair between them is review, none auto."""
+    rows = [
+        _entity("entity:a", "VRO", GOV),
+        _entity("entity:b", "VRO (Volkshuisvesting en Ruimtelijke Ordening)", GOV),
+        _entity("entity:c", "VRO (Ministerie van Volksgezondheid, Welzijn en Sport)", GOV),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert not [c for c in report.auto_merge if c.method == "surface_parts"]
+    assert len([c for c in report.review if c.method == "surface_parts"]) == 3

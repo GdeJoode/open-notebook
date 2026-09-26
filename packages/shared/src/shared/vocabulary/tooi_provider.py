@@ -258,23 +258,72 @@ class TOOIProvider:
 
         Tries an exact canonical-name match first (high confidence), then an
         alias match (abbreviation / incl-soort form, slightly lower confidence).
-        Returns ``[]`` on no hit or any repo error (fail-soft). NEVER raises.
+        When the name as written misses, the names it decomposes into are tried
+        (D1, :meth:`_lookup_parts`). Returns ``[]`` on no hit or any repo error
+        (fail-soft). NEVER raises.
         """
         normalized = normalize_entity_name(name)
         if not normalized:
             return []
         try:
-            by_name = await self._repo.lookup_by_name(name, source=self.name)
-            if by_name:
-                return self._rows_to_matches(by_name, confidence=0.99)
-            by_alias = await self._repo.lookup_by_alias(name, source=self.name)
-            return self._rows_to_matches(by_alias, confidence=0.9)
+            whole = await self._lookup_one(name)
+            if whole:
+                return whole
+            return await self._lookup_parts(name, entity_type)
         except Exception as exc:
             logger.warning("TOOI lookup failed for {n!r} (no-match): {e}", n=name, e=exc)
             return []
 
+    async def _lookup_one(self, name: str, matched_on: str = "") -> List[VocabMatch]:
+        """The K.4 rule on one string: exact canonical name, else exact alias."""
+        by_name = await self._repo.lookup_by_name(name, source=self.name)
+        if by_name:
+            return self._rows_to_matches(by_name, confidence=0.99, matched_on=matched_on)
+        by_alias = await self._repo.lookup_by_alias(name, source=self.name)
+        return self._rows_to_matches(by_alias, confidence=0.9, matched_on=matched_on)
+
+    async def _lookup_parts(self, name: str, entity_type: str) -> List[VocabMatch]:
+        """D1: when the name as written misses, try the names it decomposes into.
+
+        ``VRO (Volkshuisvesting en Ruimtelijke Ordening)`` is in no register, but
+        both of its parts are. Every part is looked up with the same exact rule,
+        and the parts that hit must AGREE: if they name different organisations —
+        the extractor glossed `VRO` as VWS on a line that names VRO — every match
+        is returned, so the reconciler sees more than one and refuses, recording
+        them as candidates. A part that misses is ignored: extractor glosses are
+        often not register names.
+
+        A blocked form — an organ of something, or several referents in one
+        string — resolves to nothing. `De Staatssecretaris van Infrastructuur en
+        Waterstaat (IenW)` is an office, and its `(IenW)` must not make it the
+        ministry.
+        """
+        from shared.utils.surface_parts import parse_surface
+
+        parts = parse_surface(name, entity_type)
+        if parts.blocked:
+            return []
+        hits: List[List[VocabMatch]] = []
+        for part in parts.names[1:]:
+            found = await self._lookup_one(part, matched_on=f"{parts.shape}: {part}")
+            if found:
+                hits.append(found)
+        if not hits:
+            return []
+        agreed = set.intersection(*({m.external_uri for m in h} for h in hits))
+        flat = [m for h in hits for m in h]
+        if agreed:
+            flat = [m for m in flat if m.external_uri in agreed]
+        # One match per URI, the most confident — the reconciler dedups the same
+        # way, but a provider that returns its own duplicates is harder to read.
+        best: Dict[str, VocabMatch] = {}
+        for m in flat:
+            if m.external_uri not in best or m.confidence > best[m.external_uri].confidence:
+                best[m.external_uri] = m
+        return list(best.values())
+
     def _rows_to_matches(
-        self, rows: Sequence[Dict[str, Any]], *, confidence: float
+        self, rows: Sequence[Dict[str, Any]], *, confidence: float, matched_on: str = ""
     ) -> List[VocabMatch]:
         matches: List[VocabMatch] = []
         for row in rows:
@@ -289,6 +338,7 @@ class TOOIProvider:
                     source_vocabulary=self.name,
                     aliases=list(row.get("aliases") or []),
                     confidence=confidence,
+                    matched_on=matched_on,
                 )
             )
         return matches

@@ -63,6 +63,9 @@ REVIEW = "review"
 FOLD_EQUAL = "fold_equal"
 FOLD_EQUAL_CROSS_TYPE = "fold_equal_cross_type"
 CONTAINMENT = "containment"
+#: D1: two rows share a name one of them decomposes into (`X (Ministerie)` ~ `X`,
+#: `VRO (Volkshuisvesting en …)` ~ `VRO`). Review only.
+SURFACE_PARTS = "surface_parts"
 
 # Forced (overlay) candidates report a sentinel score so the UI can flag them as
 # a user rule rather than a matcher score.
@@ -402,6 +405,9 @@ class CandidateDedupService:
         # rather than parked on `self`, so two concurrent proposal runs cannot
         # read each other's evidence.
         evidence: Dict[Tuple[str, str], str] = {}
+        # D1's evidence is kept apart from containment's: a pair both methods
+        # produce must render the reason of the method that won the band.
+        surface_evidence: Dict[Tuple[str, str], str] = {}
 
         f_review, f_auto = self._fuzzy_bands()
         e_review, e_auto = self._embedding_bands()
@@ -413,6 +419,7 @@ class CandidateDedupService:
             self._score_fuzzy(group, best)
             self._score_embedding(group, best)
             self._score_containment(group, best, evidence)
+            self._score_surface_parts(group, best, surface_evidence)
 
         # Build candidates, applying the force-split veto.
         report = CandidateReport(
@@ -458,6 +465,8 @@ class CandidateDedupService:
                 evidence=(
                     evidence.get(self._pair_key(id_a, id_b), "")
                     if method == CONTAINMENT
+                    else surface_evidence.get(self._pair_key(id_a, id_b), "")
+                    if method == SURFACE_PARTS
                     else ""
                 ),
             )
@@ -594,6 +603,53 @@ class CandidateDedupService:
                     # only thing that distinguishes them on the card.
                     evidence[self._pair_key(a["id"], b["id"])] = " ".join(affix)
 
+    def _score_surface_parts(
+        self,
+        group: List[Dict[str, Any]],
+        best: Dict[Tuple[str, str], Dict[str, float]],
+        evidence: Dict[Tuple[str, str], str],
+    ) -> None:
+        """Propose same-type pairs that share a name one of them decomposes into.
+
+        D1. `Economische Zaken (Ministerie)` and `Economische Zaken`, or
+        `VRO (Volkshuisvesting en Ruimtelijke Ordening)` and `VRO`, are 2 rows
+        under 2 identity keys, because the identity rule does not strip decoration
+        and must not (owner decision, 2026-09-26: a normalisation merges silently).
+        :func:`shared.utils.surface_parts.parse_surface` splits each surface into
+        the names it asserts without deleting any; a pair sharing one of those
+        names, compared under the comparison fold, is proposed.
+
+        **Always `review`.** The shared name can be an extractor's invented gloss,
+        and the shapes that must never merge — an organ of X, a list of several
+        referents — are blocked by the parser, so a blocked row contributes no
+        names at all. Pairs equal after the fold are left to `fold_equal`.
+
+        The evidence names the shared name and the shape that produced it, so a
+        card reads `surface_parts (type_suffix: economische zaken)`.
+        """
+        from shared.utils.surface_parts import parse_surface
+
+        by_name: Dict[str, List[Tuple[Dict[str, Any], str]]] = {}
+        for row in group:
+            parts = parse_surface(row["name"], row["entity_type"])
+            for name in dict.fromkeys(fold_for_comparison(n) for n in parts.names):
+                if name:
+                    by_name.setdefault(name, []).append((row, parts.shape))
+        for name, rows in by_name.items():
+            for i in range(len(rows)):
+                for j in range(i + 1, len(rows)):
+                    (a, shape_a), (b, shape_b) = rows[i], rows[j]
+                    if a["id"] == b["id"]:
+                        continue
+                    if fold_for_comparison(a["name"]) == fold_for_comparison(b["name"]):
+                        continue  # fold_equal's pair
+                    key = self._pair_key(a["id"], b["id"])
+                    if SURFACE_PARTS in best.get(key, {}):
+                        continue  # the first shared name is enough evidence
+                    self._record(best, a["id"], b["id"], 1.0, SURFACE_PARTS)
+                    shape = shape_a if shape_a != "plain" else shape_b
+                    evidence[key] = f"{shape}: {name}"
+
     def _score_fuzzy(
         self,
         group: List[Dict[str, Any]],
@@ -674,6 +730,9 @@ class CandidateDedupService:
             FOLD_EQUAL_CROSS_TYPE: (1.0, 2.0),
             # Containment is a recall device, never a decision.
             CONTAINMENT: (1.0, 2.0),
+            # A shared decomposed name is evidence, not identity (D1): the
+            # extractor invents glosses, so a human confirms. Never auto.
+            SURFACE_PARTS: (1.0, 2.0),
         }
         best_choice: Tuple[float, str, Optional[str]] = (0.0, "", None)
         best_rank = -1
