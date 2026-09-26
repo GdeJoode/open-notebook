@@ -1,0 +1,119 @@
+{
+ "IenW": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130"
+  ],
+  "note": "abbreviation of the current name; TOOI keeps IenM->IenW under one code"
+ },
+ "JenV": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1058"
+  ],
+  "note": "abbreviation; Justitie->VenJ->JenV lineage under one code"
+ },
+ "Ministerie van Economische Zaken en Klimaat": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045"
+  ],
+  "note": "EZK is an alias of mnre1045"
+ },
+ "VRO (ministerie van Volkshuisvesting en Ruimtelijke Ordening)": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"
+  ],
+  "note": ""
+ },
+ "Ministerie van Volksgezondheid, Welzijn en Sport": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025"
+  ],
+  "note": ""
+ },
+ "VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"
+  ],
+  "note": "context: 'De Minister van Volkshuisvesting en Ruimtelijke Ordening ... hierna te noemen: VRO'; the VROM gloss is the extractor's, not the text's"
+ },
+ "BZK (Binnenlandse Zaken en Koninkrijkrelaties)": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+  ],
+  "note": "corpus spells Koninkrijkrelaties without the s"
+ },
+ "IenW (Infrastructuur en Waterstaat)": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130"
+  ],
+  "note": ""
+ },
+ "VRO (Volkshuisvesting en Ruimtelijke Ordening)": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"
+  ],
+  "note": ""
+ },
+ "Volkshuisvesting en Ruimtelijke Ordening (Ministerie)": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"
+  ],
+  "note": ""
+ },
+ "Binnenlandse Zaken en Koninkrijkrelaties (Ministerie)": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+  ],
+  "note": "missing s"
+ },
+ "Economische Zaken (Ministerie)": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045",
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1040"
+  ],
+  "note": "AMBIGUOUS in TOOI as loaded: two records named Economische Zaken; either is accepted, a mechanism that returns both and refuses is also correct"
+ },
+ "Sociale Zaken en Werkgelegenheid (Ministerie)": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1073"
+  ],
+  "note": ""
+ },
+ "Infrastructuur en Waterstaat (Ministerie)": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130"
+  ],
+  "note": ""
+ },
+ "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening, Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen, Sociale Zaken en Werkgelegenheid, Justitie en Veiligheid": {
+  "gold": [],
+  "note": "NOT one entity (a list of four); correct answer is no link"
+ },
+ "HG/BZK (Herstel Groningen/Binnenlandse Zaken en Koninkrijkrelaties)": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+  ],
+  "note": "party designation for the Staatssecretaris Herstel Groningen, a BZK portfolio"
+ },
+ "De Staatssecretaris van Infrastructuur en Waterstaat (IenW)": {
+  "gold": [],
+  "note": "an OFFICE, not the ministry (PC.3 recorded it as a relation: organ of IenW); correct answer is no identity link; mnre1130 is related"
+ },
+ "VRO (Ministerie van Volksgezondheid, Welzijn en Sport)": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"
+  ],
+  "note": "context says Minister van VRO; the VWS gloss is the extractor's"
+ },
+ "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"
+  ],
+  "note": "one ministry behind a list prefix"
+ },
+ "Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen": {
+  "gold": [
+   "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
+  ],
+  "note": "BZK with its HG portfolio; missing s"
+ }
+}

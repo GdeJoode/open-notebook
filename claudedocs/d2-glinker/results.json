@@ -1,0 +1,368 @@
+{
+ "summary": {
+  "a_k4_exact": {
+   "correct": 4,
+   "refused": 16
+  },
+  "b_l2_exact_stored": {
+   "correct": 6,
+   "refused": 14
+  },
+  "b_l2_exact_text": {
+   "correct": 13,
+   "refused": 6,
+   "ambiguous_contains_gold": 1
+  },
+  "b_l2_fuzzy_top1_stored": {
+   "refused": 6,
+   "correct": 12,
+   "wrong": 2
+  },
+  "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": {
+   "wrong": 14,
+   "correct": 6
+  },
+  "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": {
+   "wrong": 13,
+   "correct": 6,
+   "refused": 1
+  },
+  "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": {
+   "correct": 8,
+   "wrong": 12
+  },
+  "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": {
+   "correct": 8,
+   "wrong": 11,
+   "refused": 1
+  },
+  "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": {
+   "correct": 16,
+   "wrong": 2,
+   "refused": 2
+  },
+  "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": {
+   "refused": 4,
+   "correct": 14,
+   "wrong": 2
+  },
+  "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": {
+   "correct": 16,
+   "wrong": 2,
+   "refused": 2
+  },
+  "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": {
+   "correct": 14,
+   "refused": 4,
+   "wrong": 2
+  },
+  "d1_sim_then_exact": {
+   "correct": 14,
+   "refused": 4,
+   "ambiguous_contains_gold": 1,
+   "wrong": 1
+  }
+ },
+ "per_mention": {
+  "IenW": {
+   "a_k4_exact": "correct",
+   "b_l2_exact_stored": "correct",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "refused",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "refused",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "correct"
+  },
+  "JenV": {
+   "a_k4_exact": "correct",
+   "b_l2_exact_stored": "correct",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "refused",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "refused",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "wrong"
+  },
+  "Ministerie van Economische Zaken en Klimaat": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "correct",
+   "b_l2_exact_text": "refused",
+   "b_l2_fuzzy_top1_stored": "refused",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "wrong"
+  },
+  "VRO (ministerie van Volkshuisvesting en Ruimtelijke Ordening)": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "correct",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "wrong"
+  },
+  "Ministerie van Volksgezondheid, Welzijn en Sport": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "correct",
+   "b_l2_exact_text": "refused",
+   "b_l2_fuzzy_top1_stored": "refused",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "correct"
+  },
+  "VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "wrong",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "wrong"
+  },
+  "BZK (Binnenlandse Zaken en Koninkrijkrelaties)": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "correct",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "correct"
+  },
+  "IenW (Infrastructuur en Waterstaat)": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "correct",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "refused",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "refused",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "refused",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "refused"
+  },
+  "VRO (Volkshuisvesting en Ruimtelijke Ordening)": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "correct",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "wrong"
+  },
+  "Volkshuisvesting en Ruimtelijke Ordening (Ministerie)": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "correct",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "wrong"
+  },
+  "Binnenlandse Zaken en Koninkrijkrelaties (Ministerie)": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "refused",
+   "b_l2_fuzzy_top1_stored": "correct",
+   "d1_sim_then_exact": "refused",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "correct"
+  },
+  "Economische Zaken (Ministerie)": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "ambiguous_contains_gold",
+   "b_l2_fuzzy_top1_stored": "correct",
+   "d1_sim_then_exact": "ambiguous_contains_gold",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "correct"
+  },
+  "Sociale Zaken en Werkgelegenheid (Ministerie)": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "correct",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "correct"
+  },
+  "Infrastructuur en Waterstaat (Ministerie)": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "correct",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "correct"
+  },
+  "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening, Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen, Sociale Zaken en Werkgelegenheid, Justitie en Veiligheid": {
+   "a_k4_exact": "correct",
+   "b_l2_exact_stored": "correct",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "correct",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "wrong"
+  },
+  "HG/BZK (Herstel Groningen/Binnenlandse Zaken en Koninkrijkrelaties)": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "refused",
+   "b_l2_fuzzy_top1_stored": "refused",
+   "d1_sim_then_exact": "refused",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "refused",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "refused",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "refused",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "refused",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "wrong"
+  },
+  "De Staatssecretaris van Infrastructuur en Waterstaat (IenW)": {
+   "a_k4_exact": "correct",
+   "b_l2_exact_stored": "correct",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "correct",
+   "d1_sim_then_exact": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "wrong"
+  },
+  "VRO (Ministerie van Volksgezondheid, Welzijn en Sport)": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "correct",
+   "b_l2_fuzzy_top1_stored": "wrong",
+   "d1_sim_then_exact": "refused",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "wrong"
+  },
+  "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "refused",
+   "b_l2_fuzzy_top1_stored": "refused",
+   "d1_sim_then_exact": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "refused",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "refused",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "wrong",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "refused",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "refused",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "wrong",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "wrong"
+  },
+  "Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen": {
+   "a_k4_exact": "refused",
+   "b_l2_exact_stored": "refused",
+   "b_l2_exact_text": "refused",
+   "b_l2_fuzzy_top1_stored": "correct",
+   "d1_sim_then_exact": "refused",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-base-v1.0@0.5": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_l2@knowledgator/gliner-linker-large-v1.0@0.5": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0": "correct",
+   "c_l3_over_all_ministries@knowledgator/gliner-linker-large-v1.0@0.5": "correct"
+  }
+ }
+}
