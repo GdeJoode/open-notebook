@@ -37,6 +37,10 @@ class VocabMatch:
     source_vocabulary: str
     aliases: List[str] = field(default_factory=list)
     confidence: float = 1.0
+    #: Which rule made the call, when it was not the whole surface form — e.g.
+    #: ``"abbreviation: VRO"`` for a hit on one part of `VRO (…)` (D1). Empty for
+    #: a hit on the name as written.
+    matched_on: str = ""
 
 
 @runtime_checkable

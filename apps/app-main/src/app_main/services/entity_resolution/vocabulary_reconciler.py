@@ -88,10 +88,13 @@ class VocabularyReconciler:
         qualifying = [m for m in candidates if m.confidence >= self._threshold]
 
         if not qualifying:
+            # D1: matches below the threshold are not linked, but they are not
+            # discarded either — a one-sided decomposed hit (`BZK (…misspelled…)`)
+            # is exactly what a curator should see. Empty when nothing matched.
             return ReconcileResult(
                 entity_id=entity_id,
                 linked=False,
-                candidates=[],
+                candidates=self._distinct_by_uri(candidates),
                 reason="no_match_above_threshold",
             )
 
