@@ -118,6 +118,24 @@ that helps every mechanism at once, and PC.3 measured all three failing on the
 same feature. Risk: over-stripping, which PC.2 spent a review round on; the
 mitigation is its affix discipline and its curator queue.
 
+> **Done 2026-09-26, scoped by the owner to "decompose only".**
+> `shared.utils.surface_parts.parse_surface` splits a name into the names it
+> asserts. The identity key is unchanged. Two consumers:
+> - the TOOI lookup: parts must all hit and agree to link; one-sided evidence is
+>   a candidate at 0.8, never a link;
+> - `surface_parts` review proposals.
+>
+> On the ministry rows: 12/18 correct, 1 candidate, 0 wrong. Across the whole
+> graph, 34 newly linked, all correct.
+>
+> **Open, for D2 or later:**
+> - `ONE_SIDED_CONFIDENCE` (0.8) sits below the reconciler's 0.85 only by
+>   convention. D2's caller must keep its threshold above 0.8.
+> - The initials check costs recall: IZA, RIVM, WOZO, a gloss in the other
+>   language, and the two VRO rows with invented glosses.
+> - `Ministerie van het Rijk` ~ `het Rijk` is proposed for review, and it is false.
+> - The evidence-shape attribution has no test that fails when it is reverted.
+
 **D2 — Do we load TOOI and give `reconcile_entity` a caller?** *Recommend yes,
 after D1.* Cheap, checkable, and it produces a stable URI — the strongest form of
 structure available here. Bounded: it reaches named things only.
