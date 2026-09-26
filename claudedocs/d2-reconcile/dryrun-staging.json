@@ -1,10 +1,28 @@
 {
- "scanned": 72,
+ "register_rows": 1438,
+ "dry_run": true,
+ "scanned": 173,
+ "scanned_by": {
+  "government_organization": {
+   "active": 20
+  },
+  "organization": {
+   "reference": 120
+  },
+  "administrative_area": {
+   "active": 52
+  }
+ },
  "by_type": {
   "government_organization": {
    "no_match": 6,
-   "linked": 13,
+   "ended_organisation": 4,
+   "linked": 9,
    "ambiguous_multiple_candidates": 1
+  },
+  "organization": {
+   "no_match": 98,
+   "linked": 3
   },
   "administrative_area": {
    "no_match": 11,
@@ -13,404 +31,1265 @@
  },
  "linked": [
   {
-   "id": "entity:322bzzeei7mndqogpwvr",
-   "name": "VRO (Volkshuisvesting en Ruimtelijke Ordening)",
-   "type": "government_organization",
-   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
-   "matched_on": "abbreviation: VRO + Volkshuisvesting en Ruimtelijke Ordening"
-  },
-  {
    "id": "entity:4ai5ium9fsa7qkwxttwi",
    "name": "Ministerie van Volksgezondheid, Welzijn en Sport",
    "type": "government_organization",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+   "label": "Volksgezondheid, Welzijn en Sport",
    "matched_on": ""
   },
   {
    "id": "entity:6y3woaib3ttjjitunypg",
    "name": "JenV",
    "type": "government_organization",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1058",
+   "label": "Justitie en Veiligheid",
    "matched_on": ""
   },
   {
    "id": "entity:8csnxydjjzl7e8ziyric",
    "name": "Binnenlandse Zaken en Koninkrijkrelaties (Ministerie)",
    "type": "government_organization",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+   "label": "Binnenlandse Zaken en Koninkrijksrelaties",
    "matched_on": "type_suffix: Binnenlandse Zaken en Koninkrijkrelaties"
-  },
-  {
-   "id": "entity:btpsat9a8ub8tvfnjw3j",
-   "name": "VRO (ministerie van Volkshuisvesting en Ruimtelijke Ordening)",
-   "type": "government_organization",
-   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
-   "matched_on": "abbreviation: VRO + Volkshuisvesting en Ruimtelijke Ordening"
   },
   {
    "id": "entity:cx1xf1gx1sow5oas3oyr",
    "name": "Infrastructuur en Waterstaat (Ministerie)",
    "type": "government_organization",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+   "label": "Infrastructuur en Waterstaat",
    "matched_on": "type_suffix: Infrastructuur en Waterstaat"
-  },
-  {
-   "id": "entity:di62hb83xu4ilwv0s3qj",
-   "name": "Volkshuisvesting en Ruimtelijke Ordening (Ministerie)",
-   "type": "government_organization",
-   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
-   "matched_on": "type_suffix: Volkshuisvesting en Ruimtelijke Ordening"
   },
   {
    "id": "entity:grhgds77kw3qwf6zwl95",
    "name": "Sociale Zaken en Werkgelegenheid (Ministerie)",
    "type": "government_organization",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1073",
+   "label": "Sociale Zaken en Werkgelegenheid",
    "matched_on": "type_suffix: Sociale Zaken en Werkgelegenheid"
   },
   {
    "id": "entity:hdiugivodjjwnpt8k9h8",
    "name": "IenW (Infrastructuur en Waterstaat)",
    "type": "government_organization",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+   "label": "Infrastructuur en Waterstaat",
    "matched_on": "abbreviation: IenW + Infrastructuur en Waterstaat"
   },
   {
    "id": "entity:o5jydq80tslfequxik54",
    "name": "Ministerie van Economische Zaken en Klimaat",
    "type": "government_organization",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045",
+   "label": "Economische Zaken en Klimaat",
    "matched_on": ""
   },
   {
    "id": "entity:rratdyul5v149w9w8t3h",
    "name": "BZK (Binnenlandse Zaken en Koninkrijkrelaties)",
    "type": "government_organization",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+   "label": "Binnenlandse Zaken en Koninkrijksrelaties",
    "matched_on": "abbreviation: BZK + Binnenlandse Zaken en Koninkrijkrelaties"
   },
   {
    "id": "entity:wgcdx6urtd6bmgp15mwu",
    "name": "IenW",
    "type": "government_organization",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+   "label": "Infrastructuur en Waterstaat",
    "matched_on": ""
   },
   {
-   "id": "entity:zyi9gcb6a1kb3fe3y5xg",
-   "name": "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening",
-   "type": "government_organization",
-   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
-   "matched_on": "category_prefix: Volkshuisvesting en Ruimtelijke Ordening"
+   "id": "entity:78hnu2m8lwusx79fkly9",
+   "name": "Rijksinstituut voor Volksgezondheid en Milieu",
+   "type": "organization",
+   "status": "reference",
+   "uri": "https://identifier.overheid.nl/tooi/id/oorg/oorg10123",
+   "label": "Rijksinstituut voor Volksgezondheid en Milieu",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:k951p04y6qx7t1lm84gh",
+   "name": "Kamer van Koophandel",
+   "type": "organization",
+   "status": "reference",
+   "uri": "https://identifier.overheid.nl/tooi/id/zbo/zb000184",
+   "label": "Kamer van Koophandel",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:zeazmljs7f6r08d8l3d6",
+   "name": "CBS (Centraal Bureau voor de Statistiek)",
+   "type": "organization",
+   "status": "reference",
+   "uri": "https://identifier.overheid.nl/tooi/id/zbo/zb000193",
+   "label": "Centraal Bureau voor de Statistiek",
+   "matched_on": "abbreviation: CBS + Centraal Bureau voor de Statistiek"
   },
   {
    "id": "entity:1f5nfunvu9qgkktch8o9",
    "name": "Gemeente Opmeer",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0432",
+   "label": "Opmeer",
    "matched_on": ""
   },
   {
    "id": "entity:1itk312dn87xkbxjiuiv",
    "name": "Gemeente Zwolle",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0193",
+   "label": "Zwolle",
    "matched_on": ""
   },
   {
    "id": "entity:2b9xoubx4vw61vajprgt",
    "name": "Gemeente Stede Broec",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0532",
+   "label": "Stede Broec",
    "matched_on": ""
   },
   {
    "id": "entity:3qwylntwzb4n1njy9w21",
    "name": "Gemeente Den Helder",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0400",
+   "label": "Den Helder",
    "matched_on": ""
   },
   {
    "id": "entity:3wfpqwkpswqfw0ypgt2w",
    "name": "Gemeente Súdwest-Fryslân",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1900",
+   "label": "Súdwest-Fryslân",
    "matched_on": ""
   },
   {
    "id": "entity:4canxlt65boiii3t8njd",
    "name": "Provincie Limburg",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/provincie/pv31",
+   "label": "Limburg",
    "matched_on": ""
   },
   {
    "id": "entity:6mks4itixtuodhbxavl3",
    "name": "Roerdalen",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1669",
+   "label": "Roerdalen",
    "matched_on": ""
   },
   {
    "id": "entity:87cnciglw93ywkdhxkgo",
    "name": "Gemeente Leudal",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1640",
+   "label": "Leudal",
    "matched_on": ""
   },
   {
    "id": "entity:9pxyamh1eb7ylhg7dch2",
    "name": "Gemeente Heiloo",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0399",
+   "label": "Heiloo",
    "matched_on": ""
   },
   {
    "id": "entity:9ro78qv825c1lmn1f8kq",
    "name": "Gemeente Medemblik",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0420",
+   "label": "Medemblik",
    "matched_on": ""
   },
   {
    "id": "entity:a75uu974dvsuos99sofm",
    "name": "Steenwijkerland",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1708",
+   "label": "Steenwijkerland",
    "matched_on": ""
   },
   {
    "id": "entity:aiwkl2ybvhfhqxy223oy",
    "name": "Weert",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0988",
+   "label": "Weert",
    "matched_on": ""
   },
   {
    "id": "entity:b476c57p9qius9mev4pv",
    "name": "Gemeente Roermond",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0957",
+   "label": "Roermond",
    "matched_on": ""
   },
   {
    "id": "entity:cy044274zoa044by5tqe",
    "name": "Gemeente Alkmaar",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0361",
+   "label": "Alkmaar",
    "matched_on": ""
   },
   {
    "id": "entity:eehvt1hrkxw4on19r5s9",
    "name": "Gemeente Enkhuizen",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0388",
+   "label": "Enkhuizen",
    "matched_on": ""
   },
   {
    "id": "entity:elikqexz0eyftxrsozwm",
    "name": "Gemeente Texel",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0448",
+   "label": "Texel",
    "matched_on": ""
   },
   {
    "id": "entity:etwmv7krrfl95yw9x659",
    "name": "Provincie Fryslân",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/provincie/pv21",
+   "label": "Fryslân",
    "matched_on": ""
   },
   {
    "id": "entity:f0gzb3z1obb7dpfgn8td",
    "name": "Gemeente Schagen",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0441",
+   "label": "Schagen",
    "matched_on": ""
   },
   {
    "id": "entity:f7st9s29fpcfpd710lzi",
    "name": "Heerde",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0246",
+   "label": "Heerde",
    "matched_on": ""
   },
   {
    "id": "entity:hlcguf431z6fbzxrq7qd",
    "name": "Hoogeveen",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0118",
+   "label": "Hoogeveen",
    "matched_on": ""
   },
   {
    "id": "entity:hz1zmf7z80jvy8pimbvc",
    "name": "Leudal",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1640",
+   "label": "Leudal",
    "matched_on": ""
   },
   {
    "id": "entity:i0okcsknsvkjwp2un1kp",
    "name": "Gemeente Hoorn",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0405",
+   "label": "Hoorn",
    "matched_on": ""
   },
   {
    "id": "entity:i4hs3vto4mnyzj2x6vke",
    "name": "Provincie Noord-Holland",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/provincie/pv27",
+   "label": "Noord-Holland",
    "matched_on": ""
   },
   {
    "id": "entity:jy065833iqbmnc6fk9ro",
    "name": "Gemeente Drechterland",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0498",
+   "label": "Drechterland",
    "matched_on": ""
   },
   {
    "id": "entity:lvlzyk2m2ymdtqwzhmpb",
    "name": "Gemeente Roerdalen",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1669",
+   "label": "Roerdalen",
    "matched_on": ""
   },
   {
    "id": "entity:mjaaltt4ceapwxqzbmcq",
    "name": "Raalte",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0177",
+   "label": "Raalte",
    "matched_on": ""
   },
   {
    "id": "entity:n698f2glp0qw7os1ubb6",
    "name": "Gemeente Castricum",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0383",
+   "label": "Castricum",
    "matched_on": ""
   },
   {
    "id": "entity:otvq5nrht53n9cp46lww",
    "name": "Gemeente De Fryske Marren",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1940",
+   "label": "De Fryske Marren",
    "matched_on": ""
   },
   {
    "id": "entity:p0oanoxb0spcpg2bci7u",
    "name": "Dalfsen",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0148",
+   "label": "Dalfsen",
    "matched_on": ""
   },
   {
    "id": "entity:q1oo2r3mr16cv6kih6jy",
    "name": "Gemeente Dijk en Waard",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1980",
+   "label": "Dijk en Waard",
    "matched_on": ""
   },
   {
    "id": "entity:qu3wi9sckfeeupn72zdb",
    "name": "Gemeente Hollands Kroon",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1911",
+   "label": "Hollands Kroon",
    "matched_on": ""
   },
   {
    "id": "entity:rcqkllzjy4lnmy162u47",
    "name": "Provincie Overijssel",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/provincie/pv23",
+   "label": "Overijssel",
    "matched_on": ""
   },
   {
    "id": "entity:tyh5kktdj6np5q3t5lh6",
    "name": "Westerveld",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1701",
+   "label": "Westerveld",
    "matched_on": ""
   },
   {
    "id": "entity:u8hi5otrko057k689lwa",
    "name": "Gemeente Echt-Susteren",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1711",
+   "label": "Echt-Susteren",
    "matched_on": ""
   },
   {
    "id": "entity:ukzcftxon6vxbrcys2kn",
    "name": "Gemeente Maasgouw",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1641",
+   "label": "Maasgouw",
    "matched_on": ""
   },
   {
    "id": "entity:vy0p7t5ro4m9g6o1aq6k",
    "name": "Nederweert",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0946",
+   "label": "Nederweert",
    "matched_on": ""
   },
   {
    "id": "entity:w77ffkngm1nr7tm6jp4d",
    "name": "Ommen",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0175",
+   "label": "Ommen",
    "matched_on": ""
   },
   {
    "id": "entity:wny9lstlniiawoatqx5a",
    "name": "gemeente Het Hogeland",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1966",
+   "label": "Het Hogeland",
    "matched_on": ""
   },
   {
    "id": "entity:xnijxw8jn4apxikab83t",
    "name": "De Wolden",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1690",
+   "label": "De Wolden",
    "matched_on": ""
   },
   {
    "id": "entity:yfyzqv1e2f2mdxoxlh31",
    "name": "Gemeente Weert",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0988",
+   "label": "Weert",
    "matched_on": ""
   },
   {
    "id": "entity:ypwsdvwf22lgnd9vo3r1",
    "name": "Gemeente Nederweert",
    "type": "administrative_area",
+   "status": "active",
    "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0946",
+   "label": "Nederweert",
    "matched_on": ""
   }
  ],
  "candidates": [
   {
+   "id": "entity:322bzzeei7mndqogpwvr",
+   "name": "VRO (Volkshuisvesting en Ruimtelijke Ordening)",
+   "type": "government_organization",
+   "status": "active",
+   "reason": "ended_organisation",
+   "candidates": [
+    {
+     "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+     "label": "Volkshuisvesting en Ruimtelijke Ordening",
+     "confidence": 0.99,
+     "matched_on": "abbreviation: VRO + Volkshuisvesting en Ruimtelijke Ordening",
+     "valid_until": "2026-02-22"
+    }
+   ]
+  },
+  {
    "id": "entity:82q4ugerjngeptm9b95b",
    "name": "Economische Zaken (Ministerie)",
    "type": "government_organization",
+   "status": "active",
    "reason": "ambiguous_multiple_candidates",
    "candidates": [
     {
      "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045",
      "label": "Economische Zaken en Klimaat",
      "confidence": 0.9,
-     "matched_on": "type_suffix: Economische Zaken"
+     "matched_on": "type_suffix: Economische Zaken",
+     "valid_until": ""
     },
     {
      "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1040",
      "label": "Economische Zaken",
      "confidence": 0.99,
-     "matched_on": "type_suffix: Economische Zaken"
+     "matched_on": "type_suffix: Economische Zaken",
+     "valid_until": "2010-10-13"
+    }
+   ]
+  },
+  {
+   "id": "entity:btpsat9a8ub8tvfnjw3j",
+   "name": "VRO (ministerie van Volkshuisvesting en Ruimtelijke Ordening)",
+   "type": "government_organization",
+   "status": "active",
+   "reason": "ended_organisation",
+   "candidates": [
+    {
+     "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+     "label": "Volkshuisvesting en Ruimtelijke Ordening",
+     "confidence": 0.99,
+     "matched_on": "abbreviation: VRO + Volkshuisvesting en Ruimtelijke Ordening",
+     "valid_until": "2026-02-22"
+    }
+   ]
+  },
+  {
+   "id": "entity:di62hb83xu4ilwv0s3qj",
+   "name": "Volkshuisvesting en Ruimtelijke Ordening (Ministerie)",
+   "type": "government_organization",
+   "status": "active",
+   "reason": "ended_organisation",
+   "candidates": [
+    {
+     "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+     "label": "Volkshuisvesting en Ruimtelijke Ordening",
+     "confidence": 0.99,
+     "matched_on": "type_suffix: Volkshuisvesting en Ruimtelijke Ordening",
+     "valid_until": "2026-02-22"
+    }
+   ]
+  },
+  {
+   "id": "entity:zyi9gcb6a1kb3fe3y5xg",
+   "name": "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening",
+   "type": "government_organization",
+   "status": "active",
+   "reason": "ended_organisation",
+   "candidates": [
+    {
+     "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+     "label": "Volkshuisvesting en Ruimtelijke Ordening",
+     "confidence": 0.99,
+     "matched_on": "category_prefix: Volkshuisvesting en Ruimtelijke Ordening",
+     "valid_until": "2026-02-22"
     }
    ]
   }
- ]
+ ],
+ "no_match": [
+  {
+   "id": "entity:087ifqcmejumgo5esapx",
+   "name": "HG/BZK (Herstel Groningen/Binnenlandse Zaken en Koninkrijkrelaties)",
+   "type": "government_organization",
+   "status": "active"
+  },
+  {
+   "id": "entity:6v6ebl6n9d13054tnt07",
+   "name": "VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)",
+   "type": "government_organization",
+   "status": "active"
+  },
+  {
+   "id": "entity:ccf5zsot67wlivvp7x27",
+   "name": "Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen",
+   "type": "government_organization",
+   "status": "active"
+  },
+  {
+   "id": "entity:qmqufzo4mqmuv73stbhv",
+   "name": "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening, Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen, Sociale Zaken en Werkgelegenheid, Justitie en Veiligheid",
+   "type": "government_organization",
+   "status": "active"
+  },
+  {
+   "id": "entity:r9p9wr8ic5vh8awevipz",
+   "name": "VRO (Ministerie van Volksgezondheid, Welzijn en Sport)",
+   "type": "government_organization",
+   "status": "active"
+  },
+  {
+   "id": "entity:x21fq73vghsiv3vmzar3",
+   "name": "De Staatssecretaris van Infrastructuur en Waterstaat (IenW)",
+   "type": "government_organization",
+   "status": "active"
+  },
+  {
+   "id": "entity:02xyiuo9kwlww8uq77ze",
+   "name": "kennis- en onderwijsinstellingen",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:0doffx7kgvg7rad662hp",
+   "name": "Biblionet",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:0gpo1ir9prrmfqq8qlpb",
+   "name": "United States Environmental Protection Agency (EPA)",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:11frxt1mlpjra3uj3qp3",
+   "name": "Journal of Regional Science",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:17exs5yclgj9lx8ba0qf",
+   "name": "Eurostat",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:1jcb1uvq8l0gw80he9ww",
+   "name": "Journal of Entrepreneurship",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:1sui79nrausweh4z869t",
+   "name": "RIEC (Regionale Informatie Eenheid Criminaliteit)",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:2dbov1vhjmclc19178f3",
+   "name": "Quality of Government Institute",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:2mvsuht26p1m28m0mwds",
+   "name": "Sociaal-Planbureau Groningen",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:308dvp4pjqzjoh0947y7",
+   "name": "Journal of Geographical Systems",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:34jttia4qo87phe6q7sz",
+   "name": "Vakland",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:3xztg4xnjv9iqqb29plw",
+   "name": "Publications Office of the European Union",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:43jmtauqyqxf2fr66hlb",
+   "name": "Stichting Groninger Dorpen",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:4jecte4avqdjn6fgaodg",
+   "name": "Applied Spatial Analysis and Policy",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:4lceusf43t720ad4rujw",
+   "name": "Cohesion Open Data Platform",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:5t3htahjwqf7b30jef7q",
+   "name": "Journal of Economic Geography",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:60yt01lnvymex1rpne7v",
+   "name": "Stuurgroep Lokaal Educatieve Agenda (LEA)",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:69foc7l99gfxd6jz5she",
+   "name": "Kyklos",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:6ngtiadpz5s8b2nm4ihr",
+   "name": "Routledge",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:6xnw9ge9ftg303ucdvnc",
+   "name": "The Stata Journal",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:86h2k2whscvrtxliuojy",
+   "name": "Journal of Institutional and Theoretical Economics",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:8h6rwgvew9o8w48op5et",
+   "name": "european union",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:8jld7tz3smn8yacobsub",
+   "name": "Harvard University Press",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:90141m3g75buslq1auc0",
+   "name": "ABC Corporation",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:92hk2y7chsho8s0bkr3c",
+   "name": "Science",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:9nfgvj7cf92lxngu8rvy",
+   "name": "Banca Nazionale del Lavoro Quarterly Review",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:a64m7ffk46pu6guv2mlr",
+   "name": "Growth and Change",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:bemtr93l002j6d79d3wh",
+   "name": "B8C Rijk",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:bldm6cjhyap8cnzoa25l",
+   "name": "Gran Sasso Science Institute",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:bn4xi1d91jkghbt5oatp",
+   "name": "Australian Grants Commission",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:btitafeftvu5anp3zu4i",
+   "name": "Cambridge Journal of Regions, Economy and Society",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:caku7nwpbgtxzes55vhm",
+   "name": "journal",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:ci1htjnkgrs7wcht6tio",
+   "name": "Federal Government",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:d1ltvua6761t01lhkjuv",
+   "name": "Regionale Ontwikkelings Maatschappij InWest",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:dsvp7zsjbp1uhgxf5cpm",
+   "name": "University of Gothenburg",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:eagcvrtn68izp3xc42m2",
+   "name": "Provincial Government",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:f5nwqtzyt2alx01ofm48",
+   "name": "regionaal economisch forum",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:ff24ohburn7006jajlir",
+   "name": "Maatschappelijke Coalitie Sociaal Domein Het Hogeland",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:fllq6plk3m91f953xtdy",
+   "name": "Het Ontwikkelplein",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:ftdfh0o2rwjeg5ms4wq2",
+   "name": "Wheatsheaf",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:ftr18owdqfkpgje6xw4y",
+   "name": "Bureau BUITEN",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:fx5ybmvadr8qmrfk8tpf",
+   "name": "Primos-prognose",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:go611v4qav14y48u56gs",
+   "name": "Journal of Economic Growth",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:h3c29os1v84485ogkay1",
+   "name": "University of Groningen",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:h4pqiyv2vmiddm71tmmb",
+   "name": "Department of Statistical Science",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:hnrl1wxr5wkjyrecze64",
+   "name": "Policy Research Department",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:j7ojjlm0ohkokp8f8dh5",
+   "name": "Regiobeeld",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:jbb63lah66dvmvc8oblw",
+   "name": "World Economic Forum",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:k3nni2f6osjnvke3jisy",
+   "name": "Council of Provincial Finance Ministers",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:k9nql46voga2j9qs2hpt",
+   "name": "Local Government",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:kfko3wefpxmysllhkeiw",
+   "name": "Regionaal Kennis- en Expertise Centrum",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:khe822vxobjybta9aj62",
+   "name": "Expertteam voor Coöperatieve Woonvormen",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:kkdhw6jpfyaei6w5xj7n",
+   "name": "Crown Business",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:lendknyqks468h75taua",
+   "name": "Partijen",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:lh24q89fv1ygv6hmtdls",
+   "name": "World Bank",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:m72yl258i09ea6ss77pu",
+   "name": "(semi-)publieke organisaties",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:me0ot4bmwplgyfqfs1rm",
+   "name": "Aletta Jacobs School of Public Health",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:nckiv7mshncf0vudn1xs",
+   "name": "The Quarterly Journal of Economics",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:nd36t4z9uxtuxgz6snzz",
+   "name": "Journal of Development Economics",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:ndz9x7yiv6zdfdw8kzs7",
+   "name": "MIT Press",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:nkfx35zaou0jmziv5zi0",
+   "name": "Mensenwerk Het Hogeland",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:ooy2zm7i0o93k7lid8rv",
+   "name": "European Committee of the Regions",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:paou3vx6kmmlh2ifnlkm",
+   "name": "Review of Income and Wealth",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:pgozu59koaqe8efc78ng",
+   "name": "University of Bologna",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:ptzqjzzr4hcemfogls05",
+   "name": "Sharpe",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:pyusishsrnze1c5yv5cl",
+   "name": "Journal of Political Economy",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:qndfyvhkdd5w7zouj8uw",
+   "name": "Quality of Government (QoG) Institute",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:r8fcruijejfq371n0rxg",
+   "name": "Journal of Econometrics",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:rbxrxc5g6bf3gsp8wjr0",
+   "name": "Wiley",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:rcju3eiu4gmctqdje5gj",
+   "name": "University of Kent",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:rhwxcjuwm4b2bztb8kcy",
+   "name": "SBE (Samenwerkende Bedrijven Eemsregio)",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:ril6cr5qwyi38zxh33o9",
+   "name": "Journal of Monetary Economics",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:rjuauw3rxx7a01fguaoz",
+   "name": "University Association for Contemporary European Studies",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:rtmnnfa67d2pddibyrbo",
+   "name": "Universita degli Studi di Bologna",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:scze3synl9bgw86grtha",
+   "name": "University Library of Munich",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:shoogwhba2djgjtvffcz",
+   "name": "Ondernemersplatform Het Hogeland",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:sqyri19syre49js7mhff",
+   "name": "The Brookings Institution",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:thbt7gsjahhp5j8c3drp",
+   "name": "woningcorporaties",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:tt7pw86bnttiz88de0tr",
+   "name": "Rabobank",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:u01y735o2bwcsfoepjqj",
+   "name": "Friedrich Schiller University Jena",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:u1mw0d7pv7tz4x7tgghk",
+   "name": "The MIT Press",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:uhfwjcb3gecq3dneq5t7",
+   "name": "John Wiley & Sons Ltd",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:umuud55rawaep2kt87zj",
+   "name": "Public Economics Division",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:uraq9cqqx5uya7q62hul",
+   "name": "Edward Elgar Publishing",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:v69apo7x6r2x536oaz5t",
+   "name": "Economics and Econometrics Research Institute (EERI)",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:v8giin61wmi82i4z0nww",
+   "name": "ondernemerskoepels in Noord-Holland Noord",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:vrvoqiljroj2gkened0v",
+   "name": "Speculators",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:vsjnksprrbziq2kr5qt6",
+   "name": "Gebiedscoöperatie Het Hogeland",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:wcmlxnffnjf8taa3qw7k",
+   "name": "Instituut Publieke Waarden",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:wskfe6hagzxzltgkt6gl",
+   "name": "Centre for Competitive Advantage in the Global Economy, University of Warwick",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:wyxxa0okb3sm1vqg7lau",
+   "name": "Department of Statistical Science, University of Bologna",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:xdj4ts1i3i6vkbujq4v6",
+   "name": "European Commission",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:xm3ojv7aolkw0xuwnwco",
+   "name": "Regional Studies",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:xxdcctm0sgv1ig055avo",
+   "name": "Canadian Tax Foundation",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:yafrt0yabo2evk4tsmac",
+   "name": "maatschappelijke organisaties",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:yqm4m8istwgmio81v8jh",
+   "name": "Vereniging van Groninger Dorpen",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:yyw935ue3r3mfzl391tb",
+   "name": "Stichting Werk op Maat",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:zios9nzvkxv3ry7t5h2p",
+   "name": "Faculty of Economics and Business",
+   "type": "organization",
+   "status": "reference"
+  },
+  {
+   "id": "entity:0qekuvu2ojip8iawo6rl",
+   "name": "Regio",
+   "type": "administrative_area",
+   "status": "active"
+  },
+  {
+   "id": "entity:785jhzr37lxal8odzy5a",
+   "name": "overheden",
+   "type": "administrative_area",
+   "status": "active"
+  },
+  {
+   "id": "entity:81m8gt211iu78rsz7p8c",
+   "name": "Provincies Drenthe, Gelderland, Flevoland en Overijssel",
+   "type": "administrative_area",
+   "status": "active"
+  },
+  {
+   "id": "entity:9n04snshslhps6v9nccb",
+   "name": "Gemeente Koggeland",
+   "type": "administrative_area",
+   "status": "active"
+  },
+  {
+   "id": "entity:9nnvydpnn9h323up10ji",
+   "name": "Algemeen Bestuur van de gemeenteraad",
+   "type": "administrative_area",
+   "status": "active"
+  },
+  {
+   "id": "entity:9yhzmox20b5ajmvx85q1",
+   "name": "Regio (Zuidwest-Friesland)",
+   "type": "administrative_area",
+   "status": "active"
+  },
+  {
+   "id": "entity:caek43ukhzzodrktdkuf",
+   "name": "Brainport regio",
+   "type": "administrative_area",
+   "status": "active"
+  },
+  {
+   "id": "entity:kq16ixgi3e341paqyclx",
+   "name": "Gemeente Bergen",
+   "type": "administrative_area",
+   "status": "active"
+  },
+  {
+   "id": "entity:uoqu03d6j75vsg6llx3u",
+   "name": "Gemeenten Dalfsen, Ommen, Hardenberg, Raalte, Olst-Wijhe, Elburg, Hattem, Oldebroek, Heerde, Kampen, Dronten, Noordoostpolder, Nunspeet, Zwartewaterland, Steenwijkerland, Meppel, Staphorst, Urk, Westerveld, De Wolden, Hoogeveen, Zwolle",
+   "type": "administrative_area",
+   "status": "active"
+  },
+  {
+   "id": "entity:vb3ganurkq9v0p3tsxtm",
+   "name": "17 gemeenten",
+   "type": "administrative_area",
+   "status": "active"
+  },
+  {
+   "id": "entity:x3o0q77sq1acho978x0y",
+   "name": "Friese regio's",
+   "type": "administrative_area",
+   "status": "active"
+  }
+ ],
+ "write_failed": [],
+ "skipped_no_name": 19,
+ "queued": 0
 }

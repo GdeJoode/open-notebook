@@ -1,0 +1,26 @@
+-- ============================================================================
+-- Migration 82: entity.external_ids is an array on every database (Track PC, D2).
+--
+-- Migration 55 declared `external_ids` as `FLEXIBLE TYPE array DEFAULT []` with
+-- `IF NOT EXISTS` — a no-op wherever the field already existed. On the
+-- long-lived `staging` database it did, in a shape that appears in no migration:
+--
+--     DEFINE FIELD external_ids ON entity FLEXIBLE TYPE object DEFAULT {}
+--
+-- and all 5,500 entity rows hold `{}`. The same drift class migration 80 closed
+-- for `entity_alias.match_type`, found here by D2 review: the reconciler's write,
+-- `SET external_ids = ['https://…']`, fails on staging with "expected a object",
+-- `update_external_ids` catches it and returns False, and a real reconcile run
+-- reported every link as written while writing none. Fresh databases (every test
+-- container) have the array, so no test could see it.
+--
+-- Measured on staging before writing this: 5,500 rows are objects, 0 of them
+-- non-empty, 0 arrays, 0 NONE — converting `{}` to `[]` loses nothing.
+--
+-- Order matters: the definition is overwritten first, so the UPDATE's `[]` is
+-- accepted by the field; the UPDATE touches only rows that do not already hold
+-- an array.
+-- ============================================================================
+
+DEFINE FIELD OVERWRITE external_ids ON entity FLEXIBLE TYPE array DEFAULT [];
+UPDATE entity SET external_ids = [] WHERE !type::is::array(external_ids);

@@ -49,13 +49,27 @@ async def test_a_row_is_found_by_its_key_whatever_the_casing(
         assert [r["external_id"] for r in rows] == [code], surface
 
 
+def _migration(version: int, *, down: bool = False) -> str:
+    from surrealdb_service.migrations import AsyncMigration
+    from surrealdb_service.testing import fixtures as fx
+
+    suffix = "_down" if down else ""
+    return AsyncMigration.from_file(fx._MIGRATIONS_DIR / f"{version}{suffix}.surrealql").sql
+
+
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
-async def test_a_row_written_without_keys_is_found_by_nothing(
+async def test_a_row_written_before_81_is_invisible_and_counted_as_unkeyed(
     live_surrealdb: SurrealDBConfig,
 ) -> None:
-    """Rows from before migration 81 carry the field's default and stay invisible
-    until `refresh()` rewrites them — stated in the migration, checked here."""
+    """THE pre-81 state (D2 review, B1): the row is written while the field does
+    not exist, then 81 is applied. It reads NONE, not the default `[]` — the
+    first version of the route's check ran `array::len` on it and failed."""
+    from surrealdb_service.connection import execute_transaction
+
+    repo = ReferenceEntityRepository(live_surrealdb)
+    before = await repo.key_status("tooi")
+    await execute_transaction(_migration(81, down=True), config=live_surrealdb)
     code = f"t{uuid.uuid4().hex[:8]}"
     await execute_query(
         "CREATE reference_entity CONTENT $d",
@@ -63,8 +77,12 @@ async def test_a_row_written_without_keys_is_found_by_nothing(
                "source_vocabulary": "tooi", "external_id": code, "aliases": []}},
         live_surrealdb,
     )
+    await execute_transaction(_migration(81), config=live_surrealdb)
+
     rows = await execute_query("SELECT lookup_keys FROM reference_entity WHERE external_id = $c",
                                {"c": code}, live_surrealdb)
-    assert rows[0]["lookup_keys"] == []
-    repo = ReferenceEntityRepository(live_surrealdb)
+    assert rows[0].get("lookup_keys") is None  # NONE: the state that broke the check
     assert await repo.lookup_by_key(normalize_alias_key(f"Oud {code}"), source="tooi") == []
+    after = await repo.key_status("tooi")  # must not raise on NONE
+    assert after["rows"] == before["rows"] + 1
+    assert after["keyed"] == before["keyed"]

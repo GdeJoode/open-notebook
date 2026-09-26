@@ -148,7 +148,10 @@ class ReferenceEntityRepository:
         ``key`` must already be normalised the way the writer normalised
         (``normalize_alias_key``); this method compares, it does not normalise.
         """
-        query = "SELECT * FROM reference_entity WHERE $key IN lookup_keys"
+        # `CONTAINSANY [$key]` rather than `$key IN lookup_keys`: the same answer,
+        # and only this form uses `idx_ref_lookup_keys` (EXPLAIN: "Iterate Index"
+        # against "Iterate Table"; D2 review).
+        query = "SELECT * FROM reference_entity WHERE lookup_keys CONTAINSANY [$key]"
         params: Dict[str, Any] = {"key": key}
         if source is not None:
             query += " AND source_vocabulary = $src"
@@ -158,6 +161,26 @@ class ReferenceEntityRepository:
         except Exception as exc:
             logger.warning("reference_entity lookup_by_key failed: {e}", e=exc)
             return []
+
+    async def key_status(self, source: str) -> Dict[str, int]:
+        """``{"rows", "keyed"}`` for one vocabulary (D2).
+
+        ``keyed`` counts rows whose ``lookup_keys`` is a non-empty array. Safe on
+        rows written before migration 81, which read the field as NONE — the
+        first version of this check used ``array::len`` and raised on them.
+        """
+        rows = await execute_query(
+            "SELECT count() AS c FROM reference_entity WHERE source_vocabulary = $src "
+            "GROUP ALL;",
+            {"src": source}, self.config,
+        )
+        keyed = await execute_query(
+            "SELECT count() AS c FROM reference_entity WHERE source_vocabulary = $src "
+            "AND lookup_keys != NONE AND lookup_keys != [] GROUP ALL;",
+            {"src": source}, self.config,
+        )
+        return {"rows": int(rows[0]["c"]) if rows else 0,
+                "keyed": int(keyed[0]["c"]) if keyed else 0}
 
     async def lookup_by_alias(
         self, alias: str, source: Optional[str] = None

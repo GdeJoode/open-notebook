@@ -47,8 +47,9 @@ The bulk file format (``tooi_organisations.json``) is a JSON list of records::
       ...
     ]
 
-``lookup`` resolves a surface form (after the K.1/K.2 normalizer) against the
-loaded rows by canonical name OR alias (abbreviation / incl-soort form).
+``lookup`` resolves a surface form against the loaded rows by lookup key — the
+``normalize_alias_key`` of the canonical name and every alias (D2, migration 81) —
+and, when the whole form misses, through the names it decomposes into (D1).
 """
 
 from __future__ import annotations
@@ -141,8 +142,8 @@ class TOOIProvider:
         """Args:
 
         repository: A ``ReferenceEntityRepository``-shaped object exposing
-            ``async bulk_load(records)``, ``async lookup_by_name(name, source)``
-            and ``async lookup_by_alias(alias, source)``.
+            ``async bulk_load(records)`` and ``async lookup_by_key(key, source)``
+            (D2, migration 81).
         source: Optional path to a bulk ``tooi_organisations.json`` file. Takes
             priority over the remote fetch when set (operator-pinned dump).
         bulk_fetcher: Optional :class:`TOOIBulkFetcher` that pulls the full
@@ -260,6 +261,13 @@ class TOOIProvider:
             ),
             "properties": {
                 "soort": record.get("soort", "ministerie"),
+                # In `properties` (FLEXIBLE): reference_entity is SCHEMAFULL and a
+                # top-level field would be dropped without a migration.
+                "current_names": [
+                    n for n in dict.fromkeys(
+                        [canonical, record.get("afkorting"), record.get("naam_incl_soort")]
+                    ) if n
+                ],
                 "begindatum": record.get("begindatum") or "",
                 "einddatum": record.get("einddatum") or "",
             },
@@ -391,6 +399,8 @@ class TOOIProvider:
                     source_vocabulary=self.name,
                     aliases=list(row.get("aliases") or []),
                     confidence=confidence,
+                    valid_until=str((row.get("properties") or {}).get("einddatum") or ""),
+                    current_names=list((row.get("properties") or {}).get("current_names") or []),
                 )
             )
         return matches

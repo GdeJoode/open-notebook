@@ -114,7 +114,13 @@ def cmd_fetch() -> None:
 def cmd_baseline() -> None:
     """(a) The K.4 matcher, with an in-memory stand-in for `reference_entity`
     that implements its two queries exactly: `canonical_name = $name` and
-    `$alias IN aliases` — both exact, case-sensitive equality."""
+    `$alias IN aliases` — both exact, case-sensitive equality.
+
+    The K.4 rule is spelled out here rather than called through
+    `TOOIProvider.lookup`: D1 and D2 changed that method (decomposition, lookup
+    keys), and this step records the matcher AS SHIPPED before them. Calling the
+    provider would silently measure today's code — and did, returning nothing,
+    once the provider started asking the repository for `lookup_by_key`."""
     import asyncio
     sys.path.insert(0, "packages/shared/src")
     from shared.vocabulary.tooi_provider import TOOIProvider
@@ -139,13 +145,14 @@ def cmd_baseline() -> None:
     repo.rows = [prov._to_reference_row(r) for r in records]
     mentions = json.loads((OUT / "mentions.json").read_text(encoding="utf-8"))
 
+    async def k4_as_shipped(name: str) -> List[Dict[str, Any]]:
+        by_name = await repo.lookup_by_name(name)
+        rows, conf = (by_name, 0.99) if by_name else (await repo.lookup_by_alias(name), 0.9)
+        return [{"uri": r["external_uri"], "label": r["canonical_name"], "confidence": conf}
+                for r in rows]
+
     async def run():
-        out = {}
-        for m in mentions:
-            matches = await prov.lookup(m["name"], "government_organization")
-            out[m["name"]] = [{"uri": x.external_uri, "label": x.canonical_name,
-                               "confidence": x.confidence} for x in matches]
-        return out
+        return {m["name"]: await k4_as_shipped(m["name"]) for m in mentions}
 
     res = asyncio.run(run())
     (OUT / "baseline.json").write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")

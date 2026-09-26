@@ -49,6 +49,11 @@ class ReconcileResult:
     added_aliases: List[str] = field(default_factory=list)
     candidates: List[VocabMatch] = field(default_factory=list)
     reason: str = ""
+    #: For a link with a repository: whether the write succeeded. ``None`` when
+    #: nothing was to be written (no link, or no repository — a dry run). D2
+    #: review: on a drifted schema the write failed and the link was still
+    #: reported, because this was never looked at.
+    persisted: Optional[bool] = None
 
 
 class VocabularyReconciler:
@@ -126,9 +131,21 @@ class VocabularyReconciler:
             )
 
         match = distinct[0]
+        # D2, owner decision 2026-09-26: documents carry no date, so a match on an
+        # organisation the authority says has ENDED cannot be checked against the
+        # document's time. It is recorded for a curator, never linked. (VRO,
+        # ended 2026-02-22, is right for a 2024 covenant — and is a candidate too.)
+        if match.valid_until:
+            return ReconcileResult(
+                entity_id=entity_id,
+                linked=False,
+                candidates=[match],
+                reason="ended_organisation",
+            )
         added_aliases = self._apply_match(entity, match)
+        persisted: Optional[bool] = None
         if self._repo is not None and entity_id is not None:
-            await self._persist(entity_id, entity.external_ids, added_aliases)
+            persisted = await self._persist(entity_id, entity.external_ids, added_aliases)
 
         logger.info(
             "reconcile_entity: linked {name!r} → {uri} ({src})",
@@ -143,6 +160,7 @@ class VocabularyReconciler:
             added_aliases=added_aliases,
             candidates=[match],
             reason="single_high_confidence_match",
+            persisted=persisted,
         )
 
     # ------------------------------------------------------------------
@@ -178,12 +196,19 @@ class VocabularyReconciler:
 
     @staticmethod
     def _apply_match(entity: Entity, match: VocabMatch) -> List[str]:
-        """Write the URI + aliases onto the entity (dedup-preserving)."""
+        """Write the URI + the record's CURRENT names onto the entity.
+
+        D2, owner decision 2026-09-26: not the authority's full alias list, which
+        holds historical names (`Justitie`, `VenJ` on JenV) and names another
+        organisation carries (`Economische Zaken` is mnre1040's name and a past
+        name of mnre1045). A provider without ``current_names`` contributes its
+        canonical name only.
+        """
         if match.external_uri not in entity.external_ids:
             entity.external_ids.append(match.external_uri)
 
         added: List[str] = []
-        candidate_aliases = [match.canonical_name, *match.aliases]
+        candidate_aliases = match.current_names or [match.canonical_name]
         for alias in candidate_aliases:
             if alias and alias not in entity.aliases:
                 entity.aliases.append(alias)
@@ -192,9 +217,10 @@ class VocabularyReconciler:
 
     async def _persist(
         self, entity_id: str, external_ids: List[str], aliases: List[str]
-    ) -> None:
+    ) -> bool:
+        """True only when the repository reports the write succeeded."""
         try:
-            await self._repo.update_external_ids(  # type: ignore[union-attr]
+            ok = await self._repo.update_external_ids(  # type: ignore[union-attr]
                 entity_id, external_ids, aliases
             )
         except Exception as exc:
@@ -203,6 +229,12 @@ class VocabularyReconciler:
                 id=entity_id,
                 e=exc,
             )
+            return False
+        if ok is False:
+            logger.error("reconcile_entity: repository refused the write for {id}",
+                         id=entity_id)
+            return False
+        return True
 
 
 __all__ = ["VocabularyReconciler", "ReconcileResult"]

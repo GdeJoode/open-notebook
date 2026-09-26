@@ -41,6 +41,14 @@ class VocabMatch:
     #: ``"abbreviation: VRO"`` for a hit on one part of `VRO (…)` (D1). Empty for
     #: a hit on the name as written.
     matched_on: str = ""
+    #: The date the authority says the record's organisation ENDED ("" = still
+    #: exists or unknown). D2, owner decision 2026-09-26: while documents carry no
+    #: date, a match on an ended organisation is a candidate, never a link.
+    valid_until: str = ""
+    #: The record's CURRENT name forms (name, abbreviation, name incl. type) —
+    #: what a link writes onto the entity. ``aliases`` also holds historical names
+    #: and names shared with other organisations, which a link must not spread.
+    current_names: List[str] = field(default_factory=list)
 
 
 @runtime_checkable

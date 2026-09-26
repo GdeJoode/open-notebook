@@ -104,14 +104,18 @@ def _bzk_match(confidence: float = 0.99) -> VocabMatch:
         external_uri="https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
         external_id="mnre1034",
         source_vocabulary="tooi",
-        aliases=["BZK", "ministerie van Binnenlandse Zaken en Koninkrijksrelaties"],
+        aliases=["BZK", "ministerie van Binnenlandse Zaken en Koninkrijksrelaties",
+                 "Binnenlandse Zaken"],  # the last: a historical name
         confidence=confidence,
+        current_names=["Binnenlandse Zaken en Koninkrijksrelaties", "BZK",
+                       "ministerie van Binnenlandse Zaken en Koninkrijksrelaties"],
     )
 
 
 @pytest.mark.asyncio
 async def test_single_match_auto_links():
-    """AC2: a BZK org entity gets the TOOI URI + aliases on a single match."""
+    """AC2: a BZK org entity gets the TOOI URI + the record's CURRENT names (D2,
+    owner decision: not the historical alias list)."""
     entity = Entity(
         canonical_name="Binnenlandse Zaken en Koninkrijksrelaties",
         entity_type="organization",
@@ -126,6 +130,7 @@ async def test_single_match_auto_links():
     ]
     assert "BZK" in entity.aliases
     assert "Binnenlandse Zaken en Koninkrijksrelaties" in entity.aliases
+    assert "Binnenlandse Zaken" not in entity.aliases
     assert result.reason == "single_high_confidence_match"
 
 
@@ -390,29 +395,104 @@ async def test_a_real_run_writes_only_the_links():
     assert [c["id"] for c in report.candidates] == ["entity:b"]
 
 
-@pytest.mark.asyncio
-async def test_a_name_two_municipalities_share_is_a_candidate_not_a_link():
-    """administrative_area (owner's scope): `Bergen` is two gemeenten in TOOI."""
+# Records as the fixed loader builds them from the LIVE registers (gemeenten v5,
+# provincies v1). TOOI writes `Bergen (NH)` / `Bergen (L)` — no bare `Bergen`, no
+# dots — and `Groningen` is both a gemeente and a provincie.
+_LIVE_AREAS = [
+    {"organisatiecode": "gm0373", "afkorting": "", "naam_excl_soort": "Bergen (NH)",
+     "naam_incl_soort": "gemeente Bergen (NH)", "soort": "gemeente"},
+    {"organisatiecode": "gm0893", "afkorting": "", "naam_excl_soort": "Bergen (L)",
+     "naam_incl_soort": "gemeente Bergen (L)", "soort": "gemeente"},
+    {"organisatiecode": "gm0014", "afkorting": "", "naam_excl_soort": "Groningen",
+     "naam_incl_soort": "gemeente Groningen", "soort": "gemeente"},
+    {"organisatiecode": "pv20", "afkorting": "GR", "naam_excl_soort": "Groningen",
+     "naam_incl_soort": "provincie Groningen", "soort": "provincie"},
+    {"organisatiecode": "gm0091", "afkorting": "", "naam_excl_soort": "Sneek",
+     "naam_incl_soort": "gemeente Sneek", "soort": "gemeente", "einddatum": "2010-12-31"},
+    {"organisatiecode": "gm0432", "afkorting": "", "naam_excl_soort": "Opmeer",
+     "naam_incl_soort": "gemeente Opmeer", "soort": "gemeente"},
+]
+
+
+async def _run(rows, *, dry_run=True, entity_repo=None, queue=None):
     from app_main.services.entity_resolution.vocabulary_reconcile_service import (
         reconcile_active_entities,
     )
-    from shared.vocabulary.tooi_provider import TOOIProvider
 
-    provider = TOOIProvider(_InMemoryReferenceRepo(), bulk_fetcher=_BergenFetcher())
-    await provider.refresh()
-    report = await reconcile_active_entities(
-        VocabularyReconciler([provider]),
-        rows=[_row("entity:x", "Gemeente Bergen", "administrative_area"),
-              _row("entity:y", "Bergen", "administrative_area")],
-        dry_run=True)
+    provider = await _tooi_with(_LIVE_AREAS + _D1_RECORDS)
+    return await reconcile_active_entities(
+        VocabularyReconciler([provider], entity_repo=entity_repo),
+        rows=rows, dry_run=dry_run, queue=queue)
+
+
+@pytest.mark.asyncio
+async def test_areas_against_live_shaped_records():
+    report = await _run([
+        _row("e:1", "Gemeente Opmeer", "administrative_area", status="active"),
+        _row("e:2", "Opmeer", "administrative_area", status="reference"),
+        # The municipality and the province share the name: refused, both kept.
+        _row("e:3", "Groningen", "administrative_area", status="active"),
+        # TOOI has no bare `Bergen`: no match, not a guess.
+        _row("e:4", "Bergen", "administrative_area", status="active"),
+        # Ended 2010: a candidate, never a link (owner decision).
+        _row("e:5", "Sneek", "administrative_area", status="active"),
+    ])
+    assert {r["id"] for r in report.linked} == {"e:1", "e:2"}
+    reasons = {c["id"]: c["reason"] for c in report.candidates}
+    assert reasons == {"e:3": "ambiguous_multiple_candidates", "e:5": "ended_organisation"}
+    assert [c["candidates"][0]["valid_until"] for c in report.candidates if c["id"] == "e:5"]         == ["2010-12-31"]
+    assert [r["id"] for r in report.no_match] == ["e:4"]
+    assert report.scanned_by["administrative_area"] == {"active": 4, "reference": 1}
+    assert report.scanned_by["organization"] == {}  # a type that scanned nothing is shown
+
+
+@pytest.mark.asyncio
+async def test_a_row_without_a_name_is_skipped_not_fatal():
+    report = await _run([
+        {"id": "e:9", "canonical_name": None, "entity_type": "organization",
+         "status": "reference"},
+        _row("e:1", "Gemeente Opmeer", "administrative_area", status="active"),
+    ])
+    assert report.skipped_no_name == 1
+    assert [r["id"] for r in report.linked] == ["e:1"]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_write_is_reported_as_failed_not_linked():
+    """D2 review, B2: on staging's drifted schema the write failed, the repository
+    returned False, and the link was reported anyway."""
+
+    class RefusingRepo:
+        async def update_external_ids(self, entity_id, uris, aliases=None):
+            return False
+
+    report = await _run([_row("e:1", "Gemeente Opmeer", "administrative_area",
+                              status="active")],
+                        dry_run=False, entity_repo=RefusingRepo())
     assert report.linked == []
-    # `Bergen` hits both canonical names: refused, both recorded.
-    [amb] = report.candidates
-    assert amb["id"] == "entity:y"
-    assert amb["reason"] == "ambiguous_multiple_candidates"
-    assert len(amb["candidates"]) == 2
-    # `Gemeente Bergen` matches neither: TOOI writes the incl-soort names as
-    # `gemeente Bergen (NH.)` / `(L.)`, and no rule strips `Gemeente` (D1: a type
-    # hint, never a split). It is reported as no match, not guessed.
-    assert report.by_type == {"administrative_area": {
-        "ambiguous_multiple_candidates": 1, "no_match": 1}}
+    assert [r["id"] for r in report.write_failed] == ["e:1"]
+
+
+@pytest.mark.asyncio
+async def test_candidates_reach_the_curator_queue_on_a_real_run_only():
+    calls = []
+
+    class Queue:
+        async def upsert(self, **kw):
+            calls.append(kw)
+            return "triage_queue:x"
+
+    rows = [_row("e:3", "Groningen", "administrative_area", status="active")]
+    await _run(rows, dry_run=True, queue=Queue())
+    assert calls == []  # a dry run writes nothing, the queue included
+
+    class Repo:
+        async def update_external_ids(self, entity_id, uris, aliases=None):
+            return True
+
+    report = await _run(rows, dry_run=False, entity_repo=Repo(), queue=Queue())
+    assert report.queued == 1
+    [call] = calls
+    assert call["entity_id"] == "e:3" and call["merge_reason"] is True
+    assert call["reason"].startswith("tooi: ambiguous_multiple_candidates: ")
+    assert "gemeente/gm0014" in call["reason"] and "provincie/pv20" in call["reason"]
