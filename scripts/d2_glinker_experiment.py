@@ -74,7 +74,7 @@ def cmd_fetch() -> None:
 
     recs = asyncio.run(tooi())
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "tooi_records.json").write_text(json.dumps(recs, ensure_ascii=False, indent=1))
+    (OUT / "tooi_records.json").write_text(json.dumps(recs, ensure_ascii=False, indent=1), encoding="utf-8")
 
     rows = _sql("SELECT id, canonical_name, name, aliases, source_documents, created FROM entity "
                 "WHERE entity_type = 'government_organization' AND status = 'active' "
@@ -104,7 +104,7 @@ def cmd_fetch() -> None:
                          "source": r["source_documents"][0] if r["source_documents"] else None,
                          "context": ctx, "span": [start, start + len(found)] if ctx else None,
                          "span_text": found if ctx else None})
-    (OUT / "mentions.json").write_text(json.dumps(mentions, ensure_ascii=False, indent=1))
+    (OUT / "mentions.json").write_text(json.dumps(mentions, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"TOOI records: {len(recs)}; mentions: {len(mentions)}, "
           f"with context: {sum(1 for m in mentions if m['context'])}")
 
@@ -119,7 +119,7 @@ def cmd_baseline() -> None:
     sys.path.insert(0, "packages/shared/src")
     from shared.vocabulary.tooi_provider import TOOIProvider
 
-    records = json.loads((OUT / "tooi_records.json").read_text())
+    records = json.loads((OUT / "tooi_records.json").read_text(encoding="utf-8"))
 
     class MemRepo:
         rows: List[Dict[str, Any]] = []
@@ -137,7 +137,7 @@ def cmd_baseline() -> None:
     repo = MemRepo()
     prov = TOOIProvider(repository=repo)
     repo.rows = [prov._to_reference_row(r) for r in records]
-    mentions = json.loads((OUT / "mentions.json").read_text())
+    mentions = json.loads((OUT / "mentions.json").read_text(encoding="utf-8"))
 
     async def run():
         out = {}
@@ -148,7 +148,7 @@ def cmd_baseline() -> None:
         return out
 
     res = asyncio.run(run())
-    (OUT / "baseline.json").write_text(json.dumps(res, ensure_ascii=False, indent=1))
+    (OUT / "baseline.json").write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
     print(json.dumps(res, ensure_ascii=False, indent=1))
 
 
@@ -187,13 +187,13 @@ def cmd_glinker(models: List[str], max_candidates: int) -> None:
     from glinker.l3.component import L3Component
     from glinker.l3.models import L3Config
 
-    kb = _kb_records(json.loads((OUT / "tooi_records.json").read_text()))
+    kb = _kb_records(json.loads((OUT / "tooi_records.json").read_text(encoding="utf-8")))
     layer = DictLayer(LayerConfig(type="dict", priority=0, search_mode=["exact", "fuzzy"],
                                   fuzzy=FuzzyConfig(min_similarity=0.6, prefix_length=1)))
     layer.load_bulk([DatabaseRecord(**r) for r in kb])
     ministries = [r for r in kb if r["entity_type"] == "ministerie"]
     template = "{label}: {description}"          # GLinker's default schema template
-    mentions = json.loads((OUT / "mentions.json").read_text())
+    mentions = json.loads((OUT / "mentions.json").read_text(encoding="utf-8"))
 
     def l2(q: str) -> Dict[str, List[str]]:
         exact = [r.entity_id for r in layer.search(q)]
@@ -242,17 +242,17 @@ def cmd_glinker(models: List[str], max_candidates: int) -> None:
                               if k in lab2id} if best else {},
                 }
         # Written per model: a failed download of the next one must not lose this.
-        (OUT / "glinker.json").write_text(json.dumps(res, ensure_ascii=False, indent=1))
-    (OUT / "glinker.json").write_text(json.dumps(res, ensure_ascii=False, indent=1))
+        (OUT / "glinker.json").write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
+    (OUT / "glinker.json").write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
     print("wrote glinker.json")
 
 
 # ------------------------------------------------------------------ score
 
 def cmd_score() -> None:
-    gold = json.loads((OUT / "gold.json").read_text())
-    base = json.loads((OUT / "baseline.json").read_text())
-    gl = json.loads((OUT / "glinker.json").read_text())
+    gold = json.loads((OUT / "gold.json").read_text(encoding="utf-8"))
+    base = json.loads((OUT / "baseline.json").read_text(encoding="utf-8"))
+    gl = json.loads((OUT / "glinker.json").read_text(encoding="utf-8"))
 
     def verdict(name: str, answer: List[str]) -> str:
         """correct / wrong / refused (no answer) / ambiguous (>1 answer).
@@ -261,6 +261,10 @@ def cmd_score() -> None:
         if not answer:
             return "correct" if not g else "refused"
         if len(answer) > 1:
+            # gold.json's rule for a double gold (EZ): returning exactly the
+            # accepted records is correct, not merely ambiguous.
+            if len(g) > 1 and set(answer) <= g:
+                return "correct"
             return "ambiguous_contains_gold" if g & set(answer) else "ambiguous_wrong"
         return "correct" if (answer[0] in g) else "wrong"
 
@@ -268,7 +272,7 @@ def cmd_score() -> None:
     # ("X (Ministerie)", "ABBR (gloss)", "Ministerie van X", "ministeries van het
     # Rijk: X") and ask the exact, case-insensitive lookup about each piece. One id
     # agreed by every piece that hits = an answer; pieces that disagree = refuse.
-    kb = _kb_records(json.loads((OUT / "tooi_records.json").read_text()))
+    kb = _kb_records(json.loads((OUT / "tooi_records.json").read_text(encoding="utf-8")))
     index: Dict[str, set] = {}
     for r in kb:
         for s in [r["label"], *r["aliases"]]:
@@ -296,6 +300,9 @@ def cmd_score() -> None:
              "b_l2_exact_stored": verdict(name, row["l2_stored_name"]["exact"]),
              "b_l2_exact_text": verdict(name, (row["l2_text_surface"] or {}).get("exact", [])),
              "b_l2_fuzzy_top1_stored": verdict(name, row["l2_stored_name"]["fuzzy"][:1]),
+             # L2 as GLinker runs it: an exact hit first, else the fuzzy top-1.
+             "b_l2_pipeline_stored": verdict(name, row["l2_stored_name"]["exact"]
+                                             or row["l2_stored_name"]["fuzzy"][:1]),
              "d1_sim_then_exact": verdict(name, d1_answer(name))}
         for k, v in row.items():
             if k.startswith("l3_"):
@@ -308,7 +315,7 @@ def cmd_score() -> None:
     mechanisms = sorted({k for p in per.values() for k in p})
     summary = {mech: dict(Counter(per[n][mech] for n in per)) for mech in mechanisms}
     (OUT / "results.json").write_text(json.dumps({"summary": summary, "per_mention": per},
-                                                 ensure_ascii=False, indent=1))
+                                                 ensure_ascii=False, indent=1), encoding="utf-8")
     for mech in mechanisms:
         print(f"{mech:60s} {summary[mech]}")
 

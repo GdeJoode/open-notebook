@@ -3,113 +3,180 @@
 **Question.** For D2 ("load TOOI and give `reconcile_entity` a caller"): does
 GLinker (Knowledgator, entity linking on GLiNER) resolve this corpus's ministries
 to the right TOOI organisation, and what does its scoring model add over a
-checkable lookup?
+lookup?
 
-**Answer.** Almost nothing for this class. Stripping the decoration (D1) and
-then doing an exact lookup resolves 13 of 18 with **zero** wrong links. GLinker's
-scoring model resolves 14, but at the price of 2 wrong links at high score (0.92
-and 0.76 for base; 0.88 and 0.55 for large), which no threshold separates from
-correct ones. Left to choose among all 19 ministries on its own, the model is
-wrong more often than right, and never declines.
+**Answer, for ministries only.** Its scoring model adds nothing net.
+- GLinker's own string lookup (exact hit first, else fuzzy top-1) gets 14 of 18
+  with 2 wrong. The scoring model on top gets the same 14 and 2: it fixes one
+  error and makes another.
+- A decoration-aware exact lookup (a simulation of D1) also gets 14 of 18, with
+  **no** wrong link among the 18. It does link one of the 2 rows that should not
+  link.
+- The cheap, checkable fixes lie in the TOOI loader and the K.4 lookup, not in a
+  model.
 
 Script `scripts/d2_glinker_experiment.py` (`fetch`, `baseline`, `glinker`,
 `score`). Data under `claudedocs/d2-glinker/`:
 - `tooi_records.json`: 1,438 organisations via the repo's own `TOOIBulkFetcher`.
-- `mentions.json`: the 20 active `government_organization` rows, with a context
-  line each.
-- `gold.json`: written by hand before any mechanism was scored.
+- `mentions.json`: the 20 active `government_organization` rows.
+- `gold.json`: stated to be written before scoring. That is not verifiable from
+  git, because gold, script and results arrived in one commit.
 - `baseline.json`, `glinker.json` and `results.json`.
 
 ## Setup
 
 - **Mentions.** All 20 active `government_organization` rows in `staging`.
-  - 18 have a correct TOOI answer.
-  - 2 must **not** link: a list of four ministries in one string, and "De
-    Staatssecretaris van IenW", an office rather than the ministry. PC.3 recorded
-    that one as a relation.
-  - One gold answer accepts either of two records: TOOI holds two "Economische
-    Zaken" records (mnre1040 and mnre1045), and nothing in the loaded data says
-    which is current.
-- **Context.** The first chunk containing the name, or its part before " (".
-  Many chunks are a single line, for example "De Minister van … hierna te noemen:
-  VRO;". 16 of 20 have one; the other 4 use the name itself as text.
+  - 18 have a correct TOOI answer. 2 must **not** link: a string listing four
+    ministries, and "De Staatssecretaris van IenW", an office. PC.3 recorded that
+    one as a relation.
+  - **Gold rule for party designations.** Covenants introduce each signatory as a
+    person ("De Staatssecretaris van …, hierna te noemen: IenW"). The gold is
+    decided by the *extracted name*: "IenW (…)" and "HG/BZK (…)" name the party
+    and link to the ministry; "De Staatssecretaris van … (IenW)" names the office
+    and does not. This rule penalises only the D1 simulation, which links the
+    office row.
+  - **EZ.** The gold accepts both "Economische Zaken" records. TOOI does say
+    which is right: mnre1040 ended 2010-10-13, and the corpus (the Schoof cabinet)
+    points to mnre1045. The double gold is kept as written: returning exactly the
+    accepted records counts as correct. This credits two rows, D1 and the L2 exact
+    lookup on the text form, which both return both records. Under a strict single
+    gold (mnre1045) both answers become ambiguous, which `reconcile_entity`
+    refuses: D1 goes from 14 to 13, and L2 exact on the text form from 12 to 11.
+- **Context.** The first chunk containing the name, or its part before " (". 16
+  of 20 found one, often a single line. The other 4 use the name as text.
 - **Mechanisms.**
   - **(a) K.4 as shipped.** `TOOIProvider.lookup` over an in-memory stand-in for
-    `reference_entity` that implements its two queries exactly: case-sensitive
-    equality on the name or an alias.
-  - **(b) GLinker L2** (DictLayer). Exact lookup is case-insensitive over label
-    and aliases. Fuzzy uses rapidfuzz ratio ≥ 0.6, top-1. It is run on the name
-    as stored, and separately on the form in the text ("VRO").
-  - **(c) GLinker L3**, `gliner-linker-{base,large}-v1.0`, template
-    `{label}: {description}`, restricted to the mention's span.
-    - `over_l2`: scores L2's candidates (exact + fuzzy, max 5).
-    - `over_all_ministries`: scores all 19.
-  - **D1 simulation.** Not shipped code. It strips "ministeries van het Rijk:",
-    "Ministerie van", "(Ministerie)", splits "ABBR (gloss)", and runs the exact
-    lookup on each piece. An answer only when every piece that hits agrees.
+    `reference_entity`'s two queries, `canonical_name = $name` and
+    `$alias IN aliases`. Both are case-sensitive: migrations 41, 55 and 57 define
+    no collation. `reconcile_entity` passes `entity.canonical_name`, as the
+    baseline does.
+  - **(b) GLinker L2** (DictLayer). Exact is lower-cased over label and aliases.
+    Fuzzy is rapidfuzz ratio ≥ 0.6 with prefix_length 1. It is run on the stored
+    name, and separately on the form in the text ("VRO"). The *pipeline* row is L2
+    as GLinker runs it: an exact hit first, else the fuzzy top-1.
+  - **(c) GLinker L3**, `gliner-linker-{base,large}-v1.0`. Template
+    `{label}: {description}` is GLinker's builder default. `threshold=0.0` was
+    set, so the model always answers; the rows at GLinker's default of 0.5 are
+    also given.
+    - **Candidates come from the stored name**, but L3 scores the **span in the
+      text** ("VRO"). That mix is a choice of this script.
+    - `over_l2` scores L2's candidates (max 5).
+    - `over_all_ministries` offers **17** labels, not 19. Two TOOI records share
+      the label of another ("Economische Zaken" mnre1040/1045, "Landbouw, Natuur
+      en Voedselkwaliteit" mnre1150/1153), and the label de-duplication drops one
+      of each.
+  - **D1 simulation.** Not shipped code, and it says more than "exact lookup":
+    - It lower-cases (casefold).
+    - It strips "ministeries van het Rijk:", "(het) ministerie van" and
+      "(Ministerie)", and splits "ABBR (gloss)". That is a wider scope than
+      `component-decisions.md`'s D1, which counted `X (Ministerie)` and
+      `ABBR (X)` for 7 of 20. The list-prefix strip matches 2 of these strings
+      and gains exactly 1.
+    - It answers when every piece that *hits* agrees, and it ignores pieces that
+      miss. That is why it links the Staatssecretaris row through its "(IenW)"
+      gloss. The affix rule forbids this (an organ of X is not X); a real D1 must
+      treat the role prefix as blocking, not as a miss.
 
 ## Result
 
 Of the 18 that should link; the last column is the 2 that should not.
 
-| Mechanism | correct | wrong | refused | ambiguous (contains gold) | the 2 no-link cases refused |
-|---|---|---|---|---|---|
-| (a) K.4 exact | 2 | 0 | 16 | 0 | 2/2 |
-| (b) L2 exact, stored name | 4 | 0 | 14 | 0 | 2/2 |
-| (b) L2 exact, form in text | 11 | 0 | 6 | 1 | 2/2 |
-| (b) L2 fuzzy, top-1 | 10 | 2 | 6 | 0 | 2/2 |
-| (c) L3 base over L2 | 14 | 2 | 2 | 0 | 2/2 ¹ |
-| (c) L3 large over L2 | 14 | 2 | 2 | 0 | 2/2 ¹ |
-| (c) L3 base over all 19 | 6 | 12 | 0 | 0 | **0/2** |
-| (c) L3 large over all 19 | 8 | 10 | 0 | 0 | **0/2** |
-| **D1 sim + exact** | **13** | **0** | 4 | 1 | 1/2 |
+| Mechanism | correct | wrong | refused | no-link rows declined |
+|---|---|---|---|---|
+| (a) K.4 exact, case-sensitive | 2 | 0 | 16 | 2/2 |
+| (b) L2 exact, stored name | 4 | 0 | 14 | 2/2 |
+| (b) L2 exact, form in text | 12 | 0 | 6 | 2/2 |
+| (b) L2 fuzzy top-1, stored name ¹ | 10 | 2 | 6 | 2/2 |
+| **(b) L2 pipeline, stored name** | **14** | **2** | 2 | 2/2 |
+| (c) L3 base or large over L2, threshold 0 | 14 | 2 | 2 | 2/2 ² |
+| (c) L3 base or large over L2, threshold 0.5 | 12 | 2 | 4 | 2/2 ² |
+| (c) L3 base over 17 ministry labels ³ | 6 | 12 | 0 | 0/2 |
+| (c) L3 large over 17 ministry labels ³ | 8 | 10 | 0 | 0/2 |
+| **D1 simulation + exact** | **14** | **0** | 4 | 1/2 |
 
-¹ Only because L2 returned no candidates. The model itself never declines.
+¹ Excludes exact hits by construction, so 4 of its 6 refusals (IenW, JenV, EZK,
+VWS) are artefacts; the pipeline row is the fair one.
+² Only because L2 returned no candidates.
+³ Confounded by stale labels (see the next section), so no claim is made here
+about the model's own ability.
 
-**L3's two wrong links** are identical for base and large:
-- "Volkshuisvesting en Ruimtelijke Ordening (Ministerie)" → VROM (mnre0180), at
-  0.92 for base and 0.88 for large.
-- "VRO (Ministerie van Volksgezondheid, Welzijn en Sport)" → VWS (mnre1025), at
-  0.76 and 0.55. The model followed a gloss the extractor invented; the text says
-  "De Minister van Volkshuisvesting en Ruimtelijke Ordening … hierna te noemen:
-  VRO".
+**L3 over L2 against L2 alone.** Identical totals, for different reasons:
+- L3 fixes "VRO (VROM, …)", where L2's top-1 was VROM.
+- L3 breaks "Volkshuisvesting en Ruimtelijke Ordening (Ministerie)" → VROM
+  (mnre0180), at 0.92 for base and 0.88 for large. 0.92 is the highest base score
+  in that row set, so no threshold removes it.
+- The other shared error, "VRO (Ministerie van VWS)" → VWS, is **L2's**. Fuzzy
+  matching on the stored name offered one candidate, VWS, and at threshold 0 L3
+  could only return it.
 
-**What every mechanism fails on:**
-- **TOOI's ended organisations.** VROM and Verkeer en Waterstaat are the most
-  frequent wrong answers. The fetcher drops `einddatum` (`tooi_bulk.py`), so
-  nothing can prefer an organisation that still exists. That filter would be a
-  checkable fix, not a score.
-- **A spelling variant.** The corpus writes "Koninkrij**k**relaties" without the
-  s. This causes 3 of the 4 D1 refusals.
-- **Glosses the extractor invented.** "VRO (VROM, …)" and "VRO (… VWS)". D1
-  refuses the second correctly, because its pieces disagree.
-- **Offices.** The Staatssecretaris row is D1's only wrong answer, via its
-  "(IenW)" gloss. Office vs ministry is a typing question, not a lookup one.
+**D1's 4 refusals.**
+- 1 is the corpus spelling "Koninkrij**k**relaties": "… (Ministerie)".
+- 2 are slash compounds ("HG/BZK (…)", "…/Herstel Groningen"). They are not in
+  the index, whatever the spelling.
+- 1 is "VRO (… VWS)", whose pieces disagree. It is scored as a refusal; the gold
+  is mnre1171.
 
-## Side findings
+## The TOOI loader: the real cause of the stale labels
 
-1. **K.4's label is the oldest name.** `IenW` resolves to the right URI
-   (mnre1130), labelled "Infrastructuur en Milieu"; `JenV` resolves to mnre1058,
-   labelled "Justitie". The URI is right, and a curator reading the label would
-   think it wrong.
-2. **GLinker fails silently without rapidfuzz.** Its fuzzy search prints one WARN
-   and returns nothing when `rapidfuzz` is absent, and `pip install glinker`
-   (0.1.1) does not install it. The first run of this experiment measured nothing
-   for that reason; the script now refuses to run without it.
+TOOI marks the end of an organisation with `ont/einddatum`, and the end of one of
+its *names* with `ont/einddatumHV`. `tooi_bulk._node_has_einddatum` checks only
+`einddatum`. So every historical name counts as current, and the record's label
+is its first, oldest name. `IenW` resolves to the right URI (mnre1130), labelled
+"Infrastructuur en Milieu"; `JenV` to mnre1058, labelled "Justitie".
+Source: the immutable register dump
+`https://repository.officiele-overheidspublicaties.nl/waardelijsten/rwc_ministeries_compleet/6/json/rwc_ministeries_compleet_6.json`.
+There, IenM's historical version `ministerie/hv_06784634` carries `einddatumHV`
+2017-12-31, `ministerie/mnre1171` carries `einddatum` 2026-02-22, and
+`ministerie/mnre1040` carries `einddatum` 2010-10-13. `tooi_records.json` does not
+contain these dates, because the loader drops them.
+`test_tooi_bulk.py` puts `einddatum` on its synthetic historical nodes, a shape
+TOOI does not produce. So the test passes on data that does not occur.
+
+**Consequences.**
+- The L3 rows over 17 labels were offered "Infrastructuur en Milieu" and
+  "Justitie" for two of the golds (mnre1130 and mnre1058), and one stale non-gold
+  label ("Landbouw, Natuur en Voedselkwaliteit", mnre1153). The reviewer
+  counted 4 of base's 12 and 2 of large's 10 wrong answers on those golds. With
+  current labels the model might do much better, so that row says nothing about
+  the model.
+- **"Prefer organisations that still exist" is wrong.** TOOI ends mnre1171 (VRO)
+  on 2026-02-22, and VRO is the gold for 6 of the 18 mentions. The corpus is from
+  a cabinet in which VRO existed. The checkable filter is **valid on the
+  document's date** (`begindatum`/`einddatum` against a document date), and that
+  needs a document date the pipeline does not yet carry.
+
+## Side finding
+
+GLinker fails silently without rapidfuzz. `DictLayer.search_fuzzy` prints a
+warning *on every call* and returns nothing when `rapidfuzz` is absent, and
+`glinker` 0.1.1 does not declare it as a dependency. The first run of this
+experiment measured nothing for that reason; the script now refuses to run
+without it.
 
 ## What this says about D2
 
-- **Resolution.** D1 then exact lookup against TOOI is sufficient for named
-  government organisations here, and it produces no wrong links.
-- **Two cheap checkable improvements come before any model:**
-  - Keep `einddatum`, and prefer organisations that still exist.
-  - Make the lookup case-insensitive. K.4's case-sensitive equality is why (a)
-    gets 2 where (b)-exact gets 4.
-- **Where GLinker's L3 fits, if anywhere.** A proposer for the mentions the lookup
-  refuses, routed to the curator queue with its score. It should never write an
-  identity.
+**For ministries:**
+- A decoration-aware exact lookup matches GLinker's full pipeline (14 of 18) with
+  no wrong link among the 18.
+- Its one error, the office row, is a rule violation of the simulation, fixable
+  by treating role prefixes as blocking.
+- The scoring model contributes nothing net here.
 
-**Limits.** 20 mentions of one entity class, one corpus, context often one line.
-Whether the model's weakness is Dutch or the model itself cannot be separated
-here. Topics (429 of 531 active entities, no authority) are untouched by all of
-this.
+**Checkable fixes, in order of evidence:**
+1. Read `einddatumHV` in `tooi_bulk`, and fix the test to use the shape TOOI
+   publishes. This fixes the labels.
+2. Make the K.4 lookup case-insensitive. That alone takes it from 2 to 4, as (b)
+   shows.
+3. Use validity **on the document's date**, not "still exists", once a document
+   date is available.
+
+**Not measured.** Everything beyond ministries:
+- TOOI as loaded holds 605 gemeenten, 12 provincies and 32 waterschappen.
+- PC.3 counts 53 active `administrative_area` rows (`phase-PC.3-plan.md`). Those
+  are the rows D2 would reach next, and they bring the "Bergen" kind of ambiguity
+  and the question of a place against its government.
+- Topics (429 of 531 active entities, per `component-decisions.md`) have no
+  authority at all.
+
+**Limits.** 20 mentions, one class, one corpus, context often one line. Whether
+any model weakness is Dutch or the model cannot be separated here.
