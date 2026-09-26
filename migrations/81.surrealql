@@ -1,0 +1,24 @@
+-- ============================================================================
+-- Migration 81: reference_entity.lookup_keys — resolve an authority by the
+-- lookup key, not by byte-equality (Track PC, decision D2).
+--
+-- `reference_entity` is matched with `canonical_name = $name` and
+-- `$alias IN aliases`: exact, case-sensitive equality, because migrations 41, 55
+-- and 57 define no collation. Measured in the D2 experiment on the 18 ministry
+-- rows that should link: the K.4 lookup resolved 2; the same lookup
+-- case-insensitively resolved 4. And the corpus writes `Koninkrijkrelaties`
+-- without the s, a variant `canonicalize_spelling` already knows and the lookup
+-- never sees.
+--
+-- The key is computed in Python by `shared.utils.nl_normalization.
+-- normalize_alias_key` (lowercase, whitespace, trailing punctuation, a leading
+-- article, curated spelling variants) over the canonical name and every alias,
+-- and written by `ReferenceEntityRepository.upsert`. SurrealQL cannot compute
+-- it, so this migration only declares the field: rows written before it carry
+-- no keys and are found by nothing until the next `refresh()`, which rewrites
+-- every row. `reference_entity` held zero rows on `staging` when this was
+-- written, so there was nothing to backfill.
+-- ============================================================================
+
+DEFINE FIELD IF NOT EXISTS lookup_keys ON reference_entity TYPE array<string> DEFAULT [];
+DEFINE INDEX IF NOT EXISTS idx_ref_lookup_keys ON reference_entity FIELDS lookup_keys;

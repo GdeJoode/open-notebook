@@ -57,6 +57,15 @@ class FakeReferenceRepo:
                 out.append(row)
         return out
 
+    async def lookup_by_key(
+        self, key: str, source: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """The real query: `$key IN lookup_keys` — exact, on stored keys."""
+        return [
+            row for (_eid, src), row in self.rows.items()
+            if (source is None or src == source) and key in (row.get("lookup_keys") or [])
+        ]
+
 
 @pytest.mark.asyncio
 async def test_refresh_loads_seed():
@@ -405,7 +414,9 @@ async def _d1_provider(tmp_path, bulk=None) -> TOOIProvider:
     ("VRO (Volkshuisvesting en Ruimtelijke Ordening)", "mnre1171"),
     ("IenW (Infrastructuur en Waterstaat)", "mnre1130"),
     ("ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening", "mnre1171"),
-    ("Ministerie van Volksgezondheid, Welzijn en Sport", "mnre1025"),
+    # D2: the lookup key knows the corpus spelling `Koninkrijkrelaties`, so the
+    # gloss now hits too and both parts agree.
+    ("BZK (Binnenlandse Zaken en Koninkrijkrelaties)", "mnre1034"),
 ])
 async def test_a_decorated_name_whose_parts_all_agree_is_linkable(tmp_path, name, code):
     """Corpus strings that K.4 as shipped resolved to nothing (D2 experiment)."""
@@ -426,8 +437,8 @@ async def test_all_agreeing_parts_are_named_in_the_provenance(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name, etype, code", [
-    # The corpus spells Koninkrij(k)relaties without the s; only BZK hits.
-    ("BZK (Binnenlandse Zaken en Koninkrijkrelaties)", GOV, "mnre1034"),
+    # constructed: the initials fit, the gloss is no register name.
+    ("BZK (Binnenlandse Zaken en Koninkrijk)", GOV, "mnre1034"),
     # D1 review: the abbreviation hits a province, the gloss names public transport.
     ("OV (Openbaar Vervoer)", "concept", "pv21"),
 ])
@@ -498,9 +509,45 @@ async def test_an_organ_a_list_or_a_foreign_gloss_resolves_to_nothing(tmp_path, 
 
 
 @pytest.mark.asyncio
-async def test_a_whole_name_hit_is_unchanged_and_unmarked(tmp_path):
-    """The K.4 path is untouched: a name that hits as written never decomposes."""
+@pytest.mark.parametrize("name, code", [
+    ("VRO", "mnre1171"),
+    # D2: case-insensitive — TOOI's alias is "ministerie van …", lowercase m.
+    ("Ministerie van Volksgezondheid, Welzijn en Sport", "mnre1025"),
+    ("volkshuisvesting en ruimtelijke ordening", "mnre1171"),
+])
+async def test_a_whole_name_hit_never_decomposes(tmp_path, name, code):
     provider = await _d1_provider(tmp_path)
-    matches = await provider.lookup("VRO", GOV)
-    assert [m.external_id for m in matches] == ["mnre1171"]
+    matches = await provider.lookup(name, GOV)
+    assert [m.external_id for m in matches] == [code]
     assert matches[0].matched_on == ""
+
+
+@pytest.mark.asyncio
+async def test_a_canonical_key_hit_outranks_an_alias_key_hit(tmp_path):
+    provider = await _d1_provider(tmp_path)
+    [by_name] = await provider.lookup("infrastructuur en waterstaat", GOV)
+    [by_alias] = await provider.lookup("IENW", GOV)
+    assert by_name.confidence == 0.99 and by_alias.confidence == 0.9
+
+
+@pytest.mark.asyncio
+async def test_one_key_on_two_organisations_returns_both(tmp_path):
+    """D2 dry run: `Economische Zaken` is mnre1040's name (ended 2010) and a past
+    name of mnre1045 (EZK). Ranking name over alias picked the ended one; both
+    must come back so the reconciler refuses. Records as the fixed loader builds
+    them from the live register."""
+    bulk = [
+        {"organisatiecode": "mnre1040", "afkorting": "EZ",
+         "naam_excl_soort": "Economische Zaken",
+         "naam_incl_soort": "ministerie van Economische Zaken", "soort": "ministerie",
+         "einddatum": "2010-10-13"},
+        {"organisatiecode": "mnre1045", "afkorting": "EZK",
+         "naam_excl_soort": "Economische Zaken en Klimaat",
+         "naam_incl_soort": "ministerie van Economische Zaken en Klimaat",
+         "soort": "ministerie", "begindatum": "2010-10-14",
+         "aliases": ["Economische Zaken", "EZ", "ministerie van Economische Zaken"]},
+    ]
+    provider = await _d1_provider(tmp_path, bulk)
+    for name in ("Economische Zaken", "Economische Zaken (Ministerie)"):
+        matches = await provider.lookup(name, GOV)
+        assert sorted(m.external_id for m in matches) == ["mnre1040", "mnre1045"], name

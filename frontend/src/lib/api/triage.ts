@@ -31,6 +31,39 @@ export interface QueueItem {
   /** `'open'` while awaiting an operator; any other value closes the row. */
   decision: string
   batch_id: string
+  /**
+   * `status` (Q.4 — decide with `decide`) or `tooi` (D2 — decide with
+   * `decideTooi`). One queue, one row per (entity, kind): a TOOI row never
+   * shares a reason or a decision with the entity's status row (migration 83).
+   */
+  kind?: QueueKind
+  /** A TOOI row's authority records, one of which a curator may link. */
+  candidates?: TooiCandidate[]
+}
+
+export type QueueKind = 'status' | 'tooi'
+
+/** One TOOI record offered for a `tooi` row (D2). */
+export interface TooiCandidate {
+  uri: string
+  label: string
+  /** The organisation's end date per TOOI; "" when it still exists. */
+  valid_until?: string
+  confidence?: number
+  matched_on?: string
+  current_names?: string[]
+}
+
+/** A curator's answer to a `tooi` row: link one candidate, or dismiss. */
+export type TooiDecisionInput =
+  | { action: 'link'; uri: string }
+  | { action: 'dismiss' }
+
+export interface TooiDecisionResponse {
+  queue_id: string
+  entity: string
+  decision: string
+  uri?: string | null
 }
 
 export interface QueueResponse {
@@ -109,6 +142,21 @@ export const triageApi = {
       // The queue id is an `entity:<id>`-shaped path segment; the router uses a
       // `:path` converter so the colon is fine unencoded.
       `/triage/queue/${queueId}/decision`,
+      body,
+    )
+    return response.data
+  },
+
+  /**
+   * Answer a `tooi` row (D2): link one of its candidate URIs onto the entity, or
+   * dismiss it. Never touches the entity's status or `manual_override`.
+   */
+  decideTooi: async (
+    queueId: string,
+    body: TooiDecisionInput,
+  ): Promise<TooiDecisionResponse> => {
+    const response = await apiClient.post<TooiDecisionResponse>(
+      `/triage/queue/${queueId}/tooi-decision`,
       body,
     )
     return response.data

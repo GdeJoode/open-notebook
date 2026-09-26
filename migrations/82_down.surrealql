@@ -1,0 +1,6 @@
+-- Reverse of migration 82: restore migration 55's declaration.
+--
+-- Deliberately NOT the drifted `TYPE object` staging carried: that shape appears
+-- in no migration, and going down to it would re-break every external_ids write.
+-- Rows keep their arrays, which migration 55's definition accepts.
+DEFINE FIELD OVERWRITE external_ids ON entity FLEXIBLE TYPE array DEFAULT [];

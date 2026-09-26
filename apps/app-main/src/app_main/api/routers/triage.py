@@ -18,7 +18,7 @@ the router.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -32,7 +32,11 @@ from app_main.services.triage.status_assignment_service import (
     STATUS_REFERENCE,
 )
 from app_main.services.triage.triage_queue import (
+    DECISION_DISMISSED,
+    DECISION_LINKED,
     DECISION_OPEN,
+    KIND_STATUS,
+    KIND_TOOI,
     QueueItem,
     TriageQueueRepository,
 )
@@ -55,6 +59,12 @@ class QueueItemOut(BaseModel):
     reason: str
     decision: str
     batch_id: str
+    #: ``status`` (Q.4: decide with /decision) or ``tooi`` (D2: decide with
+    #: /tooi-decision). Migration 83.
+    kind: str = KIND_STATUS
+    #: A TOOI row's authority records: uri, label, valid_until, confidence,
+    #: matched_on, current_names.
+    candidates: List[Dict[str, Any]] = Field(default_factory=list)
 
     @classmethod
     def from_item(cls, item: QueueItem) -> "QueueItemOut":
@@ -68,6 +78,8 @@ class QueueItemOut(BaseModel):
             reason=item.reason,
             decision=item.decision,
             batch_id=item.batch_id,
+            kind=item.kind,
+            candidates=list(item.candidates),
         )
 
 
@@ -92,6 +104,26 @@ class DecisionIn(BaseModel):
         default=None,
         description="Decision label for the queue row; defaults to the status.",
     )
+
+
+class TooiDecisionIn(BaseModel):
+    """A curator's answer to a TOOI row: link ONE of its candidates, or dismiss.
+
+    Neither touches the entity's status or ``manual_override`` — a TOOI row is a
+    different decision from a status row (migration 83).
+    """
+
+    action: Literal["link", "dismiss"]
+    uri: Optional[str] = Field(
+        default=None, description="For `link`: one of the row's candidate URIs."
+    )
+
+
+class TooiDecisionResponse(BaseModel):
+    queue_id: str
+    entity: str
+    decision: str
+    uri: Optional[str] = None
 
 
 class DecisionResponse(BaseModel):
@@ -187,6 +219,13 @@ async def decide(
     item = await queue.get(queue_id)
     if item is None:
         raise HTTPException(status_code=404, detail="queue row not found")
+    if item.kind != KIND_STATUS:
+        # A TOOI row is not a status question: pinning status here is exactly
+        # the side effect migration 83 separated the rows to prevent.
+        raise HTTPException(
+            status_code=409,
+            detail=f"queue row is kind '{item.kind}'; decide it with /tooi-decision",
+        )
 
     # Pin the entity by hand: status + override in one write. Unconditional —
     # the operator may always (re)pin (set_manual_override has no override guard).
@@ -211,6 +250,52 @@ async def decide(
         manual_override=True,
         decision=decision_label,
     )
+
+
+@router.post("/queue/{queue_id:path}/tooi-decision", response_model=TooiDecisionResponse)
+async def decide_tooi(
+    queue_id: str,
+    body: TooiDecisionIn,
+    queue: TriageQueueRepository = Depends(get_triage_queue_repo),
+    entity_repo: EntityRepository = Depends(get_entity_repo),
+) -> TooiDecisionResponse:
+    """Answer a TOOI row (D2): link one candidate, or dismiss the row.
+
+    ``link`` writes the chosen URI and that record's current names onto the
+    entity — what an automatic link writes — and fails loudly if the write is
+    refused, rather than closing the row over a link that does not exist.
+    Either answer closes the row, and it stays closed until the authority offers
+    a different candidate set. Status and ``manual_override`` are untouched.
+    """
+    item = await queue.get(queue_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="queue row not found")
+    if item.kind != KIND_TOOI:
+        raise HTTPException(
+            status_code=409,
+            detail=f"queue row is kind '{item.kind}'; decide it with /decision",
+        )
+    if item.decision != DECISION_OPEN:
+        raise HTTPException(status_code=409, detail=f"already decided: {item.decision}")
+
+    if body.action == "dismiss":
+        await queue.set_decision(queue_id, DECISION_DISMISSED)
+        return TooiDecisionResponse(queue_id=item.id, entity=item.entity,
+                                    decision=DECISION_DISMISSED)
+
+    chosen = next((c for c in item.candidates if c.get("uri") == body.uri), None)
+    if chosen is None:
+        raise HTTPException(status_code=422, detail="uri must be one of the row's candidates")
+    names = list(chosen.get("current_names") or [chosen.get("label")])
+    wrote = await entity_repo.update_external_ids(item.entity, [chosen["uri"]], names)
+    if not wrote:
+        raise HTTPException(
+            status_code=502,
+            detail=f"the link was not written for {item.entity}; the row stays open",
+        )
+    await queue.set_decision(queue_id, DECISION_LINKED)
+    return TooiDecisionResponse(queue_id=item.id, entity=item.entity,
+                                decision=DECISION_LINKED, uri=chosen["uri"])
 
 
 @router.post("/entities/{entity_id:path}/override", response_model=EntityPinResponse)
@@ -249,7 +334,9 @@ async def set_entity_override(
     closed = 0
     if body.manual_override:
         for item in await queue.list_open():
-            if item.entity == entity_id:
+            # Status rows only: a pin answers the status question, not whether
+            # the entity is a TOOI organisation (migration 83).
+            if item.entity == entity_id and item.kind == KIND_STATUS:
                 await queue.set_decision(item.id, body.status or "pinned")
                 closed += 1
 

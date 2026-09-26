@@ -21,6 +21,9 @@ import {
   isTriageStatus,
   primaryReason,
   statusDisplay,
+  TOOI_SECTION,
+  isTooiRow,
+  tooiCandidateLabel,
   totalWeakEdges,
 } from '@/lib/utils/triage'
 
@@ -175,5 +178,42 @@ describe('backbone helpers (BackboneWarnings)', () => {
     expect(
       isBackboneRisk({ entity_id: 'x', structural_degree: 5, weak_edges: [] }),
     ).toBe(false)
+  })
+})
+
+
+describe('TOOI rows (D2, migration 83)', () => {
+  const tooi = queueItem({
+    id: 'triage_queue:t',
+    kind: 'tooi',
+    reason: 'tooi: ambiguous_multiple_candidates: Groningen <…gm0014> | Groningen <…pv20>',
+    candidates: [
+      { uri: 'https://identifier.overheid.nl/tooi/id/gemeente/gm0014', label: 'Groningen' },
+      {
+        uri: 'https://identifier.overheid.nl/tooi/id/ministerie/mnre1040',
+        label: 'Economische Zaken',
+        valid_until: '2010-10-13',
+      },
+    ],
+  })
+
+  it('groups every TOOI row into one section, apart from the status rows', () => {
+    const other = queueItem({ id: 'triage_queue:t2', kind: 'tooi', reason: 'tooi: ended' })
+    const status = queueItem({ id: 'triage_queue:s' })
+    const groups = groupByReason([tooi, status, other])
+    expect(groups.map((g) => g.reason)).toEqual([TOOI_SECTION, 'unsure — operator decides'])
+    expect(groups[0].items.map((i) => i.id)).toEqual(['triage_queue:t', 'triage_queue:t2'])
+  })
+
+  it('tells a TOOI row from a status row, legacy rows (no kind) being status', () => {
+    expect(isTooiRow(tooi)).toBe(true)
+    expect(isTooiRow(queueItem())).toBe(false)
+  })
+
+  it('labels a candidate with its code and, when ended, its end date', () => {
+    expect(tooiCandidateLabel(tooi.candidates![0])).toBe('Groningen (gemeente/gm0014)')
+    expect(tooiCandidateLabel(tooi.candidates![1])).toBe(
+      'Economische Zaken (ministerie/mnre1040) — ended 2010-10-13',
+    )
   })
 })

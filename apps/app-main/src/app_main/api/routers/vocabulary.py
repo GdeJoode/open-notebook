@@ -15,8 +15,8 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field, field_validator
 from shared.vocabulary.crossref_provider import CrossrefProvider
 from shared.vocabulary.tooi_bulk import TOOIBulkFetcher
 from shared.vocabulary.tooi_provider import TOOIProvider
@@ -24,7 +24,18 @@ from surrealdb_service.repositories.reference_entity import (
     ReferenceEntityRepository,
 )
 
-from app_main.dependencies import get_reference_entity_repo
+from app_main.dependencies import (
+    get_entity_repo,
+    get_reference_entity_repo,
+    get_triage_queue_repo,
+)
+from app_main.services.entity_resolution.vocabulary_reconcile_service import (
+    DEFAULT_TYPES,
+    reconcile_active_entities,
+)
+from app_main.services.entity_resolution.vocabulary_reconciler import (
+    VocabularyReconciler,
+)
 
 router = APIRouter(prefix="/vocabulary", tags=["vocabulary"])
 
@@ -83,6 +94,45 @@ class StatusResponse(BaseModel):
     providers: List[ProviderStatusOut]
 
 
+class ReconcileRequest(BaseModel):
+    #: A subset of the owner's scope; anything else is refused (422).
+    entity_types: List[str] = Field(default_factory=lambda: list(DEFAULT_TYPES))
+    #: Compute the report and write nothing — no links, no queue rows, no
+    #: register load. The default: a real run needs `dry_run: false`.
+    dry_run: bool = True
+
+    @field_validator("entity_types")
+    @classmethod
+    def _in_scope(cls, value: List[str]) -> List[str]:
+        outside = sorted(set(value) - set(DEFAULT_TYPES))
+        if outside or not value:
+            raise ValueError(
+                f"entity_types must be a non-empty subset of {list(DEFAULT_TYPES)}; "
+                f"got {outside or value}"
+            )
+        return value
+
+
+class RegisterStatus(BaseModel):
+    rows: int
+    keyed: int
+
+
+class ReconcileResponse(BaseModel):
+    dry_run: bool
+    tooi_register: RegisterStatus
+    scanned: int
+    scanned_by: dict
+    skipped_no_name: int
+    by_type: dict
+    linked: List[dict]
+    candidates: List[dict]
+    no_match: List[dict]
+    write_failed: List[dict]
+    queued: int
+    already_decided: int
+
+
 # --- Endpoints ---------------------------------------------------------------
 
 
@@ -134,4 +184,52 @@ async def vocabulary_status(
                 on_demand=True,
             ),
         ]
+    )
+
+
+
+#: A register this small is the bundled seed (the ten core ministries), which
+#: `refresh()` falls back to when the live registers are unreachable. Reconciling
+#: against it would report every municipality as "no match" — silently.
+_SEED_SIZE = 10
+
+
+@router.post("/reconcile", response_model=ReconcileResponse)
+async def reconcile_vocabulary(
+    body: ReconcileRequest,
+    repo: ReferenceEntityRepository = Depends(get_reference_entity_repo),
+    entity_repo=Depends(get_entity_repo),
+    queue=Depends(get_triage_queue_repo),
+) -> ReconcileResponse:
+    """Link named entities to TOOI (D2 — the production caller K.4 lacked).
+
+    Does NOT load the register: that is ``POST /vocabulary/refresh``, which a
+    reconcile used to trigger itself — inside a request, writing ~2,900 rows even
+    on a dry run. Refuses (409) unless the register is loaded in full: every row
+    keyed (migration 81) and more than the bundled seed.
+    """
+    status = await repo.key_status("tooi")
+    if status["rows"] <= _SEED_SIZE or status["keyed"] < status["rows"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"TOOI register not ready ({status['keyed']} of {status['rows']} rows "
+                f"keyed; the seed alone is {_SEED_SIZE}). Run POST /vocabulary/refresh."
+            ),
+        )
+    tooi = TOOIProvider(repo)
+    reconciler = VocabularyReconciler(
+        [tooi], entity_repo=None if body.dry_run else entity_repo
+    )
+    report = await reconcile_active_entities(
+        reconciler, types=body.entity_types, dry_run=body.dry_run,
+        queue=None if body.dry_run else queue,
+    )
+    return ReconcileResponse(
+        dry_run=report.dry_run, tooi_register=RegisterStatus(**status),
+        scanned=report.scanned, scanned_by=report.scanned_by,
+        skipped_no_name=report.skipped_no_name, by_type=report.by_type,
+        linked=report.linked, candidates=report.candidates, no_match=report.no_match,
+        write_failed=report.write_failed, queued=report.queued,
+        already_decided=report.already_decided,
     )

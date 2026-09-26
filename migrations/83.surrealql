@@ -1,0 +1,34 @@
+-- ============================================================================
+-- Migration 83: triage_queue.kind — one queue, one row per (entity, decision)
+-- (Track PC, decision D2).
+--
+-- A triage_queue row was one decision about one entity: its STATUS (Q.4). D2's
+-- TOOI reconcile has a different decision about the same entity — which authority
+-- record it is, if any — and D2 review measured what sharing one row does:
+--
+-- * the next triage run REPLACES an open row's reason, and 4 of the 5 staging
+--   candidates already had an open status row, so the TOOI clause would vanish;
+-- * the only close action pins the entity's status and sets manual_override, so
+--   dismissing a TOOI candidate would freeze status automation;
+-- * a decided row is never looked at again, so every later run re-created the
+--   dismissed candidate.
+--
+-- The owner's choice (2026-09-26): keep ONE queue — the curator reads one place,
+-- and the triage screen already exists — with a row per (entity, kind). Existing
+-- rows and every Q.4 write are `kind = 'status'`; TOOI candidates are
+-- `kind = 'tooi'`, carry their candidates, and are decided link/dismiss with no
+-- effect on status. `candidate_key` (the sorted candidate URIs) makes a TOOI
+-- decision stick until the authority offers a different set.
+--
+-- Staging's triage_queue matched migration 60 exactly when this was written
+-- (1,242 rows, 4 decided): no drift to repair.
+-- ============================================================================
+
+DEFINE FIELD IF NOT EXISTS kind ON triage_queue TYPE string DEFAULT 'status';
+DEFINE FIELD IF NOT EXISTS candidates ON triage_queue FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD IF NOT EXISTS candidate_key ON triage_queue TYPE string DEFAULT '';
+-- Rows written before this migration read the new fields as NONE (D2 review B1
+-- measured that a DEFAULT does not reach existing rows). Give them their values.
+UPDATE triage_queue SET kind = 'status', candidates = [], candidate_key = ''
+    WHERE kind = NONE RETURN NONE;
+DEFINE INDEX IF NOT EXISTS idx_triage_queue_entity_kind ON triage_queue FIELDS entity, kind;

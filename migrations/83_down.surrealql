@@ -1,0 +1,11 @@
+-- Reverse of migration 83.
+--
+-- TOOI rows are removed with their fields: without `kind` they would read as
+-- status rows, and a status decision on one would pin the entity's status — the
+-- side effect 83 exists to prevent. Their content is recomputed by the next
+-- reconcile run (and a decided TOOI row's link lives on in entity.external_ids).
+DELETE triage_queue WHERE kind = 'tooi' RETURN NONE;
+REMOVE INDEX IF EXISTS idx_triage_queue_entity_kind ON triage_queue;
+REMOVE FIELD IF EXISTS candidate_key ON triage_queue;
+REMOVE FIELD IF EXISTS candidates ON triage_queue;
+REMOVE FIELD IF EXISTS kind ON triage_queue;

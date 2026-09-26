@@ -1,0 +1,6 @@
+-- Reverse of migration 81: drop the lookup keys and their index.
+--
+-- The keys are derived data (a function of canonical_name and aliases), so
+-- nothing is lost: a later up-migration plus `refresh()` recomputes them.
+REMOVE INDEX IF EXISTS idx_ref_lookup_keys ON reference_entity;
+REMOVE FIELD IF EXISTS lookup_keys ON reference_entity;

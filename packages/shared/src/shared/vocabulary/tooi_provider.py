@@ -47,8 +47,9 @@ The bulk file format (``tooi_organisations.json``) is a JSON list of records::
       ...
     ]
 
-``lookup`` resolves a surface form (after the K.1/K.2 normalizer) against the
-loaded rows by canonical name OR alias (abbreviation / incl-soort form).
+``lookup`` resolves a surface form against the loaded rows by lookup key — the
+``normalize_alias_key`` of the canonical name and every alias (D2, migration 81) —
+and, when the whole form misses, through the names it decomposes into (D1).
 """
 
 from __future__ import annotations
@@ -61,6 +62,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from loguru import logger
 
 from shared.utils.name_normalizer import normalize_entity_name
+from shared.utils.nl_normalization import normalize_alias_key
 from shared.utils.surface_parts import parse_surface
 from shared.vocabulary.provider import VocabMatch
 from shared.vocabulary.tooi_bulk import TOOIBulkFetcher
@@ -140,8 +142,8 @@ class TOOIProvider:
         """Args:
 
         repository: A ``ReferenceEntityRepository``-shaped object exposing
-            ``async bulk_load(records)``, ``async lookup_by_name(name, source)``
-            and ``async lookup_by_alias(alias, source)``.
+            ``async bulk_load(records)`` and ``async lookup_by_key(key, source)``
+            (D2, migration 81).
         source: Optional path to a bulk ``tooi_organisations.json`` file. Takes
             priority over the remote fetch when set (operator-pinned dump).
         bulk_fetcher: Optional :class:`TOOIBulkFetcher` that pulls the full
@@ -254,7 +256,21 @@ class TOOIProvider:
             "external_uri": _record_uri(record),
             "external_id": record["organisatiecode"],
             "aliases": _record_aliases(record),
-            "properties": {"soort": record.get("soort", "ministerie")},
+            "lookup_keys": sorted(
+                {k for k in (normalize_alias_key(n) for n in [canonical, *_record_aliases(record)]) if k}
+            ),
+            "properties": {
+                "soort": record.get("soort", "ministerie"),
+                # In `properties` (FLEXIBLE): reference_entity is SCHEMAFULL and a
+                # top-level field would be dropped without a migration.
+                "current_names": [
+                    n for n in dict.fromkeys(
+                        [canonical, record.get("afkorting"), record.get("naam_incl_soort")]
+                    ) if n
+                ],
+                "begindatum": record.get("begindatum") or "",
+                "einddatum": record.get("einddatum") or "",
+            },
         }
 
     # ------------------------------------------------------------------
@@ -283,12 +299,38 @@ class TOOIProvider:
             return []
 
     async def _lookup_one(self, name: str) -> List[VocabMatch]:
-        """The K.4 rule on one string: exact canonical name, else exact alias."""
-        by_name = await self._repo.lookup_by_name(name, source=self.name)
-        if by_name:
-            return self._rows_to_matches(by_name, confidence=0.99)
-        by_alias = await self._repo.lookup_by_alias(name, source=self.name)
-        return self._rows_to_matches(by_alias, confidence=0.9)
+        """One string against the register, by lookup key (D2, migration 81).
+
+        The key is :func:`normalize_alias_key` — case, whitespace, trailing
+        punctuation, a leading article and curated spelling variants — the same
+        function the writer applied to the canonical name and every alias. A row
+        whose canonical name has this key is a name hit (0.99); a row that has it
+        only through an alias is an alias hit (0.9), as K.4 ranked them.
+
+        **Every row that carries the key comes back.** K.4 returned name hits and
+        dropped alias hits when both existed, which decides between two
+        ORGANISATIONS on whether the string is one's name or the other's alias.
+        The D2 dry run caught what that does once labels are current:
+        `Economische Zaken` is the name of mnre1040 (ended 2010) and a historical
+        name of mnre1045 (EZK), and the ranking linked the corpus's 2024
+        `Economische Zaken (Ministerie)` to the one that ended fourteen years
+        earlier. Two organisations under one key is an ambiguity, and the
+        reconciler's precision guard refuses it with both recorded.
+        """
+        key = normalize_alias_key(name)
+        if not key:
+            return []
+        rows = await self._repo.lookup_by_key(key, source=self.name)
+        return [
+            m
+            for row in rows
+            for m in self._rows_to_matches(
+                [row],
+                confidence=0.99
+                if normalize_alias_key(row.get("canonical_name", "")) == key
+                else 0.9,
+            )
+        ]
 
     async def _lookup_parts(self, name: str, entity_type: str) -> List[VocabMatch]:
         """D1: when the name as written misses, try the names it decomposes into.
@@ -357,6 +399,8 @@ class TOOIProvider:
                     source_vocabulary=self.name,
                     aliases=list(row.get("aliases") or []),
                     confidence=confidence,
+                    valid_until=str((row.get("properties") or {}).get("einddatum") or ""),
+                    current_names=list((row.get("properties") or {}).get("current_names") or []),
                 )
             )
         return matches

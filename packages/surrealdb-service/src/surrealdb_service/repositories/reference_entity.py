@@ -73,6 +73,9 @@ class ReferenceEntityRepository:
             "external_uri": record.get("external_uri"),
             "external_id": record.get("external_id"),
             "aliases": list(record.get("aliases") or []),
+            # D2 (migration 81): the keys `lookup_by_key` matches on, computed by
+            # the provider — SurrealQL cannot run the normaliser.
+            "lookup_keys": list(record.get("lookup_keys") or []),
             "properties": dict(record.get("properties") or {}),
             "parent_name": record.get("parent_name"),
             "last_validated": datetime.now(timezone.utc),
@@ -136,6 +139,48 @@ class ReferenceEntityRepository:
         except Exception as exc:
             logger.warning("reference_entity lookup_by_name failed: {e}", e=exc)
             return []
+
+    async def lookup_by_key(
+        self, key: str, source: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Return reference rows carrying ``key`` in ``lookup_keys`` (D2).
+
+        ``key`` must already be normalised the way the writer normalised
+        (``normalize_alias_key``); this method compares, it does not normalise.
+        """
+        # `CONTAINSANY [$key]` rather than `$key IN lookup_keys`: the same answer,
+        # and only this form uses `idx_ref_lookup_keys` (EXPLAIN: "Iterate Index"
+        # against "Iterate Table"; D2 review).
+        query = "SELECT * FROM reference_entity WHERE lookup_keys CONTAINSANY [$key]"
+        params: Dict[str, Any] = {"key": key}
+        if source is not None:
+            query += " AND source_vocabulary = $src"
+            params["src"] = source
+        try:
+            return await execute_query(query, params, self.config)
+        except Exception as exc:
+            logger.warning("reference_entity lookup_by_key failed: {e}", e=exc)
+            return []
+
+    async def key_status(self, source: str) -> Dict[str, int]:
+        """``{"rows", "keyed"}`` for one vocabulary (D2).
+
+        ``keyed`` counts rows whose ``lookup_keys`` is a non-empty array. Safe on
+        rows written before migration 81, which read the field as NONE — the
+        first version of this check used ``array::len`` and raised on them.
+        """
+        rows = await execute_query(
+            "SELECT count() AS c FROM reference_entity WHERE source_vocabulary = $src "
+            "GROUP ALL;",
+            {"src": source}, self.config,
+        )
+        keyed = await execute_query(
+            "SELECT count() AS c FROM reference_entity WHERE source_vocabulary = $src "
+            "AND lookup_keys != NONE AND lookup_keys != [] GROUP ALL;",
+            {"src": source}, self.config,
+        )
+        return {"rows": int(rows[0]["c"]) if rows else 0,
+                "keyed": int(keyed[0]["c"]) if keyed else 0}
 
     async def lookup_by_alias(
         self, alias: str, source: Optional[str] = None

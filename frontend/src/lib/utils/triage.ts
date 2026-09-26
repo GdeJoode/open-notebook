@@ -98,7 +98,9 @@ export function groupByReason(items: QueueItem[]): Array<{
   const order: string[] = []
   const byReason = new Map<string, QueueItem[]>()
   for (const item of items) {
-    const key = primaryReason(item.reason)
+    // TOOI rows form one section of their own: their reason line lists every
+    // candidate, so grouping on it would give each row its own section.
+    const key = isTooiRow(item) ? TOOI_SECTION : primaryReason(item.reason)
     if (!byReason.has(key)) {
       byReason.set(key, [])
       order.push(key)
@@ -106,6 +108,24 @@ export function groupByReason(items: QueueItem[]): Array<{
     byReason.get(key)!.push(item)
   }
   return order.map((reason) => ({ reason, items: byReason.get(reason)! }))
+}
+
+/** The section heading for TOOI link candidates (D2). */
+export const TOOI_SECTION = 'TOOI link candidate — pick the organisation or dismiss'
+
+/** Is this a TOOI link row (decided with link/dismiss, never a status pin)? */
+export function isTooiRow(item: Pick<QueueItem, 'kind'>): boolean {
+  return item.kind === 'tooi'
+}
+
+/** A candidate's display: its label, the TOOI code, and its end date if ended. */
+export function tooiCandidateLabel(c: {
+  uri: string
+  label: string
+  valid_until?: string
+}): string {
+  const code = c.uri.split('/').slice(-2).join('/')
+  return `${c.label} (${code})${c.valid_until ? ` — ended ${c.valid_until}` : ''}`
 }
 
 /** The first `"; "`-joined clause of a (possibly multi-) reason string. */

@@ -207,3 +207,108 @@ def test_entity_override_missing_entity_is_404():
         json={"manual_override": True},
     )
     assert resp.status_code == 404
+
+
+# --- migration 83: TOOI rows are decided on their own door -------------------
+
+_TOOI_CANDS = [
+    {"uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0014", "label": "Groningen",
+     "current_names": ["Groningen", "gemeente Groningen"]},
+    {"uri": "https://identifier.overheid.nl/tooi/id/provincie/pv20", "label": "Groningen",
+     "current_names": ["Groningen", "GR", "provincie Groningen"]},
+]
+
+
+def _tooi_item(**over) -> QueueItem:
+    return _queue_item(kind="tooi", reason="tooi: ambiguous", candidates=_TOOI_CANDS, **over)
+
+
+def test_a_status_decision_on_a_tooi_row_is_refused_and_pins_nothing():
+    queue = AsyncMock()
+    queue.get = AsyncMock(return_value=_tooi_item())
+    entity_repo = AsyncMock()
+    resp = _make_app(queue=queue, entity_repo=entity_repo).post(
+        "/api/triage/queue/triage_queue:1/decision", json={"status": "active"})
+    assert resp.status_code == 409
+    entity_repo.set_manual_override.assert_not_awaited()
+    queue.set_decision.assert_not_awaited()
+
+
+def test_linking_writes_the_chosen_uri_and_its_current_names_and_closes():
+    queue = AsyncMock()
+    queue.get = AsyncMock(return_value=_tooi_item())
+    entity_repo = AsyncMock()
+    entity_repo.update_external_ids = AsyncMock(return_value=True)
+    resp = _make_app(queue=queue, entity_repo=entity_repo).post(
+        "/api/triage/queue/triage_queue:1/tooi-decision",
+        json={"action": "link", "uri": _TOOI_CANDS[1]["uri"]})
+    assert resp.status_code == 200
+    entity_repo.update_external_ids.assert_awaited_once_with(
+        "entity:a", [_TOOI_CANDS[1]["uri"]], ["Groningen", "GR", "provincie Groningen"])
+    queue.set_decision.assert_awaited_once_with("triage_queue:1", "linked")
+    entity_repo.set_manual_override.assert_not_awaited()  # status untouched
+
+
+def test_linking_a_uri_that_is_not_a_candidate_is_refused():
+    queue = AsyncMock()
+    queue.get = AsyncMock(return_value=_tooi_item())
+    entity_repo = AsyncMock()
+    resp = _make_app(queue=queue, entity_repo=entity_repo).post(
+        "/api/triage/queue/triage_queue:1/tooi-decision",
+        json={"action": "link", "uri": "https://example.org/other"})
+    assert resp.status_code == 422
+    entity_repo.update_external_ids.assert_not_awaited()
+
+
+def test_a_refused_write_keeps_the_row_open():
+    queue = AsyncMock()
+    queue.get = AsyncMock(return_value=_tooi_item())
+    entity_repo = AsyncMock()
+    entity_repo.update_external_ids = AsyncMock(return_value=False)
+    resp = _make_app(queue=queue, entity_repo=entity_repo).post(
+        "/api/triage/queue/triage_queue:1/tooi-decision",
+        json={"action": "link", "uri": _TOOI_CANDS[0]["uri"]})
+    assert resp.status_code == 502
+    queue.set_decision.assert_not_awaited()
+
+
+def test_dismiss_closes_without_writing_anything_else():
+    queue = AsyncMock()
+    queue.get = AsyncMock(return_value=_tooi_item())
+    entity_repo = AsyncMock()
+    resp = _make_app(queue=queue, entity_repo=entity_repo).post(
+        "/api/triage/queue/triage_queue:1/tooi-decision", json={"action": "dismiss"})
+    assert resp.status_code == 200
+    queue.set_decision.assert_awaited_once_with("triage_queue:1", "dismissed")
+    entity_repo.update_external_ids.assert_not_awaited()
+    entity_repo.set_manual_override.assert_not_awaited()
+
+
+def test_the_tooi_door_refuses_a_status_row():
+    queue = AsyncMock()
+    queue.get = AsyncMock(return_value=_queue_item())
+    resp = _make_app(queue=queue, entity_repo=AsyncMock()).post(
+        "/api/triage/queue/triage_queue:1/tooi-decision", json={"action": "dismiss"})
+    assert resp.status_code == 409
+
+
+def test_pinning_an_entity_closes_its_status_rows_only():
+    queue = AsyncMock()
+    queue.list_open = AsyncMock(return_value=[
+        _queue_item(id="triage_queue:s"), _tooi_item(id="triage_queue:t")])
+    entity_repo = AsyncMock()
+    entity_repo.set_manual_override = AsyncMock(return_value=True)
+    resp = _make_app(queue=queue, entity_repo=entity_repo).post(
+        "/api/triage/entities/entity:a/override",
+        json={"manual_override": True, "status": "active"})
+    assert resp.status_code == 200
+    assert resp.json()["closed_queue_rows"] == 1
+    queue.set_decision.assert_awaited_once_with("triage_queue:s", "active")
+
+
+def test_the_queue_read_model_carries_kind_and_candidates():
+    queue = AsyncMock()
+    queue.list_open = AsyncMock(return_value=[_tooi_item()])
+    data = _make_app(queue=queue).get("/api/triage/queue").json()
+    assert data["items"][0]["kind"] == "tooi"
+    assert [c["uri"] for c in data["items"][0]["candidates"]] == [c["uri"] for c in _TOOI_CANDS]
