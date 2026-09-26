@@ -1,7 +1,8 @@
 """D1: `parse_surface` splits a surface form into names, and never over-splits.
 
-Every string below is from the working corpus (active rows, 2026-09-26) unless
-marked. The traps are the point: each is a shape a cruder rule got wrong.
+Every string below is from the working corpus (staging, 2026-09-26; "wider" means
+a non-active row) unless marked "constructed". The traps are the point: each is a
+shape a cruder rule got wrong.
 """
 
 from __future__ import annotations
@@ -39,9 +40,12 @@ GOV = "government_organization"
         ("IenW (Infrastructuur en Waterstaat)", GOV, ABBREVIATION,
          ("IenW (Infrastructuur en Waterstaat)", "IenW", "Infrastructuur en Waterstaat")),
         # Long form first, abbreviation in the parenthesis.
-        ("Programma Wonen, Ondersteuning en Zorg Ouderen (WOZO)", "topic", ABBREVIATION,
-         ("Programma Wonen, Ondersteuning en Zorg Ouderen (WOZO)",
-          "Programma Wonen, Ondersteuning en Zorg Ouderen", "WOZO")),
+        ("Nationaal Programma Landelijk Gebied (NPLG)", "topic", ABBREVIATION,
+         ("Nationaal Programma Landelijk Gebied (NPLG)",
+          "Nationaal Programma Landelijk Gebied", "NPLG")),
+        # Initials over every word, function words included.
+        ("Spil in de Wijk (SIDW)", "programme", ABBREVIATION,
+         ("Spil in de Wijk (SIDW)", "Spil in de Wijk", "SIDW")),
         # Category prefix with ONE referent after it.
         ("ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening", GOV,
          CATEGORY_PREFIX,
@@ -68,13 +72,13 @@ def test_an_office_of_a_ministry_is_blocked_not_resolved_through_its_gloss():
 
 
 @pytest.mark.parametrize("name", [
+    # constructed: org_affixes's review findings, one per organ run
     "Minister van Binnenlandse Zaken en Koninkrijksrelaties",  # PC.2's office-of pair
     "Gedeputeerde Staten van Drenthe",
     "Burgemeester van Rotterdam",
     "Raad van Toezicht",
 ])
 def test_every_organ_prefix_blocks(name):
-    """Not from the corpus: org_affixes's review findings, one per organ run."""
     assert parse_surface(name, GOV).blocked
 
 
@@ -103,7 +107,7 @@ def test_a_numbered_label_is_identity_and_kept_whole():
     assert parts.names == ("Programmalijn 4: Economie",)
 
 
-@pytest.mark.parametrize("name", ["Gemeente Utrecht", "Provincie Utrecht"])
+@pytest.mark.parametrize("name", ["Gemeente Utrecht", "Provincie Utrecht"])  # constructed
 def test_a_municipal_or_provincial_prefix_is_a_hint_never_a_split(name):
     """Offering `Utrecht` as a name of both would propose merging them."""
     parts = parse_surface(name, "administrative_area")
@@ -114,15 +118,48 @@ def test_a_municipal_or_provincial_prefix_is_a_hint_never_a_split(name):
 def test_the_type_prefix_is_scoped_to_its_type():
     """`Ministerie van Onderwijs` and the topic `Onderwijs` are different things."""
     assert parse_surface("Ministerie van Onderwijs", "topic").names == ("Ministerie van Onderwijs",)
+    # constructed
     assert parse_surface("Onderwijs (Ministerie)", "topic").names == ("Onderwijs (Ministerie)",)
 
 
-def test_an_invented_gloss_is_offered_separately_so_a_consumer_can_see_it_disagree():
-    """The text says VRO; the extractor glossed it as VWS. Both names are offered —
-    choosing between them is the consumer's refusal to make, not this module's."""
-    parts = parse_surface("VRO (Ministerie van Volksgezondheid, Welzijn en Sport)", GOV)
-    assert parts.shape == ABBREVIATION
-    assert parts.names[1:] == ("VRO", "Volksgezondheid, Welzijn en Sport")
+@pytest.mark.parametrize("name, etype", [
+    # The extractor's gloss is not VRO's initials (it names VWS).
+    ("VRO (Ministerie van Volksgezondheid, Welzijn en Sport)", GOV),
+    ("VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)", GOV),
+    # D1 review, wider graph: an X of the abbreviation, and different expansions.
+    ("cultuur van Leven Lang Ontwikkelen (LLO)", "topic"),
+    ("€ 975.000 voor Uitvoeringskosten (VAT)", "topic"),
+    ("Hoge Veluwe National Park (NHN)", "other"),
+    ("Hollandse Hoogte-Nieuwkoop (NHN)", "other"),
+    ("Urban Population (PU)", "concept"),
+    ("Institutional Quality Index (EQI)", "concept"),
+    ("Stuurgroep Lokaal Educatieve Agenda (LEA)", "organization"),
+    ("VRO (Vereniging van Regio's)", "organization"),
+    # A leading generic word is not in the initials: kept whole (recall loss).
+    ("Programma Wonen, Ondersteuning en Zorg Ouderen (WOZO)", "topic"),
+])
+def test_a_parenthesis_that_is_not_the_initials_is_kept_whole(name, etype):
+    parts = parse_surface(name, etype)
+    assert parts.shape == QUALIFIER
+    assert parts.names == (name,)
+
+
+@pytest.mark.parametrize("name", [
+    "Het college van burgemeester en wethouders van de gemeente De Fryske Marren",
+    "Algemeen Bestuur van de gemeenteraad",
+    "Staatssecretaris Herstel Groningen",
+])
+def test_organ_forms_found_one_boundary_wider_are_blocked(name):
+    """D1 review: the article `het`, `algemeen bestuur van`, and an office with
+    no `van` all escaped the first organ list."""
+    assert parse_surface(name, GOV).blocked
+
+
+def test_the_type_rules_also_hold_for_plain_organization():
+    """The wider graph types ministries as `organization` too."""
+    parts = parse_surface("Ministerie van Infrastructuur en Waterstaat", "organization")
+    assert parts.shape == TYPE_PREFIX
+    assert parts.names[1:] == ("Infrastructuur en Waterstaat",)
 
 
 def test_empty_and_whitespace():

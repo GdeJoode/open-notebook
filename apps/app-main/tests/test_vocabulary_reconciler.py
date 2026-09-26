@@ -206,6 +206,8 @@ async def test_below_threshold_does_not_link():
     assert result.linked is False
     assert entity.external_ids == []
     assert result.reason == "no_match_above_threshold"
+    # D1: kept for a curator rather than discarded.
+    assert [c.external_uri for c in result.candidates] == [_bzk_match().external_uri]
 
 
 @pytest.mark.asyncio
@@ -266,3 +268,54 @@ async def test_persists_via_repo_when_supplied():
     assert captured["uris"] == [
         "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034"
     ]
+
+
+# --- D1: the real provider behind the real reconciler --------------------------
+
+
+async def _tooi_with(records):
+    from shared.vocabulary.tooi_provider import TOOIProvider
+
+    class _Fetcher:
+        async def fetch_records(self):
+            return records
+
+    provider = TOOIProvider(_InMemoryReferenceRepo(), bulk_fetcher=_Fetcher())
+    await provider.refresh()
+    return provider
+
+
+_D1_RECORDS = [
+    {"organisatiecode": "mnre1171", "afkorting": "VRO",
+     "naam_excl_soort": "Volkshuisvesting en Ruimtelijke Ordening",
+     "naam_incl_soort": "ministerie van Volkshuisvesting en Ruimtelijke Ordening",
+     "soort": "ministerie"},
+    {"organisatiecode": "mnre1034", "afkorting": "BZK",
+     "naam_excl_soort": "Binnenlandse Zaken en Koninkrijksrelaties",
+     "naam_incl_soort": "ministerie van Binnenlandse Zaken en Koninkrijksrelaties",
+     "soort": "ministerie"},
+]
+
+
+@pytest.mark.asyncio
+async def test_a_decorated_name_whose_parts_agree_links():
+    provider = await _tooi_with(_D1_RECORDS)
+    entity = Entity(canonical_name="VRO (Volkshuisvesting en Ruimtelijke Ordening)",
+                    entity_type="government_organization")
+    result = await VocabularyReconciler([provider]).reconcile_entity(entity)
+    assert result.linked is True
+    assert entity.external_ids == ["https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"]
+
+
+@pytest.mark.asyncio
+async def test_one_sided_evidence_is_recorded_for_a_curator_and_never_linked():
+    """Owner decision 2026-09-26: `BZK (…Koninkrijkrelaties)` — only BZK hits,
+    because the corpus misspells the gloss. A candidate, not a link."""
+    provider = await _tooi_with(_D1_RECORDS)
+    entity = Entity(canonical_name="BZK (Binnenlandse Zaken en Koninkrijkrelaties)",
+                    entity_type="government_organization")
+    result = await VocabularyReconciler([provider]).reconcile_entity(entity)
+    assert result.linked is False
+    assert entity.external_ids == []
+    assert [c.external_id for c in result.candidates] == ["mnre1034"]
+    assert "one-sided" in result.candidates[0].matched_on

@@ -62,8 +62,9 @@ export interface MergeCandidate {
   name_a: string
   name_b: string
   entity_type: string
-  /** Why this pair is here when `method` alone does not say — today, the head
-   *  run `containment` removed. `containment` on its own is not reviewable: a
+  /** Why this pair is here when `method` alone does not say: the head run
+   *  `containment` removed, or the shape and shared name `surface_parts` found
+   *  (D1, e.g. `type_suffix: economische zaken`). `containment` on its own is not reviewable: a
    *  corpus holding both `Gemeente Groningen` and `Provincie Groningen` yields
    *  two mutually exclusive proposals for `Groningen`. */
   evidence?: string

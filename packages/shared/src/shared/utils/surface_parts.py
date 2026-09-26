@@ -28,7 +28,12 @@ counts are the evidence:
   sides are names of one referent. The extractor invents glosses (`VRO (Ministerie
   van Volksgezondheid, Welzijn en Sport)` sits on a line that names VRO), so the
   two are offered as separate names and a consumer that finds them disagreeing
-  must refuse, never pick.
+  must refuse, never pick. The pair is only an abbreviation pair when the
+  abbreviation's capitals ARE the long form's initials — `VRO (Volkshuisvesting
+  en Ruimtelijke Ordening)` is, `cultuur van Leven Lang Ontwikkelen (LLO)` (an X
+  of LLO), `Hoge Veluwe National Park (NHN)` and `VRO (Vereniging van Regio's)`
+  are not, and those are kept whole as qualifiers. D1 review found all of these
+  on the wider graph; without the check, each was proposed or linked.
 * any other ``X (Y)`` — a QUALIFIER (~30 rows): `sterk regionaal netwerk (op
   onderwerpen)`, `Regio (Zuidwest-Friesland)`. The parenthesis narrows or renames;
   dropping it changes the referent. Kept whole.
@@ -71,11 +76,14 @@ MULTIPLE = "multiple"
 #: Parenthesised words that restate the entity type, per type. Lowercase.
 TYPE_SUFFIXES: Dict[str, FrozenSet[str]] = {
     "government_organization": frozenset({"ministerie"}),
+    # The wider graph types ministries as plain `organization` too.
+    "organization": frozenset({"ministerie"}),
 }
 
 #: Leading words that restate the entity type, per type, and may be split off.
 TYPE_PREFIXES: Dict[str, Tuple[str, ...]] = {
     "government_organization": ("het ministerie van ", "ministerie van "),
+    "organization": ("het ministerie van ", "ministerie van "),
 }
 
 #: Leading words recorded as a type hint but never split (see module docstring).
@@ -85,9 +93,20 @@ TYPE_HINTS: Tuple[str, ...] = ("gemeente ", "provincie ", "waterschap ")
 #: The governance runs `org_affixes` removed from its merge list, plus the
 #: leading article the corpus writes before them.
 ORGAN_PREFIXES: Tuple[str, ...] = (
-    "minister van ", "minister voor ", "staatssecretaris van ", "staatssecretaris voor ",
+    # Any minister or state secretary is an office, with or without "van"
+    # (`Staatssecretaris Herstel Groningen`).
+    "minister ", "staatssecretaris ",
     "raad van ", "college van ", "gemeenteraad van ", "dagelijks bestuur van ",
-    "gedeputeerde staten van ", "burgemeester van ", "commissaris van de koning",
+    "algemeen bestuur van ", "gedeputeerde staten van ", "burgemeester van ",
+    "commissaris van de koning",
+)
+
+#: Leading articles the corpus writes before an organ.
+_ARTICLES: Tuple[str, ...] = ("de ", "het ")
+
+#: Words an abbreviation may skip or spell out when its initials are compared.
+_FUNCTION_WORDS: FrozenSet[str] = frozenset(
+    {"en", "van", "de", "het", "der", "den", "voor", "in", "op", "of", "and", "the", "for"}
 )
 
 #: Plural category labels whose tail names the referent(s) themselves.
@@ -101,6 +120,23 @@ _ABBR = re.compile(r"^[A-Za-z&/.\-]{2,10}$")
 
 def _is_abbreviation(token: str) -> bool:
     return bool(_ABBR.match(token)) and sum(c.isupper() for c in token) >= 2
+
+
+def _abbreviates(abbr: str, long_form: str) -> bool:
+    """Do ``abbr``'s capitals equal ``long_form``'s initials?
+
+    Two readings are accepted, both checkable: the initials of every word
+    (`Spil in de Wijk` → SIDW), or of the words other than function words
+    (`Infrastructuur en Waterstaat` → IW, the capitals of `IenW`). Words split on
+    spaces, slashes and hyphens (`Herstel Groningen/Binnenlandse Zaken en …` →
+    HGBZK). Anything else — an X of the abbreviation, a different expansion, a
+    gloss the extractor invented — fails, and the form is kept whole.
+    """
+    key = "".join(c for c in abbr if c.isupper())
+    words = [w for w in re.split(r"[\s/\-]+", long_form) if w and w[0].isalpha()]
+    every = "".join(w[0] for w in words).upper()
+    content = "".join(w[0] for w in words if w.casefold() not in _FUNCTION_WORDS).upper()
+    return len(key) >= 2 and key in (every, content)
 
 
 def _strip_prefix(text: str, prefixes: Tuple[str, ...]) -> Tuple[str, str]:
@@ -140,7 +176,11 @@ def parse_surface(name: str, entity_type: str = "") -> SurfaceParts:
 
     # Organs first: `De Staatssecretaris van IenW (IenW)` must never reach the
     # parenthesis rule, whose gloss would name the ministry.
-    body = low[len("de "):] if low.startswith("de ") else low
+    body = low
+    for article in _ARTICLES:
+        if body.startswith(article):
+            body = body[len(article):]
+            break
     for p in ORGAN_PREFIXES:
         if body.startswith(p):
             return SurfaceParts(raw=raw, shape=ORGAN, blocked=True,
@@ -169,12 +209,14 @@ def parse_surface(name: str, entity_type: str = "") -> SurfaceParts:
         if inner.casefold() in TYPE_SUFFIXES.get(entity_type, frozenset()):
             shape, type_word = TYPE_SUFFIX, inner.casefold()
             names.append(head)
-        elif _is_abbreviation(head) and not _is_abbreviation(inner):
+        elif (_is_abbreviation(head) and not _is_abbreviation(inner)
+              and _abbreviates(head, _strip_prefix(inner, TYPE_PREFIXES.get(entity_type, ()))[1])):
             shape = ABBREVIATION
             _, gloss = _strip_prefix(inner, TYPE_PREFIXES.get(entity_type, ()))
             names += [head, gloss]
             detail = {"abbreviation": head, "gloss": gloss}
-        elif _is_abbreviation(inner) and not _is_abbreviation(head):
+        elif (_is_abbreviation(inner) and not _is_abbreviation(head)
+              and _abbreviates(inner, head)):
             shape = ABBREVIATION
             names += [head, inner]
             detail = {"abbreviation": inner, "gloss": head}

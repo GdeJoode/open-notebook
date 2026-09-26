@@ -46,6 +46,7 @@ from entity_filtering.config import EmbeddingDedupConfig, FuzzyDedupConfig
 from entity_filtering.deduplication.fuzzy_resolver import FuzzyResolver
 from loguru import logger
 from shared.utils.org_affixes import head_affix
+from shared.utils.surface_parts import PLAIN, parse_surface
 from shared.utils.text_folding import fold_for_comparison
 from surrealdb_service.repositories.entity import EntityRepository
 
@@ -627,14 +628,16 @@ class CandidateDedupService:
         The evidence names the shared name and the shape that produced it, so a
         card reads `surface_parts (type_suffix: economische zaken)`.
         """
-        from shared.utils.surface_parts import parse_surface
-
         by_name: Dict[str, List[Tuple[Dict[str, Any], str]]] = {}
         for row in group:
             parts = parse_surface(row["name"], row["entity_type"])
-            for name in dict.fromkeys(fold_for_comparison(n) for n in parts.names):
-                if name:
-                    by_name.setdefault(name, []).append((row, parts.shape))
+            for i, raw_name in enumerate(parts.names):
+                name = fold_for_comparison(raw_name)
+                if not name or any(r is row for r, _ in by_name.get(name, [])):
+                    continue
+                # The raw form is the row's own name; only a split name carries
+                # the shape that produced it, so the evidence names the right row.
+                by_name.setdefault(name, []).append((row, PLAIN if i == 0 else parts.shape))
         for name, rows in by_name.items():
             for i in range(len(rows)):
                 for j in range(i + 1, len(rows)):
@@ -647,7 +650,7 @@ class CandidateDedupService:
                     if SURFACE_PARTS in best.get(key, {}):
                         continue  # the first shared name is enough evidence
                     self._record(best, a["id"], b["id"], 1.0, SURFACE_PARTS)
-                    shape = shape_a if shape_a != "plain" else shape_b
+                    shape = shape_a if shape_a != PLAIN else shape_b
                     evidence[key] = f"{shape}: {name}"
 
     def _score_fuzzy(

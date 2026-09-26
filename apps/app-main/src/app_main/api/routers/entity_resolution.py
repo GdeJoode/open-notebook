@@ -194,8 +194,9 @@ class CandidateOut(BaseModel):
     name_a: str
     name_b: str
     entity_type: str
-    #: Why this pair is here when `method` alone does not say — today, the head
-    #: run `containment` removed. See `MergeCandidate.evidence`.
+    #: Why this pair is here when `method` alone does not say: the head run
+    #: `containment` removed, or the shape and shared name `surface_parts` found
+    #: (D1). See `MergeCandidate.evidence`.
     evidence: str = ""
     #: ``id_b``'s type when the two differ, else "". Non-empty only for the
     #: ``fold_equal_cross_type`` method: without it the card renders the same

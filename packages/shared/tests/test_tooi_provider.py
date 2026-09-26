@@ -361,8 +361,11 @@ async def test_refresh_keeps_distinct_same_named_orgs_as_two_rows():
 
 
 # ---------------------------------------------------------------------------
-# D1: a decorated name resolves through its parts, and only when they agree
+# D1: a decorated name resolves through its parts — linkably only when every part
+# carries evidence and they agree
 # ---------------------------------------------------------------------------
+
+from shared.vocabulary.tooi_provider import ONE_SIDED_CONFIDENCE  # noqa: E402
 
 GOV = "government_organization"
 _D1_BULK = [
@@ -378,12 +381,19 @@ _D1_BULK = [
      "naam_excl_soort": "Infrastructuur en Waterstaat",
      "naam_incl_soort": "ministerie van Infrastructuur en Waterstaat",
      "soort": "ministerie"},
+    {"organisatiecode": "mnre1034", "afkorting": "BZK",
+     "naam_excl_soort": "Binnenlandse Zaken en Koninkrijksrelaties",
+     "naam_incl_soort": "ministerie van Binnenlandse Zaken en Koninkrijksrelaties",
+     "soort": "ministerie"},
+    {"organisatiecode": "pv21", "afkorting": "OV",
+     "naam_excl_soort": "Overijssel", "naam_incl_soort": "provincie Overijssel",
+     "soort": "provincie"},
 ]
 
 
-async def _d1_provider(tmp_path) -> TOOIProvider:
+async def _d1_provider(tmp_path, bulk=None) -> TOOIProvider:
     f = tmp_path / "tooi_d1.json"
-    f.write_text(json.dumps(_D1_BULK), encoding="utf-8")
+    f.write_text(json.dumps(bulk or _D1_BULK), encoding="utf-8")
     provider = TOOIProvider(FakeReferenceRepo(), source=str(f))
     await provider.refresh()
     return provider
@@ -393,40 +403,98 @@ async def _d1_provider(tmp_path) -> TOOIProvider:
 @pytest.mark.parametrize("name, code", [
     ("Volkshuisvesting en Ruimtelijke Ordening (Ministerie)", "mnre1171"),
     ("VRO (Volkshuisvesting en Ruimtelijke Ordening)", "mnre1171"),
-    # The gloss is the extractor's and matches nothing; the abbreviation decides.
-    ("VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)", "mnre1171"),
     ("IenW (Infrastructuur en Waterstaat)", "mnre1130"),
     ("ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening", "mnre1171"),
+    ("Ministerie van Volksgezondheid, Welzijn en Sport", "mnre1025"),
 ])
-async def test_a_decorated_name_resolves_through_its_parts(tmp_path, name, code):
+async def test_a_decorated_name_whose_parts_all_agree_is_linkable(tmp_path, name, code):
     """Corpus strings that K.4 as shipped resolved to nothing (D2 experiment)."""
     provider = await _d1_provider(tmp_path)
     matches = await provider.lookup(name, GOV)
     assert [m.external_id for m in matches] == [code]
+    assert matches[0].confidence > ONE_SIDED_CONFIDENCE
+    assert "one-sided" not in matches[0].matched_on
     assert matches[0].matched_on  # the rule that made the call is recorded
 
 
 @pytest.mark.asyncio
-async def test_parts_that_disagree_return_both_so_the_reconciler_refuses(tmp_path):
-    """The text names VRO; the extractor glossed it as VWS. Both are returned —
-    `reconcile_entity` links only a single match, so this is a refusal with the
-    candidates recorded, never a pick."""
+async def test_all_agreeing_parts_are_named_in_the_provenance(tmp_path):
     provider = await _d1_provider(tmp_path)
-    matches = await provider.lookup(
-        "VRO (Ministerie van Volksgezondheid, Welzijn en Sport)", GOV)
-    assert sorted(m.external_id for m in matches) == ["mnre1025", "mnre1171"]
+    [m] = await provider.lookup("IenW (Infrastructuur en Waterstaat)", GOV)
+    assert m.matched_on == "abbreviation: IenW + Infrastructuur en Waterstaat"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("name", [
-    "De Staatssecretaris van Infrastructuur en Waterstaat (IenW)",
-    "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening, "
-    "Sociale Zaken en Werkgelegenheid",
+@pytest.mark.parametrize("name, etype, code", [
+    # The corpus spells Koninkrij(k)relaties without the s; only BZK hits.
+    ("BZK (Binnenlandse Zaken en Koninkrijkrelaties)", GOV, "mnre1034"),
+    # D1 review: the abbreviation hits a province, the gloss names public transport.
+    ("OV (Openbaar Vervoer)", "concept", "pv21"),
 ])
-async def test_an_organ_or_a_list_resolves_to_nothing(tmp_path, name):
-    """The D1 simulation linked the Staatssecretaris to IenW via `(IenW)`."""
+async def test_evidence_from_one_part_is_a_candidate_never_a_link(tmp_path, name, etype, code):
     provider = await _d1_provider(tmp_path)
-    assert await provider.lookup(name, GOV) == []
+    [m] = await provider.lookup(name, etype)
+    assert m.external_id == code
+    assert m.confidence == ONE_SIDED_CONFIDENCE
+    assert "one-sided" in m.matched_on
+
+
+@pytest.mark.asyncio
+async def test_a_gloss_with_the_right_initials_but_no_register_entry_is_one_sided(tmp_path):
+    """Constructed: the initials check passes, the gloss names nothing registered."""
+    provider = await _d1_provider(tmp_path)
+    [m] = await provider.lookup("VRO (Volkshuisvesting Ruimte Ordening)", GOV)
+    assert m.external_id == "mnre1171"
+    assert m.confidence == ONE_SIDED_CONFIDENCE
+
+
+@pytest.mark.asyncio
+async def test_parts_that_disagree_return_both_so_the_reconciler_refuses(tmp_path):
+    """Constructed: the abbreviation names one registered body, the gloss (same
+    initials) names another. Both come back at full confidence — the reconciler
+    links only a single match, so this is a refusal with both recorded."""
+    bulk = _D1_BULK + [
+        {"organisatiecode": "x9", "afkorting": "VRegO",
+         "naam_excl_soort": "Vereniging Regionale Omroepen",
+         "naam_incl_soort": "Vereniging Regionale Omroepen", "soort": "overige"},
+    ]
+    provider = await _d1_provider(tmp_path, bulk)
+    matches = await provider.lookup("VRO (Vereniging Regionale Omroepen)", "organization")
+    assert sorted(m.external_id for m in matches) == ["mnre1171", "x9"]
+    assert all(m.confidence > ONE_SIDED_CONFIDENCE for m in matches)
+
+
+@pytest.mark.asyncio
+async def test_the_intersection_narrows_an_ambiguous_part_to_the_agreed_one(tmp_path):
+    """Constructed: `EZ` is the abbreviation of two records; the gloss names one.
+    Without the intersection both would come back and the reconciler would refuse."""
+    bulk = [
+        {"organisatiecode": "x1", "afkorting": "EZ", "naam_excl_soort": "Economische Zaken",
+         "naam_incl_soort": "ministerie van Economische Zaken", "soort": "ministerie"},
+        {"organisatiecode": "x2", "afkorting": "EZ", "naam_excl_soort": "Eerste Zaken",
+         "naam_incl_soort": "ministerie van Eerste Zaken", "soort": "ministerie"},
+    ]
+    provider = await _d1_provider(tmp_path, bulk)
+    matches = await provider.lookup("EZ (Economische Zaken)", GOV)
+    assert [m.external_id for m in matches] == ["x1"]
+    assert matches[0].confidence > ONE_SIDED_CONFIDENCE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name, etype", [
+    ("De Staatssecretaris van Infrastructuur en Waterstaat (IenW)", GOV),
+    ("ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening, "
+     "Binnenlandse Zaken en Koninkrijkrelaties/Herstel Groningen, "
+     "Sociale Zaken en Werkgelegenheid, Justitie en Veiligheid", GOV),
+    # D1 review, wider graph: glosses that are not VRO's initials.
+    ("VRO (Vereniging van Regio's)", "organization"),
+    ("VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)", GOV),
+    # Constructed by the review: a unit OF BZK, in the parenthesis position.
+    ("Directoraat-generaal Volkshuisvesting (BZK)", GOV),
+])
+async def test_an_organ_a_list_or_a_foreign_gloss_resolves_to_nothing(tmp_path, name, etype):
+    provider = await _d1_provider(tmp_path)
+    assert await provider.lookup(name, etype) == []
 
 
 @pytest.mark.asyncio

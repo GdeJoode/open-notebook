@@ -54,16 +54,24 @@ loaded rows by canonical name OR alias (abbreviation / incl-soort form).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from loguru import logger
 
 from shared.utils.name_normalizer import normalize_entity_name
+from shared.utils.surface_parts import parse_surface
 from shared.vocabulary.provider import VocabMatch
 from shared.vocabulary.tooi_bulk import TOOIBulkFetcher
 
 _TOOI_BASE_URI = "https://identifier.overheid.nl/tooi/id"
+
+#: D1: the confidence of a match only SOME parts of a decorated name support.
+#: Below ``VocabularyReconciler``'s default link threshold (0.85) on purpose: such
+#: a match is a candidate for a curator, never a link. A caller that lowers the
+#: threshold below this makes one-sided evidence link — keep them apart.
+ONE_SIDED_CONFIDENCE = 0.8
 
 # Verified-live representative seed (subset of the ~25 core organisations).
 # Each is the real TOOI organisatiecode + officiële naam fetched from
@@ -274,38 +282,40 @@ class TOOIProvider:
             logger.warning("TOOI lookup failed for {n!r} (no-match): {e}", n=name, e=exc)
             return []
 
-    async def _lookup_one(self, name: str, matched_on: str = "") -> List[VocabMatch]:
+    async def _lookup_one(self, name: str) -> List[VocabMatch]:
         """The K.4 rule on one string: exact canonical name, else exact alias."""
         by_name = await self._repo.lookup_by_name(name, source=self.name)
         if by_name:
-            return self._rows_to_matches(by_name, confidence=0.99, matched_on=matched_on)
+            return self._rows_to_matches(by_name, confidence=0.99)
         by_alias = await self._repo.lookup_by_alias(name, source=self.name)
-        return self._rows_to_matches(by_alias, confidence=0.9, matched_on=matched_on)
+        return self._rows_to_matches(by_alias, confidence=0.9)
 
     async def _lookup_parts(self, name: str, entity_type: str) -> List[VocabMatch]:
         """D1: when the name as written misses, try the names it decomposes into.
 
         ``VRO (Volkshuisvesting en Ruimtelijke Ordening)`` is in no register, but
         both of its parts are. Every part is looked up with the same exact rule,
-        and the parts that hit must AGREE: if they name different organisations —
-        the extractor glossed `VRO` as VWS on a line that names VRO — every match
-        is returned, so the reconciler sees more than one and refuses, recording
-        them as candidates. A part that misses is ignored: extractor glosses are
-        often not register names.
+        and the outcome depends on how many parts carry evidence:
+
+        * **every part hits, and they agree** → the agreed match, at the part's
+          own confidence, so the reconciler can link it;
+        * **the parts that hit disagree** → every match, so the reconciler sees
+          more than one and refuses, recording them as candidates;
+        * **some part misses** → the matches at :data:`ONE_SIDED_CONFIDENCE`,
+          below the reconciler's link threshold: recorded for a curator, never
+          linked (owner decision, 2026-09-26). A miss is not silence — D1 review
+          found `OV (Openbaar Vervoer)` linking to the province Overijssel on its
+          abbreviation alone, the gloss naming something no register holds.
 
         A blocked form — an organ of something, or several referents in one
-        string — resolves to nothing. `De Staatssecretaris van Infrastructuur en
-        Waterstaat (IenW)` is an office, and its `(IenW)` must not make it the
-        ministry.
+        string — carries no names and so resolves to nothing: `De
+        Staatssecretaris van Infrastructuur en Waterstaat (IenW)` is an office.
         """
-        from shared.utils.surface_parts import parse_surface
-
         parts = parse_surface(name, entity_type)
-        if parts.blocked:
-            return []
+        pieces = parts.names[1:]
         hits: List[List[VocabMatch]] = []
-        for part in parts.names[1:]:
-            found = await self._lookup_one(part, matched_on=f"{parts.shape}: {part}")
+        for part in pieces:
+            found = await self._lookup_one(part)
             if found:
                 hits.append(found)
         if not hits:
@@ -314,16 +324,25 @@ class TOOIProvider:
         flat = [m for h in hits for m in h]
         if agreed:
             flat = [m for m in flat if m.external_uri in agreed]
+        one_sided = len(hits) < len(pieces)
         # One match per URI, the most confident — the reconciler dedups the same
         # way, but a provider that returns its own duplicates is harder to read.
         best: Dict[str, VocabMatch] = {}
         for m in flat:
             if m.external_uri not in best or m.confidence > best[m.external_uri].confidence:
                 best[m.external_uri] = m
-        return list(best.values())
+        rule = f"{parts.shape}{' (one-sided)' if one_sided else ''}: " + " + ".join(pieces)
+        return [
+            replace(
+                m,
+                matched_on=rule,
+                confidence=min(m.confidence, ONE_SIDED_CONFIDENCE) if one_sided else m.confidence,
+            )
+            for m in best.values()
+        ]
 
     def _rows_to_matches(
-        self, rows: Sequence[Dict[str, Any]], *, confidence: float, matched_on: str = ""
+        self, rows: Sequence[Dict[str, Any]], *, confidence: float
     ) -> List[VocabMatch]:
         matches: List[VocabMatch] = []
         for row in rows:
@@ -338,7 +357,6 @@ class TOOIProvider:
                     source_vocabulary=self.name,
                     aliases=list(row.get("aliases") or []),
                     confidence=confidence,
-                    matched_on=matched_on,
                 )
             )
         return matches

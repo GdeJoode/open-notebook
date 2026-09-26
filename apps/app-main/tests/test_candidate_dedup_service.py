@@ -757,26 +757,34 @@ async def test_a_decorated_name_and_its_part_reach_review(decorated, plain, shap
 
 
 @pytest.mark.asyncio
-async def test_two_glosses_of_one_abbreviation_are_proposed() -> None:
+async def test_an_invented_gloss_proposes_nothing() -> None:
+    """`VRO (VROM, …)`: the gloss is not VRO's initials, so the row is a qualifier
+    and offers no `VRO` to pair on — the extractor's invention is not evidence."""
     rows = [
         _entity("entity:a", "VRO (Volkshuisvesting en Ruimtelijke Ordening)", GOV),
         _entity("entity:b", "VRO (VROM, Volkshuisvesting, Ruimtelijke Ordening en Milieubeheer)", GOV),
     ]
     report = await _service(rows).propose_candidates()
-    assert [c.method for c in report.review] == ["surface_parts"]
-    assert report.review[0].evidence == "abbreviation: vro"
+    assert not [c for c in report.review if c.method == "surface_parts"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("a, b, etype", [
     # An office of the ministry is not the ministry.
     ("De Staatssecretaris van Infrastructuur en Waterstaat (IenW)", "IenW", GOV),
-    # A list of several ministries is none of them.
-    ("ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening, "
-     "Sociale Zaken en Werkgelegenheid", "Sociale Zaken en Werkgelegenheid", GOV),
+    # A list of several ministries is none of them (the corpus string, whole).
+    ("ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening, Binnenlandse "
+     "Zaken en Koninkrijkrelaties/Herstel Groningen, Sociale Zaken en Werkgelegenheid, "
+     "Justitie en Veiligheid", "Sociale Zaken en Werkgelegenheid", GOV),
+    # D1 review, wider graph: an X of the abbreviation, different expansions.
+    ("Leven Lang Ontwikkelen (LLO)", "cultuur van Leven Lang Ontwikkelen (LLO)", "topic"),
+    ("Uitvoeringskosten (VAT)", "€ 975.000 voor Uitvoeringskosten (VAT)", "topic"),
+    ("Hoge Veluwe National Park (NHN)", "Hollandse Hoogte-Nieuwkoop (NHN)", "other"),
+    ("Urban Population (PU)", "Predominantly Urban (PU)", "concept"),
+    ("Equity Index (EQI)", "Institutional Quality Index (EQI)", "concept"),
     # A qualifier is not a decoration.
     ("sterk regionaal netwerk (op onderwerpen)", "sterk regionaal netwerk", "topic"),
-    # The municipality and the province share a place name, not an identity.
+    # constructed: the municipality and the province share a place, not an identity.
     ("Gemeente Utrecht", "Provincie Utrecht", "administrative_area"),
 ])
 async def test_the_blocked_and_whole_shapes_propose_nothing(a, b, etype) -> None:
@@ -787,13 +795,44 @@ async def test_the_blocked_and_whole_shapes_propose_nothing(a, b, etype) -> None
 
 
 @pytest.mark.asyncio
-async def test_surface_parts_never_auto_merges_even_beside_an_exact_part() -> None:
-    """Three rows sharing `VRO`: every pair between them is review, none auto."""
+async def test_surface_parts_never_auto_merges() -> None:
+    """Three rows linked by shared names: every proposal is review, none auto.
+
+    `VRO` ~ `VRO (…)` share VRO, `VRO (…)` ~ `… (Ministerie)` share the long form;
+    `VRO` and `… (Ministerie)` share nothing directly. Proposals are pairwise and
+    not transitive — a curator sees both links and decides the chain."""
     rows = [
         _entity("entity:a", "VRO", GOV),
         _entity("entity:b", "VRO (Volkshuisvesting en Ruimtelijke Ordening)", GOV),
-        _entity("entity:c", "VRO (Ministerie van Volksgezondheid, Welzijn en Sport)", GOV),
+        _entity("entity:c", "Volkshuisvesting en Ruimtelijke Ordening (Ministerie)", GOV),
     ]
     report = await _service(rows).propose_candidates()
     assert not [c for c in report.auto_merge if c.method == "surface_parts"]
-    assert len([c for c in report.review if c.method == "surface_parts"]) == 3
+    assert len([c for c in report.review if c.method == "surface_parts"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_evidence_names_the_row_whose_split_produced_the_shared_name() -> None:
+    """Both rows decompose; the shared name came from b's type suffix, not a's
+    abbreviation, and the card must say so."""
+    rows = [
+        _entity("entity:a", "VRO (Volkshuisvesting en Ruimtelijke Ordening)", GOV),
+        _entity("entity:b", "Volkshuisvesting en Ruimtelijke Ordening (Ministerie)", GOV),
+    ]
+    report = await _service(rows).propose_candidates()
+    [c] = [c for c in report.review if c.method == "surface_parts"]
+    assert c.evidence == "abbreviation: volkshuisvesting en ruimtelijke ordening" or         c.evidence == "type_suffix: volkshuisvesting en ruimtelijke ordening"
+    # Both rows produced the shared name by a split; either shape is true of it.
+    # What must not happen is `plain`, which would say neither row was decorated.
+    assert not c.evidence.startswith("plain")
+
+
+@pytest.mark.asyncio
+async def test_a_plain_row_never_supplies_the_shape() -> None:
+    rows = [
+        _entity("entity:a", "Economische Zaken", GOV),
+        _entity("entity:b", "Economische Zaken (Ministerie)", GOV),
+    ]
+    report = await _service(rows).propose_candidates()
+    [c] = [c for c in report.review if c.method == "surface_parts"]
+    assert c.evidence == "type_suffix: economische zaken"
