@@ -73,6 +73,9 @@ class ReferenceEntityRepository:
             "external_uri": record.get("external_uri"),
             "external_id": record.get("external_id"),
             "aliases": list(record.get("aliases") or []),
+            # D2 (migration 81): the keys `lookup_by_key` matches on, computed by
+            # the provider — SurrealQL cannot run the normaliser.
+            "lookup_keys": list(record.get("lookup_keys") or []),
             "properties": dict(record.get("properties") or {}),
             "parent_name": record.get("parent_name"),
             "last_validated": datetime.now(timezone.utc),
@@ -135,6 +138,25 @@ class ReferenceEntityRepository:
             return await execute_query(query, params, self.config)
         except Exception as exc:
             logger.warning("reference_entity lookup_by_name failed: {e}", e=exc)
+            return []
+
+    async def lookup_by_key(
+        self, key: str, source: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Return reference rows carrying ``key`` in ``lookup_keys`` (D2).
+
+        ``key`` must already be normalised the way the writer normalised
+        (``normalize_alias_key``); this method compares, it does not normalise.
+        """
+        query = "SELECT * FROM reference_entity WHERE $key IN lookup_keys"
+        params: Dict[str, Any] = {"key": key}
+        if source is not None:
+            query += " AND source_vocabulary = $src"
+            params["src"] = source
+        try:
+            return await execute_query(query, params, self.config)
+        except Exception as exc:
+            logger.warning("reference_entity lookup_by_key failed: {e}", e=exc)
             return []
 
     async def lookup_by_alias(

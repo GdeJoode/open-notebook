@@ -20,11 +20,19 @@ from pydantic import BaseModel, Field
 from shared.vocabulary.crossref_provider import CrossrefProvider
 from shared.vocabulary.tooi_bulk import TOOIBulkFetcher
 from shared.vocabulary.tooi_provider import TOOIProvider
+from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.reference_entity import (
     ReferenceEntityRepository,
 )
 
-from app_main.dependencies import get_reference_entity_repo
+from app_main.dependencies import get_entity_repo, get_reference_entity_repo
+from app_main.services.entity_resolution.vocabulary_reconcile_service import (
+    DEFAULT_TYPES,
+    reconcile_active_entities,
+)
+from app_main.services.entity_resolution.vocabulary_reconciler import (
+    VocabularyReconciler,
+)
 
 router = APIRouter(prefix="/vocabulary", tags=["vocabulary"])
 
@@ -83,6 +91,22 @@ class StatusResponse(BaseModel):
     providers: List[ProviderStatusOut]
 
 
+class ReconcileRequest(BaseModel):
+    entity_types: List[str] = Field(default_factory=lambda: list(DEFAULT_TYPES))
+    #: Compute the report and write nothing. The default, so the door is safe to
+    #: open: a real run needs `dry_run: false` in the body.
+    dry_run: bool = True
+
+
+class ReconcileResponse(BaseModel):
+    dry_run: bool
+    tooi_refreshed: int = 0
+    scanned: int
+    by_type: dict
+    linked: List[dict]
+    candidates: List[dict]
+
+
 # --- Endpoints ---------------------------------------------------------------
 
 
@@ -134,4 +158,36 @@ async def vocabulary_status(
                 on_demand=True,
             ),
         ]
+    )
+
+
+@router.post("/reconcile", response_model=ReconcileResponse)
+async def reconcile_vocabulary(
+    body: ReconcileRequest,
+    repo: ReferenceEntityRepository = Depends(get_reference_entity_repo),
+    entity_repo=Depends(get_entity_repo),
+) -> ReconcileResponse:
+    """Link active named entities to TOOI (D2 — the production caller K.4 lacked).
+
+    Loads TOOI first when no register row carries lookup keys (an empty table, or
+    rows written before migration 81). Returns every link and every candidate the
+    precision guard refused, split by type; ``dry_run`` (default) writes nothing.
+    """
+    refreshed = 0
+    keyed = await execute_query(
+        "SELECT count() AS c FROM reference_entity WHERE source_vocabulary = 'tooi' "
+        "AND array::len(lookup_keys) > 0 GROUP ALL;"
+    )
+    tooi = TOOIProvider(repo, source=_tooi_source(), bulk_fetcher=_tooi_bulk_fetcher())
+    if not keyed or not keyed[0].get("c"):
+        refreshed = await tooi.refresh()
+    reconciler = VocabularyReconciler(
+        [tooi], entity_repo=None if body.dry_run else entity_repo
+    )
+    report = await reconcile_active_entities(
+        reconciler, types=body.entity_types, dry_run=body.dry_run
+    )
+    return ReconcileResponse(
+        dry_run=report.dry_run, tooi_refreshed=refreshed, scanned=report.scanned,
+        by_type=report.by_type, linked=report.linked, candidates=report.candidates,
     )

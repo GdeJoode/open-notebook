@@ -30,6 +30,7 @@ from typing import Any, List, Optional, Sequence
 from loguru import logger
 from shared.models.entity import Entity
 from shared.vocabulary.provider import VocabMatch, VocabularyProvider
+from shared.vocabulary.tooi_provider import ONE_SIDED_CONFIDENCE
 
 
 @dataclass
@@ -71,6 +72,14 @@ class VocabularyReconciler:
             is what the unit tests assert; a batch caller supplies a repo to
             persist.
         """
+        # D1/D2: a one-sided decomposed match is capped at ONE_SIDED_CONFIDENCE
+        # precisely so it cannot link. A threshold at or below that cap would
+        # silently undo the owner's "candidate, don't link" decision.
+        if confidence_threshold <= ONE_SIDED_CONFIDENCE:
+            raise ValueError(
+                f"confidence_threshold {confidence_threshold} would link one-sided "
+                f"matches (capped at {ONE_SIDED_CONFIDENCE}); it must be above it"
+            )
         self._providers = list(providers)
         self._threshold = confidence_threshold
         self._repo = entity_repo

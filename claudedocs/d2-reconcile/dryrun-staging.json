@@ -1,0 +1,416 @@
+{
+ "scanned": 72,
+ "by_type": {
+  "government_organization": {
+   "no_match": 6,
+   "linked": 13,
+   "ambiguous_multiple_candidates": 1
+  },
+  "administrative_area": {
+   "no_match": 11,
+   "linked": 41
+  }
+ },
+ "linked": [
+  {
+   "id": "entity:322bzzeei7mndqogpwvr",
+   "name": "VRO (Volkshuisvesting en Ruimtelijke Ordening)",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+   "matched_on": "abbreviation: VRO + Volkshuisvesting en Ruimtelijke Ordening"
+  },
+  {
+   "id": "entity:4ai5ium9fsa7qkwxttwi",
+   "name": "Ministerie van Volksgezondheid, Welzijn en Sport",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1025",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:6y3woaib3ttjjitunypg",
+   "name": "JenV",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1058",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:8csnxydjjzl7e8ziyric",
+   "name": "Binnenlandse Zaken en Koninkrijkrelaties (Ministerie)",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+   "matched_on": "type_suffix: Binnenlandse Zaken en Koninkrijkrelaties"
+  },
+  {
+   "id": "entity:btpsat9a8ub8tvfnjw3j",
+   "name": "VRO (ministerie van Volkshuisvesting en Ruimtelijke Ordening)",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+   "matched_on": "abbreviation: VRO + Volkshuisvesting en Ruimtelijke Ordening"
+  },
+  {
+   "id": "entity:cx1xf1gx1sow5oas3oyr",
+   "name": "Infrastructuur en Waterstaat (Ministerie)",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+   "matched_on": "type_suffix: Infrastructuur en Waterstaat"
+  },
+  {
+   "id": "entity:di62hb83xu4ilwv0s3qj",
+   "name": "Volkshuisvesting en Ruimtelijke Ordening (Ministerie)",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+   "matched_on": "type_suffix: Volkshuisvesting en Ruimtelijke Ordening"
+  },
+  {
+   "id": "entity:grhgds77kw3qwf6zwl95",
+   "name": "Sociale Zaken en Werkgelegenheid (Ministerie)",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1073",
+   "matched_on": "type_suffix: Sociale Zaken en Werkgelegenheid"
+  },
+  {
+   "id": "entity:hdiugivodjjwnpt8k9h8",
+   "name": "IenW (Infrastructuur en Waterstaat)",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+   "matched_on": "abbreviation: IenW + Infrastructuur en Waterstaat"
+  },
+  {
+   "id": "entity:o5jydq80tslfequxik54",
+   "name": "Ministerie van Economische Zaken en Klimaat",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:rratdyul5v149w9w8t3h",
+   "name": "BZK (Binnenlandse Zaken en Koninkrijkrelaties)",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1034",
+   "matched_on": "abbreviation: BZK + Binnenlandse Zaken en Koninkrijkrelaties"
+  },
+  {
+   "id": "entity:wgcdx6urtd6bmgp15mwu",
+   "name": "IenW",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:zyi9gcb6a1kb3fe3y5xg",
+   "name": "ministeries van het Rijk: Volkshuisvesting en Ruimtelijke Ordening",
+   "type": "government_organization",
+   "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+   "matched_on": "category_prefix: Volkshuisvesting en Ruimtelijke Ordening"
+  },
+  {
+   "id": "entity:1f5nfunvu9qgkktch8o9",
+   "name": "Gemeente Opmeer",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0432",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:1itk312dn87xkbxjiuiv",
+   "name": "Gemeente Zwolle",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0193",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:2b9xoubx4vw61vajprgt",
+   "name": "Gemeente Stede Broec",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0532",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:3qwylntwzb4n1njy9w21",
+   "name": "Gemeente Den Helder",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0400",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:3wfpqwkpswqfw0ypgt2w",
+   "name": "Gemeente Súdwest-Fryslân",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1900",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:4canxlt65boiii3t8njd",
+   "name": "Provincie Limburg",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/provincie/pv31",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:6mks4itixtuodhbxavl3",
+   "name": "Roerdalen",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1669",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:87cnciglw93ywkdhxkgo",
+   "name": "Gemeente Leudal",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1640",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:9pxyamh1eb7ylhg7dch2",
+   "name": "Gemeente Heiloo",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0399",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:9ro78qv825c1lmn1f8kq",
+   "name": "Gemeente Medemblik",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0420",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:a75uu974dvsuos99sofm",
+   "name": "Steenwijkerland",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1708",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:aiwkl2ybvhfhqxy223oy",
+   "name": "Weert",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0988",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:b476c57p9qius9mev4pv",
+   "name": "Gemeente Roermond",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0957",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:cy044274zoa044by5tqe",
+   "name": "Gemeente Alkmaar",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0361",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:eehvt1hrkxw4on19r5s9",
+   "name": "Gemeente Enkhuizen",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0388",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:elikqexz0eyftxrsozwm",
+   "name": "Gemeente Texel",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0448",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:etwmv7krrfl95yw9x659",
+   "name": "Provincie Fryslân",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/provincie/pv21",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:f0gzb3z1obb7dpfgn8td",
+   "name": "Gemeente Schagen",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0441",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:f7st9s29fpcfpd710lzi",
+   "name": "Heerde",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0246",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:hlcguf431z6fbzxrq7qd",
+   "name": "Hoogeveen",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0118",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:hz1zmf7z80jvy8pimbvc",
+   "name": "Leudal",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1640",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:i0okcsknsvkjwp2un1kp",
+   "name": "Gemeente Hoorn",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0405",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:i4hs3vto4mnyzj2x6vke",
+   "name": "Provincie Noord-Holland",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/provincie/pv27",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:jy065833iqbmnc6fk9ro",
+   "name": "Gemeente Drechterland",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0498",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:lvlzyk2m2ymdtqwzhmpb",
+   "name": "Gemeente Roerdalen",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1669",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:mjaaltt4ceapwxqzbmcq",
+   "name": "Raalte",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0177",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:n698f2glp0qw7os1ubb6",
+   "name": "Gemeente Castricum",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0383",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:otvq5nrht53n9cp46lww",
+   "name": "Gemeente De Fryske Marren",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1940",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:p0oanoxb0spcpg2bci7u",
+   "name": "Dalfsen",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0148",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:q1oo2r3mr16cv6kih6jy",
+   "name": "Gemeente Dijk en Waard",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1980",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:qu3wi9sckfeeupn72zdb",
+   "name": "Gemeente Hollands Kroon",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1911",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:rcqkllzjy4lnmy162u47",
+   "name": "Provincie Overijssel",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/provincie/pv23",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:tyh5kktdj6np5q3t5lh6",
+   "name": "Westerveld",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1701",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:u8hi5otrko057k689lwa",
+   "name": "Gemeente Echt-Susteren",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1711",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:ukzcftxon6vxbrcys2kn",
+   "name": "Gemeente Maasgouw",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1641",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:vy0p7t5ro4m9g6o1aq6k",
+   "name": "Nederweert",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0946",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:w77ffkngm1nr7tm6jp4d",
+   "name": "Ommen",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0175",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:wny9lstlniiawoatqx5a",
+   "name": "gemeente Het Hogeland",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1966",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:xnijxw8jn4apxikab83t",
+   "name": "De Wolden",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm1690",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:yfyzqv1e2f2mdxoxlh31",
+   "name": "Gemeente Weert",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0988",
+   "matched_on": ""
+  },
+  {
+   "id": "entity:ypwsdvwf22lgnd9vo3r1",
+   "name": "Gemeente Nederweert",
+   "type": "administrative_area",
+   "uri": "https://identifier.overheid.nl/tooi/id/gemeente/gm0946",
+   "matched_on": ""
+  }
+ ],
+ "candidates": [
+  {
+   "id": "entity:82q4ugerjngeptm9b95b",
+   "name": "Economische Zaken (Ministerie)",
+   "type": "government_organization",
+   "reason": "ambiguous_multiple_candidates",
+   "candidates": [
+    {
+     "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1045",
+     "label": "Economische Zaken en Klimaat",
+     "confidence": 0.9,
+     "matched_on": "type_suffix: Economische Zaken"
+    },
+    {
+     "uri": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1040",
+     "label": "Economische Zaken",
+     "confidence": 0.99,
+     "matched_on": "type_suffix: Economische Zaken"
+    }
+   ]
+  }
+ ]
+}

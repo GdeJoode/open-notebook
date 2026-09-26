@@ -135,9 +135,24 @@ def _canonical_uri(node: Dict[str, Any]) -> str:
     return str(node.get("@id", ""))
 
 
-def _node_has_einddatum(node: Dict[str, Any]) -> bool:
-    """True when this name-version has ended (``einddatum`` present)."""
-    return bool(_first(node, "einddatum"))
+def _is_historical_version(node: Dict[str, Any]) -> bool:
+    """True for a past NAME of an organisation, not the organisation itself.
+
+    TOOI publishes a renamed organisation as one node under its canonical URI
+    (the current name) plus one ``HistorischeVersie`` node per earlier name,
+    closed with ``einddatumHV`` and pointing back via ``prov:specializationOf``.
+    ``einddatum`` is something else: the end of the ORGANISATION (VRO, mnre1171,
+    ends 2026-02-22) and it sits on the canonical node. Reading ``einddatum`` as
+    "this name has ended" — what this module did until D2 — marked every past
+    name current and made the oldest one the label (`IenW` was labelled
+    "Infrastructuur en Milieu").
+    """
+    types = node.get("@type") or []
+    if isinstance(types, str):
+        types = [types]
+    return bool(_first(node, "einddatumHV")) or any(
+        str(t).endswith("/HistorischeVersie") for t in types
+    )
 
 
 def parse_register(payload: Any, *, default_soort: str) -> List[Dict[str, str]]:
@@ -145,9 +160,11 @@ def parse_register(payload: Any, *, default_soort: str) -> List[Dict[str, str]]:
 
     Returns the provider's documented record shape (``organisatiecode`` /
     ``afkorting`` / ``naam_excl_soort`` / ``naam_incl_soort`` / ``soort`` /
-    ``aliases``), one per distinct organisatiecode. The *current* name-version
-    (no ``einddatum``) supplies the canonical name; every historical name +
-    abbreviation becomes an alias so the reconciler resolves renamed forms.
+    ``aliases``, ``begindatum``, ``einddatum``), one per distinct
+    organisatiecode. The canonical node — the organisation itself, not a
+    ``HistorischeVersie`` — supplies the current name and the organisation's own
+    begin and end dates; every historical name + abbreviation becomes an alias so
+    the reconciler resolves renamed forms.
 
     Tolerant of a malformed payload: a non-list, or nodes missing fields, yield
     fewer records rather than raising.
@@ -167,10 +184,11 @@ def parse_register(payload: Any, *, default_soort: str) -> List[Dict[str, str]]:
         code = _pick_code(uri, nodes)
         if not code:
             continue
-        # Prefer a current (not-ended) version for the canonical name; fall back
-        # to the last node if every version has ended.
-        current = [n for n in nodes if not _node_has_einddatum(n)]
-        primary = current[0] if current else nodes[-1]
+        # The canonical node carries the current name, even when the organisation
+        # itself has ended; failing that, any node that is not a past name.
+        canonical = [n for n in nodes if str(n.get("@id", "")) == uri]
+        current = [n for n in nodes if not _is_historical_version(n)]
+        primary = canonical[0] if canonical else (current[0] if current else nodes[-1])
 
         naam_excl = _first(primary, "officieleNaamExclSoort") or _first(
             primary, "voorkeursnaamExclSoort"
@@ -203,6 +221,10 @@ def parse_register(payload: Any, *, default_soort: str) -> List[Dict[str, str]]:
                 "naam_incl_soort": naam_incl or "",
                 "soort": _soort_from_uri(uri, default_soort),
                 "aliases": alias_pool,  # type: ignore[dict-item]
+                # The organisation's own lifetime, for validity at a document's
+                # date — not applied yet: the pipeline carries no document date.
+                "begindatum": _first(primary, "begindatum") or "",
+                "einddatum": _first(primary, "einddatum") or "",
             }
         )
     return records

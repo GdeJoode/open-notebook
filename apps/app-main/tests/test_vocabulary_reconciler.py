@@ -66,6 +66,13 @@ class _InMemoryReferenceRepo:
             if (source is None or src == source) and alias in (row.get("aliases") or [])
         ]
 
+    async def lookup_by_key(self, key, source=None):
+        return [
+            row
+            for (_eid, src), row in self.rows.items()
+            if (source is None or src == source) and key in (row.get("lookup_keys") or [])
+        ]
+
 
 class _BergenFetcher:
     """Bulk fetcher returning the two distinct "Bergen" gemeenten (no network)."""
@@ -309,13 +316,103 @@ async def test_a_decorated_name_whose_parts_agree_links():
 
 @pytest.mark.asyncio
 async def test_one_sided_evidence_is_recorded_for_a_curator_and_never_linked():
-    """Owner decision 2026-09-26: `BZK (…Koninkrijkrelaties)` — only BZK hits,
-    because the corpus misspells the gloss. A candidate, not a link."""
+    """Owner decision 2026-09-26: only the abbreviation hits (constructed gloss
+    that is no register name). A candidate, not a link."""
     provider = await _tooi_with(_D1_RECORDS)
-    entity = Entity(canonical_name="BZK (Binnenlandse Zaken en Koninkrijkrelaties)",
+    entity = Entity(canonical_name="BZK (Binnenlandse Zaken en Koninkrijk)",
                     entity_type="government_organization")
     result = await VocabularyReconciler([provider]).reconcile_entity(entity)
     assert result.linked is False
     assert entity.external_ids == []
     assert [c.external_id for c in result.candidates] == ["mnre1034"]
     assert "one-sided" in result.candidates[0].matched_on
+
+
+# --- D2: the threshold guard and the batch caller -----------------------------
+
+
+def test_a_threshold_that_would_link_one_sided_matches_is_refused():
+    from shared.vocabulary.tooi_provider import ONE_SIDED_CONFIDENCE
+
+    with pytest.raises(ValueError):
+        VocabularyReconciler([], confidence_threshold=ONE_SIDED_CONFIDENCE)
+    VocabularyReconciler([], confidence_threshold=0.85)  # the default is fine
+
+
+def _row(eid, name, etype, **extra):
+    return {"id": eid, "canonical_name": name, "entity_type": etype, "aliases": [], **extra}
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_reports_and_writes_nothing():
+    from app_main.services.entity_resolution.vocabulary_reconcile_service import (
+        reconcile_active_entities,
+    )
+
+    provider = await _tooi_with(_D1_RECORDS)
+    rows = [
+        _row("entity:a", "Volkshuisvesting en Ruimtelijke Ordening (Ministerie)",
+             "government_organization"),
+        # The staging defect: external_ids stored as an object.
+        _row("entity:b", "BZK", "organization", external_ids={}),
+        _row("entity:c", "Nergens Genoemd", "organization"),
+    ]
+    report = await reconcile_active_entities(
+        VocabularyReconciler([provider]), rows=rows, dry_run=True)
+    assert report.scanned == 3
+    assert {r["id"] for r in report.linked} == {"entity:a", "entity:b"}
+    assert report.by_type == {"government_organization": {"linked": 1},
+                              "organization": {"linked": 1, "no_match": 1}}
+
+
+@pytest.mark.asyncio
+async def test_a_real_run_writes_only_the_links():
+    from app_main.services.entity_resolution.vocabulary_reconcile_service import (
+        reconcile_active_entities,
+    )
+
+    writes = []
+
+    class Repo:
+        async def update_external_ids(self, entity_id, uris, aliases):
+            writes.append((entity_id, list(uris)))
+
+    provider = await _tooi_with(_D1_RECORDS)
+    rows = [
+        _row("entity:a", "VRO", "government_organization"),
+        # one-sided (constructed gloss): a candidate, so no write
+        _row("entity:b", "BZK (Binnenlandse Zaken en Koninkrijk)", "government_organization"),
+    ]
+    report = await reconcile_active_entities(
+        VocabularyReconciler([provider], entity_repo=Repo()), rows=rows, dry_run=False)
+    assert writes == [("entity:a",
+                       ["https://identifier.overheid.nl/tooi/id/ministerie/mnre1171"])]
+    assert [c["id"] for c in report.candidates] == ["entity:b"]
+
+
+@pytest.mark.asyncio
+async def test_a_name_two_municipalities_share_is_a_candidate_not_a_link():
+    """administrative_area (owner's scope): `Bergen` is two gemeenten in TOOI."""
+    from app_main.services.entity_resolution.vocabulary_reconcile_service import (
+        reconcile_active_entities,
+    )
+    from shared.vocabulary.tooi_provider import TOOIProvider
+
+    provider = TOOIProvider(_InMemoryReferenceRepo(), bulk_fetcher=_BergenFetcher())
+    await provider.refresh()
+    report = await reconcile_active_entities(
+        VocabularyReconciler([provider]),
+        rows=[_row("entity:x", "Gemeente Bergen", "administrative_area"),
+              _row("entity:y", "Bergen", "administrative_area")],
+        dry_run=True)
+    assert report.linked == []
+    # `Bergen` hits both canonical names: refused, both recorded.
+    [amb] = report.candidates
+    assert amb["id"] == "entity:y"
+    assert amb["reason"] == "ambiguous_multiple_candidates"
+    assert len(amb["candidates"]) == 2
+    # `Gemeente Bergen` matches neither: TOOI writes the incl-soort names as
+    # `gemeente Bergen (NH.)` / `(L.)`, and no rule strips `Gemeente` (D1: a type
+    # hint, never a split). It is reported as no match, not guessed.
+    assert report.by_type == {"administrative_area": {
+        "ambiguous_multiple_candidates": 1, "no_match": 1}}

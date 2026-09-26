@@ -41,11 +41,17 @@ def _org_node(
     naam_excl: str,
     naam_incl: str,
     specialization_of: str | None = None,
+    einddatum_hv: str | None = None,
     einddatum: str | None = None,
 ) -> Dict[str, Any]:
+    """TOOI's shape: a past NAME is a `HistorischeVersie` closed by `einddatumHV`
+    and pointing at the canonical URI; `einddatum` ends the ORGANISATION."""
+    types = [f"{_ONT}{klass}"]
+    if einddatum_hv is not None:
+        types.insert(0, f"{_ONT}HistorischeVersie")
     node: Dict[str, Any] = {
         "@id": f"{_ID}/{soort_path}/{node_id}",
-        "@type": [f"{_ONT}{klass}"],
+        "@type": types,
         f"{_ONT}organisatiecode": _lit(code),
         f"{_ONT}afkorting": _lit(afkorting),
         f"{_ONT}officieleNaamExclSoort": _lit(naam_excl),
@@ -57,6 +63,8 @@ def _org_node(
         node["http://www.w3.org/ns/prov#specializationOf"] = [
             {"@id": f"{_ID}/{soort_path}/{specialization_of}"}
         ]
+    if einddatum_hv is not None:
+        node[f"{_ONT}einddatumHV"] = _lit(einddatum_hv)
     if einddatum is not None:
         node[f"{_ONT}einddatum"] = _lit(einddatum)
     return node
@@ -73,8 +81,8 @@ def _metadata_node() -> Dict[str, Any]:
 
 # --- A faithful, trimmed ministries register --------------------------------
 # mnre1034 (BZK) — one current version.
-# mnre1058 (Justitie) — three versions over time (VenJ → JenV), all pointing at
-# the canonical mnre1058 via specializationOf, two of them ended.
+# mnre1058 (Justitie) — the canonical node carries the current name (JenV); two
+# past names are HistorischeVersie nodes pointing at it, closed by einddatumHV.
 _MINISTRIES: List[Dict[str, Any]] = [
     _metadata_node(),
     _org_node(
@@ -95,7 +103,7 @@ _MINISTRIES: List[Dict[str, Any]] = [
         naam_excl="Veiligheid en Justitie",
         naam_incl="ministerie van Veiligheid en Justitie",
         specialization_of="mnre1058",
-        einddatum="2017-10-26",
+        einddatum_hv="2017-10-26",
     ),
     _org_node(
         node_id="hv_002",
@@ -106,17 +114,16 @@ _MINISTRIES: List[Dict[str, Any]] = [
         naam_excl="Justitie",
         naam_incl="ministerie van Justitie",
         specialization_of="mnre1058",
-        einddatum="2010-10-13",
+        einddatum_hv="2010-10-13",
     ),
     _org_node(
-        node_id="hv_003",
+        node_id="mnre1058",
         soort_path="ministerie",
         klass="Ministerie",
         code="mnre1058",
         afkorting="JenV",
         naam_excl="Justitie en Veiligheid",
         naam_incl="ministerie van Justitie en Veiligheid",
-        specialization_of="mnre1058",
     ),
 ]
 
@@ -175,7 +182,7 @@ def test_parse_register_canonical_is_current_version():
     records = parse_register(_MINISTRIES, default_soort="ministerie")
     jus = next(r for r in records if r["organisatiecode"] == "mnre1058")
 
-    # The current (no einddatum) version is JenV / "Justitie en Veiligheid".
+    # The canonical node's name is JenV / "Justitie en Veiligheid".
     assert jus["naam_excl_soort"] == "Justitie en Veiligheid"
     assert jus["afkorting"] == "JenV"
     # Historical names + abbreviations are preserved as resolvable aliases.
@@ -270,3 +277,56 @@ async def test_fetch_records_dedupes_across_registers():
     records = await fetcher.fetch_records()
     codes = [r["organisatiecode"] for r in records]
     assert codes.count("mnre1034") == 1
+
+
+# --- D2: nodes copied from the live register, not constructed ------------------
+# rwc_ministeries_compleet v6 (repository.officiele-overheidspublicaties.nl),
+# trimmed to the fields the parser reads. The synthetic fixture above used to put
+# `einddatum` on past names, a shape TOOI does not produce, so the parser that
+# read `einddatum` passed its tests and labelled IenW "Infrastructuur en Milieu".
+
+_REAL = [
+    {"@id": "https://identifier.overheid.nl/tooi/id/ministerie/hv_06784634",
+     "@type": [f"{_ONT}HistorischeVersie", f"{_ONT}Ministerie"],
+     "http://www.w3.org/ns/prov#specializationOf": [
+         {"@id": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130"}],
+     f"{_ONT}afkorting": _lit("IenM"),
+     f"{_ONT}einddatumHV": _lit("2017-12-31"),
+     f"{_ONT}organisatiecode": _lit("mnre1130"),
+     f"{_ONT}officieleNaamExclSoort": _lit("Infrastructuur en Milieu"),
+     f"{_ONT}officieleNaamInclSoort": _lit("ministerie van Infrastructuur en Milieu")},
+    {"@id": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1130",
+     "@type": [f"{_ONT}Ministerie"],
+     f"{_ONT}afkorting": _lit("IenW"),
+     f"{_ONT}begindatum": _lit("2010-10-14"),
+     f"{_ONT}organisatiecode": _lit("mnre1130"),
+     f"{_ONT}officieleNaamExclSoort": _lit("Infrastructuur en Waterstaat"),
+     f"{_ONT}officieleNaamInclSoort": _lit("ministerie van Infrastructuur en Waterstaat")},
+    {"@id": "https://identifier.overheid.nl/tooi/id/ministerie/mnre1171",
+     "@type": [f"{_ONT}Ministerie"],
+     f"{_ONT}afkorting": _lit("VRO"),
+     f"{_ONT}begindatum": _lit("2024-07-02"),
+     f"{_ONT}einddatum": _lit("2026-02-22"),
+     f"{_ONT}organisatiecode": _lit("mnre1171"),
+     f"{_ONT}officieleNaamExclSoort": _lit("Volkshuisvesting en Ruimtelijke Ordening"),
+     f"{_ONT}officieleNaamInclSoort": _lit(
+         "ministerie van Volkshuisvesting en Ruimtelijke Ordening")},
+]
+
+
+def test_a_real_renamed_ministry_is_labelled_with_its_current_name():
+    ienw = next(r for r in parse_register(_REAL, default_soort="ministerie")
+                if r["organisatiecode"] == "mnre1130")
+    assert ienw["naam_excl_soort"] == "Infrastructuur en Waterstaat"
+    assert ienw["afkorting"] == "IenW"
+    assert {"IenM", "Infrastructuur en Milieu"} <= set(ienw["aliases"])
+
+
+def test_an_ended_organisation_keeps_its_name_and_carries_its_dates():
+    """VRO ends 2026-02-22 and is the gold for 6 of 18 ministry rows (D2
+    experiment). An ended organisation is not a past name: it stays, labelled,
+    with the dates a document-date check will need."""
+    vro = next(r for r in parse_register(_REAL, default_soort="ministerie")
+               if r["organisatiecode"] == "mnre1171")
+    assert vro["naam_excl_soort"] == "Volkshuisvesting en Ruimtelijke Ordening"
+    assert (vro["begindatum"], vro["einddatum"]) == ("2024-07-02", "2026-02-22")
