@@ -140,6 +140,40 @@ mitigation is its affix discipline and its curator queue.
 after D1.* Cheap, checkable, and it produces a stable URI — the strongest form of
 structure available here. Bounded: it reaches named things only.
 
+> **Done 2026-09-26** (merge `5ea9cff4`, three review rounds). What changed:
+> - The TOOI loader reads `einddatumHV`, so labels are current and organisation
+>   dates are carried.
+> - Migration 81: the lookup is by key (case- and spelling-tolerant), and one key
+>   on two organisations is ambiguous rather than ranked.
+> - Migration 82: `entity.external_ids` had drifted to `object` on staging, so
+>   every write failed silently.
+> - `POST /vocabulary/reconcile` (dry run by default). It refuses to run until the
+>   register is loaded in full.
+> - Migration 83: candidates become `kind = 'tooi'` rows in the one
+>   `triage_queue`, decided at `POST /triage/queue/{id}/tooi-decision` (link one
+>   or dismiss). They never touch status. A decision sticks per candidate set.
+>
+> Owner decisions:
+> - scope: `government_organization`, `organization`, `administrative_area`;
+> - statuses: `active` + `reference`;
+> - a place is linked to its municipality's record;
+> - an ended organisation is a candidate, never a link;
+> - a link writes the URI plus current names.
+>
+> Dry run on staging: ministries 9 linked, 5 candidates (4 VRO ended, 1 EZ
+> ambiguous); organisations 3; areas 41; 0 wrong.
+>
+> **Not yet on staging:** the running image predates 81–83. A real run needs a
+> rebuild, then `/vocabulary/refresh`, then reconcile with `dry_run: false`.
+>
+> **Open:**
+> - A stale open tooi row is not closed when a later run links cleanly, and a
+>   curator can then add a second URI.
+> - `candidate_key` ignores `valid_until` changes.
+> - The down migration of 83 also drops dismissals.
+> - The `(entity, kind)` index is unused by the status lookup.
+> - No document date yet, so validity at a document's time waits.
+
 **D3 — What happens to topics?** *Open, and the largest question.* No authority
 exists. The candidates are the project's own ontology (stage 15's original job,
 emitting subsumption relations rather than merges) or leaving topics

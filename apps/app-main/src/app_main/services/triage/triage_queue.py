@@ -4,15 +4,20 @@ The after-extraction pipeline surfaces edge cases (isolated core actors, well-
 connected reference candidates, every unsure_review-tier entity, match conflicts)
 into a non-blocking review queue an operator works through later. The load-bearing
 property is **idempotency**: re-running the same extraction batch must NOT grow
-the queue. So the queue is keyed on the entity — each entity has at most ONE OPEN
-row, and :meth:`TriageQueueRepository.upsert` UPDATES that row (degree / doc_count
-/ reason / batch refresh) instead of appending a duplicate.
+the queue. So the queue is keyed on the entity AND the row's ``kind`` (migration
+83) — each (entity, kind) has at most ONE OPEN row, and
+:meth:`TriageQueueRepository.upsert` UPDATES the entity's status row (degree /
+doc_count / reason / batch refresh) instead of appending a duplicate.
 
-A row leaves 'open' only via an operator decision (Q.4 router → :meth:`set_decision`);
-once decided, the entity is operator-pinned (``manual_override``) so automation
-never re-queues it. This is a thin :func:`execute_query` wrapper (no shared
-Pydantic model) mirroring :class:`StatusChangeLogRepository`; the table is declared
-in ``migrations/60.surrealql``.
+A status row leaves 'open' only via an operator decision (Q.4 router →
+:meth:`set_decision`); once decided, the entity is operator-pinned
+(``manual_override``) so automation never re-queues it. A ``tooi`` row (D2) is a
+different question — which authority record the entity is — answered link or
+dismiss, never pinning status; it is re-queued only when the candidate set
+changes (:meth:`TriageQueueRepository.upsert_tooi`). This is a thin
+:func:`execute_query` wrapper (no shared Pydantic model) mirroring
+:class:`StatusChangeLogRepository`; the table is declared in
+``migrations/60.surrealql`` and ``83.surrealql``.
 """
 
 from __future__ import annotations
