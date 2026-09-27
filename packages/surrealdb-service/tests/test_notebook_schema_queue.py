@@ -99,25 +99,15 @@ class TestMergePendingExtensions:
         ) == 0
 
     @pytest.mark.asyncio
-    async def test_a_rejected_type_does_come_back(self):
-        """Asserted so the behaviour is KNOWN, not discovered.
+    async def test_a_rejected_type_does_not_come_back(self):
+        """PC.5 (migration 84): a rejection is remembered and survives the next
+        document proposing the same type.
 
-        `reject_pending_extension` drops the row and records nothing — there is
-        no `rejected_extensions` field — so a rejected type returns the next time
-        a document proposes it. Closing that needs a new field and a migration,
-        which is a follow-up (PC.5); this test exists so the gap cannot be
-        mistaken for a guarantee.
-
-        Two reviews shaped this test. The first version could not fail at all: it
-        merged one proposal into a pristine queue and asserted the count, with no
-        rejection anywhere in it. This version walks the sequence — propose,
-        reject, propose again — but through `reject_pending_extension`, which the
-        second review pointed out has NO production caller: a curator's Reject
-        button goes through `SchemaEditService.reject_extension`, keyed on
-        `type_name`. So this pins the repository's own behaviour, and the guard
-        that follows the curator's actual path lives in app-main, in
-        `test_schema_edit_service.py::TestARejectedTypeComesBackThroughTheCuratorsOwnPath`.
-        Whichever layer PC.5 records the "no" in, one of the two fails.
+        Until PC.5 this test was `test_a_rejected_type_does_come_back`, written by
+        PC.1 so the gap could not pass for a guarantee. It walks the same
+        sequence — propose, reject, propose again — through this module's
+        `reject_pending_extension`; the curator's own path (the service) has its
+        twin in app-main.
         """
         schema = _schema()
         repo = _repo(schema)
@@ -129,13 +119,14 @@ class TestMergePendingExtensions:
 
         assert await repo.reject_pending_extension(NOTEBOOK, "pass1::method") is True
         assert _names(repo) == []
+        assert schema.rejected_extensions == ["Method"]
 
-        # The curator said no. The next document says Method again, and it is
-        # back in the queue, because nothing recorded the no.
+        # The next document says Method again — in any capitalisation — and the
+        # curator's no holds.
         assert await repo.merge_pending_extensions(
-            NOTEBOOK, [{"type_name": "Method"}]
-        ) == 1
-        assert _names(repo) == ["Method"]
+            NOTEBOOK, [{"type_name": "method "}]
+        ) == 0
+        assert _names(repo) == []
 
     # One test per refusal rule, because a review measured that bundling them
     # let two rules ride on a third: the control-character case was written

@@ -1,0 +1,4 @@
+-- Reverse of migration 84. The recorded rejections go with the field: after a
+-- down migration a rejected type can be re-queued by the next document, which is
+-- the behaviour before 84.
+REMOVE FIELD IF EXISTS rejected_extensions ON TABLE notebook_schema;
