@@ -2399,6 +2399,11 @@ class EntityExtractionService:
             metadata["filtering"] = {**previous_filtering, **stats}
         else:
             metadata["filtering"] = stats
+        # PC.5c: this run persisted again, so `persisted` (what GET /sources/{id}
+        # shows as the source's relations) must describe this run, not the first.
+        written = _persisted_counts(persist_result)
+        if written:
+            metadata["persisted"] = written
         await execute_query(
             "UPDATE extraction_result SET metadata = $metadata "
             "WHERE source_id = $source_id",

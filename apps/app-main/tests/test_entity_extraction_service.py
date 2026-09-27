@@ -1906,9 +1906,14 @@ class TestARefilterDoesNotEraseWhatItDidNotMeasure:
     """
 
     @staticmethod
-    async def _refilter(previous_metadata):
+    async def _refilter(previous_metadata, persisted=None):
         """Drive the real `run_filtering_only` and return what it wrote back."""
         svc = EntityExtractionService(source_repo=AsyncMock())
+        persistence = AsyncMock()
+        if persisted is not None:
+            persistence.persist_filtered_result.return_value = persisted
+        # An instance attribute (set in __init__): a class-level patch never reached it.
+        svc._persistence = persistence
         written = {}
 
         class _Workflow:
@@ -1939,11 +1944,24 @@ class TestARefilterDoesNotEraseWhatItDidNotMeasure:
             _Workflow,
         ), patch.object(
             EntityExtractionService, "_embed_entities", AsyncMock()
-        ), patch.object(
-            EntityExtractionService, "_persistence", AsyncMock(), create=True
         ):
             await svc.run_filtering_only(source_id="source:B")
         return written.get("metadata", {})
+
+    @pytest.mark.asyncio
+    async def test_a_refilter_replaces_what_was_persisted(self):
+        """PC.5c: `GET /sources/{id}` shows `metadata.persisted` as the source's
+        relations; after a re-filter persisted again it must describe that run."""
+        metadata = await self._refilter(
+            {"persisted": {"relations_created": 9, "relations_merged": 0}},
+            persisted={"relations_created": 2, "relations_merged": 1},
+        )
+        assert metadata["persisted"] == {"relations_created": 2, "relations_merged": 1}
+
+    @pytest.mark.asyncio
+    async def test_a_refilter_that_measured_nothing_keeps_the_old_record(self):
+        metadata = await self._refilter({"persisted": {"relations_created": 9}})
+        assert metadata["persisted"] == {"relations_created": 9}
 
     @pytest.mark.asyncio
     async def test_the_alignment_counters_survive_a_refilter(self):
