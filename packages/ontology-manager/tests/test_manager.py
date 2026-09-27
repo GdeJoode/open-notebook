@@ -220,3 +220,33 @@ class TestCreatePromptGenerator:
         prompt = generator.generate_entity_extraction_prompt()
         assert isinstance(prompt, str)
         assert "Person" in prompt
+
+
+class TestPerEntityAutoProposeIsOff:
+    """PC.5a: the evolution agent no longer proposes types unasked.
+
+    A gap is a NEW INSTANCE of a type that resolved, so a proposal built from it
+    named a new type after one entity (`Gemeente Opmeer` -> `GemeenteOpmeer`).
+    Until PC.5a `auto_propose` followed `gap_tracking_enabled`.
+    """
+
+    def setup_method(self):
+        OntologyManager.reset()
+        import ontology_manager.manager as manager_module
+        manager_module._manager = None
+
+    teardown_method = setup_method
+
+    def test_the_default_config_does_not_auto_propose(self):
+        config = OntologyManagerConfig(_env_file=None)
+        assert config.gap_auto_propose_enabled is False
+        assert config.gap_tracking_enabled is True  # gaps are still recorded
+
+    def test_the_manager_wires_the_agent_from_its_own_flag(self):
+        mgr = OntologyManager(OntologyManagerConfig(_env_file=None))
+        assert mgr.evolution.auto_propose is False
+
+    def test_it_can_still_be_turned_on_explicitly(self):
+        mgr = OntologyManager(
+            OntologyManagerConfig(_env_file=None, gap_auto_propose_enabled=True))
+        assert mgr.evolution.auto_propose is True

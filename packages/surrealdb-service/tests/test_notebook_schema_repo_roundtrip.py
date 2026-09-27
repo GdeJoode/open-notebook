@@ -532,3 +532,50 @@ async def test_set_coverage_pct_roundtrips_and_clamps(
     assert await repo.set_coverage_pct(notebook_id, 87.0) is True
     row = await repo.get_by_notebook(notebook_id)
     assert row.coverage_pct == 1.0
+
+
+# --- PC.5 / migration 84: a rejection survives persistence -------------------
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_rejected_extensions_round_trip(live_surrealdb: SurrealDBConfig) -> None:
+    """SCHEMAFULL table: without migration 84's field the value would be dropped
+    on write and the rejection would evaporate between requests."""
+    notebook_id = await _create_notebook(live_surrealdb)
+    repo = NotebookSchemaRepository(config=live_surrealdb)
+    await repo.upsert(NotebookSchema(
+        notebook=notebook_id, base_ontology="scholarly",
+        pending_extensions=[{"type_name": "Method", "extension_id": "pass1::method"}],
+    ))
+    assert await repo.reject_pending_extension(notebook_id, "pass1::method") is True
+
+    fresh = await NotebookSchemaRepository(config=live_surrealdb).get_by_notebook(notebook_id)
+    assert fresh.rejected_extensions == ["Method"]
+    assert await repo.merge_pending_extensions(notebook_id, [{"type_name": "method"}]) == 0
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_a_row_from_before_84_reads_as_no_rejections(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """THE pre-84 state: the row exists without the field (reads NONE)."""
+    from surrealdb_service.connection import execute_transaction
+    from surrealdb_service.migrations import AsyncMigration
+    from surrealdb_service.testing import fixtures as fx
+
+    def sql(down: bool) -> str:
+        return AsyncMigration.from_file(
+            fx._MIGRATIONS_DIR / f"84{'_down' if down else ''}.surrealql").sql
+
+    notebook_id = await _create_notebook(live_surrealdb)
+    await execute_transaction(sql(True), config=live_surrealdb)
+    await execute_query(
+        "CREATE notebook_schema SET notebook = type::thing($n), base_ontology = 'scholarly', "
+        "pending_extensions = [], accepted_extensions = [];",
+        {"n": notebook_id}, live_surrealdb,
+    )
+    await execute_transaction(sql(False), config=live_surrealdb)
+    schema = await NotebookSchemaRepository(config=live_surrealdb).get_by_notebook(notebook_id)
+    assert schema.rejected_extensions == []

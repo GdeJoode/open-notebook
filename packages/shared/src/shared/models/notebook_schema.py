@@ -127,6 +127,15 @@ class NotebookSchema(ObjectModel):
             "B.3b DELETE /schema/types/{type_name} endpoint."
         ),
     )
+    rejected_extensions: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Type names a curator REJECTED from the pending queue (PC.5, "
+            "migration 84). `merge_pending_extensions` skips them, so a "
+            "rejection survives the next document proposing the same type — "
+            "the same guarantee `excluded_types` gives a soft-delete."
+        ),
+    )
     last_modified_by: Optional[str] = Field(
         default=None,
         description="User id of the last editor; populated once edit-ops land in B.3b.",
@@ -154,7 +163,7 @@ class NotebookSchema(ObjectModel):
             return v
         return {}
 
-    @field_validator("excluded_types", mode="before")
+    @field_validator("excluded_types", "rejected_extensions", mode="before")
     @classmethod
     def ensure_excluded_types_list(cls, v: Any) -> List[str]:
         """Coerce a missing/null excluded_types payload to ``[]``.

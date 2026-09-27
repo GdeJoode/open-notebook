@@ -48,13 +48,12 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-
 from shared.models import NotebookSchema
 from surrealdb_service.repositories.notebook_event import NotebookEventRepository
 from surrealdb_service.repositories.notebook_schema import (
     NotebookSchemaRepository,
+    record_rejection,
 )
-
 
 SCHEMA_CHANGED_EVENT_TYPE = "schema_changed"
 
@@ -221,6 +220,10 @@ class SchemaEditService:
     ) -> NotebookSchema:
         """Remove the matching pending extension.
 
+        The rejection is remembered in ``rejected_extensions`` (PC.5), which
+        ``merge_pending_extensions`` honours, so the type does not return with
+        the next document.
+
         Idempotent: re-rejecting a name that is no longer in
         ``pending_extensions`` returns the current row with no event.
         We deliberately do NOT raise on "already gone" because the
@@ -235,6 +238,9 @@ class SchemaEditService:
         if len(remaining) == len(schema.pending_extensions):
             return schema  # idempotent no-op
         schema.pending_extensions = remaining
+        # PC.5: the "no" is recorded, so the next document proposing the same
+        # type does not put it back in the queue (migration 84).
+        record_rejection(schema, type_name)
         return await self._persist(
             schema,
             notebook_id,

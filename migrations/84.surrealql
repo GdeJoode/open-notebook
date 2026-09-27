@@ -1,0 +1,20 @@
+-- ============================================================================
+-- Migration 84: notebook_schema.rejected_extensions — a curator's "no" that
+-- survives the next document (Track PC.5).
+--
+-- `reject_extension` dropped the pending row and recorded nothing, so the next
+-- document proposing the same type put it straight back in the queue. PC.1
+-- pinned that with two tests, one per layer, so the gap could not pass for a
+-- guarantee; this closes it.
+--
+-- Same shape and semantics as `excluded_types` (migration 46), which already
+-- makes a soft-DELETE survive a re-proposal: `merge_pending_extensions` skips
+-- any name in either list, case-insensitively on the trimmed name.
+-- `option<array<string>>` because rows written before this migration read the
+-- field as NONE; the model coerces NONE to [].
+--
+-- Staging held one notebook_schema row (79 pending, 0 accepted) when this was
+-- written, and no drift on the table's fields.
+-- ============================================================================
+
+DEFINE FIELD IF NOT EXISTS rejected_extensions ON TABLE notebook_schema TYPE option<array<string>>;

@@ -23,8 +23,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-
 from shared.models import NotebookSchema, Pass1Result
+
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
 from surrealdb_service.repositories.base import BaseRepository
@@ -172,6 +172,12 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
             )
             return False
 
+        # PC.5: no back door around a curator's rejection (migration 84).
+        name = str(extension.get("type_name") or "").strip().lower()
+        if name and name in {str(t).strip().lower() for t in existing.rejected_extensions}:
+            logger.info(f"add_pending_extension: {name!r} was rejected; not re-queued")
+            return False
+
         existing.pending_extensions.append(extension)
         await self.upsert(existing)
         return True
@@ -253,15 +259,17 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
         case-insensitive on the trimmed name, because the LLM's capitalisation is
         not stable across documents.
 
-        **A REJECTED proposal is NOT remembered.** ``reject_extension`` drops the
-        row and records nothing — there is no ``rejected_extensions`` field — so a
-        type the curator rejected returns the next time a document proposes it.
-        A durable "no" needs a new field and a migration, so it is recorded as a
-        follow-up rather than half-solved here. Two tests pin it, one per layer,
-        because the repository's own `reject_pending_extension` has no production
-        caller: `test_notebook_schema_queue.py` covers this module, and
-        `test_schema_edit_service.py` covers the path a curator's Reject button
-        actually takes.
+        **A REJECTED proposal is remembered** (PC.5, migration 84) — subject to
+        the known race below: a write that read the row before the curator's
+        rejection and saves after it restores the pending row and the older
+        ``rejected_extensions``. Both
+        rejection paths — ``SchemaEditService.reject_extension``, which the
+        curator's Reject button takes, and this module's
+        ``reject_pending_extension`` — record the name in
+        ``rejected_extensions``, and this method skips it like an excluded type.
+        Until PC.5 the rejection left no trace and the type returned with the
+        next document; two tests, one per layer, pinned that and are now
+        inverted.
 
         The stored ``type_name`` is stripped, and a name that cannot survive the
         accept/reject route is refused outright: those endpoints take the name as
@@ -302,6 +310,8 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
         known = {_key(e.get("type_name")) for e in existing.pending_extensions}
         known |= {_key(e.get("type_name")) for e in existing.accepted_extensions}
         known |= {_key(t) for t in existing.excluded_types}
+        # PC.5: a curator's rejection is a "no" too (migration 84).
+        known |= {_key(t) for t in existing.rejected_extensions}
 
         added = 0
         for proposal in extensions or []:
@@ -412,9 +422,29 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
         if len(remaining) == len(existing.pending_extensions):
             return False
 
+        rejected = [
+            ext for ext in existing.pending_extensions
+            if ext.get("extension_id") == extension_id
+        ]
         existing.pending_extensions = remaining
+        for ext in rejected:
+            record_rejection(existing, ext.get("type_name"))
         await self.upsert(existing)
         return True
+
+
+def record_rejection(schema: Any, type_name: Any) -> None:
+    """Remember that a curator rejected ``type_name`` (PC.5, migration 84).
+
+    Stored trimmed, once per name case-insensitively — the key
+    ``merge_pending_extensions`` matches on. Shared by both rejection paths so
+    they cannot drift apart again.
+    """
+    name = str(type_name or "").strip()
+    if not name:
+        return
+    if name.lower() not in {str(t).strip().lower() for t in schema.rejected_extensions}:
+        schema.rejected_extensions.append(name)
 
 
 def _is_routable_type_name(name: str) -> bool:

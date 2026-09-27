@@ -713,7 +713,7 @@ def test_every_module_spells_the_reparent_discriminator_the_same_way():
         )
 
 
-class TestARejectedTypeComesBackThroughTheCuratorsOwnPath:
+class TestARejectedTypeStaysRejectedThroughTheCuratorsOwnPath:
     """PC.1 — the rejection gap, asserted where a rejection actually happens.
 
     A review found the first version of this guard living in
@@ -732,7 +732,10 @@ class TestARejectedTypeComesBackThroughTheCuratorsOwnPath:
     """
 
     @pytest.mark.asyncio
-    async def test_rejecting_leaves_no_trace_so_the_type_returns(self):
+    async def test_a_rejection_is_recorded_so_the_type_does_not_return(self):
+        """PC.5 (migration 84): inverted from PC.1's
+        `test_rejecting_leaves_no_trace_so_the_type_returns`, on the path a
+        curator's Reject button takes."""
         from surrealdb_service.repositories.notebook_schema import (
             NotebookSchemaRepository,
         )
@@ -747,25 +750,35 @@ class TestARejectedTypeComesBackThroughTheCuratorsOwnPath:
         assert await schema_repo.merge_pending_extensions(
             NOTEBOOK_ID, [{"type_name": "Method"}]
         ) == 1
-        assert [e["type_name"] for e in schema.pending_extensions] == ["Method"]
 
         # The curator rejects it, through the service the router calls.
         after = await service.reject_extension(NOTEBOOK_ID, "Method")
         assert after.pending_extensions == []
+        assert after.rejected_extensions == ["Method"]
 
-        # Nowhere in the row is there a record that "Method" was refused...
-        assert "Method" not in schema.excluded_types
-        assert not any(
-            "method" in str(v).lower()
-            for k, v in schema.metadata.items()
-            if k != "pending_extensions"
+        # The next document proposing it is refused; the rejection is persisted
+        # in the same write that removed the row.
+        assert await schema_repo.merge_pending_extensions(
+            NOTEBOOK_ID, [{"type_name": "METHOD"}]
+        ) == 0
+        assert schema.pending_extensions == []
+        persisted = schema_repo.upsert.await_args_list[-1].args[0]
+        assert persisted.rejected_extensions == ["Method"]
+
+    @pytest.mark.asyncio
+    async def test_rejecting_twice_records_once(self):
+        from surrealdb_service.repositories.notebook_schema import (
+            NotebookSchemaRepository,
         )
 
-        # ...so the next document proposing it puts it straight back.
-        assert await schema_repo.merge_pending_extensions(
-            NOTEBOOK_ID, [{"type_name": "Method"}]
-        ) == 1
-        assert [e["type_name"] for e in schema.pending_extensions] == ["Method"]
+        schema = _make_schema(pending=[{"type_name": "Method"}])
+        schema_repo = NotebookSchemaRepository()
+        schema_repo.get_by_notebook = AsyncMock(return_value=schema)
+        schema_repo.upsert = AsyncMock(return_value="notebook_schema:x")
+        service = SchemaEditService(schema_repo, AsyncMock())
+        await service.reject_extension(NOTEBOOK_ID, "Method")
+        await service.reject_extension(NOTEBOOK_ID, "Method")  # idempotent no-op
+        assert schema.rejected_extensions == ["Method"]
 
     @pytest.mark.asyncio
     async def test_an_excluded_type_does_not_come_back(self):

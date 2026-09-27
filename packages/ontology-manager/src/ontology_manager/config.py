@@ -44,6 +44,17 @@ class OntologyManagerConfig(BaseSettings):
         default=5,
         description="Frequency threshold before auto-proposing schema changes",
     )
+    gap_auto_propose_enabled: bool = Field(
+        default=False,
+        description=(
+            "Let the evolution agent turn a recurring gap into a schema_proposal "
+            "row. Off (PC.5a, owner 2026-09-27): a gap is a NEW INSTANCE of a "
+            "type that resolved (`GAP_LICENSING_CODES`), so the proposal named a "
+            "new type after one entity (`Gemeente Opmeer` -> `GemeenteOpmeer`), "
+            "and nothing read the rows. Until PC.5a this followed "
+            "gap_tracking_enabled, so tracking gaps silently meant proposing types."
+        ),
+    )
 
 
 # Global config instance
