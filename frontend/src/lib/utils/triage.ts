@@ -128,6 +128,33 @@ export function tooiCandidateLabel(c: {
   return `${c.label} (${code})${c.valid_until ? ` — ended ${c.valid_until}` : ''}`
 }
 
+/**
+ * A source title for display: the upload pipeline prefixes stored titles with a
+ * 12-hex content hash (`49b9320d0e1e__Convenant …`), which means nothing to a
+ * curator. An untitled source shows its id.
+ */
+export function sourceDisplayTitle(source: { id: string; title: string }): string {
+  const title = (source.title || '').replace(/^[0-9a-f]{12}__/, '').trim()
+  return title || source.id
+}
+
+/**
+ * The hover on a queue row's *Docs* number (Q-B1): one line per document, and a
+ * note when the live list no longer matches the triage run's `doc_count`.
+ */
+export function docsTooltipLines(
+  item: Pick<QueueItem, 'doc_count' | 'sources'>,
+): string[] {
+  const sources = item.sources ?? []
+  const lines = sources.length
+    ? sources.map(sourceDisplayTitle)
+    : ['No source document recorded']
+  if (sources.length !== item.doc_count) {
+    lines.push(`(triage counted ${item.doc_count}; ${sources.length} now)`)
+  }
+  return lines
+}
+
 /** The first `"; "`-joined clause of a (possibly multi-) reason string. */
 export function primaryReason(reason: string): string {
   const first = (reason || '').split(';')[0]?.trim()
