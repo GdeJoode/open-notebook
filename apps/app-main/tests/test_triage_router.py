@@ -18,8 +18,21 @@ from unittest.mock import AsyncMock
 from app_main.api.routers.triage import router
 from app_main.dependencies import get_entity_repo, get_triage_queue_repo
 from app_main.services.triage.triage_queue import QueueItem
+import pytest
+from app_main.services.triage import queue_sources
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def _no_source_lookup(monkeypatch):
+    """GET /queue now resolves each row's documents (Q-B1); these router tests
+    mock the queue, so the lookup is mocked too — the test that pins it overrides
+    this with its own return value."""
+    async def none(entity_ids, config=None):
+        return {}
+
+    monkeypatch.setattr(queue_sources, "sources_for_entities", none)
 
 
 def _queue_item(**over) -> QueueItem:
@@ -312,3 +325,23 @@ def test_the_queue_read_model_carries_kind_and_candidates():
     data = _make_app(queue=queue).get("/api/triage/queue").json()
     assert data["items"][0]["kind"] == "tooi"
     assert [c["uri"] for c in data["items"][0]["candidates"]] == [c["uri"] for c in _TOOI_CANDS]
+
+
+# --- Q-B1: the documents behind *Docs* -----------------------------------------
+
+
+def test_each_row_carries_its_documents(monkeypatch):
+    seen = {}
+
+    async def lookup(entity_ids, config=None):
+        seen["ids"] = list(entity_ids)
+        return {"entity:a": [{"id": "source:1", "title": "49b9320d0e1e__Convenant X"}]}
+
+    monkeypatch.setattr(queue_sources, "sources_for_entities", lookup)
+    queue = AsyncMock()
+    queue.list_open = AsyncMock(return_value=[
+        _queue_item(), _queue_item(id="triage_queue:2", entity="entity:b")])
+    items = _make_app(queue=queue).get("/api/triage/queue").json()["items"]
+    assert seen["ids"] == ["entity:a", "entity:b"]  # one batched call for the queue
+    assert items[0]["sources"] == [{"id": "source:1", "title": "49b9320d0e1e__Convenant X"}]
+    assert items[1]["sources"] == []  # an entity with no documents

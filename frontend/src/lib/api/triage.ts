@@ -39,6 +39,18 @@ export interface QueueItem {
   kind?: QueueKind
   /** A TOOI row's authority records, one of which a curator may link. */
   candidates?: TooiCandidate[]
+  /**
+   * Q-B1: the documents behind `doc_count`, read when the queue is fetched.
+   * `doc_count` is the triage run's snapshot, so the two can differ.
+   */
+  sources?: QueueSource[]
+}
+
+/** One source document of a queue row's entity (Q-B1). */
+export interface QueueSource {
+  id: string
+  /** The stored title; may carry an upload-hash prefix (`49b9…__Title`). */
+  title: string
 }
 
 export type QueueKind = 'status' | 'tooi'

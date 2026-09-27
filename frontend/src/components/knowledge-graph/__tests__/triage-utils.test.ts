@@ -22,7 +22,9 @@ import {
   primaryReason,
   statusDisplay,
   TOOI_SECTION,
+  docsTooltipLines,
   isTooiRow,
+  sourceDisplayTitle,
   tooiCandidateLabel,
   totalWeakEdges,
 } from '@/lib/utils/triage'
@@ -215,5 +217,39 @@ describe('TOOI rows (D2, migration 83)', () => {
     expect(tooiCandidateLabel(tooi.candidates![1])).toBe(
       'Economische Zaken (ministerie/mnre1040) — ended 2010-10-13',
     )
+  })
+})
+
+
+describe('Docs hover (Q-B1)', () => {
+  it('drops the upload hash prefix, and shows the id when there is no title', () => {
+    expect(
+      sourceDisplayTitle({ id: 'source:1', title: '49b9320d0e1e__Convenant Regio Deal Zuidwest-Friesland' }),
+    ).toBe('Convenant Regio Deal Zuidwest-Friesland')
+    expect(sourceDisplayTitle({ id: 'source:ghost', title: '' })).toBe('source:ghost')
+    // Only a 12-hex prefix is stripped; a title that merely contains `__` is kept.
+    expect(sourceDisplayTitle({ id: 'source:2', title: 'plan__v2' })).toBe('plan__v2')
+  })
+
+  it('lists one line per document', () => {
+    const item = queueItem({
+      doc_count: 2,
+      sources: [
+        { id: 'source:1', title: '49b9320d0e1e__Convenant A' },
+        { id: 'source:2', title: '5753cb08f382__Convenant B' },
+      ],
+    })
+    expect(docsTooltipLines(item)).toEqual(['Convenant A', 'Convenant B'])
+  })
+
+  it('says so when the live list differs from the triage snapshot', () => {
+    const item = queueItem({ doc_count: 2, sources: [{ id: 'source:1', title: 'Convenant A' }] })
+    expect(docsTooltipLines(item)).toEqual(['Convenant A', '(triage counted 2; 1 now)'])
+  })
+
+  it('says there is no document rather than showing an empty tooltip', () => {
+    expect(docsTooltipLines(queueItem({ doc_count: 0, sources: [] }))).toEqual([
+      'No source document recorded',
+    ])
   })
 })

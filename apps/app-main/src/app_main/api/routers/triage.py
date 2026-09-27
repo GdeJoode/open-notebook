@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from surrealdb_service.repositories import EntityRepository
 
 from app_main.dependencies import get_entity_repo, get_triage_queue_repo
+from app_main.services.triage import queue_sources
 from app_main.services.triage.backbone_check import BackboneCheckService
 from app_main.services.triage.signals_service import TriageSignalsService
 from app_main.services.triage.status_assignment_service import (
@@ -65,6 +66,9 @@ class QueueItemOut(BaseModel):
     #: A TOOI row's authority records: uri, label, valid_until, confidence,
     #: matched_on, current_names.
     candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    #: Q-B1: the documents behind *Docs* — ``{id, title}``, read NOW, while
+    #: ``doc_count`` is the triage run's snapshot (the two can differ).
+    sources: List[Dict[str, str]] = Field(default_factory=list)
 
     @classmethod
     def from_item(cls, item: QueueItem) -> "QueueItemOut":
@@ -191,9 +195,14 @@ async def get_queue(
 ) -> QueueResponse:
     """Return the triage review queue (open rows by default)."""
     items = await (queue.list_all() if include_all else queue.list_open())
-    return QueueResponse(
-        count=len(items), items=[QueueItemOut.from_item(i) for i in items]
-    )
+    # One batched lookup for the whole queue (Q-B1): the hover on *Docs*.
+    sources = await queue_sources.sources_for_entities([i.entity for i in items])
+    out = []
+    for i in items:
+        row = QueueItemOut.from_item(i)
+        row.sources = sources.get(i.entity, [])
+        out.append(row)
+    return QueueResponse(count=len(out), items=out)
 
 
 @router.post("/queue/{queue_id:path}/decision", response_model=DecisionResponse)

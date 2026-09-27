@@ -10,6 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   useDecideQueueRow,
   useDecideTooiRow,
@@ -18,6 +19,7 @@ import {
 import type { QueueItem, TooiDecisionInput } from '@/lib/api/triage'
 import {
   buildDecision,
+  docsTooltipLines,
   groupByReason,
   isTooiRow,
   tooiCandidateLabel,
@@ -166,7 +168,25 @@ export default function TriageQueuePage() {
                               {item.structural_degree}
                             </td>
                             <td className="p-3 text-muted-foreground tabular-nums">
-                              {item.doc_count}
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span
+                                    tabIndex={0}
+                                    className="cursor-help underline decoration-dotted underline-offset-4"
+                                    data-testid={`triage-docs-${item.id}`}
+                                    aria-label={`${item.doc_count} documents: ${docsTooltipLines(item).join('; ')}`}
+                                  >
+                                    {item.doc_count}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent side="right" className="max-w-sm">
+                                  <ul className="space-y-0.5 text-xs">
+                                    {docsTooltipLines(item).map((line) => (
+                                      <li key={line}>{line}</li>
+                                    ))}
+                                  </ul>
+                                </TooltipContent>
+                              </Tooltip>
                             </td>
                             <td className="p-3 text-xs text-muted-foreground max-w-xs">
                               {isTooiRow(item) ? (
