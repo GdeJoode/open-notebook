@@ -163,8 +163,17 @@ structure available here. Bounded: it reaches named things only.
 > Dry run on staging: ministries 9 linked, 5 candidates (4 VRO ended, 1 EZ
 > ambiguous); organisations 3; areas 41; 0 wrong.
 >
-> **Not yet on staging:** the running image predates 81–83. A real run needs a
-> rebuild, then `/vocabulary/refresh`, then reconcile with `dry_run: false`.
+> **On staging 2026-09-27:**
+> - Image rebuilt; migrations 81–83 ran clean: version 83, all 5,500
+>   `external_ids` are arrays, 1,242 queue rows are `kind = 'status'`.
+> - `/vocabulary/refresh` loaded 1,438 TOOI rows, all keyed.
+> - The route's dry run was identical to the committed one (same counts, same 53
+>   links, same 5 candidates).
+> - The real run wrote 53 links (0 failed) and queued 5 tooi rows. The status rows
+>   were untouched.
+> - A second real run was idempotent: 5 tooi rows, no entity with more than one
+>   URI.
+> - Backup taken before the run: `surreal_data_backup_2026-09-27_pre81`.
 >
 > **Open:**
 > - A stale open tooi row is not closed when a later run links cleanly, and a
