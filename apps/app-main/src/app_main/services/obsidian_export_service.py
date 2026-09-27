@@ -485,6 +485,7 @@ class ObsidianExportService:
                     "dropped_relations": dropped_relations,
                     **error_payload,
                 }
+            # Read back by export_history ("last export" line, PC.5c).
             await record_metric(
                 "export.obsidian",
                 payload,
@@ -675,6 +676,7 @@ class ObsidianExportService:
                     "vault_path_redacted": True,
                     **error_payload,
                 }
+            # Read back by export_history ("last export" line, PC.5c).
             await record_metric(
                 "export.obsidian",
                 payload,

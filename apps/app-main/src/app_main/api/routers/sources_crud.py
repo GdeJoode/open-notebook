@@ -274,17 +274,24 @@ async def get_source(
                 _first.get("count", 0) if isinstance(_first, dict) else (_first or 0)
             )
 
-        # relation_count remains read from extraction_result: relations do not
-        # carry the source on the edge, so a live source-scoped count is not
-        # straightforward here.
+        # relation_count is read from extraction_result: relations do not carry
+        # the source on the edge, so a live source-scoped count is not
+        # straightforward here. PC.5c: NOT its `relation_count`, which is the
+        # raw pre-filter extraction (the row is the re-filter cache), but
+        # `metadata.persisted` — the relations persistence wrote (created) or
+        # reinforced (merged). A row without it (filtering skipped, or written
+        # before PC.1b) has no measured graph count: 0, which the UI hides.
         extraction_rows = await execute_query(
-            "SELECT relation_count FROM extraction_result "
+            "SELECT metadata.persisted AS persisted FROM extraction_result "
             "WHERE source_id = $source_id LIMIT 1",
             {"source_id": str(source.id or source_id)},
         )
         relation_count = 0
         if extraction_rows:
-            relation_count = extraction_rows[0].get("relation_count", 0) or 0
+            persisted = extraction_rows[0].get("persisted") or {}
+            relation_count = int(persisted.get("relations_created") or 0) + int(
+                persisted.get("relations_merged") or 0
+            )
 
         return SourceResponse(
             id=source.id or "",

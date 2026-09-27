@@ -270,8 +270,8 @@ async def get_extraction_result(
 
     ``entities``, ``relations`` and their counts are the RAW extraction, before
     filtering: the row is the re-filter cache, and no path rewrites its entities
-    after filtering. ``entities_stage`` says so (PC.5c); ``metadata.filtering``
-    and ``metadata.persisted`` describe what was kept and written.
+    after filtering. ``metadata.filtering`` and ``metadata.persisted`` describe
+    what was kept and written (PC.5c).
     """
     try:
         source = await source_svc.get(source_id)
@@ -291,7 +291,6 @@ async def get_extraction_result(
                 "metadata": {},
                 "entity_count": 0,
                 "relation_count": 0,
-                "entities_stage": "pre_filter",
             }
         row = rows[0]
         return {
@@ -300,9 +299,6 @@ async def get_extraction_result(
             "metadata": row.get("metadata", {}),
             "entity_count": row.get("entity_count", 0),
             "relation_count": row.get("relation_count", 0),
-            # Every row ever written holds the pre-filter set (see docstring),
-            # including rows from before `_save_result` recorded the label.
-            "entities_stage": "pre_filter",
         }
     except HTTPException:
         raise

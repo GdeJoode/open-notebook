@@ -65,6 +65,63 @@ async def test_the_bare_id_finds_the_same_rows(bound_metrics):
     assert len(await read_export_history(f"notebook:{bare}", config=bound_metrics)) == 1
 
 
+
+class _Down:
+    """A repository whose every call fails, as a lost database connection does."""
+
+    def __getattr__(self, name):
+        async def _fail(*a, **k):
+            raise RuntimeError("database unavailable")
+
+        return _fail
+
+
+async def _run_jsonl(nb):
+    from app_main.services.jsonl_export_service import JsonlExportService
+    from shared.models.export import JsonlExportRequest
+
+    async for _ in JsonlExportService(_Down()).stream_jsonl(nb, JsonlExportRequest()):
+        pass
+
+
+async def _run_networkx(nb):
+    from app_main.services.networkx_export_service import NetworkxExportService
+    from shared.models.export import NetworkxExportRequest
+
+    await NetworkxExportService(_Down()).export(nb, NetworkxExportRequest(format="graphml"))
+
+
+async def _run_obsidian(nb):
+    from app_main.services.obsidian_export_service import ObsidianExportService
+    from shared.models.export import ObsidianExportRequest
+
+    await ObsidianExportService(_Down()).export(nb, ObsidianExportRequest())
+
+
+async def _run_okf(nb):
+    from app_main.services.okf_export_service import OkfExportService
+    from shared.models.export import ObsidianExportRequest
+
+    await OkfExportService(_Down(), _Down()).export(nb, ObsidianExportRequest())
+
+
+@pytest.mark.requires_docker
+@pytest.mark.parametrize("fmt, run", [
+    ("jsonl", _run_jsonl), ("networkx", _run_networkx),
+    ("obsidian", _run_obsidian), ("okf", _run_okf),
+])
+async def test_every_exporter_records_its_failure(bound_metrics, fmt, run):
+    """Derived, not sampled: each of the four real exporters, driven into failure.
+
+    NetworkX recorded nothing on failure, so its "last export" line showed the
+    previous success after a failed run."""
+    nb = f"notebook:{uuid.uuid4().hex[:8]}"
+    with pytest.raises(Exception):
+        await run(nb)
+    [last] = await read_export_history(nb, [fmt], limit=1, config=bound_metrics)
+    assert last["error"] and "database unavailable" in last["error"]
+
+
 def _client(monkeypatch, notebook_exists=True, rows=()):
     seen = {}
 

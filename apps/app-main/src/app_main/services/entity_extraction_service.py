@@ -2411,11 +2411,11 @@ class EntityExtractionService:
     async def _save_result(self, source_id: str, result) -> None:
         """Persist extraction result to SurrealDB.
 
-        ``entities``/``relations`` are the RAW extraction, before filtering —
-        this row is the re-filter cache (``run_filtering_only`` reads it), while
-        ``metadata.filtering`` describes the filtered set. PC.5c labels that in
-        the row (``metadata.entities_stage``) so a reader cannot take the stored
-        entities for the ones that reached the graph.
+        ``entities``/``relations`` and their counts are the RAW extraction,
+        before filtering — this row is the re-filter cache
+        (``run_filtering_only`` reads it). What reached the graph is
+        ``metadata.persisted``; a reader that shows a graph count must use that
+        (PC.5c: ``GET /sources/{id}`` did not).
         """
         try:
             await execute_query(
@@ -2435,7 +2435,7 @@ class EntityExtractionService:
                     "source_id": source_id,
                     "entities": [e.model_dump() for e in result.entities],
                     "relations": [r.model_dump() for r in result.relations],
-                    "metadata": {**result.metadata, "entities_stage": "pre_filter"},
+                    "metadata": result.metadata,
                     "entity_count": result.entity_count,
                     "relation_count": result.relation_count,
                 },

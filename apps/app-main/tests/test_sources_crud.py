@@ -107,7 +107,7 @@ class TestGetSourceEntityCount:
         _patch_execute_query(
             monkeypatch,
             entity_count=42,
-            extraction_rows=[{"relation_count": 7}],
+            extraction_rows=[{"persisted": {"relations_created": 5, "relations_merged": 2}}],
         )
         client = _make_app(svc)
 
@@ -116,8 +116,21 @@ class TestGetSourceEntityCount:
         assert resp.status_code == 200
         data = resp.json()
         assert data["entity_count"] == 42
-        # relation_count still reads from extraction_result.
+        # relation_count is what persistence wrote (PC.5c), from extraction_result.
         assert data["relation_count"] == 7
+
+    def test_relation_count_is_not_the_raw_extraction(self, monkeypatch):
+        """PC.5c: a row without `metadata.persisted` has no graph count.
+
+        `extraction_result.relation_count` is the pre-filter extraction; showing
+        it as the source's relations reported relations that never reached the
+        graph."""
+        svc = AsyncMock()
+        svc.get.return_value = _fake_source()
+        svc.get_embedding_count.return_value = 0
+        _patch_execute_query(monkeypatch, entity_count=3, extraction_rows=[{"persisted": None}])
+        data = _make_app(svc).get(f"/api/sources/{SOURCE_ID}").json()
+        assert data["relation_count"] == 0
 
     def test_no_entities_returns_zero(self, monkeypatch):
         """Empty live count (GROUP ALL returns []) → entity_count 0."""

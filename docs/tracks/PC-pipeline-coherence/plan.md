@@ -364,6 +364,12 @@ filter, and a refusal on a database that predates 79.
   holds.
 - **Watch**: stage 10 is also where the automatic alias registration lives, so
   PC.2's policy decision lands before this is switched on.
+- **Carried to the re-enable (from PC.5c, 2026-09-27):** concept alignment
+  cannot run without stage 10, so its report has no reader today. The change
+  that switches stage 10 back on must also give that report a reader. That means
+  `verdict_counts`, `method_counts`, `reason_counts` and `capped_type_fetches`,
+  plus the 7 keys already copied into `metadata.filtering`, which nothing in the
+  UI reads.
 
 ## PC.7 — The extraction service's boundaries — NOT STARTED
 
@@ -468,11 +474,21 @@ different canonical bucket depending on the document. In the measured corpus,
 >   reads the `export.*` rows. The JSONL, NetworkX, Obsidian and OKF export
 >   surfaces each show a "Last export" line: when, what was written, or that the
 >   run failed and why.
-> - **`extraction_result` is labelled.** It stores the RAW extraction by design:
->   it is the re-filter cache, and no path rewrites its entities after filtering.
->   So this is not a persistence bug. `_save_result` writes
->   `metadata.entities_stage = "pre_filter"`, and `GET .../extraction-result`
->   returns it for every row.
+>   - NetworkX recorded nothing on failure, so its line showed the previous
+>     success. It now records the failure.
+>   - A test drives each of the four real exporters into failure.
+> - **`extraction_result`: pre-filter by design, and one reader got it wrong.**
+>   The row stores the RAW extraction; it is the re-filter cache, and no path
+>   rewrites its entities after filtering.
+>   - Readers: `run_filtering_only`, `GET .../extraction-result` (no UI
+>     caller), `GET /sources/{id}`, and the scripts `pc1b_handoff_probe.py` and
+>     `diag_relation_persist.py`.
+>   - `GET /sources/{id}` showed the raw `relation_count` as the source's
+>     relations (pipeline completion tab). It now reads `metadata.persisted`
+>     (created + merged). A row without that key has no measured count and
+>     shows none.
+>   - No stored label: it would have had no reader. The two routes' docstrings
+>     state the stage.
 > - **Alignment keys: not copied, measured.** `verdict_counts`,
 >   `method_counts`, `reason_counts` and `capped_type_fetches` stay on
 >   `concept_alignment_report`.
@@ -482,8 +498,16 @@ different canonical bucket depending on the document. In the measured corpus,
 >   - Nothing in the UI reads `metadata.filtering`: the only reader is the API
 >     route plus `scripts/pc1b_handoff_probe.py`.
 >
->   Copying the keys would add a producer without a consumer. When alignment
->   is switched back on (PC.4), its report gets a reader in the same change.
+>   Copying the keys would add a producer without a consumer. The obligation to
+>   give the report a reader is recorded where alignment would come back: PC.3,
+>   under "Carried to the re-enable". This is a deferral, not "rendered or
+>   deleted"; the owner may still overrule it.
+>   Known minors, not fixed:
+>   - A vault-mode Obsidian error string can contain the vault path (the route
+>     already echoes such errors).
+>   - The "Last export" line refreshes when the surface reopens, not while it
+>     stays open.
+>   - `metrics` has no index on `notebook`.
 
 **Also owned here (from PC.1's review)**: a durable "no". `reject_extension`
 records nothing, so a rejected proposal is re-queued by the next document that

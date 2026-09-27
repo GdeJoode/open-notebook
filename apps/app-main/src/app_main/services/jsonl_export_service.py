@@ -365,6 +365,7 @@ class JsonlExportService:
                     "filter_applied": request.filter.model_dump(mode="json"),
                     **error_payload,
                 }
+            # Read back by export_history ("last export" line, PC.5c).
             await record_metric(
                 "export.jsonl",
                 metric_payload,
