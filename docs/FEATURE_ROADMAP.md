@@ -286,6 +286,8 @@ Document ─► Detector (bestaand) ─► Pass 1 (LLM, lichtgewicht)
 
 ## Track C — Content quality (Writer-Evaluator-Editor + markdown lint)
 
+> **Status**: ⏸ **UITGESTELD (2026-09-28, owner)** — open-notebook is voor het extraheren en administreren van bronmateriaal; content checken gebeurt in Obsidian + Claude. Niet starten zonder nieuw besluit.
+
 ### C1 — Writer-Evaluator-Editor chain voor summaries
 
 **Bron**: 🅑 wiki_llm `src/pipeline.py` generate-stage.
@@ -424,6 +426,8 @@ replaces — the graph/search/provenance substrate.
 ---
 
 ## Track E — Research workflows (E1 + E3 first, E2 later)
+
+> **Status**: ⏸ **UITGESTELD (2026-09-28, owner)** — open-notebook is voor het extraheren en administreren van bronmateriaal; workflow-organisatie gebeurt in Obsidian + Claude. Niet starten zonder nieuw besluit.
 
 ### E1 — Single-agent research
 

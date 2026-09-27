@@ -30,9 +30,9 @@ phase merge.
 |---|---|---|:---:|---|---|
 | **A** — mineru | Ingestion robustness (MinerU + fallback) | ✅ CLOSED | yes | 2026-06-04 | A3 (markitdown) = optional follow-up, not blocking |
 | **B** — kg-quality | Multi-schema KG extraction + discipline | ✅ CLOSED | yes | 2026-06-12 | RETRO present |
-| **C** — content-quality | Writer-Evaluator-Editor + markdown lint | 🕗 NOT STARTED | no | — | Roadmap entry only |
+| **C** — content-quality | Writer-Evaluator-Editor + markdown lint | ⏸ PARKED | no | 2026-09-28 | Deferred by owner: open-notebook extracts and administers source material; content checking lives in Obsidian + Claude |
 | **D** — output-richness | Obsidian / TTL / JSONL / NetworkX export | ✅ CLOSED | yes | 2026-06-16 | RETRO present |
-| **E** — research-workflows | E1 single-agent + E3 thesis-mode | 🕗 NOT STARTED | no | — | Roadmap entry only |
+| **E** — research-workflows | E1 single-agent + E3 thesis-mode | ⏸ PARKED | no | 2026-09-28 | Deferred by owner: workflow organising lives in Obsidian + Claude |
 | **F** — operations | Audit, librarian, resumable jobs | 🚢 SHIPPED | yes | 2026-07-24 | F.1–F.8 merged (`#58`–`#64` + docs); see `F-operations/{status,RETRO}.md`. F.7b (`chunked` split) deferred |
 | **G** — agent-integration | Headless mode + REST agent API | 🚢 SHIPPED | yes | 2026-07-25 | G.1–G.7 merged (`#67`–`#75`) + security fix `#72`; see `G-agent-integration/{status,RETRO}.md`. Unblocks Track H |
 | **H** — vision-parser | Vision-model parser tier | 🔨 IN PROGRESS (prereq) | partial | 2026-07-25 | Prereq "per-segment confidence" started: **H0.1 per-page scoring SHIPPED (#77)**. **Resume at H0.2** (hybrid page-merge) — see `H-vision-parser/confidence-granularity-plan.md` ▶ RESUME HERE. Vision tier (H1–H3) still gated on 2 user decisions (YAGNI + model choice) |
