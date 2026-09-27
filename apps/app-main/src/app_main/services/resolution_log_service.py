@@ -69,11 +69,12 @@ class ResolutionLogService:
         return items, total
 
     async def get_candidate(self, candidate_id: str) -> dict[str, Any] | None:
-        """Get a single resolution log entry."""
-        result = await execute_query(
-            "SELECT * FROM $id",
-            {"id": ensure_record_id(candidate_id)},
-        )
+        """Get a single resolution log entry; ``None`` for a malformed id too."""
+        try:
+            rid = ensure_record_id(candidate_id)
+        except ValueError:
+            return None
+        result = await execute_query("SELECT * FROM $id", {"id": rid})
         return result[0] if result else None
 
     async def update_status(
