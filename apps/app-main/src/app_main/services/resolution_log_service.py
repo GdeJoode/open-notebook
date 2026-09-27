@@ -8,7 +8,11 @@ exposes it for the review UI.
 
 from typing import Any
 
-from surrealdb_service.connection import execute_query
+from surrealdb_service.connection import ensure_record_id, execute_query
+
+
+class MergeRecordImmutable(Exception):
+    """The row records an applied merge; its status is not a decision to change."""
 
 
 class ResolutionLogService:
@@ -55,32 +59,42 @@ class ResolutionLogService:
             params,
         )
 
-        items = items_result[0] if items_result else []
-        total = count_result[0][0].get("total", 0) if count_result and count_result[0] else 0
+        # `execute_query` returns the rows themselves. This read `[0]` and
+        # `[0][0]` as if it returned one list per statement, which raised
+        # KeyError on the first real row — unnoticed while the table had no
+        # writer (PC.5b gave it one).
+        items = list(items_result or [])
+        total = int(count_result[0].get("total", 0)) if count_result else 0
 
         return items, total
 
     async def get_candidate(self, candidate_id: str) -> dict[str, Any] | None:
-        """Get a single resolution log entry."""
-        result = await execute_query(
-            "SELECT * FROM $id",
-            {"id": candidate_id},
-        )
-        if result and result[0]:
-            return result[0][0]
-        return None
+        """Get a single resolution log entry; ``None`` for a malformed id too."""
+        try:
+            rid = ensure_record_id(candidate_id)
+        except ValueError:
+            return None
+        result = await execute_query("SELECT * FROM $id", {"id": rid})
+        return result[0] if result else None
 
     async def update_status(
         self, candidate_id: str, status: str
     ) -> dict[str, Any] | None:
-        """Accept or reject a resolution log entry."""
+        """Accept or reject a resolution log entry.
+
+        Raises :class:`MergeRecordImmutable` for the record of an applied merge
+        (``winner_id`` set, PC.5b): rejecting it would not undo the merge.
+        """
+        row = await self.get_candidate(candidate_id)
+        if not row:
+            return None
+        if row.get("winner_id"):
+            raise MergeRecordImmutable(candidate_id)
         result = await execute_query(
             "UPDATE $id SET status = $status, reviewed_at = time::now() RETURN AFTER",
-            {"id": candidate_id, "status": status},
+            {"id": ensure_record_id(candidate_id), "status": status},
         )
-        if result and result[0]:
-            return result[0][0]
-        return None
+        return result[0] if result else None
 
     async def bulk_update_status(
         self, candidate_ids: list[str], status: str
@@ -88,7 +102,10 @@ class ResolutionLogService:
         """Bulk accept/reject resolution log entries."""
         updated = 0
         for cid in candidate_ids:
-            result = await self.update_status(cid, status)
+            try:
+                result = await self.update_status(cid, status)
+            except MergeRecordImmutable:
+                continue  # a merge record is not a decision to revisit
             if result:
                 updated += 1
         return updated
@@ -99,9 +116,7 @@ class ResolutionLogService:
             "SELECT match_method FROM resolution_log GROUP BY match_method",
             {},
         )
-        if result and result[0]:
-            return [r.get("match_method", "") for r in result[0]]
-        return []
+        return [r.get("match_method", "") for r in result or []]
 
     async def get_stats(self) -> dict[str, Any]:
         """Get resolution log summary statistics."""
@@ -116,6 +131,6 @@ class ResolutionLogService:
             FROM resolution_log GROUP ALL""",
             {},
         )
-        if result and result[0]:
-            return result[0][0]
+        if result:
+            return result[0]
         return {"total": 0, "matches": 0, "pending": 0, "accepted": 0, "rejected": 0, "auto_accepted": 0}

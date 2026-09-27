@@ -47,7 +47,9 @@ export function OkfImportDialog({
   notebookId,
 }: OkfImportDialogProps) {
   const [file, setFile] = useState<File | null>(null)
-  const [applyDedup, setApplyDedup] = useState(true)
+  // PC.5b: off by default — the auto band merges unattended; an import now
+  // proposes and a curator applies from the resolution page. Opt-in stays.
+  const [applyDedup, setApplyDedup] = useState(false)
   const [successReport, setSuccessReport] = useState<OkfImportReport | null>(
     null,
   )
@@ -59,7 +61,7 @@ export function OkfImportDialog({
   useEffect(() => {
     if (open) {
       setFile(null)
-      setApplyDedup(true)
+      setApplyDedup(false) // PC.5b: the reset must match the default
       setSuccessReport(null)
     }
   }, [open])
@@ -137,7 +139,8 @@ export function OkfImportDialog({
                 data-testid="okf-import-dedup-switch"
               />
               <Label htmlFor={dedupId} className="text-sm cursor-pointer">
-                Match against existing entities (recommended)
+                Auto-merge high-confidence duplicates on import (otherwise
+                they wait on the Entity Resolution page)
               </Label>
             </div>
 

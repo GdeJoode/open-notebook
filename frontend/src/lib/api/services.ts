@@ -236,9 +236,6 @@ export const getDuplicates = (params?: {
 }) =>
   apiClient.get('/services/duplicates', { params }).then(r => r.data)
 
-export const mergeEntities = (canonical_id: string, duplicate_id: string) =>
-  apiClient.post('/services/merge', { canonical_id, duplicate_id }).then(r => r.data)
-
 // Summarization
 export const summarizeDocument = (req: SummarizeRequest) =>
   apiClient.post('/services/summarize', req).then(r => r.data)

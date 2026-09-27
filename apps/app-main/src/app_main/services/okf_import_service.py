@@ -80,6 +80,7 @@ from app_main.services.entity_persistence_service import (
     EntityPersistenceService,
     _resolve_entity_type,
 )
+from app_main.services.entity_resolution import merge_audit
 from app_main.services.okf_export_service import RESERVED_STEMS
 from app_main.services.vault_sync_service import _parse_frontmatter
 
@@ -555,7 +556,10 @@ class OkfImportService:
         source: Union[str, Path, Mapping[str, str], bytes],
         *,
         notebook_id: Optional[str] = None,
-        apply_dedup: bool = True,
+        # PC.5b: off by default. Since PC.2 fold-equal pairs of one type are the
+        # auto_merge band, so an import used to merge them unattended; an import
+        # now proposes, and a curator applies (resolution page). Opt-in stays.
+        apply_dedup: bool = False,
     ) -> OkfImportReport:
         """Parse + persist a bundle, returning a counts/skip report.
 
@@ -818,6 +822,18 @@ class OkfImportService:
                 result = await self._recanon.apply_merge(candidate.to_merge_cluster())
                 if not result.skipped:
                     merges += 1
+                    # PC.5b: an unattended merge is logged like any other, as
+                    # `auto_merge:<method>` — it used to leave no trace.
+                    names = {candidate.id_a: candidate.name_a, candidate.id_b: candidate.name_b}
+                    types = {candidate.id_a: candidate.entity_type,
+                             candidate.id_b: candidate.entity_type_b or candidate.entity_type}
+                    await merge_audit.record_merges(
+                        winner_id=candidate.winner_id,
+                        merged_loser_ids=result.merged_loser_ids,
+                        names=names, types=types, origin=merge_audit.AUTO_MERGE,
+                        method=candidate.method, score=candidate.score,
+                        evidence=candidate.evidence or None,
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "OKF import: apply_merge failed for {a}/{b}: {e}",

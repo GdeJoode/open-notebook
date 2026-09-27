@@ -36,6 +36,8 @@ export function buildApplyCluster(
     winner_id: winnerId,
     loser_ids,
     member_surface_forms: cluster.member_surface_forms,
+    origin: 'curator_approved',
+    method: 'recanonicalization_plan',
   }
 }
 
@@ -112,6 +114,13 @@ export function candidateToApplyCluster(
     winner_id: candidate.winner_id,
     loser_ids: [candidate.loser_id],
     member_surface_forms: [candidate.name_a, candidate.name_b],
+    // PC.5b: a human approved it, whichever band proposed it; the method and
+    // evidence travel into the resolution log.
+    origin: 'curator_approved',
+    method: candidate.method,
+    score: candidate.score,
+    evidence: candidate.evidence || undefined,
+    cross_type: isCrossTypeCandidate(candidate),
   }
 }
 

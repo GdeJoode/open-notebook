@@ -447,6 +447,21 @@ different canonical bucket depending on the document. In the measured corpus,
 >   `ontology_gap`/`schema_proposal` are therefore unreachable in production, and
 >   nothing reads or writes them there. New types reach the curator through Pass 1,
 >   whose door works. The real "no type" signal moved to PC.4.
+>
+> **PC.5b done 2026-09-27** (the merge door, two review rounds).
+> - **Server-side merge guard:** `POST /entity-resolution/apply` validates before
+>   it merges. Ids must exist; the winner must be active, a loser active or merged;
+>   types must match unless `cross_type`, which is curator-only; no id may repeat.
+>   `origin` is required and client-stated.
+> - **Every merge is logged:** each merge writes a `resolution_log` row with
+>   `origin:method`. Migration 85 adds `winner_id`/`loser_id`, and a merge row
+>   cannot change status.
+> - **OKF import:** it no longer merges by default (route, dialog, service, MCP).
+>   The auto band is rendered on the resolution page.
+> - **Removed:** the `/api/services/merge` proxy (unvalidated, unlogged, no caller).
+> - **Known, out of scope:** the extraction service's own `POST /merge`
+>   (`services/extraction/api.py`) is still an unvalidated, unlogged merge,
+>   reachable from the host on port 8103. Nothing in the app calls it.
 
 **Also owned here (from PC.1's review)**: a durable "no". `reject_extension`
 records nothing, so a rejected proposal is re-queued by the next document that

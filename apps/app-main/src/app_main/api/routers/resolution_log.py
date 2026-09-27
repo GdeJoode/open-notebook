@@ -5,7 +5,10 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app_main.services.resolution_log_service import ResolutionLogService
+from app_main.services.resolution_log_service import (
+    MergeRecordImmutable,
+    ResolutionLogService,
+)
 
 router = APIRouter(prefix="/resolution-log", tags=["resolution-log"])
 
@@ -100,7 +103,13 @@ async def update_entry_status(
     """Accept or reject a resolution log entry."""
     if status not in ("accepted", "rejected"):
         raise HTTPException(status_code=422, detail="Status must be 'accepted' or 'rejected'")
-    result = await svc.update_status(entry_id, status)
+    try:
+        result = await svc.update_status(entry_id, status)
+    except MergeRecordImmutable:
+        raise HTTPException(
+            status_code=409,
+            detail="This row records an applied merge; its status cannot be changed",
+        )
     if not result:
         raise HTTPException(status_code=404, detail="Entry not found")
     return result

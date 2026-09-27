@@ -1,0 +1,4 @@
+-- Reverse of migration 85. Merge records lose their ids and can then be
+-- flipped to rejected again, which is the behaviour before 85.
+REMOVE FIELD IF EXISTS loser_id ON TABLE resolution_log;
+REMOVE FIELD IF EXISTS winner_id ON TABLE resolution_log;

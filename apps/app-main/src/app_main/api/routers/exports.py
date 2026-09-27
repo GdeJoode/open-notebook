@@ -576,11 +576,13 @@ async def import_notebook_okf(
         ..., description="An OKF v0.1 Knowledge Bundle as a .zip archive."
     ),
     apply_dedup: bool = Query(
-        True,
+        False,
         description=(
             "Run the K.5 propose + K.3 auto-merge dedup pass after "
             "persistence so an imported entity is matched against the "
-            "existing graph, not duplicated. Idempotent."
+            "existing graph, not duplicated. Idempotent. Off by default "
+            "(PC.5b): the auto band merges unattended, so an import "
+            "proposes and a curator applies; each merge is logged."
         ),
     ),
     notebook_service: NotebookService = Depends(get_notebook_service),

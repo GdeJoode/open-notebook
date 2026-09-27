@@ -37,6 +37,17 @@ export interface ApplyClusterInput {
   winner_id: string
   loser_ids: string[]
   member_surface_forms?: string[]
+  /**
+   * PC.5b: who decided this merge — required by the server and written to the
+   * resolution log. Everything this UI applies is `curator_approved`: a human
+   * clicked approve, whichever band proposed it.
+   */
+  origin: 'curator_approved' | 'auto_merge'
+  method?: string
+  score?: number
+  evidence?: string
+  /** A merge across entity types must say so (only a curator may make one). */
+  cross_type?: boolean
 }
 
 export interface ApplyResult {

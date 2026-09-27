@@ -84,11 +84,15 @@ export function ResolutionLogTab() {
     })
   }
 
+  // PC.5b: the record of an applied merge is not a decision to accept or
+  // reject — the server refuses it, so it is not selectable here.
+  const selectable = items.filter((i: ResolutionLogEntry) => !i.winner_id)
+
   const toggleSelectAll = () => {
-    if (selectedIds.size === items.length) {
+    if (selectedIds.size === selectable.length) {
       setSelectedIds(new Set())
     } else {
-      setSelectedIds(new Set(items.map((i) => i.id)))
+      setSelectedIds(new Set(selectable.map((i: ResolutionLogEntry) => i.id)))
     }
   }
 
@@ -207,7 +211,8 @@ export function ResolutionLogTab() {
                 <tr className="border-b bg-muted/50">
                   <th className="p-3 w-8">
                     <Checkbox
-                      checked={selectedIds.size === items.length && items.length > 0}
+                      checked={selectedIds.size === selectable.length && selectable.length > 0}
+                      disabled={selectable.length === 0}
                       onCheckedChange={toggleSelectAll}
                     />
                   </th>
@@ -232,6 +237,8 @@ export function ResolutionLogTab() {
                         <Checkbox
                           checked={selectedIds.has(entry.id)}
                           onCheckedChange={() => toggleSelect(entry.id)}
+                          disabled={!!entry.winner_id}
+                          aria-label={entry.winner_id ? 'Applied merge (not selectable)' : undefined}
                         />
                       </td>
                       <td className="p-3">

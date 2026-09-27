@@ -67,6 +67,16 @@ export default function EntityResolutionPage() {
     [candidatesQuery.data, dismissed],
   )
 
+  // PC.5b: the auto band. An OKF import no longer merges it unattended, so it
+  // waits here for a curator like the review band.
+  const autoCandidates = useMemo(
+    () =>
+      (candidatesQuery.data?.auto_merge ?? []).filter(
+        (c) => !dismissed.has(`cand:${c.id_a}:${c.id_b}`),
+      ),
+    [candidatesQuery.data, dismissed],
+  )
+
   const isLoading = planQuery.isLoading || candidatesQuery.isLoading
   const isError = planQuery.isError && candidatesQuery.isError
 
@@ -200,6 +210,31 @@ export default function EntityResolutionPage() {
                   </>
                 )}
               </section>
+
+              {autoCandidates.length > 0 && (
+                <section className="space-y-3" data-testid="resolution-auto-band">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-lg font-semibold">
+                      High-confidence candidates
+                    </h2>
+                    <Badge variant="secondary">{autoCandidates.length}</Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Pairs above the auto-merge threshold. They are merged
+                    automatically only when an OKF import is run with
+                    auto-merge on — otherwise approve to merge, or keep apart.
+                  </p>
+                  {autoCandidates.map((c) => (
+                    <CandidateMergeCard
+                      key={`${c.id_a}:${c.id_b}`}
+                      candidate={c}
+                      onApprove={(cluster) => onApproveCandidate(c, cluster)}
+                      onReject={onRejectCandidate}
+                      disabled={applyMerge.isPending || addOverlay.isPending}
+                    />
+                  ))}
+                </section>
+              )}
 
               {reviewCandidates.length > 0 && (
                 <section className="space-y-3">
