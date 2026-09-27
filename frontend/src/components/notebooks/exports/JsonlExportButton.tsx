@@ -39,6 +39,7 @@ import { useJsonlExport } from '@/lib/hooks/use-jsonl-export'
 import type { ExportFilter } from '@/lib/types/exports'
 
 import { ExportPreviewCounts } from './ExportPreviewCounts'
+import { LastExportLine } from './LastExportLine'
 
 interface JsonlExportButtonProps {
   notebookId: string
@@ -191,6 +192,7 @@ export function JsonlExportButton({ notebookId }: JsonlExportButtonProps) {
           </div>
 
           <ExportPreviewCounts notebookId={notebookId} filter={filter} />
+          <LastExportLine notebookId={notebookId} format="jsonl" />
 
           {error && (
             <div

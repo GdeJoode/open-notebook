@@ -462,6 +462,28 @@ different canonical bucket depending on the document. In the measured corpus,
 > - **Known, out of scope:** the extraction service's own `POST /merge`
 >   (`services/extraction/api.py`) is still an unvalidated, unlogged merge,
 >   reachable from the host on port 8103. Nothing in the app calls it.
+>
+> **PC.5c (the run report)**
+> - **Export metrics have a reader.** `GET /notebooks/{id}/exports/history`
+>   reads the `export.*` rows. The JSONL, NetworkX, Obsidian and OKF export
+>   surfaces each show a "Last export" line: when, what was written, or that the
+>   run failed and why.
+> - **`extraction_result` is labelled.** It stores the RAW extraction by design:
+>   it is the re-filter cache, and no path rewrites its entities after filtering.
+>   So this is not a persistence bug. `_save_result` writes
+>   `metadata.entities_stage = "pre_filter"`, and `GET .../extraction-result`
+>   returns it for every row.
+> - **Alignment keys: not copied, measured.** `verdict_counts`,
+>   `method_counts`, `reason_counts` and `capped_type_fetches` stay on
+>   `concept_alignment_report`.
+>   - Alignment cannot run on a shipped configuration: it requires KG
+>     resolution, which PC.3 turned off, and the workflow refuses the
+>     combination.
+>   - Nothing in the UI reads `metadata.filtering`: the only reader is the API
+>     route plus `scripts/pc1b_handoff_probe.py`.
+>
+>   Copying the keys would add a producer without a consumer. When alignment
+>   is switched back on (PC.4), its report gets a reader in the same change.
 
 **Also owned here (from PC.1's review)**: a durable "no". `reject_extension`
 records nothing, so a rejected proposal is re-queued by the next document that

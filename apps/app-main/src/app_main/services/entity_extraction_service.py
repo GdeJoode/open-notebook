@@ -2409,7 +2409,14 @@ class EntityExtractionService:
         return stats
 
     async def _save_result(self, source_id: str, result) -> None:
-        """Persist extraction result to SurrealDB."""
+        """Persist extraction result to SurrealDB.
+
+        ``entities``/``relations`` are the RAW extraction, before filtering —
+        this row is the re-filter cache (``run_filtering_only`` reads it), while
+        ``metadata.filtering`` describes the filtered set. PC.5c labels that in
+        the row (``metadata.entities_stage``) so a reader cannot take the stored
+        entities for the ones that reached the graph.
+        """
         try:
             await execute_query(
                 "DELETE FROM extraction_result WHERE source_id = $source_id",
@@ -2428,7 +2435,7 @@ class EntityExtractionService:
                     "source_id": source_id,
                     "entities": [e.model_dump() for e in result.entities],
                     "relations": [r.model_dump() for r in result.relations],
-                    "metadata": result.metadata,
+                    "metadata": {**result.metadata, "entities_stage": "pre_filter"},
                     "entity_count": result.entity_count,
                     "relation_count": result.relation_count,
                 },

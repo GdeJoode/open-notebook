@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/lib/hooks/use-toast'
+import { LastExportLine } from './LastExportLine'
 
 /**
  * NetworkX 7-format export dropdown (Phase D.3).
@@ -244,6 +245,10 @@ export function NetworkxExportMenu({ notebookId }: NetworkxExportMenuProps) {
             )}
           </DropdownMenuItem>
         ))}
+        <DropdownMenuSeparator />
+        <div className="px-2 py-1.5">
+          <LastExportLine notebookId={notebookId} format="networkx" />
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   )
