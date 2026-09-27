@@ -309,6 +309,8 @@ where it was found.
      * (c) a **GLiNER grounding pass** (character offsets per mention), not
        yet measured on Dutch (see the D2 experiment).
 
+**Part 1 done 2026-09-27** (merge on main; `queue_sources.sources_for_entities`, 116 ms for 1,238 rows). Open minors: `aria-label` on a role-less span and a tab stop per row; the wording when the entity has been deleted; `FROM $ids` no longer restricts the lookup to `entity`.
+
 **Recommendation:** part 1 now. For part 2, show grounding where it exists, and
 choose between (a) and (b) for the existing corpus. Either way, the tooltip
 must say which kind of evidence it shows.
