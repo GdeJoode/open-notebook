@@ -266,3 +266,49 @@ Idempotency preserved (re-run appends nothing). Tested: `test_match_conflict_doe
 - [ ] KG table → set status filter to `reference` → table narrows; URL/query carries `status=reference`.
 - [ ] Open a degree>=3 entity → detail shows degree/docs + status badge; flip override → toast "Pinned"; re-run extraction → status preserved.
 - [ ] Triage queue → grouped reasons render; Promote a row → toast + row leaves; entity status flips to active.
+
+## Backlog — owner requests
+
+### Q-B1 — Hover on "Docs": which documents, and where (owner, 2026-09-27)
+
+**Request.** In the triage queue, hovering the number under *Docs* shows the
+documents the entity comes from and, preferably, the chunk or text passage
+where it was found.
+
+**What exists, measured on staging (2026-09-27):**
+
+* The number is `doc_count`: the distinct `source_documents` on the entity
+  (`signals_service._doc_count_from_sources`). The document ids are therefore
+  already on every entity; only their titles need resolving (`source.title`).
+* The passage is a different matter. PC.3 made extraction persist
+  `properties.grounding`, keyed by source id (chunk id, grounding, extraction
+  context), for everything extracted **after 2026-09-06**. On staging, **0 of
+  2,174** active/reference entities carry it: the corpus predates PC.3. The
+  `mentions` table (67 rows) links source → entity, not chunk → entity.
+
+**What it takes, in two parts:**
+
+1. **Documents on hover — small, exact.** Add the source ids and titles to the
+   queue read-model (`QueueItemOut`), either resolved in `GET /triage/queue` or
+   via a lazy `GET /triage/queue/{id}/sources`. Then a tooltip on the Docs cell,
+   in `triage/page.tsx` plus a pure helper and a test in `lib/utils/triage.ts`.
+   Works for every row today.
+2. **Passage on hover — depends on the data.**
+   * For entities extracted after PC.3: read `properties.grounding[source]`.
+     This is exact, and costs one field in the read-model and one line in the
+     tooltip.
+   * For the existing corpus there is no stored passage, so there are three
+     options:
+     * (a) **re-extract** the sources, which gives exact grounding but costs
+       an LLM run per document;
+     * (b) **search at read time** the source's chunks for the entity's name
+       and aliases. This is approximate, and D6 measured why: an extracted
+       name is often a normalised form of the text ("Gemeente Alkmaar" vs
+       "Alkmaar"). It must be labelled "found by name", never shown as
+       provenance;
+     * (c) a **GLiNER grounding pass** (character offsets per mention), not
+       yet measured on Dutch (see the D2 experiment).
+
+**Recommendation:** part 1 now. For part 2, show grounding where it exists, and
+choose between (a) and (b) for the existing corpus. Either way, the tooltip
+must say which kind of evidence it shows.
