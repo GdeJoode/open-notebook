@@ -266,7 +266,13 @@ async def get_extraction_result(
     source_id: str,
     source_svc: SourceService = Depends(get_source_service),
 ):
-    """Get full extraction result (entities, relations, metadata) for a source."""
+    """Get full extraction result (entities, relations, metadata) for a source.
+
+    ``entities``, ``relations`` and their counts are the RAW extraction, before
+    filtering: the row is the re-filter cache, and no path rewrites its entities
+    after filtering. ``metadata.filtering`` and ``metadata.persisted`` describe
+    what was kept and written (PC.5c).
+    """
     try:
         source = await source_svc.get(source_id)
         if not source:

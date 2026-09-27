@@ -209,8 +209,28 @@ class NetworkxExportService:
         """
         started = time.monotonic()
 
-        summary = await self._build_graph(notebook_id, request.filter)
-        payload = self._serialize(summary.graph, request.format)
+        try:
+            summary = await self._build_graph(notebook_id, request.filter)
+            payload = self._serialize(summary.graph, request.format)
+        except Exception as exc:
+            # PC.5c: a failed run is a run. JSONL, Obsidian and OKF record one;
+            # without this the "last export" line (export_history.py, read by
+            # the NetworkX menu) showed the previous success after a failure.
+            await record_metric(
+                "export.networkx",
+                {
+                    "entities_written": 0,
+                    "relations_written": 0,
+                    "files_written": 0,
+                    "bytes_written": 0,
+                    "duration_ms": int((time.monotonic() - started) * 1000),
+                    "format": request.format,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+                source=None,
+                notebook=notebook_id,
+            )
+            raise
 
         duration_ms = int((time.monotonic() - started) * 1000)
 
@@ -236,7 +256,8 @@ class NetworkxExportService:
             metadata=metadata or None,
         )
 
-        # Telemetry -- counts only, no IDs per Q-D-8.
+        # Telemetry -- counts only, no IDs per Q-D-8. Read back by
+        # ``export_history`` for the NetworkX menu's "last export" line (PC.5c).
         await record_metric(
             "export.networkx",
             {**report.model_dump(mode="json"), "format": request.format},

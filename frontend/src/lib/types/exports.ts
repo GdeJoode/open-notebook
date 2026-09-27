@@ -188,3 +188,22 @@ export interface OkfImportReport {
   skipped: OkfSkippedConcept[]
   dangling_links: OkfDanglingLink[]
 }
+
+/** Export formats that record an ``export.*`` metric per run (PC.5c). */
+export type ExportHistoryFormat = 'jsonl' | 'networkx' | 'obsidian' | 'okf'
+
+/**
+ * One row of ``GET /api/notebooks/{id}/exports/history`` — an export run as its
+ * exporter recorded it. Counts only; ``error`` is set when the run failed.
+ */
+export interface ExportHistoryEntry {
+  format: ExportHistoryFormat
+  created_at: string
+  error: string | null
+  entities_written: number
+  relations_written: number
+  files_written: number
+  bytes_written: number
+  duration_ms: number | null
+  mode: string | null
+}

@@ -71,6 +71,7 @@ import type {
 } from '@/lib/types/exports'
 
 import { ExportPreviewCounts } from './ExportPreviewCounts'
+import { LastExportLine } from './LastExportLine'
 
 interface ObsidianExportDialogProps {
   open: boolean
@@ -298,6 +299,7 @@ export function ObsidianExportDialog({
               notebookId={notebookId}
               filter={withParsedEntityTypes(filter, entityTypesRaw)}
             />
+            <LastExportLine notebookId={notebookId} format="obsidian" />
 
             {error && (
               <div

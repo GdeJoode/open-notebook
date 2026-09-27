@@ -48,6 +48,7 @@ import { useOkfExport } from '@/lib/hooks/use-okf-export'
 import type { ExportFilter, OkfExportReport } from '@/lib/types/exports'
 
 import { ExportPreviewCounts } from './ExportPreviewCounts'
+import { LastExportLine } from './LastExportLine'
 
 interface OkfExportDialogProps {
   open: boolean
@@ -233,6 +234,7 @@ export function OkfExportDialog({
               notebookId={notebookId}
               filter={withParsedEntityTypes(filter, entityTypesRaw)}
             />
+            <LastExportLine notebookId={notebookId} format="okf" />
 
             {error && (
               <div

@@ -683,6 +683,7 @@ class OkfExportService:
                     "duration_ms": duration_ms,
                     **(error_payload or {}),
                 }
+            # Read back by export_history ("last export" line, PC.5c).
             await record_metric(
                 "export.okf", payload, source=None, notebook=notebook_id
             )

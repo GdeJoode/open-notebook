@@ -2399,6 +2399,11 @@ class EntityExtractionService:
             metadata["filtering"] = {**previous_filtering, **stats}
         else:
             metadata["filtering"] = stats
+        # PC.5c: this run persisted again, so `persisted` (what GET /sources/{id}
+        # shows as the source's relations) must describe this run, not the first.
+        written = _persisted_counts(persist_result)
+        if written:
+            metadata["persisted"] = written
         await execute_query(
             "UPDATE extraction_result SET metadata = $metadata "
             "WHERE source_id = $source_id",
@@ -2409,7 +2414,14 @@ class EntityExtractionService:
         return stats
 
     async def _save_result(self, source_id: str, result) -> None:
-        """Persist extraction result to SurrealDB."""
+        """Persist extraction result to SurrealDB.
+
+        ``entities``/``relations`` and their counts are the RAW extraction,
+        before filtering — this row is the re-filter cache
+        (``run_filtering_only`` reads it). What reached the graph is
+        ``metadata.persisted``; a reader that shows a graph count must use that
+        (PC.5c: ``GET /sources/{id}`` did not).
+        """
         try:
             await execute_query(
                 "DELETE FROM extraction_result WHERE source_id = $source_id",

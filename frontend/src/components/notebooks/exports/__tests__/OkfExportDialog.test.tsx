@@ -47,6 +47,12 @@ vi.mock('@/lib/hooks/use-export-preview', () => ({
   }),
 }))
 
+// PC.5c: the dialog shows the last OKF export; the dialog test stubs it, the
+// line has its own test (LastExportLine.test.tsx).
+vi.mock('@/lib/hooks/use-export-history', () => ({
+  useLastExport: () => ({ data: null }),
+}))
+
 // Radix Slider observes its track size; jsdom ships neither ResizeObserver nor
 // pointer-capture, so polyfill them or the dialog crashes on mount.
 beforeAll(() => {

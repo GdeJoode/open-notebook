@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import io
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import (
     APIRouter,
@@ -57,6 +57,7 @@ from app_main.dependencies import (
     get_settings_service,
 )
 from app_main.services.okf_export_service import okf_artifact_path
+from app_main.services import export_history
 from app_main.services.settings_service import SettingsService
 from app_main.services.command_service import CommandService
 from app_main.services.jsonl_export_service import JsonlExportService
@@ -831,6 +832,53 @@ def _extract_partial_state(exc: Exception) -> Dict[str, Any]:
                 **{k: v for k, v in arg.items() if k != "entities_written"},
             }
     return {}
+
+
+
+# ---------------------------------------------------------------------------
+# Export history (PC.5c) -- the reader of the ``export.*`` metrics
+# ---------------------------------------------------------------------------
+
+
+class ExportHistoryEntry(BaseModel):
+    """One export run, as its exporter recorded it. Counts only (Q-D-8)."""
+
+    format: str
+    created_at: str
+    error: Optional[str] = None
+    entities_written: int = 0
+    relations_written: int = 0
+    files_written: int = 0
+    bytes_written: int = 0
+    duration_ms: Optional[float] = None
+    mode: Optional[str] = None
+
+
+@router.get(
+    "/exports/history",
+    response_model=List[ExportHistoryEntry],
+    responses={404: {"description": "Notebook not found."}},
+)
+async def get_export_history(
+    notebook_id: str,
+    format: Optional[Literal["jsonl", "networkx", "obsidian", "okf"]] = Query(
+        None, description="One export format; omit for all."
+    ),
+    limit: int = Query(10, ge=1, le=100),
+    notebook_service: NotebookService = Depends(get_notebook_service),
+) -> List[ExportHistoryEntry]:
+    """The notebook's export runs, newest first (PC.5c).
+
+    Every exporter writes an ``export.*`` metric per run, failures included;
+    this is what the export UIs read for their "last export" line.
+    """
+    notebook = await notebook_service.get(notebook_id)
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    rows = await export_history.read_export_history(
+        notebook_id, [format] if format else None, limit
+    )
+    return [ExportHistoryEntry(**r) for r in rows]
 
 
 __all__ = ["router"]
