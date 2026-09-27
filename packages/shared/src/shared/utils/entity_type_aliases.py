@@ -73,10 +73,22 @@ ENTITY_TYPE_ALIASES = {
     "organisatie": "organization",
     "ministerie": "government_organization",
     "uitvoeringsorganisatie": "government_organization",  # executive agency
+    # PC.4: measured on the Regio Deal corpus — labels the LLM free-formed that
+    # no shipped ontology declares, so they fell to ``concept`` / ``other``.
+    "overheid": "government_organization",  # government
+    "overheidsorgaan": "government_organization",  # government body
+    "governmentbody": "government_organization",
+    "government_body": "government_organization",
+    "waterschap": "government_organization",  # water authority
+    "havenbedrijf": "organization",  # port authority company
+    "samenwerkingsverband": "organization",  # joint body (legal entity)
+    "werkgeversorganisatie": "organization",  # employers' organisation
     # places / administrative areas
     "gemeente": "administrative_area",  # municipality
     "provincie": "administrative_area",  # province
     "regio": "administrative_area",  # region
+    "subregio": "administrative_area",  # PC.4: sub-region
+    "plaats": "location",  # PC.4: place / town
     # topics / themes
     "thema": "topic",
     "beleidsthema": "topic",  # policy theme
@@ -105,7 +117,13 @@ ENTITY_TYPE_ALIASES = {
 # default while PRESERVING the raw label in ``primary_type`` so L.6 metrics and
 # L.5 retro-typing can see them. Kept distinct from genuine-unknown labels
 # (``Frobnicator``) so a reviewer can tell noise from an unmodeled real type.
-NON_TYPE_LABELS = frozenset({"abbreviation", "amount"})
+#
+# PC.4 adds the literals measured on the Regio Deal corpus: values the LLM
+# tagged by their data type (a date, an amount, a count, an identifier).
+NON_TYPE_LABELS = frozenset({
+    "abbreviation", "amount",
+    "budget", "budget/amount", "date", "datum", "metric", "aantal", "doi",
+})
 
 
 def _normalize(raw: object) -> str:

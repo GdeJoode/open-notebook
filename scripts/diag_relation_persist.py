@@ -59,13 +59,19 @@ async def main(source_id: str) -> None:
     entities = rows[0].get("entities", []) or []
     relations = rows[0].get("relations", []) or []
 
-    # Build the bridge-aware type_by_name exactly as persist does (no schemas on
-    # the re-filter path; the LLM label drives it).
+    # Build the bridge-aware type_by_name exactly as persist does: since PC.4
+    # the re-filter path types against every ontology (typing_vocabulary).
+    from app_main.services.entity_persistence_service import (
+        load_typing_ontologies,
+        typing_vocabulary,
+    )
+
+    schemas = typing_vocabulary(None, await load_typing_ontologies())
     type_by_name = {}
     for e in entities:
         t = e.get("text", "")
         if t.strip():
-            type_by_name[t] = _resolve_entity_type(e.get("label", "concept")).entity_type
+            type_by_name[t] = _resolve_entity_type(e.get("label", "concept"), schemas).entity_type
 
     from app_main.services.entity_persistence_service import (
         EntityPersistenceService,
@@ -78,7 +84,7 @@ async def main(source_id: str) -> None:
         # relation-carried type bridge-resolved; else None.
         t = type_by_name.get(name)
         if t is None and carried:
-            t = _resolve_entity_type(carried).entity_type
+            t = _resolve_entity_type(carried, schemas).entity_type
         return t
 
     old_outcomes = Counter()

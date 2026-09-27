@@ -253,6 +253,7 @@ entity_types:
   - name: "EducationalOrganization"
     description: "An educational organization"
     schema_org: "https://schema.org/EducationalOrganization"
+    schema_org_type: "schema:EducationalOrganization"
     parent_type: "Organization"
     extraction_strategy: "llm"
     extraction_hints:

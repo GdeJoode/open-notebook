@@ -43,7 +43,11 @@ if TYPE_CHECKING:
     from ontology_manager.schema import Ontology
     from shared.models import NotebookSchema
 
-from app_main.services.entity_persistence_service import EntityPersistenceService
+from app_main.services.entity_persistence_service import (
+    EntityPersistenceService,
+    load_typing_ontologies,
+    typing_vocabulary,
+)
 
 # Explicit per-notebook override bundle (Track L.4). When an operator configures
 # a ``base_ontology`` for a notebook, that is a declaration that the notebook is
@@ -627,6 +631,10 @@ class EntityExtractionService:
         # top of each ``run_extraction`` so a single-schema / no-schema run does
         # not inherit a prior run's schemas.
         self._applicable_schemas: Optional[List[Any]] = None
+        # PC.4: what the persist step TYPES against — the applied set followed by
+        # every other ontology, with the notebook's edits projected over the
+        # whole list (`_typing_schemas_for`). Reset with `_applicable_schemas`.
+        self._typing_schemas: Optional[List[Any]] = None
         # N.4d.4: the notebook's declared vocabulary name, for gap rows. See the
         # stash site in `_run_multi_schema` for why it is not read off the
         # applied set.
@@ -1383,6 +1391,53 @@ class EntityExtractionService:
             )
         return deps
 
+    async def _typing_schemas_or_all(self) -> Optional[List["Ontology"]]:
+        """This run's typing vocabulary, or every ontology when no detection ran.
+
+        PC.4. `_run_multi_schema` sets `_typing_schemas`; the single-schema path
+        and the re-filter do not detect, and type against every ontology. A load
+        that RAISES degrades to the alias/enum path (None). An unreachable
+        database does not raise: the pool waits for it (connection.py), as every
+        other query in the run would.
+        """
+        if self._typing_schemas is not None:
+            return self._typing_schemas
+        try:
+            return typing_vocabulary(None, await load_typing_ontologies())
+        except Exception as e:
+            logger.warning(f"typing vocabulary: could not load the ontologies ({e})")
+            return None
+
+    def _typing_schemas_for(
+        self,
+        applicable_schemas: List[Tuple["Ontology", float]],
+        candidate_ontologies: List["Ontology"],
+        notebook_schema: Optional["NotebookSchema"],
+        notebook_id: Optional[str],
+    ) -> List["Ontology"]:
+        """The typing vocabulary for this run, the notebook's edits projected over it.
+
+        Track PC.4. ``applicable_schemas`` is the selection BEFORE projection.
+        The edits are projected over the whole list, not over the selection: a
+        re-parent of a type the selection lacks, or an extension whose name an
+        unselected ontology already declares, then takes the same way whichever
+        ontologies this document selected (review M2 — projected over the
+        selection alone, `Gemeente` re-parented to `GovernmentOrganization` came
+        out `government_organization` or `administrative_area` depending on it).
+        The prompt keeps its own projection over the selection. The two can
+        differ for an extension whose name an unselected ontology declares as
+        an alias: the prompt offers the extension, typing resolves the alias.
+        Either way the type is the same under every selection.
+        """
+        applied = [o for o, _c in applicable_schemas]
+        vocabulary = typing_vocabulary(applied, candidate_ontologies)
+        return [
+            o
+            for o, _c in self._project_notebook_edits(
+                [(o, 0.0) for o in vocabulary], notebook_schema, notebook_id
+            )
+        ]
+
     def _project_notebook_edits(
         self,
         applicable_schemas: List[Tuple["Ontology", float]],
@@ -1599,6 +1654,9 @@ class EntityExtractionService:
                 notebook_schema,
             )
 
+        self._typing_schemas = self._typing_schemas_for(
+            applicable_schemas, candidate_ontologies, notebook_schema, notebook_id
+        )
         applicable_schemas = self._project_notebook_edits(
             applicable_schemas, notebook_schema, notebook_id
         )
@@ -1646,6 +1704,9 @@ class EntityExtractionService:
                     "to the notebook's own history: {names}",
                     src=source_id,
                     names=[o.metadata.name for o, _c in fallback],
+                )
+                self._typing_schemas = self._typing_schemas_for(
+                    fallback, candidate_ontologies, notebook_schema, notebook_id
                 )
                 applicable_schemas = self._project_notebook_edits(
                     fallback, notebook_schema, notebook_id
@@ -1834,6 +1895,7 @@ class EntityExtractionService:
         # populates this (below). A single-schema run leaves it None so the
         # persist bridge degrades to the alias/enum path.
         self._applicable_schemas = None
+        self._typing_schemas = None
         self._gap_ontology_name = None
 
         # 3. Build config and workflow
@@ -2103,11 +2165,11 @@ class EntityExtractionService:
                     # Not config.llm_model, which is "default" on the common path
                     # and would stamp None even though a model produced the rows.
                     extraction_model=await self._served_extraction_model(config),
-                    # L.1: the schemas detected for this run (set by
-                    # _run_multi_schema; None for the single-schema path) so the
-                    # persist bridge can re-type ontology labels and preserve the
-                    # rich type. No re-detection here.
-                    applicable_schemas=self._applicable_schemas,
+                    # L.1 + PC.4: the TYPING vocabulary — the schemas detected
+                    # for this run followed by every other ontology, with the
+                    # notebook's edits (set by _run_multi_schema). No
+                    # re-detection here.
+                    applicable_schemas=await self._typing_schemas_or_all(),
                 )
 
                 # Q.4 R1 hook (main path): fire triage AFTER the persist, OUTSIDE
@@ -2129,6 +2191,17 @@ class EntityExtractionService:
         written = _persisted_counts(persist_result)
         if written:
             result.metadata["persisted"] = written
+
+        # PC.4: which ontologies detection selected for this document. It was
+        # recorded nowhere, so measuring detection meant replaying it with
+        # today's ontologies. Read by `scripts/pc4_detection_probe.py`.
+        if self._applicable_schemas:
+            result.metadata["applied_ontologies"] = [
+                o.metadata.name for o in self._applicable_schemas if o.metadata
+            ]
+        elif result.metadata.get("ontology_name"):
+            # The single-schema (legacy) path: its one ontology IS the selection.
+            result.metadata["applied_ontologies"] = [result.metadata["ontology_name"]]
 
         # 7. Persist raw extraction results
         await self._save_result(source_id, result)
@@ -2283,6 +2356,7 @@ class EntityExtractionService:
         # the DI provider happens to build a fresh instance per call — the
         # assumption that comment had already declined to rely on.
         self._applicable_schemas = None
+        self._typing_schemas = None
         self._gap_ontology_name = None
 
         # Fetch existing extraction result
@@ -2364,11 +2438,13 @@ class EntityExtractionService:
             merge_groups=filtered.merged_entity_groups,
             match_candidates=[c.model_dump() for c in filtered.match_candidates] if filtered.match_candidates else None,
             extraction_method=extraction.metadata.get("extractor_type", "llm"),
-            # L.1: the re-filter path does not re-detect schemas, so the bridge
-            # has none to work with — it degrades to the alias/enum path (AC7).
-            # Pass None explicitly so a reused service instance can't leak a
-            # prior run's schemas onto a different source's re-filter.
-            applicable_schemas=None,
+            # L.1: the re-filter path does not re-detect schemas. PC.4: it
+            # still types against every ontology, as the extraction did —
+            # typing no longer depends on the selection, so there is nothing to
+            # re-detect. `_typing_schemas` was reset above, so a reused instance
+            # cannot leak a prior run's vocabulary. Known limit: this path has
+            # no notebook, so the notebook's schema edits are not projected.
+            applicable_schemas=await self._typing_schemas_or_all(),
         )
 
         # Q.4 R1 hook (re-filter path): triage fires here too (operator-confirmed,

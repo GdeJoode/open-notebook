@@ -238,6 +238,26 @@ DocumentTypeMapper = Callable[[Optional[str]], str]
 LLMCallerAlias = LLMCaller
 
 
+#: PC.4: the broad vocabularies. They do not compete with a domain ontology for
+#: a slot in the top-K; they fill the slots domain ontologies leave open.
+#:
+#: The top-K exists because a model cannot always hold more ontologies in its
+#: prompt. Measured on the Regio Deal corpus, `base` and `general` (content
+#: scores 0.40 / 0.38) took two of the three slots and pushed `regiodeal`
+#: (0.30-0.39) out of three documents' selection. Those documents' `Gemeente`,
+#: `Ministerie`, `RegioDeal` and `Provincie` labels came only from `regiodeal`'s
+#: inheritance chain; the documents that did select it had none of those misses.
+#: A generic label loses nothing: typing checks every shipped ontology after
+#: extraction (`entity_persistence_service.typing_vocabulary`), and the domain
+#: ontologies that extend `schema_core` carry its Person / Organization / Place.
+#:
+#: Consumers of the new order: Pass 2 renders the applied set into its prompt;
+#: `_merge_results` breaks label ties first-seen, so a domain label now wins a tie
+#: with a generic one; `schema_projection._target_ontology` attaches a curator's
+#: extension to `schemas[0]` when it names no schema — now a domain ontology.
+GENERIC_ONTOLOGIES = frozenset({"base", "general", "schema_core"})
+
+
 async def detect_applicable_schemas(
     document_type: Optional[str],
     document_text: Optional[str],
@@ -292,8 +312,9 @@ async def detect_applicable_schemas(
             ontology_manager module.
 
     Returns:
-        A list of ``(ontology, confidence)`` tuples sorted by
-        confidence descending, filtered to those scoring at least
+        A list of ``(ontology, confidence)`` tuples — domain ontologies by
+        confidence descending, then the ``GENERIC_ONTOLOGIES`` (PC.4) —
+        filtered to those scoring at least
         ``MIN_APPLICABLE_CONFIDENCE``, truncated to ``top_k``. Empty list
         when nothing applies.
     """
@@ -325,7 +346,16 @@ async def detect_applicable_schemas(
         if final_score >= MIN_APPLICABLE_CONFIDENCE:
             scored.append((ontology, final_score))
 
-    scored.sort(key=lambda pair: pair[1], reverse=True)
+    # PC.4: domain ontologies first (by score), generic ones after (by score) —
+    # see GENERIC_ONTOLOGIES. A document only generic ontologies fit still gets
+    # them.
+    scored.sort(
+        key=lambda pair: (
+            (pair[0].metadata.name if pair[0].metadata else "") not in GENERIC_ONTOLOGIES,
+            pair[1],
+        ),
+        reverse=True,
+    )
     return scored[:top_k]
 
 

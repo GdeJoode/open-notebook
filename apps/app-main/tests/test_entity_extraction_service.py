@@ -1493,19 +1493,30 @@ class TestConceptAlignmentIsReachable:
                 captured["process"] = kwargs
                 return FilteredResult(entities=result.entities, relations=[])
 
+        applied = [
+            SimpleNamespace(metadata=SimpleNamespace(name="first-ontology")),
+            SimpleNamespace(metadata=SimpleNamespace(name="second-ontology")),
+        ]
+        saved = {}
+
+        async def _save(source_id, result):
+            saved["metadata"] = dict(result.metadata)
+
         async def _extract_and_stash(**_kwargs):
             # The real `_run_multi_schema` stashes the applied set and the
             # notebook's declared vocabulary; a stub that skips that leaves
             # `_applicable_schemas` at None, and then an assertion about the
             # ontology reaching the workflow cannot fail. A review caught exactly
             # that here.
-            svc._applicable_schemas = ["first-ontology", "second-ontology"]
+            # PC.4: ontology-shaped, as the real stash is — the persist step now
+            # records `applied_ontologies` from each one's `metadata.name`.
+            svc._applicable_schemas = applied
             svc._gap_ontology_name = "deals"
             return extracted
 
         with patch.object(
             svc, "_run_multi_schema", AsyncMock(side_effect=_extract_and_stash)
-        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+        ), patch.object(svc, "_save_result", AsyncMock(side_effect=_save)), patch.object(
             svc, "_embed_entities", AsyncMock()
         ), patch.object(
             svc, "_persistence", AsyncMock()
@@ -1523,15 +1534,14 @@ class TestConceptAlignmentIsReachable:
                 run_filtering=True,
             )
 
+        # PC.4: the selection is recorded on the persisted result.
+        assert saved["metadata"]["applied_ontologies"] == ["first-ontology", "second-ontology"]
         assert captured["init"]["config"].concept_alignment.enabled is True
         assert captured["init"]["entity_repo"] is not None
         assert captured["init"]["gap_recorder"] is not None
         # ALL applied schemas, not just the first: a type declared in the second
         # or third would otherwise fail to resolve and license no gap.
-        assert captured["init"]["alignment_schemas"] == [
-            "first-ontology",
-            "second-ontology",
-        ]
+        assert captured["init"]["alignment_schemas"] == applied
         # And the gap name is the notebook's DECLARED vocabulary, never a member
         # of the applied set — that set is ranked per document, and gaps are
         # keyed on (entity_text, ontology_name).
@@ -3202,3 +3212,108 @@ class TestSaveResultNonFatal:
             # Must NOT raise — a raised exception here would mark a successful
             # extraction "failed" and dead-letter it.
             await svc._save_result("source:test", result)
+
+
+class TestTheTypingVocabularyReachesPersist:
+    """PC.4 review (round 2): persistence types against whatever it is handed,
+    so the guarantee rests on the two `persist_filtered_result` call sites.
+    Handing it `None` (the pre-PC.4 behaviour) passed every other test. These
+    follow a run to the persist call and read what arrived.
+    """
+
+    @staticmethod
+    async def _run(svc, base_source_repo, *, multi_schema_enabled=True):
+        scholarly, general = _make_ontology("scholarly"), _make_ontology("general")
+        manager = MagicMock()
+        manager.list_ontologies = AsyncMock(return_value=["scholarly", "general"])
+        manager.get_ontology = AsyncMock(
+            side_effect=lambda n: {"scholarly": scholarly, "general": general}.get(n)
+        )
+        base_source_repo.get_chunks = AsyncMock(return_value=[_make_chunk()])
+        extracted = ExtractionResult(
+            entities=[ExtractedEntity(text="X", label="Person")]
+        )
+        persistence = AsyncMock()
+        persistence.persist_filtered_result.return_value = {}
+
+        class _Workflow:
+            def __init__(self, **kwargs):
+                pass
+
+            async def process(self, result, **kwargs):
+                return FilteredResult(entities=result.entities, relations=[])
+
+        workflow = MagicMock()
+        workflow.extract = AsyncMock(return_value=extracted)
+        svc._persistence = persistence
+        with patch("ontology_manager.get_ontology_manager", return_value=manager), patch(
+            "app_main.services.entity_extraction_service.detect_applicable_schemas",
+            new=AsyncMock(return_value=[(scholarly, 0.92)]),
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow",
+            return_value=workflow,
+        ), patch(
+            "app_main.services.entity_extraction_service.FilteringWorkflow", _Workflow
+        ), patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller",
+            new=AsyncMock(return_value=AsyncMock()),
+        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(svc, "_run_triage", AsyncMock()):
+            await svc.run_extraction(
+                source_id="source:test",
+                notebook_id="notebook:abc",
+                run_filtering=True,
+                multi_schema_enabled=multi_schema_enabled,
+            )
+        persistence.persist_filtered_result.assert_awaited_once()
+        return persistence.persist_filtered_result.await_args.kwargs["applicable_schemas"]
+
+    @pytest.mark.asyncio
+    async def test_an_unselected_ontology_reaches_persist(self, base_source_repo):
+        svc = EntityExtractionService(source_repo=base_source_repo)
+        schemas = await self._run(svc, base_source_repo)
+        # `scholarly` was selected, `general` was not: both arrive, selected first.
+        assert [o.metadata.name for o in schemas] == ["scholarly", "general"]
+
+    @pytest.mark.asyncio
+    async def test_the_path_without_detection_types_against_every_ontology(
+        self, base_source_repo
+    ):
+        """The kill-switch path detects nothing; it loads every ontology the
+        manager holds (here the two the test's manager returns)."""
+        svc = EntityExtractionService(source_repo=base_source_repo)
+        schemas = await self._run(svc, base_source_repo, multi_schema_enabled=False)
+        assert sorted(o.metadata.name for o in schemas) == ["general", "scholarly"]
+
+    @pytest.mark.asyncio
+    async def test_a_refilter_types_against_every_ontology(self):
+        svc = EntityExtractionService(source_repo=AsyncMock())
+        persistence = AsyncMock()
+        persistence.persist_filtered_result.return_value = {}
+        svc._persistence = persistence
+
+        class _Workflow:
+            def __init__(self, **kwargs):
+                pass
+
+            async def process(self, result, **kwargs):
+                return FilteredResult(entities=[], relations=[])
+
+        async def fake_query(query, params=None, *a, **kw):
+            if query.strip().startswith("UPDATE"):
+                return []
+            return [{"id": "extraction_result:1", "entities": [{"text": "X", "label": "L"}],
+                     "relations": [], "metadata": {}}]
+
+        with patch(
+            "app_main.services.entity_extraction_service.execute_query",
+            AsyncMock(side_effect=fake_query),
+        ), patch(
+            "app_main.services.entity_extraction_service.FilteringWorkflow", _Workflow
+        ), patch.object(EntityExtractionService, "_embed_entities", AsyncMock()):
+            await svc.run_filtering_only(source_id="source:B")
+        schemas = persistence.persist_filtered_result.await_args.kwargs["applicable_schemas"]
+        assert {"general", "regiodeal", "schema_core", "policy"} <= {
+            o.metadata.name for o in schemas
+        }

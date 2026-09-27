@@ -17,8 +17,10 @@ shipped a re-parent that quietly does nothing:
    module works on ``model_copy(deep=True)`` and the inputs are never touched.
 
 2. **The bridge prefers ``schema_org_type`` over ``parent_type``.** Across the
-   eleven shipped ontologies, 13 of 277 applied type entries declare a
-   ``schema_org_type``, and for 10 of them rewriting ``parent_type`` alone leaves
+   eleven shipped ontologies, 13 of 277 applied type entries declared a
+   ``schema_org_type`` when this was measured (PC.4 added it to 15 more whose
+   base had been written only as a ``schema_org:`` URL, so the share has grown),
+   and for 10 of them rewriting ``parent_type`` alone leaves
    the canonical UNCHANGED — the bridge terminates at step 1 and never walks the
    new parent. Every one of those is a root a curator plausibly re-parents
    (``Person``, ``Organization``, ``Location``, ``Event``, ``Topic``,

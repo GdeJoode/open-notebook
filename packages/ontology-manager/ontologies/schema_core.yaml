@@ -1,5 +1,12 @@
 # schema_core.yaml
 # Core ontology based on Schema.org with Dublin Core mappings
+#
+# PC.4: a type whose schema.org base the canonical bridge maps carries an
+# explicit `schema_org_type`. `schema_org:` is a documentation URL the loader
+# does not read; without `schema_org_type` the bridge walked `parent_type` to
+# `Thing` and typed Person, Organization, Place, Event, CreativeWork,
+# DefinedTerm and Grant as `concept` (Report and Dataset as `creative_work`)
+# in every ontology that extends this one.
 # This is the base ontology - all others extend from this
 
 metadata:
@@ -24,6 +31,7 @@ entity_types:
   - name: "Thing"
     description: "The most generic type of item (Schema.org root)"
     schema_org: "https://schema.org/Thing"
+    schema_org_type: "schema:Thing"
     extraction_strategy: "llm"
     extraction_hints:
       - "Any named entity that doesn't fit a more specific type"
@@ -62,6 +70,7 @@ entity_types:
   - name: "CreativeWork"
     description: "A creative work such as a document, article, book, or dataset"
     schema_org: "https://schema.org/CreativeWork"
+    schema_org_type: "schema:CreativeWork"
     parent_type: "Thing"
     extraction_strategy: "llm"
     extraction_hints:
@@ -130,6 +139,7 @@ entity_types:
   - name: "Article"
     description: "An article, such as a news article or blog post"
     schema_org: "https://schema.org/Article"
+    schema_org_type: "schema:Article"
     parent_type: "CreativeWork"
     extraction_strategy: "llm"
     extraction_hints:
@@ -153,6 +163,7 @@ entity_types:
   - name: "Report"
     description: "A report, such as a research report or technical report"
     schema_org: "https://schema.org/Report"
+    schema_org_type: "schema:Report"
     parent_type: "CreativeWork"
     extraction_strategy: "llm"
     extraction_hints:
@@ -222,6 +233,7 @@ entity_types:
   - name: "Dataset"
     description: "A dataset or data collection"
     schema_org: "https://schema.org/Dataset"
+    schema_org_type: "schema:Dataset"
     parent_type: "CreativeWork"
     extraction_strategy: "llm"
     extraction_hints:
@@ -256,6 +268,7 @@ entity_types:
   - name: "Person"
     description: "A person (alive, dead, fictional, or mythical)"
     schema_org: "https://schema.org/Person"
+    schema_org_type: "schema:Person"
     parent_type: "Thing"
     extraction_strategy: "llm"
     extraction_hints:
@@ -307,6 +320,7 @@ entity_types:
   - name: "Organization"
     description: "An organization such as a company, institution, or government body"
     schema_org: "https://schema.org/Organization"
+    schema_org_type: "schema:Organization"
     parent_type: "Thing"
     extraction_strategy: "llm"
     extraction_hints:
@@ -349,6 +363,7 @@ entity_types:
   - name: "Place"
     description: "A physical location"
     schema_org: "https://schema.org/Place"
+    schema_org_type: "schema:Place"
     parent_type: "Thing"
     extraction_strategy: "hybrid"
     extraction_hints:
@@ -382,6 +397,7 @@ entity_types:
   - name: "Event"
     description: "An event, such as a conference or meeting"
     schema_org: "https://schema.org/Event"
+    schema_org_type: "schema:Event"
     parent_type: "Thing"
     extraction_strategy: "llm"
     extraction_hints:
@@ -420,6 +436,7 @@ entity_types:
   - name: "DefinedTerm"
     description: "A word, phrase, or concept with a specific definition (topics, keywords, controlled vocabulary)"
     schema_org: "https://schema.org/DefinedTerm"
+    schema_org_type: "schema:DefinedTerm"
     parent_type: "Thing"
     extraction_strategy: "llm"
     extraction_hints:
@@ -451,6 +468,7 @@ entity_types:
   - name: "Grant"
     description: "A grant or funding award"
     schema_org: "https://schema.org/Grant"
+    schema_org_type: "schema:Grant"
     parent_type: "Thing"
     extraction_strategy: "llm"
     extraction_hints:
