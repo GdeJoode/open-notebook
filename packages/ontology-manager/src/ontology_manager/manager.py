@@ -47,9 +47,7 @@ class OntologyManager:
         self._registry = OntologyRegistry()
         self._evolution = OntologyEvolutionAgent(
             frequency_threshold=self._config.gap_auto_propose_threshold,
-            # PC.5a: its own flag, default off — it used to ride on
-            # gap_tracking_enabled, so tracking gaps meant proposing types.
-            auto_propose=self._config.gap_auto_propose_enabled,
+            auto_propose=self._config.gap_tracking_enabled,
         )
         logger.info("OntologyManager initialized")
 

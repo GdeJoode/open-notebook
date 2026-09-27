@@ -1006,35 +1006,6 @@ class EntityExtractionService:
 
         return result
 
-    async def _queue_gap_label_proposals(self, notebook_id: str) -> int:
-        """Queue the notebook's gap labels that have enough evidence (PC.5a).
-
-        Returns the number queued; ``merge_pending_extensions`` skips labels
-        already pending, accepted, excluded or REJECTED, so a curator's no holds.
-        """
-        try:
-            from ontology_manager.config import get_config as get_ontology_config
-
-            from app_main.services.gap_label_proposals import (
-                label_proposals_for_notebook,
-            )
-
-            proposals = await label_proposals_for_notebook(
-                notebook_id, threshold=get_ontology_config().gap_auto_propose_threshold
-            )
-            if not proposals:
-                return 0
-            schema_repo = self._notebook_schema_repo or NotebookSchemaRepository()
-            added = await schema_repo.merge_pending_extensions(notebook_id, proposals)
-            logger.info(
-                "gap label proposals queued for {nb}: {added} new of {total}",
-                nb=notebook_id, added=added, total=len(proposals),
-            )
-            return added
-        except Exception as e:
-            logger.warning(f"could not queue gap label proposals for {notebook_id}: {e}")
-            return 0
-
     async def _record_pass1_outcome(
         self,
         result: Any,
@@ -2082,21 +2053,6 @@ class EntityExtractionService:
                         ),
                     }
                 result.metadata["filtering"] = filtering_stats
-
-                # PC.5a: gaps this run recorded may push a LABEL over the
-                # evidence threshold; such a label becomes a pending extension
-                # in this notebook's queue (the Schema tab), where accept runs
-                # the placement and reject is remembered. Best-effort: the
-                # extraction has succeeded, and a proposal is not worth losing it.
-                # No `self._notebook_schema_repo is not None` here: production
-                # constructs that repository lazily, so such a guard would make
-                # this fire in tests only (PC.1's lesson, in the same file).
-                if (
-                    notebook_id
-                    and alignment_report
-                    and alignment_report.get("gaps_recorded", 0) > 0
-                ):
-                    await self._queue_gap_label_proposals(notebook_id)
 
                 logger.info(
                     f"Filtering complete for source {source_id}: "

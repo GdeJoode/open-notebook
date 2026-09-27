@@ -87,17 +87,6 @@ export function PendingExtensionsPanel({
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
                   <h4 className="text-sm font-medium">{ext.type_name}</h4>
-                  {ext.origin === 'ontology_gap' && (
-                    <span
-                      className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground"
-                      data-testid={`pending-extension-origin-${ext.type_name}`}
-                      title="Grouped from extracted entities whose label matched no type"
-                    >
-                      {ext.evidence_count
-                        ? `${ext.evidence_count} unmatched entities`
-                        : 'unmatched entities'}
-                    </span>
-                  )}
                   {ext.parent_type && (
                     <span className="text-xs text-muted-foreground">
                       extends{' '}

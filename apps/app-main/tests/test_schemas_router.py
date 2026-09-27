@@ -563,8 +563,6 @@ class TestSchemaJsonHappyPath:
         assert pen["extension_id"] == "ext-pen-1"
         assert pen["type_name"] == "Cohort"
         assert pen["rationale"] == "Found cohort references in 3 sources."
-        # A Pass-1 proposal carries no origin (PC.5a).
-        assert pen["origin"] is None and pen["examples"] == []
 
 
 class TestSchemaJsonEmptyState:
@@ -1030,18 +1028,3 @@ class TestSchemaJsonWithAReparent:
             e for e in body["accepted_extensions"] if e["type_name"] == "PreprintServer"
         )
         assert ext["parent_type"] == "Organization"
-
-
-
-def test_a_gap_label_proposal_carries_its_origin_and_evidence():
-    """PC.5a: the panel shows where a proposal came from."""
-    from app_main.api.routers.schemas import _normalise_extension
-
-    view = _normalise_extension({
-        "type_name": "Programmalijn", "rationale": "6 entities labelled ...",
-        "origin": "ontology_gap", "examples": ["Economie", "Wonen", 3],
-        "evidence_count": 6,
-    })
-    assert view.origin == "ontology_gap"
-    assert view.examples == ["Economie", "Wonen"]  # non-strings dropped
-    assert view.evidence_count == 6

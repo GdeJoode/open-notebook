@@ -489,11 +489,6 @@ class _ExtensionView(BaseModel):
     description: Optional[str] = None
     rationale: Optional[str] = None
     properties: List[_PropertyDef] = Field(default_factory=list)
-    #: Where the proposal came from: absent for Pass 1, ``ontology_gap`` for a
-    #: label grouped from unmatched entities (PC.5a), with its evidence.
-    origin: Optional[str] = None
-    examples: List[str] = Field(default_factory=list)
-    evidence_count: Optional[int] = None
 
 
 class _PlacementView(BaseModel):
@@ -628,11 +623,6 @@ def _normalise_extension(ext: Dict[str, Any]) -> _ExtensionView:
         description=ext.get("description") if isinstance(ext.get("description"), str) else None,
         rationale=ext.get("rationale") if isinstance(ext.get("rationale"), str) else None,
         properties=props,
-        origin=ext.get("origin") if isinstance(ext.get("origin"), str) else None,
-        examples=[str(e) for e in ext.get("examples") or [] if isinstance(e, str)],
-        evidence_count=(
-            ext.get("evidence_count") if isinstance(ext.get("evidence_count"), int) else None
-        ),
     )
 
 

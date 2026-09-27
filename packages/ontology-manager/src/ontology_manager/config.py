@@ -42,21 +42,7 @@ class OntologyManagerConfig(BaseSettings):
     )
     gap_auto_propose_threshold: int = Field(
         default=5,
-        description=(
-            "Evidence threshold for a schema proposal. PC.5a: the number of "
-            "DISTINCT entities sharing a gap label before that label is queued "
-            "as a pending extension (app_main.services.gap_label_proposals)."
-        ),
-    )
-    gap_auto_propose_enabled: bool = Field(
-        default=False,
-        description=(
-            "Let the evolution agent write per-ENTITY schema_proposal rows. Off "
-            "(PC.5a, owner 2026-09-27): it proposed a type named after one "
-            "entity (`Gemeente Opmeer` -> `GemeenteOpmeer`), and nothing read "
-            "the rows. Label-grouped proposals replace it. Until PC.5a this "
-            "followed gap_tracking_enabled, so gap tracking silently implied it."
-        ),
+        description="Frequency threshold before auto-proposing schema changes",
     )
 
 
