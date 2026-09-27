@@ -1396,7 +1396,9 @@ class EntityExtractionService:
 
         PC.4. `_run_multi_schema` sets `_typing_schemas`; the single-schema path
         and the re-filter do not detect, and type against every ontology. A load
-        failure degrades to the alias/enum path (None), never breaks a persist.
+        that RAISES degrades to the alias/enum path (None). An unreachable
+        database does not raise: the pool waits for it (connection.py), as every
+        other query in the run would.
         """
         if self._typing_schemas is not None:
             return self._typing_schemas
@@ -1422,8 +1424,10 @@ class EntityExtractionService:
         ontologies this document selected (review M2 — projected over the
         selection alone, `Gemeente` re-parented to `GovernmentOrganization` came
         out `government_organization` or `administrative_area` depending on it).
-        The prompt keeps its own projection over the selection; the two agree
-        on every type the prompt offers.
+        The prompt keeps its own projection over the selection. The two can
+        differ for an extension whose name an unselected ontology declares as
+        an alias: the prompt offers the extension, typing resolves the alias.
+        Either way the type is the same under every selection.
         """
         applied = [o for o, _c in applicable_schemas]
         vocabulary = typing_vocabulary(applied, candidate_ontologies)

@@ -449,9 +449,11 @@ phase that happened to touch one line of it.*
 > `Legislation`.
 >
 > **Known limits:**
-> - The re-filter has no notebook, so it does not project curator edits. This
->   was already true before PC.4; the difference is that it now types against
->   every ontology instead of none.
+> - The re-filter has no notebook, so it does not project curator edits. The
+>   same is true of the `multi_schema_enabled=False` kill-switch path, which
+>   has a notebook but no detection step. The re-filter already skipped edits
+>   before PC.4; the difference is that both paths now type against every
+>   ontology instead of none.
 > - The typing vocabulary is the registry's: the database's `ontology_version`
 >   first, then the YAML files, as for detection. There are no DB rows today.
 > - `Project` is `creative_work` in `deals`/`regiodeal` (`parent_type:

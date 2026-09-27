@@ -248,7 +248,7 @@ LLMCallerAlias = LLMCaller
 #: `Ministerie`, `RegioDeal` and `Provincie` labels came only from `regiodeal`'s
 #: inheritance chain; the documents that did select it had none of those misses.
 #: A generic label loses nothing: typing checks every shipped ontology after
-#: extraction (`entity_persistence_service._typing_vocabulary`), and the domain
+#: extraction (`entity_persistence_service.typing_vocabulary`), and the domain
 #: ontologies that extend `schema_core` carry its Person / Organization / Place.
 #:
 #: Consumers of the new order: Pass 2 renders the applied set into its prompt;
