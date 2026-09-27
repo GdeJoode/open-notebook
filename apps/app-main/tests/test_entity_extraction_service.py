@@ -1493,19 +1493,30 @@ class TestConceptAlignmentIsReachable:
                 captured["process"] = kwargs
                 return FilteredResult(entities=result.entities, relations=[])
 
+        applied = [
+            SimpleNamespace(metadata=SimpleNamespace(name="first-ontology")),
+            SimpleNamespace(metadata=SimpleNamespace(name="second-ontology")),
+        ]
+        saved = {}
+
+        async def _save(source_id, result):
+            saved["metadata"] = dict(result.metadata)
+
         async def _extract_and_stash(**_kwargs):
             # The real `_run_multi_schema` stashes the applied set and the
             # notebook's declared vocabulary; a stub that skips that leaves
             # `_applicable_schemas` at None, and then an assertion about the
             # ontology reaching the workflow cannot fail. A review caught exactly
             # that here.
-            svc._applicable_schemas = ["first-ontology", "second-ontology"]
+            # PC.4: ontology-shaped, as the real stash is — the persist step now
+            # records `applied_ontologies` from each one's `metadata.name`.
+            svc._applicable_schemas = applied
             svc._gap_ontology_name = "deals"
             return extracted
 
         with patch.object(
             svc, "_run_multi_schema", AsyncMock(side_effect=_extract_and_stash)
-        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+        ), patch.object(svc, "_save_result", AsyncMock(side_effect=_save)), patch.object(
             svc, "_embed_entities", AsyncMock()
         ), patch.object(
             svc, "_persistence", AsyncMock()
@@ -1523,15 +1534,14 @@ class TestConceptAlignmentIsReachable:
                 run_filtering=True,
             )
 
+        # PC.4: the selection is recorded on the persisted result.
+        assert saved["metadata"]["applied_ontologies"] == ["first-ontology", "second-ontology"]
         assert captured["init"]["config"].concept_alignment.enabled is True
         assert captured["init"]["entity_repo"] is not None
         assert captured["init"]["gap_recorder"] is not None
         # ALL applied schemas, not just the first: a type declared in the second
         # or third would otherwise fail to resolve and license no gap.
-        assert captured["init"]["alignment_schemas"] == [
-            "first-ontology",
-            "second-ontology",
-        ]
+        assert captured["init"]["alignment_schemas"] == applied
         # And the gap name is the notebook's DECLARED vocabulary, never a member
         # of the applied set — that set is ranked per document, and gaps are
         # keyed on (entity_text, ontology_name).

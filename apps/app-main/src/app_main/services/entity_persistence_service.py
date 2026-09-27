@@ -84,6 +84,42 @@ def _normalize_entity_type(raw: Any) -> str:
     return norm if norm in _ALLOWED_ENTITY_TYPES else "other"
 
 
+async def _typing_vocabulary(
+    applied: Optional[List["Ontology"]],
+) -> List["Ontology"]:
+    """The ontologies an extracted label is typed against: applied first, then all.
+
+    Track PC.4. Detection selects 1-3 ontologies per document, because a model
+    cannot always hold more of them in its prompt. That selection is right for
+    EXTRACTION and wrong for TYPING: a label from an ontology that was not
+    selected fell through to ``concept``, so the same label got a different
+    type depending on the document (measured: 69 of 91 declared labels).
+    Typing runs after extraction, in Python, so it checks every shipped
+    ontology — the registry already holds them all for detection.
+
+    The applied set leads because it carries the notebook's curator edits
+    (``_project_notebook_edits``); the rest follow by name. Across the shipped
+    ontologies no label has two canonical answers (pinned by
+    ``test_typing_is_stable.py``), so their order cannot change a type.
+    Loading fails soft to the applied set: typing must never break a persist.
+    """
+    applied = list(applied or [])
+    try:
+        from ontology_manager import get_ontology_manager
+
+        manager = get_ontology_manager()
+        shipped = [await manager.get_ontology(n) for n in await manager.list_ontologies()]
+    except Exception as e:
+        logger.warning(f"typing vocabulary: could not load the shipped ontologies ({e})")
+        return applied
+    have = {o.metadata.name for o in applied if o.metadata}
+    rest = sorted(
+        (o for o in shipped if o is not None and o.metadata and o.metadata.name not in have),
+        key=lambda o: o.metadata.name,
+    )
+    return applied + rest
+
+
 @dataclass
 class ResolvedType:
     """The outcome of resolving an extracted label to a persistable type.
@@ -527,13 +563,15 @@ class EntityPersistenceService:
         # NOT in this batch (cross-batch) stays unmapped and resolves by the
         # relation-carried type (also bridge-resolved) or, failing that, by name
         # only.
+        # PC.4: type against every shipped ontology, the applied set first.
+        schemas = await _typing_vocabulary(applicable_schemas)
         type_by_name: Dict[str, str] = {}
         for entity in entities:
             etext = entity.get("text", "")
             if not etext.strip():
                 continue
             type_by_name[etext] = _resolve_entity_type(
-                entity.get("label", "concept"), applicable_schemas
+                entity.get("label", "concept"), schemas
             ).entity_type
 
         # 1. Upsert entities
@@ -544,7 +582,7 @@ class EntityPersistenceService:
             # AND preserve the original type. ``entity_type`` (coarse) drives
             # dedup / the K (name,type) guard; ``primary_type`` / ``type_tags``
             # carry the rich type the LLM emitted.
-            resolved = _resolve_entity_type(raw_label, applicable_schemas)
+            resolved = _resolve_entity_type(raw_label, schemas)
             label = resolved.entity_type
             confidence = entity.get("confidence", 0.5)
             properties = entity.get("properties", {})
@@ -725,13 +763,13 @@ class EntityPersistenceService:
             # (``type_by_name``). Neither present → None → name-only resolution.
             src_carried = rel.get("source_type")
             src_type = (
-                _resolve_entity_type(src_carried).entity_type
+                _resolve_entity_type(src_carried, schemas).entity_type
                 if src_carried
                 else type_by_name.get(src_text)
             )
             tgt_carried = rel.get("target_type")
             tgt_type = (
-                _resolve_entity_type(tgt_carried).entity_type
+                _resolve_entity_type(tgt_carried, schemas).entity_type
                 if tgt_carried
                 else type_by_name.get(tgt_text)
             )

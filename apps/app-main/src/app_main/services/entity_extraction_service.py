@@ -2130,6 +2130,14 @@ class EntityExtractionService:
         if written:
             result.metadata["persisted"] = written
 
+        # PC.4: which ontologies detection selected for this document. It was
+        # recorded nowhere, so measuring detection meant replaying it with
+        # today's ontologies. Read by `scripts/pc4_detection_probe.py`.
+        if self._applicable_schemas:
+            result.metadata["applied_ontologies"] = [
+                o.metadata.name for o in self._applicable_schemas if o.metadata
+            ]
+
         # 7. Persist raw extraction results
         await self._save_result(source_id, result)
 

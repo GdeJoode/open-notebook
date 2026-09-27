@@ -394,6 +394,53 @@ phase that happened to touch one line of it.*
 
 ## PC.4 — Stable typing — ~1d
 
+> **PC.4 built 2026-09-27** (branch `feature/pc4-stable-typing`).
+>
+> **The measurement (read-only).** Every label the shipped ontologies declare
+> (91), under every ordered selection detection can produce (1,111).
+> - Three labels had two answers even inside the ontologies: `Person`,
+>   `Organization` and `Event` became `concept` in the 8 ontologies built on
+>   `schema_core`.
+> - 69 labels changed type with the selection: in it, the real type; out of it,
+>   `concept`.
+> - Cause of the first: types written with a `schema_org:` URL (documentation,
+>   not read by the loader) and no `schema_org_type`, so the bridge walked to
+>   `Thing`. Affected: 10 types in `schema_core`, 3 in `policy`
+>   (`Legislation` → `creative_work`, `GovernmentOrganization` → `organization`,
+>   `AdministrativeArea` → `location`) and 1 in `scholarly`.
+>
+> **Owner (2026-09-27): select narrowly, check broadly.** Detection selects 1–3
+> ontologies because the model cannot always hold more in memory. That stays for
+> EXTRACTION. TYPING checks afterwards against every ontology.
+>
+> **What shipped:**
+> - `schema_org_type` on the 15 affected types;
+> - `_typing_vocabulary`: the applied set first (it carries curator edits), then
+>   every shipped ontology. It is used by persistence, by the relation-endpoint
+>   types (which were typed against no ontology at all), and by the OKF import
+>   (the same);
+> - detection ranks domain ontologies ahead of `GENERIC_ONTOLOGIES`
+>   (base / general / schema_core; owner-approved). A replay over 14 documents:
+>   detection misses 233 → 178; `Gemeente` 32 → 2, `Ministerie` 16 → 1,
+>   `RegioDeal` 12 → 3. The remainder is generic labels, mostly one document
+>   where no ontology scored, and typing catches them;
+> - NL aliases for the measured government labels, and literals (`Date`,
+>   `Budget`, `Metric`, …) flagged as `non_type_label`;
+> - `extraction_result.metadata.applied_ontologies`, read by
+>   `scripts/pc4_detection_probe.py`. Before this the selection was recorded
+>   nowhere.
+>
+> Tests: `test_typing_is_stable.py`. It checks consistency AND correctness: a
+> type named after a mapped base must reach that base. Consistency alone missed
+> `Legislation`.
+>
+> **Not done, for the owner:**
+> - Existing rows are not retyped. A dry run says 142 of 2,174 would change.
+> - Literals still land on `concept`: L.2 AC3 decided noise is never `other`.
+>   "Keep literals out of the type layer" contradicts that.
+> - The notebook's `base_ontology = "scholarly"` predates PC.1's fix and is
+>   wrong for this corpus (owner). Clearing it is a write to the live row.
+
 **The finding (review I1).** `resolve_ontology_type("Person", …)` returns `person`
 under `general` and `concept` under `deals`/`government`. Which ontologies apply
 is decided by a content score over the document, so the same label lands in a

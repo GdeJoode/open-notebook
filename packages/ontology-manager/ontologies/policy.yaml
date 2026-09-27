@@ -62,6 +62,7 @@ entity_types:
   - name: "Legislation"
     description: "A law, statute, regulation, or legal instrument"
     schema_org: "https://schema.org/Legislation"
+    schema_org_type: "schema:Legislation"
     parent_type: "CreativeWork"
     extraction_strategy: "llm"
     extraction_hints:
@@ -137,6 +138,7 @@ entity_types:
   - name: "GovernmentOrganization"
     description: "A governmental body, agency, or department"
     schema_org: "https://schema.org/GovernmentOrganization"
+    schema_org_type: "schema:GovernmentOrganization"
     parent_type: "Organization"
     extraction_strategy: "llm"
     extraction_hints:
@@ -164,6 +166,7 @@ entity_types:
   - name: "AdministrativeArea"
     description: "A political or administrative geographic area"
     schema_org: "https://schema.org/AdministrativeArea"
+    schema_org_type: "schema:AdministrativeArea"
     parent_type: "Place"
     extraction_strategy: "llm"
     extraction_hints:

@@ -1240,9 +1240,14 @@ class TestTheMergedTypeTagsReachTheDatabase:
         # before and after W2. Compare against what the BRIDGE alone resolves, so
         # the assertion is that the union added nothing when there was nothing to
         # add.
-        from app_main.services.entity_persistence_service import _resolve_entity_type
+        from app_main.services.entity_persistence_service import (
+            _resolve_entity_type,
+            _typing_vocabulary,
+        )
 
-        bridge_only = _resolve_entity_type("Provincie", None)
+        # PC.4: persistence types against every shipped ontology, so the bridge
+        # reference must use the same vocabulary.
+        bridge_only = _resolve_entity_type("Provincie", await _typing_vocabulary(None))
         assert without.type_tags == list(bridge_only.type_tags)
 
     @pytest.mark.asyncio
