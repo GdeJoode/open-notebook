@@ -79,7 +79,8 @@ from surrealdb_service.connection import execute_query
 from app_main.services.entity_persistence_service import (
     EntityPersistenceService,
     _resolve_entity_type,
-    _typing_vocabulary,
+    load_typing_ontologies,
+    typing_vocabulary,
 )
 from app_main.services.entity_resolution import merge_audit
 from app_main.services.okf_export_service import RESERVED_STEMS
@@ -676,7 +677,8 @@ class OkfImportService:
         (so a re-export re-emits it); an internal urn is kept only as a property.
         """
         if self._typing_schemas is None:
-            self._typing_schemas = await _typing_vocabulary(None)
+            # PC.4: every ontology, as extraction types (no selection here).
+            self._typing_schemas = typing_vocabulary(None, await load_typing_ontologies())
         resolved = _resolve_entity_type(pe.okf_type, self._typing_schemas)
         type_tags = list(
             dict.fromkeys([*resolved.type_tags, *pe.type_tags])

@@ -84,40 +84,52 @@ def _normalize_entity_type(raw: Any) -> str:
     return norm if norm in _ALLOWED_ENTITY_TYPES else "other"
 
 
-async def _typing_vocabulary(
+def typing_vocabulary(
     applied: Optional[List["Ontology"]],
+    all_ontologies: Optional[List["Ontology"]],
 ) -> List["Ontology"]:
-    """The ontologies an extracted label is typed against: applied first, then all.
+    """The ontologies a label is typed against: the applied set, then every other.
 
-    Track PC.4. Detection selects 1-3 ontologies per document, because a model
-    cannot always hold more of them in its prompt. That selection is right for
+    Track PC.4. Detection selects 1-3 ontologies per document because a model
+    cannot always hold more in its prompt (owner). That selection is right for
     EXTRACTION and wrong for TYPING: a label from an ontology that was not
-    selected fell through to ``concept``, so the same label got a different
-    type depending on the document (measured: 69 of 91 declared labels).
-    Typing runs after extraction, in Python, so it checks every shipped
-    ontology — the registry already holds them all for detection.
+    selected fell through to ``concept`` (measured: 69 of 91 declared labels
+    changed type with the selection). Typing runs after extraction, so it
+    checks every ontology.
 
-    The applied set leads because it carries the notebook's curator edits
-    (``_project_notebook_edits``); the rest follow by name. Across the shipped
-    ontologies no label has two canonical answers (pinned by
-    ``test_typing_is_stable.py``), so their order cannot change a type.
-    Loading fails soft to the applied set: typing must never break a persist.
+    Pure. The caller supplies ``all_ontologies`` — extraction already holds them
+    for detection; the re-filter and the OKF import load them with
+    :func:`load_typing_ontologies` — so persistence itself never loads anything.
+    The applied set leads, the rest follow by name. A caller that projects
+    curator edits projects them over THIS list (see
+    ``EntityExtractionService._typing_schemas_for``), so an edit takes the same
+    way whichever ontologies were selected.
     """
     applied = list(applied or [])
-    try:
-        from ontology_manager import get_ontology_manager
-
-        manager = get_ontology_manager()
-        shipped = [await manager.get_ontology(n) for n in await manager.list_ontologies()]
-    except Exception as e:
-        logger.warning(f"typing vocabulary: could not load the shipped ontologies ({e})")
-        return applied
-    have = {o.metadata.name for o in applied if o.metadata}
+    have = {o.metadata.name for o in applied if getattr(o, "metadata", None)}
     rest = sorted(
-        (o for o in shipped if o is not None and o.metadata and o.metadata.name not in have),
+        (
+            o
+            for o in (all_ontologies or [])
+            if getattr(o, "metadata", None) and o.metadata.name not in have
+        ),
         key=lambda o: o.metadata.name,
     )
     return applied + rest
+
+
+async def load_typing_ontologies() -> List["Ontology"]:
+    """Every ontology the registry holds, loaded the way detection loads them.
+
+    PC.4: for the paths that type without a detection step (the re-filter, the
+    OKF import). Goes through the registry, which reads the database before the
+    YAML files — the same source detection uses, so the two cannot disagree.
+    """
+    from ontology_manager import get_ontology_manager
+
+    manager = get_ontology_manager()
+    loaded = [await manager.get_ontology(n) for n in await manager.list_ontologies()]
+    return [o for o in loaded if o is not None]
 
 
 @dataclass
@@ -516,8 +528,10 @@ class EntityPersistenceService:
             entities: Filtered entity dicts (text, label, confidence, properties).
             relations: Filtered relation dicts (source_entity, target_entity, relation_type, confidence).
             merge_groups: Optional dedup merge groups for provenance.
-            applicable_schemas: The ontologies applied for this source's
-                extraction (L.1). When supplied, an extracted ontology label
+            applicable_schemas: The ontologies labels are typed against (L.1).
+                Since PC.4 the typing vocabulary — the applied set followed by
+                every other ontology (:func:`typing_vocabulary`) — not only the
+                applied set. When supplied, an extracted ontology label
                 is bridged to its canonical ``entity_type`` and the rich type
                 is preserved in ``primary_type`` / ``type_tags``. Threaded down
                 from ``entity_extraction_service`` (already computed by
@@ -563,8 +577,10 @@ class EntityPersistenceService:
         # NOT in this batch (cross-batch) stays unmapped and resolves by the
         # relation-carried type (also bridge-resolved) or, failing that, by name
         # only.
-        # PC.4: type against every shipped ontology, the applied set first.
-        schemas = await _typing_vocabulary(applicable_schemas)
+        # PC.4: the caller passes the TYPING vocabulary (every ontology, the
+        # applied set first — see `typing_vocabulary`); entities and the
+        # relation-carried endpoint types below resolve against the same list.
+        schemas = applicable_schemas
         type_by_name: Dict[str, str] = {}
         for entity in entities:
             etext = entity.get("text", "")

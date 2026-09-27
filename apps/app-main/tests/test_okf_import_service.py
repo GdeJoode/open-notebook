@@ -404,15 +404,6 @@ def _bind_db_service(monkeypatch, config: SurrealDBConfig):
     monkeypatch.setattr(okf_module, "execute_query", _exec)
     monkeypatch.setattr(eps_module, "execute_query", _exec)
 
-    # PC.4: typing loads the shipped ontologies through the registry, which looks
-    # in the database first through the GLOBAL pool. Bind that pool to the
-    # container, as a production process's pool is bound to its one database;
-    # otherwise the registry's first query binds it to the env default, and the
-    # identity-column check (which reads the pool's config) inspects that one.
-    from surrealdb_service.connection import get_pool
-
-    get_pool(config)
-
     entity_repo = EntityRepository(config=config)
     overlay = OverlayService(repo=AliasOverlayRepository(config=config))
     return OkfImportService(

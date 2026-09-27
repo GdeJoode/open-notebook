@@ -250,6 +250,11 @@ LLMCallerAlias = LLMCaller
 #: A generic label loses nothing: typing checks every shipped ontology after
 #: extraction (`entity_persistence_service._typing_vocabulary`), and the domain
 #: ontologies that extend `schema_core` carry its Person / Organization / Place.
+#:
+#: Consumers of the new order: Pass 2 renders the applied set into its prompt;
+#: `_merge_results` breaks label ties first-seen, so a domain label now wins a tie
+#: with a generic one; `schema_projection._target_ontology` attaches a curator's
+#: extension to `schemas[0]` when it names no schema — now a domain ontology.
 GENERIC_ONTOLOGIES = frozenset({"base", "general", "schema_core"})
 
 

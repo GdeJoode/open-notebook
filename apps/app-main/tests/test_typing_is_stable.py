@@ -16,26 +16,39 @@ sequence of 1 to 3 distinct shipped ontologies.
 from __future__ import annotations
 
 import itertools
+from types import SimpleNamespace
 
 import pytest
+from app_main.services.entity_extraction_service import EntityExtractionService
 from app_main.services.entity_persistence_service import (
     _resolve_entity_type,
-    _typing_vocabulary,
+    load_typing_ontologies,
+    typing_vocabulary,
 )
-from ontology_manager import get_ontology_manager
 from ontology_manager.canonical_bridge import resolve_ontology_type
 
 pytestmark = pytest.mark.asyncio
 
 
 async def _shipped():
-    manager = get_ontology_manager()
-    onts = {}
-    for name in await manager.list_ontologies():
-        ontology = await manager.get_ontology(name)
-        if ontology is not None:
-            onts[name] = ontology
-    return onts
+    """The shipped YAML ontologies (conftest keeps the registry off any database)."""
+    return {o.metadata.name: o for o in await load_typing_ontologies()}
+
+
+def _svc():
+    return EntityExtractionService.__new__(EntityExtractionService)
+
+
+def _typing(onts, selection, edits=None):
+    """What the extraction service types against for this selection."""
+    notebook_schema = SimpleNamespace(accepted_extensions=edits) if edits else None
+    return _svc()._typing_schemas_for(
+        [(onts[n], 0.9) for n in selection], list(onts.values()), notebook_schema, "notebook:t"
+    )
+
+
+def _selections(names):
+    return [p for k in (1, 2, 3) for p in itertools.permutations(names, k)]
 
 
 def _labels(onts):
@@ -95,11 +108,10 @@ async def test_the_type_is_the_same_under_every_selection():
         label: _resolve_entity_type(label, [onts[n] for n in names]).entity_type
         for label in labels
     }
-    selections = [p for k in (1, 2, 3) for p in itertools.permutations(names, k)]
-    assert len(selections) == 1111 or len(names) != 11
+    selections = _selections(names)
     differs = {}
     for selection in selections:
-        schemas = await _typing_vocabulary([onts[n] for n in selection])
+        schemas = typing_vocabulary([onts[n] for n in selection], list(onts.values()))
         for label in labels:
             got = _resolve_entity_type(label, schemas).entity_type
             if got != reference[label]:
@@ -129,15 +141,42 @@ async def test_a_label_outside_the_selection_is_still_typed():
     onts = await _shipped()
     selection = [onts["policy_themes"], onts["base"], onts["general"]]
     assert resolve_ontology_type("RegioDeal", selection) is None
-    schemas = await _typing_vocabulary(selection)
+    schemas = typing_vocabulary(selection, list(onts.values()))
     assert _resolve_entity_type("RegioDeal", schemas).entity_type == "programme"
 
 
-async def test_the_selection_leads_so_curator_edits_win():
-    """The applied set is first: a projected (curator-edited) definition is found
-    before the shipped one of the same name."""
+@pytest.mark.parametrize("edit, label", [
+    # A re-parent of a type only some selections contain.
+    ({"reparent_id": "r1", "op": "reparent", "type_name": "Gemeente",
+      "new_parent": "GovernmentOrganization", "parent_type": "GovernmentOrganization"},
+     "Gemeente"),
+    # An extension whose name an ontology already declares as an alias.
+    ({"extension_id": "ext:Theme", "type_name": "Theme", "parent_type": "Organization"},
+     "Theme"),
+])
+async def test_a_curator_edit_takes_the_same_way_under_every_selection(edit, label):
+    """Review M2: edits projected over the selection alone made the type depend
+    on it again — the re-parent was refused when the selection lacked
+    `Gemeente`, the extension materialised when it lacked the alias."""
     onts = await _shipped()
-    edited = onts["general"].model_copy(deep=True)
-    schemas = await _typing_vocabulary([edited])
-    assert schemas[0] is edited
-    assert sum(1 for o in schemas if o.metadata.name == "general") == 1
+    answers = {
+        _resolve_entity_type(label, _typing(onts, sel, [edit])).entity_type
+        for sel in _selections(sorted(onts))
+    }
+    assert len(answers) == 1, answers
+
+
+async def test_the_re_parent_is_applied_not_refused():
+    """Vacuity guard for the test above: one answer could be "always refused"."""
+    onts = await _shipped()
+    edit = {"reparent_id": "r1", "op": "reparent", "type_name": "Gemeente",
+            "new_parent": "GovernmentOrganization", "parent_type": "GovernmentOrganization"}
+    assert _resolve_entity_type("Gemeente", _typing(onts, ["policy_themes"], [edit])).entity_type         == "government_organization"
+    assert _resolve_entity_type("Gemeente", _typing(onts, ["policy_themes"])).entity_type         == "administrative_area"
+
+
+async def test_the_selection_leads():
+    onts = await _shipped()
+    schemas = typing_vocabulary([onts["regiodeal"], onts["base"]], list(onts.values()))
+    assert [o.metadata.name for o in schemas[:2]] == ["regiodeal", "base"]
+    assert len({o.metadata.name for o in schemas}) == len(schemas) == len(onts)

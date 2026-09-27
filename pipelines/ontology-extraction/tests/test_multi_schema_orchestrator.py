@@ -24,6 +24,7 @@ from unittest.mock import patch
 
 import pytest
 from ontology_extraction.multi_schema_orchestrator import (
+    GENERIC_ONTOLOGIES,
     MIN_APPLICABLE_CONFIDENCE,
     SOFT_NUDGE_COVERAGE_HIGH,
     SOFT_NUDGE_COVERAGE_LOW,
@@ -1835,3 +1836,67 @@ class TestWorkflowMultiMode:
             )
             mocked.assert_not_called()
         assert result.metadata["soft_nudge"] == SoftNudgeDecision.NONE.value
+
+
+# ---------------------------------------------------------------------------
+# PC.4: generic ontologies fill the slots domain ontologies leave open
+# ---------------------------------------------------------------------------
+
+
+def _named(name: str, *type_names: str) -> Ontology:
+    return Ontology(
+        metadata=OntologyMetadata(name=name, version="1.0"),
+        entity_types={t: EntityTypeDefinition(name=t) for t in type_names},
+    )
+
+
+# Each generic ontology has ONE type the text names (score 0.9, the cap); each
+# domain ontology names one of TWO (score 0.5). By score alone the generics win.
+_TEXT = "Person Organization Thing Gemeente RegioDeal Brede welvaart"
+
+
+def _candidates():
+    return [
+        _named("base", "Person"),
+        _named("general", "Organization"),
+        _named("schema_core", "Thing"),
+        _named("government", "Gemeente", "Waterschap"),
+        _named("regiodeal", "RegioDeal", "Convenant"),
+        _named("policy_themes", "Brede welvaart", "Leefbaarheid"),
+    ]
+
+
+class TestGenericOntologiesFillLeftoverSlots:
+    """Owner-approved (PC.4): measured on the Regio Deal corpus, `base` and
+    `general` outscored `regiodeal` and pushed it out of three documents' top 3.
+    Typing checks every ontology afterwards, so a generic label loses nothing."""
+
+    def test_the_generic_set_is_the_three_broad_vocabularies(self):
+        assert GENERIC_ONTOLOGIES == {"base", "general", "schema_core"}
+
+    @pytest.mark.asyncio
+    async def test_domain_ontologies_take_the_slots_even_when_outscored(self):
+        ranked = await detect_applicable_schemas(
+            document_type=None, document_text=_TEXT, ontologies=_candidates(), top_k=3
+        )
+        names = [o.metadata.name for o, _ in ranked]
+        assert sorted(names) == ["government", "policy_themes", "regiodeal"]
+        # The premise: every generic scored higher than every domain ontology.
+        assert all(conf == pytest.approx(0.5) for _, conf in ranked)
+
+    @pytest.mark.asyncio
+    async def test_generics_fill_what_the_domains_leave(self):
+        ranked = await detect_applicable_schemas(
+            document_type=None, document_text=_TEXT, ontologies=_candidates(), top_k=5
+        )
+        names = [o.metadata.name for o, _ in ranked]
+        assert set(names[:3]) == {"government", "policy_themes", "regiodeal"}
+        assert set(names[3:]) <= GENERIC_ONTOLOGIES and len(names) == 5
+
+    @pytest.mark.asyncio
+    async def test_a_document_only_generics_fit_still_gets_them(self):
+        ranked = await detect_applicable_schemas(
+            document_type=None, document_text="Person Organization",
+            ontologies=_candidates(), top_k=3,
+        )
+        assert {o.metadata.name for o, _ in ranked} == {"base", "general"}

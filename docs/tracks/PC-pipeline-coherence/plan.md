@@ -370,6 +370,12 @@ filter, and a refusal on a database that predates 79.
   `verdict_counts`, `method_counts`, `reason_counts` and `capped_type_fetches`,
   plus the 7 keys already copied into `metadata.filtering`, which nothing in the
   UI reads.
+- **Also carried (from PC.4's review, M4):** `concept_alignment.resolve_canonical_type`
+  resolves against `alignment_schemas`, the applied set only. The `entity_type`
+  it queries with `find_by_type` is written against the typing vocabulary
+  (every ontology). Switching alignment back on must pass it the typing
+  vocabulary, or a label from outside the selection gets `None` or a type the
+  graph does not hold.
 
 ## PC.7 — The extraction service's boundaries — NOT STARTED
 
@@ -415,10 +421,18 @@ phase that happened to touch one line of it.*
 >
 > **What shipped:**
 > - `schema_org_type` on the 15 affected types;
-> - `_typing_vocabulary`: the applied set first (it carries curator edits), then
->   every shipped ontology. It is used by persistence, by the relation-endpoint
->   types (which were typed against no ontology at all), and by the OKF import
->   (the same);
+> - `typing_vocabulary` (pure): the applied set first, then every other
+>   ontology. The extraction service builds it from the ontologies detection
+>   already loaded, and projects the notebook's curator edits over the WHOLE
+>   list (`_typing_schemas_for`), so an edit takes the same way under every
+>   selection (review M2).
+>   - The prompt keeps its own projection over the selection.
+>   - Persistence loads nothing itself (review M1: it had quietly started
+>     querying the database through the global pool).
+>   - The same vocabulary types the relation endpoints (which had been typed
+>     against no ontology at all), the re-filter and the OKF import; the last
+>     two load it with `load_typing_ontologies`.
+>   - Unit tests read the YAML files only (`conftest._ontology_registry_reads_files`).
 > - detection ranks domain ontologies ahead of `GENERIC_ONTOLOGIES`
 >   (base / general / schema_core; owner-approved). A replay over 14 documents:
 >   detection misses 233 → 178; `Gemeente` 32 → 2, `Ministerie` 16 → 1,
@@ -434,8 +448,30 @@ phase that happened to touch one line of it.*
 > type named after a mapped base must reach that base. Consistency alone missed
 > `Legislation`.
 >
+> **Known limits:**
+> - The re-filter has no notebook, so it does not project curator edits. This
+>   was already true before PC.4; the difference is that it now types against
+>   every ontology instead of none.
+> - The typing vocabulary is the registry's: the database's `ontology_version`
+>   first, then the YAML files, as for detection. There are no DB rows today.
+> - `Project` is `creative_work` in `deals`/`regiodeal` (`parent_type:
+>   CreativeWork`) and `programme` in L.3's alias map. The ontology now wins in
+>   every document; before, the alias won whenever those ontologies were not
+>   selected. Which one is right is an owner question.
+> - PC.1b evidence (cross-type fold-equal groups): 97 name groups span two
+>   types on the live graph, and 94 remain split after PC.4 typing. All 94 are
+>   the LLM choosing different labels (`BeleidsPijler` vs `Programma`), not
+>   typing.
+>
 > **Not done, for the owner:**
 > - Existing rows are not retyped. A dry run says 142 of 2,174 would change.
+>   **This matters on re-extraction.** The upsert is keyed on
+>   `(name_key, entity_type)`. Any extraction that meets one of those names
+>   again, whether a re-extraction or a new document, writes a second row next
+>   to the old one (e.g. `Plaats` concept→location, `Overheid`
+>   concept→government_organization). The name-only relation fallback then
+>   picks one of them arbitrarily. A retype of the existing rows should come
+>   before, or with, the next extraction.
 > - Literals still land on `concept`: L.2 AC3 decided noise is never `other`.
 >   "Keep literals out of the type layer" contradicts that.
 > - The notebook's `base_ontology = "scholarly"` predates PC.1's fix and is

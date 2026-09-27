@@ -152,8 +152,11 @@ def resolve_ontology_type(
 
     Args:
         label: The extracted ontology label (the rich domain type).
-        schemas: The ontologies applied for this source's extraction (already
-            inheritance-resolved by the registry).
+        schemas: The ontologies to resolve against (already
+            inheritance-resolved by the registry). Since PC.4 persistence passes
+            its typing vocabulary — the applied set followed by every other
+            ontology — so a label outside the selection still resolves; the
+            first definition found wins.
 
     Returns:
         A :class:`CanonicalResolution` when the label is in some applied

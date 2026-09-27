@@ -50,6 +50,29 @@ def _disable_metrics_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(_DISABLE_METRICS_KEY, "1")
 
 
+@pytest.fixture(autouse=True)
+def _ontology_registry_reads_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unit tests read the shipped YAML ontologies, never a database's.
+
+    PC.4: typing loads every ontology through the registry, which asks the
+    database first — through the GLOBAL pool, i.e. whatever the env default
+    points at (a developer's server), and an unreachable one hangs the pool
+    rather than failing. Same reasoning as the metrics switch above: a unit test
+    takes no DB dependency. No app-main test exercises the registry's database
+    path; the ontology-manager package tests it.
+    """
+    from ontology_manager.registry import OntologyRegistry
+
+    async def _no_db_version(self, name, version=None):
+        return None
+
+    async def _file_names(self):
+        return sorted(p.stem for p in self._ontology_dir.glob("*.yaml"))
+
+    monkeypatch.setattr(OntologyRegistry, "_load_from_db", _no_db_version)
+    monkeypatch.setattr(OntologyRegistry, "list_ontologies", _file_names)
+
+
 # ---------------------------------------------------------------------------
 # Timestamp helpers
 # ---------------------------------------------------------------------------
