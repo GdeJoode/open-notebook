@@ -15,7 +15,7 @@ passage to show (see ``docs/tracks/Q-triage/status.md``, Q-B1).
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
@@ -30,8 +30,11 @@ async def sources_for_entities(
     ids = list(dict.fromkeys(str(e) for e in entity_ids if e))
     if not ids:
         return {}
+    # `FROM $ids` fetches the records directly; `FROM entity WHERE id IN $ids`
+    # scanned the table: 1,418 ms against 99 ms for 1,238 queue rows on staging
+    # (Q-B1 review), paid on every queue refetch — i.e. after every curator click.
     rows = await execute_query(
-        "SELECT id, source_documents FROM entity WHERE id IN $ids;",
+        "SELECT id, source_documents FROM $ids;",
         {"ids": [ensure_record_id(i) for i in ids]},
         config,
     )
@@ -50,7 +53,7 @@ async def sources_for_entities(
         )
         titles = {str(r["id"]): str(r.get("title") or "") for r in srows or []}
 
-    out: Dict[str, List[Dict[str, Any]]] = {}
+    out: Dict[str, List[Dict[str, str]]] = {}
     for eid in ids:
         out[eid] = [{"id": s, "title": titles.get(s, "")} for s in per_entity.get(eid, [])]
     return out

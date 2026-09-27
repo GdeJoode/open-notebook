@@ -181,8 +181,9 @@ export default function TriageQueuePage() {
                                 </TooltipTrigger>
                                 <TooltipContent side="right" className="max-w-sm">
                                   <ul className="space-y-0.5 text-xs">
-                                    {docsTooltipLines(item).map((line) => (
-                                      <li key={line}>{line}</li>
+                                    {docsTooltipLines(item).map((line, idx) => (
+                                      // Two uploads of one file share a display title.
+                                      <li key={`${idx}-${line}`}>{line}</li>
                                     ))}
                                   </ul>
                                 </TooltipContent>

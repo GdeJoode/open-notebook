@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from loguru import logger
 from pydantic import BaseModel, Field
 from surrealdb_service.repositories import EntityRepository
 
@@ -195,8 +196,14 @@ async def get_queue(
 ) -> QueueResponse:
     """Return the triage review queue (open rows by default)."""
     items = await (queue.list_all() if include_all else queue.list_open())
-    # One batched lookup for the whole queue (Q-B1): the hover on *Docs*.
-    sources = await queue_sources.sources_for_entities([i.entity for i in items])
+    # One batched lookup for the whole queue (Q-B1): the hover on *Docs*. It is
+    # an enrichment, so it degrades to "no documents" rather than failing the
+    # queue a curator needs to work.
+    try:
+        sources = await queue_sources.sources_for_entities([i.entity for i in items])
+    except Exception as exc:
+        logger.warning("triage queue: document lookup failed, serving without: {e}", e=exc)
+        sources = {}
     out = []
     for i in items:
         row = QueueItemOut.from_item(i)

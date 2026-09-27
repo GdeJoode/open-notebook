@@ -15,11 +15,11 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import pytest
 from app_main.api.routers.triage import router
 from app_main.dependencies import get_entity_repo, get_triage_queue_repo
-from app_main.services.triage.triage_queue import QueueItem
-import pytest
 from app_main.services.triage import queue_sources
+from app_main.services.triage.triage_queue import QueueItem
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -345,3 +345,15 @@ def test_each_row_carries_its_documents(monkeypatch):
     assert seen["ids"] == ["entity:a", "entity:b"]  # one batched call for the queue
     assert items[0]["sources"] == [{"id": "source:1", "title": "49b9320d0e1e__Convenant X"}]
     assert items[1]["sources"] == []  # an entity with no documents
+
+
+def test_a_failing_document_lookup_does_not_fail_the_queue(monkeypatch):
+    async def boom(entity_ids, config=None):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(queue_sources, "sources_for_entities", boom)
+    queue = AsyncMock()
+    queue.list_open = AsyncMock(return_value=[_queue_item()])
+    resp = _make_app(queue=queue).get("/api/triage/queue")
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["sources"] == []
