@@ -401,8 +401,52 @@ different canonical bucket depending on the document. In the measured corpus,
 - **From PC.1b's inventory**: PC.2's cross-type fold-equal candidates are this phase's evidence — labels holding two canonical answers on real data rather than a sweep over shipped ontologies.
 - **AC**: a label's canonical type is identical across the eight review documents;
   a sweep over the shipped ontologies shows no label with two canonical answers.
+- **Added 2026-09-27 (from PC.5a, owner): the "label resolved to no type" signal.**
+  Entities whose label mapped to no canonical type land in `other`/`concept` and
+  keep the label in `properties.raw_entity_type`. Measured on staging (748 such
+  active/reference rows):
+  - 416 carry no raw label: older extractions.
+  - The rest splits into three kinds:
+    - **literals, not types**: `ABBREVIATION` 36, `Budget/Amount` 26, `Date` 14,
+      `Budget` 12, plus `Aantal`, `Datum`, `DOI`;
+    - **mapping misses** of types that exist: `Gemeente` → `other`. These are
+      this phase's defect;
+    - **a handful of real type candidates**: `Akkoord` 2, `Doelgroep` 4,
+      `BeleidsPijler` 1, `Bedrijfsvereniging` 2.
+  - None overlaps the 79 pending Pass-1 proposals.
+
+  PC.4 owns this signal. Fix the mapping misses, and keep literals out of the
+  type layer. Only a measured residue of real type candidates may later become
+  a curator door. PC.5a first built that door on `ontology_gap` and withdrew it:
+  see PC.5.
 
 ## PC.5 — A door for the curator loop — ~1.5d
+
+> **PC.5a done 2026-09-27** (the schema door, two review rounds).
+> - **Durable "no":**
+>   - migration 84 adds `rejected_extensions`;
+>   - both rejection paths record it through `record_rejection`;
+>   - `merge_pending_extensions` and `add_pending_extension` skip a rejected
+>     name;
+>   - PC.1's two "it comes back" tests are inverted.
+>
+>   It holds unless the known read-modify-write race (PC.1 → PC.6) restores an
+>   older row. There is no un-reject and no display of rejected names: the owner
+>   asked for durability only, and that is a recorded decision, not an oversight.
+> - **Per-entity auto-propose off:** `gap_auto_propose_enabled`, default False.
+>   It used to follow `gap_tracking_enabled`.
+> - **Withdrawn, owner 2026-09-27:** the label-grouped proposals from
+>   `ontology_gap`. Review showed the premise was false.
+>   - A gap is licensed only when the label DID resolve (`GAP_LICENSING_CODES`),
+>     so it is a new instance of a known type, never a missing type. The
+>     proposals would have offered existing types as new ones.
+>   - Gaps cannot be recorded on any shipped configuration: alignment requires
+>     KG resolution, which PC.3 turned off, and the workflow refuses the
+>     combination.
+>
+>   `ontology_gap`/`schema_proposal` are therefore unreachable in production, and
+>   nothing reads or writes them there. New types reach the curator through Pass 1,
+>   whose door works. The real "no type" signal moved to PC.4.
 
 **Also owned here (from PC.1's review)**: a durable "no". `reject_extension`
 records nothing, so a rejected proposal is re-queued by the next document that

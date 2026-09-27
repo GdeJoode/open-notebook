@@ -172,6 +172,12 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
             )
             return False
 
+        # PC.5: no back door around a curator's rejection (migration 84).
+        name = str(extension.get("type_name") or "").strip().lower()
+        if name and name in {str(t).strip().lower() for t in existing.rejected_extensions}:
+            logger.info(f"add_pending_extension: {name!r} was rejected; not re-queued")
+            return False
+
         existing.pending_extensions.append(extension)
         await self.upsert(existing)
         return True
@@ -253,7 +259,10 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
         case-insensitive on the trimmed name, because the LLM's capitalisation is
         not stable across documents.
 
-        **A REJECTED proposal is remembered** (PC.5, migration 84): both
+        **A REJECTED proposal is remembered** (PC.5, migration 84) — subject to
+        the known race below: a write that read the row before the curator's
+        rejection and saves after it restores the pending row and the older
+        ``rejected_extensions``. Both
         rejection paths — ``SchemaEditService.reject_extension``, which the
         curator's Reject button takes, and this module's
         ``reject_pending_extension`` — record the name in

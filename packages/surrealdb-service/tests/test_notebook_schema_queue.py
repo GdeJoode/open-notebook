@@ -336,3 +336,16 @@ class TestEnsureRow:
             "Method",
             "Tranche",
         ]
+
+
+class TestNoBackDoorAroundARejection:
+    @pytest.mark.asyncio
+    async def test_add_pending_extension_refuses_a_rejected_name(self):
+        """PC.5 review: add_pending_extension appended without looking at
+        rejected_extensions — an open back door around the curator's no."""
+        schema = _schema()
+        schema.rejected_extensions = ["Method"]
+        repo = _repo(schema)
+        assert await repo.add_pending_extension(NOTEBOOK, {"type_name": " method"}) is False
+        repo.upsert.assert_not_awaited()  # nothing written
+        assert schema.pending_extensions == []

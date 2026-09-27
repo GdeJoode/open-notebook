@@ -132,7 +132,7 @@ def build(counts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         ]),
         ("5 — after the graph", 4, [
             ("ontology_gap\nD-N4-6 · gated on reason code", WRITE, n("gaps")),
-            ("schema_proposal\nauto at frequency 5", WRITE, ""),
+            ("schema_proposal\noff since PC.5a", WRITE, ""),
             ("type placement + judge\nN.4d.1 / N.4d.2", SYSTEM, ""),
             ("curator re-parents\nPOST /schema/reparent", USER, ""),
             ("triage queue\northogonal to all of the above", USER, ""),

@@ -783,14 +783,15 @@ class ConceptAligner:
         Never raises. Alignment is a classification pass; a gap store that is
         down must not cost the caller its verdicts.
 
-        **What recording a gap sets in motion.** `OntologyEvolutionAgent` ships
-        with ``frequency_threshold=5`` and ``auto_propose=True``, so the fifth
-        recording of one concept creates a ``schema_proposal`` row without anyone
-        asking. That is why the gate is on the reason code and why the per-run
-        de-duplication exists: both bound what reaches a curator's queue. The
-        proposal's ``parent_type`` comes from ``entity_type_guess``, i.e. the
-        rich extraction label passed below — an unvalidated guess that N.4d.3's
-        placement is what actually checks.
+        **What recording a gap sets in motion.** Since PC.5a, nothing further by
+        default: the ontology manager builds `OntologyEvolutionAgent` with
+        ``auto_propose`` from ``gap_auto_propose_enabled`` (default False). Before
+        that, the fifth recording of one concept created a ``schema_proposal``
+        row naming a new type after that entity, which nothing read. The gate on
+        the reason code and the per-run de-duplication still bound the gap
+        counts. Note also that this path is unreachable on the shipped
+        configuration: alignment requires KG resolution, which PC.3 turned off,
+        and the workflow refuses the combination (PC.5a review).
         """
         if alignment.verdict != NOVEL:
             # Belt-and-braces. No RELATED_TO alignment carries a reason code
