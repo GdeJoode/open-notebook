@@ -150,12 +150,12 @@ def test_import_happy_path_returns_report():
     ]
 
     # The uploaded bytes were forwarded to the service, notebook-scoped, with
-    # dedup on by default.
+    # dedup OFF by default (PC.5b: an import proposes, a curator applies).
     import_svc.import_bundle.assert_awaited_once()
     call = import_svc.import_bundle.await_args
     assert call.args[0] == payload
     assert call.kwargs["notebook_id"] == "notebook:abc"
-    assert call.kwargs["apply_dedup"] is True
+    assert call.kwargs["apply_dedup"] is False
 
 
 def test_import_apply_dedup_query_flag_forwarded():

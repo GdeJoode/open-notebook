@@ -96,7 +96,7 @@ describe('OkfImportDialog', () => {
     expect(mutateSpy).toHaveBeenCalledTimes(1)
     const [vars] = mutateSpy.mock.calls[0]
     expect(vars.file.name).toBe('bundle.zip')
-    expect(vars.applyDedup).toBe(true) // default on
+    expect(vars.applyDedup).toBe(false) // PC.5b: off by default, opt-in
   })
 
   it('renders the report ledger on a successful import', async () => {

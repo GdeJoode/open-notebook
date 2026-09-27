@@ -8,7 +8,7 @@ exposes it for the review UI.
 
 from typing import Any
 
-from surrealdb_service.connection import execute_query
+from surrealdb_service.connection import ensure_record_id, execute_query
 
 
 class ResolutionLogService:
@@ -55,8 +55,12 @@ class ResolutionLogService:
             params,
         )
 
-        items = items_result[0] if items_result else []
-        total = count_result[0][0].get("total", 0) if count_result and count_result[0] else 0
+        # `execute_query` returns the rows themselves. This read `[0]` and
+        # `[0][0]` as if it returned one list per statement, which raised
+        # KeyError on the first real row — unnoticed while the table had no
+        # writer (PC.5b gave it one).
+        items = list(items_result or [])
+        total = int(count_result[0].get("total", 0)) if count_result else 0
 
         return items, total
 
@@ -64,11 +68,9 @@ class ResolutionLogService:
         """Get a single resolution log entry."""
         result = await execute_query(
             "SELECT * FROM $id",
-            {"id": candidate_id},
+            {"id": ensure_record_id(candidate_id)},
         )
-        if result and result[0]:
-            return result[0][0]
-        return None
+        return result[0] if result else None
 
     async def update_status(
         self, candidate_id: str, status: str
@@ -76,11 +78,9 @@ class ResolutionLogService:
         """Accept or reject a resolution log entry."""
         result = await execute_query(
             "UPDATE $id SET status = $status, reviewed_at = time::now() RETURN AFTER",
-            {"id": candidate_id, "status": status},
+            {"id": ensure_record_id(candidate_id), "status": status},
         )
-        if result and result[0]:
-            return result[0][0]
-        return None
+        return result[0] if result else None
 
     async def bulk_update_status(
         self, candidate_ids: list[str], status: str
@@ -99,9 +99,7 @@ class ResolutionLogService:
             "SELECT match_method FROM resolution_log GROUP BY match_method",
             {},
         )
-        if result and result[0]:
-            return [r.get("match_method", "") for r in result[0]]
-        return []
+        return [r.get("match_method", "") for r in result or []]
 
     async def get_stats(self) -> dict[str, Any]:
         """Get resolution log summary statistics."""
@@ -116,6 +114,6 @@ class ResolutionLogService:
             FROM resolution_log GROUP ALL""",
             {},
         )
-        if result and result[0]:
-            return result[0][0]
+        if result:
+            return result[0]
         return {"total": 0, "matches": 0, "pending": 0, "accepted": 0, "rejected": 0, "auto_accepted": 0}

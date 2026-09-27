@@ -301,17 +301,39 @@ async def test_import_matches_existing_entity_not_duplicated(monkeypatch):
 
 
 async def test_import_runs_k5_propose_and_applies_auto_merge(monkeypatch):
+    """Opt-in (PC.5b): the auto band is applied, and each merge is logged."""
+    from app_main.services.entity_resolution import merge_audit
+
+    logged = []
+
+    async def _record(**kw):
+        logged.append(kw)
+        return 1
+
+    monkeypatch.setattr(merge_audit, "record_merges", _record)
     candidate = MagicMock()
     candidate.to_merge_cluster = MagicMock(return_value="cluster")
     candidate.id_a, candidate.id_b = "entity:a", "entity:b"
+    candidate.method, candidate.score, candidate.evidence = "fold_equal", 1.0, ""
     svc, _, _, _, _, dedup, recanon = _mock_service(
         monkeypatch, dedup_auto=[candidate]
     )
-    report = await svc.import_bundle(_bundle(), notebook_id="notebook:z")
+    report = await svc.import_bundle(
+        _bundle(), notebook_id="notebook:z", apply_dedup=True)
 
     dedup.propose_candidates.assert_awaited_once_with(notebook_id="notebook:z")
     recanon.apply_merge.assert_awaited_once_with("cluster")
     assert report.dedup_merges == 1
+    [entry] = logged
+    assert entry["origin"] == "auto_merge" and entry["method"] == "fold_equal"
+
+
+async def test_dedup_is_off_by_default(monkeypatch):
+    """PC.5b: an import proposes; a curator applies. Nothing merges unasked."""
+    svc, _, _, _, _, dedup, recanon = _mock_service(monkeypatch)
+    await svc.import_bundle(_bundle(), notebook_id="notebook:z")
+    dedup.propose_candidates.assert_not_called()
+    recanon.apply_merge.assert_not_called()
 
 
 async def test_import_can_disable_dedup(monkeypatch):

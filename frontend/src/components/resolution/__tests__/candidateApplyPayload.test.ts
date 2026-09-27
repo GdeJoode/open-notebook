@@ -127,3 +127,23 @@ describe('candidateTypeLabel (what the card shows for a cross-type pair)', () =>
     expect(candidateTypeLabel(same)).toBe('programme')
   })
 })
+
+describe('the apply payload states its origin (PC.5b)', () => {
+  it('marks an approved candidate curator_approved, with method, score and evidence', () => {
+    const out = candidateToApplyCluster({ ...CANDIDATE, evidence: 'gemeente' })
+    expect(out.origin).toBe('curator_approved')
+    expect(out.method).toBe('embedding')
+    expect(out.score).toBe(0.82)
+    expect(out.evidence).toBe('gemeente')
+    expect(out.cross_type).toBe(false)
+  })
+
+  it('says cross_type when the two rows carry different types', () => {
+    const out = candidateToApplyCluster({
+      ...CANDIDATE,
+      method: 'fold_equal_cross_type',
+      entity_type_b: 'topic',
+    })
+    expect(out.cross_type).toBe(true)
+  })
+})
