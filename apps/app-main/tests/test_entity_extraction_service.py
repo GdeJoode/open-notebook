@@ -3184,3 +3184,79 @@ class TestSaveResultNonFatal:
             # Must NOT raise — a raised exception here would mark a successful
             # extraction "failed" and dead-letter it.
             await svc._save_result("source:test", result)
+
+
+class TestGapLabelProposalsReachTheSchemaQueue:
+    """PC.5a: gap labels with enough evidence become pending extensions."""
+
+    @staticmethod
+    async def _run(svc, gaps_recorded):
+        extracted = ExtractionResult(
+            entities=[ExtractedEntity(text="X", label="L")], relations=[]
+        )
+
+        class _Workflow:
+            def __init__(self, **kwargs):
+                pass
+
+            async def process(self, result, **kwargs):
+                return FilteredResult(
+                    entities=result.entities, relations=[],
+                    concept_alignment_report={"gaps_recorded": gaps_recorded},
+                )
+
+        with patch.object(
+            svc, "_run_multi_schema", AsyncMock(return_value=extracted)
+        ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
+            svc, "_embed_entities", AsyncMock()
+        ), patch.object(svc, "_persistence", AsyncMock()), patch(
+            "app_main.services.entity_extraction_service.FilteringWorkflow", _Workflow,
+        ), patch.object(
+            EntityExtractionService, "_make_routed_caller", AsyncMock(return_value="c"),
+        ):
+            await svc.run_extraction(
+                source_id="source:test", notebook_id="notebook:abc", run_filtering=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_production_shape_queues_the_labels(self, base_source_repo, monkeypatch):
+        """THE production state: no schema repository injected — the service
+        builds one lazily. A guard on the injected repo made the first draft of
+        this hook fire in tests only."""
+        monkeypatch.setenv("ENABLE_CONCEPT_ALIGNMENT", "true")
+        merged = []
+
+        class _Repo:
+            async def merge_pending_extensions(self, notebook_id, proposals):
+                merged.append((notebook_id, proposals))
+                return len(proposals)
+
+        async def _labels(notebook_id, *, threshold, config=None):
+            assert threshold == 5  # the ontology config's default
+            return [{"type_name": "Programmalijn", "origin": "ontology_gap"}]
+
+        monkeypatch.setattr(
+            "app_main.services.gap_label_proposals.label_proposals_for_notebook", _labels)
+        monkeypatch.setattr(
+            "app_main.services.entity_extraction_service.NotebookSchemaRepository", _Repo)
+        svc = EntityExtractionService(source_repo=base_source_repo)  # nothing injected
+        await self._run(svc, gaps_recorded=2)
+        assert merged == [("notebook:abc", [{"type_name": "Programmalijn",
+                                             "origin": "ontology_gap"}])]
+
+    @pytest.mark.asyncio
+    async def test_a_run_that_recorded_no_gap_queues_nothing(
+        self, base_source_repo, monkeypatch
+    ):
+        monkeypatch.setenv("ENABLE_CONCEPT_ALIGNMENT", "true")
+        called = []
+
+        async def _labels(notebook_id, *, threshold, config=None):
+            called.append(notebook_id)
+            return []
+
+        monkeypatch.setattr(
+            "app_main.services.gap_label_proposals.label_proposals_for_notebook", _labels)
+        svc = EntityExtractionService(source_repo=base_source_repo)
+        await self._run(svc, gaps_recorded=0)
+        assert called == []

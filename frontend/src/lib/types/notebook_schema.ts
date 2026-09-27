@@ -40,6 +40,14 @@ export interface ExtensionView {
   rationale?: string | null
   properties: PropertyDef[]
   /**
+   * PC.5a: where the proposal came from. Absent for a Pass-1 proposal;
+   * `ontology_gap` for a label grouped from entities that matched no type,
+   * with `evidence_count` distinct entities and some `examples`.
+   */
+  origin?: string | null
+  examples?: string[]
+  evidence_count?: number | null
+  /**
    * B.3c resume-sentinel marker. Older rows / non-sentinel entries
    * lack this field entirely. The SchemaBrowser filters items where
    * `is_resume_sentinel === true` so users never see the marker as a
