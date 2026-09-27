@@ -259,11 +259,7 @@ class TestLiteralsStayOutOfTheTypeLayer:
     """PC.4b: the literals measured on the Regio Deal corpus land on ``other``,
     keep their label and are flagged — never on a real type bucket."""
 
-    @pytest.mark.parametrize(
-        "label",
-        ["ABBREVIATION", "Amount", "Budget", "Budget/Amount", "Date", "Datum",
-         "Metric", "Aantal", "DOI"],
-    )
+    @pytest.mark.parametrize("label", sorted(NON_TYPE_LABELS))
     def test_a_literal_is_other_flagged_and_keeps_its_label(self, label):
         res = resolve_residual_type(label)
         assert (res.entity_type, res.is_noise, res.primary_type) == ("other", True, label)

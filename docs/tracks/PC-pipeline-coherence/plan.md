@@ -456,10 +456,6 @@ phase that happened to touch one line of it.*
 >   ontology instead of none.
 > - The typing vocabulary is the registry's: the database's `ontology_version`
 >   first, then the YAML files, as for detection. There are no DB rows today.
-> - `Project` is `creative_work` in `deals`/`regiodeal` (`parent_type:
->   CreativeWork`) and `programme` in L.3's alias map. The ontology now wins in
->   every document; before, the alias won whenever those ontologies were not
->   selected. Which one is right is an owner question.
 > - PC.1b evidence (cross-type fold-equal groups): 97 name groups span two
 >   types on the live graph, and 94 remain split after PC.4 typing. All 94 are
 >   the LLM choosing different labels (`BeleidsPijler` vs `Programma`), not
@@ -475,25 +471,25 @@ phase that happened to touch one line of it.*
 >   (`notebook_schema:oxnj073hyqzdz6d1p02k`: `scholarly` → `""`), so selection
 >   is per document. Detection falls back to the notebook's history only when
 >   nothing scores.
-> - **Retype of existing rows:** `scripts/pc4b_retype_entities.py`. It dry-runs
->   by default and refuses collisions on `(name_key, entity_type)`; with
->   `--apply` it writes a rollback file first. Dry run on the live graph: 205
->   type changes (87 of them literals `concept` → `other`), 24 literals flagged
->   only, 0 collisions.
->
-> **Not done, for the owner:**
-> - Existing rows are not retyped. A dry run says 142 of 2,174 would change.
->   **This matters on re-extraction.** The upsert is keyed on
->   `(name_key, entity_type)`. Any extraction that meets one of those names
->   again, whether a re-extraction or a new document, writes a second row next
->   to the old one (e.g. `Plaats` concept→location, `Overheid`
->   concept→government_organization). The name-only relation fallback then
->   picks one of them arbitrarily. A retype of the existing rows should come
->   before, or with, the next extraction.
-> - Literals still land on `concept`: L.2 AC3 decided noise is never `other`.
->   "Keep literals out of the type layer" contradicts that.
-> - The notebook's `base_ontology = "scholarly"` predates PC.1's fix and is
->   wrong for this corpus (owner). Clearing it is a write to the live row.
+> - **Retype of existing rows:** `scripts/pc4b_retype_entities.py`. It is
+>   needed because identity is `(name_key, entity_type)`: any extraction that
+>   meets a changed name again, whether a new document or a re-extraction,
+>   would write a second row next to the old one.
+>   - It types the RAW label, as persistence does.
+>   - It refuses a retype onto a `(name_key, type)` that another active OR
+>     reference row holds (a merge for the curator).
+>   - It dry-runs by default. `--apply` guards each write on the old type,
+>     survives a failing row, and logs every written row (previous type and
+>     flag) to `data/retype_rollback/`. `--rollback FILE` undoes exactly those
+>     rows.
+>   - It changes only `entity_type` and the flag; `primary_type` / `type_tags`
+>     keep what the extraction wrote.
+>   - Dry run on the live graph (2026-09-28): 201 type changes (80 of them
+>     literals `concept` → `other`), 24 literals flagged only, 19 refused. All
+>     19 refused rows are `reference` rows whose twin already holds the new
+>     type; they stay as they are, as merge candidates.
+> - The Schema tab and the TTL export treat `""` as no base. They used to show
+>   the default (`scholarly`) through `or`.
 
 **The finding (review I1).** `resolve_ontology_type("Person", …)` returns `person`
 under `general` and `concept` under `deals`/`government`. Which ontologies apply

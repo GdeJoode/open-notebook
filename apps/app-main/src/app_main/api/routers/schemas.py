@@ -119,6 +119,20 @@ router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["schemas"])
 _DEFAULT_BASE_ONTOLOGY = DEFAULT_BASE_ONTOLOGY
 
 
+def _declared_base(base_ontology: Optional[str]) -> Optional[str]:
+    """The notebook's declared base, or ``None`` when it declares none.
+
+    PC.4b. A row whose ``base_ontology`` is ``""`` (``NO_DECLARED_BASE``, what
+    PC.1 writes, and what the owner set on a notebook whose documents select
+    their ontologies per document) declares NO base. These readers used to turn
+    ``""`` into the default through ``or``, so the Schema tab and the TTL export
+    showed ``scholarly`` as the base of a notebook that has none — while
+    extraction, correctly, forced nothing. A notebook with no row at all keeps
+    the default, as before.
+    """
+    return base_ontology or None
+
+
 def _ontologies_dir() -> Path:
     """Resolve the bundled YAML ontology directory.
 
@@ -381,8 +395,19 @@ async def export_notebook_schema_ttl(
         base_ontology = _DEFAULT_BASE_ONTOLOGY
         accepted_extensions: List[Dict[str, Any]] = []
     else:
-        base_ontology = notebook_schema.base_ontology or _DEFAULT_BASE_ONTOLOGY
+        base_ontology = _declared_base(notebook_schema.base_ontology)
         accepted_extensions = notebook_schema.accepted_extensions or []
+
+    if base_ontology is None:
+        # PC.4b: no declared base — the export is the notebook's own classes.
+        graph = Graph()
+        _apply_extensions(graph, accepted_extensions)
+        filename = _safe_filename(notebook_id)
+        return Response(
+            content=graph.serialize(format="turtle"),
+            media_type="text/turtle",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     yaml_path = _ontologies_dir() / f"{base_ontology}.yaml"
     if not yaml_path.exists():
@@ -766,7 +791,7 @@ async def get_notebook_schema_json(
         review_required = False
         soft_nudge_dismissed = False
     else:
-        base_ontology = notebook_schema.base_ontology or _DEFAULT_BASE_ONTOLOGY
+        base_ontology = _declared_base(notebook_schema.base_ontology)
         accepted_raw = notebook_schema.accepted_extensions or []
         pending_raw = notebook_schema.pending_extensions or []
         excluded_types = list(notebook_schema.excluded_types or [])
@@ -794,9 +819,10 @@ async def get_notebook_schema_json(
     reparented = _reparented_types(accepted_raw)
     return NotebookSchemaResponse(
         notebook_id=notebook_id,
-        base_ontology=base_ontology,
+        base_ontology=base_ontology or "",
         base_ontology_types=_apply_reparents_to_views(
-            _load_base_ontology_types(base_ontology), reparented
+            _load_base_ontology_types(base_ontology) if base_ontology else [],
+            reparented,
         ),
         accepted_extensions=[
             _normalise_extension(e)
@@ -969,7 +995,7 @@ def _schema_to_response(
     the response is self-contained — the client refreshes its cached
     view from a single POST/DELETE.
     """
-    base_ontology = schema.base_ontology or _DEFAULT_BASE_ONTOLOGY
+    base_ontology = _declared_base(schema.base_ontology)
     accepted_raw = schema.accepted_extensions or []
     # N.4d.3: the same effective-schema rendering the GET does. Diverging here
     # would let a client that refreshes from a POST see a re-parented type twice
@@ -977,9 +1003,10 @@ def _schema_to_response(
     reparented = _reparented_types(accepted_raw)
     return NotebookSchemaResponse(
         notebook_id=notebook_id,
-        base_ontology=base_ontology,
+        base_ontology=base_ontology or "",
         base_ontology_types=_apply_reparents_to_views(
-            _load_base_ontology_types(base_ontology), reparented
+            _load_base_ontology_types(base_ontology) if base_ontology else [],
+            reparented,
         ),
         accepted_extensions=[
             _normalise_extension(e)

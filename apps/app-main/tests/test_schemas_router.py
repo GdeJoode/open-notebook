@@ -1028,3 +1028,38 @@ class TestSchemaJsonWithAReparent:
             e for e in body["accepted_extensions"] if e["type_name"] == "PreprintServer"
         )
         assert ext["parent_type"] == "Organization"
+
+
+class TestANotebookWithNoDeclaredBase:
+    """PC.4b: `base_ontology = ""` declares NO base (the owner cleared it so
+    documents select their ontologies per document). The readers turned "" into
+    the default through `or`, so the Schema tab and the TTL export showed
+    `scholarly` as the base of a notebook that has none."""
+
+    def _client(self):
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+        schema_repo = AsyncMock(spec=NotebookSchemaRepository)
+        schema_repo.get_by_notebook.return_value = NotebookSchema(
+            notebook="notebook:test1",
+            base_ontology="",
+            accepted_extensions=[{"extension_id": "ext-1", "type_name": "Cohort"}],
+            pending_extensions=[],
+        )
+        return _make_app(notebook_svc, schema_repo)
+
+    def test_the_schema_tab_shows_no_base(self):
+        body = self._client().get("/api/notebooks/notebook:test1/schema").json()
+        assert body["base_ontology"] == ""
+        assert body["base_ontology_types"] == []
+        assert [e["type_name"] for e in body["accepted_extensions"]] == ["Cohort"]
+
+    def test_the_ttl_export_holds_only_the_notebooks_own_classes(self):
+        resp = self._client().get("/api/notebooks/notebook:test1/schema.ttl")
+        assert resp.status_code == 200
+        graph = Graph().parse(data=resp.text, format="turtle")
+        labels = {str(o) for o in graph.objects(None, RDFS.label)}
+        assert "Cohort" in labels
+        # Nothing from any base ontology — `scholarly` declares Person, Article…
+        assert not {"Person", "Article", "ScholarlyArticle"} & labels
+        assert len(set(graph.subjects(RDF.type, OWL.Class))) == 1
