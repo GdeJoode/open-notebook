@@ -160,12 +160,17 @@ class ResidualResolution:
     mapped: bool = False
 
 
-# Coarse defaults for the non-silent fallback. A genuine-unknown label and
-# extraction noise both default to ``concept`` (the softest non-``other`` bucket
-# for an abstract/unknown signal) while the raw label is preserved separately —
-# so the rich label survives even though the coarse projection is generic.
+# Coarse defaults for the non-silent fallback. A genuine-unknown label defaults
+# to ``concept`` (the softest non-``other`` bucket for an abstract/unknown
+# signal); extraction noise to ``other`` (below). Either way the raw label is
+# preserved separately, so the rich label survives the generic projection.
 _UNKNOWN_DEFAULT = "concept"
-_NOISE_DEFAULT = "concept"
+# PC.4b (owner, 2026-09-27): a literal is kept OUT of the type layer — it lands on
+# ``other``, not on ``concept`` (a real type bucket it was polluting). This
+# overrides L.2 AC3 ("noise never becomes ``other``"). What AC3 protected still
+# holds: the raw label survives in ``primary_type`` and the row is flagged
+# ``non_type_label``, so it is not the historical SILENT ``other``.
+_NOISE_DEFAULT = "other"
 
 
 def resolve_residual_type(raw_label: object) -> ResidualResolution:

@@ -180,3 +180,24 @@ async def test_the_selection_leads():
     schemas = typing_vocabulary([onts["regiodeal"], onts["base"]], list(onts.values()))
     assert [o.metadata.name for o in schemas[:2]] == ["regiodeal", "base"]
     assert len({o.metadata.name for o in schemas}) == len(schemas) == len(onts)
+
+
+async def test_a_project_is_a_programme():
+    """PC.4b (owner): `deals.Project` hung under CreativeWork, contradicting
+    L.3's alias `project -> programme`; the ontology now agrees with the alias."""
+    onts = await _shipped()
+    for label in ("Project", "project"):
+        assert _resolve_entity_type(label, list(onts.values())).entity_type == "programme"
+        assert _resolve_entity_type(label, None).entity_type == "programme"
+
+
+async def test_every_literal_stays_out_of_the_type_layer_under_every_ontology():
+    """PC.4b: a literal lands on `other` through the WHOLE typing path, not just
+    the residual map — an ontology that later declared `Date` as a type would
+    take it back into the type layer, and this fails then."""
+    from shared.utils.entity_type_aliases import NON_TYPE_LABELS
+
+    onts = await _shipped()
+    for label in sorted(NON_TYPE_LABELS):
+        resolved = _resolve_entity_type(label, list(onts.values()))
+        assert (resolved.entity_type, resolved.is_noise) == ("other", True), label

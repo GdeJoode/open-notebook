@@ -113,8 +113,9 @@ class TestNonSilentFallback:
         assert res.primary_type == "ABBREVIATION"
         assert res.is_noise is True
         assert res.mapped is False
-        # coarses to a sensible default, not ``other``
-        assert res.entity_type != "other"
+        # PC.4b (owner): noise lands on ``other`` — out of the type layer — while
+        # the label above survives. L.2 AC3 said "not other"; the owner reversed it.
+        assert res.entity_type == "other"
 
     def test_amount_is_noise(self):
         res = resolve_residual_type("Amount")
@@ -252,3 +253,17 @@ class TestNonTypeLabelsSet:
         assert "amount" in NON_TYPE_LABELS
         # A real type is NOT in the noise set.
         assert "gemeente" not in NON_TYPE_LABELS
+
+
+class TestLiteralsStayOutOfTheTypeLayer:
+    """PC.4b: the literals measured on the Regio Deal corpus land on ``other``,
+    keep their label and are flagged — never on a real type bucket."""
+
+    @pytest.mark.parametrize("label", sorted(NON_TYPE_LABELS))
+    def test_a_literal_is_other_flagged_and_keeps_its_label(self, label):
+        res = resolve_residual_type(label)
+        assert (res.entity_type, res.is_noise, res.primary_type) == ("other", True, label)
+
+    def test_an_unknown_real_type_is_not_a_literal(self):
+        res = resolve_residual_type("Doelgroep")
+        assert (res.entity_type, res.is_noise) == ("concept", False)
