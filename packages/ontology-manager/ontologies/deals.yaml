@@ -124,12 +124,15 @@ entity_types:
   # ---------------------------------------------------------------------------
   - name: "Project"
     description: "Concreet project of initiatief binnen een deal of programma"
-    parent_type: "CreativeWork"
+    # PC.4b (owner): a project is a programme, like Akkoord and BeleidsProgramma.
+    # It hung under CreativeWork, so every Project typed `creative_work`.
+    parent_type: "GovernmentService"
     graph_relevance: "active"
     extraction_hints:
       - "Specifiek benoemd project, pilot, initiatief"
       - "Bijv: 'Gezonde Huiskamer', 'Dutch TechZone', 'Greenwise Campus'"
       - "NIET: generieke activiteiten of beschrijvingen"
+      - "NIET: een projectplan, -rapport of -publicatie als document; dat is een Document of Report"
 
   - name: "Voorziening"
     description: "Fysieke voorziening of faciliteit gerealiseerd via een deal"

@@ -180,3 +180,12 @@ async def test_the_selection_leads():
     schemas = typing_vocabulary([onts["regiodeal"], onts["base"]], list(onts.values()))
     assert [o.metadata.name for o in schemas[:2]] == ["regiodeal", "base"]
     assert len({o.metadata.name for o in schemas}) == len(schemas) == len(onts)
+
+
+async def test_a_project_is_a_programme():
+    """PC.4b (owner): `deals.Project` hung under CreativeWork, contradicting
+    L.3's alias `project -> programme`; the ontology now agrees with the alias."""
+    onts = await _shipped()
+    for label in ("Project", "project"):
+        assert _resolve_entity_type(label, list(onts.values())).entity_type == "programme"
+        assert _resolve_entity_type(label, None).entity_type == "programme"

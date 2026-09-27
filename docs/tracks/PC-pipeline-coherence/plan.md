@@ -465,6 +465,22 @@ phase that happened to touch one line of it.*
 >   the LLM choosing different labels (`BeleidsPijler` vs `Programma`), not
 >   typing.
 >
+> **PC.4b, owner decisions of 2026-09-27:**
+> - **Literals go to `other`** (`_NOISE_DEFAULT`). This overrides L.2 AC3; the
+>   label and the `non_type_label` flag still survive.
+> - **`Project` is a programme.** `deals.Project` moves from `CreativeWork` to
+>   `GovernmentService`, in line with L.3's alias. A project *document* is a
+>   Document/Report; there is an extraction hint for that.
+> - **The notebook base was cleared** on the live row
+>   (`notebook_schema:oxnj073hyqzdz6d1p02k`: `scholarly` → `""`), so selection
+>   is per document. Detection falls back to the notebook's history only when
+>   nothing scores.
+> - **Retype of existing rows:** `scripts/pc4b_retype_entities.py`. It dry-runs
+>   by default and refuses collisions on `(name_key, entity_type)`; with
+>   `--apply` it writes a rollback file first. Dry run on the live graph: 205
+>   type changes (87 of them literals `concept` → `other`), 24 literals flagged
+>   only, 0 collisions.
+>
 > **Not done, for the owner:**
 > - Existing rows are not retyped. A dry run says 142 of 2,174 would change.
 >   **This matters on re-extraction.** The upsert is keyed on

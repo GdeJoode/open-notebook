@@ -277,6 +277,8 @@ def test_schema_org_base_is_valid_parent(deals):
     assert set(placement.descendant_candidates) == {
         "Deal", "Akkoord", "BeleidsProgramma",
         "Subsidieregeling", "Fonds", "Investering", "Convenant", "Bestuursakkoord",
+        # PC.4b (owner): Project moved from CreativeWork to GovernmentService.
+        "Project",
     }
     # NOT the grandchildren: re-parenting those would move them away from their
     # own parent, which is a different and unsound edit.
