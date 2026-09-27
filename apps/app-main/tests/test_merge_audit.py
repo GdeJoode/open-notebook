@@ -40,6 +40,23 @@ async def test_each_merged_pair_is_one_readable_row(live_surrealdb: SurrealDBCon
     assert r["confidence"] == pytest.approx(0.97)
     assert r["match_reasoning"] == "type_suffix: economische zaken"
     assert {x["entity_b_label"] for x in rows} == {"government_organization", "UNKNOWN"}
+    # Names are not unique; the ids say which records were merged (migration 85).
+    assert {x["winner_id"] for x in rows} == {"entity:w"}
+    assert {x["loser_id"] for x in rows} == {"entity:l1", "entity:l2"}
+
+
+async def test_a_plan_cluster_has_no_invented_confidence(live_surrealdb: SurrealDBConfig):
+    tag = uuid.uuid4().hex[:6]
+    await record_merges(
+        winner_id="entity:wp", merged_loser_ids=["entity:lp"],
+        names={"entity:wp": f"P{tag}"}, types={},
+        origin="curator_approved", method="recanonicalization_plan", config=live_surrealdb,
+    )
+    [row] = await execute_query(
+        "SELECT confidence FROM resolution_log WHERE entity_a_text = $a;",
+        {"a": f"P{tag}"}, live_surrealdb,
+    )
+    assert row["confidence"] == 0.0
 
 
 async def test_the_existing_reader_lists_them(live_surrealdb: SurrealDBConfig, monkeypatch):
@@ -87,8 +104,39 @@ async def test_the_whole_reader_works_on_real_rows(live_surrealdb: SurrealDBConf
     assert total == 1 and items[0]["entity_a_text"] == f"W{tag}"
     rid = str(items[0]["id"])
     assert (await svc.get_candidate(rid))["entity_b_text"] == "L4"
-    assert (await svc.update_status(rid, "rejected"))["status"] == "rejected"
-    assert await svc.bulk_update_status([rid], "accepted") == 1
+    # A merge record cannot be re-decided: rejecting it would not undo the merge.
+    with pytest.raises(mod.MergeRecordImmutable):
+        await svc.update_status(rid, "rejected")
+    assert await svc.bulk_update_status([rid], "rejected") == 0
+    assert (await svc.get_candidate(rid))["status"] == "accepted"
+    # A matcher row (no winner_id) still can.
+    [m] = await execute_query(
+        "CREATE resolution_log CONTENT {entity_a_text: $a, entity_b_text: 'B', "
+        "match_method: $m, status: 'pending'};",
+        {"a": f"M{tag}", "m": f"matcher{tag}"}, live_surrealdb,
+    )
+    mid = str(m["id"])
+    assert (await svc.update_status(mid, "rejected"))["status"] == "rejected"
+    assert await svc.bulk_update_status([mid, rid], "accepted") == 1
     assert f"curator_approved:m{tag}" in await svc.get_methods()
     stats = await svc.get_stats()
     assert stats["total"] >= 1 and stats["accepted"] >= 1
+
+
+async def test_the_status_route_refuses_a_merge_record():
+    """PATCH answers 409 with the reason; bulk counts only the rows it changed."""
+    from app_main.api.routers import resolution_log as route
+    from app_main.services.resolution_log_service import MergeRecordImmutable
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    class _Svc:
+        async def update_status(self, entry_id, status):
+            raise MergeRecordImmutable(entry_id)
+
+    app = FastAPI()
+    app.include_router(route.router, prefix="/api")
+    app.dependency_overrides[route.get_resolution_log_service] = lambda: _Svc()
+    r = TestClient(app).patch(
+        "/api/resolution-log/resolution_log:x/status", params={"status": "rejected"})
+    assert r.status_code == 409 and "applied merge" in r.json()["detail"]

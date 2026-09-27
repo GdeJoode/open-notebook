@@ -20,6 +20,9 @@ export interface ResolutionLogEntry {
   status: 'pending' | 'accepted' | 'rejected' | 'auto_accepted'
   reviewed_at?: string | null
   source_id?: string | null
+  /** PC.5b: set on the record of an applied merge, which cannot be re-decided. */
+  winner_id?: string | null
+  loser_id?: string | null
 }
 
 export interface PaginatedResolutionLog {

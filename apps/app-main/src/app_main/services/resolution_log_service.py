@@ -11,6 +11,10 @@ from typing import Any
 from surrealdb_service.connection import ensure_record_id, execute_query
 
 
+class MergeRecordImmutable(Exception):
+    """The row records an applied merge; its status is not a decision to change."""
+
+
 class ResolutionLogService:
     """Service for querying and updating the resolution_log table."""
 
@@ -75,7 +79,16 @@ class ResolutionLogService:
     async def update_status(
         self, candidate_id: str, status: str
     ) -> dict[str, Any] | None:
-        """Accept or reject a resolution log entry."""
+        """Accept or reject a resolution log entry.
+
+        Raises :class:`MergeRecordImmutable` for the record of an applied merge
+        (``winner_id`` set, PC.5b): rejecting it would not undo the merge.
+        """
+        row = await self.get_candidate(candidate_id)
+        if not row:
+            return None
+        if row.get("winner_id"):
+            raise MergeRecordImmutable(candidate_id)
         result = await execute_query(
             "UPDATE $id SET status = $status, reviewed_at = time::now() RETURN AFTER",
             {"id": ensure_record_id(candidate_id), "status": status},
@@ -88,7 +101,10 @@ class ResolutionLogService:
         """Bulk accept/reject resolution log entries."""
         updated = 0
         for cid in candidate_ids:
-            result = await self.update_status(cid, status)
+            try:
+                result = await self.update_status(cid, status)
+            except MergeRecordImmutable:
+                continue  # a merge record is not a decision to revisit
             if result:
                 updated += 1
         return updated

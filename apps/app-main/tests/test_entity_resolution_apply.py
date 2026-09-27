@@ -110,6 +110,13 @@ def test_each_refused_state_merges_nothing(env, cluster, fragment):
     assert recanon.applied == [] and logged == []
 
 
+def test_a_malformed_id_is_the_callers_error(env):
+    client, recanon, _ = env
+    r = _post(client, _cluster(losers=("not a record id",)))
+    assert r.status_code == 422 and "malformed" in r.json()["detail"]
+    assert recanon.applied == []
+
+
 def test_one_bad_cluster_blocks_the_whole_request(env):
     client, recanon, logged = env
     r = _post(client, _cluster(), _cluster(winner="entity:topic", losers=("entity:gone",),

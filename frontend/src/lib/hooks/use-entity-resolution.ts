@@ -58,10 +58,14 @@ export function useApplyMerge(notebookId?: string) {
         }`,
       })
     },
-    onError: () => {
+    onError: (err: unknown) => {
+      // PC.5b: the server refuses with a reason (422) — show it.
+      const detail = (err as { response?: { data?: { detail?: unknown } } })
+        ?.response?.data?.detail
       toast({
         title: 'Error',
-        description: 'Failed to apply merge',
+        description:
+          typeof detail === 'string' ? detail : 'Failed to apply merge',
         variant: 'destructive',
       })
     },

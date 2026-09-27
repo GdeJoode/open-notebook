@@ -210,15 +210,8 @@ async def get_duplicates(
     return await _proxy_get(EXTRACTION_URL, "/duplicates", params)
 
 
-class MergeRequest(BaseModel):
-    canonical_id: str
-    duplicate_id: str
-
-
-@router.post("/merge")
-async def merge_entities(req: MergeRequest):
-    """Merge a duplicate entity into a canonical entity."""
-    return await _proxy_post(EXTRACTION_URL, "/merge", req)
+# No /merge proxy (PC.5b): it merged any two ids without validation or a log
+# row, and nothing called it. Merges go through POST /api/entity-resolution/apply.
 
 
 # ---------------------------------------------------------------------------

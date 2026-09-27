@@ -139,7 +139,8 @@ export function OkfImportDialog({
                 data-testid="okf-import-dedup-switch"
               />
               <Label htmlFor={dedupId} className="text-sm cursor-pointer">
-                Auto-merge exact duplicates on import (otherwise proposed for review)
+                Auto-merge high-confidence duplicates on import (otherwise
+                they wait on the Entity Resolution page)
               </Label>
             </div>
 

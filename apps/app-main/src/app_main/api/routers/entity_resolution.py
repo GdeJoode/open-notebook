@@ -188,9 +188,12 @@ async def _validate_clusters(clusters: List[ApplyClusterIn]) -> Dict[str, Dict[s
                 detail=f"cluster {c.winner_id}: only a curator may merge across types",
             )
 
+    try:
+        ids = [ensure_record_id(i) for i in seen]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"malformed entity id: {exc}")
     rows = await execute_query(
-        "SELECT id, canonical_name, entity_type, status FROM $ids;",
-        {"ids": [ensure_record_id(i) for i in seen]},
+        "SELECT id, canonical_name, entity_type, status FROM $ids;", {"ids": ids}
     )
     found = {str(r["id"]): r for r in rows or []}
     for c in clusters:
@@ -228,6 +231,11 @@ async def apply_merges(
     Every cluster is validated before any is applied (``_validate_clusters``),
     and every merged pair is recorded in ``resolution_log`` with its origin
     (PC.5b).
+
+    Known limits: validation and apply are not one transaction — a concurrent
+    merge between the two can still reach ``apply_merge``, which skips losers
+    no longer active. ``origin`` is what the client states; the server checks
+    what it constrains (``cross_type``) and logs it, it cannot verify it.
     """
     if not body.clusters:
         raise HTTPException(

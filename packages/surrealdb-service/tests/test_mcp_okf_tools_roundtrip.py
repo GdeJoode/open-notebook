@@ -285,3 +285,23 @@ async def test_import_okf_malformed_zip_is_typed_error(
     not_a_zip = base64.b64encode(b"plain text, not a zip").decode("ascii")
     out = json.loads(await import_okf(zip_base64=not_a_zip))
     assert out["status"] == "malformed_bundle"
+
+
+async def test_import_okf_does_not_merge_unless_asked(monkeypatch) -> None:
+    """PC.5b: the agent path has the route's default — dedup off.
+
+    The route and the service were switched off; the MCP tool still passed True,
+    so an agent import merged the auto band unattended."""
+    import app_main.dependencies as deps
+
+    seen: dict[str, Any] = {}
+
+    class _Svc:
+        async def import_bundle(self, source, *, notebook_id=None, apply_dedup):
+            seen["apply_dedup"] = apply_dedup
+            raise ValueError("stop here")
+
+    monkeypatch.setattr(deps, "get_okf_import_service", lambda: _Svc())
+    import_okf = _tool(create_server(), "import_okf")
+    await import_okf(bundle={"index.md": "x"})
+    assert seen["apply_dedup"] is False

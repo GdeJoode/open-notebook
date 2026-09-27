@@ -1,0 +1,16 @@
+-- ============================================================================
+-- Migration 85: resolution_log.winner_id / loser_id — a merge record names the
+-- records it merged (Track PC.5b).
+--
+-- `merge_audit.record_merges` writes one resolution_log row per merged pair.
+-- The table (migration 36) holds only the two names, and names are not unique:
+-- two "Economische Zaken" rows cannot be told apart, nor traced to the winner
+-- that absorbed them. The ids can.
+--
+-- A row with `winner_id` set is a record of an applied merge; its status cannot
+-- be changed (ResolutionLogService.update_status), because a log status cannot
+-- undo a merge. Rows from the matcher leave both fields NONE.
+-- ============================================================================
+
+DEFINE FIELD IF NOT EXISTS winner_id ON TABLE resolution_log TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS loser_id ON TABLE resolution_log TYPE option<string>;

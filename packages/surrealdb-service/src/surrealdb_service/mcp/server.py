@@ -634,7 +634,7 @@ def create_server() -> FastMCP:
         bundle: Optional[Dict[str, str]] = None,
         zip_base64: Optional[str] = None,
         notebook_id: Optional[str] = None,
-        apply_dedup: bool = True,
+        apply_dedup: bool = False,
     ) -> str:
         """Import an OKF v0.1 bundle into the shared graph.
 
@@ -652,7 +652,9 @@ def create_server() -> FastMCP:
             notebook_id: Optional ``notebook:...`` to link imported notes/sources
                 into and to scope the dedup pass.
             apply_dedup: Run the K.5 propose + K.3 auto-merge pass after
-                persistence (idempotent; default on).
+                persistence (idempotent). Default off since PC.5b: the auto
+                band then merges unattended; off, the proposals wait for a
+                curator on the resolution page.
 
         Returns:
             JSON ``{"status": "imported", ...OkfImportReport}`` with
