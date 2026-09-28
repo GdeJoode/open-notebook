@@ -12,6 +12,15 @@
  * a stale draft and 422 on a blocking one, a rollback that leaves the draft
  * alone (so it goes stale), and a rename that appends the old name to the
  * aliases and moves this ontology's references. Nothing touches a database.
+ *
+ * OE.4 adds the retype (`/api/ontologies/retype/...`), modelled on
+ * `retype_planner.plan_rows` and `EntityRetypeService`: entities keep the type
+ * they were written with; the plan types each row's label under the ACTIVE
+ * content (name or alias, up the parent chain to a base) and is conservative
+ * (every current identity stays held, so a move onto a held `(name_key, type)`
+ * is a collision); the preview and publish count the same plan; an apply
+ * writes only when the fingerprint it echoes is the current plan's (409
+ * otherwise) and returns a rollback id to undo it.
  */
 
 import { expect, test, type Page, type Route } from '@playwright/test'
@@ -22,6 +31,53 @@ import { mockDashboardChrome } from '../track-a/_track-a-helpers'
 type EntityType = { name: string; parent_type?: string; aliases?: string[]; [k: string]: unknown }
 type Relationship = { name: string; [k: string]: unknown }
 type Content = { types: Record<string, EntityType>; rels: Record<string, Relationship> }
+type Entity = { id: string; name: string; name_key: string; label: string; entity_type: string }
+type RetypeRow = { id: string; name: string; label: string; status: string; old: string; new: string;
+  old_flag: null; new_flag: null; held_by?: string[] }
+
+/** The canonical type of a label under `content`: its type by name or alias,
+ *  up the parent chain, to the first base. A label defined nowhere is concept. */
+const BASES: Record<string, string> = { GovernmentService: 'programme', Grant: 'grant' }
+function typeOf(label: string, content: Content): string {
+  const find = (n: string) => Object.values(content.types)
+    .find((t) => t.name === n || (t.aliases ?? []).includes(n))
+  let current: string | undefined = find(label)?.name ?? label
+  const seen = new Set<string>()
+  while (current && !seen.has(current)) {
+    if (BASES[current]) return BASES[current]
+    seen.add(current)
+    current = find(current)?.parent_type
+  }
+  return 'concept'
+}
+
+function retypePlan(entities: Entity[], content: Content) {
+  const holders = new Map<string, Set<string>>()
+  const key = (k: string, t: string) => `${k}|${t}`
+  const hold = (k: string, id: string) => holders.set(k, (holders.get(k) ?? new Set()).add(id))
+  for (const e of entities) hold(key(e.name_key, e.entity_type), e.id)
+  const changes: RetypeRow[] = []
+  const collisions: RetypeRow[] = []
+  for (const e of entities) {
+    const next = typeOf(e.label, content)
+    if (next === e.entity_type) continue
+    const item: RetypeRow = { id: e.id, name: e.name, label: e.label, status: 'active',
+      old: e.entity_type, new: next, old_flag: null, new_flag: null }
+    const held = [...(holders.get(key(e.name_key, next)) ?? [])].filter((id) => id !== e.id)
+    if (held.length) {
+      collisions.push({ ...item, held_by: held.sort() })
+      continue
+    }
+    hold(key(e.name_key, next), e.id)
+    changes.push(item)
+  }
+  const byId = (a: RetypeRow, b: RetypeRow) => a.id.localeCompare(b.id)
+  const fingerprint = JSON.stringify({ changes: [...changes].sort(byId),
+    collisions: [...collisions].sort(byId), flag_only: [] })
+  return { total: entities.length, changes, collisions, flag_only: [] as RetypeRow[],
+    counts: { changes: changes.length, collisions: collisions.length, flag_only: 0 },
+    fingerprint, notebook_edits: [] as string[] }
+}
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value))
 
@@ -41,6 +97,28 @@ function backend() {
     active: { version: '1.0.0', content: clone(seed) },
     versions: [] as { version: string; note: string | null; is_active: boolean; content: Content }[],
     calls: [] as { method: string; path: string; body: unknown }[],
+    // Typed as the seed types their labels: nothing to retype until a publish.
+    entities: [
+      { id: 'entity:1', name: 'Regio Deal Twente', name_key: 'regio deal twente', label: 'Project',
+        entity_type: 'programme' },
+      { id: 'entity:2', name: 'Groeiagenda', name_key: 'groeiagenda', label: 'Project',
+        entity_type: 'programme' },
+      { id: 'entity:3', name: 'Groeiagenda', name_key: 'groeiagenda', label: 'Onderwerp',
+        entity_type: 'concept' },
+      { id: 'entity:4', name: 'Deal Noord', name_key: 'deal noord', label: 'Deal',
+        entity_type: 'programme' },
+    ] as Entity[],
+    rollbacks: {} as Record<string, RetypeRow[]>,
+  }
+  /** The retype counts a publish of `content` reports (the preview's `retype`). */
+  const retypeCounts = (content: Content) => {
+    const plan = retypePlan(state.entities, content)
+    const caused = (rows: RetypeRow[]) => rows.filter((r) => {
+      const e = state.entities.find((x) => x.id === r.id)!
+      return typeOf(e.label, state.active.content) !== r.new
+    }).length
+    return { ...plan.counts, caused_by_this_edit: caused(plan.changes),
+      collisions_caused_by_this_edit: caused(plan.collisions) }
   }
   const current = () => state.draft?.content ?? state.active.content
   const editable = () => {
@@ -110,6 +188,37 @@ function backend() {
         entity_types: [person] },
     }
     if (chain[path] && method === 'GET') return json(route, chain[path])
+    if (path === '/retype/dry-run' && method === 'GET') {
+      return json(route, retypePlan(state.entities, state.active.content))
+    }
+    if (path === '/retype/apply' && method === 'POST') {
+      const plan = retypePlan(state.entities, state.active.content)
+      if ((body as { fingerprint: string }).fingerprint !== plan.fingerprint) {
+        return json(route, { detail: 'the retype plan changed since the dry run was shown' }, 409)
+      }
+      const written = plan.changes.filter((c) => {
+        const e = state.entities.find((x) => x.id === c.id)
+        if (!e || e.entity_type !== c.old) return false // guarded on the old type
+        e.entity_type = c.new
+        return true
+      })
+      const rollbackId = written.length
+        ? `pc4b_retype_2026092812000${Object.keys(state.rollbacks).length}000000Z.jsonl` : null
+      if (rollbackId) state.rollbacks[rollbackId] = written
+      return json(route, { written: written.length, skipped: [], failed: [], rollback_id: rollbackId })
+    }
+    const undo = path.match(/^\/retype\/undo\/(.+)$/)
+    if (undo && method === 'POST') {
+      const rows = state.rollbacks[undo[1]]
+      if (!rows) return json(route, { detail: 'no rollback file' }, 404)
+      const restored = rows.filter((c) => {
+        const e = state.entities.find((x) => x.id === c.id)
+        if (!e || e.entity_type !== c.new) return false
+        e.entity_type = c.old
+        return true
+      })
+      return json(route, { written: restored.length, skipped: [], failed: [] })
+    }
     if (path === '/deals/draft' && method === 'GET') return json(route, draftBody())
     if (path === '/deals/draft' && method === 'DELETE') {
       state.draft = null
@@ -154,8 +263,7 @@ function backend() {
       return json(route, { findings: findings(), blocking: findings().length > 0, detection: [],
         detection_error: null, notebook_edits: 0,
         label_changes: changed.map((t) => ({ label: t.name, before: 'programme', after: 'concept', entities: 2 })),
-        retype: { changes: 0, collisions: 0, flag_only: 0, caused_by_this_edit: 0,
-          collisions_caused_by_this_edit: 0 } })
+        retype: retypeCounts(current()) })
     }
     if (path === '/deals/draft/publish') {
       if (!state.draft) return json(route, { detail: "'deals' has no draft to publish" }, 404)
@@ -168,15 +276,14 @@ function backend() {
       if (state.versions.length === 0) {
         state.versions.push({ version: '1.0.0', note: 'YAML seed', is_active: false, content: clone(seed) })
       }
+      const retype = retypeCounts(state.draft.content) // counted before it takes effect
       const version = `1.0.0+2026092812000${state.versions.length}Z`
       state.versions.forEach((v) => (v.is_active = false))
       state.versions.push({ version, note: (body as { note: string | null }).note, is_active: true,
         content: clone(state.draft.content) })
       state.active = { version, content: clone(state.draft.content) }
       state.draft = null
-      return json(route, { name: 'deals', version, warnings: [],
-        retype: { changes: 0, collisions: 0, flag_only: 0, caused_by_this_edit: 0,
-          collisions_caused_by_this_edit: 0 } })
+      return json(route, { name: 'deals', version, warnings: [], retype })
     }
     if (path === '/deals/versions') {
       return json(route, state.versions.map((v) => ({ name: 'deals', created_at: '2026-09-28T12:00:00Z',
@@ -378,5 +485,72 @@ test.describe('OE.3 — ontology editor', () => {
     await expect(page.getByTestId('ontology-draft-stale')).toBeVisible()
     await expect(page.getByTestId('ontology-publish')).toBeDisabled()
     expect(api.state.draft).not.toBeNull() // the edits are kept until the user discards
+  })
+})
+
+test.describe('OE.4 — the retype after a publish', () => {
+  async function publishProjectAsRoot(page: Page) {
+    await typeName(page, 'Project').focus()
+    await page.keyboard.press('Control+x')
+    await page.getByTestId('ontology-root-zone').focus()
+    await page.keyboard.press('Control+v')
+    await expect(page.getByTestId('ontology-draft-state')).toHaveText('Draft')
+    await page.getByTestId('ontology-publish').click()
+  }
+
+  test('publish → dry run → apply → the dry run is empty, the collision is left', async ({ page }) => {
+    const api = await openEditor(page)
+    await publishProjectAsRoot(page)
+
+    // The publish reported entities it moves, so the dry run is offered.
+    const panel = page.getByTestId('ontology-retype')
+    await expect(panel.getByTestId('ontology-retype-changes')).toContainText('Regio Deal Twente')
+    await expect(panel.getByTestId('ontology-retype-changes')).toContainText('programme → concept')
+    const collisions = panel.getByTestId('ontology-retype-collisions')
+    await expect(collisions).toContainText('held by entity:3')
+    await expect(collisions.getByRole('link', { name: 'resolution page' }))
+      .toHaveAttribute('href', '/knowledge-graph/resolution')
+
+    await panel.getByTestId('ontology-retype-apply').click()
+    await confirm(page)
+    await expect(panel.getByTestId('ontology-retype-empty')).toBeVisible()
+    await expect(panel.getByTestId('ontology-retype-result')).toContainText('Written 1')
+    await expect(collisions).toContainText('Groeiagenda') // left for the curator
+    expect(Object.fromEntries(api.state.entities.map((e) => [e.id, e.entity_type]))).toEqual({
+      'entity:1': 'concept', 'entity:2': 'programme', 'entity:3': 'concept', 'entity:4': 'programme',
+    })
+
+    await panel.getByTestId('ontology-retype-undo').click()
+    await confirm(page)
+    await expect(panel.getByTestId('ontology-retype-changes')).toContainText('Regio Deal Twente')
+    expect(api.state.entities.find((e) => e.id === 'entity:1')?.entity_type).toBe('programme')
+  })
+
+  test('an apply of a plan that changed since the dry run writes nothing and shows the new plan',
+    async ({ page }) => {
+      const api = await openEditor(page)
+      await publishProjectAsRoot(page)
+      const panel = page.getByTestId('ontology-retype')
+      await expect(panel.getByTestId('ontology-retype-changes')).toContainText('Regio Deal Twente')
+      // Extracted meanwhile, under the old typing.
+      api.state.entities.push({ id: 'entity:5', name: 'Fonds West', name_key: 'fonds west',
+        label: 'Project', entity_type: 'programme' })
+
+      await panel.getByTestId('ontology-retype-apply').click()
+      await confirm(page)
+      await expect(panel.getByTestId('ontology-retype-changes')).toContainText('Fonds West')
+      expect(api.state.entities.filter((e) => e.entity_type === 'concept').map((e) => e.id))
+        .toEqual(['entity:3'])
+
+      await panel.getByTestId('ontology-retype-apply').click()
+      await confirm(page)
+      await expect(panel.getByTestId('ontology-retype-empty')).toBeVisible()
+    })
+
+  test('the retype is there on demand, and says when there is nothing to do', async ({ page }) => {
+    await openEditor(page)
+    await page.getByTestId('ontology-retype-open').click()
+    await expect(page.getByTestId('ontology-retype-empty')).toBeVisible()
+    await expect(page.getByTestId('ontology-retype-apply')).toHaveCount(0)
   })
 })
