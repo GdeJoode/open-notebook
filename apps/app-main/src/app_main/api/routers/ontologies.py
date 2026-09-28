@@ -206,7 +206,7 @@ async def retype_dry_run(svc: EntityRetypeService = Depends(get_entity_retype_se
 async def retype_apply(body: RetypeApplyIn,
                        svc: EntityRetypeService = Depends(get_entity_retype_service)):
     """Write the plan the dry run showed. 409 when the plan changed since (its
-    fingerprint differs) or notebooks have schema edits; nothing is written then.
+    fingerprint differs); nothing is written then.
     Returns the counts and the ``rollback_id`` to undo it."""
     return await _call(svc.apply(body.fingerprint))
 

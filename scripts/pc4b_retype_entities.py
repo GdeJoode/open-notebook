@@ -31,9 +31,8 @@ Modes:
 * ``--rollback FILE`` — undoes exactly the rows in FILE (guarded on the type
   the retype wrote), restoring the previous type and flag.
 
-Notebook schema edits are not projected (typing here has no notebook, like the
-re-filter). If any notebook has accepted edits the script refuses unless
-``--ignore-notebook-edits`` is given.
+Typing has no notebook: the ontologies are shared by every notebook (OE.5
+retired the per-notebook layer).
 
 Run with SURREAL_* pointing at the target (the WSL venv, env from ``.env``)::
 
@@ -52,7 +51,6 @@ from pathlib import Path
 from app_main.services.entity_retype_service import (
     active_plan,
     new_rollback_path,
-    notebooks_with_edits,
     rollback_file,
     write_plan,
 )
@@ -104,16 +102,11 @@ async def main() -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--apply", action="store_true", help="write (default: dry run)")
     group.add_argument("--rollback", type=Path, help="undo the rows in this rollback file")
-    parser.add_argument("--ignore-notebook-edits", action="store_true")
     args = parser.parse_args()
 
     if args.rollback:
         _report(await rollback(args.rollback))
         return 0
-    edited = await notebooks_with_edits()
-    if edited and not args.ignore_notebook_edits:
-        print(f"refusing: notebooks with accepted schema edits: {edited}")
-        return 2
     result = await plan()
     _print(result)
     if args.apply:

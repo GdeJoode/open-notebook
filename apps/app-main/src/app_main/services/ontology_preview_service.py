@@ -147,25 +147,12 @@ async def detection_changes(
     return out
 
 
-async def _notebook_edit_count() -> int:
-    """Notebook-level schema edits the typing here does not project (OE.5
-    retires that layer). The retype script refuses while any exist."""
-    rows = await execute_query(
-        "SELECT accepted_extensions FROM notebook_schema;", {}
-    ) or []
-    return sum(
-        1 for r in rows for e in (r.get("accepted_extensions") or [])
-        if isinstance(e, dict) and not str(e.get("type_name", "")).startswith("_")
-    )
-
-
 async def preview(
     candidate: Dict[str, Ontology],
     active: Optional[Dict[str, Ontology]] = None,
     *,
     rows: Optional[List[Dict[str, Any]]] = None,
     include_detection: bool = True,
-    count_notebook_edits: bool = True,
 ) -> Dict[str, Any]:
     """Everything the editor shows before a publish. See the module docstring."""
     if active is None:
@@ -189,13 +176,6 @@ async def preview(
         except Exception as exc:  # a preview never fails on the replay
             logger.warning(f"ontology preview: detection replay failed ({exc})")
             detection_error = str(exc)
-    notebook_edits: Optional[int] = None
-    if count_notebook_edits:
-        try:
-            notebook_edits = await _notebook_edit_count()
-        except Exception as exc:
-            logger.warning(f"ontology preview: could not count notebook edits ({exc})")
-
     return {
         "findings": [f.__dict__ for f in findings],
         "blocking": any(f.severity == BLOCK for f in findings),
@@ -212,7 +192,6 @@ async def preview(
         },
         "detection": detection,
         "detection_error": detection_error,
-        "notebook_edits": notebook_edits,
     }
 
 

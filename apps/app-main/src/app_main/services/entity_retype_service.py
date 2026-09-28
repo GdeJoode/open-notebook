@@ -52,22 +52,6 @@ _WRITE = (
 )
 
 
-async def notebooks_with_edits() -> List[str]:
-    """Notebooks with accepted schema edits: the typing here does not project
-    them (OE.5 retires that layer), so a retype while any exist is refused."""
-    rows = await execute_query(
-        "SELECT notebook, accepted_extensions FROM notebook_schema;", {}
-    )
-    return [
-        str(r["notebook"])
-        for r in rows or []
-        if any(
-            isinstance(e, dict) and not str(e.get("type_name", "")).startswith("_")
-            for e in (r.get("accepted_extensions") or [])
-        )
-    ]
-
-
 async def active_plan() -> Dict[str, Any]:
     """The plan under the typing extraction uses NOW (the registry's active set)."""
     return await plan_retype(typing_vocabulary(None, await load_typing_ontologies()))
@@ -145,17 +129,11 @@ class EntityRetypeService:
             **plan,
             "counts": {k: len(plan[k]) for k in ("changes", "collisions", "flag_only")},
             "fingerprint": fingerprint(plan),
-            "notebook_edits": await notebooks_with_edits(),
         }
 
     async def apply(self, confirmed: str) -> Dict[str, Any]:
         """Write the plan whose fingerprint is ``confirmed``, or nothing."""
         async with _publish_lock():
-            edited = await notebooks_with_edits()
-            if edited:
-                raise OntologyEditError(409, (
-                    f"notebooks with accepted schema edits: {edited}; the retype does not "
-                    "project them"))
             plan = await active_plan()
             if fingerprint(plan) != confirmed:
                 raise OntologyEditError(409, (
@@ -181,5 +159,5 @@ class EntityRetypeService:
 
 __all__ = [
     "EntityRetypeService", "ROLLBACK_DIR", "active_plan", "fingerprint",
-    "new_rollback_path", "notebooks_with_edits", "rollback_file", "write_plan",
+    "new_rollback_path", "rollback_file", "write_plan",
 ]

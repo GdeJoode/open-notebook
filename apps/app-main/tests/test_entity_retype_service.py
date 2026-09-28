@@ -187,23 +187,26 @@ async def test_an_apply_waits_for_a_publish_under_way(env, monkeypatch):
     assert (await retype.dry_run())["changes"] == []
 
 
-async def test_an_apply_is_refused_while_notebooks_have_schema_edits(env):
-    """As the script refuses without ``--ignore-notebook-edits``: the typing here
-    does not project notebook edits (OE.5 retires them)."""
+async def test_stored_notebook_edits_do_not_hold_up_an_apply(env):
+    """OE.5 retired the per-notebook layer: typing projects nothing per notebook,
+    so a notebook row that still stores old edits no longer refuses the apply
+    (OE.4 refused it with a 409)."""
     editor, retype = env
     moved, *_ = await _graph()
     await _publish_streekfonds_under_grant(editor)
     await conn.execute_query(
         "CREATE notebook_schema CONTENT $c;",
         {"c": {"notebook": conn.ensure_record_id("notebook:oe4"), "base_ontology": "deals",
-               "accepted_extensions": [{"type_name": "Streekfonds"}]}},
+               "accepted_extensions": [
+                   {"type_name": "Streekfonds"},
+                   {"op": "reparent", "type_name": "Streekfonds", "new_parent": "Deal",
+                    "parent_type": "Deal"}]}},
     )
     shown = await retype.dry_run()
-    assert shown["notebook_edits"] == ["notebook:oe4"]
-    with pytest.raises(OntologyEditError) as refused:
-        await retype.apply(shown["fingerprint"])
-    assert refused.value.status == 409
-    assert (await _types())[moved] == "concept"
+    assert "notebook_edits" not in shown
+    outcome = await retype.apply(shown["fingerprint"])
+    assert outcome["written"] >= 1
+    assert (await _types())[moved] == "grant"
 
 
 async def test_undo_names_only_files_in_the_rollback_directory(env, tmp_path):
