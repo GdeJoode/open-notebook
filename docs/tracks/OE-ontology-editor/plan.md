@@ -1,6 +1,54 @@
 # Track OE — Ontology editor
 
-**Status: PLANNED (2026-09-28).** Awaiting the owner's decisions below.
+**Status: IN PROGRESS.** Owner, 2026-09-28: "follow the recommendations,
+start with OE.0". Every decision below is taken as its recommended option:
+OE-D1 (a) DB versions, OE-D2 (a) retire the per-notebook layer, OE-D3 (a)
+retype only after a confirmed dry run, OE-D4 entity + relationship types in
+v1, OE-D5 (a) the extraction service goes through the registry or stops
+reading ontologies.
+
+> **OE.0 built 2026-09-28** (branch `feature/oe0-lossless-storage`, review
+> round 2).
+> - Every ontology model keeps the keys it has no field for (`extra='allow'`).
+> - `merge_with` combines those keys the way their one reader
+>   (`services/extraction`) does: lists joined parent-first without
+>   duplicates, dicts merged child-first.
+> - `Ontology.to_storage_dict` / `to_yaml_string` write every field that is SET
+>   or differs from its default, plus the extra keys. That covers an in-place
+>   edit of a collection the YAML never set (a type added to `regiodeal`), and
+>   writes no defaults the YAML never said. `to_yaml` uses the same function.
+> - `register` stores a NEW immutable version (unique `(name, version)`;
+>   re-storing is refused and changes nothing) in one transaction via
+>   `execute_transaction`.
+> - `activate_version` refuses an unknown version before touching the active
+>   one.
+> - Both drop the whole cache, so ontologies that `extends` the changed one
+>   follow.
+> - The cache key names whether inheritance was resolved.
+> - Migration 86 defines `ontology_version` exactly as production already had
+>   it (a table no repo migration created; same field and index names), plus
+>   `note` / `created_by`.
+> - Known: a collection written as a YAML list is stored as a mapping (same
+>   content). The OE.2 export back to YAML will have to choose its form.
+> - Tests: `test_ontology_storage_lossless.py`.
+>   - Every shipped YAML stores and reloads identically, through the
+>     serialisation `register` uses.
+>   - Against SurrealDB, every shipped YAML goes through `register` and
+>     `get(version=…)`.
+>   - In-place edits, re-storing refused, `activate_version` reaching
+>     `regiodeal`, and an unknown version refused.
+>
+> **Carried into OE.2 (review minors, not blocking):**
+> 1. Extra lists from `includes` come out in a different order than the
+>    extraction service produces; the set is the same.
+> 2. Two concurrent `register(activate=True)` calls on a name with no stored
+>    rows can leave two active versions. OE.2's publish must serialise.
+> 3. `updated_at` is set on create only. `activate_version` should set it.
+> 4. The down migration leaves stored `note` / `created_by` values in place.
+> 5. `merge_with` passes the parent's extra-key objects into the merged
+>    ontology by reference. OE.2 must deep-copy before editing a merged
+>    ontology in place.
+
 
 ## Why
 

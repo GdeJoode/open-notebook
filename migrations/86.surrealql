@@ -1,0 +1,35 @@
+-- ============================================================================
+-- Migration 86: ontology_version — the store the ontology registry reads first
+-- (Track OE.0).
+--
+-- `OntologyRegistry` reads `ontology_version` before the YAML files
+-- (`_load_from_db`) and writes it with `register` / `activate_version`. No
+-- migration in this repo defined the table: a database migrated from scratch
+-- (the test container) has none, while the production database already holds
+-- one, empty, created before the repo's migrations tracked it — with the
+-- fields `description`, `extends`, `updated_at` and the two indexes below.
+-- This migration defines the SAME schema everywhere: it matches the existing
+-- table field for field and index for index (same names, so nothing is doubled
+-- there), and adds `note` / `created_by` for the editor (OE.2).
+--
+-- A version is immutable: `(name, version)` is unique and `register` creates,
+-- never updates. At most one version per name is active; `register` and
+-- `activate_version` keep that inside a transaction (an index cannot express
+-- "unique where is_active"). `yaml_content` is the ontology's OWN content.
+-- ============================================================================
+
+DEFINE TABLE IF NOT EXISTS ontology_version SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS name ON TABLE ontology_version TYPE string;
+DEFINE FIELD IF NOT EXISTS version ON TABLE ontology_version TYPE string;
+DEFINE FIELD IF NOT EXISTS yaml_content ON TABLE ontology_version TYPE string;
+DEFINE FIELD IF NOT EXISTS is_active ON TABLE ontology_version TYPE bool DEFAULT false;
+DEFINE FIELD IF NOT EXISTS description ON TABLE ontology_version TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS extends ON TABLE ontology_version TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS created_at ON TABLE ontology_version TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_at ON TABLE ontology_version TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS note ON TABLE ontology_version TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS created_by ON TABLE ontology_version TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_ontology_version_unique ON TABLE ontology_version
+    FIELDS name, version UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_ontology_version_active ON TABLE ontology_version
+    FIELDS name, is_active;
