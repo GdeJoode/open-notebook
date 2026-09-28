@@ -103,8 +103,9 @@ function backend() {
         retype: { changes: 0, collisions: 0, flag_only: 0, caused_by_this_edit: 0 } })
     }
     if (path === '/deals/versions') {
-      return json(route, state.versions.map(({ types: _types, ...v }) => ({
-        name: 'deals', created_at: '2026-09-28T12:00:00Z', created_by: 'ontology-editor', ...v })))
+      return json(route, state.versions.map((v) => ({
+        name: 'deals', created_at: '2026-09-28T12:00:00Z', created_by: 'ontology-editor',
+        version: v.version, note: v.note, is_active: v.is_active })))
     }
     const rollback = path.match(/^\/deals\/rollback\/(.+)$/)
     if (rollback) {
@@ -157,15 +158,53 @@ test.describe('OE.3 — ontology editor', () => {
     const handle = page.getByRole('button', { name: 'Move Project' })
     await handle.focus()
     await page.keyboard.press('Space')
+    await expect(handle).toHaveAttribute('aria-pressed', 'true') // picked up
     // Deal is listed right above Project under the same parent.
     await page.keyboard.press('ArrowUp')
+    // The drop target is resolved asynchronously; drop once Deal is the target.
+    await expect(page.getByTestId('ontology-type-Deal')).toHaveClass(/bg-primary\/10/)
     await page.keyboard.press('Space')
-    await expect.poll(() => api.state.calls.some((c) => c.method === 'PUT')).toBe(true)
+    await expect.poll(() => api.state.calls.find((c) => c.method === 'PUT')?.body).toEqual({
+      name: 'Project', parent_type: 'Deal', graph_relevance: 'active',
+    })
+  })
+
+  test('cut and paste a type with Ctrl+X / Ctrl+V', async ({ page }) => {
+    const api = await openEditor(page)
+    await page.getByTestId('ontology-type-Project')
+      .getByRole('button', { name: 'Project', exact: true }).focus()
+    await page.keyboard.press('Control+x')
+    await expect(page.getByTestId('ontology-cut-state')).toContainText('Project cut')
+    await page.getByTestId('ontology-type-Deal')
+      .getByRole('button', { name: 'Deal', exact: true }).focus()
+    await page.keyboard.press('Control+v')
+    await expect.poll(() => api.state.calls.find((c) => c.method === 'PUT')?.body).toEqual({
+      name: 'Project', parent_type: 'Deal', graph_relevance: 'active',
+    })
+    await expect(page.getByTestId('ontology-cut-state')).toHaveCount(0)
+  })
+
+  test('Ctrl+V on "No parent" makes a type a root; Escape cancels a cut', async ({ page }) => {
+    const api = await openEditor(page)
+    const project = page.getByTestId('ontology-type-Project')
+      .getByRole('button', { name: 'Project', exact: true })
+    await project.focus()
+    await page.keyboard.press('Control+x')
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('ontology-cut-state')).toHaveCount(0)
+    await project.focus()
+    await page.keyboard.press('Control+x')
+    await page.getByTestId('ontology-root-zone').focus()
+    await page.keyboard.press('Control+v')
+    await expect.poll(() => api.state.calls.find((c) => c.method === 'PUT')?.body).toEqual({
+      name: 'Project', graph_relevance: 'active',
+    })
   })
 
   test('rename → preview → publish → rollback', async ({ page }) => {
     const api = await openEditor(page)
-    await page.getByTestId('ontology-type-Project').getByRole('button', { name: 'Project' }).click()
+    await page.getByTestId('ontology-type-Project')
+      .getByRole('button', { name: 'Project', exact: true }).click()
     await page.getByLabel('New name').fill('Programmaproject')
     await page.getByTestId('ontology-type-rename').click()
     await expect(page.getByTestId('ontology-type-Programmaproject')).toBeVisible()
