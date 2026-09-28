@@ -5,7 +5,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from app_main.dependencies import get_ontology_edit_service, get_ontology_service
+from app_main.dependencies import (
+    get_entity_retype_service,
+    get_ontology_edit_service,
+    get_ontology_service,
+)
+from app_main.services.entity_retype_service import EntityRetypeService
 from app_main.services.ontology_edit_service import (
     OntologyEditError,
     OntologyEditService,
@@ -178,3 +183,36 @@ async def export_yaml(name: str, svc: OntologyEditService = Depends(get_ontology
     text = await _call(svc.export_yaml(name))
     return Response(content=text, media_type="application/x-yaml",
                     headers={"Content-Disposition": f'attachment; filename="{name}.yaml"'})
+
+
+# ---------------------------------------------------------------------------
+# Retype (Track OE.4): the rows a publish left on their old type. Dry run, then
+# an apply of exactly the plan the dry run showed (OE-D3 (a)).
+# ---------------------------------------------------------------------------
+
+
+class RetypeApplyIn(BaseModel):
+    fingerprint: str = Field(..., min_length=1)
+
+
+@router.get("/retype/dry-run", response_model=Dict[str, Any])
+async def retype_dry_run(svc: EntityRetypeService = Depends(get_entity_retype_service)):
+    """The retype under the ACTIVE ontologies: changes, collisions (left for the
+    curator's merge), flag-only rows, counts, and the plan's ``fingerprint``."""
+    return await svc.dry_run()
+
+
+@router.post("/retype/apply", response_model=Dict[str, Any])
+async def retype_apply(body: RetypeApplyIn,
+                       svc: EntityRetypeService = Depends(get_entity_retype_service)):
+    """Write the plan the dry run showed. 409 when the plan changed since (its
+    fingerprint differs) or notebooks have schema edits; nothing is written then.
+    Returns the counts and the ``rollback_id`` to undo it."""
+    return await _call(svc.apply(body.fingerprint))
+
+
+@router.post("/retype/undo/{rollback_id}", response_model=Dict[str, Any])
+async def retype_undo(rollback_id: str,
+                      svc: EntityRetypeService = Depends(get_entity_retype_service)):
+    """Undo an apply: the rows it wrote go back to their previous type and flag."""
+    return await _call(svc.undo(rollback_id))
