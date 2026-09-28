@@ -1,6 +1,7 @@
 /**
  * OE.3: the drag-and-drop tree's rules. The server's gate validates what a new
- * parent does to typing; these decide which drops the editor offers at all.
+ * parent does to typing; these decide which drops the editor offers at all,
+ * and that every type stays reachable in the tree.
  */
 import { describe, expect, it } from 'vitest'
 
@@ -10,9 +11,12 @@ import {
   canDrop,
   descendantsOf,
   dropEdit,
+  nameTaken,
   reparented,
   zoneId,
+  type InheritedType,
 } from '../ontology-tree'
+import { endpointsOf, withEndpoints } from '../relationship-endpoints'
 import type { StoredEntityType } from '@/lib/api/ontologies'
 
 const own: Record<string, StoredEntityType> = {
@@ -21,19 +25,21 @@ const own: Record<string, StoredEntityType> = {
   Project: { name: 'Project', parent_type: 'GovernmentService' },
   Losstaand: { name: 'Losstaand' },
 }
-const inherited = [
-  { name: 'Person', parent_type: 'Thing' },
-  { name: 'Thing', parent_type: null },
-  { name: 'Deal', parent_type: 'CreativeWork' }, // redefined by `own`
+const inherited: InheritedType[] = [
+  { name: 'Person', parent_type: 'Thing', definedIn: 'instruments' },
+  { name: 'Thing', parent_type: null, definedIn: 'instruments' },
+  { name: 'Deal', parent_type: 'CreativeWork', definedIn: 'instruments' }, // redefined by `own`
+  { name: 'BeleidsThema', parent_type: 'Concept', definedIn: 'policy_themes' },
 ]
 
 describe('buildTypeTree', () => {
   const tree = buildTypeTree(own, inherited)
 
-  it('marks own types, inherited types and undefined parents', () => {
+  it('marks own types, inherited types (with their ontology) and undefined parents', () => {
     expect(tree.nodes.get('regiodeal')).toMatchObject({ own: true, placeholder: false })
-    expect(tree.nodes.get('person')).toMatchObject({ own: false, placeholder: false })
-    expect(tree.nodes.get('governmentservice')).toMatchObject({ own: false, placeholder: true })
+    expect(tree.nodes.get('person')).toMatchObject({ own: false, definedIn: 'instruments' })
+    expect(tree.nodes.get('beleidsthema')).toMatchObject({ definedIn: 'policy_themes' })
+    expect(tree.nodes.get('governmentservice')).toMatchObject({ placeholder: true })
   })
 
   it('an own type redefining an inherited one wins', () => {
@@ -42,9 +48,30 @@ describe('buildTypeTree', () => {
   })
 
   it('hangs children under their parent and the rest at the root', () => {
-    expect(tree.roots).toEqual(['GovernmentService', 'Losstaand', 'Thing'])
+    expect(tree.roots).toEqual(['Concept', 'GovernmentService', 'Losstaand', 'Thing'])
     expect(tree.children.get('governmentservice')).toEqual(['Deal', 'Project'])
     expect(tree.children.get('deal')).toEqual(['RegioDeal'])
+  })
+
+  it('keeps every type of a parent cycle reachable (review B2)', () => {
+    const cyclic = buildTypeTree({
+      A: { name: 'A', parent_type: 'B' }, B: { name: 'B', parent_type: 'A' }, C: { name: 'C' },
+    }, [])
+    const reachable = new Set<string>()
+    const walk = (name: string) => {
+      reachable.add(name.toLowerCase())
+      for (const child of cyclic.children.get(name.toLowerCase()) ?? []) walk(child)
+    }
+    cyclic.roots.forEach(walk)
+    expect(reachable).toEqual(new Set(['a', 'b', 'c']))
+    expect([...cyclic.nodes.values()].filter((n) => n.inCycle).map((n) => n.name)).toEqual(['A'])
+  })
+
+  it('resolves a parent given by an alias, like the backend (review minor 5)', () => {
+    const aliased = buildTypeTree({ Kind: { name: 'Kind', parent_type: 'OudeNaam' } },
+      [{ name: 'NieuweNaam', aliases: ['OudeNaam'], definedIn: 'deals' }])
+    expect(aliased.nodes.has('oudenaam')).toBe(false)
+    expect(aliased.children.get('nieuwenaam')).toEqual(['Kind'])
   })
 })
 
@@ -108,5 +135,34 @@ describe('dropEdit', () => {
     expect(dropEdit(tree, own, 'Deal', zoneId('RegioDeal'))).toBeNull()
     expect(dropEdit(tree, own, 'Person', zoneId('Deal'))).toBeNull()
     expect(dropEdit(tree, own, 'Project', 'somewhere')).toBeNull()
+  })
+})
+
+describe('nameTaken (review M1: "Add" must not replace an existing type)', () => {
+  it('finds a name case-insensitively', () => {
+    expect(nameTaken(own, 'project')).toBe(true)
+    expect(nameTaken(own, ' Deal ')).toBe(true)
+    expect(nameTaken(own, 'Nieuw')).toBe(false)
+  })
+})
+
+describe('relationship endpoints (review B1: both stored spellings)', () => {
+  const legacy = { name: 'BEVAT_PROJECT', description: 'x',
+    source_types: ['Deal'], target_types: ['Project'] }
+  const modern = { name: 'FUNDS', domain: ['Grant'], range: ['Project'], extra: 1 }
+
+  it('reads either spelling', () => {
+    expect(endpointsOf(legacy)).toEqual({ domain: ['Deal'], range: ['Project'] })
+    expect(endpointsOf(modern)).toEqual({ domain: ['Grant'], range: ['Project'] })
+  })
+
+  it('writes back the spelling the relationship uses, every other key kept', () => {
+    expect(withEndpoints(legacy, ['Deal'], ['Project', 'Voorziening'])).toEqual({
+      name: 'BEVAT_PROJECT', description: 'x',
+      source_types: ['Deal'], target_types: ['Project', 'Voorziening'],
+    })
+    expect(withEndpoints(modern, ['Grant'], [])).toEqual({
+      name: 'FUNDS', domain: ['Grant'], range: [], extra: 1,
+    })
   })
 })

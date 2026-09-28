@@ -3,11 +3,16 @@
  *
  * Two kinds of type appear: the ontology's OWN types (from its draft — the
  * only ones an edit here may change, so the only draggable ones) and the types
- * it INHERITS (from the ontology it `extends` — drop targets only). A parent
- * named but defined nowhere (`GovernmentService`, a schema.org base the bridge
- * maps by name) becomes a placeholder node, so a type can be dropped under it.
+ * it INHERITS, each labelled with the ontology that defines it (from every
+ * ontology it `extends` or `includes` — drop targets only). A parent named but
+ * defined nowhere (`GovernmentService`, a schema.org base the bridge maps by
+ * name) becomes a placeholder node, so a type can be dropped under it.
  *
- * Names are matched case-insensitively, like the backend's `_find_definition`.
+ * Names — and parents given by an ALIAS — are matched case-insensitively, like
+ * the backend's `_find_definition`. A parent cycle in the data (the free-text
+ * parent field can make one; the gate blocks its publish) is broken for display
+ * — one member becomes a root marked `inCycle` — so every type stays reachable
+ * and the cycle can be repaired.
  */
 
 import type { StoredEntityType } from '@/lib/api/ontologies'
@@ -17,6 +22,10 @@ export interface TypeNode {
   parent: string | null
   own: boolean
   placeholder: boolean
+  /** The ontology an inherited type comes from. */
+  definedIn: string | null
+  aliases: string[]
+  inCycle: boolean
 }
 
 export interface TypeTree {
@@ -25,35 +34,78 @@ export interface TypeTree {
   roots: string[]
 }
 
+export interface InheritedType {
+  name: string
+  parent_type?: string | null
+  aliases?: string[] | null
+  /** The ontology that defines it. */
+  definedIn: string
+}
+
 const key = (name: string) => name.trim().toLowerCase()
 
 export function buildTypeTree(
   own: Record<string, StoredEntityType>,
-  inherited: { name: string; parent_type?: string | null }[],
+  inherited: InheritedType[],
 ): TypeTree {
   const nodes = new Map<string, TypeNode>()
+  const put = (name: string, node: Omit<TypeNode, 'name' | 'inCycle'>) =>
+    nodes.set(key(name), { name, inCycle: false, ...node })
   for (const t of inherited) {
-    nodes.set(key(t.name), { name: t.name, parent: t.parent_type ?? null, own: false, placeholder: false })
+    if (!nodes.has(key(t.name))) {
+      put(t.name, { parent: t.parent_type ?? null, own: false, placeholder: false,
+        definedIn: t.definedIn, aliases: t.aliases ?? [] })
+    }
   }
   // An own type with an inherited name redefines it: the own one wins.
   for (const t of Object.values(own)) {
-    nodes.set(key(t.name), { name: t.name, parent: t.parent_type ?? null, own: true, placeholder: false })
+    put(t.name, { parent: t.parent_type ?? null, own: true, placeholder: false,
+      definedIn: null, aliases: t.aliases ?? [] })
   }
+  const byAlias = new Map<string, string>()
+  for (const [k, node] of nodes) for (const a of node.aliases) byAlias.set(key(a), k)
+  const resolve = (name: string) => (nodes.has(key(name)) ? key(name) : byAlias.get(key(name)))
   for (const node of [...nodes.values()]) {
-    if (node.parent && !nodes.has(key(node.parent))) {
-      nodes.set(key(node.parent), { name: node.parent, parent: null, own: false, placeholder: true })
+    if (node.parent && resolve(node.parent) === undefined) {
+      put(node.parent, { parent: null, own: false, placeholder: true, definedIn: null, aliases: [] })
     }
   }
+
   const children = new Map<string, string[]>()
   const roots: string[] = []
-  for (const node of nodes.values()) {
-    if (node.parent && nodes.has(key(node.parent)) && key(node.parent) !== key(node.name)) {
-      const k = key(node.parent)
-      children.set(k, [...(children.get(k) ?? []), node.name])
+  const parentKey = new Map<string, string>()
+  for (const [k, node] of nodes) {
+    const p = node.parent ? resolve(node.parent) : undefined
+    if (p !== undefined && p !== k) {
+      parentKey.set(k, p)
+      children.set(p, [...(children.get(p) ?? []), node.name])
     } else {
       roots.push(node.name)
     }
   }
+
+  // Break parent cycles for display: whatever the roots do not reach.
+  const reached = new Set<string>()
+  const walk = (name: string) => {
+    const todo = [key(name)]
+    while (todo.length) {
+      const k = todo.pop() as string
+      if (reached.has(k)) continue
+      reached.add(k)
+      for (const child of children.get(k) ?? []) todo.push(key(child))
+    }
+  }
+  roots.forEach(walk)
+  for (const k of [...nodes.keys()].sort()) {
+    if (reached.has(k)) continue
+    const node = nodes.get(k) as TypeNode
+    const p = parentKey.get(k) as string
+    children.set(p, (children.get(p) ?? []).filter((c) => key(c) !== k))
+    node.inCycle = true
+    roots.push(node.name)
+    walk(node.name)
+  }
+
   const byName = (a: string, b: string) => a.localeCompare(b)
   roots.sort(byName)
   for (const list of children.values()) list.sort(byName)
@@ -107,8 +159,8 @@ export function zoneId(typeName: string): string {
   return `type:${typeName}`
 }
 
-/** What a finished drag changes: the dragged own type with its new parent, or
- *  `null` when the drop is not an edit (dropped outside, or refused). */
+/** What a finished drag or paste changes: the dragged own type with its new
+ *  parent, or `null` when it is not an edit (dropped outside, or refused). */
 export function dropEdit(
   tree: TypeTree,
   own: Record<string, StoredEntityType>,
@@ -120,4 +172,10 @@ export function dropEdit(
   if (target === undefined || !canDrop(tree, dragged, target)) return null
   const type = Object.values(own).find((t) => key(t.name) === key(dragged))
   return type ? reparented(type, target) : null
+}
+
+/** A name already taken — case-insensitively, like the backend — by an own
+ *  type (adding it would REPLACE that type: the edit API creates or replaces). */
+export function nameTaken(own: Record<string, { name: string }>, name: string): boolean {
+  return Object.values(own).some((t) => key(t.name) === key(name))
 }

@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from 'react'
 
+import { ConfirmButton } from '@/components/ontologies/ConfirmButton'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -42,7 +43,11 @@ export function TypeForm({ type, parentOptions, onSave, onRename, onDelete, disa
     setAliases((type.aliases ?? []).join(', '))
     setHints((type.extraction_hints ?? []).join('\n'))
     setNewName('')
-  }, [type])
+    // Reset only when another type is shown (the editor remounts the form on a
+    // discard or publish): a draft refresh from an unrelated edit, such as a
+    // drag, must not wipe what is being typed. `type` is read, not watched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type.name])
 
   const save = () => {
     const next: StoredEntityType = { ...type }
@@ -102,10 +107,12 @@ export function TypeForm({ type, parentOptions, onSave, onRename, onDelete, disa
           onClick={() => onRename(newName.trim())} data-testid="ontology-type-rename">
           Rename
         </Button>
-        <Button size="sm" variant="outline" className="text-destructive" disabled={disabled}
-          onClick={onDelete} data-testid="ontology-type-delete">
+        <ConfirmButton size="sm" variant="outline" className="text-destructive" disabled={disabled}
+          data-testid="ontology-type-delete" title={`Delete ${type.name} from the draft?`}
+          description="Only the draft changes; discard the draft to undo it."
+          confirmLabel="Delete" onConfirm={onDelete}>
           Delete
-        </Button>
+        </ConfirmButton>
       </div>
     </div>
   )

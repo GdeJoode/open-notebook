@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
   ontologyEditApi,
+  type Finding,
   type OntologyDraft,
 } from '@/lib/api/ontologies'
 import { QUERY_KEYS } from '@/lib/api/query-client'
@@ -24,21 +25,31 @@ export const ONTOLOGY_EDITOR_KEYS = {
   versions: (name: string) => ['ontology-editor', name, 'versions'] as const,
 }
 
-/** The server's reason, whatever shape it has (a string, or `{message, findings}`). */
+/** The server's reason, whatever shape it has (a string, or `{message,
+ *  findings}` on a 422 — the blocking findings are named, not dropped). */
 export function errorDetail(err: unknown): string {
   const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
   if (typeof detail === 'string') return detail
   if (detail && typeof detail === 'object' && 'message' in detail) {
-    return String((detail as { message: unknown }).message)
+    const { message, findings } = detail as { message: unknown; findings?: Finding[] }
+    const blocking = (findings ?? []).filter((f) => f.severity === 'block')
+    return blocking.length
+      ? `${String(message)}: ${blocking.map((f) => `${f.rule} (${f.subject ?? '—'})`).join(', ')}`
+      : String(message)
   }
   return err instanceof Error ? err.message : 'Request failed'
 }
+
+/** Everything the editor holds for one ontology, or (no name) for all of them:
+ *  a publish of a PARENT changes the findings of the ontologies that extend it. */
+const editorKey = (name?: string) => (name ? ['ontology-editor', name] : ['ontology-editor'])
 
 export function useOntologyDraft(name: string) {
   return useQuery({
     queryKey: ONTOLOGY_EDITOR_KEYS.draft(name),
     queryFn: () => ontologyEditApi.getDraft(name),
     enabled: !!name,
+    staleTime: 0,
   })
 }
 
@@ -47,6 +58,7 @@ export function useDraftFindings(name: string) {
     queryKey: ONTOLOGY_EDITOR_KEYS.findings(name),
     queryFn: () => ontologyEditApi.validate(name),
     enabled: !!name,
+    staleTime: 0,
   })
 }
 
@@ -68,18 +80,23 @@ export function useDraftEdit(name: string) {
       queryClient.setQueryData(ONTOLOGY_EDITOR_KEYS.draft(name), draft)
       queryClient.invalidateQueries({ queryKey: ONTOLOGY_EDITOR_KEYS.findings(name) })
     },
-    onError: (err) =>
-      toast({ title: 'Edit refused', description: errorDetail(err), variant: 'destructive' }),
+    onError: (err) => {
+      queryClient.invalidateQueries({ queryKey: editorKey(name) })
+      toast({ title: 'Edit refused', description: errorDetail(err), variant: 'destructive' })
+    },
   })
 }
 
 export function useDiscardDraft(name: string) {
   const queryClient = useQueryClient()
+  const { toast } = useToast()
   return useMutation({
     mutationFn: () => ontologyEditApi.discardDraft(name),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['ontology-editor', name] })
+      queryClient.invalidateQueries({ queryKey: editorKey(name) })
     },
+    onError: (err) =>
+      toast({ title: 'Discard failed', description: errorDetail(err), variant: 'destructive' }),
   })
 }
 
@@ -92,16 +109,16 @@ export function useDraftPreview(name: string) {
   })
 }
 
-function useActiveChanged(name: string) {
+function useActiveChanged() {
   const queryClient = useQueryClient()
   return () => {
-    queryClient.invalidateQueries({ queryKey: ['ontology-editor', name] })
+    queryClient.invalidateQueries({ queryKey: editorKey() })
     queryClient.invalidateQueries({ queryKey: QUERY_KEYS.ontologies })
   }
 }
 
 export function usePublishDraft(name: string) {
-  const changed = useActiveChanged(name)
+  const changed = useActiveChanged()
   const { toast } = useToast()
   return useMutation({
     mutationFn: (note: string | null) => ontologyEditApi.publish(name, note),
@@ -109,13 +126,15 @@ export function usePublishDraft(name: string) {
       changed()
       toast({ title: 'Published', description: `${name} is now version ${result.version}` })
     },
-    onError: (err) =>
-      toast({ title: 'Publish refused', description: errorDetail(err), variant: 'destructive' }),
+    onError: (err) => {
+      changed() // a 409 or 422 means the draft or the active set moved: show it
+      toast({ title: 'Publish refused', description: errorDetail(err), variant: 'destructive' })
+    },
   })
 }
 
 export function useRollback(name: string) {
-  const changed = useActiveChanged(name)
+  const changed = useActiveChanged()
   const { toast } = useToast()
   return useMutation({
     mutationFn: (version: string) => ontologyEditApi.rollback(name, version),

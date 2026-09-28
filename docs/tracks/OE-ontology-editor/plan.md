@@ -294,49 +294,57 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 
 **OE.3 — Editor UI** (~2d)
 
-> **OE.3 built 2026-09-28** (branch `feature/oe3-editor-ui`). The owner added
-> drag-and-drop re-parenting to the scope, and Ctrl+X / Ctrl+V as the keyboard
-> way to do it.
+> **OE.3 built 2026-09-28** (branch `feature/oe3-editor-ui`, review round 2).
+> The owner added drag-and-drop re-parenting to the scope, and Ctrl+X / Ctrl+V
+> as the keyboard way to do it ("no need to make it very complicated").
 > - The `/ontologies` detail page gets an **Edit** tab (`OntologyEditor`):
->   - a draft bar: state, base version, Preview, Publish with a note (disabled
->     while a finding blocks), Discard;
->   - the gate's findings: blocks as alerts, warnings folded;
->   - the type tree (`TypeTree`, `@dnd-kit`) next to a form for the selected
->     type (`TypeForm`: description, parent, schema.org base, aliases, hints;
->     rename; delete);
+>   - a draft bar showing the draft's base version next to the ACTIVE
+>     version, with Preview, Publish with a note, and Discard (confirmed);
+>   - a stale draft (after a rollback, or a publish elsewhere) is warned
+>     about and cannot be published;
+>   - the gate's findings, with a blocking count on the type concerned in
+>     the tree;
+>   - the type tree (`TypeTree`) next to a form for the selected type
+>     (`TypeForm`; delete confirmed);
 >   - relationship types (`RelationshipTypesEditor`);
->   - the preview (label changes with entity counts, the retype, detection
->     changes);
->   - versions with rollback, and export to YAML.
-> - **Re-parenting**, three ways that all end in the same draft edit
->   (`dropEdit` → the type sent back whole with its new `parent_type`):
->   - drag a type onto its new parent, or onto "No parent";
->   - Ctrl+X on a type, then Ctrl+V on the new parent (Cmd on a Mac; Escape
->     cancels);
->   - the drag handle's own keyboard mode (Space, arrow keys, Space).
+>   - the preview, dropped as soon as the draft changes;
+>   - versions with a confirmed rollback that warns an open draft will go
+>     stale; export to YAML.
+> - **The tree** shows own types and the types inherited through `extends`
+>   and every `includes`, each labelled with the ontology it comes from.
+>   - Parents are resolved by name or alias, case-insensitively, as in the
+>     backend.
+>   - Parents defined nowhere show as "not defined" targets.
+>   - A parent cycle is broken for display, one member marked "parent
+>     cycle", so every type stays reachable and repairable.
+>   - Until the inherited ontologies have loaded, a notice replaces the tree.
+> - **Re-parenting**, three ways, all ending in the same draft edit
+>   (`dropEdit`):
+>   - drag onto the new parent, or onto "No parent";
+>   - Ctrl+X, then Ctrl+V (Cmd on a Mac; Escape cancels; a refused move says
+>     why);
+>   - the drag handle's own keyboard mode.
 >
->   Only OWN types move. Inherited types and undefined parents (schema.org
->   bases such as `GovernmentService`) are targets only. The editor offers no
->   drop that would make a cycle or change nothing; the server's gate still
->   validates what a new parent does to typing.
-> - Every edit sends the stored type back whole, so keys the form does not
->   show (`graph_relevance`, …) survive (OE.2's PUT contract).
+>   Only OWN types move. No drop that would make a cycle or change nothing is
+>   offered.
+> - **Nothing is silently lost:**
+>   - every edit sends the stored type back whole;
+>   - relationships keep the endpoint spelling they use (`source_types` /
+>     `target_types`, about 80 shipped ones), which the first version wiped;
+>   - "Add" refuses a name that exists, which the first version replaced;
+>   - rows and the form follow the draft without discarding what is being
+>     typed.
 > - Tests:
->   - `ontology-tree.test.ts` (13): tree building, allowed drops, the drop
->     edit;
->   - `OntologyEditor.test.tsx` (4): publish refused while blocking, own vs
->     inherited in the tree, the form keeping unshown keys;
->   - e2e `e2e/track-oe/ontology-editor.spec.ts` (5, against a stateful mocked
->     backend with the OE.2 shapes): drag, keyboard drag, cut/paste, paste on
->     "No parent" plus Escape, and rename → preview → publish → rollback.
-- The existing read-only `/ontologies` page becomes the editor.
-  - A type tree per ontology, showing its inheritance chain (`extends`) and
-    which parent defines what.
-  - A form per type for the v1 fields.
-  - Validation findings inline, and a preview panel before publish (labels
-    that change type, entities affected, collisions).
-  - A version history with rollback.
-- **AC:** an e2e test performs rename → preview → publish → rollback.
+>   - `ontology-tree.test.ts` (18): tree incl. cycles, `includes` and
+>     aliases; drops; name clashes; both endpoint spellings;
+>   - `OntologyEditor.test.tsx` (10): the review cases, each in its state;
+>   - e2e `ontology-editor.spec.ts` (8), against a stateful mock that follows
+>     the OE.2 contract (source_types spelling, cycle findings, 409 / 422, a
+>     rollback leaving the draft stale, a rename appending the alias and
+>     moving references): drag, keyboard drag, cut/paste, "No parent" plus
+>     Escape, rename → preview → publish → rollback, relationship spelling,
+>     parent cycle, stale draft after a rollback.
+
 
 **OE.4 — Data follow-through** (~1d)
 - After a publish that changes types, the preview's retype plan is offered:

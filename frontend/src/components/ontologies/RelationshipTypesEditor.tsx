@@ -2,18 +2,21 @@
 
 /**
  * OE.3: the draft's OWN relationship types — name, description, domain and
- * range. Like entity types, a save sends the whole type (unshown keys kept).
- * The gate reports a domain/range that names no type
- * (`relationship_endpoint_unknown`).
+ * range. A save sends the whole relationship (unshown keys kept) with its
+ * endpoints in the spelling it already uses (`domain`/`range` or
+ * `source_types`/`target_types`; see `relationship-endpoints`). The gate
+ * reports a domain/range that names no type (`relationship_endpoint_unknown`).
  */
 
 import { useState } from 'react'
 
+import { ConfirmButton } from '@/components/ontologies/ConfirmButton'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import type { StoredRelationshipType } from '@/lib/api/ontologies'
+import { nameTaken } from '@/lib/utils/ontology-tree'
+import { endpointsOf, withEndpoints } from '@/lib/utils/relationship-endpoints'
 
-const csv = (items?: string[]) => (items ?? []).join(', ')
 const parse = (text: string) => text.split(',').map((s) => s.trim()).filter(Boolean)
 
 interface Props {
@@ -26,20 +29,24 @@ interface Props {
 export function RelationshipTypesEditor({ relationships, onSave, onDelete, disabled }: Props) {
   const [newName, setNewName] = useState('')
   const rels = Object.values(relationships).sort((a, b) => a.name.localeCompare(b.name))
+  const taken = newName.trim() !== '' && nameTaken(relationships, newName)
   return (
     <div className="space-y-2 rounded-md border p-3" data-testid="ontology-relationships">
       <h3 className="font-semibold text-sm">Relationship types</h3>
       {rels.map((rel) => (
-        <RelationshipRow key={rel.name} rel={rel} onSave={onSave} onDelete={onDelete}
-          disabled={disabled} />
+        // Keyed on the stored content: a draft change (a rename moving the
+        // endpoints, a discard) resets the row instead of saving stale values.
+        <RelationshipRow key={`${rel.name}:${JSON.stringify(rel)}`} rel={rel} onSave={onSave}
+          onDelete={onDelete} disabled={disabled} />
       ))}
-      <div className="flex gap-2">
+      <div className="flex items-center gap-2">
         <Input className="h-8" placeholder="NEW_RELATION" aria-label="New relationship name"
           value={newName} onChange={(e) => setNewName(e.target.value)} />
-        <Button size="sm" variant="outline" disabled={!newName.trim() || disabled}
+        <Button size="sm" variant="outline" disabled={!newName.trim() || taken || disabled}
           onClick={() => { onSave({ name: newName.trim(), domain: [], range: [] }); setNewName('') }}>
           Add relationship
         </Button>
+        {taken && <span className="text-xs text-destructive">That relationship exists already.</span>}
       </div>
     </div>
   )
@@ -51,11 +58,13 @@ function RelationshipRow({ rel, onSave, onDelete, disabled }: {
   onDelete: Props['onDelete']
   disabled?: boolean
 }) {
+  const stored = endpointsOf(rel)
   const [description, setDescription] = useState(rel.description ?? '')
-  const [domain, setDomain] = useState(csv(rel.domain))
-  const [range, setRange] = useState(csv(rel.range))
+  const [domain, setDomain] = useState(stored.domain.join(', '))
+  const [range, setRange] = useState(stored.range.join(', '))
   return (
-    <div className="grid grid-cols-[8rem_1fr_1fr_1fr_auto_auto] items-center gap-2 text-sm">
+    <div className="grid grid-cols-[8rem_1fr_1fr_1fr_auto_auto] items-center gap-2 text-sm"
+      data-testid={`ontology-relationship-${rel.name}`}>
       <code className="truncate" title={rel.name}>{rel.name}</code>
       <Input className="h-8" aria-label={`${rel.name} description`} value={description}
         onChange={(e) => setDescription(e.target.value)} />
@@ -65,21 +74,19 @@ function RelationshipRow({ rel, onSave, onDelete, disabled }: {
         value={range} onChange={(e) => setRange(e.target.value)} />
       <Button size="sm" variant="outline" disabled={disabled}
         onClick={() => {
-          const next: StoredRelationshipType = { ...rel, domain: parse(domain), range: parse(range) }
-          // The source may spell them source_types/target_types; one spelling wins.
-          delete next.source_types
-          delete next.target_types
+          const next = withEndpoints(rel, parse(domain), parse(range))
           if (description.trim()) next.description = description.trim()
           else delete next.description
           onSave(next)
         }}>
         Save
       </Button>
-      <Button size="sm" variant="ghost" className="text-destructive" disabled={disabled}
-        onClick={() => onDelete(rel.name)}>
+      <ConfirmButton size="sm" variant="ghost" className="text-destructive" disabled={disabled}
+        title={`Delete ${rel.name} from the draft?`}
+        description="Only the draft changes; discard the draft to undo it."
+        confirmLabel="Delete" onConfirm={() => onDelete(rel.name)}>
         Delete
-      </Button>
+      </ConfirmButton>
     </div>
   )
 }
-

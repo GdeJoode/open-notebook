@@ -4,26 +4,32 @@
  * OE.3: the shared-ontology editor. Edits go to a DRAFT (nothing changes for
  * extraction until a publish); the OE.1 gate re-validates the draft after each
  * edit, the preview shows what a publish would do to the graph, and a publish
- * is refused while a finding blocks. Versions can be rolled back.
+ * is refused while a finding blocks or while the draft is based on a version
+ * that is no longer active. Versions can be rolled back.
  */
 
-import { useMemo, useState } from 'react'
+import { useQueries } from '@tanstack/react-query'
+import { useEffect, useMemo, useState } from 'react'
 
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { ConfirmButton } from '@/components/ontologies/ConfirmButton'
 import { RelationshipTypesEditor } from '@/components/ontologies/RelationshipTypesEditor'
 import { TypeForm } from '@/components/ontologies/TypeForm'
 import { TypeTree } from '@/components/ontologies/TypeTree'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import {
+  ontologiesApi,
   ontologyEditApi,
   type Finding,
   type OntologyPreview,
   type StoredEntityType,
 } from '@/lib/api/ontologies'
+import { QUERY_KEYS } from '@/lib/api/query-client'
 import { useOntology } from '@/lib/hooks/use-ontologies'
 import {
+  errorDetail,
   useDiscardDraft,
   useDraftEdit,
   useDraftFindings,
@@ -33,13 +39,13 @@ import {
   usePublishDraft,
   useRollback,
 } from '@/lib/hooks/use-ontology-editor'
-import { buildTypeTree } from '@/lib/utils/ontology-tree'
+import { useToast } from '@/lib/hooks/use-toast'
+import { buildTypeTree, nameTaken, type InheritedType } from '@/lib/utils/ontology-tree'
 
 export function OntologyEditor({ name }: { name: string }) {
   const draftQuery = useOntologyDraft(name)
+  const active = useOntology(name)
   const findings = useDraftFindings(name)
-  const extendsName = draftQuery.data?.ontology.metadata.extends ?? ''
-  const parent = useOntology(extendsName)
   const edit = useDraftEdit(name)
   const discard = useDiscardDraft(name)
   const previewMutation = useDraftPreview(name)
@@ -48,20 +54,51 @@ export function OntologyEditor({ name }: { name: string }) {
   const [note, setNote] = useState('')
   const [newType, setNewType] = useState('')
 
-  const own = useMemo(() => draftQuery.data?.ontology.entity_types ?? {}, [draftQuery.data])
-  const tree = useMemo(
-    () => buildTypeTree(own, extendsName ? (parent.data?.entity_types ?? []) : []),
-    [own, extendsName, parent.data],
+  // Every ontology this one inherits from: `extends` first, then `includes`.
+  const metadata = draftQuery.data?.ontology.metadata
+  const parents = useMemo(() => {
+    if (!metadata?.extends) return [] // the registry merges `includes` only with `extends`
+    return [metadata.extends, ...(metadata.includes ?? [])].filter((p, i, all) => all.indexOf(p) === i)
+  }, [metadata])
+  const parentQueries = useQueries({
+    queries: parents.map((p) => ({
+      queryKey: QUERY_KEYS.ontology(p),
+      queryFn: () => ontologiesApi.get(p),
+    })),
+  })
+  const parentsLoading = parentQueries.some((q) => q.isLoading)
+  const parentsFailed = parentQueries.some((q) => q.isError)
+  const inherited = useMemo<InheritedType[]>(
+    () => parentQueries.flatMap((q, i) =>
+      (q.data?.entity_types ?? []).map((t) => ({ ...t, definedIn: parents[i] }))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [parents, ...parentQueries.map((q) => q.data)],
   )
+  const own = useMemo(() => draftQuery.data?.ontology.entity_types ?? {}, [draftQuery.data])
+  const tree = useMemo(() => buildTypeTree(own, inherited), [own, inherited])
+
+  // The preview describes the draft it was made from: drop it when the draft changes.
+  const draftStamp = draftQuery.dataUpdatedAt
+  useEffect(() => {
+    previewMutation.reset()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftStamp])
 
   if (draftQuery.isLoading) return <LoadingSpinner />
   if (!draftQuery.data) return <p className="text-sm text-destructive">Could not load the draft.</p>
 
   const draft = draftQuery.data
+  const activeVersion = active.data?.version
+  const stale = draft.exists && activeVersion !== undefined && activeVersion !== draft.base_version
   const blocking = (findings.data ?? []).filter((f) => f.severity === 'block')
+  const findingsByType = new Map<string, number>()
+  for (const f of blocking) {
+    if (f.subject) findingsByType.set(f.subject.toLowerCase(), (findingsByType.get(f.subject.toLowerCase()) ?? 0) + 1)
+  }
   const busy = edit.isPending || publish.isPending || discard.isPending
   const selectedOwn = selected ? Object.values(own).find((t) => t.name === selected) : undefined
   const put = (type: StoredEntityType) => edit.mutate(() => ontologyEditApi.putEntityType(name, type))
+  const newTypeTaken = newType.trim() !== '' && nameTaken(own, newType)
 
   return (
     <div className="space-y-4" data-testid="ontology-editor">
@@ -70,7 +107,7 @@ export function OntologyEditor({ name }: { name: string }) {
           {draft.exists ? 'Draft' : 'No draft'}
         </Badge>
         <span className="text-xs text-muted-foreground">
-          based on version {draft.base_version}
+          based on {draft.base_version}; active {activeVersion ?? '…'}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <Button size="sm" variant="outline" disabled={!draft.exists || previewMutation.isPending}
@@ -79,60 +116,85 @@ export function OntologyEditor({ name }: { name: string }) {
           </Button>
           <Input className="h-8 w-56" placeholder="Note for this version" aria-label="Publish note"
             value={note} onChange={(e) => setNote(e.target.value)} />
-          <Button size="sm" disabled={!draft.exists || blocking.length > 0 || busy}
+          <Button size="sm" disabled={!draft.exists || blocking.length > 0 || stale || busy}
             onClick={() => publish.mutate(note.trim() || null, { onSuccess: () => setNote('') })}
             data-testid="ontology-publish">
             Publish
           </Button>
-          <Button size="sm" variant="ghost" disabled={!draft.exists || busy}
-            onClick={() => discard.mutate()} data-testid="ontology-discard">
+          <ConfirmButton size="sm" variant="ghost" disabled={!draft.exists || busy}
+            data-testid="ontology-discard" title="Discard the draft?"
+            description="Every unpublished edit of this ontology is lost."
+            confirmLabel="Discard" onConfirm={() => discard.mutate()}>
             Discard draft
-          </Button>
+          </ConfirmButton>
         </div>
       </div>
+
+      {stale && (
+        <p role="alert" className="text-sm text-destructive" data-testid="ontology-draft-stale">
+          This draft was started from version {draft.base_version}, but {activeVersion} is active
+          now (a publish or rollback happened since). It cannot be published; discard it and
+          start again from the active version.
+        </p>
+      )}
 
       <FindingList findings={findings.data ?? []} />
 
       <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-2">
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             <Input className="h-8" placeholder="New type name" aria-label="New type name"
               value={newType} onChange={(e) => setNewType(e.target.value)} />
-            <Button size="sm" variant="outline" disabled={!newType.trim() || busy}
+            <Button size="sm" variant="outline" disabled={!newType.trim() || newTypeTaken || busy}
               data-testid="ontology-add-type"
               onClick={() => {
                 const typeName = newType.trim()
-                put({ name: typeName })
-                setSelected(typeName)
-                setNewType('')
+                edit.mutate(() => ontologyEditApi.putEntityType(name, { name: typeName }), {
+                  onSuccess: () => { setSelected(typeName); setNewType('') },
+                })
               }}>
               Add type
             </Button>
           </div>
-          <TypeTree tree={tree} own={own} selected={selected} onSelect={setSelected}
-            onReparent={put} disabled={busy} />
+          {newTypeTaken && (
+            <p className="text-xs text-destructive" data-testid="ontology-add-type-taken">
+              {newType.trim()} exists already; select it to edit it.
+            </p>
+          )}
+          {parentsLoading ? (
+            <p className="text-sm text-muted-foreground">Loading the inherited types…</p>
+          ) : (
+            <>
+              {parentsFailed && (
+                <p className="text-xs text-destructive">
+                  Could not load every inherited ontology; types they define show as not defined.
+                </p>
+              )}
+              <TypeTree tree={tree} own={own} selected={selected} onSelect={setSelected}
+                onReparent={put} findingsByType={findingsByType} disabled={busy} />
+            </>
+          )}
         </div>
         <div>
           {selectedOwn ? (
             <TypeForm
+              key={`${selectedOwn.name}:${draft.exists}:${draft.base_version}`}
               type={selectedOwn}
               parentOptions={[...tree.nodes.values()].map((n) => n.name).sort()}
               disabled={busy}
               onSave={put}
-              onRename={(newName) => {
-                edit.mutate(() => ontologyEditApi.renameEntityType(name, selectedOwn.name, newName))
-                setSelected(newName)
-              }}
-              onDelete={() => {
-                edit.mutate(() => ontologyEditApi.deleteEntityType(name, selectedOwn.name))
-                setSelected(null)
-              }}
+              onRename={(newName) =>
+                edit.mutate(() => ontologyEditApi.renameEntityType(name, selectedOwn.name, newName),
+                  { onSuccess: () => setSelected(newName) })}
+              onDelete={() =>
+                edit.mutate(() => ontologyEditApi.deleteEntityType(name, selectedOwn.name),
+                  { onSuccess: () => setSelected(null) })}
             />
           ) : (
             <p className="text-sm text-muted-foreground">
               {selected
-                ? `${selected} is inherited or a schema.org base; edit it in the ontology that defines it.`
-                : 'Select a type to edit it, or drag a type onto its new parent.'}
+                ? `${selected} is inherited or not defined; edit it in the ontology that defines it.`
+                : 'Select a type to edit it, or drag a type onto its new parent (or cut and paste it with Ctrl+X / Ctrl+V).'}
             </p>
           )}
         </div>
@@ -146,7 +208,7 @@ export function OntologyEditor({ name }: { name: string }) {
       />
 
       {previewMutation.data && <PreviewPanel preview={previewMutation.data} />}
-      <Versions name={name} />
+      <Versions name={name} draftOpen={draft.exists} />
     </div>
   )
 }
@@ -179,11 +241,14 @@ function PreviewPanel({ preview }: { preview: OntologyPreview }) {
   const r = preview.retype
   return (
     <div className="space-y-2 rounded-md border p-3 text-sm" data-testid="ontology-preview-result">
-      <h3 className="font-semibold">What publishing would do</h3>
+      <h3 className="font-semibold">What publishing this draft would do</h3>
+      {preview.blocking && (
+        <p className="text-destructive">A finding blocks this draft; it cannot be published.</p>
+      )}
       {preview.label_changes.length === 0 ? (
         <p className="text-muted-foreground">No label changes type.</p>
       ) : (
-        <ul className="list-disc pl-5">
+        <ul className="list-disc pl-5" data-testid="ontology-preview-labels">
           {preview.label_changes.map((c) => (
             <li key={c.label}>
               <code>{c.label}</code>: {c.before} → {c.after} ({c.entities} entities)
@@ -192,8 +257,9 @@ function PreviewPanel({ preview }: { preview: OntologyPreview }) {
         </ul>
       )}
       <p>
-        Retype after publishing: {r.changes} change(s), of which {r.caused_by_this_edit} caused
-        by this draft; {r.collisions} collision(s) left for a merge.
+        Retype after publishing: {r.changes} change(s), {r.caused_by_this_edit} caused by this
+        draft; {r.collisions} collision(s) left for a merge, {r.collisions_caused_by_this_edit} caused
+        by this draft.
       </p>
       {preview.detection.length > 0 && (
         <p>{preview.detection.length} document(s) would select different ontologies.</p>
@@ -209,17 +275,22 @@ function PreviewPanel({ preview }: { preview: OntologyPreview }) {
   )
 }
 
-function Versions({ name }: { name: string }) {
+function Versions({ name, draftOpen }: { name: string; draftOpen: boolean }) {
   const versions = useOntologyVersions(name)
   const rollback = useRollback(name)
+  const { toast } = useToast()
   const download = async () => {
-    const text = await ontologyEditApi.exportYaml(name)
-    const url = URL.createObjectURL(new Blob([text], { type: 'application/x-yaml' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${name}.yaml`
-    a.click()
-    URL.revokeObjectURL(url)
+    try {
+      const text = await ontologyEditApi.exportYaml(name)
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/x-yaml' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${name}.yaml`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (err) {
+      toast({ title: 'Export failed', description: errorDetail(err), variant: 'destructive' })
+    }
   }
   return (
     <div className="space-y-2 rounded-md border p-3" data-testid="ontology-versions">
@@ -238,11 +309,17 @@ function Versions({ name }: { name: string }) {
               {v.is_active && <Badge>active</Badge>}
               <span className="text-xs text-muted-foreground">{v.note ?? ''}</span>
               {!v.is_active && (
-                <Button size="sm" variant="ghost" className="ml-auto" disabled={rollback.isPending}
-                  onClick={() => rollback.mutate(v.version)}
-                  data-testid={`ontology-rollback-${v.version}`}>
+                <ConfirmButton size="sm" variant="ghost" className="ml-auto"
+                  disabled={rollback.isPending}
+                  data-testid={`ontology-rollback-${v.version}`}
+                  title={`Roll ${name} back to ${v.version}?`}
+                  description={
+                    `Every notebook types with this version from the next extraction on.` +
+                    (draftOpen ? ' The open draft was started from the current version and ' +
+                      'can no longer be published afterwards.' : '')}
+                  confirmLabel="Roll back" onConfirm={() => rollback.mutate(v.version)}>
                   Roll back to this
-                </Button>
+                </ConfirmButton>
               )}
             </li>
           ))}

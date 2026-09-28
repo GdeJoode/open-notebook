@@ -108,7 +108,12 @@ export interface OntologyDraft {
   exists: boolean
   base_version: string
   ontology: {
-    metadata: { name: string; version: string; extends?: string | null }
+    metadata: {
+      name: string
+      version: string
+      extends?: string | null
+      includes?: string[] | null
+    }
     entity_types?: Record<string, StoredEntityType>
     relationship_types?: Record<string, StoredRelationshipType>
     [key: string]: unknown
