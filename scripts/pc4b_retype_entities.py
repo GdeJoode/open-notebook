@@ -52,10 +52,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app_main.services.entity_persistence_service import (
-    _resolve_entity_type,
     load_typing_ontologies,
     typing_vocabulary,
 )
+from app_main.services.retype_planner import plan_retype
 from surrealdb_service.connection import ensure_record_id, execute_query
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -82,44 +82,9 @@ async def _notebooks_with_edits() -> list[str]:
 
 
 async def plan() -> dict:
-    vocabulary = typing_vocabulary(None, await load_typing_ontologies())
-    rows = await execute_query(
-        "SELECT id, canonical_name, name_key, entity_type, status, primary_type, "
-        "properties.raw_entity_type AS raw, properties.non_type_label AS flagged "
-        "FROM entity WHERE status IN ['active', 'reference'];",
-        {},
-    )
-    holders: dict = {}
-    for r in rows:
-        holders.setdefault((r.get("name_key"), r.get("entity_type")), set()).add(str(r["id"]))
-    changes, collisions, flags = [], [], []
-    for r in rows:
-        label = (r.get("raw") or r.get("primary_type") or "").strip()
-        if not label:
-            continue
-        resolved = _resolve_entity_type(label, vocabulary)
-        new, old, rid = resolved.entity_type, r.get("entity_type"), str(r["id"])
-        item = {
-            "id": rid,
-            "name": r.get("canonical_name"),
-            "label": label,
-            "status": r.get("status"),
-            "old": old,
-            "new": new,
-            "old_flag": r.get("flagged"),
-            "new_flag": True if resolved.is_noise else r.get("flagged"),
-        }
-        if new == old:
-            if resolved.is_noise and r.get("flagged") is not True:
-                flags.append(item)
-            continue
-        key = (r.get("name_key"), new)
-        if holders.get(key, set()) - {rid}:
-            collisions.append({**item, "held_by": sorted(holders[key] - {rid})})
-            continue
-        holders.setdefault(key, set()).add(rid)
-        changes.append(item)
-    return {"changes": changes, "collisions": collisions, "flag_only": flags, "total": len(rows)}
+    """The plan under the current typing (``app_main.services.retype_planner``,
+    shared with the ontology editor's preview)."""
+    return await plan_retype(typing_vocabulary(None, await load_typing_ontologies()))
 
 
 def _print(result: dict) -> None:

@@ -158,25 +158,74 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
   - activating a version of `schema_core` changes what `regiodeal` resolves.
 
 **OE.1 — Validation gate and impact preview** (~1.5d)
-- `validate_candidate(ontology_set) -> [finding]` is one function, run before
-  anything is saved.
-  - It lifts the `test_typing_is_stable` checks into production code: no label
-    with two canonical answers, a type named after a mapped base reaches it,
-    literals stay out.
-  - It adds: no parent cycle (`would_cycle`), no orphan (a chain that reaches
-    no mapped base), no alias shared by two types, no unknown keys, a valid
-    `schema_org_type`.
-- `preview(candidate)` compares a candidate with the active set:
-  - which labels change canonical type;
-  - how many existing entities would retype (the PC.4b plan logic, lifted out
-    of the script into a service), and how many identity collisions that would
-    cause;
-  - which documents would select different ontologies (the detection replay
-    from `scripts/pc4_detection_probe.py`).
-- **AC:**
-  - each rule has a test that feeds it the broken state it refuses;
-  - the preview's entity count for a known edit equals the retype script's dry
-    run on the same data.
+
+> **OE.1 built 2026-09-28** (branch `feature/oe1-validation-preview`, review
+> round 3).
+> - **Structural rules** (`ontology_manager.validation`), decided from the
+>   content alone:
+>   - `base_named_type_points_elsewhere` (a base-named type sent to a
+>     DIFFERENT canonical) and `unmapped_schema_org_type` (catches a typo like
+>     `schema:Persn`);
+>   - `parent_cycle`, `inheritance_cycle` (found once, from the graph),
+>     `unknown_parent_ontology`;
+>   - `alias_collision` (over names, dict keys and aliases),
+>     `literal_declared_as_type`, `relationship_endpoint_unknown`;
+>   - `unknown_key` at every level (warn only).
+>
+>   Inherited problems are reported once, where they are defined; `includes`
+>   merges only with `extends`, as in the registry.
+> - **Typing rules** (`app_main.services.ontology_validation_service`),
+>   modelled on production typing: `_resolve_entity_type` over
+>   `typing_vocabulary`. A label is typed under every ordered selection (up to
+>   three, as detection) of one representative per group of ontologies that
+>   define the names on its chain differently. That is the exact set of
+>   outcomes a selection can produce, and matches a brute-force run over all
+>   1,111 orders for every shipped label. One leader at a time was not enough:
+>   a label and its parent each defined twice type differently under a PAIR.
+>   The first version modelled its own idea of typing, missed the PC.4 bug
+>   class, and blocked 553 of 935 legitimate re-parents. Rules:
+>   - `selection_dependent_type`, `base_named_type_misses_its_base`;
+>   - `orphan` (a chain that ends on no base at all);
+>   - `subtype_disagrees_with_parent`: a child that types differently from
+>     the type its `parent_type` names. It catches `parent_type: "grant"`
+>     (the bridge's base lookup is case-sensitive) and children of `Product`
+>     (they fall to `concept` while `Product` types `product`).
+> - `classify`: a finding the active set already has, at the same or a higher
+>   `weight`, warns; a new or worse one blocks.
+>   - The shipped set is clean against itself.
+>   - Its 5 standalone findings (2 deliberate unmapped bases, 3 relationship
+>     endpoints naming no type) are pinned.
+>   - A test over the whole re-parent space (935 edits) checks every block,
+>     and every miss, against production typing brute-forced independently.
+> - `retype_planner` holds the retype plan, lifted out of the PC.4b script and
+>   shared with it.
+>   - It is conservative: every row's current identity stays held for the
+>     whole plan, so no two rows can end up with one identity, and the plan can
+>     be written in any order.
+>   - A chain (a row wanting what another row vacates) completes on the next
+>     run.
+>   - Releasing identities within one plan (review round 1 m11) was tried and
+>     reverted: a refused row kept its identity while another was moved onto
+>     it.
+> - `ontology_preview_service.preview(candidate, active)` returns:
+>   - findings;
+>   - label changes, with entity counts;
+>   - the retype a publish would offer (changes, collisions, flag-only, and
+>     how many changes and collisions this edit causes);
+>   - notebook edits, which it does not project;
+>   - the documents whose selection changes: the detection replayed per
+>     notebook the source belongs to, with that notebook's default. The
+>     history fallback is not replayed.
+>
+>   The count matches the script's own dry run through the script's own
+>   vocabulary path. Read-only.
+> - **For OE.2:**
+>   - The preview is synchronous: about 4–6 s on 14 sources, most of it the
+>     detection replay. On a larger corpus the replay should become a
+>     background job.
+>   - The replay also reads every chunk into memory at once; read only the
+>     sampled windows instead.
+
 
 **OE.2 — Write API** (~1.5d)
 - An ontology has a **draft**. Edits change the draft; publish, discard and
