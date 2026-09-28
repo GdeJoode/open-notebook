@@ -1,0 +1,29 @@
+-- ============================================================================
+-- Migration 86: ontology_version — the store the ontology registry reads first
+-- (Track OE.0).
+--
+-- `OntologyRegistry` has read `ontology_version` before the YAML files since
+-- it was written (`_load_from_db`), and has `register` / `activate_version` /
+-- `list_versions` for it. No migration ever defined the table, so every read
+-- found nothing and fell back to the files, and `register`'s
+-- `ON DUPLICATE KEY UPDATE` had no unique key to act on. The ontology editor
+-- (OE.2) stores its versions here.
+--
+-- `yaml_content` holds the ontology's OWN content (not inheritance-resolved),
+-- written losslessly by `register`. At most one version per name is active;
+-- `register` and `activate_version` keep that inside a transaction (an index
+-- cannot express "unique where is_active").
+-- ============================================================================
+
+DEFINE TABLE IF NOT EXISTS ontology_version SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS name ON TABLE ontology_version TYPE string;
+DEFINE FIELD IF NOT EXISTS version ON TABLE ontology_version TYPE string;
+DEFINE FIELD IF NOT EXISTS yaml_content ON TABLE ontology_version TYPE string;
+DEFINE FIELD IF NOT EXISTS is_active ON TABLE ontology_version TYPE bool DEFAULT false;
+DEFINE FIELD IF NOT EXISTS note ON TABLE ontology_version TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS created_by ON TABLE ontology_version TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS created_at ON TABLE ontology_version TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_ontology_version_name_version ON TABLE ontology_version
+    FIELDS name, version UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_ontology_version_active ON TABLE ontology_version
+    FIELDS name, is_active;

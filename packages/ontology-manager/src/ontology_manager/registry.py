@@ -92,7 +92,11 @@ class OntologyRegistry:
         Returns:
             Ontology instance or None if not found
         """
-        cache_key = f"{name}:{version or 'active'}"
+        # OE.0: the key names whether inheritance was resolved. Without it, a
+        # `resolve_inheritance=False` call after a resolved one returned the
+        # MERGED ontology (and the reverse) — and storing a merged ontology
+        # would bake its parents' types into the child.
+        cache_key = f"{name}:{version or 'active'}:{'merged' if resolve_inheritance else 'own'}"
 
         # 1. Check cache
         if cache_key in self._cache:
@@ -193,66 +197,66 @@ class OntologyRegistry:
         self,
         ontology: Ontology,
         activate: bool = False,
+        note: Optional[str] = None,
+        created_by: Optional[str] = None,
     ) -> bool:
-        """
-        Register an ontology in the database.
+        """Store ``ontology`` as a version in ``ontology_version`` (migration 86).
 
-        Args:
-            ontology: Ontology to register
-            activate: Whether to make this the active version
+        ``ontology`` must be the ontology's OWN content, not an
+        inheritance-resolved one: get it with ``get(name,
+        resolve_inheritance=False)`` or ``Ontology.from_yaml``. A resolved
+        ontology would bake its parents' types into this version, and a later
+        edit of the parent would never reach it.
 
-        Returns:
-            True if successful
+        OE.0: stored losslessly — ``exclude_unset`` writes back what the
+        source set, including the keys the model has no field for, and no
+        defaults it never said; ``mode="json"`` writes enums as their values.
+        Activating deactivates the other versions in the same transaction, so
+        a failure cannot leave the ontology with none. Every cached ontology is
+        dropped, because any ontology that ``extends`` this one cached a merged
+        copy of it.
+
+        Returns True on success; errors are logged and return False.
         """
         try:
+            import yaml
             from surrealdb_service.connection import execute_query
 
-            import yaml
-
-            yaml_content = yaml.dump(
-                ontology.model_dump(), default_flow_style=False, sort_keys=False
+            yaml_content = yaml.safe_dump(
+                ontology.model_dump(mode="json", exclude_unset=True),
+                default_flow_style=False,
+                sort_keys=False,
+                allow_unicode=True,
             )
-
-            # Deactivate other versions if activating this one
-            if activate:
-                await execute_query(
-                    """
-                    UPDATE ontology_version
-                    SET is_active = false
-                    WHERE name = $name
-                    """,
-                    {"name": ontology.metadata.name},
-                )
-
-            # Insert or update the version
             await execute_query(
                 """
+                BEGIN TRANSACTION;
+                IF $activate {
+                    UPDATE ontology_version SET is_active = false WHERE name = $name;
+                };
                 INSERT INTO ontology_version {
-                    name: $name,
-                    version: $version,
-                    yaml_content: $yaml_content,
-                    is_active: $is_active
-                } ON DUPLICATE KEY UPDATE {
-                    yaml_content: $yaml_content,
-                    is_active: $is_active
-                }
+                    name: $name, version: $version, yaml_content: $yaml_content,
+                    is_active: $activate, note: $note, created_by: $created_by
+                } ON DUPLICATE KEY UPDATE
+                    yaml_content = $input.yaml_content,
+                    is_active = $input.is_active,
+                    note = $input.note,
+                    created_by = $input.created_by;
+                COMMIT TRANSACTION;
                 """,
                 {
                     "name": ontology.metadata.name,
                     "version": ontology.metadata.version,
                     "yaml_content": yaml_content,
-                    "is_active": activate,
+                    "activate": activate,
+                    "note": note,
+                    "created_by": created_by,
                 },
             )
-
-            # Update cache
-            cache_key = f"{ontology.metadata.name}:{ontology.metadata.version}"
-            self._cache[cache_key] = ontology
-            if activate:
-                self._cache[f"{ontology.metadata.name}:active"] = ontology
-
+            self.clear_cache()
             logger.info(
                 f"Registered ontology '{ontology.metadata.name}' v{ontology.metadata.version}"
+                + (" (active)" if activate else "")
             )
             return True
 
@@ -261,35 +265,29 @@ class OntologyRegistry:
             return False
 
     async def activate_version(self, name: str, version: str) -> bool:
-        """Activate a specific ontology version."""
+        """Make ``version`` the active version of ``name``.
+
+        OE.0: one transaction that refuses an unknown version BEFORE touching
+        the active one — activating a typo used to deactivate every version and
+        activate none. Every cached ontology is dropped (see ``register``).
+        """
         try:
             from surrealdb_service.connection import execute_query
 
-            # Deactivate all versions
             await execute_query(
                 """
-                UPDATE ontology_version
-                SET is_active = false
-                WHERE name = $name
-                """,
-                {"name": name},
-            )
-
-            # Activate the specified version
-            await execute_query(
-                """
-                UPDATE ontology_version
-                SET is_active = true
-                WHERE name = $name AND version = $version
+                BEGIN TRANSACTION;
+                IF count(SELECT id FROM ontology_version
+                         WHERE name = $name AND version = $version) = 0 {
+                    THROW "no such ontology version: " + $name + " " + $version;
+                };
+                UPDATE ontology_version SET is_active = (version = $version)
+                    WHERE name = $name;
+                COMMIT TRANSACTION;
                 """,
                 {"name": name, "version": version},
             )
-
-            # Clear cache for this ontology
-            keys_to_remove = [k for k in self._cache if k.startswith(f"{name}:")]
-            for key in keys_to_remove:
-                del self._cache[key]
-
+            self.clear_cache()
             logger.info(f"Activated ontology '{name}' version {version}")
             return True
 

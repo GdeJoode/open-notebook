@@ -1,6 +1,29 @@
 # Track OE — Ontology editor
 
-**Status: PLANNED (2026-09-28).** Awaiting the owner's decisions below.
+**Status: IN PROGRESS.** Owner, 2026-09-28: "follow the recommendations,
+start with OE.0". Every decision below is taken as its recommended option:
+OE-D1 (a) DB versions, OE-D2 (a) retire the per-notebook layer, OE-D3 (a)
+retype only after a confirmed dry run, OE-D4 entity + relationship types in
+v1, OE-D5 (a) the extraction service goes through the registry or stops
+reading ontologies.
+
+> **OE.0 built 2026-09-28** (branch `feature/oe0-lossless-storage`).
+> - Every ontology model keeps the keys it has no field for (`extra='allow'`),
+>   and `merge_with` carries them through inheritance.
+> - `register` stores the ontology's own content losslessly
+>   (`model_dump(mode="json", exclude_unset=True)`; before OE.0 it wrote enums
+>   as Python objects, so its YAML would not even load). It deactivates and
+>   inserts in one transaction.
+> - `activate_version` refuses an unknown version before touching the active
+>   one. Both drop the whole cache, so the ontologies that `extends` the
+>   changed one see the new version.
+> - The cache key now names whether inheritance was resolved.
+> - Migration 86 defines `ontology_version`: unique `(name, version)`, plus
+>   `note` and `created_by`.
+> - Tests: `packages/ontology-manager/tests/test_ontology_storage_lossless.py`.
+>   Every shipped YAML stores and reloads with the same keys and values, and
+>   against a real SurrealDB a stored `schema_core` version changes what
+>   `regiodeal` resolves.
 
 ## Why
 

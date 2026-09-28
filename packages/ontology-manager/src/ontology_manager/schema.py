@@ -57,10 +57,18 @@ class Cardinality(str, Enum):
     MANY_TO_MANY_ALT = "many_to_many"
 
 
+# OE.0: every model below keeps the keys it has no field for (`extra='allow'`).
+# With `extra='ignore'` the YAML's `schema_org:` URLs, `graph_relevance`,
+# property `required` / `enum_values` / `validation_rules`, `metadata.namespaces`,
+# `extraction_rules` and `abstract` were dropped on load, so storing a loaded
+# ontology (`OntologyRegistry.register`) would have deleted them. Kept, they
+# round-trip; what reads them is unchanged (see docs/tracks/OE-ontology-editor).
+
+
 class ValidationRules(BaseModel):
     """Validation constraints for a property."""
 
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra='allow')
 
     required: bool = False
     min_length: Optional[int] = None
@@ -75,7 +83,7 @@ class ValidationRules(BaseModel):
 class PropertyDefinition(BaseModel):
     """Definition of an entity property."""
 
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra='allow')
 
     name: str
     description: Optional[str] = None
@@ -99,7 +107,7 @@ class PropertyDefinition(BaseModel):
 class EntityTypeDefinition(BaseModel):
     """Definition of an entity type in the ontology."""
 
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra='allow')
 
     name: str
     description: Optional[str] = None
@@ -137,7 +145,7 @@ class EntityTypeDefinition(BaseModel):
 class RelationshipTypeDefinition(BaseModel):
     """Definition of a relationship type between entities."""
 
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra='allow')
 
     name: str
     description: Optional[str] = None
@@ -174,7 +182,7 @@ class RelationshipTypeDefinition(BaseModel):
 class ConceptDefinition(BaseModel):
     """Definition of a thematic concept in the ontology."""
 
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra='allow')
 
     name: str
     description: Optional[str] = None
@@ -187,7 +195,7 @@ class ConceptDefinition(BaseModel):
 class ClaimTypeDefinition(BaseModel):
     """Definition of a claim type for fact extraction."""
 
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra='allow')
 
     name: str
     description: Optional[str] = None
@@ -197,7 +205,7 @@ class ClaimTypeDefinition(BaseModel):
 class ExtractionPatternDefinition(BaseModel):
     """Definition of an extraction pattern for text matching."""
 
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra='allow')
 
     name: str
     description: Optional[str] = None
@@ -208,7 +216,7 @@ class ExtractionPatternDefinition(BaseModel):
 class OntologyMetadata(BaseModel):
     """Metadata about the ontology."""
 
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra='allow')
 
     name: str
     version: str
@@ -224,7 +232,7 @@ class OntologyMetadata(BaseModel):
 class Ontology(BaseModel):
     """Complete ontology definition."""
 
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra='allow')
 
     metadata: OntologyMetadata
     entity_types: Dict[str, EntityTypeDefinition] = Field(default_factory=dict)
@@ -390,6 +398,9 @@ class Ontology(BaseModel):
         merged_claim_types.update(self.claim_types)
         merged_extraction_patterns.update(self.extraction_patterns)
 
+        # OE.0: keys the model has no field for (`extraction_rules`, …) are
+        # carried too, the child's winning — as for the typed collections.
+        extras = {**(parent.model_extra or {}), **(self.model_extra or {})}
         return Ontology(
             metadata=self.metadata,
             entity_types=merged_entity_types,
@@ -398,6 +409,7 @@ class Ontology(BaseModel):
             concepts=merged_concepts,
             claim_types=merged_claim_types,
             extraction_patterns=merged_extraction_patterns,
+            **extras,
         )
 
     def get_concept(self, name: str) -> Optional[ConceptDefinition]:
