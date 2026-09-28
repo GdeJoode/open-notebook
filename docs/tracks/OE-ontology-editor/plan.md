@@ -353,6 +353,12 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 >     moving references): drag, keyboard drag, cut/paste, "No parent" plus
 >     Escape, rename → preview → publish → rollback, relationship spelling,
 >     parent cycle, stale draft after a rollback.
+>
+> **Carried from OE.3 review round 3 (not blocking):**
+> - A refused save (e.g. a 422) clears what was typed, because the form clears
+>   its edited fields before the server answers.
+> - A redefinition that changes only a key the browse API does not return
+>   (e.g. `graph_relevance`) is labelled with the deeper ontology.
 
 
 **OE.4 — Data follow-through** (~1d)
