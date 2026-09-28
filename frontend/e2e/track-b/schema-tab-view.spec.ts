@@ -2,7 +2,8 @@
  * B.3a acceptance criteria:
  *
  * 1. Navigating to `/notebooks/{id}/schema` renders the SchemaBrowser.
- * 2. The tree shows base-ontology entity types + accepted extensions.
+ * 2. The tree shows the base ontology's entity types (OE.5: accepted
+ *    extensions are published to a shared ontology, not listed per notebook).
  * 3. CoverageStatsTable shows per-source rows from /pass1_results.
  * 4. PendingExtensionsPanel lists pending extensions with disabled
  *    Accept/Reject buttons.
@@ -45,15 +46,6 @@ const FIX_SCHEMA = {
       description: 'A person who authored the work.',
       parent_type: null,
       properties: [{ name: 'name', data_type: 'string', required: true }],
-    },
-  ],
-  accepted_extensions: [
-    {
-      extension_id: 'ext-acc-1',
-      type_name: 'PreprintServer',
-      parent_type: 'Organization',
-      description: 'A preprint hosting service.',
-      properties: [],
     },
   ],
   pending_extensions: [
@@ -175,16 +167,13 @@ test.describe('B.3a: schema tab view-only', () => {
   }) => {
     await page.goto(`/notebooks/${NOTEBOOK_ID}/schema`)
 
-    // SchemaBrowser tree renders both base types and the accepted extension.
+    // SchemaBrowser tree renders the base types.
     const browser = page.getByTestId('schema-browser')
     await expect(browser).toBeVisible()
     await expect(
       page.getByTestId('schema-tree-item-Article'),
     ).toBeVisible()
     await expect(page.getByTestId('schema-tree-item-Author')).toBeVisible()
-    await expect(
-      page.getByTestId('schema-tree-item-PreprintServer'),
-    ).toBeVisible()
 
     // CoverageStatsTable shows one row per source (deduped by source_id).
     const table = page.getByTestId('coverage-stats-table')
@@ -206,7 +195,8 @@ test.describe('B.3a: schema tab view-only', () => {
     // Reject buttons. As of B.3b these are LIVE (the B.3a stub had
     // them disabled with a "coming next release" tooltip — that
     // behaviour is gone). We assert visibility + enabled state; the
-    // actual click → POST flow is covered in schema-edit-ops.spec.ts.
+    // Accept flow (publish to a shared ontology) is covered in
+    // track-oe/notebook-accept.spec.ts.
     const pending = page.getByTestId('pending-extension-Cohort')
     await expect(pending).toBeVisible()
     await expect(pending).toContainText('Three sources mention a cohort.')
