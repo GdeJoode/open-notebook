@@ -253,8 +253,7 @@ LLMCallerAlias = LLMCaller
 #:
 #: Consumers of the new order: Pass 2 renders the applied set into its prompt;
 #: `_merge_results` breaks label ties first-seen, so a domain label now wins a tie
-#: with a generic one; `schema_projection._target_ontology` attaches a curator's
-#: extension to `schemas[0]` when it names no schema — now a domain ontology.
+#: with a generic one.
 GENERIC_ONTOLOGIES = frozenset({"base", "general", "schema_core"})
 
 
@@ -513,7 +512,6 @@ async def run_multi_schema(
     applicable_schemas: List[Tuple[Ontology, float]],
     llm_caller: Optional[LLMCallerAlias] = None,
     pass1_repo: Optional[Any] = None,
-    accepted_extensions_by_schema: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     model: str = "default",
     pass2_token_budget: Optional[int] = None,
 ) -> Tuple[ExtractionResult, SoftNudgeDecision]:
@@ -533,10 +531,9 @@ async def run_multi_schema(
     2. Decide a :class:`SoftNudgeDecision` from the *best* coverage
        seen across all attempts.
 
-    3. For each schema sequentially: run :func:`run_pass2` with the
-       caller-supplied accepted extensions for *that* schema (or an
-       empty list — extensions become accepted via B.3c approval, the
-       orchestrator doesn't auto-accept them).
+    3. For each schema sequentially: run :func:`run_pass2`. Proposed
+       extensions are not used here: a curator accepts one into the shared
+       ontology through the editor (OE.5), where every run then reads it.
 
     4. Merge the per-schema ``ExtractionResult`` instances:
 
@@ -564,9 +561,6 @@ async def run_multi_schema(
         pass1_repo: Object exposing ``async record(Pass1Result) -> str``.
             When ``None`` the orchestrator logs a WARNING and skips
             persistence (test mode).
-        accepted_extensions_by_schema: Optional dict keyed by ontology
-            name, mapping to the extensions the user has already
-            approved for that schema. Missing keys default to ``[]``.
         model: Model id forwarded to both Pass-1 and Pass-2.
 
     Returns:
@@ -575,8 +569,6 @@ async def run_multi_schema(
         ``metadata`` bag populated with per-schema bookkeeping, and
         ``decision`` is the :class:`SoftNudgeDecision` for the UI.
     """
-    accepted_map = accepted_extensions_by_schema or {}
-
     # Short-circuit: no schemas applicable → empty result, NONE nudge.
     # Matches the "no chunks" short-circuit in ``run_pass2`` —
     # zero-work paths must be cheap and side-effect-free.
@@ -713,12 +705,10 @@ async def run_multi_schema(
         schema_name = (
             ontology.metadata.name if ontology.metadata else "unknown"
         )
-        accepted_for_schema = accepted_map.get(schema_name, [])
         try:
             pass2_result = await run_pass2(
                 chunks=chunks,
                 ontology=ontology,
-                accepted_extensions=accepted_for_schema,
                 llm_caller=llm_caller,
                 model=model,
                 token_budget=pass2_token_budget,

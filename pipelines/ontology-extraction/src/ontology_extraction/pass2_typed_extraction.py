@@ -1,7 +1,6 @@
 """Pass-2 typed extraction module (B.1d, single-schema).
 
-Given a list of chunks, a target ontology, the list of accepted
-extension types (from B.3c, conceptually), and an injected LLM
+Given a list of chunks, a target ontology and an injected LLM
 caller, produce an ``ExtractionResult`` populated with typed
 entities and relations.
 
@@ -554,7 +553,6 @@ def _default_llm_caller() -> LLMCaller:
 async def run_pass2(
     chunks: List[Dict[str, Any]],
     ontology: Ontology,
-    accepted_extensions: Optional[List[Dict[str, Any]]] = None,
     llm_caller: Optional[LLMCaller] = None,
     model: str = "default",
     token_budget: Optional[int] = None,
@@ -564,8 +562,7 @@ async def run_pass2(
 
     For each chunk:
 
-    1. Build a Pass-2 user prompt (ontology + accepted extensions +
-       chunk text).
+    1. Build a Pass-2 user prompt (ontology + chunk text).
     2. Estimate the prompt token count; raise
        ``Pass2TokenBudgetExceeded`` if it exceeds the budget. (The
        caller is responsible for chunk sizing — failure here is
@@ -580,10 +577,6 @@ async def run_pass2(
             content); ``id`` is optional and used to tag entities/
             relations with ``source_chunk_id``.
         ontology: Target ontology (``ontology_manager.schema.Ontology``).
-        accepted_extensions: Optional list of extension dicts approved
-            by the curator (B.3c). Empty or ``None`` triggers the
-            back-compat path that mirrors the current ``LLMExtractor``
-            behaviour for callers that don't yet wire extensions.
         llm_caller: Injected sync or async caller. ``None`` falls back
             to the lazy default (CLI / dev only; logs a canary).
         model: Model identifier passed to the LLM caller.
@@ -606,7 +599,6 @@ async def run_pass2(
             2800-token cap (or the threaded ``token_budget``) for some chunk.
         Pass2ParseError: LLM caller itself failed (transport).
     """
-    extensions = accepted_extensions or []
     caller = llm_caller if llm_caller is not None else _default_llm_caller()
     budget = token_budget if token_budget is not None else TOKEN_BUDGET_TARGET
 
@@ -625,10 +617,8 @@ async def run_pass2(
     # empty result. AC #6.
     if not chunks:
         logger.info(
-            "Pass-2 run skipped: no chunks provided (ontology={ontology}, "
-            "extensions={ext_count})",
+            "Pass-2 run skipped: no chunks provided (ontology={ontology})",
             ontology=ontology.metadata.name if ontology.metadata else "unknown",
-            ext_count=len(extensions),
         )
         return ExtractionResult(
             metadata={
@@ -636,7 +626,6 @@ async def run_pass2(
                     ontology.metadata.name if ontology.metadata else "unknown"
                 ),
                 "chunk_count": 0,
-                "extensions_count": len(extensions),
                 "total_entities": 0,
                 "total_relations": 0,
             }
@@ -675,10 +664,9 @@ async def run_pass2(
         shared_nlp = _load_spacy(_detect_lang(" ".join(lang_source)[:20000]))
 
     logger.info(
-        "Pass-2 run start: chunks={n}, ontology={o}, extensions={e}",
+        "Pass-2 run start: chunks={n}, ontology={o}",
         n=len(chunks),
         o=ontology.metadata.name if ontology.metadata else "unknown",
-        e=len(extensions),
     )
 
     for chunk in chunks:
@@ -710,7 +698,7 @@ async def run_pass2(
                 anchors = None
 
         user_prompt = build_pass2_prompt(
-            ontology, chunk_text, extensions, candidate_anchors=anchors
+            ontology, chunk_text, candidate_anchors=anchors
         )
         estimated = _estimate_tokens(user_prompt)
         if estimated > budget and anchors:
@@ -718,7 +706,7 @@ async def run_pass2(
             # that would otherwise fit into a budget failure that stops the whole
             # run. Drop them and re-check before raising (N.1 safety).
             user_prompt = build_pass2_prompt(
-                ontology, chunk_text, extensions, candidate_anchors=None
+                ontology, chunk_text, candidate_anchors=None
             )
             estimated = _estimate_tokens(user_prompt)
             if estimated <= budget:
@@ -840,7 +828,6 @@ async def run_pass2(
                 ontology.metadata.name if ontology.metadata else "unknown"
             ),
             "chunk_count": len(chunks),
-            "extensions_count": len(extensions),
             "total_entities": len(all_entities),
             "total_relations": len(all_relations),
             "parse_failures": parse_failures,

@@ -1,9 +1,8 @@
 """LLM-based extractor using ontology-guided prompts.
 
 Back-compat shim. New code should call
-``ontology_extraction.run_pass2`` (B.1d) directly — it adds
-accepted-extension injection and enforces the B4 confidence-
-everywhere invariant. This module stays in place so existing
+``ontology_extraction.run_pass2`` (B.1d) directly — it enforces the
+B4 confidence-everywhere invariant. This module stays in place so existing
 wiring (``workflow.py`` + tests) keeps working unchanged.
 
 Phase B.1f changes

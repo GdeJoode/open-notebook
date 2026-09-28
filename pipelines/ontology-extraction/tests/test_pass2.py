@@ -6,11 +6,10 @@ B.1c's pattern.
 
 Coverage areas (per B.1d plan acceptance criteria):
 
-1. ``run_pass2`` with ``accepted_extensions=[]`` produces an
-   ``ExtractionResult`` for a 3-chunk fixture (AC #1).
-2. With a non-empty extensions list, the prompt body carries the
-   extension definition and an LLM response using the extension
-   label produces an ``ExtractedEntity(label=<extension>)`` (AC #2).
+1. ``run_pass2`` produces an ``ExtractionResult`` for a 3-chunk
+   fixture (AC #1).
+2. OE.5 retired the per-notebook "accepted extensions": the prompt
+   has no such section and no parameter to carry one.
 3. Every entity AND every relation in the output has a non-null
    ``confidence`` (AC #3 — the B4 confidence-everywhere invariant).
 4. Malformed LLM JSON degrades to an empty per-chunk result with a
@@ -173,173 +172,17 @@ class TestBuildPass2Prompt:
         # The B4 confidence contract must be visible in the rules.
         assert "confidence" in prompt
 
-    def test_no_extensions_omits_extension_section(self):
-        """Empty list = no ``Accepted Extension Types`` heading."""
-        prompt = build_pass2_prompt(_small_ontology(), "text", [])
-        assert "Accepted Extension Types" not in prompt
+    def test_the_prompt_carries_nothing_of_the_notebook_layer(self):
+        """OE.5: the vocabulary is the shared ontology. The prompt builder takes
+        no per-notebook extensions, and neither the section nor the rule that
+        pointed at it is rendered."""
+        import inspect
 
-    def test_none_extensions_omits_extension_section(self):
-        """``None`` is equivalent to ``[]`` — back-compat with single-arg calls."""
-        prompt = build_pass2_prompt(_small_ontology(), "text", None)
-        assert "Accepted Extension Types" not in prompt
-
-    def test_extension_definition_injected(self):
-        """Non-empty extensions appear as their own section."""
-        extensions = [
-            {
-                "type_name": "EarlyCareerResearcher",
-                "parent_type": "Researcher",
-                "rationale": "Distinguishes junior from senior researchers.",
-            }
-        ]
-        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
-        assert "## Accepted Extension Types" in prompt
-        assert "EarlyCareerResearcher" in prompt
-        assert "parent: Researcher" in prompt
-        assert "junior from senior" in prompt
-
-    def test_extension_without_parent_renders(self):
-        extensions = [{"type_name": "Foo", "rationale": "test"}]
-        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
-        assert "Foo" in prompt
-        assert "no parent" in prompt
-
-    def test_extension_without_rationale_renders(self):
-        extensions = [{"type_name": "Foo", "parent_type": "Bar"}]
-        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
-        assert "Foo" in prompt
-        assert "parent: Bar" in prompt
-
-    def test_extension_with_empty_type_name_dropped(self):
-        """Defensive: missing ``type_name`` means no usable label."""
-        extensions = [
-            {"type_name": "", "parent_type": "Bar"},
-            {"type_name": "Valid", "parent_type": "X"},
-        ]
-        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
-        assert "Valid" in prompt
-        # No empty label rendered as ** ** anywhere
-        assert "** ** (" not in prompt
-
-    def test_long_extension_rationale_truncated(self):
-        extensions = [
-            {
-                "type_name": "Foo",
-                "parent_type": "Bar",
-                "rationale": "x" * 500,
-            }
-        ]
-        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
-        assert "..." in prompt
-        # 500-char raw rationale must not appear in full
-        assert "x" * 200 not in prompt
-
-    def test_format_accepted_extensions_filters_sentinels(self):
-        """B.3c attempt-2 — defence-in-depth at the prompt layer.
-
-        The resume sentinel
-        (``{type_name: "_resumed_without_extensions",
-        is_resume_sentinel: True}``) is appended by the resume endpoint
-        to satisfy the review-gate predicate. It is infrastructure, not
-        ontology — letting it through renders
-        ``_resumed_without_extensions`` into the LLM prompt as a
-        first-class type and pollutes Pass-2 output.
-
-        Primary filter lives in ``entity_extraction_service``; this
-        layer is defence-in-depth. If the upstream filter ever
-        regresses, the LLM still never sees the leak.
-
-        Real types in the same list MUST survive — the filter is
-        sentinel-specific, not a wholesale drop.
-        """
-        extensions = [
-            {
-                "type_name": "RealType",
-                "parent_type": "Researcher",
-                "rationale": "Legitimate extension.",
-            },
-            {
-                "type_name": "_resumed_without_extensions",
-                "is_resume_sentinel": True,
-                "created_at": "2026-06-09T12:00:00Z",
-            },
-        ]
-        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
-        # Sentinel must not leak into the prompt under any spelling.
-        assert "_resumed_without_extensions" not in prompt
-        assert "is_resume_sentinel" not in prompt
-        # The real type comes through and the section renders.
-        assert "RealType" in prompt
-        assert "## Accepted Extension Types" in prompt
-
-    def test_format_accepted_extensions_filters_reparents(self):
-        """N.4d.3 — the same defence, for the other entry kind.
-
-        A re-parent records that an EXISTING type moved under a different parent.
-        Rendered here it would appear under "Accepted Extension Types" with the
-        instruction to treat it as a first-class ADDITION to the schema — telling
-        the LLM a base-ontology type is a curator's new type. The move itself is
-        applied to the ontology this prompt already renders its vocabulary from
-        (``ontology_manager.schema_projection``), so nothing is lost by skipping
-        it.
-
-        Real extensions in the same list must survive — the filter is
-        reparent-specific.
-        """
-        extensions = [
-            {
-                "type_name": "RealType",
-                # Deliberately NOT parented on the re-parented type: the two
-                # names must be independent, or "the moved type is absent" would
-                # hold for a reason unrelated to the filter.
-                "parent_type": "Institution",
-                "rationale": "Legitimate extension.",
-            },
-            {
-                "reparent_id": "reparent::Researcher->Institution",
-                "op": "reparent",
-                "type_name": "Researcher",
-                "new_parent": "Institution",
-                "parent_type": "Institution",
-            },
-        ]
-        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
-        section = prompt.split("## Accepted Extension Types", 1)[1]
-        assert "RealType" in section
-        assert "Researcher" not in section, (
-            "a re-parent was rendered as an accepted extension type"
-        )
-
-    def test_format_accepted_extensions_omits_section_when_only_reparents(self):
-        """The empty-section guard has to see through the new filter too."""
-        extensions = [
-            {
-                "reparent_id": "reparent::Researcher->Organization",
-                "op": "reparent",
-                "type_name": "Researcher",
-                "new_parent": "Organization",
-            },
-        ]
-        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
-        assert "Accepted Extension Types" not in prompt
-
-    def test_format_accepted_extensions_omits_section_when_all_sentinels(self):
-        """When the only extensions in the list are sentinels, the
-        ``Accepted Extension Types`` section is omitted entirely —
-        matching the behaviour for an empty / ``None`` list. Without
-        this guard the prompt would render an empty section header
-        with no bullets, which is confusing to the LLM.
-        """
-        extensions = [
-            {
-                "type_name": "_resumed_without_extensions",
-                "is_resume_sentinel": True,
-                "created_at": "2026-06-09T12:00:00Z",
-            },
-        ]
-        prompt = build_pass2_prompt(_small_ontology(), "text", extensions)
-        assert "Accepted Extension Types" not in prompt
-        assert "_resumed_without_extensions" not in prompt
+        assert "accepted_extensions" not in inspect.signature(build_pass2_prompt).parameters
+        prompt = build_pass2_prompt(_small_ontology(), "text")
+        assert "Accepted Extension" not in prompt
+        assert "accepted-extension" not in prompt
+        assert "accepted" not in prompt.lower()
 
     def test_long_descriptions_truncated_in_entity_types(self):
         """Entity descriptions over 160 chars truncate with ``...``."""
@@ -489,7 +332,6 @@ class TestTokenBudget:
             await run_pass2(
                 [_make_chunk(oversized, "huge")],
                 _small_ontology(),
-                accepted_extensions=[],
                 llm_caller=fake_llm,
             )
 
@@ -511,7 +353,6 @@ class TestTokenBudget:
         await run_pass2(
             [_make_chunk(sample, "c1")],
             _small_ontology(),
-            accepted_extensions=[],
             llm_caller=fake_llm,
         )
         assert called is True
@@ -535,7 +376,6 @@ class TestTokenBudget:
             await run_pass2(
                 [_make_chunk(big_window, "big")],
                 _small_ontology(),
-                accepted_extensions=[],
                 llm_caller=fake_llm,
             )
         assert called is False
@@ -544,7 +384,6 @@ class TestTokenBudget:
         await run_pass2(
             [_make_chunk(big_window, "big")],
             _small_ontology(),
-            accepted_extensions=[],
             llm_caller=fake_llm,
             token_budget=200_000,
         )
@@ -552,24 +391,16 @@ class TestTokenBudget:
 
 
 class TestStressTokenBudget:
-    """A 100-type ontology + a 1500-token chunk + 3 extensions fits."""
+    """A 100-type ontology + a 1500-token chunk fits."""
 
     def test_realistic_headroom(self):
         ontology = _synthetic_large_ontology(100)
         # 1500 tokens ≈ 6000 chars under len(text) // 4.
         chunk = "x " * 3000
-        extensions = [
-            {
-                "type_name": f"Ext{i}",
-                "parent_type": "SynthType000",
-                "rationale": "test extension",
-            }
-            for i in range(3)
-        ]
-        prompt = build_pass2_prompt(ontology, chunk, extensions)
+        prompt = build_pass2_prompt(ontology, chunk)
         estimated = _estimate_tokens(prompt)
         assert estimated <= TOKEN_BUDGET_TARGET, (
-            f"100-type ontology + 1500-token chunk + 3 extensions "
+            f"100-type ontology + 1500-token chunk "
             f"produced ~{estimated} tokens (budget {TOKEN_BUDGET_TARGET})."
         )
 
@@ -833,7 +664,6 @@ class TestRunPass2:
         result = await run_pass2(
             _three_chunks(),
             _small_ontology(),
-            accepted_extensions=[],
             llm_caller=fake_llm,
         )
 
@@ -855,52 +685,9 @@ class TestRunPass2:
         assert result.metadata["chunk_count"] == 3
         assert result.metadata["total_entities"] == 3
         assert result.metadata["total_relations"] == 3
-        assert result.metadata["extensions_count"] == 0
         assert result.metadata["ontology_name"] == "scholarly"
         # Source-chunk tagging preserves chunk lineage downstream.
         assert {e.source_chunk_id for e in result.entities} == {"c-1", "c-2", "c-3"}
-
-    async def test_extension_injected_and_used(self):
-        """AC #2: extension label flows through to the ExtractedEntity."""
-        extensions = [
-            {
-                "type_name": "EarlyCareerResearcher",
-                "parent_type": "Researcher",
-                "rationale": "Distinguishes junior researchers.",
-            }
-        ]
-
-        def fake_llm(sys_p: str, user_p: str, model: str) -> str:
-            # AC #2: the extension must be visible in the prompt body
-            # so the LLM knows the additional label exists.
-            assert "EarlyCareerResearcher" in user_p
-            assert "parent: Researcher" in user_p
-            # Mock returns an entity with the extension label.
-            return json.dumps(
-                {
-                    "entities": [
-                        {
-                            "text": "Xavier Chen",
-                            "label": "EarlyCareerResearcher",
-                            "confidence": 0.85,
-                            "properties": {},
-                        }
-                    ],
-                    "relations": [],
-                }
-            )
-
-        result = await run_pass2(
-            [_make_chunk("Xavier Chen is a junior researcher.", "c-ext")],
-            _small_ontology(),
-            accepted_extensions=extensions,
-            llm_caller=fake_llm,
-        )
-
-        assert len(result.entities) == 1
-        assert result.entities[0].label == "EarlyCareerResearcher"
-        assert result.entities[0].confidence == 0.85
-        assert result.metadata["extensions_count"] == 1
 
     async def test_confidence_present_on_every_element(self):
         """AC #3: every entity AND every relation carries confidence.
@@ -951,7 +738,6 @@ class TestRunPass2:
         result = await run_pass2(
             [_make_chunk("text 1", "c-1"), _make_chunk("text 2", "c-2")],
             _small_ontology(),
-            accepted_extensions=[],
             llm_caller=fake_llm,
         )
 
@@ -988,7 +774,6 @@ class TestRunPass2:
         result = await run_pass2(
             _three_chunks(),
             _small_ontology(),
-            accepted_extensions=[],
             llm_caller=fake_llm,
         )
 
@@ -1009,7 +794,6 @@ class TestRunPass2:
         result = await run_pass2(
             [],
             _small_ontology(),
-            accepted_extensions=[],
             llm_caller=fake_llm,
         )
 
@@ -1035,7 +819,6 @@ class TestRunPass2:
         await run_pass2(
             chunks,
             _small_ontology(),
-            accepted_extensions=[],
             llm_caller=fake_llm,
         )
         # Only the real chunk hit the LLM.
@@ -1050,7 +833,6 @@ class TestRunPass2:
         result = await run_pass2(
             [_make_chunk("text", "c1")],
             _small_ontology(),
-            accepted_extensions=[],
             llm_caller=fake_llm,
         )
         assert len(result.entities) == 1
@@ -1065,7 +847,6 @@ class TestRunPass2:
             await run_pass2(
                 [_make_chunk("text", "c1")],
                 _small_ontology(),
-                accepted_extensions=[],
                 llm_caller=fake_llm,
             )
 
@@ -1077,7 +858,6 @@ class TestRunPass2:
             await run_pass2(
                 [_make_chunk("text", "c1")],
                 _small_ontology(),
-                accepted_extensions=[],
                 llm_caller=fake_llm,
             )
 
@@ -1091,7 +871,6 @@ class TestRunPass2:
         await run_pass2(
             [_make_chunk("text", "c1")],
             _small_ontology(),
-            accepted_extensions=[],
             llm_caller=fake_llm,
             model="gpt-4o-mini",
         )
@@ -1107,24 +886,9 @@ class TestRunPass2:
         await run_pass2(
             [_make_chunk("text", "c1")],
             _small_ontology(),
-            accepted_extensions=[],
             llm_caller=fake_llm,
         )
         assert seen_model == ["default"]
-
-    async def test_none_extensions_treated_as_empty(self):
-        """Calling without ``accepted_extensions`` is the back-compat path."""
-
-        def fake_llm(sys_p: str, user_p: str, model: str) -> str:
-            assert "Accepted Extension Types" not in user_p
-            return _valid_chunk_response()
-
-        result = await run_pass2(
-            [_make_chunk("text", "c1")],
-            _small_ontology(),
-            llm_caller=fake_llm,
-        )
-        assert result.metadata["extensions_count"] == 0
 
     async def test_default_llm_caller_resolves_when_unset(self):
         """``llm_caller=None`` falls back to the lazy default (logs canary).
@@ -1143,7 +907,6 @@ class TestRunPass2:
             result = await run_pass2(
                 [_make_chunk("text", "c1")],
                 _small_ontology(),
-                accepted_extensions=[],
                 llm_caller=None,
             )
 

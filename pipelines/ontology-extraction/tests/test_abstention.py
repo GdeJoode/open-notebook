@@ -34,7 +34,7 @@ def _extract_payload(entities, relations=None):
 
 
 def test_prompt_carries_abstention_clause():
-    p = build_pass2_prompt(_ontology(), "some text", None)
+    p = build_pass2_prompt(_ontology(), "some text")
     assert "INSUFFICIENT_EVIDENCE" in p
     assert 'return an EMPTY "entities" array' in p
     # still an EXCEPTION to exhaustive recall, not a licence to under-extract

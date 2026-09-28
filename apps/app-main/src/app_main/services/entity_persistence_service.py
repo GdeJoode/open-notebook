@@ -100,10 +100,7 @@ def typing_vocabulary(
     Pure. The caller supplies ``all_ontologies`` — extraction already holds them
     for detection; the re-filter and the OKF import load them with
     :func:`load_typing_ontologies` — so persistence itself never loads anything.
-    The applied set leads, the rest follow by name. A caller that projects
-    curator edits projects them over THIS list (see
-    ``EntityExtractionService._typing_schemas_for``), so an edit takes the same
-    way whichever ontologies were selected.
+    The applied set leads, the rest follow by name.
     """
     applied = list(applied or [])
     have = {o.metadata.name for o in applied if getattr(o, "metadata", None)}

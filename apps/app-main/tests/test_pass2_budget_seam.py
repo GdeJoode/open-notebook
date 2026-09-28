@@ -120,7 +120,7 @@ async def test_near_ceiling_packed_window_does_not_abort_under_threaded_cap():
     # Prove this is genuinely the seam the reviewer flagged: ontology + window
     # measured TOGETHER exceeds the packing budget (so the old threading would
     # abort), yet sits comfortably under the threaded cap (so the fix admits it).
-    whole_prompt = build_pass2_prompt(ontology, window["text"], [])
+    whole_prompt = build_pass2_prompt(ontology, window["text"])
     measured = _estimate_tokens(whole_prompt)
     assert measured > pack_budget, (
         "test invalid: window+ontology must exceed the packing budget to "
@@ -139,7 +139,6 @@ async def test_near_ceiling_packed_window_does_not_abort_under_threaded_cap():
     await run_pass2(
         [window],
         ontology,
-        accepted_extensions=[],
         llm_caller=fake_llm,
         token_budget=cap,
     )
@@ -167,7 +166,6 @@ async def test_old_double_subtraction_would_have_aborted():
         await run_pass2(
             [window],
             ontology,
-            accepted_extensions=[],
             llm_caller=fake_llm,
             token_budget=pack_budget,  # the OLD (buggy) threaded value
         )
@@ -182,7 +180,7 @@ async def test_genuinely_oversized_window_still_raises_under_cap():
     oversized_text = "x" * (cap * 4 + 100_000)
     ontology = _realistic_ontology()
 
-    measured = _estimate_tokens(build_pass2_prompt(ontology, oversized_text, []))
+    measured = _estimate_tokens(build_pass2_prompt(ontology, oversized_text))
     assert measured > cap, "test invalid: input must genuinely exceed the cap"
 
     def fake_llm(sys_p: str, user_p: str, model: str) -> str:  # pragma: no cover
@@ -192,7 +190,6 @@ async def test_genuinely_oversized_window_still_raises_under_cap():
         await run_pass2(
             [{"text": oversized_text, "id": "huge"}],
             ontology,
-            accepted_extensions=[],
             llm_caller=fake_llm,
             token_budget=cap,
         )

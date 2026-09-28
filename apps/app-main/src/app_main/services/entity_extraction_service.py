@@ -27,7 +27,6 @@ from ontology_extraction.multi_schema_orchestrator import (
     detect_applicable_schemas,
 )
 from ontology_extraction.workflow import ExtractionWorkflow
-from ontology_manager.schema_projection import project_accepted_edits
 from shared.config_coherence import ConfigurationError
 from shared.services.metrics import record_metric
 from surrealdb_service.connection import execute_query
@@ -230,25 +229,6 @@ def _counts_toward_review(extension: Dict[str, Any]) -> bool:
     here.
     """
     return extension.get("op") != _REPARENT_OP
-
-
-def _is_resume_sentinel(extension: Dict[str, Any]) -> bool:
-    """Return ``True`` for a B.3c resume-sentinel extension entry.
-
-    The sentinel is appended by ``POST /extraction/resume`` to satisfy
-    the review-gate predicate (``review_required AND accepted_extensions
-    empty``). It carries no ontology content — only the marker fields
-    ``type_name="_resumed_without_extensions"`` and
-    ``is_resume_sentinel=True``.
-
-    Any consumer that forwards ``accepted_extensions`` into a downstream
-    artifact (LLM prompt, TTL export, JSON response) MUST filter
-    sentinels first — otherwise the LLM gets instructed to treat
-    ``_resumed_without_extensions`` as a first-class entity type, which
-    pollutes Pass-2 output. This helper centralises the predicate so
-    every filter site agrees on the marker shape.
-    """
-    return bool(extension.get("is_resume_sentinel"))
 
 
 def _avg_entity_confidence(entities: Iterable[Any]) -> float:
@@ -632,8 +612,8 @@ class EntityExtractionService:
         # not inherit a prior run's schemas.
         self._applicable_schemas: Optional[List[Any]] = None
         # PC.4: what the persist step TYPES against — the applied set followed by
-        # every other ontology, with the notebook's edits projected over the
-        # whole list (`_typing_schemas_for`). Reset with `_applicable_schemas`.
+        # every other ontology (`_typing_schemas_for`). Reset with
+        # `_applicable_schemas`.
         self._typing_schemas: Optional[List[Any]] = None
         # N.4d.4: the notebook's declared vocabulary name, for gap rows. See the
         # stash site in `_run_multi_schema` for why it is not read off the
@@ -947,9 +927,15 @@ class EntityExtractionService:
         Config beats auto-detection (L.4 AC3): when an operator has configured a
         ``base_ontology`` for a notebook, that base — plus its explicit override
         bundle (``NOTEBOOK_DEFAULT_BUNDLE``, e.g. ``deals`` → ``policy_themes``)
-        plus any accepted-extension schemas — is applied regardless of the
-        content score. A document with no theme keywords still gets
-        ``policy_themes`` because the notebook is *declared* to be about policy.
+        — is applied regardless of the content score. A document with no theme
+        keywords still gets ``policy_themes`` because the notebook is *declared*
+        to be about policy.
+
+        This changes the SELECTION only, never the type a label gets: typing
+        runs against every ontology with the selection first
+        (``typing_vocabulary``), and the type is the same under every selection
+        (PC.4). OE.5 dropped the schemas named on accepted extensions from the
+        forced set along with the rest of the per-notebook layer.
 
         This is the EXPLICIT-override path. The ordinary auto-detection path
         (``detect_applicable_schemas``) already selects ``policy_themes`` on
@@ -975,17 +961,10 @@ class EntityExtractionService:
             for ont in candidate_ontologies
         }
 
-        # Resolve the forced schema names: base + affinity bundle + the schemas
-        # named on accepted extensions (so a notebook that accepted a
-        # policy_themes extension keeps it applied).
         forced_names: List[str] = [notebook_schema.base_ontology]
         forced_names.extend(
             NOTEBOOK_DEFAULT_BUNDLE.get(notebook_schema.base_ontology, [])
         )
-        for ext in notebook_schema.accepted_extensions:
-            ext_schema = ext.get("schema_name") if isinstance(ext, dict) else None
-            if ext_schema:
-                forced_names.append(ext_schema)
 
         existing_names = {
             (ont.metadata.name if ont.metadata else "")
@@ -1343,8 +1322,7 @@ class EntityExtractionService:
         except Exception as e:
             logger.warning(f"concept alignment: no entity repo ({e})")
 
-        # ALL the ontologies this run applied, already projected with the
-        # notebook's accepted schema edits (N.4d.3) — not just the first.
+        # ALL the ontologies this run applied — not just the first.
         # `detect_applicable_schemas(top_k=3)` means an applied set holds three,
         # and a type declared in the second or third would otherwise fail
         # `resolve_canonical_type`, produce a code that licenses no gap, and make
@@ -1412,86 +1390,16 @@ class EntityExtractionService:
         self,
         applicable_schemas: List[Tuple["Ontology", float]],
         candidate_ontologies: List["Ontology"],
-        notebook_schema: Optional["NotebookSchema"],
-        notebook_id: Optional[str],
     ) -> List["Ontology"]:
-        """The typing vocabulary for this run, the notebook's edits projected over it.
+        """The typing vocabulary for this run: the registry's active set.
 
-        Track PC.4. ``applicable_schemas`` is the selection BEFORE projection.
-        The edits are projected over the whole list, not over the selection: a
-        re-parent of a type the selection lacks, or an extension whose name an
-        unselected ontology already declares, then takes the same way whichever
-        ontologies this document selected (review M2 — projected over the
-        selection alone, `Gemeente` re-parented to `GovernmentOrganization` came
-        out `government_organization` or `administrative_area` depending on it).
-        The prompt keeps its own projection over the selection. The two can
-        differ for an extension whose name an unselected ontology declares as
-        an alias: the prompt offers the extension, typing resolves the alias.
-        Either way the type is the same under every selection.
+        Track PC.4: the selection first, then every other ontology, so the type
+        is the same under every selection. OE.5: nothing per notebook is
+        projected over it any more — the ontologies are shared by every
+        notebook, and a curator's decision reaches them through the editor.
         """
         applied = [o for o, _c in applicable_schemas]
-        vocabulary = typing_vocabulary(applied, candidate_ontologies)
-        return [
-            o
-            for o, _c in self._project_notebook_edits(
-                [(o, 0.0) for o in vocabulary], notebook_schema, notebook_id
-            )
-        ]
-
-    def _project_notebook_edits(
-        self,
-        applicable_schemas: List[Tuple["Ontology", float]],
-        notebook_schema: Optional["NotebookSchema"],
-        notebook_id: Optional[str],
-    ) -> List[Tuple["Ontology", float]]:
-        """Apply the notebook's ACCEPTED schema edits to the applied ontologies.
-
-        Track N.4d.3. Two consumers depend on this running before anything reads
-        the applied set: Pass 2 renders the vocabulary into its prompt, and the
-        persist step bridges extracted labels to canonical types through the very
-        same objects. So a curator's accepted extension becomes resolvable, and a
-        curator's re-parent moves every entity of that type under its new
-        ancestor — with no per-entity write, because the TYPE moved, not the rows.
-
-        Returns COPIES. The registry caches ontologies and hands out the SAME
-        object to every caller (measured: a second ``get`` returns an identical
-        instance, ``entity_types`` dict included), so editing in place would give
-        the next notebook in this process one notebook's vocabulary.
-
-        Pure — no I/O — so it can be exercised directly against the real
-        ontologies, the way ``_apply_notebook_schema_default`` is.
-        """
-        if notebook_schema is None or not notebook_schema.accepted_extensions:
-            return applicable_schemas
-
-        projection = project_accepted_edits(
-            [ontology for ontology, _conf in applicable_schemas],
-            notebook_schema.accepted_extensions,
-        )
-        if projection.applied:
-            logger.info(
-                "schema edits projected for notebook={nb}: {summary}",
-                nb=notebook_id,
-                summary=", ".join(
-                    f"{o.type_name}({o.action})" for o in projection.applied
-                ),
-            )
-        for refusal in projection.refused:
-            # A curator's edit that did NOT take is worth seeing: silence here
-            # would read as "applied" to anyone reading the log.
-            logger.warning(
-                "schema edit refused for notebook={nb}: {name} — {code} {detail}",
-                nb=notebook_id,
-                name=refusal.type_name or "(unnamed)",
-                code=refusal.reason_code,
-                detail=refusal.detail,
-            )
-        return [
-            (projected, conf)
-            for projected, (_original, conf) in zip(
-                projection.schemas, applicable_schemas
-            )
-        ]
+        return typing_vocabulary(applied, candidate_ontologies)
 
     async def _run_multi_schema(
         self,
@@ -1641,8 +1549,7 @@ class EntityExtractionService:
         # L.4: a per-notebook ``notebook_schema`` default beats auto-detection.
         # When the notebook has a configured ``base_ontology`` (empty today for
         # the Regio-Deal corpus, but set via the seed/endpoint), force that base
-        # plus its affinity bundle plus any accepted-extension schemas — config
-        # is an explicit operator choice and must not be overruled by a low
+        # plus its affinity bundle — config is an explicit operator choice and must not be overruled by a low
         # keyword score. ``applicable_schemas`` is the auto-detected set; the
         # forced schemas are merged in (additive — auto-detected schemas are
         # kept so a notebook default never *loses* a schema the document clearly
@@ -1655,10 +1562,7 @@ class EntityExtractionService:
             )
 
         self._typing_schemas = self._typing_schemas_for(
-            applicable_schemas, candidate_ontologies, notebook_schema, notebook_id
-        )
-        applicable_schemas = self._project_notebook_edits(
-            applicable_schemas, notebook_schema, notebook_id
+            applicable_schemas, candidate_ontologies
         )
 
         # L.1: stash the applied ontologies (without the confidence scores) so
@@ -1706,11 +1610,9 @@ class EntityExtractionService:
                     names=[o.metadata.name for o, _c in fallback],
                 )
                 self._typing_schemas = self._typing_schemas_for(
-                    fallback, candidate_ontologies, notebook_schema, notebook_id
+                    fallback, candidate_ontologies
                 )
-                applicable_schemas = self._project_notebook_edits(
-                    fallback, notebook_schema, notebook_id
-                )
+                applicable_schemas = fallback
                 self._applicable_schemas = [o for o, _c in applicable_schemas]
 
         if not applicable_schemas:
@@ -1733,40 +1635,6 @@ class EntityExtractionService:
             fallback_workflow = await self._build_single_schema_workflow(config)
             return await fallback_workflow.extract(chunks)
 
-        # Build the per-schema accepted-extensions map from the
-        # notebook's accepted extensions. Each extension dict carries
-        # an optional ``schema_name`` field; ones without it are
-        # broadcast to every schema (conservative default).
-        #
-        # B.3c: resume-sentinel entries are infrastructure markers, not
-        # real entity types. If we forward them, ``_run_pass2`` will
-        # render them into the LLM prompt as first-class extensions
-        # (see ``_format_accepted_extensions``). Filter at this seam so
-        # the prompt builder never sees them; ``_format_accepted_extensions``
-        # also filters defensively (defence-in-depth) in case a future
-        # caller bypasses this service.
-        accepted_by_schema: Dict[str, List[Dict[str, Any]]] = {}
-        if notebook_schema is not None:
-            for ext in notebook_schema.accepted_extensions:
-                if _is_resume_sentinel(ext):
-                    continue
-                if isinstance(ext, dict) and ext.get("op") == _REPARENT_OP:
-                    # N.4d.3: a re-parent is not a new type. Forwarded, Pass 2
-                    # would render an EXISTING base type under "Accepted
-                    # Extension Types" and be told to treat it as an addition to
-                    # the schema. The move itself has already been applied to the
-                    # ontologies above, which is where Pass 2 reads the
-                    # vocabulary from.
-                    continue
-                schema_name = ext.get("schema_name")
-                if schema_name:
-                    accepted_by_schema.setdefault(schema_name, []).append(ext)
-                else:
-                    for ontology, _conf in applicable_schemas:
-                        name = ontology.metadata.name if ontology.metadata else ""
-                        if name:
-                            accepted_by_schema.setdefault(name, []).append(ext)
-
         # Build the production LLM caller once per run so Pass-1 and
         # Pass-2 share a single bound ``LanguageModel``. Failures here
         # are logged but non-fatal — Pass-1/Pass-2 fall through to
@@ -1787,7 +1655,6 @@ class EntityExtractionService:
             source_id=source_id,
             notebook_id=notebook_id,
             pass1_repo=pass1_repo,
-            accepted_extensions_by_schema=accepted_by_schema or None,
             llm_caller=llm_caller,
             pass2_token_budget=self._pass2_token_budget,
         )
@@ -2442,8 +2309,7 @@ class EntityExtractionService:
             # still types against every ontology, as the extraction did —
             # typing no longer depends on the selection, so there is nothing to
             # re-detect. `_typing_schemas` was reset above, so a reused instance
-            # cannot leak a prior run's vocabulary. Known limit: this path has
-            # no notebook, so the notebook's schema edits are not projected.
+            # cannot leak a prior run's vocabulary.
             applicable_schemas=await self._typing_schemas_or_all(),
         )
 

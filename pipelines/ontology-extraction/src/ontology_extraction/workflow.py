@@ -99,9 +99,6 @@ class ExtractionWorkflow:
         source_id: Optional[str] = None,
         notebook_id: Optional[str] = None,
         pass1_repo: Optional[Any] = None,
-        accepted_extensions_by_schema: Optional[
-            Dict[str, List[Dict[str, Any]]]
-        ] = None,
         llm_caller: Optional[Any] = None,
         pass2_token_budget: Optional[int] = None,
     ) -> ExtractionResult:
@@ -128,9 +125,6 @@ class ExtractionWorkflow:
                 forwarded to ``Pass1Result.notebook``.
             pass1_repo: For ``mode="multi"``: ``Pass1ResultRepository``
                 instance (or test fake exposing ``async record``).
-            accepted_extensions_by_schema: For ``mode="multi"``: per-
-                schema accepted extension lists. Missing keys default
-                to ``[]``.
 
         Returns:
             Combined ExtractionResult from all chunks. In ``mode="multi"``
@@ -160,7 +154,6 @@ class ExtractionWorkflow:
                 chunks=chunks,
                 applicable_schemas=applicable_schemas,
                 pass1_repo=pass1_repo,
-                accepted_extensions_by_schema=accepted_extensions_by_schema,
                 # B.1f: thread the production LLM caller (or test fake)
                 # through to Pass-1 + Pass-2. ``None`` retains the
                 # orchestrator's lazy-default behaviour (logs a canary).
