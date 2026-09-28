@@ -7,23 +7,37 @@ retype only after a confirmed dry run, OE-D4 entity + relationship types in
 v1, OE-D5 (a) the extraction service goes through the registry or stops
 reading ontologies.
 
-> **OE.0 built 2026-09-28** (branch `feature/oe0-lossless-storage`).
-> - Every ontology model keeps the keys it has no field for (`extra='allow'`),
->   and `merge_with` carries them through inheritance.
-> - `register` stores the ontology's own content losslessly
->   (`model_dump(mode="json", exclude_unset=True)`; before OE.0 it wrote enums
->   as Python objects, so its YAML would not even load). It deactivates and
->   inserts in one transaction.
+> **OE.0 built 2026-09-28** (branch `feature/oe0-lossless-storage`, review
+> round 2).
+> - Every ontology model keeps the keys it has no field for (`extra='allow'`).
+> - `merge_with` combines those keys the way their one reader
+>   (`services/extraction`) does: lists joined parent-first without
+>   duplicates, dicts merged child-first.
+> - `Ontology.to_storage_dict` / `to_yaml_string` write every field that is SET
+>   or differs from its default, plus the extra keys. That covers an in-place
+>   edit of a collection the YAML never set (a type added to `regiodeal`), and
+>   writes no defaults the YAML never said. `to_yaml` uses the same function.
+> - `register` stores a NEW immutable version (unique `(name, version)`;
+>   re-storing is refused and changes nothing) in one transaction via
+>   `execute_transaction`.
 > - `activate_version` refuses an unknown version before touching the active
->   one. Both drop the whole cache, so the ontologies that `extends` the
->   changed one see the new version.
-> - The cache key now names whether inheritance was resolved.
-> - Migration 86 defines `ontology_version`: unique `(name, version)`, plus
->   `note` and `created_by`.
-> - Tests: `packages/ontology-manager/tests/test_ontology_storage_lossless.py`.
->   Every shipped YAML stores and reloads with the same keys and values, and
->   against a real SurrealDB a stored `schema_core` version changes what
->   `regiodeal` resolves.
+>   one.
+> - Both drop the whole cache, so ontologies that `extends` the changed one
+>   follow.
+> - The cache key names whether inheritance was resolved.
+> - Migration 86 defines `ontology_version` exactly as production already had
+>   it (a table no repo migration created; same field and index names), plus
+>   `note` / `created_by`.
+> - Known: a collection written as a YAML list is stored as a mapping (same
+>   content). The OE.2 export back to YAML will have to choose its form.
+> - Tests: `test_ontology_storage_lossless.py`.
+>   - Every shipped YAML stores and reloads identically, through the
+>     serialisation `register` uses.
+>   - Against SurrealDB, every shipped YAML goes through `register` and
+>     `get(version=…)`.
+>   - In-place edits, re-storing refused, `activate_version` reaching
+>     `regiodeal`, and an unknown version refused.
+
 
 ## Why
 

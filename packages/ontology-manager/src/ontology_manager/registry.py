@@ -200,54 +200,48 @@ class OntologyRegistry:
         note: Optional[str] = None,
         created_by: Optional[str] = None,
     ) -> bool:
-        """Store ``ontology`` as a version in ``ontology_version`` (migration 86).
+        """Store ``ontology`` as a NEW version in ``ontology_version`` (migration 86).
 
         ``ontology`` must be the ontology's OWN content, not an
-        inheritance-resolved one: get it with ``get(name,
-        resolve_inheritance=False)`` or ``Ontology.from_yaml``. A resolved
-        ontology would bake its parents' types into this version, and a later
-        edit of the parent would never reach it.
+        inheritance-resolved one: ``Ontology.from_yaml`` / ``from_yaml_string``,
+        or a DEEP COPY of ``get(name, resolve_inheritance=False)`` — that call
+        returns the shared cached object, so editing it in place would change
+        what every caller sees before anything is stored. A resolved ontology
+        would bake its parents' types into this version.
 
-        OE.0: stored losslessly — ``exclude_unset`` writes back what the
-        source set, including the keys the model has no field for, and no
-        defaults it never said; ``mode="json"`` writes enums as their values.
-        Activating deactivates the other versions in the same transaction, so
-        a failure cannot leave the ontology with none. Every cached ontology is
-        dropped, because any ontology that ``extends`` this one cached a merged
-        copy of it.
+        OE.0:
+        - Stored losslessly via :meth:`Ontology.to_storage_dict` — what the
+          source set, what was changed since, the keys the model has no field
+          for; no defaults the source never said.
+        - Versions are IMMUTABLE: storing an existing ``(name, version)`` is
+          refused (unique index) and changes nothing, so every stored version
+          stays restorable and re-storing can never deactivate the active one.
+        - Activating deactivates the other versions in the same transaction.
+        - Every cached ontology is dropped: any ontology that ``extends`` this
+          one cached a merged copy of it.
 
-        Returns True on success; errors are logged and return False.
+        Returns True on success; errors (including a duplicate version) are
+        logged and return False.
         """
         try:
-            import yaml
-            from surrealdb_service.connection import execute_query
+            from surrealdb_service.connection import execute_transaction
 
-            yaml_content = yaml.safe_dump(
-                ontology.model_dump(mode="json", exclude_unset=True),
-                default_flow_style=False,
-                sort_keys=False,
-                allow_unicode=True,
-            )
-            await execute_query(
+            await execute_transaction(
                 """
                 BEGIN TRANSACTION;
                 IF $activate {
                     UPDATE ontology_version SET is_active = false WHERE name = $name;
                 };
-                INSERT INTO ontology_version {
+                CREATE ontology_version CONTENT {
                     name: $name, version: $version, yaml_content: $yaml_content,
                     is_active: $activate, note: $note, created_by: $created_by
-                } ON DUPLICATE KEY UPDATE
-                    yaml_content = $input.yaml_content,
-                    is_active = $input.is_active,
-                    note = $input.note,
-                    created_by = $input.created_by;
+                };
                 COMMIT TRANSACTION;
                 """,
                 {
                     "name": ontology.metadata.name,
                     "version": ontology.metadata.version,
-                    "yaml_content": yaml_content,
+                    "yaml_content": ontology.to_yaml_string(),
                     "activate": activate,
                     "note": note,
                     "created_by": created_by,
@@ -272,9 +266,9 @@ class OntologyRegistry:
         activate none. Every cached ontology is dropped (see ``register``).
         """
         try:
-            from surrealdb_service.connection import execute_query
+            from surrealdb_service.connection import execute_transaction
 
-            await execute_query(
+            await execute_transaction(
                 """
                 BEGIN TRANSACTION;
                 IF count(SELECT id FROM ontology_version
@@ -302,7 +296,7 @@ class OntologyRegistry:
 
             result = await execute_query(
                 """
-                SELECT name, version, is_active, created_at
+                SELECT name, version, is_active, created_at, note, created_by
                 FROM ontology_version
                 WHERE name = $name
                 ORDER BY created_at DESC

@@ -7,7 +7,7 @@ and used to generate extraction prompts and validate extracted knowledge.
 
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, ClassVar, Dict, List, Optional, Union
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -55,6 +55,42 @@ class Cardinality(str, Enum):
     ONE_TO_MANY_ALT = "one_to_many"
     MANY_TO_ONE_ALT = "many_to_one"
     MANY_TO_MANY_ALT = "many_to_many"
+
+
+def storage_dict(value: Any) -> Any:
+    """What storing ``value`` writes: every field that is SET or differs from its
+    default, the keys the model has no field for, and nothing else (Track OE.0).
+
+    ``model_dump(exclude_unset=True)`` alone dropped an edit made IN PLACE to a
+    collection the source never set — a type added to `regiodeal`, whose YAML
+    has no `entity_types` key, vanished on save. ``exclude_unset=False`` would
+    write every default the YAML never said. Set-or-changed is both lossless and
+    faithful. A field a model derives from another (``domain`` from
+    ``source_types``) is written only when it says something the source does
+    not. Enums are written as their values.
+    """
+    if isinstance(value, BaseModel):
+        out: Dict[str, Any] = {}
+        derived = getattr(type(value), "DERIVED_FROM", {})
+        for name, field in type(value).model_fields.items():
+            current = getattr(value, name)
+            if name not in value.model_fields_set:
+                if current == field.get_default(call_default_factory=True):
+                    continue
+                source = derived.get(name)
+                if source is not None and current == getattr(value, source):
+                    continue
+            out[name] = storage_dict(current)
+        for key, extra in (value.model_extra or {}).items():
+            out[key] = storage_dict(extra)
+        return out
+    if isinstance(value, dict):
+        return {k: storage_dict(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [storage_dict(v) for v in value]
+    if isinstance(value, Enum):
+        return value.value
+    return value
 
 
 # OE.0: every model below keeps the keys it has no field for (`extra='allow'`).
@@ -161,6 +197,10 @@ class RelationshipTypeDefinition(BaseModel):
     # Support source_types/target_types as aliases for domain/range
     source_types: Optional[List[str]] = None
     target_types: Optional[List[str]] = None
+
+    # `storage_dict`: domain/range are derived from these when the source used
+    # the source_types/target_types spelling; do not write them twice.
+    DERIVED_FROM: ClassVar[Dict[str, str]] = {"domain": "source_types", "range": "target_types"}
 
     def model_post_init(self, __context: Any) -> None:
         """Convert source_types/target_types to domain/range."""
@@ -341,11 +381,24 @@ class Ontology(BaseModel):
         data = yaml.safe_load(yaml_content)
         return cls(**data)
 
+    def to_storage_dict(self) -> Dict[str, Any]:
+        """What ``OntologyRegistry.register`` stores (see :func:`storage_dict`)."""
+        return storage_dict(self)
+
+    def to_yaml_string(self) -> str:
+        """The ontology as stored YAML — the inverse of :meth:`from_yaml_string`."""
+        return yaml.safe_dump(
+            self.to_storage_dict(), default_flow_style=False, sort_keys=False,
+            allow_unicode=True,
+        )
+
     def to_yaml(self, path: Union[str, Path]) -> None:
-        """Save the ontology to a YAML file."""
-        path = Path(path)
-        with open(path, "w", encoding="utf-8") as f:
-            yaml.dump(self.model_dump(), f, default_flow_style=False, sort_keys=False)
+        """Save the ontology to a YAML file (the same serialisation as storage).
+
+        OE.0: this used plain ``model_dump`` + ``yaml.dump``, which wrote enums
+        as Python objects and every default — a second, lossy serialisation.
+        """
+        Path(path).write_text(self.to_yaml_string(), encoding="utf-8")
 
     def get_entity_type(self, name: str) -> Optional[EntityTypeDefinition]:
         """Get an entity type by name (case-insensitive)."""
@@ -398,9 +451,22 @@ class Ontology(BaseModel):
         merged_claim_types.update(self.claim_types)
         merged_extraction_patterns.update(self.extraction_patterns)
 
-        # OE.0: keys the model has no field for (`extraction_rules`, …) are
-        # carried too, the child's winning — as for the typed collections.
-        extras = {**(parent.model_extra or {}), **(self.model_extra or {})}
+        # OE.0: keys the model has no field for are carried too, combined the
+        # way their one reader (`services/extraction/api.py`) combines them: a
+        # list is the parent's followed by the child's without duplicates (the
+        # `extraction_rules` of `government` + `deals` + `regiodeal`), a dict is
+        # merged with the child winning, anything else is the child's.
+        extras = dict(parent.model_extra or {})
+        for key, value in (self.model_extra or {}).items():
+            inherited = extras.get(key)
+            if isinstance(value, list) and isinstance(inherited, list):
+                merged = list(inherited)
+                merged.extend(v for v in value if v not in merged)
+                extras[key] = merged
+            elif isinstance(value, dict) and isinstance(inherited, dict):
+                extras[key] = {**inherited, **value}
+            else:
+                extras[key] = value
         return Ontology(
             metadata=self.metadata,
             entity_types=merged_entity_types,

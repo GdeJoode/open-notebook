@@ -1,3 +1,6 @@
--- Reverse of migration 86. Stored ontology versions go with the table; the
--- registry then reads the YAML files only, which is the behaviour before 86.
-REMOVE TABLE IF EXISTS ontology_version;
+-- Reverse of migration 86. Removes only what 86 added to the table production
+-- already had (`note`, `created_by`); the table itself predates 86 there, so it
+-- stays. A database migrated from scratch keeps an empty table, which the
+-- registry reads as "no stored versions" — the behaviour before 86.
+REMOVE FIELD IF EXISTS created_by ON TABLE ontology_version;
+REMOVE FIELD IF EXISTS note ON TABLE ontology_version;
