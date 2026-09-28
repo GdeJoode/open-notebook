@@ -1,0 +1,19 @@
+-- ============================================================================
+-- Migration 87: ontology_draft — the ontology editor's work in progress
+-- (Track OE.2).
+--
+-- One draft per ontology (record id `ontology_draft:⟨name⟩`): the ontology's
+-- OWN content being edited, stored as YAML like `ontology_version`, and the
+-- active version it was started from. Publishing validates the draft against
+-- every other active ontology, refuses if another version was published since
+-- `base_version` (optimistic concurrency), stores it as a new
+-- `ontology_version` and removes the draft.
+-- ============================================================================
+
+DEFINE TABLE IF NOT EXISTS ontology_draft SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS name ON TABLE ontology_draft TYPE string;
+DEFINE FIELD IF NOT EXISTS yaml_content ON TABLE ontology_draft TYPE string;
+DEFINE FIELD IF NOT EXISTS base_version ON TABLE ontology_draft TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at ON TABLE ontology_draft TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_at ON TABLE ontology_draft TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_ontology_draft_name ON TABLE ontology_draft FIELDS name UNIQUE;

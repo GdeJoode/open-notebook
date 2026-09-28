@@ -228,21 +228,69 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 
 
 **OE.2 — Write API** (~1.5d)
-- An ontology has a **draft**. Edits change the draft; publish, discard and
-  rollback act on versions.
-  - Edit ops: `create`, `update`, `rename`, `delete`, `reparent` for entity
-    types and relationship types.
-  - `POST …/validate`, `POST …/preview`, `POST …/publish` (validate + activate
-    + invalidate caches), `GET …/versions`, `POST …/rollback/{version}`,
-    `GET …/export.yaml`.
-- A publish records who, when and why (a `note`).
-- A publish with blocking findings is refused (422, with the findings).
-- `rename` of a type keeps the old name as an alias, so rows and labels that
-  use it keep resolving.
-- **AC:**
-  - a publish takes effect for the next extraction without a restart;
-  - a rollback restores the previous typing exactly;
-  - the registry's DB-first read is covered by a test against a real SurrealDB.
+
+> **OE.2 built 2026-09-28** (branch `feature/oe2-write-api`, review round 2).
+> - `OntologyEditService` plus routes under `/api/ontologies/{name}/…`:
+>   - the draft: `GET` / `DELETE draft`;
+>   - edits: `PUT` / `DELETE draft/entity-types/{t}`,
+>     `POST draft/entity-types/{t}/rename`, `PUT` / `DELETE
+>     draft/relationship-types/{r}`, `POST draft/relationship-types/{r}/rename`;
+>   - `POST draft/validate`, `POST draft/preview`, `POST draft/publish`;
+>   - `GET versions`, `POST rollback/{version}`, `GET export.yaml`.
+> - One draft per ontology (migration 87 `ontology_draft`), holding its own
+>   content and `base_version`.
+>   - A `PUT` replaces the type WHOLE: the editor sends the stored type back
+>     with its changes.
+>   - A rename keeps the old name as an alias and moves this ontology's own
+>     `parent_type` and relationship references. Other ontologies' references
+>     resolve through the alias.
+> - Serialisation: edits, discard, publish and rollback share one lock per
+>   event loop. An edit made during a publish lands in a new draft on the new
+>   version instead of being lost, and a draft is published exactly once.
+> - Publish:
+>   - refuses a stale base (409, someone published meanwhile) and a blocking
+>     finding (422);
+>   - stores the YAML seed whenever no stored version is active, even if
+>     inactive ones exist;
+>   - stores the draft as `{base}+{UTC timestamp with microseconds}` and
+>     returns the warnings plus the retype counts (including collisions this
+>     edit causes);
+>   - a failed store is a 500 and an existing version a 409; a publish that
+>     took effect but could not remove the draft says so as a warning.
+> - Registry: every `clear_cache` bumps a generation, and a `get` that was
+>   under way during a publish does not write the pre-publish ontology back
+>   into the cache. A race test fails without it. Rollback goes through the
+>   same gate, and `activate_version` stamps `updated_at`.
+> - Tests: `test_ontology_edit_service.py` (19), against a real SurrealDB
+>   through the database-first read:
+>   - with a warm cache, every declared label types as the candidate says
+>     after a publish, and exactly as before after a rollback;
+>   - many edits to one draft; an edit during a publish; a read in flight
+>     during a publish;
+>   - the HTTP surface: every route, 404 / 409 / 422.
+>
+>   Each guard was mutation-checked: removing it fails its test.
+> - **Limits, carried:**
+>   - The lock and the base check are in-process: one uvicorn process, as
+>     now. With several processes the last publish wins; it needs a
+>     compare-and-set inside the `register` transaction.
+>   - `created_by` is always `ontology-editor` (no authentication; PC.7).
+>   - Readers that bypass the registry do not see a publish: the Schema tab
+>     tree and TTL export (`schemas.py` read the YAML), and
+>     `services/extraction` (OE-D5 / OE.6).
+>   - After an ontology's first publish, later YAML edits in the repo no
+>     longer reach it; a new seed has to be published.
+>   - `export.yaml` writes list-form collections as mappings (same content).
+>   - The `includes` order of extra keys (OE.0 minor 1); the preview is
+>     synchronous (OE.1 note).
+>   - From OE.2 review round 2:
+>     - The seed check reads the registry's private `_load_from_db`, which
+>       hides DB errors. After a transient error an active stored version can
+>       be stored again, labelled as a seed.
+>     - A relationship rename keeps no alias.
+>     - Endpoints kept under the extra keys `source_types` / `target_types` are
+>       not validated.
+
 
 **OE.3 — Editor UI** (~2d)
 - The existing read-only `/ontologies` page becomes the editor.

@@ -538,6 +538,13 @@ def get_ontology_service() -> OntologyService:
     return OntologyService()
 
 
+def get_ontology_edit_service():
+    """Track OE.2: the shared-ontology editor (draft, publish, versions)."""
+    from app_main.services.ontology_edit_service import OntologyEditService
+
+    return OntologyEditService()
+
+
 def get_knowledge_graph_service() -> KnowledgeGraphService:
     return KnowledgeGraphService(
         entity_repo=get_entity_repo(),
