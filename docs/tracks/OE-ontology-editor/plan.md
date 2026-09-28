@@ -293,6 +293,42 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 
 
 **OE.3 — Editor UI** (~2d)
+
+> **OE.3 built 2026-09-28** (branch `feature/oe3-editor-ui`). The owner added
+> drag-and-drop re-parenting to the scope, and Ctrl+X / Ctrl+V as the keyboard
+> way to do it.
+> - The `/ontologies` detail page gets an **Edit** tab (`OntologyEditor`):
+>   - a draft bar: state, base version, Preview, Publish with a note (disabled
+>     while a finding blocks), Discard;
+>   - the gate's findings: blocks as alerts, warnings folded;
+>   - the type tree (`TypeTree`, `@dnd-kit`) next to a form for the selected
+>     type (`TypeForm`: description, parent, schema.org base, aliases, hints;
+>     rename; delete);
+>   - relationship types (`RelationshipTypesEditor`);
+>   - the preview (label changes with entity counts, the retype, detection
+>     changes);
+>   - versions with rollback, and export to YAML.
+> - **Re-parenting**, three ways that all end in the same draft edit
+>   (`dropEdit` → the type sent back whole with its new `parent_type`):
+>   - drag a type onto its new parent, or onto "No parent";
+>   - Ctrl+X on a type, then Ctrl+V on the new parent (Cmd on a Mac; Escape
+>     cancels);
+>   - the drag handle's own keyboard mode (Space, arrow keys, Space).
+>
+>   Only OWN types move. Inherited types and undefined parents (schema.org
+>   bases such as `GovernmentService`) are targets only. The editor offers no
+>   drop that would make a cycle or change nothing; the server's gate still
+>   validates what a new parent does to typing.
+> - Every edit sends the stored type back whole, so keys the form does not
+>   show (`graph_relevance`, …) survive (OE.2's PUT contract).
+> - Tests:
+>   - `ontology-tree.test.ts` (13): tree building, allowed drops, the drop
+>     edit;
+>   - `OntologyEditor.test.tsx` (4): publish refused while blocking, own vs
+>     inherited in the tree, the form keeping unshown keys;
+>   - e2e `e2e/track-oe/ontology-editor.spec.ts` (5, against a stateful mocked
+>     backend with the OE.2 shapes): drag, keyboard drag, cut/paste, paste on
+>     "No parent" plus Escape, and rename → preview → publish → rollback.
 - The existing read-only `/ontologies` page becomes the editor.
   - A type tree per ontology, showing its inheritance chain (`extends`) and
     which parent defines what.
