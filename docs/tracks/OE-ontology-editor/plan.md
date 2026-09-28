@@ -362,6 +362,51 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 
 
 **OE.4 — Data follow-through** (~1d)
+
+> **OE.4 built 2026-09-28** (branch `feature/oe4-retype-followthrough`).
+> - `entity_retype_service` holds the retype lifted out of the PC.4b script:
+>   the plan under the ACTIVE ontologies (`retype_planner`, entity rows now
+>   read in id order so the plan is deterministic), the guarded writes, the
+>   JSONL rollback file and its undo. The script is a thin CLI over it, same
+>   flags and output.
+> - API under `/api/ontologies/retype/`:
+>   - `GET dry-run`: changes, collisions, flag-only, counts, notebooks with
+>     schema edits, and a `fingerprint` of the plan;
+>   - `POST apply {fingerprint}`: recomputes the plan and writes it only if the
+>     fingerprint still matches; a changed plan or any notebook schema edit is a
+>     409 and writes nothing. Runs under the OE.2 publish lock. Returns the
+>     counts and a `rollback_id` (the file name in `DATA_FOLDER/retype_rollback`);
+>   - `POST undo/{rollback_id}`: only a bare rollback file name (422 otherwise).
+> - UI: `RetypePanel` in the Edit tab. It opens after a publish whose result
+>   reports rows to move (changes, flags, or collisions this edit causes), and
+>   on demand ("Retype entities"). Rows `old → new`, flag-only rows folded,
+>   collisions apart with a link to the resolution page; Apply and Undo behind
+>   `ConfirmButton`. A 409 fetches the new dry run.
+> - Tests:
+>   - `test_entity_retype_service.py` (8), against a real SurrealDB:
+>     - the AC: after publish + apply the dry run is empty, the collision is
+>       left, every other row types as stored, no identity is held twice;
+>     - the publish's retype counts equal the dry run's;
+>     - undo; a changed plan (new row, rollback) refused; an apply during a
+>       publish waits and is refused; notebook edits refused; undo outside the
+>       rollback directory refused; the HTTP surface.
+>
+>     Each guard was mutation-checked (fingerprint, lock, notebook edits,
+>     rollback-id pattern).
+>   - `RetypePanel.test.tsx` (6) and 2 editor cases; UI guards mutation-checked
+>     (confirmation, notebook edits, auto-open both ways, refetch on 409).
+>   - e2e (3): publish → dry run → apply → empty dry run → undo; a plan changed
+>     since the dry run; on demand. The mock follows the contract above.
+> - **Limits:**
+>   - The lock is in-process (as OE.2). An extraction running during an apply
+>     can still create a row on a target identity: the write then fails
+>     (active) or both rows exist (reference), as with the script.
+>   - The API has no `--ignore-notebook-edits`; notebook edits (0 live) block
+>     the apply until OE.5.
+>   - Undo is offered only for the apply made in the open panel; older rollback
+>     files are undone through the script or the endpoint.
+>   - The dry run lists every row; on a large graph it should page.
+
 - After a publish that changes types, the preview's retype plan is offered:
   dry run shown, apply on confirmation (OE-D3). Collisions are listed for the
   curator's merge (PC.5b's `/apply`).
