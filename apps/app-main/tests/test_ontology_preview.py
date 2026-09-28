@@ -148,22 +148,40 @@ async def test_the_detection_replay_names_documents_whose_selection_changes(monk
         definition.extraction_hints = ["Waterschapsbestuur"]
 
     [change] = await svc.detection_changes(active, candidate)
-    assert change["source"] == "source:a"
+    assert (change["source"], change["notebook"]) == ("source:a", "notebook:n")
     assert "government" in change["after"] and "government" not in change["before"]
     assert await svc.detection_changes(active, active) == []
 
 
-async def test_a_row_that_moves_releases_the_identity_it_held():
-    """Review m11: two rows swapping types were reported as a collision."""
+def _r(i, etype, label):
+    return {"id": f"entity:{i}", "canonical_name": "X", "name_key": "x", "entity_type": etype,
+            "status": "active", "primary_type": label, "raw": None, "flagged": None}
+
+
+async def test_no_two_rows_can_end_up_with_one_identity():
+    """Review OE.1 round 2 B1: releasing identities within one plan let B take
+    the identity a REFUSED row A kept. A wants organization (held by C) and is
+    refused, staying person; B must then be refused for person too."""
     vocabulary = vocabulary_of(await load_own_ontologies())
-    rows = [
-        {"id": "entity:1", "canonical_name": "X", "name_key": "x", "entity_type": "concept",
-         "status": "active", "primary_type": "Waterschap", "raw": None, "flagged": None},
-        {"id": "entity:2", "canonical_name": "X", "name_key": "x",
-         "entity_type": "government_organization", "status": "active",
-         "primary_type": "Date", "raw": None, "flagged": None},
-    ]
+    rows = [_r(1, "person", "Organization"), _r(2, "organization", "Organization"),
+            _r(3, "event", "Person")]
     plan = plan_rows(rows, vocabulary)
-    assert {(c["id"], c["new"]) for c in plan["changes"]} == {
-        ("entity:1", "government_organization"), ("entity:2", "other")}
-    assert plan["collisions"] == []
+    assert plan["changes"] == []
+    assert {c["id"] for c in plan["collisions"]} == {"entity:1", "entity:3"}
+    final = {r["id"]: r["entity_type"] for r in rows}
+    final.update({c["id"]: c["new"] for c in plan["changes"]})
+    assert len(set(final.values())) == len(final)
+
+
+async def test_a_chain_resolves_over_two_runs_in_any_write_order():
+    """Row 1 wants what row 2 holds, and row 2 moves away. Plan 1 moves row 2
+    only (row 1 would trip the unique index if written first); plan 2 moves
+    row 1 into the freed identity."""
+    vocabulary = vocabulary_of(await load_own_ontologies())
+    rows = [_r(1, "concept", "Waterschap"), _r(2, "government_organization", "Date")]
+    first = plan_rows(rows, vocabulary)
+    assert [(c["id"], c["new"]) for c in first["changes"]] == [("entity:2", "other")]
+    assert [c["id"] for c in first["collisions"]] == ["entity:1"]
+    after = [dict(rows[0]), {**rows[1], "entity_type": "other"}]
+    second = plan_rows(after, vocabulary)
+    assert [(c["id"], c["new"]) for c in second["changes"]] == [("entity:1", "government_organization")]

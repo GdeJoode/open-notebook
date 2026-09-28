@@ -8,11 +8,16 @@ the bridge, then the passthrough and residual fallbacks. Modelling them on
 anything else is how the first version of this gate missed the PC.4 bug class
 (review OE.1 B1) and blocked 553 of 935 legitimate re-parents (M1).
 
-Which definition a label resolves to depends on which ontology leads the
-vocabulary. A label is therefore typed once with each ontology leading, and
-once with none (the re-filter / OKF / no-detection order). That covers every
-choice of definition a selection can make; the full space of 1,111 ordered
-selections stays pinned in CI (``test_typing_is_stable``).
+What a label types as depends on which definition comes FIRST in the
+vocabulary for every name on its chain — the label and each ``parent_type`` it
+walks through. Only ontologies that define one of those names DIFFERENTLY can
+change the answer, and only their relative order matters. So per label the
+ontologies are grouped by their definitions of the chain's names, one
+representative per group, and the label is typed under every ordered selection
+of up to three representatives (detection's ``top_k``) plus no selection — the
+exact set of outcomes a selection can produce, not a sample. (Review OE.1
+round 2 M1: one leader at a time missed a label and its parent each defined
+twice; a PAIR of selected ontologies typed it differently.)
 
 Rules, each keyed so :func:`classify` can tell pre-existing from new:
 
@@ -30,7 +35,8 @@ Rules, each keyed so :func:`classify` can tell pre-existing from new:
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+import itertools
+from typing import Dict, List, Optional, Set, Tuple
 
 from ontology_manager.canonical_bridge import (
     _CANONICAL_BY_SCHEMA_ORG,
@@ -58,11 +64,56 @@ def _norm(text: Optional[str]) -> str:
 
 
 def _orders(merged: Dict[str, Ontology]) -> Dict[Optional[str], List[Ontology]]:
+    """One ontology leading, per ontology: the vocabulary a type is checked in
+    by the per-type rules (its own ontology first, as when it is selected)."""
     everything = list(merged.values())
     orders: Dict[Optional[str], List[Ontology]] = {None: typing_vocabulary(None, everything)}
     for name, ontology in merged.items():
         orders[name] = typing_vocabulary([ontology], everything)
     return orders
+
+
+def _chain_names(label: str, merged: Dict[str, Ontology]) -> Set[str]:
+    """Every name the bridge may look up while typing ``label``: the label and,
+    through ANY ontology's definition of it, each parent_type, transitively."""
+    names, todo = set(), [label]
+    while todo:
+        name = todo.pop()
+        if _norm(name) in names:
+            continue
+        names.add(_norm(name))
+        for ontology in merged.values():
+            definition = _find_definition(name, [ontology])
+            if definition is not None and definition.parent_type:
+                todo.append(definition.parent_type)
+    return names
+
+
+def _representatives(label: str, merged: Dict[str, Ontology]) -> List[str]:
+    """One ontology per distinct set of definitions for the label's chain."""
+    names = sorted(_chain_names(label, merged))
+    groups: Dict[str, str] = {}
+    for name in sorted(merged):
+        signature = repr([
+            (n, d.model_dump(mode="json") if (d := _find_definition(n, [merged[name]])) else None)
+            for n in names
+        ])
+        groups.setdefault(signature, name)
+    return sorted(groups.values())
+
+
+def label_answers(label: str, merged: Dict[str, Ontology]) -> Dict[Tuple[str, ...], str]:
+    """``label``'s type under every selection that can change it (see module doc)."""
+    everything = list(merged.values())
+    reps = _representatives(label, merged)
+    answers = {(): _resolve_entity_type(label, typing_vocabulary(None, everything)).entity_type}
+    if len(reps) < 2:
+        return answers
+    for size in range(1, min(3, len(reps)) + 1):
+        for selection in itertools.permutations(reps, size):
+            vocabulary = typing_vocabulary([merged[n] for n in selection], everything)
+            answers[selection] = _resolve_entity_type(label, vocabulary).entity_type
+    return answers
 
 
 def _declares_a_base(type_name: str, vocabulary: List[Ontology]) -> bool:
@@ -92,14 +143,11 @@ def typing_findings(own: Dict[str, Ontology]) -> List[Finding]:
 
     labels = {label for ontology in merged.values() for label, _ in labels_of(ontology)}
     for label in sorted(labels, key=str.lower):
-        answers = {
-            leader: _resolve_entity_type(label, vocabulary).entity_type
-            for leader, vocabulary in orders.items()
-        }
+        answers = label_answers(label, merged)
         distinct = sorted(set(answers.values()))
         if len(distinct) > 1:
             by_answer = {
-                answer: sorted(str(k) for k, v in answers.items() if v == answer and k)
+                answer: sorted("+".join(k) or "(none)" for k, v in answers.items() if v == answer)
                 for answer in distinct
             }
             findings.append(Finding(
@@ -158,4 +206,4 @@ def validate_candidate(
     return classify(all_findings(candidate), all_findings(active) if active is not None else [])
 
 
-__all__ = ["all_findings", "typing_findings", "validate_candidate"]
+__all__ = ["all_findings", "label_answers", "typing_findings", "validate_candidate"]

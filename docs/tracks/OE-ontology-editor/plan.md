@@ -160,7 +160,7 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 **OE.1 — Validation gate and impact preview** (~1.5d)
 
 > **OE.1 built 2026-09-28** (branch `feature/oe1-validation-preview`, review
-> round 2).
+> round 3).
 > - **Structural rules** (`ontology_manager.validation`), decided from the
 >   content alone:
 >   - `base_named_type_points_elsewhere` (a base-named type sent to a
@@ -176,9 +176,14 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 >   merges only with `extends`, as in the registry.
 > - **Typing rules** (`app_main.services.ontology_validation_service`),
 >   modelled on production typing: `_resolve_entity_type` over
->   `typing_vocabulary`, with each ontology leading and with none. The first
->   version modelled its own idea of typing, missed the PC.4 bug class, and
->   blocked 553 of 935 legitimate re-parents. Rules:
+>   `typing_vocabulary`. A label is typed under every ordered selection (up to
+>   three, as detection) of one representative per group of ontologies that
+>   define the names on its chain differently. That is the exact set of
+>   outcomes a selection can produce, and matches a brute-force run over all
+>   1,111 orders for every shipped label. One leader at a time was not enough:
+>   a label and its parent each defined twice type differently under a PAIR.
+>   The first version modelled its own idea of typing, missed the PC.4 bug
+>   class, and blocked 553 of 935 legitimate re-parents. Rules:
 >   - `selection_dependent_type`, `base_named_type_misses_its_base`;
 >   - `orphan` (a chain that ends on no base at all);
 >   - `subtype_disagrees_with_parent`: a child that types differently from
@@ -190,24 +195,36 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 >   - The shipped set is clean against itself.
 >   - Its 5 standalone findings (2 deliberate unmapped bases, 3 relationship
 >     endpoints naming no type) are pinned.
->   - A test over the whole re-parent space (935 edits) checks every block
->     against production typing, computed independently.
+>   - A test over the whole re-parent space (935 edits) checks every block,
+>     and every miss, against production typing brute-forced independently.
 > - `retype_planner` holds the retype plan, lifted out of the PC.4b script and
->   shared with it. A row that moves releases the identity it held.
+>   shared with it.
+>   - It is conservative: every row's current identity stays held for the
+>     whole plan, so no two rows can end up with one identity, and the plan can
+>     be written in any order.
+>   - A chain (a row wanting what another row vacates) completes on the next
+>     run.
+>   - Releasing identities within one plan (review round 1 m11) was tried and
+>     reverted: a refused row kept its identity while another was moved onto
+>     it.
 > - `ontology_preview_service.preview(candidate, active)` returns:
 >   - findings;
 >   - label changes, with entity counts;
 >   - the retype a publish would offer (changes, collisions, flag-only, and
 >     how many changes and collisions this edit causes);
 >   - notebook edits, which it does not project;
->   - the documents whose selection changes (the detection replayed with the
->     notebook default; the history fallback is not replayed).
+>   - the documents whose selection changes: the detection replayed per
+>     notebook the source belongs to, with that notebook's default. The
+>     history fallback is not replayed.
 >
 >   The count matches the script's own dry run through the script's own
 >   vocabulary path. Read-only.
-> - **For OE.2:** the preview is synchronous (about 4–6 s on 14 sources, most
->   of it the detection replay); on a larger corpus the replay should become a
->   background job.
+> - **For OE.2:**
+>   - The preview is synchronous: about 4–6 s on 14 sources, most of it the
+>     detection replay. On a larger corpus the replay should become a
+>     background job.
+>   - The replay also reads every chunk into memory at once; read only the
+>     sampled windows instead.
 
 
 **OE.2 — Write API** (~1.5d)

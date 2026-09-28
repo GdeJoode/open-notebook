@@ -113,30 +113,37 @@ async def detection_changes(
         "SELECT source, text, order FROM chunk ORDER BY source, order ASC;", {}
     ) or []:
         chunks_of.setdefault(str(chunk.get("source")), []).append(chunk)
-    notebook_of = {
-        str(r["s"]): str(r["nb"])
-        for r in await execute_query("SELECT in AS s, out AS nb FROM reference;", {}) or []
-    }
+    # A source can belong to several notebooks, each with its own declared
+    # base: the selection is replayed per notebook, not for an arbitrary one.
+    notebooks_of: Dict[str, List[str]] = {}
+    for r in await execute_query("SELECT in AS s, out AS nb FROM reference;", {}) or []:
+        notebooks_of.setdefault(str(r["s"]), []).append(str(r["nb"]))
     schemas = NotebookSchemaRepository()
     service = EntityExtractionService.__new__(EntityExtractionService)
     out = []
     for source in sources:
         sid = str(source["id"])
         sample = _applicability_sample(chunks_of.get(sid, []))
-        notebook_schema = (await schemas.get_by_notebook(notebook_of[sid])
-                           if sid in notebook_of else None)
-        picks = {}
-        for side, ontologies in merged.items():
-            detected = await detect_applicable_schemas(
+        detected = {
+            side: await detect_applicable_schemas(
                 document_type=source.get("dt"), document_text=sample,
                 ontologies=ontologies, top_k=3,
             )
-            if notebook_schema is not None and notebook_schema.base_ontology:
-                detected = service._apply_notebook_schema_default(
-                    detected, ontologies, notebook_schema)
-            picks[side] = [o.metadata.name for o, _ in detected]
-        if picks["before"] != picks["after"]:
-            out.append({"source": sid, "title": source.get("title"), **picks})
+            for side, ontologies in merged.items()
+        }
+        for notebook_id in sorted(notebooks_of.get(sid, [])) or [None]:
+            notebook_schema = (await schemas.get_by_notebook(notebook_id)
+                               if notebook_id else None)
+            picks = {}
+            for side, ontologies in merged.items():
+                chosen = detected[side]
+                if notebook_schema is not None and notebook_schema.base_ontology:
+                    chosen = service._apply_notebook_schema_default(
+                        chosen, ontologies, notebook_schema)
+                picks[side] = [o.metadata.name for o, _ in chosen]
+            if picks["before"] != picks["after"]:
+                out.append({"source": sid, "title": source.get("title"),
+                            "notebook": notebook_id, **picks})
     return out
 
 

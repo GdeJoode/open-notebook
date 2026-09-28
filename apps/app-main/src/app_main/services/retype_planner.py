@@ -41,14 +41,21 @@ def label_of(row: Dict[str, Any]) -> str:
 def plan_rows(rows: List[Dict[str, Any]], vocabulary: List[Any]) -> Dict[str, Any]:
     """The plan for ``rows`` (shaped as :data:`ENTITY_ROWS` returns them).
 
-    Decided in two steps, so a row that MOVES releases the identity it held: a
-    change is refused only when a row that STAYS holds the new
-    ``(name_key, entity_type)``, or another change claims it first (then the
-    first claim wins, in row order).
+    Conservative on purpose: every row's CURRENT ``(name_key, entity_type)`` stays
+    held for the whole plan, moving or not, and each accepted change claims its
+    new one. So no two rows can end up with the same identity, and the plan can
+    be written in any order without tripping ``idx_entity_identity``.
+
+    The cost is a chain: a row whose target is held by a row that moves away in
+    the same plan is refused this time and goes on the next run (after
+    PC.4b's first apply, a second run took 3 such rows). OE.1's review showed
+    what releasing identities within one plan does instead: a refused row keeps
+    its identity while another row is moved onto it.
     """
-    intended: Dict[str, Dict[str, Any]] = {}
-    keys: Dict[str, Any] = {}
-    flags = []
+    holders: Dict[Any, set] = {}
+    for r in rows:
+        holders.setdefault((r.get("name_key"), r.get("entity_type")), set()).add(str(r["id"]))
+    changes, collisions, flags = [], [], []
     for r in rows:
         label = label_of(r)
         if not label:
@@ -69,17 +76,9 @@ def plan_rows(rows: List[Dict[str, Any]], vocabulary: List[Any]) -> Dict[str, An
             if resolved.is_noise and r.get("flagged") is not True:
                 flags.append(item)
             continue
-        intended[rid] = item
-        keys[rid] = (r.get("name_key"), new)
-    holders: Dict[Any, set] = {}
-    for r in rows:
-        if str(r["id"]) not in intended:  # stays where it is
-            holders.setdefault((r.get("name_key"), r.get("entity_type")), set()).add(str(r["id"]))
-    changes, collisions = [], []
-    for rid, item in intended.items():
-        key = keys[rid]
-        if holders.get(key):
-            collisions.append({**item, "held_by": sorted(holders[key])})
+        key = (r.get("name_key"), new)
+        if holders.get(key, set()) - {rid}:
+            collisions.append({**item, "held_by": sorted(holders[key] - {rid})})
             continue
         holders.setdefault(key, set()).add(rid)
         changes.append(item)

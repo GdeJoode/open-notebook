@@ -9,6 +9,7 @@ re-parents over the whole space.
 
 from __future__ import annotations
 
+import itertools
 from pathlib import Path
 
 import pytest
@@ -41,12 +42,19 @@ def _blocks(findings):
     return {(f.rule, f.ontology, f.subject) for f in findings if f.severity == BLOCK}
 
 
-def _answers(own, label):
-    """The type of `label` with each ontology leading, and with none — the
-    production typing, computed independently of the service."""
-    merged = list(resolve_set(own)[0].values())
-    orders = [typing_vocabulary(None, merged)] + [typing_vocabulary([o], merged) for o in merged]
-    return {_resolve_entity_type(label, v).entity_type for v in orders}
+def _answers(own, label, size=2):
+    """The type of `label` under every ordered selection of up to `size`
+    ontologies, and none — production typing, enumerated by brute force and
+    independently of the service (which reasons about which ontologies can
+    matter). `size=3` is the full space detection can produce (1,111 orders)."""
+    merged = resolve_set(own)[0]
+    everything = list(merged.values())
+    selections = [()] + [p for k in range(1, size + 1)
+                         for p in itertools.permutations(sorted(merged), k)]
+    return {
+        _resolve_entity_type(label, typing_vocabulary([merged[n] for n in sel], everything)).entity_type
+        for sel in selections
+    }
 
 
 def test_the_shipped_set_has_no_typing_findings():
@@ -95,6 +103,36 @@ def test_the_selection_dependent_finding_is_real():
     assert len(_answers(_shipped(), "Wijk")) == 1
 
 
+def test_a_label_and_its_parent_each_defined_twice():
+    """Review OE.1 round 2 M1: one leading ontology at a time typed `Kindje` as
+    person every time; the PAIR (scholarly, social_profiles) types it concept."""
+    def edit(c):
+        c["social_profiles"].entity_types["Ptype"] = EntityTypeDefinition(
+            name="Ptype", schema_org_type="schema:Person", parent_type="Thing")
+        c["policy_themes"].entity_types["Ptype"] = EntityTypeDefinition(
+            name="Ptype", schema_org_type="schema:Person")
+        c["scholarly"].entity_types["Kindje"] = EntityTypeDefinition(
+            name="Kindje", parent_type="Ptype")
+        c["general"].entity_types["Kindje"] = EntityTypeDefinition(
+            name="Kindje", schema_org_type="schema:Person")
+
+    candidate = _edited(edit)
+    assert _answers(candidate, "Kindje", size=3) == {"person", "concept"}
+    assert ("selection_dependent_type", None, "kindje") in _blocks(
+        validate_candidate(candidate, _shipped()))
+
+
+def test_the_service_finds_every_answer_the_full_space_has():
+    """The service enumerates representatives; the full space (1,111 orders)
+    must give no answer it does not — for every label of the shipped set."""
+    from app_main.services.ontology_validation_service import label_answers
+
+    shipped = _shipped()
+    merged = resolve_set(shipped)[0]
+    for label in sorted({lbl for o in merged.values() for lbl, _ in labels_of(o)}, key=str.lower):
+        assert set(label_answers(label, merged).values()) == _answers(shipped, label, size=3), label
+
+
 def test_a_re_parent_blocks_only_when_production_typing_proves_it_across_the_space():
     """Review M1, derived: a new type under EVERY declared type name, in EVERY
     ontology (the first version blocked 553 of these). A block is allowed only
@@ -106,7 +144,7 @@ def test_a_re_parent_blocks_only_when_production_typing_proves_it_across_the_spa
     known = all_findings(shipped)
     parents = sorted({label for o in resolve_set(shipped)[0].values()
                       for label, owner in labels_of(o) if label == owner})
-    checked = wrongly_blocked = 0
+    checked = wrongly_blocked = missed = 0
     for ontology in sorted(shipped):
         for parent in parents:
             candidate = {k: v.model_copy(deep=True) for k, v in shipped.items()}
@@ -114,6 +152,11 @@ def test_a_re_parent_blocks_only_when_production_typing_proves_it_across_the_spa
                 name="Nieuwtype", parent_type=parent)
             blocks = [f for f in classify(all_findings(candidate), known) if f.severity == BLOCK]
             checked += 1
+            # Misses too (review round 2: the oracle only confirmed blocks): if
+            # brute force finds two answers, the gate must have blocked it.
+            if len(_answers(candidate, "Nieuwtype")) > 1 and not any(
+                    f.rule == "selection_dependent_type" and f.subject == "nieuwtype" for f in blocks):
+                missed += 1
             for f in blocks:
                 if f.rule == "selection_dependent_type":
                     confirmed = len(_answers(candidate, f.subject)) > 1
@@ -124,6 +167,7 @@ def test_a_re_parent_blocks_only_when_production_typing_proves_it_across_the_spa
                 wrongly_blocked += not confirmed
     assert checked > 900
     assert wrongly_blocked == 0
+    assert missed == 0
 
 
 def test_a_selection_dependency_that_gets_worse_blocks():
