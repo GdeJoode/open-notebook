@@ -27,6 +27,9 @@ Rules, each keyed so :func:`classify` can tell pre-existing from new:
   base (and not declaring another) that does not type as that base;
 * ``orphan`` — a type the bridge cannot place whose chain declares no base at all,
   so it is typed by the fallback;
+  (This and the next two rules check a type with its OWN ontology leading, as
+  when that ontology is selected. A type whose outcome depends on the order
+  is caught by ``selection_dependent_type``, which is exact.)
 * ``subtype_disagrees_with_parent`` — a type without its own base that types
   differently from the type its ``parent_type`` names (e.g. ``parent_type:
   "grant"``: the bridge's base lookup is case-sensitive, so the child walks past
