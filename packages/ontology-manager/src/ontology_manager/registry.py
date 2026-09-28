@@ -275,7 +275,8 @@ class OntologyRegistry:
                          WHERE name = $name AND version = $version) = 0 {
                     THROW "no such ontology version: " + $name + " " + $version;
                 };
-                UPDATE ontology_version SET is_active = (version = $version)
+                UPDATE ontology_version SET is_active = (version = $version),
+                    updated_at = IF version = $version THEN time::now() ELSE updated_at END
                     WHERE name = $name;
                 COMMIT TRANSACTION;
                 """,

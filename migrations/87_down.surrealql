@@ -1,0 +1,3 @@
+-- Reverse of migration 87. Unpublished drafts go with the table; published
+-- versions live in `ontology_version` and are untouched.
+REMOVE TABLE IF EXISTS ontology_draft;

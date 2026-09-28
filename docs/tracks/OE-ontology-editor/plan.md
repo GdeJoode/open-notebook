@@ -228,6 +228,41 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 
 
 **OE.2 — Write API** (~1.5d)
+
+> **OE.2 built 2026-09-28** (branch `feature/oe2-write-api`).
+> - `OntologyEditService` plus routes under `/api/ontologies/{name}/…`:
+>   - the draft: `GET` / `DELETE draft`;
+>   - edits: `PUT` / `DELETE draft/entity-types/{t}`,
+>     `POST draft/entity-types/{t}/rename`, `PUT` / `DELETE
+>     draft/relationship-types/{r}`;
+>   - `POST draft/validate`, `POST draft/preview` (`include_detection`),
+>     `POST draft/publish`;
+>   - `GET versions`, `POST rollback/{version}`, `GET export.yaml`.
+> - One draft per ontology (migration 87 `ontology_draft`, id
+>   `ontology_draft:⟨name⟩`), holding its own content and `base_version`.
+>   Re-parenting is a `PUT` with a new `parent_type`. A rename keeps the old
+>   name as an alias, so what uses it keeps resolving.
+> - Publish:
+>   - refuses a draft with no base in the active set, or whose base is no
+>     longer the active version (409, someone published meanwhile);
+>   - refuses a blocking finding (422, with the findings);
+>   - on an ontology's first publish, stores the YAML seed as a version, so it
+>     can be rolled back to;
+>   - stores the draft as `{base}+{UTC timestamp}` (active), removes the
+>     draft, and returns the warnings plus the retype the publish makes due
+>     (OE.4 acts on it);
+>   - is serialised by a lock per event loop, so a draft is published exactly
+>     once. A test forces the race and fails without the lock.
+> - Rollback goes through the same gate; `activate_version` now stamps
+>   `updated_at` (OE.0 minor 3).
+> - Not done, carried:
+>   - the `includes` order of extra keys (OE.0 minor 1);
+>   - the preview is synchronous (OE.1 note);
+>   - no auth on these routes: the app has none on its other routes either
+>     (PC.7's decision).
+> - Tests: `apps/app-main/tests/test_ontology_edit_service.py`, against a real
+>   SurrealDB through the registry's database-first read, including an HTTP
+>   round trip.
 - An ontology has a **draft**. Edits change the draft; publish, discard and
   rollback act on versions.
   - Edit ops: `create`, `update`, `rename`, `delete`, `reparent` for entity
