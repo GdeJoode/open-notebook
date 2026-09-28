@@ -17,6 +17,11 @@ versions besides the YAML seed:
   an ontology also stores the YAML seed as an inactive version, so it can be
   rolled back to.
 * **Rollback** re-activates a stored version, through the same gate.
+* **A new entity type** can also be previewed and published in one step,
+  without a draft (OE.5: accepting a Pass-1 proposal from a notebook's queue).
+  It goes through the same gate, preview and store as a draft's publish, and is
+  refused while the ontology has an open draft, which it would otherwise leave
+  stale.
 
 Rename keeps the old name as an alias, so the entities, labels and references
 that use it keep resolving. The publish result reports how many entities the
@@ -231,46 +236,97 @@ class OntologyEditService:
                     f"'{name}' is at version "
                     f"{current.metadata.version if current else None!r} now, the draft was "
                     f"started from {row['base_version']!r}: someone published meanwhile"))
-            candidate = {**active, name: draft}
-            findings = validate_candidate(candidate, active)
-            if any(f.severity == BLOCK for f in findings):
-                raise OntologyEditError(422, {"message": "the draft has blocking findings",
-                                              "findings": _findings(findings)})
-            impact = await preview(candidate, active, include_detection=False)
-
-            registry = get_ontology_registry()
-            stored = {v["version"] for v in await registry.list_versions(name)}
-            if await registry._load_from_db(name) is None:
-                # The active content is the YAML seed (no active stored version,
-                # even if inactive ones exist): store it, so it can be rolled
-                # back to (review minor 6).
-                seed = current.model_copy(deep=True)
-                if seed.metadata.version in stored:
-                    seed.metadata.version = f"{seed.metadata.version}+yaml-{_stamp()}"
-                if not await registry.register(seed, activate=True, note="YAML seed",
-                                               created_by=EDITOR):
-                    raise OntologyEditError(500, f"could not store the seed of '{name}'")
-                stored.add(seed.metadata.version)
-            draft.metadata.version = f"{row['base_version'].split('+')[0]}+{_stamp()}"
-            if draft.metadata.version in stored:
-                raise OntologyEditError(409, f"version {draft.metadata.version!r} exists already")
-            if not await registry.register(draft, activate=True, note=note, created_by=EDITOR):
-                raise OntologyEditError(500, f"could not store version {draft.metadata.version!r}")
-            warnings = _findings(findings)
+            result = await self._store(name, active, draft, row["base_version"], note)
             try:
                 await self._delete_draft(name)
             except Exception as exc:  # published: report, do not fail the publish
-                warnings.append({"rule": "draft_not_removed", "ontology": name, "subject": None,
-                                 "detail": f"published, but the draft could not be removed: {exc}",
-                                 "severity": "warn", "weight": 1})
-            return {
-                "name": name,
-                "version": draft.metadata.version,
-                "warnings": warnings,
-                "retype": {k: impact["retype"][k] for k in
-                           ("changes", "collisions", "flag_only", "caused_by_this_edit",
-                            "collisions_caused_by_this_edit")},
-            }
+                result["warnings"].append({
+                    "rule": "draft_not_removed", "ontology": name, "subject": None,
+                    "detail": f"published, but the draft could not be removed: {exc}",
+                    "severity": "warn", "weight": 1})
+            return result
+
+    async def _store(self, name: str, active: Dict[str, Ontology], ontology: Ontology,
+                     base_version: str, note: Optional[str],
+                     blocked: str = "the draft has blocking findings") -> Dict[str, Any]:
+        """Gate, then store ``ontology`` as the new active version of ``name``.
+        Runs under the publish lock; ``active`` is read under it."""
+        current = active[name]
+        candidate = {**active, name: ontology}
+        findings = validate_candidate(candidate, active)
+        if any(f.severity == BLOCK for f in findings):
+            raise OntologyEditError(422, {"message": blocked, "findings": _findings(findings)})
+        impact = await preview(candidate, active, include_detection=False)
+
+        registry = get_ontology_registry()
+        stored = {v["version"] for v in await registry.list_versions(name)}
+        if await registry._load_from_db(name) is None:
+            # The active content is the YAML seed (no active stored version,
+            # even if inactive ones exist): store it, so it can be rolled
+            # back to (review minor 6).
+            seed = current.model_copy(deep=True)
+            if seed.metadata.version in stored:
+                seed.metadata.version = f"{seed.metadata.version}+yaml-{_stamp()}"
+            if not await registry.register(seed, activate=True, note="YAML seed",
+                                           created_by=EDITOR):
+                raise OntologyEditError(500, f"could not store the seed of '{name}'")
+            stored.add(seed.metadata.version)
+        ontology.metadata.version = f"{base_version.split('+')[0]}+{_stamp()}"
+        if ontology.metadata.version in stored:
+            raise OntologyEditError(409, f"version {ontology.metadata.version!r} exists already")
+        if not await registry.register(ontology, activate=True, note=note, created_by=EDITOR):
+            raise OntologyEditError(500, f"could not store version {ontology.metadata.version!r}")
+        return {
+            "name": name,
+            "version": ontology.metadata.version,
+            "warnings": _findings(findings),
+            "retype": {k: impact["retype"][k] for k in
+                       ("changes", "collisions", "flag_only", "caused_by_this_edit",
+                        "collisions_caused_by_this_edit")},
+        }
+
+    # -- a new entity type in one step (OE.5) -----------------------------------------
+
+    @staticmethod
+    def _with_new_type(active: Dict[str, Ontology], name: str, type_name: str,
+                       fields: Dict[str, Any]) -> Ontology:
+        own = active.get(name)
+        if own is None:
+            raise OntologyEditError(404, f"Ontology '{name}' not found")
+        if type_name in own.entity_types:
+            raise OntologyEditError(409, f"'{name}' already defines '{type_name}'")
+        try:
+            definition = EntityTypeDefinition(**{**fields, "name": type_name})
+        except Exception as exc:
+            raise OntologyEditError(422, str(exc)) from exc
+        ontology = own.model_copy(deep=True)
+        ontology.entity_types[type_name] = definition
+        return ontology
+
+    async def preview_new_entity_type(self, name: str, type_name: str,
+                                      fields: Dict[str, Any]) -> Dict[str, Any]:
+        """What adding ``type_name`` to ``name`` would do (the OE.1 preview), and
+        whether an open draft stands in the way. Writes nothing."""
+        active = await self._active()
+        ontology = self._with_new_type(active, name, type_name, fields)
+        result = await preview({**active, name: ontology}, active)
+        result["draft_open"] = await self._draft_row(name) is not None
+        return result
+
+    async def publish_new_entity_type(self, name: str, type_name: str, fields: Dict[str, Any],
+                                      note: Optional[str] = None) -> Dict[str, Any]:
+        """Add ``type_name`` to ``name`` and publish, through the same gate as a
+        draft. Refused while ``name`` has an open draft (409): publishing past
+        it would leave that draft stale."""
+        async with _publish_lock():
+            if await self._draft_row(name) is not None:
+                raise OntologyEditError(409, (
+                    f"'{name}' has an unpublished draft in the ontology editor; publish "
+                    "or discard it first"))
+            active = await self._active()
+            ontology = self._with_new_type(active, name, type_name, fields)
+            return await self._store(name, active, ontology, active[name].metadata.version, note,
+                                     blocked="the new type has blocking findings")
 
     async def versions(self, name: str) -> List[Dict[str, Any]]:
         return await get_ontology_registry().list_versions(name)

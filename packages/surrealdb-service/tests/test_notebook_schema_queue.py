@@ -88,15 +88,14 @@ class TestMergePendingExtensions:
         assert _names(repo) == ["Tranche"]
 
     @pytest.mark.asyncio
-    async def test_an_excluded_type_is_not_re_proposed(self):
-        """`excluded_types` is the curator's explicit soft-delete (B.3b). A
-        review measured that without this the deleted type comes straight back
-        the next time a document proposes it.
-        """
+    async def test_a_stored_soft_delete_no_longer_blocks_a_proposal(self):
+        """OE.5 retired the B.3b soft-delete with the rest of the per-notebook
+        layer; a stored ``excluded_types`` is ignored, like the layer's other
+        stored rows. A "no" to a proposal is a rejection (PC.5)."""
         repo = _repo(_schema(excluded_types=["Method"]))
         assert await repo.merge_pending_extensions(
             NOTEBOOK, [{"type_name": "Method"}]
-        ) == 0
+        ) == 1
 
     @pytest.mark.asyncio
     async def test_a_rejected_type_does_not_come_back(self):

@@ -659,41 +659,17 @@ def get_entity_extraction_service() -> EntityExtractionService:
     return EntityExtractionService(source_repo=get_source_repo())
 
 
-def get_type_placement_service():
-    """FastAPI provider for the N.4d.3 placement service.
-
-    Wires the ontology manager's loader and the routed LLM caller factory. The
-    service writes nothing — it reports where a proposed type sits and which of
-    its siblings a judge thinks belong under it, so a curator can decide. Tests
-    instantiate it directly with a stub loader and, where the judge matters, a
-    stub caller factory.
-
-    No return annotation: the service is imported lazily to avoid a cycle back
-    through ``entity_extraction_service``, and annotating a lazily-imported class
-    is what makes this file's two existing F821s. One more would be a third.
-    """
-    from ontology_manager import get_ontology_manager
-
-    from app_main.services.entity_extraction_service import make_default_llm_caller
-    from app_main.services.type_placement_service import TypePlacementService
-
-    manager = get_ontology_manager()
-    return TypePlacementService(
-        ontology_loader=manager.get_ontology,
-        llm_caller_factory=make_default_llm_caller,
-    )
-
-
 def get_schema_edit_service() -> SchemaEditService:
-    """FastAPI provider for the B.3b schema edit-ops service.
+    """FastAPI provider for the notebook's proposal queue (B.3b, OE.5).
 
-    Wires the notebook_schema + notebook_event repos. The router under
-    ``api/routers/schemas.py`` is the sole HTTP consumer; tests
-    instantiate ``SchemaEditService`` directly with AsyncMock repos.
+    Wires the notebook_schema + notebook_event repos and the ontology editor,
+    which an Accept publishes through. The router under
+    ``api/routers/schemas.py`` is the sole HTTP consumer.
     """
     return SchemaEditService(
         schema_repo=get_notebook_schema_repo(),
         event_repo=get_notebook_event_repo(),
+        ontology_edit=get_ontology_edit_service(),
     )
 
 

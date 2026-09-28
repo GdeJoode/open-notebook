@@ -1,51 +1,33 @@
-"""Schema edit operations service (Phase B.3b).
+"""The notebook's Pass-1 proposal queue: accept into the shared ontology, or reject.
 
-Pure business logic for the six edit ops the Schema-tab UI exposes:
+Pass 1 proposes entity types a document needed and the ontologies lacked; they
+queue per notebook in ``notebook_schema.pending_extensions`` (PC.1). The
+ontologies themselves are SHARED by every notebook (owner, 2026-09-28; OE-D2
+(a)), so a decision on a proposal is made there:
 
-* ``accept_extension`` — move a pending extension into ``accepted_extensions``.
-* ``reject_extension`` — drop a pending extension.
-* ``rename_type`` — record a rename in ``accepted_extensions`` as a synonym.
-  The base ontology YAML is never mutated.
-* ``merge_types`` — record a merge of N types into one; future extractions
-  consult ``accepted_extensions`` and remap.
-* ``split_type`` — record a split of one type into N, with an LLM hint.
-* ``delete_type`` — soft-delete by adding the name to ``excluded_types``.
-* ``reparent_type`` — record that N types now hang under a different parent
-  (Track N.4d.3). This is how an accepted ``BROADER_THAN`` placement is applied:
-  as a schema edit, on the curator's decision, never silently.
+* ``accept_extension`` adds the type to the shared ontology the curator picks,
+  through the ontology editor's gate and store
+  (:meth:`OntologyEditService.publish_new_entity_type`): a blocking finding
+  refuses it (422, nothing stored), and it is previewed first with
+  ``preview_accept``. On success the proposal leaves the queue and is recorded
+  in ``accepted_extensions`` with the ontology and version it was published to.
+* ``reject_extension`` drops it and remembers the "no" (PC.5).
 
-Design notes
-============
+``accepted_extensions`` is the queue's history. Since OE.5 nothing reads it for
+typing, detection or the Pass-2 prompt; it keeps a published proposal from
+re-queueing and satisfies the ``review_required`` gate. The per-notebook edit
+ops (rename, merge, split, re-parent, delete) are gone: those are edits of the
+shared ontology now, made in the editor. Rows they stored earlier stay in the
+database and are ignored.
 
-* **Each op emits exactly one ``notebook_event{type:"schema_changed"}`` row**
-  via :class:`NotebookEventRepository`. The payload carries an ``op``
-  discriminator plus the op-specific fields so consumers (B.3c soft-nudge,
-  B.3d re-extract prompt, Track G5 webhooks) can decide whether to react.
-
-* **Idempotent.** Re-running the same op on already-converged state is a
-  no-op AND emits ZERO new events. This is critical for the "user
-  double-clicks Accept" case + for replays during testing. Idempotency
-  is enforced by reading current state and short-circuiting before
-  writing.
-
-* **The base ontology YAML is read-only.** Rename / merge / split /
-  delete record their intent in the per-notebook schema row. Downstream
-  consumers (effective-schema projection, TTL export, Pass 2 extraction)
-  consult the same row when computing the user-facing view.
-
-* **Service depends on repositories, not on HTTP types.** Inputs are
-  primitive strings + lists; the FastAPI router translates request /
-  response bodies. This keeps the service unit-testable without
-  spinning up a FastAPI client.
-
-* **All ops return the updated ``NotebookSchema``.** The router serialises
-  it; tests assert on it directly. Keeps the contract symmetric: one
-  call, one resulting view.
+Each decision emits one ``notebook_event{type:"schema_changed"}``, which the
+re-extract banner (B.3d) reacts to. Re-running a decision that already took
+effect is a no-op without an event.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 from shared.models import NotebookSchema
@@ -55,66 +37,79 @@ from surrealdb_service.repositories.notebook_schema import (
     record_rejection,
 )
 
+from app_main.services.ontology_edit_service import OntologyEditService
+from app_main.services.ontology_preview_service import load_own_ontologies
+
 SCHEMA_CHANGED_EVENT_TYPE = "schema_changed"
 
 # The discriminator on an ``accepted_extensions`` entry that records a re-parent
-# rather than a new type (N.4d.3).
+# rather than a new type (N.4d.3). No longer written; older rows still carry it.
 REPARENT_OP = "reparent"
+
+#: The ontology a proposal goes to by default when no ontology defines its
+#: parent: the root the other shipped ontologies extend.
+FALLBACK_ONTOLOGY = "schema_core"
 
 
 class NotebookSchemaNotFoundError(Exception):
-    """Raised when an edit op targets a notebook that has no schema row.
+    """The notebook has no ``notebook_schema`` row, so there is no queue.
 
-    The notebook itself exists (the router layer guards 404 separately)
-    but no pass-1 extraction has run, so there's nothing to edit. The
-    router translates this to 404 — the schema row is implicit
-    state-not-found, distinct from "notebook does not exist".
+    The router translates this to 404, distinct from "notebook does not exist".
     """
 
 
 class UnknownExtensionError(Exception):
-    """Raised when accept_extension / reject_extension targets a type_name
-    not present in ``pending_extensions``.
+    """No pending or accepted proposal has this name. The router makes it 404."""
 
-    Router translates to 404. Distinguished from
-    :class:`NotebookSchemaNotFoundError` so the API surface can give a
-    precise reason — important when a user clicks Accept twice and the
-    second click 404s because the first already moved the row.
+
+def default_ontology(ontologies: Dict[str, Any], parent_type: Optional[str]) -> str:
+    """Where a proposal goes unless the curator picks otherwise: the ontology
+    that introduces its parent, else :data:`FALLBACK_ONTOLOGY`.
+
+    "Introduces": defines it (by name or alias, case-insensitive) with the
+    fewest ``extends`` above it; among those, the one most other ontologies
+    build on, then by name. ``Organization``, defined by both roots ``base`` and
+    ``schema_core``, goes to ``schema_core``, which seven ontologies extend.
     """
+    wanted = (parent_type or "").strip().lower()
+
+    def chain(name: str) -> List[str]:
+        out: List[str] = []
+        current = ontologies.get(name)
+        while current is not None and current.metadata.extends and name not in out:
+            out.append(name)
+            name = current.metadata.extends
+            current = ontologies.get(name)
+        return out + ([name] if name not in out else [])
+
+    def builds_on(name: str) -> int:
+        return sum(1 for other in ontologies if other != name and name in chain(other))
+
+    defining = [
+        name for name, ontology in ontologies.items()
+        if wanted and any(
+            wanted in {str(key).lower(), str(d.name or "").lower(),
+                       *(str(a).lower() for a in (d.aliases or []))}
+            for key, d in ontology.entity_types.items()
+        )
+    ]
+    if defining:
+        return min(defining, key=lambda n: (len(chain(n)), -builds_on(n), n))
+    return FALLBACK_ONTOLOGY
 
 
 class SchemaEditService:
-    """Service orchestrating the six per-notebook schema edit ops.
-
-    Each public method:
-
-    1. Loads the current :class:`NotebookSchema` row.
-    2. Computes the new state.
-    3. Returns early (no DB write, no event) when the state has not
-       changed — idempotent.
-    4. Persists via :meth:`NotebookSchemaRepository.upsert`.
-    5. Emits one ``schema_changed`` event via
-       :meth:`NotebookEventRepository.record`.
-    6. Returns the updated schema row.
-
-    The split between schema_repo and event_repo is deliberate: schema
-    state is the source-of-truth, events are the change-stream. A future
-    Track G5 webhook fan-out reads events; B.3c's soft-nudge banner
-    reads events; the Schema tab itself reads schema_repo directly via
-    the existing GET endpoints.
-    """
+    """Accept or reject the proposals queued for a notebook."""
 
     def __init__(
         self,
         schema_repo: NotebookSchemaRepository,
         event_repo: NotebookEventRepository,
+        ontology_edit: Optional[OntologyEditService] = None,
     ):
         self._schema_repo = schema_repo
         self._event_repo = event_repo
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+        self._ontology_edit = ontology_edit or OntologyEditService()
 
     async def _load_or_raise(self, notebook_id: str) -> NotebookSchema:
         schema = await self._schema_repo.get_by_notebook(notebook_id)
@@ -131,14 +126,10 @@ class SchemaEditService:
         notebook_id: str,
         event_payload: Dict[str, Any],
     ) -> NotebookSchema:
-        """Upsert schema + emit one schema_changed event.
+        """Upsert the row, then emit one ``schema_changed`` event.
 
-        The event is emitted AFTER the schema upsert succeeds — if the
-        upsert raises, callers see the exception and no event lands.
-        Conversely, an event failure does not roll back the schema
-        write (the event stream is best-effort additive history;
-        losing one row is preferable to leaving schema state in a
-        half-updated condition). Errors in event emit are logged.
+        An event failure is logged and does not undo the write: the event stream
+        is best-effort history, the row is the state.
         """
         await self._schema_repo.upsert(schema)
         try:
@@ -152,40 +143,17 @@ class SchemaEditService:
                 f"Schema edit op persisted but event emit failed for "
                 f"{notebook_id}: {e}"
             )
-        # Re-fetch to pick up server-side last_modified_at + ensure the
-        # caller sees the canonical post-write state.
         refreshed = await self._schema_repo.get_by_notebook(notebook_id)
         return refreshed if refreshed is not None else schema
 
     # ------------------------------------------------------------------
-    # Accept / reject pending extensions
+    # Accept into the shared ontology
     # ------------------------------------------------------------------
 
-    async def accept_extension(
-        self,
-        notebook_id: str,
-        type_name: str,
-    ) -> NotebookSchema:
-        """Move the matching pending extension into accepted_extensions.
-
-        Idempotent: if no pending extension matches ``type_name`` but one
-        already exists in ``accepted_extensions`` with the same name, the
-        op is a no-op (returns the current row, no event).
-
-        Raises :class:`UnknownExtensionError` when no extension exists
-        with this name in either list.
-        """
-        schema = await self._load_or_raise(notebook_id)
-
-        already_accepted = any(
-            ext.get("type_name") == type_name
-            # N.4d.3: a re-parent carries the moved type's name in `type_name`
-            # too, so an unguarded scan would read "Article was re-parented" as
-            # "Article was already accepted" and turn a genuinely unknown
-            # extension into a silent no-op instead of an UnknownExtensionError.
-            and ext.get("op") != REPARENT_OP
-            for ext in schema.accepted_extensions
-        )
+    @staticmethod
+    def _pending(
+        schema: NotebookSchema, type_name: str
+    ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
         matched: Optional[Dict[str, Any]] = None
         remaining: List[Dict[str, Any]] = []
         for ext in schema.pending_extensions:
@@ -193,25 +161,114 @@ class SchemaEditService:
                 matched = ext
             else:
                 remaining.append(ext)
+        return matched, remaining
 
+    @staticmethod
+    def _already_accepted(schema: NotebookSchema, type_name: str) -> bool:
+        # A legacy re-parent row carries the moved type's name in `type_name`
+        # too; it is not an acceptance of that name.
+        return any(
+            ext.get("type_name") == type_name and ext.get("op") != REPARENT_OP
+            for ext in schema.accepted_extensions
+        )
+
+    @staticmethod
+    def _fields(proposal: Dict[str, Any], parent_type: Optional[str]) -> Dict[str, Any]:
+        """The entity type the proposal becomes. ``parent_type`` is the
+        curator's choice when given, else the proposal's."""
+        parent = parent_type if parent_type is not None else proposal.get("parent_type")
+        fields: Dict[str, Any] = {"parent_type": (parent or "").strip() or None}
+        description = proposal.get("description") or proposal.get("rationale")
+        if isinstance(description, str) and description.strip():
+            fields["description"] = description.strip()
+        return fields
+
+    async def _proposal(self, notebook_id: str, type_name: str) -> Dict[str, Any]:
+        schema = await self._load_or_raise(notebook_id)
+        matched, _ = self._pending(schema, type_name)
         if matched is None:
-            if already_accepted:
-                return schema  # idempotent no-op
+            raise UnknownExtensionError(f"No pending extension named {type_name!r}")
+        return matched
+
+    async def accept_target(self, notebook_id: str, type_name: str) -> Dict[str, Any]:
+        """The proposal, and the ontology it goes to by default."""
+        proposal = await self._proposal(notebook_id, type_name)
+        ontologies = await load_own_ontologies()
+        parent = self._fields(proposal, None)["parent_type"]
+        return {
+            "type_name": type_name,
+            "parent_type": parent,
+            "default_ontology": default_ontology(ontologies, parent),
+            "ontologies": sorted(ontologies),
+        }
+
+    async def preview_accept(
+        self,
+        notebook_id: str,
+        type_name: str,
+        ontology: str,
+        parent_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """What accepting into ``ontology`` would do (the OE.1 preview). Writes
+        nothing."""
+        proposal = await self._proposal(notebook_id, type_name)
+        return await self._ontology_edit.preview_new_entity_type(
+            ontology, type_name, self._fields(proposal, parent_type)
+        )
+
+    async def accept_extension(
+        self,
+        notebook_id: str,
+        type_name: str,
+        ontology: str,
+        parent_type: Optional[str] = None,
+    ) -> Tuple[NotebookSchema, Optional[Dict[str, Any]]]:
+        """Publish the proposal as a type of the shared ``ontology``, then move
+        it out of the queue.
+
+        Returns the updated row and the publish result (``None`` when the
+        proposal was already accepted: idempotent, nothing published, no event).
+        :class:`OntologyEditError` from the publish (422 blocking findings, 409
+        open draft or existing type, 404 unknown ontology) propagates, and the
+        queue is left as it was.
+        """
+        schema = await self._load_or_raise(notebook_id)
+        matched, remaining = self._pending(schema, type_name)
+        if matched is None:
+            if self._already_accepted(schema, type_name):
+                return schema, None
             raise UnknownExtensionError(
                 f"No pending or accepted extension named {type_name!r}"
             )
 
+        fields = self._fields(matched, parent_type)
+        published = await self._ontology_edit.publish_new_entity_type(
+            ontology, type_name, fields,
+            note=f"accepted from {notebook_id}'s Pass-1 proposals",
+        )
         schema.pending_extensions = remaining
-        schema.accepted_extensions.append(matched)
-        return await self._persist(
+        schema.accepted_extensions.append({
+            **matched,
+            "parent_type": fields["parent_type"],
+            "published_to": ontology,
+            "published_version": published["version"],
+        })
+        updated = await self._persist(
             schema,
             notebook_id,
             {
                 "op": "accept_extension",
                 "type_name": type_name,
                 "extension_id": matched.get("extension_id"),
+                "ontology": ontology,
+                "version": published["version"],
             },
         )
+        return updated, published
+
+    # ------------------------------------------------------------------
+    # Reject
+    # ------------------------------------------------------------------
 
     async def reject_extension(
         self,
@@ -245,370 +302,4 @@ class SchemaEditService:
             schema,
             notebook_id,
             {"op": "reject_extension", "type_name": type_name},
-        )
-
-    # ------------------------------------------------------------------
-    # Rename / merge / split / delete
-    # ------------------------------------------------------------------
-
-    async def rename_type(
-        self,
-        notebook_id: str,
-        old_name: str,
-        new_name: str,
-    ) -> NotebookSchema:
-        """Record a rename as a synonym in accepted_extensions.
-
-        The base ontology YAML is not touched. A rename entry is appended
-        to ``accepted_extensions`` with shape::
-
-            {
-                "rename_id": "<deterministic key>",
-                "op": "rename",
-                "old_name": ...,
-                "new_name": ...,
-                "type_name": <new_name>,
-            }
-
-        ``type_name`` mirrors the new name so the existing TTL exporter
-        + schema browser surface the rename as a regular class
-        declaration. ``rename_id`` is deterministic
-        (``rename:<old_name>->∶<new_name>``) so idempotent replays
-        recognise an existing entry instead of appending a duplicate.
-
-        Idempotent: a rename whose ``rename_id`` already lives in
-        ``accepted_extensions`` returns the current row, no event.
-        """
-        if old_name == new_name:
-            return await self._load_or_raise(notebook_id)
-        schema = await self._load_or_raise(notebook_id)
-        rename_id = self._rename_id(old_name, new_name)
-
-        if any(
-            ext.get("rename_id") == rename_id
-            for ext in schema.accepted_extensions
-        ):
-            return schema  # idempotent no-op
-
-        schema.accepted_extensions.append(
-            {
-                "rename_id": rename_id,
-                "op": "rename",
-                "old_name": old_name,
-                "new_name": new_name,
-                "type_name": new_name,
-            }
-        )
-        return await self._persist(
-            schema,
-            notebook_id,
-            {
-                "op": "rename",
-                "old_name": old_name,
-                "new_name": new_name,
-            },
-        )
-
-    async def merge_types(
-        self,
-        notebook_id: str,
-        type_names: List[str],
-        merged_name: str,
-    ) -> NotebookSchema:
-        """Record a merge of N types into one.
-
-        Inputs:
-
-        * ``type_names`` — the names being merged. Must contain at least
-          two distinct names. Duplicate entries are deduplicated.
-        * ``merged_name`` — the surviving name.
-
-        The merge entry shape is::
-
-            {
-                "merge_id": "<deterministic>",
-                "op": "merge",
-                "source_types": [...],
-                "merged_name": ...,
-                "type_name": <merged_name>,
-            }
-
-        Idempotent: a merge whose ``merge_id`` already lives in
-        ``accepted_extensions`` returns the current row, no event.
-
-        Raises ``ValueError`` if ``type_names`` has fewer than two
-        distinct entries — a "merge" of one type is a rename and
-        should use :meth:`rename_type` instead.
-        """
-        deduped = sorted(set(type_names))
-        if len(deduped) < 2:
-            raise ValueError(
-                f"merge requires at least two distinct type names; got {type_names!r}"
-            )
-        schema = await self._load_or_raise(notebook_id)
-        merge_id = self._merge_id(deduped, merged_name)
-
-        if any(
-            ext.get("merge_id") == merge_id
-            for ext in schema.accepted_extensions
-        ):
-            return schema  # idempotent no-op
-
-        schema.accepted_extensions.append(
-            {
-                "merge_id": merge_id,
-                "op": "merge",
-                "source_types": deduped,
-                "merged_name": merged_name,
-                "type_name": merged_name,
-            }
-        )
-        return await self._persist(
-            schema,
-            notebook_id,
-            {
-                "op": "merge",
-                "source_types": deduped,
-                "merged_name": merged_name,
-            },
-        )
-
-    async def split_type(
-        self,
-        notebook_id: str,
-        type_name: str,
-        into: List[str],
-        criterion: str,
-    ) -> NotebookSchema:
-        """Record a split of one type into N new ones.
-
-        Inputs:
-
-        * ``type_name`` — the source type.
-        * ``into`` — list of new names. Must contain at least two distinct.
-        * ``criterion`` — natural-language hint passed to Pass 2 so the
-          LLM knows how to disambiguate (e.g. "by year published").
-
-        The split entry shape is::
-
-            {
-                "split_id": "<deterministic>",
-                "op": "split",
-                "source_type": <type_name>,
-                "into": [...],
-                "criterion": ...,
-                "type_name": <type_name>,
-            }
-
-        ``type_name`` mirrors the source so existing tooling sees the
-        entry as a regular accepted extension declaration; downstream
-        Pass 2 consults ``into`` + ``criterion`` for routing.
-
-        Idempotent on (source_type, into, criterion).
-
-        Raises ``ValueError`` if ``into`` has fewer than two distinct
-        entries.
-        """
-        deduped_into = sorted(set(into))
-        if len(deduped_into) < 2:
-            raise ValueError(
-                f"split requires at least two distinct target names; got {into!r}"
-            )
-        schema = await self._load_or_raise(notebook_id)
-        split_id = self._split_id(type_name, deduped_into, criterion)
-
-        if any(
-            ext.get("split_id") == split_id
-            for ext in schema.accepted_extensions
-        ):
-            return schema  # idempotent no-op
-
-        schema.accepted_extensions.append(
-            {
-                "split_id": split_id,
-                "op": "split",
-                "source_type": type_name,
-                "into": deduped_into,
-                "criterion": criterion,
-                "type_name": type_name,
-            }
-        )
-        return await self._persist(
-            schema,
-            notebook_id,
-            {
-                "op": "split",
-                "source_type": type_name,
-                "into": deduped_into,
-                "criterion": criterion,
-            },
-        )
-
-    async def reparent_type(
-        self,
-        notebook_id: str,
-        type_names: List[str],
-        new_parent: str,
-    ) -> NotebookSchema:
-        """Record that ``type_names`` now hang under ``new_parent``.
-
-        This is the write half of Track N.4d.3. ``type_placement`` decides where
-        a PROPOSED type may go and which of its siblings are candidates to move
-        under it; the judge selects among those candidates; this records the
-        curator's acceptance. Nothing here re-derives the placement — a service
-        that re-judged at write time could disagree with what the curator saw.
-
-        One entry per moved type::
-
-            {
-                "reparent_id": "reparent::Article->Report",
-                "op": "reparent",
-                "type_name": "Article",
-                "new_parent": "Report",
-                "parent_type": "Report",
-            }
-
-        N entries rather than one entry naming N types, deliberately: each is
-        separately visible in the schema browser, separately reversible, and
-        renders through the existing extension tooling without it having to learn
-        a list shape. ``parent_type`` mirrors ``new_parent`` for exactly that
-        reason (the same mirroring ``rename_type`` does with ``type_name``);
-        ``new_parent`` is the authoritative field.
-
-        The edit takes effect through
-        :func:`ontology_manager.schema_projection.project_accepted_edits`, which
-        applies these entries to COPIES of the applied ontologies. That is what
-        lets an entity of a re-parented type resolve through its new ancestor via
-        ``canonical_bridge`` with no per-entity write — the type moved, not the
-        rows.
-
-        Idempotent per (type, parent): a type already recorded as moving under
-        ``new_parent`` is skipped. Re-parenting the same type under a DIFFERENT
-        parent appends a second entry rather than rewriting the first, and the
-        projection applies entries in order, so the latest decision wins while the
-        earlier one stays in the audit trail.
-
-        Emits ONE event for the whole call, listing only the types this call
-        actually moved.
-
-        Raises ``ValueError`` when ``new_parent`` is blank, when no distinct type
-        name is given, or when a type is moved under itself.
-        """
-        parent = (new_parent or "").strip()
-        if not parent:
-            raise ValueError("reparent requires a non-empty new_parent")
-
-        wanted: List[str] = []
-        seen: set = set()
-        for name in type_names or []:
-            cleaned = (name or "").strip()
-            if not cleaned or cleaned.lower() in seen:
-                continue
-            if cleaned.lower() == parent.lower():
-                raise ValueError(
-                    f"cannot re-parent {cleaned!r} under itself"
-                )
-            seen.add(cleaned.lower())
-            wanted.append(cleaned)
-        if not wanted:
-            raise ValueError(
-                f"reparent requires at least one type name; got {type_names!r}"
-            )
-
-        schema = await self._load_or_raise(notebook_id)
-        # No isinstance guard: `NotebookSchema.accepted_extensions` is typed
-        # `List[Dict[str, Any]]` and Pydantic rejects a non-dict row at load, so
-        # a guard here could not be reached — and an unreachable fence reads as a
-        # demonstrated one.
-        existing = {ext.get("reparent_id") for ext in schema.accepted_extensions}
-
-        moved: List[str] = []
-        for name in wanted:
-            reparent_id = self._reparent_id(name, parent)
-            if reparent_id in existing:
-                continue  # already recorded — idempotent
-            schema.accepted_extensions.append(
-                {
-                    "reparent_id": reparent_id,
-                    "op": REPARENT_OP,
-                    "type_name": name,
-                    "new_parent": parent,
-                    "parent_type": parent,
-                }
-            )
-            moved.append(name)
-
-        if not moved:
-            return schema  # idempotent no-op
-
-        return await self._persist(
-            schema,
-            notebook_id,
-            {
-                "op": "reparent",
-                "type_names": moved,
-                "new_parent": parent,
-            },
-        )
-
-    async def delete_type(
-        self,
-        notebook_id: str,
-        type_name: str,
-    ) -> NotebookSchema:
-        """Soft-delete by appending ``type_name`` to ``excluded_types``.
-
-        Idempotent: re-deleting a type already in ``excluded_types`` is a
-        no-op. The base ontology YAML is never mutated; the projection
-        layer filters the entity types list against ``excluded_types``
-        when building the effective schema.
-        """
-        schema = await self._load_or_raise(notebook_id)
-        if type_name in schema.excluded_types:
-            return schema  # idempotent no-op
-        schema.excluded_types = [*schema.excluded_types, type_name]
-        return await self._persist(
-            schema,
-            notebook_id,
-            {"op": "delete", "type_name": type_name},
-        )
-
-    # ------------------------------------------------------------------
-    # Deterministic id helpers
-    # ------------------------------------------------------------------
-    #
-    # These keep replays idempotent without needing to compare entry
-    # dicts structurally. A plain ``"::"`` delimiter is fine because
-    # type names never contain it in practice; for defensive belt-and-
-    # braces we strip the delimiter from inputs.
-
-    @staticmethod
-    def _rename_id(old_name: str, new_name: str) -> str:
-        return f"rename::{old_name.replace('::', '_')}->{new_name.replace('::', '_')}"
-
-    @staticmethod
-    def _merge_id(source_types: List[str], merged_name: str) -> str:
-        joined = "+".join(t.replace("::", "_") for t in source_types)
-        return f"merge::{joined}->{merged_name.replace('::', '_')}"
-
-    @staticmethod
-    def _reparent_id(type_name: str, new_parent: str) -> str:
-        return (
-            f"reparent::{type_name.replace('::', '_')}->"
-            f"{new_parent.replace('::', '_')}"
-        )
-
-    @staticmethod
-    def _split_id(type_name: str, into: List[str], criterion: str) -> str:
-        joined = "+".join(t.replace("::", "_") for t in into)
-        # Include the criterion so two splits with different criteria are
-        # treated as distinct operations.
-        # We hash on a stable string rather than carrying the raw criterion
-        # because it can be long-form natural language.
-        import hashlib
-
-        crit_hash = hashlib.sha256(criterion.encode("utf-8")).hexdigest()[:12]
-        return (
-            f"split::{type_name.replace('::', '_')}->"
-            f"{joined}@{crit_hash}"
         )

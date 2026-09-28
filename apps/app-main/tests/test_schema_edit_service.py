@@ -1,20 +1,17 @@
-"""Unit tests for the Phase B.3b SchemaEditService.
+"""The notebook's Pass-1 proposal queue: accept into the shared ontology, reject.
 
-Exercises each of the six edit ops in isolation against AsyncMock'd
-repositories. The docker-gated end-to-end test for the underlying
-``notebook_event`` table + ``excluded_types`` field lives in
-``packages/surrealdb-service/tests/test_notebook_event_repo_roundtrip.py``.
+OE.5 retired the per-notebook edit ops (rename, merge, split, re-parent,
+delete). Accepting a proposal publishes it to a shared ontology through the
+ontology editor's gate (``OntologyEditService.publish_new_entity_type``).
 
-Acceptance criteria mapped to test classes / cases:
-
-* AC#1 (rename emits one event + accepted_extensions entry + GET returns
-  renamed type) — :class:`TestRenameType`.
-* AC#2 (merge/split/delete each pass equivalent assertions) —
-  :class:`TestMergeTypes`, :class:`TestSplitType`, :class:`TestDeleteType`.
-* AC#3 (idempotency — re-run = no state change + 0 new events) —
-  one ``test_..._is_idempotent`` per op class.
-* AC#6 (exactly one event row per successful op) — asserted on the mock
-  ``event_repo.record`` call count in every "happy path" test.
+* Unit tests, against AsyncMock'd repositories and a fake editor that keeps the
+  real contract (a refusal raises ``OntologyEditError`` and stores nothing):
+  what the queue does around a publish.
+* ``default_ontology`` against the shipped ontologies.
+* Against a real SurrealDB, through the registry's database-first read: an
+  accepted proposal types as published; a blocking candidate and an open draft
+  are refused, and nothing is stored — no version, no draft, the queue as it
+  was.
 """
 
 from __future__ import annotations
@@ -23,19 +20,17 @@ from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock
 
 import pytest
+from app_main.services.ontology_edit_service import OntologyEditError
 from app_main.services.schema_edit_service import (
+    FALLBACK_ONTOLOGY,
     NotebookSchemaNotFoundError,
     SchemaEditService,
     UnknownExtensionError,
+    default_ontology,
 )
 from shared.models import NotebookSchema
 
 NOTEBOOK_ID = "notebook:edit-fixture"
-
-
-# ---------------------------------------------------------------------------
-# Helpers / fixtures
-# ---------------------------------------------------------------------------
 
 
 def _make_schema(
@@ -69,28 +64,28 @@ def event_repo() -> AsyncMock:
 
 
 @pytest.fixture
-def service(schema_repo: AsyncMock, event_repo: AsyncMock) -> SchemaEditService:
-    return SchemaEditService(schema_repo=schema_repo, event_repo=event_repo)
+def editor() -> AsyncMock:
+    """The editor's contract: returns the publish result, or raises
+    ``OntologyEditError`` having stored nothing."""
+    ed = AsyncMock()
+    ed.publish_new_entity_type = AsyncMock(
+        return_value={"name": "scholarly", "version": "1.0+t", "warnings": [],
+                      "retype": {"changes": 0}}
+    )
+    return ed
 
 
-def _bind_state(
-    schema_repo: AsyncMock,
-    initial: NotebookSchema,
-) -> List[NotebookSchema]:
-    """Wire the mock so the second get_by_notebook reflects the upsert.
+@pytest.fixture
+def service(schema_repo, event_repo, editor) -> SchemaEditService:
+    return SchemaEditService(schema_repo=schema_repo, event_repo=event_repo,
+                             ontology_edit=editor)
 
-    The service calls get_by_notebook BEFORE the mutation (to load
-    state) and AGAIN after the upsert (to return the refreshed view).
-    The default AsyncMock return_value would return the same row both
-    times — fine for assertion shape, but masks the state-rotation
-    semantic the production code relies on. This helper mirrors the
-    real DB by tracking the most-recently-upserted schema.
-    """
+
+def _bind_state(schema_repo: AsyncMock, initial: NotebookSchema) -> Dict[str, NotebookSchema]:
+    """get_by_notebook reflects the last upsert, as the database does."""
     state: Dict[str, NotebookSchema] = {"current": initial}
 
     async def _get_current(_notebook_id: str) -> NotebookSchema:
-        # Return a deep-ish copy so the service mutating its local copy
-        # doesn't bleed back into the fixture row.
         return state["current"].model_copy(deep=True)
 
     async def _upsert(schema: NotebookSchema) -> str:
@@ -99,643 +94,190 @@ def _bind_state(
 
     schema_repo.get_by_notebook = AsyncMock(side_effect=_get_current)
     schema_repo.upsert = AsyncMock(side_effect=_upsert)
-    return [initial]
+    return state
 
 
 # ---------------------------------------------------------------------------
-# accept_extension / reject_extension
+# accept_extension
 # ---------------------------------------------------------------------------
 
 
 class TestAcceptExtension:
     @pytest.mark.asyncio
-    async def test_accept_moves_pending_to_accepted_and_emits_event(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
+    async def test_accept_publishes_then_moves_the_proposal_out_of_the_queue(
+        self, service, schema_repo, event_repo, editor
     ) -> None:
-        _bind_state(
-            schema_repo,
-            _make_schema(
-                pending=[
-                    {"extension_id": "ext-1", "type_name": "Cohort"},
-                    {"extension_id": "ext-2", "type_name": "Methodology"},
-                ]
-            ),
-        )
+        _bind_state(schema_repo, _make_schema(pending=[
+            {"extension_id": "ext-1", "type_name": "Cohort", "parent_type": "Group",
+             "rationale": "a study group"},
+            {"extension_id": "ext-2", "type_name": "Methodology"},
+        ]))
 
-        result = await service.accept_extension(NOTEBOOK_ID, "Cohort")
+        result, published = await service.accept_extension(NOTEBOOK_ID, "Cohort", "scholarly")
 
-        assert {e["type_name"] for e in result.accepted_extensions} == {"Cohort"}
-        assert {e["type_name"] for e in result.pending_extensions} == {
-            "Methodology"
-        }
+        editor.publish_new_entity_type.assert_awaited_once()
+        args, kwargs = editor.publish_new_entity_type.await_args
+        assert args[:3] == ("scholarly", "Cohort",
+                            {"parent_type": "Group", "description": "a study group"})
+        assert published["version"] == "1.0+t"
+        assert [e["type_name"] for e in result.pending_extensions] == ["Methodology"]
+        [accepted] = result.accepted_extensions
+        assert (accepted["type_name"], accepted["published_to"], accepted["published_version"]) \
+            == ("Cohort", "scholarly", "1.0+t")
         event_repo.record.assert_awaited_once()
-        args, _ = event_repo.record.call_args
-        assert args[0] == NOTEBOOK_ID
-        assert args[1] == "schema_changed"
-        assert args[2]["op"] == "accept_extension"
-        assert args[2]["type_name"] == "Cohort"
+        payload = event_repo.record.call_args.args[2]
+        assert payload["op"] == "accept_extension"
+        assert (payload["ontology"], payload["version"]) == ("scholarly", "1.0+t")
+
+    @pytest.mark.asyncio
+    async def test_the_curators_parent_replaces_the_proposed_one(
+        self, service, schema_repo, editor
+    ) -> None:
+        _bind_state(schema_repo, _make_schema(pending=[
+            {"type_name": "Cohort", "parent_type": "Group"}]))
+        result, _ = await service.accept_extension(NOTEBOOK_ID, "Cohort", "scholarly", "Grant")
+        assert editor.publish_new_entity_type.await_args.args[2]["parent_type"] == "Grant"
+        assert result.accepted_extensions[0]["parent_type"] == "Grant"
+        # An empty choice is "no parent", not "the proposed one".
+        _bind_state(schema_repo, _make_schema(pending=[
+            {"type_name": "Cohort", "parent_type": "Group"}]))
+        await service.accept_extension(NOTEBOOK_ID, "Cohort", "scholarly", "")
+        assert editor.publish_new_entity_type.await_args.args[2]["parent_type"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_refused_publish_leaves_the_queue_as_it_was(
+        self, service, schema_repo, event_repo, editor
+    ) -> None:
+        state = _bind_state(schema_repo, _make_schema(pending=[{"type_name": "Cohort"}]))
+        editor.publish_new_entity_type.side_effect = OntologyEditError(
+            422, {"message": "the new type has blocking findings", "findings": [{}]})
+        with pytest.raises(OntologyEditError) as refused:
+            await service.accept_extension(NOTEBOOK_ID, "Cohort", "scholarly")
+        assert refused.value.status == 422
+        schema_repo.upsert.assert_not_awaited()
+        event_repo.record.assert_not_awaited()
+        assert [e["type_name"] for e in state["current"].pending_extensions] == ["Cohort"]
 
     @pytest.mark.asyncio
     async def test_accept_is_idempotent_when_already_accepted(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
+        self, service, schema_repo, event_repo, editor
     ) -> None:
-        _bind_state(
-            schema_repo,
-            _make_schema(
-                accepted=[{"extension_id": "ext-1", "type_name": "Cohort"}]
-            ),
-        )
-
-        result = await service.accept_extension(NOTEBOOK_ID, "Cohort")
-
-        # Still exactly one accepted entry (no duplicate).
+        _bind_state(schema_repo, _make_schema(
+            accepted=[{"extension_id": "ext-1", "type_name": "Cohort"}]))
+        result, published = await service.accept_extension(NOTEBOOK_ID, "Cohort", "scholarly")
+        assert published is None
         assert len(result.accepted_extensions) == 1
+        editor.publish_new_entity_type.assert_not_awaited()
         event_repo.record.assert_not_awaited()
         schema_repo.upsert.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_accept_raises_when_extension_unknown(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
+        self, service, schema_repo, event_repo, editor
     ) -> None:
         _bind_state(schema_repo, _make_schema())
-
         with pytest.raises(UnknownExtensionError):
-            await service.accept_extension(NOTEBOOK_ID, "Nope")
-
+            await service.accept_extension(NOTEBOOK_ID, "Nope", "scholarly")
+        editor.publish_new_entity_type.assert_not_awaited()
         event_repo.record.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_legacy_reparent_does_not_make_an_unknown_proposal_look_accepted(
+        self, service, schema_repo, editor
+    ) -> None:
+        """A re-parent row stored before OE.5 carries the moved type's name."""
+        _bind_state(schema_repo, _make_schema(accepted=[
+            {"op": "reparent", "type_name": "Article", "new_parent": "Publication"}]))
+        with pytest.raises(UnknownExtensionError):
+            await service.accept_extension(NOTEBOOK_ID, "Article", "scholarly")
 
 
 class TestRejectExtension:
     @pytest.mark.asyncio
     async def test_reject_drops_pending_and_emits_event(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
+        self, service, schema_repo, event_repo
     ) -> None:
-        _bind_state(
-            schema_repo,
-            _make_schema(
-                pending=[{"extension_id": "ext-1", "type_name": "Cohort"}]
-            ),
-        )
-
+        _bind_state(schema_repo, _make_schema(
+            pending=[{"extension_id": "ext-1", "type_name": "Cohort"}]))
         result = await service.reject_extension(NOTEBOOK_ID, "Cohort")
-
         assert result.pending_extensions == []
         event_repo.record.assert_awaited_once()
-        args, _ = event_repo.record.call_args
-        assert args[2] == {"op": "reject_extension", "type_name": "Cohort"}
+        assert event_repo.record.call_args.args[2] == {
+            "op": "reject_extension", "type_name": "Cohort"}
 
     @pytest.mark.asyncio
     async def test_reject_is_idempotent_when_already_gone(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
+        self, service, schema_repo, event_repo
     ) -> None:
         _bind_state(schema_repo, _make_schema())
         result = await service.reject_extension(NOTEBOOK_ID, "Cohort")
         assert result.pending_extensions == []
         event_repo.record.assert_not_awaited()
         schema_repo.upsert.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# rename_type
-# ---------------------------------------------------------------------------
-
-
-class TestRenameType:
-    @pytest.mark.asyncio
-    async def test_rename_appends_synonym_entry_and_emits_event(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ) -> None:
-        _bind_state(schema_repo, _make_schema())
-
-        result = await service.rename_type(
-            NOTEBOOK_ID, "Researcher", "ResearchFellow"
-        )
-
-        rename_entries = [
-            e for e in result.accepted_extensions if e.get("op") == "rename"
-        ]
-        assert len(rename_entries) == 1
-        entry = rename_entries[0]
-        assert entry["old_name"] == "Researcher"
-        assert entry["new_name"] == "ResearchFellow"
-        # type_name mirrors the new name so the TTL exporter surfaces it.
-        assert entry["type_name"] == "ResearchFellow"
-
-        event_repo.record.assert_awaited_once()
-        args, _ = event_repo.record.call_args
-        assert args[2] == {
-            "op": "rename",
-            "old_name": "Researcher",
-            "new_name": "ResearchFellow",
-        }
-
-    @pytest.mark.asyncio
-    async def test_rename_is_idempotent_on_replay(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ) -> None:
-        _bind_state(schema_repo, _make_schema())
-
-        await service.rename_type(NOTEBOOK_ID, "Researcher", "ResearchFellow")
-        await service.rename_type(NOTEBOOK_ID, "Researcher", "ResearchFellow")
-
-        # Reload final state — only one rename entry expected.
-        final = await schema_repo.get_by_notebook(NOTEBOOK_ID)
-        rename_entries = [
-            e for e in final.accepted_extensions if e.get("op") == "rename"
-        ]
-        assert len(rename_entries) == 1
-        # Only one event emitted — the second call short-circuited.
-        assert event_repo.record.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_rename_to_same_name_is_noop(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ) -> None:
-        _bind_state(schema_repo, _make_schema())
-        result = await service.rename_type(NOTEBOOK_ID, "X", "X")
-        assert result.accepted_extensions == []
-        event_repo.record.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# merge_types
-# ---------------------------------------------------------------------------
-
-
-class TestMergeTypes:
-    @pytest.mark.asyncio
-    async def test_merge_records_entry_and_emits_event(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ) -> None:
-        _bind_state(schema_repo, _make_schema())
-
-        result = await service.merge_types(
-            NOTEBOOK_ID,
-            type_names=["Author", "Editor"],
-            merged_name="Contributor",
-        )
-
-        merge_entries = [
-            e for e in result.accepted_extensions if e.get("op") == "merge"
-        ]
-        assert len(merge_entries) == 1
-        entry = merge_entries[0]
-        assert entry["source_types"] == ["Author", "Editor"]
-        assert entry["merged_name"] == "Contributor"
-        assert entry["type_name"] == "Contributor"
-
-        event_repo.record.assert_awaited_once()
-        args, _ = event_repo.record.call_args
-        assert args[2]["op"] == "merge"
-        assert args[2]["merged_name"] == "Contributor"
-
-    @pytest.mark.asyncio
-    async def test_merge_is_idempotent_on_replay(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ) -> None:
-        _bind_state(schema_repo, _make_schema())
-
-        await service.merge_types(
-            NOTEBOOK_ID, ["Author", "Editor"], "Contributor"
-        )
-        await service.merge_types(
-            NOTEBOOK_ID, ["Editor", "Author"], "Contributor"
-        )  # different order, same set
-
-        final = await schema_repo.get_by_notebook(NOTEBOOK_ID)
-        merge_entries = [
-            e for e in final.accepted_extensions if e.get("op") == "merge"
-        ]
-        assert len(merge_entries) == 1
-        assert event_repo.record.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_merge_rejects_single_type_list(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-    ) -> None:
-        _bind_state(schema_repo, _make_schema())
-        with pytest.raises(ValueError):
-            await service.merge_types(NOTEBOOK_ID, ["X"], "Y")
-
-
-# ---------------------------------------------------------------------------
-# split_type
-# ---------------------------------------------------------------------------
-
-
-class TestSplitType:
-    @pytest.mark.asyncio
-    async def test_split_records_entry_and_emits_event(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ) -> None:
-        _bind_state(schema_repo, _make_schema())
-
-        result = await service.split_type(
-            NOTEBOOK_ID,
-            type_name="Cohort",
-            into=["StudyCohort", "ControlCohort"],
-            criterion="by trial role",
-        )
-
-        split_entries = [
-            e for e in result.accepted_extensions if e.get("op") == "split"
-        ]
-        assert len(split_entries) == 1
-        entry = split_entries[0]
-        assert entry["source_type"] == "Cohort"
-        assert entry["into"] == ["ControlCohort", "StudyCohort"]
-        assert entry["criterion"] == "by trial role"
-        # type_name mirrors source so existing tooling sees a class declaration.
-        assert entry["type_name"] == "Cohort"
-
-        event_repo.record.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_split_is_idempotent_on_replay(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ) -> None:
-        _bind_state(schema_repo, _make_schema())
-
-        await service.split_type(
-            NOTEBOOK_ID, "Cohort", ["A", "B"], "by year"
-        )
-        await service.split_type(
-            NOTEBOOK_ID, "Cohort", ["B", "A"], "by year"
-        )  # same set + criterion
-
-        final = await schema_repo.get_by_notebook(NOTEBOOK_ID)
-        splits = [
-            e for e in final.accepted_extensions if e.get("op") == "split"
-        ]
-        assert len(splits) == 1
-        assert event_repo.record.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_split_different_criterion_emits_distinct_entry(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ) -> None:
-        """A second split with a different criterion is NOT idempotent —
-        it is a distinct operation (different user intent).
-        """
-        _bind_state(schema_repo, _make_schema())
-
-        await service.split_type(
-            NOTEBOOK_ID, "Cohort", ["A", "B"], "by year"
-        )
-        await service.split_type(
-            NOTEBOOK_ID, "Cohort", ["A", "B"], "by cohort size"
-        )
-
-        final = await schema_repo.get_by_notebook(NOTEBOOK_ID)
-        splits = [
-            e for e in final.accepted_extensions if e.get("op") == "split"
-        ]
-        assert len(splits) == 2
-        assert event_repo.record.await_count == 2
-
-    @pytest.mark.asyncio
-    async def test_split_rejects_single_target(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-    ) -> None:
-        _bind_state(schema_repo, _make_schema())
-        with pytest.raises(ValueError):
-            await service.split_type(
-                NOTEBOOK_ID, "Cohort", ["OnlyOne"], "x"
-            )
-
-
-# ---------------------------------------------------------------------------
-# delete_type
-# ---------------------------------------------------------------------------
-
-
-class TestDeleteType:
-    @pytest.mark.asyncio
-    async def test_delete_appends_to_excluded_types(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ) -> None:
-        _bind_state(schema_repo, _make_schema())
-
-        result = await service.delete_type(NOTEBOOK_ID, "Methodology")
-
-        assert "Methodology" in result.excluded_types
-        event_repo.record.assert_awaited_once()
-        args, _ = event_repo.record.call_args
-        assert args[2] == {"op": "delete", "type_name": "Methodology"}
-
-    @pytest.mark.asyncio
-    async def test_delete_is_idempotent_on_replay(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ) -> None:
-        _bind_state(schema_repo, _make_schema(excluded=["Methodology"]))
-
-        result = await service.delete_type(NOTEBOOK_ID, "Methodology")
-
-        assert result.excluded_types == ["Methodology"]  # no duplicate
-        event_repo.record.assert_not_awaited()
-        schema_repo.upsert.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# Cross-cutting: missing schema row raises
-# ---------------------------------------------------------------------------
 
 
 class TestMissingSchemaRow:
     @pytest.mark.asyncio
     async def test_every_op_raises_when_schema_row_absent(
-        self,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
+        self, service, schema_repo, event_repo, editor
     ) -> None:
         schema_repo.get_by_notebook = AsyncMock(return_value=None)
-        service = SchemaEditService(schema_repo=schema_repo, event_repo=event_repo)
-
         with pytest.raises(NotebookSchemaNotFoundError):
-            await service.accept_extension(NOTEBOOK_ID, "X")
+            await service.accept_extension(NOTEBOOK_ID, "X", "scholarly")
+        with pytest.raises(NotebookSchemaNotFoundError):
+            await service.preview_accept(NOTEBOOK_ID, "X", "scholarly")
         with pytest.raises(NotebookSchemaNotFoundError):
             await service.reject_extension(NOTEBOOK_ID, "X")
-        with pytest.raises(NotebookSchemaNotFoundError):
-            await service.rename_type(NOTEBOOK_ID, "X", "Y")
-        with pytest.raises(NotebookSchemaNotFoundError):
-            await service.merge_types(NOTEBOOK_ID, ["X", "Y"], "Z")
-        with pytest.raises(NotebookSchemaNotFoundError):
-            await service.split_type(
-                NOTEBOOK_ID, "X", ["A", "B"], "criterion"
-            )
-        with pytest.raises(NotebookSchemaNotFoundError):
-            await service.delete_type(NOTEBOOK_ID, "X")
-
+        editor.publish_new_entity_type.assert_not_awaited()
         event_repo.record.assert_not_awaited()
 
 
+def test_the_per_notebook_edit_ops_are_gone():
+    for op in ("rename_type", "merge_types", "split_type", "reparent_type", "delete_type"):
+        assert not hasattr(SchemaEditService, op), op
+
+
 # ---------------------------------------------------------------------------
-# reparent_type (Track N.4d.3)
+# default_ontology
 # ---------------------------------------------------------------------------
 
 
-class TestReparentType:
-    """The write half of an accepted BROADER_THAN placement.
+class TestDefaultOntology:
+    @pytest.fixture
+    async def own(self):
+        from app_main.services.ontology_preview_service import load_own_ontologies
 
-    The op only RECORDS the curator's decision; what makes it take effect is
-    `ontology_manager.schema_projection`, tested against the real vocabulary in
-    `packages/ontology-manager/tests/test_schema_projection.py`. The split is
-    deliberate — a service that re-derived the placement at write time could
-    disagree with what the curator was shown.
-    """
+        return await load_own_ontologies()
 
     @pytest.mark.asyncio
-    async def test_each_moved_type_gets_its_own_entry_and_one_event(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ):
-        _bind_state(schema_repo, _make_schema())
-
-        updated = await service.reparent_type(
-            NOTEBOOK_ID, ["Article", "Report"], "Publication"
-        )
-
-        entries = [e for e in updated.accepted_extensions if e.get("op") == "reparent"]
-        assert [e["type_name"] for e in entries] == ["Article", "Report"]
-        assert {e["new_parent"] for e in entries} == {"Publication"}
-        # `parent_type` mirrors `new_parent` so the existing extension tooling
-        # (TTL export, schema browser) renders the entry without learning a new
-        # field; `new_parent` stays authoritative.
-        assert {e["parent_type"] for e in entries} == {"Publication"}
-
-        assert event_repo.record.await_count == 1
-        _nb, _type, payload = event_repo.record.await_args.args
-        assert payload == {
-            "op": "reparent",
-            "type_names": ["Article", "Report"],
-            "new_parent": "Publication",
-        }
+    async def test_a_parent_goes_to_the_ontology_that_introduces_it(self, own):
+        defining = [n for n, o in own.items() if "Organization" in o.entity_types]
+        assert len(defining) > 1 and "schema_core" in defining, defining
+        assert default_ontology(own, "Organization") == "schema_core"
+        assert default_ontology(own, "organization") == "schema_core"
 
     @pytest.mark.asyncio
-    async def test_re_running_the_same_move_changes_nothing(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ):
-        _bind_state(schema_repo, _make_schema())
-
-        first = await service.reparent_type(NOTEBOOK_ID, ["Article"], "Publication")
-        before = list(first.accepted_extensions)
-        event_repo.record.reset_mock()
-
-        second = await service.reparent_type(NOTEBOOK_ID, ["Article"], "Publication")
-
-        assert second.accepted_extensions == before
-        assert event_repo.record.await_count == 0
+    async def test_a_type_only_a_domain_ontology_defines(self, own):
+        [only] = [n for n, o in own.items() if "RegioDeal" in o.entity_types]
+        assert default_ontology(own, "RegioDeal") == only
 
     @pytest.mark.asyncio
-    async def test_only_the_types_not_already_moved_are_recorded(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ):
-        """A curator accepting an overlapping placement must not double-record —
-        and the event must name what THIS call moved, not what it was asked to.
-        """
-        _bind_state(schema_repo, _make_schema())
-        await service.reparent_type(NOTEBOOK_ID, ["Article"], "Publication")
-        event_repo.record.reset_mock()
-
-        updated = await service.reparent_type(
-            NOTEBOOK_ID, ["Article", "Report"], "Publication"
-        )
-
-        entries = [e for e in updated.accepted_extensions if e.get("op") == "reparent"]
-        assert [e["type_name"] for e in entries] == ["Article", "Report"]
-        assert event_repo.record.await_args.args[2]["type_names"] == ["Report"]
-
-    @pytest.mark.asyncio
-    async def test_moving_a_type_again_appends_rather_than_rewrites(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-        event_repo: AsyncMock,
-    ):
-        """The earlier decision stays in the audit trail; the projection applies
-        entries in order, so the LATEST parent is the one that takes effect.
-        """
-        _bind_state(schema_repo, _make_schema())
-        await service.reparent_type(NOTEBOOK_ID, ["Article"], "Publication")
-
-        updated = await service.reparent_type(NOTEBOOK_ID, ["Article"], "Report")
-
-        entries = [e for e in updated.accepted_extensions if e.get("op") == "reparent"]
-        assert [e["new_parent"] for e in entries] == ["Publication", "Report"]
-
-    @pytest.mark.asyncio
-    async def test_duplicate_names_in_one_call_are_recorded_once(
-        self,
-        service: SchemaEditService,
-        schema_repo: AsyncMock,
-    ):
-        _bind_state(schema_repo, _make_schema())
-        updated = await service.reparent_type(
-            NOTEBOOK_ID, ["Article", "article", " Article "], "Publication"
-        )
-        entries = [e for e in updated.accepted_extensions if e.get("op") == "reparent"]
-        assert len(entries) == 1
-
-    @pytest.mark.asyncio
-    async def test_a_type_cannot_be_moved_under_itself(
-        self, service: SchemaEditService, schema_repo: AsyncMock
-    ):
-        _bind_state(schema_repo, _make_schema())
-        with pytest.raises(ValueError, match="under itself"):
-            await service.reparent_type(NOTEBOOK_ID, ["Article"], "article")
-
-    @pytest.mark.asyncio
-    async def test_a_blank_parent_is_rejected(
-        self, service: SchemaEditService, schema_repo: AsyncMock
-    ):
-        _bind_state(schema_repo, _make_schema())
-        with pytest.raises(ValueError, match="new_parent"):
-            await service.reparent_type(NOTEBOOK_ID, ["Article"], "   ")
-
-    @pytest.mark.asyncio
-    async def test_no_usable_type_name_is_rejected(
-        self, service: SchemaEditService, schema_repo: AsyncMock
-    ):
-        _bind_state(schema_repo, _make_schema())
-        with pytest.raises(ValueError, match="at least one type name"):
-            await service.reparent_type(NOTEBOOK_ID, ["", "  "], "Publication")
-
-    @pytest.mark.asyncio
-    async def test_a_reparent_does_not_make_an_unknown_extension_look_accepted(
-        self, service: SchemaEditService, schema_repo: AsyncMock
-    ):
-        """A re-parent carries the moved type's name in `type_name` too, so an
-        unguarded scan in `accept_extension` reads it as "already accepted" and
-        turns a genuinely unknown extension into a silent no-op.
-        """
-        _bind_state(schema_repo, _make_schema())
-        await service.reparent_type(NOTEBOOK_ID, ["Article"], "Publication")
-
-        with pytest.raises(UnknownExtensionError):
-            await service.accept_extension(NOTEBOOK_ID, "Article")
-
-    @pytest.mark.asyncio
-    async def test_a_missing_schema_row_raises(
-        self, service: SchemaEditService, schema_repo: AsyncMock
-    ):
-        schema_repo.get_by_notebook = AsyncMock(return_value=None)
-        with pytest.raises(NotebookSchemaNotFoundError):
-            await service.reparent_type(NOTEBOOK_ID, ["Article"], "Publication")
+    async def test_no_parent_or_an_unknown_one_goes_to_the_fallback(self, own):
+        assert FALLBACK_ONTOLOGY in own
+        assert default_ontology(own, None) == FALLBACK_ONTOLOGY
+        assert default_ontology(own, "Nergens") == FALLBACK_ONTOLOGY
 
 
-def test_every_module_spells_the_reparent_discriminator_the_same_way():
-    """N.4d.3 — six places decide what a re-parent entry is.
-
-    Each spells the discriminator locally, on purpose: the router must not import
-    a service symbol, and `ontology_manager` / `ontology_extraction` cannot import
-    from `app_main` at all. The cost of that is silent divergence — a filter that
-    quietly stops filtering, with every test still green because each side agrees
-    with itself. This pins them together.
-    """
-    from app_main.api.routers.schemas import _REPARENT_OP as router_op
-    from app_main.services.entity_extraction_service import (
-        _REPARENT_OP as extraction_op,
-    )
-    from app_main.services.schema_edit_service import REPARENT_OP as service_op
-    from ontology_manager.schema_projection import REPARENT_OP as projection_op
-
-    assert service_op == router_op == extraction_op == projection_op == "reparent"
-
-    # The two remaining sites use a bare literal because they filter a raw dict
-    # in a comprehension; assert the literal is present in each source rather
-    # than leaving them out of the pin entirely.
-    from pathlib import Path
-
-    import app_main.api.routers.sources_processing as sources_processing
-    import ontology_extraction.prompts.pass2 as pass2
-
-    for module in (pass2, sources_processing):
-        source = Path(module.__file__).read_text(encoding="utf-8")
-        assert f'"{service_op}"' in source, (
-            f"{module.__name__} no longer mentions the reparent discriminator"
-        )
+# ---------------------------------------------------------------------------
+# PC.5: a rejection is a "no" that survives the next document
+# ---------------------------------------------------------------------------
 
 
 class TestARejectedTypeStaysRejectedThroughTheCuratorsOwnPath:
-    """PC.1 — the rejection gap, asserted where a rejection actually happens.
-
-    A review found the first version of this guard living in
-    ``packages/surrealdb-service`` and rejecting through
-    ``NotebookSchemaRepository.reject_pending_extension``, which has no
-    production caller: the router rejects through
-    :meth:`SchemaEditService.reject_extension`, keyed on ``type_name`` rather
-    than ``extension_id``. So the guard's promise — that it fails the day a
-    durable "no" lands — held only if PC.5 happened to write the trace through
-    the dead method. Pinned here instead, on the path a curator's Reject button
-    actually takes.
-
-    The behaviour itself is the gap: rejection removes the row and records
-    nothing, so the next document proposing the same type re-queues it. Closing
-    that needs a ``rejected_extensions`` field and a migration, which is PC.5.
-    """
+    """PC.5 (migration 84), on the path a curator's Reject button takes."""
 
     @pytest.mark.asyncio
     async def test_a_rejection_is_recorded_so_the_type_does_not_return(self):
-        """PC.5 (migration 84): inverted from PC.1's
-        `test_rejecting_leaves_no_trace_so_the_type_returns`, on the path a
-        curator's Reject button takes."""
         from surrealdb_service.repositories.notebook_schema import (
             NotebookSchemaRepository,
         )
@@ -744,20 +286,14 @@ class TestARejectedTypeStaysRejectedThroughTheCuratorsOwnPath:
         schema_repo = NotebookSchemaRepository()
         schema_repo.get_by_notebook = AsyncMock(return_value=schema)
         schema_repo.upsert = AsyncMock(return_value="notebook_schema:x")
-        service = SchemaEditService(schema_repo, AsyncMock())
+        service = SchemaEditService(schema_repo, AsyncMock(), ontology_edit=AsyncMock())
 
-        # Pass 1 proposes it.
         assert await schema_repo.merge_pending_extensions(
             NOTEBOOK_ID, [{"type_name": "Method"}]
         ) == 1
-
-        # The curator rejects it, through the service the router calls.
         after = await service.reject_extension(NOTEBOOK_ID, "Method")
         assert after.pending_extensions == []
         assert after.rejected_extensions == ["Method"]
-
-        # The next document proposing it is refused; the rejection is persisted
-        # in the same write that removed the row.
         assert await schema_repo.merge_pending_extensions(
             NOTEBOOK_ID, [{"type_name": "METHOD"}]
         ) == 0
@@ -775,27 +311,127 @@ class TestARejectedTypeStaysRejectedThroughTheCuratorsOwnPath:
         schema_repo = NotebookSchemaRepository()
         schema_repo.get_by_notebook = AsyncMock(return_value=schema)
         schema_repo.upsert = AsyncMock(return_value="notebook_schema:x")
-        service = SchemaEditService(schema_repo, AsyncMock())
+        service = SchemaEditService(schema_repo, AsyncMock(), ontology_edit=AsyncMock())
         await service.reject_extension(NOTEBOOK_ID, "Method")
-        await service.reject_extension(NOTEBOOK_ID, "Method")  # idempotent no-op
+        await service.reject_extension(NOTEBOOK_ID, "Method")
         assert schema.rejected_extensions == ["Method"]
 
-    @pytest.mark.asyncio
-    async def test_an_excluded_type_does_not_come_back(self):
-        """The contrast that makes the gap legible: a soft-DELETE (B.3b) is
-        remembered in ``excluded_types`` and survives a re-proposal. A rejection
-        has no such field, which is the whole of the difference.
-        """
-        from surrealdb_service.repositories.notebook_schema import (
-            NotebookSchemaRepository,
-        )
 
-        schema = _make_schema(pending=[], excluded=["Method"])
-        schema_repo = NotebookSchemaRepository()
-        schema_repo.get_by_notebook = AsyncMock(return_value=schema)
-        schema_repo.upsert = AsyncMock(return_value="notebook_schema:x")
+# ---------------------------------------------------------------------------
+# Against a real SurrealDB
+# ---------------------------------------------------------------------------
 
-        assert await schema_repo.merge_pending_extensions(
-            NOTEBOOK_ID, [{"type_name": "Method"}]
-        ) == 0
-        assert schema.pending_extensions == []
+
+@pytest.fixture
+async def live(live_surrealdb, monkeypatch):
+    """The real editor and repositories on a real SurrealDB, with the registry
+    reading the database first (the unit conftest keeps it on the YAML)."""
+    import surrealdb_service.connection as conn
+    from app_main.services.ontology_edit_service import OntologyEditService
+    from ontology_manager.registry import OntologyRegistry, get_ontology_registry
+    from surrealdb_service.repositories.notebook_event import NotebookEventRepository
+    from surrealdb_service.repositories.notebook_schema import NotebookSchemaRepository
+
+    from tests.test_ontology_edit_service import _LIST_ONTOLOGIES, _LOAD_FROM_DB
+
+    monkeypatch.setattr(OntologyRegistry, "_load_from_db", _LOAD_FROM_DB)
+    monkeypatch.setattr(OntologyRegistry, "list_ontologies", _LIST_ONTOLOGIES)
+    original = conn._pool
+    conn._pool = conn.ConnectionPool(config=live_surrealdb)
+    registry = get_ontology_registry()
+    registry.clear_cache()
+    clean = ("DELETE ontology_draft; DELETE ontology_version; DELETE notebook_schema; "
+             "DELETE notebook_event; DELETE notebook;")
+    await conn.execute_query(clean, {})
+    await conn.execute_query("CREATE notebook:oe5 CONTENT {name: 'oe5', description: ''};", {})
+    repo = NotebookSchemaRepository()
+    await repo.upsert(NotebookSchema(
+        notebook="notebook:oe5", base_ontology="",
+        pending_extensions=[
+            {"extension_id": "pass1::streekfonds", "type_name": "Streekfonds",
+             "parent_type": "Grant", "rationale": "a regional fund"},
+            {"extension_id": "pass1::zwerfbegrip", "type_name": "Zwerfbegrip",
+             "parent_type": "Nergens"},
+        ],
+    ))
+    editor = OntologyEditService()
+    yield SchemaEditService(repo, NotebookEventRepository(), ontology_edit=editor), editor, repo
+    await conn.execute_query(clean, {})
+    registry.clear_cache()
+    await conn._pool.close_all()
+    conn._pool = original
+
+
+async def _typed(label):
+    from app_main.services.entity_persistence_service import (
+        _resolve_entity_type,
+        load_typing_ontologies,
+        typing_vocabulary,
+    )
+
+    return _resolve_entity_type(
+        label, typing_vocabulary(None, await load_typing_ontologies())).entity_type
+
+
+async def _stored():
+    import surrealdb_service.connection as conn
+
+    versions = await conn.execute_query("SELECT name, version FROM ontology_version;", {})
+    drafts = await conn.execute_query("SELECT name FROM ontology_draft;", {})
+    return versions, drafts
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_an_accepted_proposal_is_published_and_types_everywhere(live):
+    service, _editor, repo = live
+    assert await _typed("Streekfonds") == "concept"
+    target = await service.accept_target("notebook:oe5", "Streekfonds")
+    assert target["parent_type"] == "Grant"
+    assert "deals" in target["ontologies"]
+    assert target["default_ontology"] in target["ontologies"]
+    preview = await service.preview_accept("notebook:oe5", "Streekfonds", "deals")
+    assert preview["blocking"] is False and preview["draft_open"] is False
+    assert await _stored() == ([], [])  # the preview wrote nothing
+
+    row, published = await service.accept_extension("notebook:oe5", "Streekfonds", "deals")
+    assert await _typed("Streekfonds") == "grant"
+    assert [e["type_name"] for e in row.pending_extensions] == ["Zwerfbegrip"]
+    assert row.accepted_extensions[-1]["published_version"] == published["version"]
+    from ontology_manager.registry import get_ontology_registry
+
+    active = [v["version"] for v in await get_ontology_registry().list_versions("deals")
+              if v["is_active"]]
+    assert active == [published["version"]]
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_a_blocking_proposal_is_refused_and_nothing_is_stored(live):
+    service, _editor, repo = live
+    preview = await service.preview_accept("notebook:oe5", "Zwerfbegrip", "deals")
+    assert preview["blocking"] is True
+    with pytest.raises(OntologyEditError) as refused:
+        await service.accept_extension("notebook:oe5", "Zwerfbegrip", "deals")
+    assert refused.value.status == 422
+    assert any(f["severity"] == "block" for f in refused.value.detail["findings"])
+    assert await _stored() == ([], [])
+    row = await repo.get_by_notebook("notebook:oe5")
+    assert [e["type_name"] for e in row.pending_extensions] == ["Streekfonds", "Zwerfbegrip"]
+    assert row.accepted_extensions == []
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_an_open_draft_refuses_the_accept_and_nothing_is_stored(live):
+    service, editor, repo = live
+    await editor.put_entity_type("deals", "Iets", {"parent_type": "Grant"})
+    assert (await service.preview_accept("notebook:oe5", "Streekfonds", "deals"))["draft_open"]
+    with pytest.raises(OntologyEditError) as refused:
+        await service.accept_extension("notebook:oe5", "Streekfonds", "deals")
+    assert refused.value.status == 409
+    versions, drafts = await _stored()
+    assert versions == [] and len(drafts) == 1
+    assert "Streekfonds" not in (await editor.get_draft("deals"))["ontology"].entity_types
+    row = await repo.get_by_notebook("notebook:oe5")
+    assert [e["type_name"] for e in row.pending_extensions] == ["Streekfonds", "Zwerfbegrip"]

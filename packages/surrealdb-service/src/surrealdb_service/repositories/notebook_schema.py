@@ -252,12 +252,12 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
         three times, and each append would be its own read-modify-write.
 
         A proposal is skipped when its ``type_name`` already appears in
-        ``pending_extensions``, in ``accepted_extensions``, or in
-        ``excluded_types``. The first two are duplicates; the third is the
-        curator having explicitly soft-deleted that type (B.3b), which is a "no"
-        that must survive the next document proposing it again. Matching is
-        case-insensitive on the trimmed name, because the LLM's capitalisation is
-        not stable across documents.
+        ``pending_extensions`` or ``accepted_extensions`` (duplicates). Matching
+        is case-insensitive on the trimmed name, because the LLM's
+        capitalisation is not stable across documents. ``excluded_types`` (the
+        B.3b soft-delete) is no longer consulted: OE.5 retired the op that wrote
+        it, with the rest of the per-notebook layer, and stored values are
+        ignored.
 
         **A REJECTED proposal is remembered** (PC.5, migration 84) — subject to
         the known race below: a write that read the row before the curator's
@@ -266,7 +266,7 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
         rejection paths — ``SchemaEditService.reject_extension``, which the
         curator's Reject button takes, and this module's
         ``reject_pending_extension`` — record the name in
-        ``rejected_extensions``, and this method skips it like an excluded type.
+        ``rejected_extensions``, and this method skips it.
         Until PC.5 the rejection left no trace and the type returned with the
         next document; two tests, one per layer, pinned that and are now
         inverted.
@@ -309,7 +309,6 @@ class NotebookSchemaRepository(BaseRepository[NotebookSchema]):
 
         known = {_key(e.get("type_name")) for e in existing.pending_extensions}
         known |= {_key(e.get("type_name")) for e in existing.accepted_extensions}
-        known |= {_key(t) for t in existing.excluded_types}
         # PC.5: a curator's rejection is a "no" too (migration 84).
         known |= {_key(t) for t in existing.rejected_extensions}
 
