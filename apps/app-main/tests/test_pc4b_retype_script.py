@@ -35,11 +35,15 @@ def _row(i, name, key, etype, label, status="active", flagged=None, raw=None):
 
 
 async def _plan(monkeypatch, rows):
+    """The script's plan, reading `rows` where it reads the entity table (the
+    planner module, shared with the ontology editor's preview since OE.1)."""
+    from app_main.services import retype_planner
+
     async def _query(sql, params=None, config=None):
         assert "FROM entity" in sql
         return rows
 
-    monkeypatch.setattr(retype, "execute_query", _query)
+    monkeypatch.setattr(retype_planner, "execute_query", _query)
     return await retype.plan()
 
 

@@ -158,6 +158,27 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
   - activating a version of `schema_core` changes what `regiodeal` resolves.
 
 **OE.1 — Validation gate and impact preview** (~1.5d)
+
+> **OE.1 built 2026-09-28** (branch `feature/oe1-validation-preview`).
+> - `ontology_manager.validation.validate(candidate, active)`. It resolves
+>   inheritance within the candidate set, finding loops once from the graph,
+>   and reports:
+>   - `base_named_type_misses_its_base`, `two_canonical_answers`, `orphan`
+>     (a chain that ends on no base at all; a declared unmapped base such as
+>     `schema:Intangible` is deliberate);
+>   - `parent_cycle`, `inheritance_cycle`, `unknown_parent_ontology`;
+>   - `alias_collision`, `literal_declared_as_type`, `unknown_key` (warn only).
+>
+>   A finding the active set already has warns; a new one blocks. The shipped
+>   set is clean.
+> - `retype_planner` holds the retype plan, lifted out of the PC.4b script;
+>   the script and the preview share it.
+> - `ontology_preview_service.preview(candidate, active)` returns the
+>   findings, the label changes (with entity counts), the retype a publish
+>   would offer (changes, collisions, flag-only, and how many this edit
+>   causes), and the documents whose ontology selection changes (a
+>   deterministic replay of the detection). Read-only; about 6 s on the live
+>   graph.
 - `validate_candidate(ontology_set) -> [finding]` is one function, run before
   anything is saved.
   - It lifts the `test_typing_is_stable` checks into production code: no label
