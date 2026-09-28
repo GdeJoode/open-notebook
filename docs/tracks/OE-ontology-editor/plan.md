@@ -294,7 +294,7 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 
 **OE.3 — Editor UI** (~2d)
 
-> **OE.3 built 2026-09-28** (branch `feature/oe3-editor-ui`, review round 2).
+> **OE.3 built 2026-09-28** (branch `feature/oe3-editor-ui`, review round 3).
 > The owner added drag-and-drop re-parenting to the scope, and Ctrl+X / Ctrl+V
 > as the keyboard way to do it ("no need to make it very complicated").
 > - The `/ontologies` detail page gets an **Edit** tab (`OntologyEditor`):
@@ -310,13 +310,17 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 >   - the preview, dropped as soon as the draft changes;
 >   - versions with a confirmed rollback that warns an open draft will go
 >     stale; export to YAML.
-> - **The tree** shows own types and the types inherited through `extends`
->   and every `includes`, each labelled with the ontology it comes from.
+> - **The tree** shows own types and the types inherited through the whole
+>   chain (`extends` and every `includes`, at every level). Each is labelled
+>   with the ontology that DEFINES it: the one that introduces or redefines
+>   it, not the parent it arrives through (`inheritedTypes`; the browse API's
+>   detail now includes `includes`).
 >   - Parents are resolved by name or alias, case-insensitively, as in the
 >     backend.
 >   - Parents defined nowhere show as "not defined" targets.
->   - A parent cycle is broken for display, one member marked "parent
->     cycle", so every type stays reachable and repairable.
+>   - A parent cycle is broken for display at a type ON the cycle, marked
+>     "parent cycle", so every type stays reachable and repairable. A type
+>     below the cycle keeps its parent.
 >   - Until the inherited ontologies have loaded, a notice replaces the tree.
 > - **Re-parenting**, three ways, all ending in the same draft edit
 >   (`dropEdit`):
@@ -331,6 +335,11 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 >   - every edit sends the stored type back whole;
 >   - relationships keep the endpoint spelling they use (`source_types` /
 >     `target_types`, about 80 shipped ones), which the first version wiped;
+>     every spelling present is updated;
+>   - the type form keeps only the fields the user edited and saves them onto
+>     the LATEST stored type, so a drag or paste of the selected type is not
+>     undone by the next save. It starts over only on a discard, publish or
+>     rollback, never on the edit that creates the draft;
 >   - "Add" refuses a name that exists, which the first version replaced;
 >   - rows and the form follow the draft without discarding what is being
 >     typed.

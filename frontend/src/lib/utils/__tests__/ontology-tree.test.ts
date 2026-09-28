@@ -11,6 +11,8 @@ import {
   canDrop,
   descendantsOf,
   dropEdit,
+  inheritanceClosure,
+  inheritedTypes,
   nameTaken,
   reparented,
   zoneId,
@@ -65,6 +67,16 @@ describe('buildTypeTree', () => {
     cyclic.roots.forEach(walk)
     expect(reachable).toEqual(new Set(['a', 'b', 'c']))
     expect([...cyclic.nodes.values()].filter((n) => n.inCycle).map((n) => n.name)).toEqual(['A'])
+  })
+
+  it('marks only a type ON the cycle; one below it keeps its parent (round-2 minor 1)', () => {
+    const t = buildTypeTree({
+      X: { name: 'X', parent_type: 'Y' }, Y: { name: 'Y', parent_type: 'X' },
+      D: { name: 'D', parent_type: 'X' },
+    }, [])
+    expect([...t.nodes.values()].filter((n) => n.inCycle).map((n) => n.name)).toEqual(['X'])
+    expect(t.children.get('x')).toEqual(expect.arrayContaining(['D']))
+    expect(canDrop(t, 'X', 'D')).toBe(false) // D still counts as X's descendant
   })
 
   it('resolves a parent given by an alias, like the backend (review minor 5)', () => {
@@ -164,5 +176,51 @@ describe('relationship endpoints (review B1: both stored spellings)', () => {
     expect(withEndpoints(modern, ['Grant'], [])).toEqual({
       name: 'FUNDS', domain: ['Grant'], range: [], extra: 1,
     })
+  })
+})
+
+
+describe('inheritedTypes: which ontology DEFINES each inherited type (round-2 major 2)', () => {
+  // deals extends instruments → government → schema_core; each GET returns the
+  // MERGED chain, as the browse API does.
+  const person = { name: 'Person', parent_type: 'Thing' }
+  const loaded = {
+    instruments: { extends: 'government', includes: ['policy_themes'],
+      entity_types: [person, { name: 'Gemeente', parent_type: 'AdministrativeArea' },
+        { name: 'Subsidie', parent_type: 'Grant' }, { name: 'Thema', parent_type: 'Concept' }] },
+    government: { extends: 'schema_core',
+      entity_types: [person, { name: 'Gemeente', parent_type: 'AdministrativeArea' }] },
+    schema_core: { extends: null, entity_types: [{ name: 'Person', parent_type: 'Thing' }] },
+    policy_themes: { extends: null, entity_types: [{ name: 'Thema', parent_type: 'Concept' }] },
+  }
+
+  it('walks the whole chain, extends and includes', () => {
+    expect(inheritanceClosure(['instruments'], loaded)).toEqual({
+      order: ['instruments', 'government', 'policy_themes', 'schema_core'], missing: [] })
+    expect(inheritanceClosure(['instruments'], { instruments: loaded.instruments }).missing)
+      .toEqual(['government', 'policy_themes'])
+  })
+
+  it('labels a type with the ontology that introduced it, however deep', () => {
+    const by = Object.fromEntries(inheritedTypes(['instruments'], loaded).map((t) => [t.name, t.definedIn]))
+    expect(by).toEqual({ Person: 'schema_core', Gemeente: 'government',
+      Subsidie: 'instruments', Thema: 'policy_themes' })
+  })
+
+  it('a redefinition is labelled where it is redefined', () => {
+    const redefined = { ...loaded,
+      government: { ...loaded.government, entity_types: [{ name: 'Person', parent_type: 'Agent' },
+        { name: 'Gemeente', parent_type: 'AdministrativeArea' }] },
+      instruments: { ...loaded.instruments, entity_types: [{ name: 'Person', parent_type: 'Agent' }] } }
+    expect(inheritedTypes(['instruments'], redefined).find((t) => t.name === 'Person'))
+      .toMatchObject({ definedIn: 'government', parent_type: 'Agent' })
+  })
+})
+
+describe('relationship endpoints with BOTH spellings (round-2 minor 2)', () => {
+  it('updates every spelling present, so they cannot contradict each other', () => {
+    const mixed = { name: 'R', range: ['Nieuw'], source_types: ['A'], target_types: ['Nieuw'] }
+    expect(withEndpoints(mixed, ['A'], ['Ander'])).toEqual({
+      name: 'R', domain: ['A'], range: ['Ander'], source_types: ['A'], target_types: ['Ander'] })
   })
 })

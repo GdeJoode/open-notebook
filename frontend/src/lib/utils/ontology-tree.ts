@@ -38,8 +38,83 @@ export interface InheritedType {
   name: string
   parent_type?: string | null
   aliases?: string[] | null
-  /** The ontology that defines it. */
+  /** The ontology that defines it: introduces it, or redefines it. */
   definedIn: string
+}
+
+/** An ontology as the browse API returns it: inheritance already merged. */
+export interface MergedOntology {
+  extends?: string | null
+  includes?: string[] | null
+  entity_types: { name: string; parent_type?: string | null; aliases?: string[] | null }[]
+}
+
+/** The ontologies an ontology inherits from, as the registry merges them:
+ *  `extends`, then each `includes` — and `includes` only with `extends`. */
+export function parentsOf(o: { extends?: string | null; includes?: string[] | null }): string[] {
+  if (!o.extends) return []
+  return [o.extends, ...(o.includes ?? [])].filter((p, i, all) => all.indexOf(p) === i)
+}
+
+/** Every ontology reachable through `parentsOf`, nearest first; `missing`
+ *  lists the ones not loaded yet (the caller loads them and asks again). */
+export function inheritanceClosure(
+  direct: string[],
+  loaded: Record<string, MergedOntology | undefined>,
+): { order: string[]; missing: string[] } {
+  const order: string[] = []
+  const missing: string[] = []
+  const queue = [...direct]
+  while (queue.length) {
+    const name = queue.shift() as string
+    if (order.includes(name) || missing.includes(name)) continue
+    const o = loaded[name]
+    if (!o) {
+      missing.push(name)
+      continue
+    }
+    order.push(name)
+    queue.push(...parentsOf(o))
+  }
+  return { order, missing }
+}
+
+/**
+ * The types an ontology inherits, each labelled with the ontology that
+ * DEFINES it (review OE.3 major 2: the browse API returns a parent's MERGED
+ * chain, so labelling by the direct parent named `instruments` for a type
+ * `schema_core` defines). An ontology defines a type when its merged set has
+ * it and none of ITS parents has it the same way — it introduced or
+ * redefined it. The definition shown is the one this ontology sees: the
+ * nearest direct parent's.
+ */
+export function inheritedTypes(
+  direct: string[],
+  loaded: Record<string, MergedOntology | undefined>,
+): InheritedType[] {
+  const { order } = inheritanceClosure(direct, loaded)
+  const typeIn = (name: string, ontology: string) =>
+    loaded[ontology]?.entity_types.find((t) => key(t.name) === key(name))
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+  const definer = (name: string): string | undefined =>
+    order.find((o) => {
+      const here = typeIn(name, o)
+      if (!here) return false
+      return parentsOf(loaded[o] as MergedOntology).every((p) => {
+        const there = typeIn(name, p)
+        return !there || !same(there, here)
+      })
+    })
+  const out: InheritedType[] = []
+  const seen = new Set<string>()
+  for (const parent of direct) {
+    for (const t of loaded[parent]?.entity_types ?? []) {
+      if (seen.has(key(t.name))) continue
+      seen.add(key(t.name))
+      out.push({ ...t, definedIn: definer(t.name) ?? parent })
+    }
+  }
+  return out
 }
 
 const key = (name: string) => name.trim().toLowerCase()
@@ -96,11 +171,20 @@ export function buildTypeTree(
     }
   }
   roots.forEach(walk)
-  for (const k of [...nodes.keys()].sort()) {
-    if (reached.has(k)) continue
+  for (const start of [...nodes.keys()].sort()) {
+    if (reached.has(start)) continue
+    // Follow the parents up to the first repeat: that node is ON the cycle. A
+    // node merely hanging below the cycle keeps its real parent.
+    const seen = new Set<string>()
+    let k = start
+    while (!seen.has(k)) {
+      seen.add(k)
+      k = parentKey.get(k) as string
+    }
     const node = nodes.get(k) as TypeNode
     const p = parentKey.get(k) as string
     children.set(p, (children.get(p) ?? []).filter((c) => key(c) !== k))
+    parentKey.delete(k)
     node.inCycle = true
     roots.push(node.name)
     walk(node.name)

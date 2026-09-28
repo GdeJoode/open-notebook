@@ -29,13 +29,16 @@ export function withEndpoints(
   range: string[],
 ): StoredRelationshipType {
   const next: StoredRelationshipType = { ...rel }
-  const legacy = !asList(rel.domain).length && ('source_types' in rel || 'target_types' in rel)
+  const legacy = 'source_types' in rel || 'target_types' in rel
+  const modern = 'domain' in rel || 'range' in rel
+  // Every spelling present is updated, so the two can never contradict each
+  // other (after a server rename a relationship can hold both); a
+  // relationship with neither gets `domain`/`range`.
   if (legacy) {
     next.source_types = domain
     next.target_types = range
-    delete next.domain
-    delete next.range
-  } else {
+  }
+  if (modern || !legacy) {
     next.domain = domain
     next.range = range
   }

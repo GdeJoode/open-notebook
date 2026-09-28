@@ -49,6 +49,7 @@ export interface ConceptDef {
 export interface OntologyDetail extends OntologySummary {
   authors: string[] | null
   extends: string | null
+  includes?: string[] | null
   entity_types: EntityTypeDef[]
   relationship_types: RelationshipTypeDef[]
   concepts: ConceptDef[]

@@ -28,41 +28,62 @@ export interface TypeFormProps {
   disabled?: boolean
 }
 
+type Field = 'description' | 'parent_type' | 'schema_org_type' | 'aliases' | 'extraction_hints'
+
+/** The form's text for a field of the stored type. */
+function shown(type: StoredEntityType, field: Field): string {
+  const value = type[field]
+  if (Array.isArray(value)) return value.join(field === 'aliases' ? ', ' : '\n')
+  return typeof value === 'string' ? value : ''
+}
+
+/** A field's text back into what the stored type holds (`undefined` = remove). */
+function parsed(field: Field, text: string): unknown {
+  if (field === 'aliases' || field === 'extraction_hints') {
+    const items = list(text, field === 'aliases' ? /,/ : /\n/)
+    return items.length ? items : undefined
+  }
+  return text.trim() || undefined
+}
+
+const FIELDS: Field[] = ['description', 'parent_type', 'schema_org_type', 'aliases', 'extraction_hints']
+
 export function TypeForm({ type, parentOptions, onSave, onRename, onDelete, disabled }: TypeFormProps) {
-  const [description, setDescription] = useState('')
-  const [parent, setParent] = useState('')
-  const [base, setBase] = useState('')
-  const [aliases, setAliases] = useState('')
-  const [hints, setHints] = useState('')
+  // Only what the user EDITED is kept as form state; every other field shows
+  // the stored type as it is now. Review OE.3 round 2: a form holding a copy
+  // of every field put back a parent a drag or a paste had changed meanwhile.
+  const [edited, setEdited] = useState<Partial<Record<Field, string>>>({})
   const [newName, setNewName] = useState('')
 
   useEffect(() => {
-    setDescription(type.description ?? '')
-    setParent(type.parent_type ?? '')
-    setBase(type.schema_org_type ?? '')
-    setAliases((type.aliases ?? []).join(', '))
-    setHints((type.extraction_hints ?? []).join('\n'))
+    setEdited({})
     setNewName('')
-    // Reset only when another type is shown (the editor remounts the form on a
-    // discard or publish): a draft refresh from an unrelated edit, such as a
-    // drag, must not wipe what is being typed. `type` is read, not watched.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type.name])
 
+  const value = (field: Field) => edited[field] ?? shown(type, field)
+  const change = (field: Field) => (text: string) => setEdited((prev) => ({ ...prev, [field]: text }))
+  const setDescription = change('description')
+  const setParent = change('parent_type')
+  const setBase = change('schema_org_type')
+  const setAliases = change('aliases')
+  const setHints = change('extraction_hints')
+  const description = value('description')
+  const parent = value('parent_type')
+  const base = value('schema_org_type')
+  const aliases = value('aliases')
+  const hints = value('extraction_hints')
+
   const save = () => {
-    const next: StoredEntityType = { ...type }
-    const set = (k: string, v: unknown, empty: boolean) => {
-      if (empty) delete next[k]
-      else next[k] = v
+    // The latest stored type, with only the edited fields replaced.
+    const next: Record<string, unknown> = { ...type }
+    for (const field of FIELDS) {
+      if (edited[field] === undefined) continue
+      const v = parsed(field, edited[field] as string)
+      if (v === undefined) delete next[field]
+      else next[field] = v
     }
-    set('description', description.trim(), !description.trim())
-    set('parent_type', parent.trim(), !parent.trim())
-    set('schema_org_type', base.trim(), !base.trim())
-    const aliasList = list(aliases, /,/)
-    set('aliases', aliasList, aliasList.length === 0)
-    const hintList = list(hints, /\n/)
-    set('extraction_hints', hintList, hintList.length === 0)
-    onSave(next)
+    setEdited({})
+    onSave(next as StoredEntityType) // `name` is kept from the stored type
   }
 
   const listId = `parents-${type.name}`

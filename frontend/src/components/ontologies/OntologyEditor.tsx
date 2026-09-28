@@ -40,7 +40,15 @@ import {
   useRollback,
 } from '@/lib/hooks/use-ontology-editor'
 import { useToast } from '@/lib/hooks/use-toast'
-import { buildTypeTree, nameTaken, type InheritedType } from '@/lib/utils/ontology-tree'
+import {
+  buildTypeTree,
+  inheritanceClosure,
+  inheritedTypes,
+  nameTaken,
+  parentsOf,
+  type InheritedType,
+  type MergedOntology,
+} from '@/lib/utils/ontology-tree'
 
 export function OntologyEditor({ name }: { name: string }) {
   const draftQuery = useOntologyDraft(name)
@@ -52,28 +60,40 @@ export function OntologyEditor({ name }: { name: string }) {
   const publish = usePublishDraft(name)
   const [selected, setSelected] = useState<string | null>(null)
   const [note, setNote] = useState('')
+  // Bumped when the draft is replaced wholesale (discard, publish, rollback):
+  // the type form starts over then, and only then. Keying it on the draft's
+  // existence remounted it on the FIRST edit, which creates the draft, and
+  // lost what was being typed (review OE.3 round 3).
+  const [formEpoch, setFormEpoch] = useState(0)
+  const restart = () => setFormEpoch((e) => e + 1)
   const [newType, setNewType] = useState('')
 
-  // Every ontology this one inherits from: `extends` first, then `includes`.
+  // Every ontology this one inherits from, through the whole chain (`extends`
+  // then `includes`, at every level), so each inherited type can be labelled
+  // with the ontology that DEFINES it. The chain is discovered as it loads.
   const metadata = draftQuery.data?.ontology.metadata
-  const parents = useMemo(() => {
-    if (!metadata?.extends) return [] // the registry merges `includes` only with `extends`
-    return [metadata.extends, ...(metadata.includes ?? [])].filter((p, i, all) => all.indexOf(p) === i)
-  }, [metadata])
-  const parentQueries = useQueries({
-    queries: parents.map((p) => ({
+  const direct = useMemo(() => (metadata ? parentsOf(metadata) : []), [metadata])
+  const [chain, setChain] = useState<string[]>([])
+  const chainQueries = useQueries({
+    queries: chain.map((p) => ({
       queryKey: QUERY_KEYS.ontology(p),
       queryFn: () => ontologiesApi.get(p),
     })),
   })
-  const parentsLoading = parentQueries.some((q) => q.isLoading)
-  const parentsFailed = parentQueries.some((q) => q.isError)
-  const inherited = useMemo<InheritedType[]>(
-    () => parentQueries.flatMap((q, i) =>
-      (q.data?.entity_types ?? []).map((t) => ({ ...t, definedIn: parents[i] }))),
+  const loaded = useMemo(() => {
+    const out: Record<string, MergedOntology | undefined> = {}
+    chain.forEach((p, i) => { out[p] = chainQueries[i]?.data as MergedOntology | undefined })
+    return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [parents, ...parentQueries.map((q) => q.data)],
-  )
+  }, [chain, ...chainQueries.map((q) => q.data)])
+  const { missing } = inheritanceClosure(direct, loaded)
+  const toLoad = missing.filter((m) => !chain.includes(m))
+  useEffect(() => {
+    if (toLoad.length) setChain((prev) => [...prev, ...toLoad.filter((m) => !prev.includes(m))])
+  }, [toLoad.join('|')]) // eslint-disable-line react-hooks/exhaustive-deps
+  const parentsFailed = chainQueries.some((q) => q.isError)
+  const parentsLoading = !parentsFailed && (missing.length > 0 || chainQueries.some((q) => q.isLoading))
+  const inherited = useMemo<InheritedType[]>(() => inheritedTypes(direct, loaded), [direct, loaded])
   const own = useMemo(() => draftQuery.data?.ontology.entity_types ?? {}, [draftQuery.data])
   const tree = useMemo(() => buildTypeTree(own, inherited), [own, inherited])
 
@@ -117,14 +137,16 @@ export function OntologyEditor({ name }: { name: string }) {
           <Input className="h-8 w-56" placeholder="Note for this version" aria-label="Publish note"
             value={note} onChange={(e) => setNote(e.target.value)} />
           <Button size="sm" disabled={!draft.exists || blocking.length > 0 || stale || busy}
-            onClick={() => publish.mutate(note.trim() || null, { onSuccess: () => setNote('') })}
+            onClick={() => publish.mutate(note.trim() || null, {
+              onSuccess: () => { setNote(''); restart() },
+            })}
             data-testid="ontology-publish">
             Publish
           </Button>
           <ConfirmButton size="sm" variant="ghost" disabled={!draft.exists || busy}
             data-testid="ontology-discard" title="Discard the draft?"
             description="Every unpublished edit of this ontology is lost."
-            confirmLabel="Discard" onConfirm={() => discard.mutate()}>
+            confirmLabel="Discard" onConfirm={() => discard.mutate(undefined, { onSuccess: restart })}>
             Discard draft
           </ConfirmButton>
         </div>
@@ -178,7 +200,7 @@ export function OntologyEditor({ name }: { name: string }) {
         <div>
           {selectedOwn ? (
             <TypeForm
-              key={`${selectedOwn.name}:${draft.exists}:${draft.base_version}`}
+              key={`${selectedOwn.name}:${formEpoch}`}
               type={selectedOwn}
               parentOptions={[...tree.nodes.values()].map((n) => n.name).sort()}
               disabled={busy}
@@ -208,7 +230,7 @@ export function OntologyEditor({ name }: { name: string }) {
       />
 
       {previewMutation.data && <PreviewPanel preview={previewMutation.data} />}
-      <Versions name={name} draftOpen={draft.exists} />
+      <Versions name={name} draftOpen={draft.exists} onRolledBack={restart} />
     </div>
   )
 }
@@ -275,7 +297,11 @@ function PreviewPanel({ preview }: { preview: OntologyPreview }) {
   )
 }
 
-function Versions({ name, draftOpen }: { name: string; draftOpen: boolean }) {
+function Versions({ name, draftOpen, onRolledBack }: {
+  name: string
+  draftOpen: boolean
+  onRolledBack: () => void
+}) {
   const versions = useOntologyVersions(name)
   const rollback = useRollback(name)
   const { toast } = useToast()
@@ -317,7 +343,7 @@ function Versions({ name, draftOpen }: { name: string; draftOpen: boolean }) {
                     `Every notebook types with this version from the next extraction on.` +
                     (draftOpen ? ' The open draft was started from the current version and ' +
                       'can no longer be published afterwards.' : '')}
-                  confirmLabel="Roll back" onConfirm={() => rollback.mutate(v.version)}>
+                  confirmLabel="Roll back" onConfirm={() => rollback.mutate(v.version, { onSuccess: onRolledBack })}>
                   Roll back to this
                 </ConfirmButton>
               )}

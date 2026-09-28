@@ -55,7 +55,10 @@ const BLOCK: Finding = {
 
 const ONTOLOGIES: Record<string, unknown> = {
   deals: { name: 'deals', version: '1.0.0', entity_types: [] },
-  instruments: { name: 'instruments', entity_types: [{ name: 'Person', parent_type: 'Thing' }] },
+  instruments: { name: 'instruments', extends: 'schema_core',
+    entity_types: [{ name: 'Person', parent_type: 'Thing' }] },
+  schema_core: { name: 'schema_core', extends: null,
+    entity_types: [{ name: 'Person', parent_type: 'Thing' }] },
   policy_themes: { name: 'policy_themes', entity_types: [{ name: 'BeleidsThema', parent_type: 'Concept' }] },
 }
 
@@ -100,7 +103,8 @@ describe('OntologyEditor', () => {
     expect(within(project).getByRole('button', { name: 'Move Project' })).toBeTruthy()
     const person = await screen.findByTestId('ontology-type-Person')
     expect(within(person).queryByRole('button', { name: /Move/ })).toBeNull()
-    expect(person.textContent).toContain('from instruments')
+    // Person reaches deals through instruments, but schema_core defines it.
+    await waitFor(() => expect(person.textContent).toContain('from schema_core'))
     expect((await screen.findByTestId('ontology-type-BeleidsThema')).textContent)
       .toContain('from policy_themes')
   })
@@ -180,6 +184,20 @@ describe('TypeForm', () => {
       name: 'Project', parent_type: 'GovernmentService', graph_relevance: 'active',
       description: 'Een project',
     })
+  })
+
+  it('a save keeps a parent changed meanwhile by a drag or paste (round-2 major 1)', () => {
+    const onSave = vi.fn()
+    const type: StoredEntityType = { name: 'Project', parent_type: 'G', description: 'a' }
+    const { rerender } = render(<TypeForm type={type} parentOptions={[]} onSave={onSave}
+      onRename={vi.fn()} onDelete={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'b' } })
+    // The type is dragged under Deal: the draft refreshes the stored type.
+    rerender(<TypeForm type={{ ...type, parent_type: 'Deal' }} parentOptions={[]} onSave={onSave}
+      onRename={vi.fn()} onDelete={vi.fn()} />)
+    expect((screen.getByLabelText('Parent type') as HTMLInputElement).value).toBe('Deal')
+    fireEvent.click(screen.getByTestId('ontology-type-save'))
+    expect(onSave).toHaveBeenCalledWith({ name: 'Project', parent_type: 'Deal', description: 'b' })
   })
 
   it('an unrelated draft refresh does not wipe what is being typed (review minor 4)', () => {

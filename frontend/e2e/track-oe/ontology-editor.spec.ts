@@ -98,10 +98,18 @@ function backend() {
           description: null, extraction_hints: null, examples: null, aliases: null,
           parent_type: null, properties: [], ...t })) })
     }
-    if (path === '/instruments' && method === 'GET') {
-      return json(route, { name: 'instruments', version: '1.0.0',
-        entity_types: [{ name: 'Person', parent_type: 'Thing' }] })
+    // The chain deals → instruments → government → schema_core, each GET
+    // returning its MERGED types, as the browse API does.
+    const person = { name: 'Person', parent_type: 'Thing' }
+    const chain: Record<string, unknown> = {
+      '/instruments': { name: 'instruments', version: '1.0.0', extends: 'government', includes: [],
+        entity_types: [person, { name: 'Subsidie', parent_type: 'Grant' }] },
+      '/government': { name: 'government', version: '1.0.0', extends: 'schema_core', includes: [],
+        entity_types: [person] },
+      '/schema_core': { name: 'schema_core', version: '1.0.0', extends: null, includes: [],
+        entity_types: [person] },
     }
+    if (chain[path] && method === 'GET') return json(route, chain[path])
     if (path === '/deals/draft' && method === 'GET') return json(route, draftBody())
     if (path === '/deals/draft' && method === 'DELETE') {
       state.draft = null
@@ -121,8 +129,14 @@ function backend() {
       content.types[next] = { ...type, name: next, aliases: [...(type.aliases ?? []), old] }
       for (const t of Object.values(content.types)) if (t.parent_type === old) t.parent_type = next
       for (const r of Object.values(content.rels)) {
-        for (const k of ['domain', 'range', 'source_types', 'target_types']) {
-          if (Array.isArray(r[k])) r[k] = (r[k] as string[]).map((n) => (n === old ? next : n))
+        // Like the server: the renamed side is rewritten, and a relationship
+        // spelled source_types/target_types gains domain/range for that side.
+        for (const [modern, legacy] of [['domain', 'source_types'], ['range', 'target_types']]) {
+          const names = (r[modern] ?? r[legacy]) as string[] | undefined
+          if (!names?.includes(old)) continue
+          const renamed = names.map((n) => (n === old ? next : n))
+          r[modern] = renamed
+          if (legacy in r) r[legacy] = renamed
         }
       }
       return json(route, draftBody())
@@ -299,6 +313,27 @@ test.describe('OE.3 — ontology editor', () => {
     await confirm(page)
     await expect.poll(() => api.state.active.version).toBe('1.0.0')
     await expect(page.getByTestId('ontology-type-Project')).toBeVisible()
+  })
+
+  test('an inherited type names the ontology that defines it (round-2 major 2)', async ({ page }) => {
+    await openEditor(page)
+    await expect(page.getByTestId('ontology-type-Person')).toContainText('from schema_core')
+    await expect(page.getByTestId('ontology-type-Subsidie')).toContainText('from instruments')
+  })
+
+  test('a save does not undo a drag of the selected type (round-2 major 1)', async ({ page }) => {
+    const api = await openEditor(page)
+    await typeName(page, 'Project').click()
+    await page.getByLabel('Description', { exact: true }).fill('beschrijving')
+    await typeName(page, 'Project').focus()
+    await page.keyboard.press('Control+x')
+    await typeName(page, 'Deal').focus()
+    await page.keyboard.press('Control+v')
+    await expect(page.getByLabel('Parent type')).toHaveValue('Deal')
+    await page.getByTestId('ontology-type-save').click()
+    await expect.poll(() => api.state.calls.filter((c) => c.method === 'PUT').at(-1)?.body).toEqual({
+      name: 'Project', parent_type: 'Deal', graph_relevance: 'active', description: 'beschrijving',
+    })
   })
 
   test('editing a relationship keeps its source_types/target_types (review B1)', async ({ page }) => {
