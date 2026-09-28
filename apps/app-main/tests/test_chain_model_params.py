@@ -14,6 +14,7 @@ Two surfaces:
 from typing import Any, Dict, List, Optional
 
 import pytest
+from surrealdb import RecordID
 from llm_manager.providers.factory import ModelFactory
 from shared.models.llm import Model
 
@@ -87,6 +88,12 @@ class _FakeDB:
         if query.strip().upper().startswith("SELECT"):
             return [self._row] if self._row is not None else []
         if query.strip().upper().startswith("UPDATE"):
+            # Like SurrealDB: `UPDATE $id` on a plain string is rejected
+            # ("Can not execute UPDATE statement using value: 'model:…'").
+            if not isinstance(params.get("id"), RecordID):
+                raise RuntimeError(
+                    f"Can not execute UPDATE statement using value: {params.get('id')!r}"
+                )
             self.updates.append(params)
             # Apply the update to the in-memory row so a re-run sees it filled.
             for k, v in params.items():

@@ -53,7 +53,7 @@ async def _backfill_model_row(
     when no such row exists (a model the operator has not configured — nothing
     to backfill).
     """
-    from surrealdb_service.connection import execute_query
+    from surrealdb_service.connection import ensure_record_id, execute_query
 
     rows = await execute_query(
         "SELECT * FROM model WHERE name = $name AND provider = $provider LIMIT 1;",
@@ -81,7 +81,7 @@ async def _backfill_model_row(
     set_clause = ", ".join(f"{k} = ${k}" for k in updates)
     await execute_query(
         f"UPDATE $id SET {set_clause};",
-        {"id": model_id, **updates},
+        {"id": ensure_record_id(model_id), **updates},
     )
     logger.info(
         f"chain-model backfill: {provider}/{name} filled {updates}"
