@@ -82,7 +82,11 @@ async def test_the_preview_counts_what_the_retype_script_would_do(monkeypatch):
     spec = importlib.util.spec_from_file_location("pc4b_retype_entities", path)
     script = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(script)
-    monkeypatch.setattr(script, "load_typing_ontologies", _published)
+    # The script's plan is the retype service's (OE.4), which the editor's
+    # retype dry run and apply use as well.
+    from app_main.services import entity_retype_service
+
+    monkeypatch.setattr(entity_retype_service, "load_typing_ontologies", _published)
     monkeypatch.setattr(retype_planner, "execute_query", _rows)
     dry_run = await script.plan()
 

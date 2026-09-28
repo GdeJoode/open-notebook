@@ -545,6 +545,13 @@ def get_ontology_edit_service():
     return OntologyEditService()
 
 
+def get_entity_retype_service():
+    """Track OE.4: retype existing entities after a publish (dry run, confirmed apply)."""
+    from app_main.services.entity_retype_service import EntityRetypeService
+
+    return EntityRetypeService()
+
+
 def get_knowledge_graph_service() -> KnowledgeGraphService:
     return KnowledgeGraphService(
         entity_repo=get_entity_repo(),

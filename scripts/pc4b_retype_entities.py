@@ -46,45 +46,25 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 
-from app_main.services.entity_persistence_service import (
-    load_typing_ontologies,
-    typing_vocabulary,
+from app_main.services.entity_retype_service import (
+    active_plan,
+    new_rollback_path,
+    notebooks_with_edits,
+    rollback_file,
+    write_plan,
 )
-from app_main.services.retype_planner import plan_retype
-from surrealdb_service.connection import ensure_record_id, execute_query
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ROLLBACK_DIR = REPO_ROOT / "data" / "retype_rollback"
 
-_WRITE = (
-    "UPDATE $id SET entity_type = $to, properties.non_type_label = $flag "
-    "WHERE entity_type = $from RETURN id;"
-)
-
-
-async def _notebooks_with_edits() -> list[str]:
-    rows = await execute_query(
-        "SELECT notebook, accepted_extensions FROM notebook_schema;", {}
-    )
-    return [
-        str(r["notebook"])
-        for r in rows or []
-        if any(
-            isinstance(e, dict) and not str(e.get("type_name", "")).startswith("_")
-            for e in (r.get("accepted_extensions") or [])
-        )
-    ]
-
 
 async def plan() -> dict:
-    """The plan under the current typing (``app_main.services.retype_planner``,
-    shared with the ontology editor's preview)."""
-    return await plan_retype(typing_vocabulary(None, await load_typing_ontologies()))
+    """The plan under the current typing (``app_main.services.entity_retype_service``,
+    shared with the ontology editor)."""
+    return await active_plan()
 
 
 def _print(result: dict) -> None:
@@ -102,43 +82,14 @@ def _print(result: dict) -> None:
         print(f"  {c['id']} {c['name']!r} [{c['status']}] {c['old']} -> {c['new']}, held by {c['held_by']}")
 
 
-async def _write_rows(items, frm, to, flag_key, log_path=None) -> dict:
-    written, skipped, failed = 0, [], []
-    for c in items:
-        try:
-            rows = await execute_query(
-                _WRITE,
-                {"id": ensure_record_id(c["id"]), "from": c[frm], "to": c[to],
-                 "flag": c[flag_key]},
-            )
-        except Exception as exc:  # one bad row must not abort the run
-            failed.append({"id": c["id"], "error": str(exc)})
-            continue
-        if not rows:
-            skipped.append(c["id"])  # changed since the plan was made
-            continue
-        written += 1
-        if log_path is not None:
-            with log_path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(c, ensure_ascii=False) + "\n")
-    return {"written": written, "skipped": skipped, "failed": failed}
-
-
 async def apply(result: dict, rollback_dir: Path = ROLLBACK_DIR) -> dict:
-    rollback_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    log_path = rollback_dir / f"pc4b_retype_{stamp}.jsonl"
+    log_path = new_rollback_path(rollback_dir)
     print(f"rollback file (one line per row written): {log_path}")
-    outcome = await _write_rows(
-        result["changes"] + result["flag_only"], "old", "new", "new_flag", log_path
-    )
-    outcome["rollback_file"] = str(log_path)
-    return outcome
+    return await write_plan(result, log_path)
 
 
 async def rollback(log_path: Path) -> dict:
-    items = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
-    return await _write_rows(items, "new", "old", "old_flag")
+    return await rollback_file(log_path)
 
 
 def _report(outcome: dict) -> None:
@@ -159,7 +110,7 @@ async def main() -> int:
     if args.rollback:
         _report(await rollback(args.rollback))
         return 0
-    edited = await _notebooks_with_edits()
+    edited = await notebooks_with_edits()
     if edited and not args.ignore_notebook_edits:
         print(f"refusing: notebooks with accepted schema edits: {edited}")
         return 2

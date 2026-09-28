@@ -159,7 +159,50 @@ export interface PublishResult {
   name: string
   version: string
   warnings: Finding[]
-  retype: { changes: number; collisions: number; flag_only: number; caused_by_this_edit: number }
+  retype: {
+    changes: number
+    collisions: number
+    flag_only: number
+    caused_by_this_edit: number
+    collisions_caused_by_this_edit: number
+  }
+}
+
+/** One row of the retype plan (`retype_planner.plan_rows`). */
+export interface RetypeRow {
+  id: string
+  name: string | null
+  label: string
+  status: string
+  old: string
+  new: string
+  old_flag: boolean | null
+  new_flag: boolean | null
+  /** Collisions only: the rows that already hold the new identity. */
+  held_by?: string[]
+}
+
+/** OE.4: the retype under the ACTIVE ontologies. `fingerprint` is echoed back
+ *  to apply, so exactly this plan is written or nothing is. */
+export interface RetypeDryRun {
+  total: number
+  changes: RetypeRow[]
+  collisions: RetypeRow[]
+  flag_only: RetypeRow[]
+  counts: { changes: number; collisions: number; flag_only: number }
+  fingerprint: string
+  notebook_edits: string[]
+}
+
+export interface RetypeOutcome {
+  written: number
+  skipped: string[]
+  failed: { id: string; error: string }[]
+}
+
+export interface RetypeApplyResult extends RetypeOutcome {
+  /** Null when nothing was written. */
+  rollback_id: string | null
 }
 
 const enc = encodeURIComponent
@@ -212,4 +255,16 @@ export const ontologyEditApi = {
   exportYaml: async (name: string) =>
     (await apiClient.get<string>(`/ontologies/${enc(name)}/export.yaml`,
       { responseType: 'text' })).data,
+}
+
+// OE.4: the retype of existing entities after a publish (all ontologies at once).
+export const retypeApi = {
+  dryRun: async () =>
+    (await apiClient.get<RetypeDryRun>('/ontologies/retype/dry-run')).data,
+
+  apply: async (fingerprint: string) =>
+    (await apiClient.post<RetypeApplyResult>('/ontologies/retype/apply', { fingerprint })).data,
+
+  undo: async (rollbackId: string) =>
+    (await apiClient.post<RetypeOutcome>(`/ontologies/retype/undo/${enc(rollbackId)}`)).data,
 }

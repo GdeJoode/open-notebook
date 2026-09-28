@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
   ontologyEditApi,
+  retypeApi,
   type Finding,
   type OntologyDraft,
 } from '@/lib/api/ontologies'
@@ -23,6 +24,8 @@ export const ONTOLOGY_EDITOR_KEYS = {
   draft: (name: string) => ['ontology-editor', name, 'draft'] as const,
   findings: (name: string) => ['ontology-editor', name, 'findings'] as const,
   versions: (name: string) => ['ontology-editor', name, 'versions'] as const,
+  /** Under the editor's prefix: a publish or rollback re-runs the dry run. */
+  retype: ['ontology-editor', 'retype-dry-run'] as const,
 }
 
 /** The server's reason, whatever shape it has (a string, or `{message,
@@ -144,5 +147,50 @@ export function useRollback(name: string) {
     },
     onError: (err) =>
       toast({ title: 'Rollback refused', description: errorDetail(err), variant: 'destructive' }),
+  })
+}
+
+/** OE.4: the retype dry run. Not refetched on focus: the plan on screen is the
+ *  plan an apply confirms, and it only changes when asked for or after a
+ *  publish, rollback or apply. */
+export function useRetypeDryRun() {
+  return useQuery({
+    queryKey: ONTOLOGY_EDITOR_KEYS.retype,
+    queryFn: () => retypeApi.dryRun(),
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+  })
+}
+
+/** Applies the plan with this fingerprint; a 409 means the plan changed since
+ *  (nothing was written) and the new dry run is fetched. */
+export function useApplyRetype() {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ONTOLOGY_EDITOR_KEYS.retype })
+  return useMutation({
+    mutationFn: (fingerprint: string) => retypeApi.apply(fingerprint),
+    onSuccess: (result) => {
+      refresh()
+      toast({ title: 'Retyped', description: `${result.written} entities written` })
+    },
+    onError: (err) => {
+      refresh()
+      toast({ title: 'Retype refused', description: errorDetail(err), variant: 'destructive' })
+    },
+  })
+}
+
+export function useUndoRetype() {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  return useMutation({
+    mutationFn: (rollbackId: string) => retypeApi.undo(rollbackId),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ONTOLOGY_EDITOR_KEYS.retype })
+      toast({ title: 'Retype undone', description: `${result.written} entities restored` })
+    },
+    onError: (err) =>
+      toast({ title: 'Undo failed', description: errorDetail(err), variant: 'destructive' }),
   })
 }

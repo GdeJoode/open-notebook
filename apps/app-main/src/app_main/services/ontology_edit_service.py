@@ -19,8 +19,9 @@ versions besides the YAML seed:
 * **Rollback** re-activates a stored version, through the same gate.
 
 Rename keeps the old name as an alias, so the entities, labels and references
-that use it keep resolving. Retyping the entities an edit moves is OE.4; the
-publish result reports how many there are.
+that use it keep resolving. The publish result reports how many entities the
+edit moves; the editor then offers their retype (``entity_retype_service``,
+OE.4), which shares the publish lock.
 """
 
 from __future__ import annotations

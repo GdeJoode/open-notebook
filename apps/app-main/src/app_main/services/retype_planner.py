@@ -26,10 +26,12 @@ from surrealdb_service.connection import execute_query
 
 from app_main.services.entity_persistence_service import _resolve_entity_type
 
+# Ordered: which of two rows claiming one identity goes first decides the plan,
+# and the editor's apply refuses a plan that differs from the dry run (OE.4).
 ENTITY_ROWS = (
     "SELECT id, canonical_name, name_key, entity_type, status, primary_type, "
     "properties.raw_entity_type AS raw, properties.non_type_label AS flagged "
-    "FROM entity WHERE status IN ['active', 'reference'];"
+    "FROM entity WHERE status IN ['active', 'reference'] ORDER BY id;"
 )
 
 

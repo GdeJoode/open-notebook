@@ -19,11 +19,13 @@ const api = vi.hoisted(() => ({
   publish: vi.fn(),
   get: vi.fn(),
 }))
+const retype = vi.hoisted(() => ({ dryRun: vi.fn(), apply: vi.fn(), undo: vi.fn() }))
 
 vi.mock('@/lib/api/ontologies', async (original) => ({
   ...(await original<typeof import('@/lib/api/ontologies')>()),
   ontologyEditApi: api,
   ontologiesApi: { get: api.get, list: vi.fn() },
+  retypeApi: retype,
 }))
 vi.mock('@/lib/hooks/use-toast', () => ({ useToast: () => ({ toast: vi.fn() }) }))
 
@@ -138,6 +140,40 @@ describe('OntologyEditor', () => {
     await screen.findByTestId('ontology-preview-result')
     client.setQueryData(['ontology-editor', 'deals', 'draft'], draft({ base_version: '1.0.0' }))
     await waitFor(() => expect(screen.queryByTestId('ontology-preview-result')).toBeNull())
+  })
+})
+
+describe('OntologyEditor: the retype after a publish (OE.4)', () => {
+  const published = (retypeCounts: Partial<Record<string, number>>) => ({
+    name: 'deals', version: '1.0.0+x', warnings: [],
+    retype: { changes: 0, collisions: 0, flag_only: 0, caused_by_this_edit: 0,
+      collisions_caused_by_this_edit: 0, ...retypeCounts },
+  })
+
+  beforeEach(() => {
+    retype.dryRun.mockResolvedValue({ total: 1, changes: [], collisions: [], flag_only: [],
+      counts: { changes: 0, collisions: 0, flag_only: 0 }, fingerprint: 'fp', notebook_edits: [] })
+  })
+
+  it('a publish that moves entities offers their retype', async () => {
+    api.publish.mockResolvedValue(published({ changes: 2, caused_by_this_edit: 2 }))
+    mount(<OntologyEditor name="deals" />)
+    await waitFor(() => expect(publishButton().disabled).toBe(false))
+    fireEvent.click(publishButton())
+    await screen.findByTestId('ontology-retype')
+    expect(retype.dryRun).toHaveBeenCalled()
+  })
+
+  it('a publish that moves nothing does not; the retype stays on demand', async () => {
+    api.publish.mockResolvedValue(published({ collisions: 3 })) // collisions from before
+    mount(<OntologyEditor name="deals" />)
+    await waitFor(() => expect(publishButton().disabled).toBe(false))
+    fireEvent.click(publishButton())
+    await waitFor(() => expect(api.publish).toHaveBeenCalled())
+    await waitFor(() => expect(api.getDraft.mock.calls.length).toBeGreaterThan(1))
+    expect(screen.queryByTestId('ontology-retype')).toBeNull()
+    fireEvent.click(screen.getByTestId('ontology-retype-open'))
+    await screen.findByTestId('ontology-retype')
   })
 })
 
