@@ -3,7 +3,7 @@
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app_main.dependencies import get_ontology_edit_service, get_ontology_service
 from app_main.services.ontology_edit_service import (
@@ -65,7 +65,7 @@ async def get_relationship_types(
 
 
 class NameIn(BaseModel):
-    new_name: str
+    new_name: str = Field(..., min_length=1, max_length=200, pattern=r"^\S(.*\S)?$")
 
 
 class PublishIn(BaseModel):
@@ -98,7 +98,12 @@ async def discard_draft(name: str, svc: OntologyEditService = Depends(get_ontolo
 @router.put("/{name}/draft/entity-types/{type_name}", response_model=Dict[str, Any])
 async def put_entity_type(name: str, type_name: str, body: Dict[str, Any],
                           svc: OntologyEditService = Depends(get_ontology_edit_service)):
-    """Create or replace an entity type in the draft."""
+    """Create or REPLACE an entity type in the draft.
+
+    The body is the whole type: a key it leaves out is removed from the type
+    (the editor sends the stored type back with its changes, so keys it does
+    not show, such as ``graph_relevance``, survive).
+    """
     return _draft_out(await _call(svc.put_entity_type(name, type_name, body)))
 
 
@@ -113,6 +118,12 @@ async def rename_entity_type(name: str, type_name: str, body: NameIn,
                              svc: OntologyEditService = Depends(get_ontology_edit_service)):
     """Rename; the old name stays as an alias."""
     return _draft_out(await _call(svc.rename_entity_type(name, type_name, body.new_name)))
+
+
+@router.post("/{name}/draft/relationship-types/{rel_name}/rename", response_model=Dict[str, Any])
+async def rename_relationship_type(name: str, rel_name: str, body: NameIn,
+                                   svc: OntologyEditService = Depends(get_ontology_edit_service)):
+    return _draft_out(await _call(svc.rename_relationship_type(name, rel_name, body.new_name)))
 
 
 @router.put("/{name}/draft/relationship-types/{rel_name}", response_model=Dict[str, Any])

@@ -37,6 +37,11 @@ class OntologyRegistry:
         OntologyRegistry._initialized = True
 
         self._cache: Dict[str, Ontology] = {}
+        # OE.2: bumped by every `clear_cache`. A `get` that started before a
+        # clear (a publish) caches its result only if no clear happened while
+        # it awaited the database — otherwise it would write the PRE-publish
+        # ontology back into a cache that never expires.
+        self._generation = 0
         self._ontology_dir = self._find_ontology_dir()
         logger.info(f"OntologyRegistry initialized with dir: {self._ontology_dir}")
 
@@ -98,6 +103,8 @@ class OntologyRegistry:
         # would bake its parents' types into the child.
         cache_key = f"{name}:{version or 'active'}:{'merged' if resolve_inheritance else 'own'}"
 
+        generation = self._generation
+
         # 1. Check cache
         if cache_key in self._cache:
             logger.debug(f"Ontology '{cache_key}' found in cache")
@@ -109,7 +116,8 @@ class OntologyRegistry:
             logger.debug(f"Ontology '{name}' loaded from database")
             if resolve_inheritance and ontology.metadata.extends:
                 ontology = await self._resolve_inheritance(ontology)
-            self._cache[cache_key] = ontology
+            if generation == self._generation:
+                self._cache[cache_key] = ontology
             return ontology
 
         # 3. Try file system
@@ -118,7 +126,8 @@ class OntologyRegistry:
             logger.debug(f"Ontology '{name}' loaded from file")
             if resolve_inheritance and ontology.metadata.extends:
                 ontology = await self._resolve_inheritance(ontology)
-            self._cache[cache_key] = ontology
+            if generation == self._generation:
+                self._cache[cache_key] = ontology
             return ontology
 
         logger.warning(f"Ontology '{name}' not found")
@@ -338,6 +347,7 @@ class OntologyRegistry:
 
     def clear_cache(self, name: Optional[str] = None) -> None:
         """Clear the ontology cache."""
+        self._generation += 1
         if name:
             keys_to_remove = [k for k in self._cache if k.startswith(f"{name}:")]
             for key in keys_to_remove:

@@ -23,6 +23,7 @@ from app_main.services.ontology_edit_service import (
 )
 from fastapi import FastAPI
 from ontology_manager.registry import OntologyRegistry, get_ontology_registry
+from ontology_manager.validation import labels_of
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.requires_docker]
 
@@ -48,6 +49,14 @@ async def svc(live_surrealdb, monkeypatch):
 
 async def _typed(label):
     return _resolve_entity_type(label, typing_vocabulary(None, await load_typing_ontologies())).entity_type
+
+
+async def _typing_map():
+    """The type of EVERY declared label, as extraction types it now (through the
+    registry's cache — warm it first to prove a publish reaches it)."""
+    vocabulary = typing_vocabulary(None, await load_typing_ontologies())
+    labels = {label for o in vocabulary for label, _ in labels_of(o)}
+    return {label: _resolve_entity_type(label, vocabulary).entity_type for label in labels}
 
 
 async def _active_versions(name):
@@ -200,3 +209,164 @@ async def test_the_http_round_trip(svc):
         r = await client.put("/api/ontologies/deals/draft/entity-types/X",
                              json={"parent_type": ["not", "a", "string"]})
         assert r.status_code == 422
+
+
+async def test_a_draft_takes_many_edits(svc):
+    """Review OE.2 B1: `UPSERT ... CONTENT` wiped `created_at` on the second
+    edit, and every later edit of a draft failed."""
+    await svc.put_entity_type("deals", "Streekfonds", {"parent_type": "Grant"})
+    await svc.put_entity_type("deals", "Tweedefonds", {"parent_type": "Grant"})
+    await svc.rename_entity_type("deals", "Tweedefonds", "Derdefonds")
+    await svc.delete_entity_type("deals", "Streekfonds")
+    types = (await svc.get_draft("deals"))["ontology"].entity_types
+    assert "Derdefonds" in types and "Streekfonds" not in types and "Tweedefonds" not in types
+
+
+async def test_a_publish_reaches_every_label_through_a_warm_cache(svc):
+    """Review M4: the cache the publish must drop was never filled, so removing
+    `clear_cache` passed. Warm it, publish, and every label types as the
+    candidate says — then roll back and every label types as before."""
+    from app_main.services.ontology_preview_service import (
+        load_own_ontologies,
+        vocabulary_of,
+    )
+
+    before = await _typing_map()  # warms the merged cache for every ontology
+    await svc.put_entity_type("deals", "Streekfonds", {"parent_type": "Grant"})
+    project = (await svc.get_draft("deals"))["ontology"].entity_types["Project"]
+    await svc.put_entity_type("deals", "Project", {**project.model_dump(exclude_unset=True),
+                                                   "parent_type": "CreativeWork"})
+    candidate = {**await load_own_ontologies(), "deals": (await svc.get_draft("deals"))["ontology"]}
+    expected_vocabulary = vocabulary_of(candidate)
+    await svc.publish("deals")
+
+    after = await _typing_map()
+    assert after["Streekfonds"] == "grant" and after["Project"] == "creative_work"
+    assert after == {label: _resolve_entity_type(label, expected_vocabulary).entity_type
+                     for label in after}
+
+    seed = next(v["version"] for v in await get_ontology_registry().list_versions("deals")
+                if v["note"] == "YAML seed")
+    await svc.rollback("deals", seed)
+    assert await _typing_map() == before  # every label, exactly
+
+
+async def test_a_read_in_flight_during_a_publish_does_not_re_cache_the_old_ontology(svc, monkeypatch):
+    """Review M2: `get` awaits the DB; a publish clearing the cache in between
+    let the reader write the PRE-publish ontology back, for good."""
+    registry = get_ontology_registry()
+    gate = asyncio.Event()
+    real = OntologyRegistry._load_from_db
+    delayed = {"n": 0}
+
+    async def _slow(self, name, version=None):
+        # The reader has already read `deals` (the old content) and now resolves
+        # its parent chain: the window a publish lands in.
+        if name == "instruments" and delayed["n"] == 0:
+            delayed["n"] += 1
+            await gate.wait()
+        return await real(self, name, version)
+
+    monkeypatch.setattr(OntologyRegistry, "_load_from_db", _slow)
+    reader = asyncio.create_task(registry.get("deals"))
+    await asyncio.sleep(0.1)  # the reader holds the old `deals`, waiting on its parent
+    await svc.put_entity_type("deals", "Streekfonds", {"parent_type": "Grant"})
+    await svc.publish("deals")
+    gate.set()
+    await reader
+    assert "Streekfonds" in (await registry.get("deals")).entity_types
+
+
+async def test_an_edit_during_a_publish_is_not_lost(svc, monkeypatch):
+    """Review M3: an edit landing between publish reading the draft and
+    deleting it was accepted, then silently dropped with the draft."""
+    from app_main.services import ontology_edit_service as mod
+
+    real_preview = mod.preview
+
+    async def _slow_preview(*args, **kwargs):
+        await asyncio.sleep(0.3)
+        return await real_preview(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "preview", _slow_preview)
+    await svc.put_entity_type("deals", "Streekfonds", {"parent_type": "Grant"})
+    publishing = asyncio.create_task(svc.publish("deals"))
+    await asyncio.sleep(0.1)
+    await svc.put_entity_type("deals", "Laatfonds", {"parent_type": "Grant"})
+    published = await publishing
+    draft = await svc.get_draft("deals")
+    assert draft["exists"] and "Laatfonds" in draft["ontology"].entity_types
+    assert draft["base_version"] == published["version"]  # a new draft on the new version
+
+
+async def test_the_seed_is_stored_when_only_inactive_versions_exist(svc):
+    """Review minor 6: any stored row used to skip the seed, so the YAML could
+    not be rolled back to."""
+    imported = (await svc.get_draft("deals"))["ontology"].model_copy(deep=True)
+    imported.metadata.version = "0.9-imported"
+    assert await get_ontology_registry().register(imported)  # inactive
+    await svc.put_entity_type("deals", "Streekfonds", {"parent_type": "Grant"})
+    await svc.publish("deals")
+    notes = {v["note"] for v in await get_ontology_registry().list_versions("deals")}
+    assert "YAML seed" in notes
+
+
+async def test_activating_a_version_stamps_it(svc):
+    await svc.put_entity_type("deals", "Streekfonds", {"parent_type": "Grant"})
+    await svc.publish("deals")
+    seed = next(v for v in await get_ontology_registry().list_versions("deals")
+                if v["note"] == "YAML seed")
+    await asyncio.sleep(1.1)
+    await svc.rollback("deals", seed["version"])
+    [row] = await conn.execute_query(
+        "SELECT created_at, updated_at FROM ontology_version WHERE version = $v;",
+        {"v": seed["version"]})
+    assert row["updated_at"] > row["created_at"]
+
+
+async def test_rename_moves_this_ontologys_own_references(svc):
+    await svc.put_entity_type("deals", "Kindfonds", {"parent_type": "Project"})
+    await svc.rename_entity_type("deals", "Project", "Programmaproject")
+    types = (await svc.get_draft("deals"))["ontology"].entity_types
+    assert types["Kindfonds"].parent_type == "Programmaproject"
+
+
+async def test_the_http_surface(svc):
+    """Review minor 14: every route, the refusals and a second edit."""
+    app = FastAPI()
+    app.include_router(ontologies_router.router, prefix="/api")
+    app.dependency_overrides[get_ontology_edit_service] = lambda: svc
+    base = "/api/ontologies/deals"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url="http://t") as client:
+        assert (await client.put(f"{base}/draft/entity-types/A", json={"parent_type": "Grant"})).status_code == 200
+        assert (await client.put(f"{base}/draft/entity-types/B", json={"parent_type": "Grant"})).status_code == 200
+        r = await client.post(f"{base}/draft/entity-types/B/rename", json={"new_name": "C"})
+        assert r.status_code == 200 and "C" in r.json()["ontology"]["entity_types"]
+        assert (await client.post(f"{base}/draft/entity-types/C/rename",
+                                  json={"new_name": "  "})).status_code == 422
+        assert (await client.delete(f"{base}/draft/entity-types/A")).status_code == 200
+        assert (await client.delete(f"{base}/draft/entity-types/Nope")).status_code == 404
+        r = await client.put(f"{base}/draft/relationship-types/FUNDS",
+                             json={"domain": ["Grant"], "range": ["Nergens"]})
+        assert r.status_code == 200
+        findings = (await client.post(f"{base}/draft/validate")).json()
+        assert any(f["rule"] == "relationship_endpoint_unknown" and f["severity"] == "block"
+                   for f in findings)
+        assert (await client.post(f"{base}/draft/publish", json={})).status_code == 422
+        assert (await client.delete(f"{base}/draft/relationship-types/FUNDS")).status_code == 200
+        published = await client.post(f"{base}/draft/publish", json={"note": "via http"})
+        assert published.status_code == 200
+        r = await client.get(f"{base}/export.yaml")
+        assert r.status_code == 200 and "C:" in r.text
+        versions = (await client.get(f"{base}/versions")).json()
+        seed = next(v["version"] for v in versions if v["note"] == "YAML seed")
+        assert (await client.post(f"{base}/rollback/{seed}")).status_code == 200
+        assert (await client.post(f"{base}/rollback/nope")).status_code == 404
+        # A draft started from the seed, published over by someone else: 409.
+        assert (await client.put(f"{base}/draft/entity-types/D", json={"parent_type": "Grant"})).status_code == 200
+        underneath = (await svc.get_draft("deals"))["ontology"].model_copy(deep=True)
+        underneath.metadata.version = "9.9.9"
+        assert await get_ontology_registry().register(underneath, activate=True)
+        assert (await client.post(f"{base}/draft/publish", json={})).status_code == 409
+        assert (await client.get("/api/ontologies/nope/draft")).status_code == 404

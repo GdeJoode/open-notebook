@@ -42,7 +42,14 @@ from surrealdb_service.connection import execute_query
 from app_main.services.ontology_preview_service import load_own_ontologies, preview
 from app_main.services.ontology_validation_service import validate_candidate
 
+#: Who published. There is no authentication in the app (PC.7), so every
+#: publish is recorded as the editor, not as a person.
 EDITOR = "ontology-editor"
+
+
+def _stamp() -> str:
+    # Microseconds: two publishes from one base within a second must not collide.
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 _publish_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
     weakref.WeakKeyDictionary()
 )
@@ -97,21 +104,33 @@ class OntologyEditService:
                 "ontology": active}
 
     async def _save(self, name: str, ontology: Ontology, base_version: str) -> None:
+        # SET, not CONTENT: CONTENT replaces the whole record, and on an
+        # existing draft that left `created_at` NONE, which the schema refuses —
+        # every second edit of a draft failed (review OE.2 B1).
         await execute_query(
-            "UPSERT type::thing('ontology_draft', $name) CONTENT {"
-            " name: $name, yaml_content: $yaml, base_version: $base,"
-            " updated_at: time::now() };",
+            "UPSERT type::thing('ontology_draft', $name) SET"
+            " name = $name, yaml_content = $yaml, base_version = $base,"
+            " updated_at = time::now();",
             {"name": name, "yaml": ontology.to_yaml_string(), "base": base_version},
         )
 
     async def _edit(self, name: str, change) -> Dict[str, Any]:
-        draft = await self.get_draft(name)
-        ontology = draft["ontology"]
-        change(ontology)
-        await self._save(name, ontology, draft["base_version"])
-        return await self.get_draft(name)
+        # Under the publish lock: an edit landing between a publish reading the
+        # draft and deleting it was accepted, then silently lost (review M3).
+        # Each edit is a read-modify-write of the CURRENT draft, so edits from
+        # two tabs both apply.
+        async with _publish_lock():
+            draft = await self.get_draft(name)
+            ontology = draft["ontology"]
+            change(ontology)
+            await self._save(name, ontology, draft["base_version"])
+            return await self.get_draft(name)
 
     async def discard_draft(self, name: str) -> None:
+        async with _publish_lock():
+            await self._delete_draft(name)
+
+    async def _delete_draft(self, name: str) -> None:
         await execute_query("DELETE ontology_draft WHERE name = $name;", {"name": name})
 
     # -- edits ---------------------------------------------------------------------
@@ -142,6 +161,27 @@ class OntologyEditService:
             aliases = [a for a in (definition.aliases or []) if a != new]
             definition.aliases = aliases + ([old] if old not in aliases else [])
             o.entity_types[new] = definition
+            # This ontology's own references follow the new name; other
+            # ontologies' references keep resolving through the alias.
+            for other in o.entity_types.values():
+                if other.parent_type == old:
+                    other.parent_type = new
+            for rel in o.relationship_types.values():
+                for field in ("domain", "range", "source_types", "target_types"):
+                    names = getattr(rel, field, None)
+                    if names and old in names:
+                        setattr(rel, field, [new if n == old else n for n in names])
+        return await self._edit(name, change)
+
+    async def rename_relationship_type(self, name: str, old: str, new: str):
+        def change(o: Ontology):
+            if old not in o.relationship_types:
+                raise OntologyEditError(404, f"'{name}' defines no relationship type '{old}'")
+            if new in o.relationship_types:
+                raise OntologyEditError(409, f"'{name}' already defines '{new}'")
+            definition = o.relationship_types.pop(old)
+            definition.name = new
+            o.relationship_types[new] = definition
         return await self._edit(name, change)
 
     async def put_relationship_type(self, name: str, rel_name: str, fields: Dict[str, Any]):
@@ -198,22 +238,37 @@ class OntologyEditService:
             impact = await preview(candidate, active, include_detection=False)
 
             registry = get_ontology_registry()
-            if not await registry.list_versions(name):
-                # The YAML seed becomes a stored version, so it can be rolled back to.
-                if not await registry.register(current, activate=True, note="YAML seed",
+            stored = {v["version"] for v in await registry.list_versions(name)}
+            if await registry._load_from_db(name) is None:
+                # The active content is the YAML seed (no active stored version,
+                # even if inactive ones exist): store it, so it can be rolled
+                # back to (review minor 6).
+                seed = current.model_copy(deep=True)
+                if seed.metadata.version in stored:
+                    seed.metadata.version = f"{seed.metadata.version}+yaml-{_stamp()}"
+                if not await registry.register(seed, activate=True, note="YAML seed",
                                                created_by=EDITOR):
                     raise OntologyEditError(500, f"could not store the seed of '{name}'")
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            draft.metadata.version = f"{row['base_version'].split('+')[0]}+{stamp}"
+                stored.add(seed.metadata.version)
+            draft.metadata.version = f"{row['base_version'].split('+')[0]}+{_stamp()}"
+            if draft.metadata.version in stored:
+                raise OntologyEditError(409, f"version {draft.metadata.version!r} exists already")
             if not await registry.register(draft, activate=True, note=note, created_by=EDITOR):
-                raise OntologyEditError(409, f"could not store version {draft.metadata.version!r}")
-            await self.discard_draft(name)
+                raise OntologyEditError(500, f"could not store version {draft.metadata.version!r}")
+            warnings = _findings(findings)
+            try:
+                await self._delete_draft(name)
+            except Exception as exc:  # published: report, do not fail the publish
+                warnings.append({"rule": "draft_not_removed", "ontology": name, "subject": None,
+                                 "detail": f"published, but the draft could not be removed: {exc}",
+                                 "severity": "warn", "weight": 1})
             return {
                 "name": name,
                 "version": draft.metadata.version,
-                "warnings": _findings(findings),
+                "warnings": warnings,
                 "retype": {k: impact["retype"][k] for k in
-                           ("changes", "collisions", "flag_only", "caused_by_this_edit")},
+                           ("changes", "collisions", "flag_only", "caused_by_this_edit",
+                            "collisions_caused_by_this_edit")},
             }
 
     async def versions(self, name: str) -> List[Dict[str, Any]]:
