@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/accordion'
 import { Network, ArrowLeft, ArrowRight } from 'lucide-react'
 import type { OntologySummary } from '@/lib/api/ontologies'
+import { OntologyEditor } from '@/components/ontologies/OntologyEditor'
 
 export default function OntologiesPage() {
   const [selectedOntology, setSelectedOntology] = useState<string | null>(null)
@@ -144,6 +145,9 @@ function OntologyDetail({
           <TabsTrigger value="relationships">
             Relationships ({ontology.relationship_types.length})
           </TabsTrigger>
+          <TabsTrigger value="edit" data-testid="ontology-edit-tab">
+            Edit
+          </TabsTrigger>
           <TabsTrigger value="concepts">
             Concepts ({ontology.concepts.length})
           </TabsTrigger>
@@ -267,6 +271,10 @@ function OntologyDetail({
               </Card>
             ))}
           </div>
+        </TabsContent>
+
+        <TabsContent value="edit" className="mt-4">
+          <OntologyEditor name={name} />
         </TabsContent>
 
         <TabsContent value="concepts" className="mt-4">
