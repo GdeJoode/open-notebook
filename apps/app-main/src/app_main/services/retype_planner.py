@@ -39,11 +39,16 @@ def label_of(row: Dict[str, Any]) -> str:
 
 
 def plan_rows(rows: List[Dict[str, Any]], vocabulary: List[Any]) -> Dict[str, Any]:
-    """The plan for ``rows`` (shaped as :data:`ENTITY_ROWS` returns them)."""
-    holders: Dict[Any, set] = {}
-    for r in rows:
-        holders.setdefault((r.get("name_key"), r.get("entity_type")), set()).add(str(r["id"]))
-    changes, collisions, flags = [], [], []
+    """The plan for ``rows`` (shaped as :data:`ENTITY_ROWS` returns them).
+
+    Decided in two steps, so a row that MOVES releases the identity it held: a
+    change is refused only when a row that STAYS holds the new
+    ``(name_key, entity_type)``, or another change claims it first (then the
+    first claim wins, in row order).
+    """
+    intended: Dict[str, Dict[str, Any]] = {}
+    keys: Dict[str, Any] = {}
+    flags = []
     for r in rows:
         label = label_of(r)
         if not label:
@@ -64,9 +69,17 @@ def plan_rows(rows: List[Dict[str, Any]], vocabulary: List[Any]) -> Dict[str, An
             if resolved.is_noise and r.get("flagged") is not True:
                 flags.append(item)
             continue
-        key = (r.get("name_key"), new)
-        if holders.get(key, set()) - {rid}:
-            collisions.append({**item, "held_by": sorted(holders[key] - {rid})})
+        intended[rid] = item
+        keys[rid] = (r.get("name_key"), new)
+    holders: Dict[Any, set] = {}
+    for r in rows:
+        if str(r["id"]) not in intended:  # stays where it is
+            holders.setdefault((r.get("name_key"), r.get("entity_type")), set()).add(str(r["id"]))
+    changes, collisions = [], []
+    for rid, item in intended.items():
+        key = keys[rid]
+        if holders.get(key):
+            collisions.append({**item, "held_by": sorted(holders[key])})
             continue
         holders.setdefault(key, set()).add(rid)
         changes.append(item)

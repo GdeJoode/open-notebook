@@ -23,13 +23,14 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from ontology_manager.schema import Ontology
-from ontology_manager.validation import BLOCK, resolve_set, validate
+from ontology_manager.validation import BLOCK, resolve_set
 from surrealdb_service.connection import ensure_record_id, execute_query
 
 from app_main.services.entity_persistence_service import (
     _resolve_entity_type,
     typing_vocabulary,
 )
+from app_main.services.ontology_validation_service import validate_candidate
 from app_main.services.retype_planner import entity_rows, label_of, plan_rows
 
 
@@ -86,34 +87,69 @@ def label_changes(
 async def detection_changes(
     active: Dict[str, Ontology], candidate: Dict[str, Ontology]
 ) -> List[Dict[str, Any]]:
-    """Per source, the selection under each set — only the ones that differ."""
+    """Per source, the selection under each set — only the ones that differ.
+
+    The same steps as extraction: ``detect_applicable_schemas`` over the
+    source's sample, then the notebook's declared base
+    (``_apply_notebook_schema_default``). Not replayed: the notebook-history
+    fallback, taken only when nothing scores (it reads Pass-1 history, which an
+    ontology edit does not change). All chunks are read in one query.
+    """
     from ontology_extraction.multi_schema_orchestrator import detect_applicable_schemas
+    from surrealdb_service.repositories import NotebookSchemaRepository
 
-    from app_main.services.entity_extraction_service import _applicability_sample
+    from app_main.services.entity_extraction_service import (
+        EntityExtractionService,
+        _applicability_sample,
+    )
 
-    merged_active = list(resolve_set(active)[0].values())
-    merged_candidate = list(resolve_set(candidate)[0].values())
+    merged = {"before": list(resolve_set(active)[0].values()),
+              "after": list(resolve_set(candidate)[0].values())}
     sources = await execute_query(
         "SELECT id, title, metadata.document_type AS dt FROM source;", {}
     ) or []
+    chunks_of: Dict[str, List[Dict[str, Any]]] = {}
+    for chunk in await execute_query(
+        "SELECT source, text, order FROM chunk ORDER BY source, order ASC;", {}
+    ) or []:
+        chunks_of.setdefault(str(chunk.get("source")), []).append(chunk)
+    notebook_of = {
+        str(r["s"]): str(r["nb"])
+        for r in await execute_query("SELECT in AS s, out AS nb FROM reference;", {}) or []
+    }
+    schemas = NotebookSchemaRepository()
+    service = EntityExtractionService.__new__(EntityExtractionService)
     out = []
     for source in sources:
-        chunks = await execute_query(
-            "SELECT text, order FROM chunk WHERE source = $id ORDER BY order ASC;",
-            {"id": ensure_record_id(str(source["id"]))},
-        ) or []
-        sample = _applicability_sample(chunks)
-        picks = []
-        for ontologies in (merged_active, merged_candidate):
+        sid = str(source["id"])
+        sample = _applicability_sample(chunks_of.get(sid, []))
+        notebook_schema = (await schemas.get_by_notebook(notebook_of[sid])
+                           if sid in notebook_of else None)
+        picks = {}
+        for side, ontologies in merged.items():
             detected = await detect_applicable_schemas(
                 document_type=source.get("dt"), document_text=sample,
                 ontologies=ontologies, top_k=3,
             )
-            picks.append([o.metadata.name for o, _ in detected])
-        if picks[0] != picks[1]:
-            out.append({"source": str(source["id"]), "title": source.get("title"),
-                        "before": picks[0], "after": picks[1]})
+            if notebook_schema is not None and notebook_schema.base_ontology:
+                detected = service._apply_notebook_schema_default(
+                    detected, ontologies, notebook_schema)
+            picks[side] = [o.metadata.name for o, _ in detected]
+        if picks["before"] != picks["after"]:
+            out.append({"source": sid, "title": source.get("title"), **picks})
     return out
+
+
+async def _notebook_edit_count() -> int:
+    """Notebook-level schema edits the typing here does not project (OE.5
+    retires that layer). The retype script refuses while any exist."""
+    rows = await execute_query(
+        "SELECT accepted_extensions FROM notebook_schema;", {}
+    ) or []
+    return sum(
+        1 for r in rows for e in (r.get("accepted_extensions") or [])
+        if isinstance(e, dict) and not str(e.get("type_name", "")).startswith("_")
+    )
 
 
 async def preview(
@@ -122,27 +158,36 @@ async def preview(
     *,
     rows: Optional[List[Dict[str, Any]]] = None,
     include_detection: bool = True,
+    count_notebook_edits: bool = True,
 ) -> Dict[str, Any]:
     """Everything the editor shows before a publish. See the module docstring."""
     if active is None:
         active = await load_own_ontologies()
-    findings = validate(candidate, active)
+    findings = validate_candidate(candidate, active)
     v_active, v_candidate = vocabulary_of(active), vocabulary_of(candidate)
     if rows is None:
         rows = await entity_rows()
 
     plan = plan_rows(rows, v_candidate)
-    caused = [
-        c for c in plan["changes"]
-        if _resolve_entity_type(c["label"], v_active).entity_type != c["new"]
-    ]
+    def _caused(item: Dict[str, Any]) -> bool:
+        return _resolve_entity_type(item["label"], v_active).entity_type != item["new"]
+
+    caused = [c for c in plan["changes"] if _caused(c)]
+    caused_collisions = [c for c in plan["collisions"] if _caused(c)]
     detection: List[Dict[str, Any]] = []
+    detection_error: Optional[str] = None
     if include_detection:
         try:
             detection = await detection_changes(active, candidate)
         except Exception as exc:  # a preview never fails on the replay
             logger.warning(f"ontology preview: detection replay failed ({exc})")
-            detection = [{"error": str(exc)}]
+            detection_error = str(exc)
+    notebook_edits: Optional[int] = None
+    if count_notebook_edits:
+        try:
+            notebook_edits = await _notebook_edit_count()
+        except Exception as exc:
+            logger.warning(f"ontology preview: could not count notebook edits ({exc})")
 
     return {
         "findings": [f.__dict__ for f in findings],
@@ -155,9 +200,12 @@ async def preview(
             "collisions": len(plan["collisions"]),
             "flag_only": len(plan["flag_only"]),
             "caused_by_this_edit": len(caused),
+            "collisions_caused_by_this_edit": len(caused_collisions),
             "plan": plan,
         },
         "detection": detection,
+        "detection_error": detection_error,
+        "notebook_edits": notebook_edits,
     }
 
 
