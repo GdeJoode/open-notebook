@@ -37,6 +37,17 @@ reading ontologies.
 >     `get(version=…)`.
 >   - In-place edits, re-storing refused, `activate_version` reaching
 >     `regiodeal`, and an unknown version refused.
+>
+> **Carried into OE.2 (review minors, not blocking):**
+> 1. Extra lists from `includes` come out in a different order than the
+>    extraction service produces; the set is the same.
+> 2. Two concurrent `register(activate=True)` calls on a name with no stored
+>    rows can leave two active versions. OE.2's publish must serialise.
+> 3. `updated_at` is set on create only. `activate_version` should set it.
+> 4. The down migration leaves stored `note` / `created_by` values in place.
+> 5. `merge_with` passes the parent's extra-key objects into the merged
+>    ontology by reference. OE.2 must deep-copy before editing a merged
+>    ontology in place.
 
 
 ## Why
