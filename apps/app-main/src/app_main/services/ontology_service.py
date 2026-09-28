@@ -70,6 +70,9 @@ def _ontology_detail(o: Ontology) -> Dict[str, Any]:
         **_ontology_summary(o),
         "authors": o.metadata.authors,
         "extends": o.metadata.extends,
+        # OE.3: with `extends`, the editor walks the whole inheritance chain to
+        # say which ontology defines each inherited type.
+        "includes": list(o.metadata.includes or []),
         "entity_types": [_entity_type_dict(et) for et in o.entity_types.values()],
         "relationship_types": [
             _relationship_type_dict(rt) for rt in o.relationship_types.values()

@@ -293,14 +293,73 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 
 
 **OE.3 — Editor UI** (~2d)
-- The existing read-only `/ontologies` page becomes the editor.
-  - A type tree per ontology, showing its inheritance chain (`extends`) and
-    which parent defines what.
-  - A form per type for the v1 fields.
-  - Validation findings inline, and a preview panel before publish (labels
-    that change type, entities affected, collisions).
-  - A version history with rollback.
-- **AC:** an e2e test performs rename → preview → publish → rollback.
+
+> **OE.3 built 2026-09-28** (branch `feature/oe3-editor-ui`, review round 3).
+> The owner added drag-and-drop re-parenting to the scope, and Ctrl+X / Ctrl+V
+> as the keyboard way to do it ("no need to make it very complicated").
+> - The `/ontologies` detail page gets an **Edit** tab (`OntologyEditor`):
+>   - a draft bar showing the draft's base version next to the ACTIVE
+>     version, with Preview, Publish with a note, and Discard (confirmed);
+>   - a stale draft (after a rollback, or a publish elsewhere) is warned
+>     about and cannot be published;
+>   - the gate's findings, with a blocking count on the type concerned in
+>     the tree;
+>   - the type tree (`TypeTree`) next to a form for the selected type
+>     (`TypeForm`; delete confirmed);
+>   - relationship types (`RelationshipTypesEditor`);
+>   - the preview, dropped as soon as the draft changes;
+>   - versions with a confirmed rollback that warns an open draft will go
+>     stale; export to YAML.
+> - **The tree** shows own types and the types inherited through the whole
+>   chain (`extends` and every `includes`, at every level). Each is labelled
+>   with the ontology that DEFINES it: the one that introduces or redefines
+>   it, not the parent it arrives through (`inheritedTypes`; the browse API's
+>   detail now includes `includes`).
+>   - Parents are resolved by name or alias, case-insensitively, as in the
+>     backend.
+>   - Parents defined nowhere show as "not defined" targets.
+>   - A parent cycle is broken for display at a type ON the cycle, marked
+>     "parent cycle", so every type stays reachable and repairable. A type
+>     below the cycle keeps its parent.
+>   - Until the inherited ontologies have loaded, a notice replaces the tree.
+> - **Re-parenting**, three ways, all ending in the same draft edit
+>   (`dropEdit`):
+>   - drag onto the new parent, or onto "No parent";
+>   - Ctrl+X, then Ctrl+V (Cmd on a Mac; Escape cancels; a refused move says
+>     why);
+>   - the drag handle's own keyboard mode.
+>
+>   Only OWN types move. No drop that would make a cycle or change nothing is
+>   offered.
+> - **Nothing is silently lost:**
+>   - every edit sends the stored type back whole;
+>   - relationships keep the endpoint spelling they use (`source_types` /
+>     `target_types`, about 80 shipped ones), which the first version wiped;
+>     every spelling present is updated;
+>   - the type form keeps only the fields the user edited and saves them onto
+>     the LATEST stored type, so a drag or paste of the selected type is not
+>     undone by the next save. It starts over only on a discard, publish or
+>     rollback, never on the edit that creates the draft;
+>   - "Add" refuses a name that exists, which the first version replaced;
+>   - rows and the form follow the draft without discarding what is being
+>     typed.
+> - Tests:
+>   - `ontology-tree.test.ts` (18): tree incl. cycles, `includes` and
+>     aliases; drops; name clashes; both endpoint spellings;
+>   - `OntologyEditor.test.tsx` (10): the review cases, each in its state;
+>   - e2e `ontology-editor.spec.ts` (8), against a stateful mock that follows
+>     the OE.2 contract (source_types spelling, cycle findings, 409 / 422, a
+>     rollback leaving the draft stale, a rename appending the alias and
+>     moving references): drag, keyboard drag, cut/paste, "No parent" plus
+>     Escape, rename → preview → publish → rollback, relationship spelling,
+>     parent cycle, stale draft after a rollback.
+>
+> **Carried from OE.3 review round 3 (not blocking):**
+> - A refused save (e.g. a 422) clears what was typed, because the form clears
+>   its edited fields before the server answers.
+> - A redefinition that changes only a key the browse API does not return
+>   (e.g. `graph_relevance`) is labelled with the deeper ontology.
+
 
 **OE.4 — Data follow-through** (~1d)
 - After a publish that changes types, the preview's retype plan is offered:

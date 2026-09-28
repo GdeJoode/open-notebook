@@ -16,6 +16,7 @@ def _make_ontology_mock():
     metadata.description = "General purpose ontology"
     metadata.authors = ["test"]
     metadata.extends = None
+    metadata.includes = ["policy_themes"]
     ontology.metadata = metadata
 
     # Entity types
@@ -105,6 +106,8 @@ class TestGetOntology:
         assert len(result["entity_types"]) == 1
         assert len(result["relationship_types"]) == 1
         assert len(result["concepts"]) == 1
+        # OE.3: the editor walks extends + includes to label inherited types.
+        assert result["includes"] == ["policy_themes"]
 
     @pytest.mark.asyncio
     async def test_get_returns_none(self):
