@@ -19,9 +19,10 @@ import { useNotebookSchema } from '@/lib/hooks/use-notebook-schema'
 /**
  * `/notebooks/[id]/schema` — Phase B.3a Schema tab.
  *
- * View-only browser for the notebook's effective schema (base ontology
- * + accepted extensions), per-source coverage statistics, pending
- * extensions, and a TTL download button. Edit mutations land in B.3b.
+ * The notebook's declared base ontology (read-only; the ontologies are
+ * shared by every notebook and edited in the ontology editor, OE.5),
+ * per-source coverage statistics, the Pass-1 proposal queue (Accept
+ * publishes to a shared ontology), and a TTL download button.
  *
  * Routing choice (Q-B-3): this is implemented as a separate sub-route
  * rather than an in-page tab on `/notebooks/[id]` so the existing
@@ -76,7 +77,7 @@ export default function NotebookSchemaPage() {
             <section aria-labelledby="schema-heading">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <h2 id="schema-heading" className="text-lg font-semibold">
-                  Effective schema
+                  Schema
                 </h2>
                 <div className="flex items-center gap-2">
                   <TtlDownloadButton notebookId={notebookId} />
@@ -99,7 +100,7 @@ export default function NotebookSchemaPage() {
                   Failed to load the notebook schema. Reload to retry.
                 </div>
               ) : (
-                <SchemaBrowser schema={schema} notebookId={notebookId} />
+                <SchemaBrowser schema={schema} />
               )}
             </section>
 

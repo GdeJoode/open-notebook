@@ -26,12 +26,12 @@ export interface EntityTypeNode {
   properties: PropertyDef[]
 }
 
+/** A Pass-1 proposal in the notebook's queue. */
 export interface ExtensionView {
   /**
    * `extension_id` is assigned by B.1c when the LLM proposes an
    * extension. Older rows may not carry it (the storage shape is
-   * FLEXIBLE), in which case the B.3b accept/reject buttons fall
-   * back to matching by `type_name`.
+   * FLEXIBLE); accept/reject match by `type_name`.
    */
   extension_id?: string | null
   type_name: string
@@ -39,28 +39,48 @@ export interface ExtensionView {
   description?: string | null
   rationale?: string | null
   properties: PropertyDef[]
-  /**
-   * B.3c resume-sentinel marker. Older rows / non-sentinel entries
-   * lack this field entirely. The SchemaBrowser filters items where
-   * `is_resume_sentinel === true` so users never see the marker as a
-   * tree node — it carries no schema content. The backend already
-   * filters sentinels at the JSON-schema endpoint (defence-in-depth
-   * here in case a future endpoint forgets).
-   */
-  is_resume_sentinel?: boolean
 }
 
+/**
+ * OE.5: the ontologies are shared by every notebook. The response carries the
+ * declared base ontology's types (read-only; edits happen in the ontology
+ * editor) and the Pass-1 proposal queue.
+ */
 export interface NotebookSchemaResponse {
   notebook_id: string
   base_ontology: string
   base_ontology_types: EntityTypeNode[]
-  accepted_extensions: ExtensionView[]
   pending_extensions: ExtensionView[]
-  /** Type names hidden via the B.3b soft-delete (DELETE /schema/types/...). */
-  excluded_types: string[]
   coverage_pct: number
   review_required: boolean
   soft_nudge_dismissed: boolean
+}
+
+/** `GET /schema/extensions/{type}/accept`: where a proposal goes by default. */
+export interface AcceptTarget {
+  type_name: string
+  parent_type: string | null
+  /** The ontology that introduces the parent; `schema_core` when none does. */
+  default_ontology: string
+  ontologies: string[]
+}
+
+/** `POST /schema/extensions/{type}/accept`: the queue and what was published
+ *  (`null` when the proposal had already been accepted). */
+export interface AcceptExtensionResponse {
+  notebook_schema: NotebookSchemaResponse
+  published: {
+    name: string
+    version: string
+    warnings: unknown[]
+    retype: {
+      changes: number
+      collisions: number
+      flag_only: number
+      caused_by_this_edit: number
+      collisions_caused_by_this_edit: number
+    }
+  } | null
 }
 
 // ---------------------------------------------------------------------------

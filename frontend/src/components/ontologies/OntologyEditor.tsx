@@ -52,7 +52,7 @@ import {
   type MergedOntology,
 } from '@/lib/utils/ontology-tree'
 
-export function OntologyEditor({ name }: { name: string }) {
+export function OntologyEditor({ name, initialType }: { name: string; initialType?: string }) {
   const draftQuery = useOntologyDraft(name)
   const active = useOntology(name)
   const findings = useDraftFindings(name)
@@ -60,7 +60,7 @@ export function OntologyEditor({ name }: { name: string }) {
   const discard = useDiscardDraft(name)
   const previewMutation = useDraftPreview(name)
   const publish = usePublishDraft(name)
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useState<string | null>(initialType ?? null)
   const [note, setNote] = useState('')
   // Bumped when the draft is replaced wholesale (discard, publish, rollback):
   // the type form starts over then, and only then. Keying it on the draft's
@@ -305,10 +305,6 @@ function PreviewPanel({ preview }: { preview: OntologyPreview }) {
       {preview.detection_error && (
         <p className="text-destructive">Detection replay failed: {preview.detection_error}</p>
       )}
-      {preview.notebook_edits ? (
-        <p className="text-muted-foreground">
-          {preview.notebook_edits} notebook-level schema edit(s) are not included.</p>
-      ) : null}
     </div>
   )
 }

@@ -3,29 +3,23 @@
  *
  * Read hooks (B.3a):
  *
- * - `useNotebookSchema(notebookId)` — fetches the effective schema
- *   (base ontology + extensions + flags). Powers the SchemaBrowser
- *   tree and the PendingExtensionsPanel.
+ * - `useNotebookSchema(notebookId)` — fetches the schema view (declared
+ *   base ontology + pending proposals + flags). Powers the SchemaBrowser
+ *   and the PendingExtensionsPanel.
  *
  * - `usePass1Results(notebookId)` — fetches per-source pass-1 results.
  *   Powers the CoverageStatsTable.
  *
- * Mutation hooks (B.3b) — one per edit op:
+ * The proposal queue (OE.5):
  *
- * - `useAcceptExtension(notebookId)` / `useRejectExtension(notebookId)`
- * - `useRenameType(notebookId)` / `useMergeTypes(notebookId)`
- * - `useSplitType(notebookId)` / `useDeleteType(notebookId)`
+ * - `useAcceptTarget` / `useAcceptPreview` / `useAcceptExtension` — Accept
+ *   publishes the proposal to a SHARED ontology through the ontology
+ *   editor's gate (preview first; a blocking finding refuses it).
+ * - `useRejectExtension` — drops it and remembers the "no".
  *
- * Each mutation:
- *  1. Posts to the corresponding endpoint.
- *  2. Replaces the React Query cache directly with the response body
- *     (the endpoint returns the full updated `NotebookSchemaResponse`)
- *     to guarantee a single-roundtrip refresh — the AC#4 "200ms"
- *     guarantee. We deliberately do NOT call `invalidateQueries` after
- *     because it would force a second GET; the response is the
- *     canonical post-write state.
- *  3. Surfaces success / failure toasts. Toast wording mirrors the
- *     `use-notebooks` hooks for consistency.
+ * Both write the returned queue straight into the cache. The per-notebook
+ * edit ops (rename / merge / split / delete) are gone: those are edits of the
+ * shared ontology, made in the ontology editor.
  */
 
 import {
@@ -36,13 +30,12 @@ import {
 } from '@tanstack/react-query'
 import {
   notebookSchemaApi,
-  type MergeTypesRequest,
   type NotebookEventView,
   type ReextractRequest,
-  type RenameTypeRequest,
-  type SplitTypeRequest,
 } from '@/lib/api/notebook-schema'
+import { QUERY_KEYS } from '@/lib/api/query-client'
 import type {
+  AcceptExtensionResponse,
   NotebookSchemaResponse,
   ReextractCandidatesResponse,
   ReextractResponse,
@@ -83,38 +76,6 @@ export function usePass1Results(notebookId: string) {
     queryKey: PASS1_RESULTS_QUERY_KEY(notebookId),
     queryFn: () => notebookSchemaApi.listPass1Results(notebookId),
     enabled: !!notebookId,
-  })
-}
-
-// ---------------------------------------------------------------------------
-// Internal: shared success / error handlers for the B.3b mutations.
-// ---------------------------------------------------------------------------
-
-function buildMutationHandlers(
-  notebookId: string,
-  successDescription: string,
-  errorDescription: string,
-) {
-  return (
-    queryClient: ReturnType<typeof useQueryClient>,
-    toast: ReturnType<typeof useToast>['toast'],
-  ) => ({
-    onSuccess: (data: NotebookSchemaResponse) => {
-      // Replace the cache directly — guaranteed single-roundtrip refresh.
-      queryClient.setQueryData(NOTEBOOK_SCHEMA_QUERY_KEY(notebookId), data)
-      // Pass1 results don't change on schema-only ops; no invalidate.
-      toast({
-        title: 'Success',
-        description: successDescription,
-      })
-    },
-    onError: () => {
-      toast({
-        title: 'Error',
-        description: errorDescription,
-        variant: 'destructive' as const,
-      })
-    },
   })
 }
 
@@ -175,22 +136,63 @@ export function useMarkEventRead(notebookId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Mutation hooks
+// The proposal queue (OE.5)
 // ---------------------------------------------------------------------------
 
+export interface AcceptVariables {
+  typeName: string
+  ontology: string
+  /** The curator's parent; `undefined` keeps the proposed one, `""` is none. */
+  parentType?: string
+}
+
+/** Where a proposal goes by default, and the ontologies it can go to. */
+export function useAcceptTarget(notebookId: string, typeName: string | null) {
+  return useQuery({
+    queryKey: ['notebook-schema', notebookId, 'accept-target', typeName] as const,
+    queryFn: () => notebookSchemaApi.getAcceptTarget(notebookId, typeName as string),
+    enabled: !!notebookId && !!typeName,
+  })
+}
+
+/** What accepting would do to the shared ontologies. Writes nothing. */
+export function useAcceptPreview(notebookId: string) {
+  return useMutation({
+    mutationFn: ({ typeName, ontology, parentType }: AcceptVariables) =>
+      notebookSchemaApi.previewAccept(notebookId, typeName, {
+        ontology,
+        parent_type: parentType,
+      }),
+  })
+}
+
+/**
+ * Publish the proposal to a shared ontology. Errors are left to the caller,
+ * which shows the gate's findings (422) or the reason (409) in place.
+ */
 export function useAcceptExtension(
   notebookId: string,
-): UseMutationResult<NotebookSchemaResponse, Error, string> {
+): UseMutationResult<AcceptExtensionResponse, Error, AcceptVariables> {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   return useMutation({
-    mutationFn: (typeName: string) =>
-      notebookSchemaApi.acceptExtension(notebookId, typeName),
-    ...buildMutationHandlers(
-      notebookId,
-      'Extension accepted',
-      'Failed to accept extension',
-    )(queryClient, toast),
+    mutationFn: ({ typeName, ontology, parentType }: AcceptVariables) =>
+      notebookSchemaApi.acceptExtension(notebookId, typeName, {
+        ontology,
+        parent_type: parentType,
+      }),
+    onSuccess: (data, { typeName, ontology }) => {
+      queryClient.setQueryData(NOTEBOOK_SCHEMA_QUERY_KEY(notebookId), data.notebook_schema)
+      // The shared ontology changed: the browse views and the editor follow.
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.ontologies })
+      queryClient.invalidateQueries({ queryKey: ['ontology-editor'] })
+      toast({
+        title: 'Published',
+        description: data.published
+          ? `${typeName} is now a type of ${ontology} (version ${data.published.version})`
+          : `${typeName} was already accepted`,
+      })
+    },
   })
 }
 
@@ -202,75 +204,17 @@ export function useRejectExtension(
   return useMutation({
     mutationFn: (typeName: string) =>
       notebookSchemaApi.rejectExtension(notebookId, typeName),
-    ...buildMutationHandlers(
-      notebookId,
-      'Extension rejected',
-      'Failed to reject extension',
-    )(queryClient, toast),
-  })
-}
-
-export function useRenameType(
-  notebookId: string,
-): UseMutationResult<NotebookSchemaResponse, Error, RenameTypeRequest> {
-  const queryClient = useQueryClient()
-  const { toast } = useToast()
-  return useMutation({
-    mutationFn: (payload: RenameTypeRequest) =>
-      notebookSchemaApi.renameType(notebookId, payload),
-    ...buildMutationHandlers(
-      notebookId,
-      'Type renamed',
-      'Failed to rename type',
-    )(queryClient, toast),
-  })
-}
-
-export function useMergeTypes(
-  notebookId: string,
-): UseMutationResult<NotebookSchemaResponse, Error, MergeTypesRequest> {
-  const queryClient = useQueryClient()
-  const { toast } = useToast()
-  return useMutation({
-    mutationFn: (payload: MergeTypesRequest) =>
-      notebookSchemaApi.mergeTypes(notebookId, payload),
-    ...buildMutationHandlers(
-      notebookId,
-      'Types merged',
-      'Failed to merge types',
-    )(queryClient, toast),
-  })
-}
-
-export function useSplitType(
-  notebookId: string,
-): UseMutationResult<NotebookSchemaResponse, Error, SplitTypeRequest> {
-  const queryClient = useQueryClient()
-  const { toast } = useToast()
-  return useMutation({
-    mutationFn: (payload: SplitTypeRequest) =>
-      notebookSchemaApi.splitType(notebookId, payload),
-    ...buildMutationHandlers(
-      notebookId,
-      'Type split',
-      'Failed to split type',
-    )(queryClient, toast),
-  })
-}
-
-export function useDeleteType(
-  notebookId: string,
-): UseMutationResult<NotebookSchemaResponse, Error, string> {
-  const queryClient = useQueryClient()
-  const { toast } = useToast()
-  return useMutation({
-    mutationFn: (typeName: string) =>
-      notebookSchemaApi.deleteType(notebookId, typeName),
-    ...buildMutationHandlers(
-      notebookId,
-      'Type deleted',
-      'Failed to delete type',
-    )(queryClient, toast),
+    onSuccess: (data: NotebookSchemaResponse) => {
+      queryClient.setQueryData(NOTEBOOK_SCHEMA_QUERY_KEY(notebookId), data)
+      toast({ title: 'Success', description: 'Extension rejected' })
+    },
+    onError: () => {
+      toast({
+        title: 'Error',
+        description: 'Failed to reject extension',
+        variant: 'destructive',
+      })
+    },
   })
 }
 

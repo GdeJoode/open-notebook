@@ -143,7 +143,6 @@ export interface OntologyPreview {
   }
   detection: { source: string; title: string | null; notebook: string | null; before: string[]; after: string[] }[]
   detection_error: string | null
-  notebook_edits: number | null
 }
 
 export interface OntologyVersion {
@@ -191,7 +190,6 @@ export interface RetypeDryRun {
   flag_only: RetypeRow[]
   counts: { changes: number; collisions: number; flag_only: number }
   fingerprint: string
-  notebook_edits: string[]
 }
 
 export interface RetypeOutcome {

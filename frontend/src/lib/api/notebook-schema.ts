@@ -7,36 +7,21 @@
  */
 
 import apiClient from './client'
+import type { OntologyPreview } from '@/lib/api/ontologies'
 import type {
+  AcceptExtensionResponse,
+  AcceptTarget,
   NotebookSchemaResponse,
   Pass1ResultView,
   ReextractCandidatesResponse,
   ReextractResponse,
 } from '@/lib/types/notebook_schema'
 
-/**
- * Payload contracts for the B.3b schema-edit mutations.
- *
- * Hand-typed against `RenameTypeRequest` / `MergeTypesRequest` /
- * `SplitTypeRequest` in `apps/app-main/src/app_main/api/routers/schemas.py`.
- * Kept here (rather than under `lib/types/`) because they are mutation-
- * scoped and don't leak into render code — co-locating with the client
- * keeps the surface narrow.
- */
-export interface RenameTypeRequest {
-  old_name: string
-  new_name: string
-}
-
-export interface MergeTypesRequest {
-  type_names: string[]
-  merged_name: string
-}
-
-export interface SplitTypeRequest {
-  type_name: string
-  into: string[]
-  criterion: string
+/** Where an accepted proposal goes (OE.5): a shared ontology, and optionally a
+ *  parent other than the proposed one (`""` for none). */
+export interface AcceptExtensionRequest {
+  ontology: string
+  parent_type?: string | null
 }
 
 /**
@@ -104,9 +89,9 @@ const nbPath = (id: string) => `/notebooks/${encodeURIComponent(id)}`
 
 export const notebookSchemaApi = {
   /**
-   * Fetch the notebook's effective schema (base ontology + accepted +
-   * pending extensions + flags). Returns the bare-base-ontology defaults
-   * when the notebook has not been pass-1-processed yet.
+   * Fetch the notebook's schema view (declared base ontology, pending
+   * proposals, flags). Returns the bare-base-ontology defaults when the
+   * notebook has not been pass-1-processed yet.
    */
   get: async (notebookId: string): Promise<NotebookSchemaResponse> => {
     const response = await apiClient.get<NotebookSchemaResponse>(
@@ -128,21 +113,42 @@ export const notebookSchemaApi = {
   },
 
   // --------------------------------------------------------------------
-  // Phase B.3b edit ops
+  // The proposal queue (OE.5): Accept publishes to a shared ontology
   // --------------------------------------------------------------------
-  //
-  // Each mutation returns the FULL `NotebookSchemaResponse` so the
-  // caller can replace the React Query cache directly without a follow-
-  // up GET — guaranteeing UI updates within one round-trip (the AC#4
-  // "Schema tab updates within 200ms" guarantee).
 
-  /** Accept a pending extension by type name. */
+  /** The proposal and the ontology it goes to by default. */
+  getAcceptTarget: async (
+    notebookId: string,
+    typeName: string,
+  ): Promise<AcceptTarget> => {
+    const response = await apiClient.get<AcceptTarget>(
+      `${nbPath(notebookId)}/schema/extensions/${encodeURIComponent(typeName)}/accept`,
+    )
+    return response.data
+  },
+
+  /** What accepting would do (the ontology editor's preview). Writes nothing. */
+  previewAccept: async (
+    notebookId: string,
+    typeName: string,
+    payload: AcceptExtensionRequest,
+  ): Promise<OntologyPreview & { draft_open: boolean }> => {
+    const response = await apiClient.post<OntologyPreview & { draft_open: boolean }>(
+      `${nbPath(notebookId)}/schema/extensions/${encodeURIComponent(typeName)}/accept/preview`,
+      payload,
+    )
+    return response.data
+  },
+
+  /** Publish the proposal to the shared ontology; 422 carries the findings. */
   acceptExtension: async (
     notebookId: string,
     typeName: string,
-  ): Promise<NotebookSchemaResponse> => {
-    const response = await apiClient.post<NotebookSchemaResponse>(
+    payload: AcceptExtensionRequest,
+  ): Promise<AcceptExtensionResponse> => {
+    const response = await apiClient.post<AcceptExtensionResponse>(
       `${nbPath(notebookId)}/schema/extensions/${encodeURIComponent(typeName)}/accept`,
+      payload,
     )
     return response.data
   },
@@ -154,53 +160,6 @@ export const notebookSchemaApi = {
   ): Promise<NotebookSchemaResponse> => {
     const response = await apiClient.post<NotebookSchemaResponse>(
       `${nbPath(notebookId)}/schema/extensions/${encodeURIComponent(typeName)}/reject`,
-    )
-    return response.data
-  },
-
-  /** Record a rename as a synonym in `accepted_extensions`. */
-  renameType: async (
-    notebookId: string,
-    payload: RenameTypeRequest,
-  ): Promise<NotebookSchemaResponse> => {
-    const response = await apiClient.post<NotebookSchemaResponse>(
-      `${nbPath(notebookId)}/schema/rename`,
-      payload,
-    )
-    return response.data
-  },
-
-  /** Record a merge of N types into one. */
-  mergeTypes: async (
-    notebookId: string,
-    payload: MergeTypesRequest,
-  ): Promise<NotebookSchemaResponse> => {
-    const response = await apiClient.post<NotebookSchemaResponse>(
-      `${nbPath(notebookId)}/schema/merge`,
-      payload,
-    )
-    return response.data
-  },
-
-  /** Record a split of one type into N new ones. */
-  splitType: async (
-    notebookId: string,
-    payload: SplitTypeRequest,
-  ): Promise<NotebookSchemaResponse> => {
-    const response = await apiClient.post<NotebookSchemaResponse>(
-      `${nbPath(notebookId)}/schema/split`,
-      payload,
-    )
-    return response.data
-  },
-
-  /** Soft-delete a type by adding it to `excluded_types`. */
-  deleteType: async (
-    notebookId: string,
-    typeName: string,
-  ): Promise<NotebookSchemaResponse> => {
-    const response = await apiClient.delete<NotebookSchemaResponse>(
-      `${nbPath(notebookId)}/schema/types/${encodeURIComponent(typeName)}`,
     )
     return response.data
   },

@@ -30,7 +30,6 @@ export function RetypePanel({ onClose }: { onClose: () => void }) {
   const [last, setLast] = useState<RetypeApplyResult | null>(null)
   const plan = dryRun.data
   const toWrite = plan ? plan.changes.length + plan.flag_only.length : 0
-  const blockedByNotebooks = (plan?.notebook_edits.length ?? 0) > 0
 
   return (
     <div className="space-y-2 rounded-md border p-3 text-sm" data-testid="ontology-retype">
@@ -62,12 +61,6 @@ export function RetypePanel({ onClose }: { onClose: () => void }) {
             {plan.counts.changes} type change(s), {plan.counts.flag_only} literal(s) to flag,
             {' '}{plan.counts.collisions} collision(s) left for a merge.
           </p>
-          {blockedByNotebooks && (
-            <p className="text-destructive" role="alert">
-              Notebooks with schema edits ({plan.notebook_edits.join(', ')}): the retype does not
-              include them, so it cannot be applied.
-            </p>
-          )}
           {toWrite === 0 ? (
             <p className="text-muted-foreground" data-testid="ontology-retype-empty">
               Nothing to retype: every entity has the type the active ontologies give it.
@@ -84,7 +77,7 @@ export function RetypePanel({ onClose }: { onClose: () => void }) {
                 </details>
               )}
               <ConfirmButton size="sm" data-testid="ontology-retype-apply"
-                disabled={blockedByNotebooks || apply.isPending || dryRun.isFetching}
+                disabled={apply.isPending || dryRun.isFetching}
                 title={`Retype ${toWrite} entities?`}
                 description={
                   'Exactly the rows listed are written, each only if it still has its old type. ' +

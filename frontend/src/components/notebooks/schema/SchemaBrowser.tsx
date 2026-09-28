@@ -1,17 +1,11 @@
 'use client'
 
+import Link from 'next/link'
 import { useId, useMemo, useState } from 'react'
-import { ChevronRight, MoreHorizontal } from 'lucide-react'
+import { ChevronRight, Pencil } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -20,31 +14,34 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import {
-  SchemaEditDialog,
-  type SchemaEditMode,
-} from '@/components/notebooks/schema/SchemaEditDialog'
 import { useToggleReviewRequired } from '@/lib/hooks/use-notebook-schema'
 import type {
   EntityTypeNode,
-  ExtensionView,
   NotebookSchemaResponse,
 } from '@/lib/types/notebook_schema'
 
 interface SchemaBrowserProps {
   schema: NotebookSchemaResponse
-  /** When set, the per-row ⋯ menu fires edit ops scoped to this notebook. */
-  notebookId?: string
+}
+
+/** Where a type of a shared ontology is edited: the ontology editor's Edit tab. */
+export function ontologyEditorHref(ontology: string, typeName?: string): string {
+  const params = new URLSearchParams({ name: ontology, tab: 'edit' })
+  if (typeName) params.set('type', typeName)
+  return `/ontologies?${params.toString()}`
 }
 
 /**
- * Effective-schema browser.
+ * Schema browser: the notebook's declared base ontology, read-only.
+ *
+ * OE.5: the ontologies are shared by every notebook, so nothing here edits
+ * them. Each row links to the type in the ontology editor, where it is
+ * renamed, merged, split, re-parented or deleted for every notebook at once.
  *
  * Renders a two-column layout:
- *  - left: a flat single-select `role="listbox"` of entity types in
- *    the effective schema = base ontology + accepted extensions. Each
- *    row shows the type name and (when present) its `parent_type` in
- *    the side panel — the list itself is flat.
+ *  - left: a flat single-select `role="listbox"` of the base ontology's own
+ *    entity types. Each row shows the type name and (when present) its
+ *    `parent_type` in the side panel — the list itself is flat.
  *  - right: a side panel for the selected type, showing its
  *    description + properties.
  *
@@ -63,10 +60,8 @@ interface SchemaBrowserProps {
  *     `role="tree"` carries `aria-expanded` semantics + arrow-key
  *     traversal that imply child nodes; using it for a flat list
  *     mis-signals expandability to screen readers.
- *  3. **No B.3b dependency.** The rename/merge/split edit ops shipped
- *     in B.3b operate on individual types, not on tree edges — they
- *     read the same flat `items[]` list. Pivoting later would be cheap
- *     if a deeply-nested ontology lands in scope.
+ *  3. **The tree lives in the editor.** The ontology editor shows the full
+ *     type tree across inheritance; this list is a per-notebook entry point.
  *  4. **Keyboard scan speed.** A flat list is faster to skim with Tab
  *     + Enter than a tree where each parent has to be expanded first.
  *
@@ -87,66 +82,24 @@ interface SchemaBrowserProps {
  * Tooltips: each row's name has a tooltip with the description when
  * present — keeps the row label short while preserving discoverability.
  */
-export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
-  // Merge base + accepted extensions into a single tree. Accepted
-  // extensions are flagged so the UI can render an "Extension" badge.
-  // Types in `excluded_types` (B.3b soft-delete) are filtered out so
-  // the browser reflects the effective schema, not the raw lists.
-  //
-  // B.3c defence-in-depth: drop resume-sentinel entries and any
-  // underscore-prefixed `type_name` before rendering. The backend
-  // already filters at the JSON schema endpoint (`schemas.py` ~L633),
-  // but matching the pattern here means a future endpoint regression
-  // can't leak the `_resumed_without_extensions` marker into the
-  // SchemaBrowser tree.
+export function SchemaBrowser({ schema }: SchemaBrowserProps) {
+  const base = schema.base_ontology
   const items: TreeItem[] = useMemo(() => {
-    const excluded = new Set(schema.excluded_types ?? [])
-    const base: TreeItem[] = schema.base_ontology_types
-      .filter((et) => !excluded.has(et.name))
-      .map((et) => ({
-        kind: 'base',
-        key: `base:${et.name}`,
-        name: et.name,
-        description: et.description ?? null,
-        parent_type: et.parent_type ?? null,
-        properties: et.properties,
-      }))
-    const visibleExtensions = schema.accepted_extensions.filter(
-      (ext) =>
-        !excluded.has(ext.type_name) &&
-        ext.is_resume_sentinel !== true &&
-        !(ext.type_name ?? '').startsWith('_'),
-    )
-    const accepted: TreeItem[] = visibleExtensions.map((ext) => ({
-      kind: 'extension',
-      key: `ext:${ext.extension_id ?? ext.type_name}`,
-      name: ext.type_name,
-      description: ext.description ?? null,
-      parent_type: ext.parent_type ?? null,
-      properties: ext.properties,
+    const rows: TreeItem[] = schema.base_ontology_types.map((et) => ({
+      key: `base:${et.name}`,
+      name: et.name,
+      description: et.description ?? null,
+      parent_type: et.parent_type ?? null,
+      properties: et.properties,
     }))
-    // Stable order: base types first (preserves YAML order), then
-    // accepted extensions in their stored order. Both groups are
-    // alphabetised within their group for predictability.
-    base.sort((a, b) => a.name.localeCompare(b.name))
-    accepted.sort((a, b) => a.name.localeCompare(b.name))
-    return [...base, ...accepted]
+    rows.sort((a, b) => a.name.localeCompare(b.name))
+    return rows
   }, [schema])
 
   const [selectedKey, setSelectedKey] = useState<string | null>(
     items.length > 0 ? items[0].key : null,
   )
   const selected = items.find((it) => it.key === selectedKey) ?? null
-
-  // Edit-dialog state — `target` carries the row name the user invoked
-  // the menu on. `mode === null` means dialog is closed.
-  const [editMode, setEditMode] = useState<SchemaEditMode | null>(null)
-  const [editTarget, setEditTarget] = useState<string>('')
-
-  const openEditDialog = (mode: SchemaEditMode, name: string) => {
-    setEditTarget(name)
-    setEditMode(mode)
-  }
 
   // Stable id prefix for option ids. Required so `aria-activedescendant`
   // on the listbox can point at the option DOM node. `useId` keeps the
@@ -155,6 +108,21 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
   const optionId = (key: string) =>
     `${optionIdPrefix}-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}`
   const activeOptionId = selectedKey ? optionId(selectedKey) : undefined
+
+  const sharedNote = (
+    <p className="text-xs text-muted-foreground" data-testid="schema-shared-note">
+      The ontologies are shared by every notebook. Rename, merge, split,
+      re-parent or delete a type in the{' '}
+      <Link
+        href={base ? ontologyEditorHref(base) : '/ontologies'}
+        className="underline"
+        data-testid="schema-open-editor"
+      >
+        ontology editor
+      </Link>
+      .
+    </p>
+  )
 
   if (items.length === 0) {
     return (
@@ -167,9 +135,10 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
           role="status"
           className="rounded-md border border-dashed p-6 text-sm text-muted-foreground"
         >
-          No entity types in the effective schema yet. Try running pass-1
-          extraction on a source to populate the base ontology.
+          This notebook declares no base ontology; each document selects its
+          ontologies itself.
         </div>
+        {sharedNote}
       </div>
     )
   }
@@ -181,6 +150,7 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
           notebookId={schema.notebook_id}
           reviewRequired={schema.review_required}
         />
+        {sharedNote}
         <div
           className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]"
           data-testid="schema-browser"
@@ -224,11 +194,6 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
                           {item.name}
                         </span>
                       </span>
-                      {item.kind === 'extension' && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          Extension
-                        </Badge>
-                      )}
                     </button>
                   </TooltipTrigger>
                   {item.description && (
@@ -237,52 +202,15 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
                     </TooltipContent>
                   )}
                 </Tooltip>
-                {notebookId && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 shrink-0 p-0"
-                        aria-label={`Actions for ${item.name}`}
-                        data-testid={`schema-row-actions-${item.name}`}
-                      >
-                        <MoreHorizontal
-                          aria-hidden="true"
-                          className="h-4 w-4"
-                        />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-48">
-                      <DropdownMenuItem
-                        data-testid={`schema-row-rename-${item.name}`}
-                        onSelect={() => openEditDialog('rename', item.name)}
-                      >
-                        Rename…
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        data-testid={`schema-row-merge-${item.name}`}
-                        onSelect={() => openEditDialog('merge', item.name)}
-                      >
-                        Merge into…
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        data-testid={`schema-row-split-${item.name}`}
-                        onSelect={() => openEditDialog('split', item.name)}
-                      >
-                        Split…
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        data-testid={`schema-row-delete-${item.name}`}
-                        className="text-destructive focus:text-destructive"
-                        onSelect={() => openEditDialog('delete', item.name)}
-                      >
-                        Hide type
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
+                <Link
+                  href={ontologyEditorHref(base, item.name)}
+                  aria-label={`Edit ${item.name} in the ontology editor`}
+                  title="Edit in the ontology editor"
+                  data-testid={`schema-row-edit-${item.name}`}
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Pencil aria-hidden="true" className="h-3.5 w-3.5" />
+                </Link>
               </li>
             )
           })}
@@ -303,17 +231,6 @@ export function SchemaBrowser({ schema, notebookId }: SchemaBrowserProps) {
         </aside>
       </div>
       </div>
-      {notebookId && editMode && (
-        <SchemaEditDialog
-          notebookId={notebookId}
-          mode={editMode}
-          typeName={editTarget}
-          open={editMode !== null}
-          onOpenChange={(open) => {
-            if (!open) setEditMode(null)
-          }}
-        />
-      )}
     </TooltipProvider>
   )
 }
@@ -368,7 +285,6 @@ function ReviewRequiredToggle({
 }
 
 type TreeItem = {
-  kind: 'base' | 'extension'
   key: string
   name: string
   description: string | null
@@ -382,9 +298,6 @@ function SelectedTypePanel({ item }: { item: TreeItem }) {
       <header className="space-y-1">
         <div className="flex items-center gap-2">
           <h3 className="text-base font-semibold">{item.name}</h3>
-          {item.kind === 'extension' && (
-            <Badge variant="secondary">Extension</Badge>
-          )}
           {item.parent_type && (
             <span className="text-xs text-muted-foreground">
               extends <code className="font-mono">{item.parent_type}</code>
@@ -436,6 +349,3 @@ function SelectedTypePanel({ item }: { item: TreeItem }) {
     </div>
   )
 }
-
-// Re-export ExtensionView for the consumers that import it alongside.
-export type { ExtensionView }

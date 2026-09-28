@@ -1,5 +1,6 @@
 'use client'
 
+import { useSearchParams } from 'next/navigation'
 import { useState } from 'react'
 import { AppShell } from '@/components/layout/AppShell'
 import { EmptyState } from '@/components/common/EmptyState'
@@ -20,7 +21,13 @@ import type { OntologySummary } from '@/lib/api/ontologies'
 import { OntologyEditor } from '@/components/ontologies/OntologyEditor'
 
 export default function OntologiesPage() {
-  const [selectedOntology, setSelectedOntology] = useState<string | null>(null)
+  // A link can open an ontology on a tab with a type selected, e.g. the
+  // Schema tab's "edit in the ontology editor" (OE.5):
+  // `/ontologies?name=deals&tab=edit&type=Project`.
+  const searchParams = useSearchParams()
+  const [selectedOntology, setSelectedOntology] = useState<string | null>(
+    searchParams.get('name'),
+  )
 
   return (
     <AppShell>
@@ -30,6 +37,8 @@ export default function OntologiesPage() {
             {selectedOntology ? (
               <OntologyDetail
                 name={selectedOntology}
+                initialTab={searchParams.get('tab') ?? undefined}
+                initialType={searchParams.get('type') ?? undefined}
                 onBack={() => setSelectedOntology(null)}
               />
             ) : (
@@ -103,9 +112,13 @@ function OntologyList({ onSelect }: { onSelect: (name: string) => void }) {
 
 function OntologyDetail({
   name,
+  initialTab,
+  initialType,
   onBack,
 }: {
   name: string
+  initialTab?: string
+  initialType?: string
   onBack: () => void
 }) {
   const { data: ontology, isLoading, error } = useOntology(name)
@@ -137,7 +150,7 @@ function OntologyDetail({
         <p className="text-muted-foreground mb-6">{ontology.description}</p>
       )}
 
-      <Tabs defaultValue="entity-types">
+      <Tabs defaultValue={initialTab ?? 'entity-types'}>
         <TabsList>
           <TabsTrigger value="entity-types">
             Entity Types ({ontology.entity_types.length})
@@ -274,7 +287,7 @@ function OntologyDetail({
         </TabsContent>
 
         <TabsContent value="edit" className="mt-4">
-          <OntologyEditor name={name} />
+          <OntologyEditor name={name} initialType={initialType} />
         </TabsContent>
 
         <TabsContent value="concepts" className="mt-4">
