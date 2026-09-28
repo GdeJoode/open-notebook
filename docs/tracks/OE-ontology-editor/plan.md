@@ -283,6 +283,13 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 >   - `export.yaml` writes list-form collections as mappings (same content).
 >   - The `includes` order of extra keys (OE.0 minor 1); the preview is
 >     synchronous (OE.1 note).
+>   - From OE.2 review round 2:
+>     - The seed check reads the registry's private `_load_from_db`, which
+>       hides DB errors. After a transient error an active stored version can
+>       be stored again, labelled as a seed.
+>     - A relationship rename keeps no alias.
+>     - Endpoints kept under the extra keys `source_types` / `target_types` are
+>       not validated.
 
 
 **OE.3 — Editor UI** (~2d)
