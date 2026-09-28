@@ -126,7 +126,10 @@ def bound(live_surrealdb: SurrealDBConfig, monkeypatch):
     async def _bound(q, params=None, config=None):
         return await real(q, params, config or live_surrealdb)
 
-    monkeypatch.setattr(retype, "execute_query", _bound)
+    # The writes live in the service the script is a CLI over (OE.4).
+    from app_main.services import entity_retype_service
+
+    monkeypatch.setattr(entity_retype_service, "execute_query", _bound)
     return _bound
 
 
