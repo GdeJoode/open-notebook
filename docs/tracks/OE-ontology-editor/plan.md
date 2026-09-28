@@ -436,6 +436,75 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
   identity split exists.
 
 **OE.5 — Retire the per-notebook layer** (~1.5d, OE-D2)
+
+> **OE.5 built 2026-09-29** (branch `feature/oe5-retire-notebook-layer`).
+> - **Typing** is the registry's active set: `_typing_schemas_for` projects
+>   nothing per notebook; `_project_notebook_edits`, `schema_projection` and
+>   the N.4d.3 placement service (its advice was applied through the retired
+>   `/schema/reparent`) are gone.
+> - **Pass 2**: the accepted-extension map, its workflow / orchestrator /
+>   `run_pass2` / `build_pass2_prompt` parameters, the prompt section and the
+>   rule pointing at it are removed.
+> - **Selection** stays per document. A declared `base_ontology` still forces
+>   its base and bundle in (it changes the selection, not the type; 1 live
+>   row, base `""`). The schema named on an accepted extension no longer does.
+> - **Accept** publishes the proposal to a shared ontology:
+>   - through `OntologyEditService.publish_new_entity_type`, which shares the
+>     gate and store of a draft's publish (`_store`);
+>   - a blocking finding is a 422 with the findings and stores nothing; an
+>     open draft of that ontology is a 409 (the publish would leave it stale);
+>   - previewed first (`POST …/accept/preview`, the OE.1 preview plus
+>     `draft_open`);
+>   - the default ontology is the one that introduces the proposed parent
+>     (fewest `extends`, then the most built upon), else `schema_core`;
+>   - on success the proposal leaves the queue and is recorded in
+>     `accepted_extensions` with `published_to` / `published_version`. That
+>     list is now only the queue's history (dedup, review gate).
+> - **Retired write paths:** `/schema/rename|merge|split|reparent`,
+>   `DELETE /schema/types/{t}`, their service ops, `SchemaEditDialog`, hooks
+>   and client calls.
+> - **Retired readers:** the old layer in the TTL export and the Schema JSON
+>   (`accepted_extensions`, `excluded_types`), the `excluded_types` skip in
+>   the queue.
+> - **UI:** the Schema tab lists the base read-only; each type links to
+>   `/ontologies?name=…&tab=edit&type=…`, which opens there.
+>   `AcceptExtensionDialog`: ontology (default stated), parent, preview,
+>   publish.
+> - **Retype:** the notebook-edits refusal is gone (service, dry run,
+>   preview count, script flag, UI).
+> - **Stored data:** no migration. Rows of the old layer stay and are ignored.
+>   Live on 2026-09-29: 1 `notebook_schema` row, 0 accepted, 0 excluded,
+>   79 pending.
+> - **Tests:**
+>   - `test_typing_is_stable`, the AC: every notebook × every selection. The
+>     notebooks are no row, and each base (none, the 11 shipped ones, one
+>     unknown) with an empty layer and with one entry of every kind the layer
+>     wrote. That is 27 notebooks × 1,111 selections through the real
+>     `_run_multi_schema`: every label and layer name types as under all
+>     ontologies, and the vocabulary is the registry's own objects.
+>   - The Pass-2 prompt through the real workflow carries none of the layer.
+>   - `test_schema_edit_service`, against SurrealDB: an accept publishes and
+>     types; a blocking candidate and an open draft are refused, nothing
+>     stored.
+>   - `AcceptExtensionDialog` / `SchemaBrowser` vitest; e2e
+>     `notebook-accept.spec.ts` (4) on the OE backend, now shared as
+>     `_ontology-backend.ts`.
+>
+>   Mutation-checked:
+>   - the old projection and the old Pass-2 path fail the AC and the prompt
+>     test;
+>   - removing the gate, the open-draft guard or publish-before-dequeue fails
+>     its test;
+>   - in the dialog, ignoring `blocking` or `draft_open`, or keeping a stale
+>     preview, fails its test.
+> - **Limits:**
+>   - A publish that succeeds while the queue write fails leaves the proposal
+>     pending; a retry is then a 409 (the type exists).
+>   - `ontology_manager.type_placement` / `type_placement_judge` have no
+>     production caller now (reported, not removed).
+>   - The Schema tab's base list and the TTL export still read the YAML
+>     (OE.6).
+
 - Pass-1 proposals stay a per-notebook queue. "Accept" publishes the type to
   the shared ontology through OE.2 (validated, previewed).
 - The Schema tab's rename/merge/split/re-parent/delete route to the editor.
