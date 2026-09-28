@@ -5,7 +5,8 @@
  * extraction until a publish); the OE.1 gate re-validates the draft after each
  * edit, the preview shows what a publish would do to the graph, and a publish
  * is refused while a finding blocks or while the draft is based on a version
- * that is no longer active. Versions can be rolled back.
+ * that is no longer active. Versions can be rolled back. After a publish that
+ * moves entities, the retype of the existing rows is offered (OE.4).
  */
 
 import { useQueries } from '@tanstack/react-query'
@@ -14,6 +15,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { ConfirmButton } from '@/components/ontologies/ConfirmButton'
 import { RelationshipTypesEditor } from '@/components/ontologies/RelationshipTypesEditor'
+import { RetypePanel } from '@/components/ontologies/RetypePanel'
 import { TypeForm } from '@/components/ontologies/TypeForm'
 import { TypeTree } from '@/components/ontologies/TypeTree'
 import { Badge } from '@/components/ui/badge'
@@ -67,6 +69,7 @@ export function OntologyEditor({ name }: { name: string }) {
   const [formEpoch, setFormEpoch] = useState(0)
   const restart = () => setFormEpoch((e) => e + 1)
   const [newType, setNewType] = useState('')
+  const [retypeOpen, setRetypeOpen] = useState(false)
 
   // Every ontology this one inherits from, through the whole chain (`extends`
   // then `includes`, at every level), so each inherited type can be labelled
@@ -138,7 +141,14 @@ export function OntologyEditor({ name }: { name: string }) {
             value={note} onChange={(e) => setNote(e.target.value)} />
           <Button size="sm" disabled={!draft.exists || blocking.length > 0 || stale || busy}
             onClick={() => publish.mutate(note.trim() || null, {
-              onSuccess: () => { setNote(''); restart() },
+              onSuccess: ({ retype }) => {
+                setNote('')
+                restart()
+                // Offer the retype when this publish left rows on their old type.
+                if (retype.changes + retype.flag_only > 0 || retype.collisions_caused_by_this_edit > 0) {
+                  setRetypeOpen(true)
+                }
+              },
             })}
             data-testid="ontology-publish">
             Publish
@@ -149,6 +159,10 @@ export function OntologyEditor({ name }: { name: string }) {
             confirmLabel="Discard" onConfirm={() => discard.mutate(undefined, { onSuccess: restart })}>
             Discard draft
           </ConfirmButton>
+          <Button size="sm" variant="outline" onClick={() => setRetypeOpen(true)}
+            disabled={retypeOpen} data-testid="ontology-retype-open">
+            Retype entities
+          </Button>
         </div>
       </div>
 
@@ -159,6 +173,8 @@ export function OntologyEditor({ name }: { name: string }) {
           start again from the active version.
         </p>
       )}
+
+      {retypeOpen && <RetypePanel onClose={() => setRetypeOpen(false)} />}
 
       <FindingList findings={findings.data ?? []} />
 
