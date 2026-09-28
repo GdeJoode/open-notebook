@@ -406,6 +406,26 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 >   - Undo is offered only for the apply made in the open panel; older rollback
 >     files are undone through the script or the endpoint.
 >   - The dry run lists every row; on a large graph it should page.
+>
+> **Carried from OE.4 review round 1 (approved; minors, not blocking):**
+> 1. A rollback file is never marked used: undo can run twice, and an old
+>    undo can revert a later apply of the same change.
+> 2. Undo writes without a dry run or collision check; for `reference` rows
+>    it can hold an identity twice.
+> 3. The `non_type_label` flag is not guarded on write or undo (old = new for
+>    flag-only rows, so the type guard always passes).
+> 4. A label that stops being a literal keeps `non_type_label=True`
+>    (`retype_planner`, older behaviour the editor now reaches); the dry run
+>    does not offer it.
+> 5. The rollback line is written after each UPDATE: a crash or failed log
+>    write loses that row's undo, and a log error returns no `rollback_id`.
+> 6. `refetchOnReconnect` can swap the plan behind an open confirm dialog; the
+>    confirm then sends the new fingerprint (disable only covers the trigger).
+> 7. Script (`REPO_ROOT/data`) and API (`DATA_FOLDER`) rollback dirs can
+>    differ; rollback file names now carry microseconds.
+> 8. `_ROLLBACK_NAME.match` accepts a trailing newline; the e2e mock's undo
+>    never returns 422 and its apply ignores `notebook_edits`; apply holds the
+>    publish lock for all row writes.
 
 - After a publish that changes types, the preview's retype plan is offered:
   dry run shown, apply on confirmation (OE-D3). Collisions are listed for the
