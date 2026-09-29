@@ -101,8 +101,8 @@ class ConnectionPool:
     A semaphore holds one permit per connection that exists or is being
     created, so a failed or cancelled sign-in hands its permit back instead of
     leaking a slot. Every wait is bounded: sign-in (``connect_timeout``), the
-    liveness ping on reuse (``ping_timeout``) and waiting for a free slot
-    (``acquire_timeout``).
+    liveness ping on reuse (``ping_timeout``), and the whole checkout,
+    including the wait for a free slot (``acquire_timeout``).
     """
 
     def __init__(
@@ -171,14 +171,20 @@ class ConnectionPool:
             pass
 
     async def _checkout(self) -> AsyncSurreal:
-        """Take a slot, then an idle healthy connection or a new one."""
+        """Checkout within one deadline: the slot wait, pings and sign-in."""
         try:
-            await asyncio.wait_for(self._slots.acquire(), self._acquire_timeout)
+            return await asyncio.wait_for(
+                self._checkout_unbounded(), self._acquire_timeout
+            )
         except asyncio.TimeoutError as e:
             raise DatabaseUnavailableError(
-                f"No SurrealDB connection free within {self._acquire_timeout}s "
-                f"(all {self._max_size} in use)"
+                f"No SurrealDB connection within {self._acquire_timeout}s "
+                f"(pool of {self._max_size})"
             ) from e
+
+    async def _checkout_unbounded(self) -> AsyncSurreal:
+        """Take a slot, then an idle healthy connection or a new one."""
+        await self._slots.acquire()
         try:
             while not self._pool.empty():
                 candidate = self._pool.get_nowait()

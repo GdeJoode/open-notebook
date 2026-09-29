@@ -240,3 +240,23 @@ async def test_sdk_cancelled_ping_is_a_dead_candidate_not_an_abort(server):
 
     assert second is not first
     assert first.closed
+
+
+async def test_whole_checkout_shares_one_deadline_slow_sign_in(server):
+    pool = _pool(max_size=1, connect_timeout=GUARD * 2, acquire_timeout=0.05)
+    server.signin_mode = "hang"
+    with pytest.raises(DatabaseUnavailableError):
+        await asyncio.wait_for(_use_once(pool), GUARD)
+
+    server.signin_mode = "ok"
+    await asyncio.wait_for(_use_once(pool), GUARD)
+
+
+async def test_whole_checkout_shares_one_deadline_slow_ping(server):
+    pool = _pool(max_size=1, ping_timeout=GUARD * 2, acquire_timeout=0.05)
+    first = await asyncio.wait_for(_use_once(pool), GUARD)
+
+    server.query_mode = "hang"
+    with pytest.raises(DatabaseUnavailableError):
+        await asyncio.wait_for(_use_once(pool), GUARD)
+    assert first.closed
