@@ -29,6 +29,7 @@ from surrealdb_service.repositories.notebook_schema import NotebookSchemaReposit
 from surrealdb_service.repositories.source import SourceRepository
 
 from app_main.services.notebook_service import NotebookService
+from app_main.services.paused_extraction import list_paused_jobs_for_notebook
 
 # A source short of ``complete`` with no job queued or running for it counts as
 # stopped once its last write is this old. The pipeline enqueues the next stage
@@ -360,8 +361,6 @@ class AttentionService:
     async def _extraction_paused(
         self, group: AttentionGroup, notebooks: "asyncio.Future[List[Dict[str, Any]]]"
     ) -> None:
-        from app_main.api.routers.schemas import _list_paused_jobs_for_notebook
-
         # The per-notebook read filters this global list; when it is empty,
         # every notebook's is too.
         paused = await self.job_repo.list_jobs(
@@ -371,7 +370,7 @@ class AttentionService:
         if paused:
             nbs = await _shared(notebooks)
             per_notebook = await asyncio.gather(
-                *(_list_paused_jobs_for_notebook(str(nb["id"]), self.source_repo)
+                *(list_paused_jobs_for_notebook(str(nb["id"]), self.source_repo)
                   for nb in nbs)
             )
             items = [(nb, len(jobs)) for nb, jobs in zip(nbs, per_notebook) if jobs]

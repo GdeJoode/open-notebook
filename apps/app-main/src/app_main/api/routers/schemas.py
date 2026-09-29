@@ -50,6 +50,7 @@ from app_main.dependencies import (
     get_source_repo,
 )
 from app_main.services.notebook_service import NotebookService
+from app_main.services.paused_extraction import list_paused_jobs_for_notebook
 from app_main.services.reextract_service import ReextractService
 from app_main.services.ontology_edit_service import OntologyEditError
 from app_main.services.schema_edit_service import (
@@ -63,7 +64,7 @@ from shared.models.notebook_schema import (
     DEFAULT_BASE_ONTOLOGY,
     NotebookSchema,
 )
-from shared.types.enums import JobStatus, JobType
+from shared.types.enums import JobStatus
 from surrealdb_service.repositories.notebook_schema import (
     NotebookSchemaRepository,
     Pass1ResultRepository,
@@ -935,37 +936,6 @@ async def dismiss_soft_nudge(
     )
 
 
-async def _list_paused_jobs_for_notebook(
-    notebook_id: str,
-    source_repo: SourceRepository,
-) -> List[Any]:
-    """Find all ``PAUSED_FOR_REVIEW`` jobs whose source belongs to this notebook.
-
-    Done in two steps because the job table only stores ``source_id``,
-    not ``notebook_id``. We walk the ``reference`` edge from the notebook
-    to its sources and then query the job table for paused entries.
-
-    Local import of :class:`JobRepository` to keep the module-level
-    import graph tight (the schemas router otherwise has no job-queue
-    dependency).
-    """
-    from job_queue.repository import JobRepository
-
-    job_repo = JobRepository()
-
-    rows = await source_repo.list_with_metadata(notebook_id=notebook_id, limit=500)
-    source_ids = {str(row["id"]) for row in rows if row.get("id")}
-    if not source_ids:
-        return []
-
-    paused_entity_jobs = await job_repo.list_jobs(
-        status=JobStatus.PAUSED_FOR_REVIEW,
-        job_type=JobType.ENTITY_EXTRACT,
-        limit=200,
-    )
-    return [j for j in paused_entity_jobs if j.source_id in source_ids]
-
-
 @router.get(
     "/extraction/paused",
     response_model=PausedExtractionStatus,
@@ -986,7 +956,7 @@ async def list_paused_extraction(
     if not notebook:
         raise HTTPException(status_code=404, detail="Notebook not found")
 
-    paused_jobs = await _list_paused_jobs_for_notebook(notebook_id, source_repo)
+    paused_jobs = await list_paused_jobs_for_notebook(notebook_id, source_repo)
     paused_source_ids = sorted(
         {j.source_id for j in paused_jobs if j.source_id}
     )
@@ -1057,7 +1027,7 @@ async def resume_extraction(
         )
 
     # Move any paused jobs back to QUEUED so the worker re-picks them.
-    paused_jobs = await _list_paused_jobs_for_notebook(notebook_id, source_repo)
+    paused_jobs = await list_paused_jobs_for_notebook(notebook_id, source_repo)
     if paused_jobs:
         from job_queue.repository import JobRepository
 
