@@ -102,6 +102,8 @@ _last_probe_error: Optional[str] = None
 def _record_probe_outcome(task: asyncio.Task) -> None:
     global _last_probe_error
     if task.cancelled():
+        # The SDK cancels a pending query when the server drops the socket.
+        _last_probe_error = "Health probe cancelled"
         return
     exc = task.exception()
     _last_probe_error = None if exc is None else (str(exc) or type(exc).__name__)
@@ -123,9 +125,10 @@ async def check_database_health() -> dict:
     ):
         _probe = asyncio.ensure_future(execute_query("RETURN 1"))
         _probe.add_done_callback(_record_probe_outcome)
+    probe = _probe
     try:
         result = await asyncio.wait_for(
-            asyncio.shield(_probe), timeout=HEALTH_CHECK_TIMEOUT
+            asyncio.shield(probe), timeout=HEALTH_CHECK_TIMEOUT
         )
         if result:
             return {"status": "online"}
@@ -142,6 +145,11 @@ async def check_database_health() -> dict:
             f"{HEALTH_CHECK_TIMEOUT} seconds; not reporting offline"
         )
         return {"status": "online"}
+    except asyncio.CancelledError:
+        if not probe.cancelled():
+            raise  # this request was cancelled, not the probe
+        logger.warning("Database health probe was cancelled")
+        return {"status": "offline", "error": "Health probe cancelled"}
     except Exception as e:
         logger.warning(f"Database health check failed: {e}")
         return {"status": "offline", "error": str(e)}

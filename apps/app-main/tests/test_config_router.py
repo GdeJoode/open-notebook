@@ -121,3 +121,41 @@ class TestCheckDatabaseHealth:
         assert (await self.mod.check_database_health())["status"] == "online"
         gate.set()
         await self.mod._probe
+
+    async def test_cancelled_probe_is_offline_not_an_exception(self, monkeypatch):
+        """The SDK cancels a pending query when the socket drops; the probe
+        task then ends cancelled while this request was not cancelled."""
+        gate = asyncio.Event()
+        outcomes = ["cancel"]
+
+        async def cancelled_then_hang():
+            if outcomes:
+                outcomes.pop()
+                raise asyncio.CancelledError()
+            await gate.wait()
+            return [1]
+
+        self._db(monkeypatch, cancelled_then_hang)
+        health = await self.mod.check_database_health()
+        assert health["status"] == "offline"
+        # It also counts as the last failure for a following slow probe.
+        assert (await self.mod.check_database_health())["status"] == "offline"
+        gate.set()
+        await self.mod._probe
+
+    async def test_cancelling_the_request_still_cancels_it(self, monkeypatch):
+        gate = asyncio.Event()
+
+        async def slow():
+            await gate.wait()
+            return [1]
+
+        self._db(monkeypatch, slow)
+        self.mod.HEALTH_CHECK_TIMEOUT = 5.0
+        check = asyncio.ensure_future(self.mod.check_database_health())
+        await asyncio.sleep(0.01)
+        check.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await check
+        gate.set()
+        await self.mod._probe
