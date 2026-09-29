@@ -102,11 +102,12 @@ async def _notebook(name: str) -> str:
 
 
 async def _job(job_type: str, status: str, source_id: str | None = None,
-               error: str | None = None, completed: bool = False) -> str:
+               error: str | None = None, completed: bool = False,
+               payload: Dict[str, Any] | None = None) -> str:
     [row] = await _q(
         "CREATE job CONTENT $c RETURN id;",
         {"c": {"job_type": job_type, "status": status, "priority": "normal",
-               "payload": {}, "retry_count": 0, "max_retries": 2,
+               "payload": payload or {}, "retry_count": 0, "max_retries": 2,
                "source_id": source_id, "error_message": error,
                "created": datetime.now(timezone.utc),
                "updated": datetime.now(timezone.utc),
@@ -442,3 +443,21 @@ async def test_e2e_fixture_follows_the_contract(env) -> None:
                 assert f["link"] == r["link"], f["key"]
     assert fixture["total"] == sum(g["count"] for g in fixture["groups"]
                                    if g["needs_action"] and not g["error"])
+
+
+async def test_a_sourceless_failure_is_resolved_per_notebook(env) -> None:
+    """A failed export of one notebook stays until that notebook is exported
+    again; an export of another notebook does not resolve it."""
+    nb1, nb2 = await _notebook("One"), await _notebook("Two")
+    open_failure = await _job("export_okf", "failed", error="disk full", completed=True,
+                              payload={"notebook_id": nb1})
+    await _job("export_okf", "failed", error="disk full", completed=True,
+               payload={"notebook_id": nb2})
+    await asyncio.sleep(0.01)
+    await _job("export_okf", "completed", completed=True, payload={"notebook_id": nb2})
+    [job] = await JobRepository().list_unresolved_failures()
+    assert str(job.id) == open_failure
+    async with _client(_app()) as c:
+        body = (await c.get("/api/attention")).json()
+    failed = next(g for g in body["groups"] if g["key"] == "jobs_failed")
+    assert [i["link"] for i in failed["items"]] == [f"/notebooks/{quote(nb1, safe='')}"]

@@ -157,34 +157,41 @@ class JobRepository(BaseRepository[Job]):
     async def list_unresolved_failures(self) -> List[Job]:
         """Failed jobs nothing has resolved since, newest first (WB.1).
 
-        A failure is resolved once a later job of the same type for the same
-        source exists (a re-run, whatever its outcome), or once its source is
-        gone: nothing is left to act on. A job without a source is resolved by
-        a later job of its type without a source. The Werkbak lists what is
-        left, so a retried or deleted failure leaves it. Raises on a failed
-        read, unlike :meth:`query`.
+        A failure is resolved once a later job with the same key exists (a
+        re-run, whatever its outcome), or once its source is gone: nothing is
+        left to act on. The key is the job type, the source and the
+        payload's ``notebook_id``, so a failed notebook export is resolved by
+        a later export of that notebook, not of another one.
+
+        The later jobs are read as one row per key (the latest ``created``),
+        for the failures' keys only. Raises on a failed read, unlike
+        :meth:`query`.
         """
-        failed = [
-            Job(**r)
-            for r in await execute_query(
-                "SELECT * FROM job WHERE status = $status ORDER BY created DESC;",
-                {"status": JobStatus.FAILED.value},
-                self.config,
-            )
-            or []
-        ]
+        failed = await execute_query(
+            "SELECT * FROM job WHERE status = $status ORDER BY created DESC;",
+            {"status": JobStatus.FAILED.value},
+            self.config,
+        ) or []
         if not failed:
             return []
-        rows = await execute_query(
-            "SELECT id, job_type, source_id, created FROM job;", config=self.config
+
+        def key(row: Dict[str, Any]) -> tuple:
+            return (row.get("job_type"), row.get("source_id"),
+                    (row.get("payload") or {}).get("notebook_id"))
+
+        source_ids = sorted({r["source_id"] for r in failed if r.get("source_id")})
+        latest_rows = await execute_query(
+            "SELECT job_type, source_id, payload.notebook_id AS notebook_id, "
+            "time::max(created) AS latest FROM job "
+            "WHERE job_type IN $types AND (source_id = NONE OR source_id IN $sources) "
+            "GROUP BY job_type, source_id, notebook_id;",
+            {"types": sorted({r["job_type"] for r in failed}), "sources": source_ids},
+            self.config,
         )
-        latest: Dict[Any, Dict[str, Any]] = {}
-        for r in rows or []:
-            key = (r.get("job_type"), r.get("source_id"))
-            if key not in latest or r["created"] > latest[key]["created"]:
-                latest[key] = r
-        latest_ids = {str(r["id"]) for r in latest.values()}
-        source_ids = sorted({j.source_id for j in failed if j.source_id})
+        latest = {
+            (r.get("job_type"), r.get("source_id"), r.get("notebook_id")): r["latest"]
+            for r in latest_rows or []
+        }
         existing: set = set()
         if source_ids:
             found = await execute_query(
@@ -194,10 +201,10 @@ class JobRepository(BaseRepository[Job]):
             )
             existing = {str(r) for r in found or []}
         return [
-            j
-            for j in failed
-            if str(j.id) in latest_ids
-            and (j.source_id is None or j.source_id in existing)
+            Job(**r)
+            for r in failed
+            if not r["created"] < latest.get(key(r), r["created"])
+            and (not r.get("source_id") or r["source_id"] in existing)
         ]
 
     async def get_retryable(self) -> List[Job]:
