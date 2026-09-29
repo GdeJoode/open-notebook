@@ -332,10 +332,10 @@ async def live(live_surrealdb, monkeypatch):
     from surrealdb_service.repositories.notebook_event import NotebookEventRepository
     from surrealdb_service.repositories.notebook_schema import NotebookSchemaRepository
 
-    from tests.test_ontology_edit_service import _LIST_ONTOLOGIES, _LOAD_FROM_DB
+    from tests.conftest import REGISTRY_LIST_ONTOLOGIES, REGISTRY_LOAD_FROM_DB
 
-    monkeypatch.setattr(OntologyRegistry, "_load_from_db", _LOAD_FROM_DB)
-    monkeypatch.setattr(OntologyRegistry, "list_ontologies", _LIST_ONTOLOGIES)
+    monkeypatch.setattr(OntologyRegistry, "_load_from_db", REGISTRY_LOAD_FROM_DB)
+    monkeypatch.setattr(OntologyRegistry, "list_ontologies", REGISTRY_LIST_ONTOLOGIES)
     original = conn._pool
     conn._pool = conn.ConnectionPool(config=live_surrealdb)
     registry = get_ontology_registry()

@@ -35,6 +35,15 @@ from surrealdb_service.testing import live_surrealdb  # noqa: F401
 
 _DISABLE_METRICS_KEY = "OPEN_NOTEBOOK_DISABLE_METRICS"
 
+# The registry's database-first reads as shipped, captured at import — before
+# the autouse `_ontology_registry_reads_files` patches them. A test that reads
+# ontologies from a real SurrealDB restores these; capturing them inside a
+# fixture would capture the patch instead (OE.5 review M2).
+from ontology_manager.registry import OntologyRegistry as _OntologyRegistry  # noqa: E402
+
+REGISTRY_LOAD_FROM_DB = _OntologyRegistry._load_from_db
+REGISTRY_LIST_ONTOLOGIES = _OntologyRegistry.list_ontologies
+
 
 @pytest.fixture(autouse=True)
 def _disable_metrics_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
