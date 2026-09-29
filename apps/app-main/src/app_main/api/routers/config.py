@@ -102,7 +102,8 @@ _last_probe_error: Optional[str] = None
 def _record_probe_outcome(task: asyncio.Task) -> None:
     global _last_probe_error
     if task.cancelled():
-        # The SDK cancels a pending query when the server drops the socket.
+        # The pool turns a lost socket into DatabaseUnavailableError; a probe
+        # ends cancelled only when its loop shuts down, and counts as failed.
         _last_probe_error = "Health probe cancelled"
         return
     exc = task.exception()

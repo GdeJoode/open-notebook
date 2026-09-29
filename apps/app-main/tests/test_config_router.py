@@ -123,8 +123,8 @@ class TestCheckDatabaseHealth:
         await self.mod._probe
 
     async def test_cancelled_probe_is_offline_not_an_exception(self, monkeypatch):
-        """The SDK cancels a pending query when the socket drops; the probe
-        task then ends cancelled while this request was not cancelled."""
+        """A probe task that ends cancelled (its loop shutting down) while this
+        request was not cancelled counts as offline."""
         gate = asyncio.Event()
         outcomes = ["cancel"]
 
