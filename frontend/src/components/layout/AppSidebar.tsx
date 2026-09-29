@@ -8,6 +8,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/lib/hooks/use-auth'
+import { useAttention } from '@/lib/hooks/use-attention'
 import { useSidebarStore } from '@/lib/stores/sidebar-store'
 import {
   Tooltip,
@@ -25,6 +26,7 @@ import { ThemeToggle } from '@/components/common/ThemeToggle'
 import { CreateNotebookDialog } from '@/components/notebooks/CreateNotebookDialog'
 import { GeneratePodcastDialog } from '@/components/podcasts/GeneratePodcastDialog'
 import { Separator } from '@/components/ui/separator'
+import { Badge } from '@/components/ui/badge'
 import {
   Book,
   Search,
@@ -40,7 +42,11 @@ import {
   Network,
   Share2,
   AlignLeft,
+  Inbox,
+  type LucideIcon,
 } from 'lucide-react'
+
+const werkbak = { name: 'Werkbak', href: '/', icon: Inbox }
 
 const navigation = [
   {
@@ -91,6 +97,68 @@ export function AppSidebar() {
   const [createMenuOpen, setCreateMenuOpen] = useState(false)
   const [notebookDialogOpen, setNotebookDialogOpen] = useState(false)
   const [podcastDialogOpen, setPodcastDialogOpen] = useState(false)
+
+  // WB.1: the Werkbak's total, and per entry the groups whose `nav` it is
+  // (every group with a `nav` needs action; a failed group counts 0).
+  const { data: attention } = useAttention()
+  const badgeFor = (href: string): number => {
+    if (!attention) return 0
+    if (href === werkbak.href) return attention.total
+    return attention.groups
+      .filter((g) => g.nav === href)
+      .reduce((sum, g) => sum + g.count, 0)
+  }
+
+  const renderItem = (item: { name: string; href: string; icon: LucideIcon }) => {
+    const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)
+    const count = badgeFor(item.href)
+    const button = (
+      <Button
+        variant={isActive ? 'secondary' : 'ghost'}
+        className={cn(
+          'w-full gap-3 text-sidebar-foreground',
+          isActive && 'bg-sidebar-accent text-sidebar-accent-foreground',
+          isCollapsed ? 'relative justify-center px-2' : 'justify-start'
+        )}
+      >
+        <item.icon className="h-4 w-4" />
+        {!isCollapsed && <span>{item.name}</span>}
+        {count > 0 && (
+          <Badge
+            className={cn(
+              'tabular-nums',
+              isCollapsed ? 'absolute -right-1 -top-1 px-1' : 'ml-auto'
+            )}
+            data-testid={`nav-badge-${item.name}`}
+          >
+            {count}
+            <span className="sr-only"> need you</span>
+          </Badge>
+        )}
+      </Button>
+    )
+
+    if (isCollapsed) {
+      return (
+        <Tooltip key={item.name}>
+          <TooltipTrigger asChild>
+            <Link href={item.href}>
+              {button}
+            </Link>
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            {count > 0 ? `${item.name} (${count})` : item.name}
+          </TooltipContent>
+        </Tooltip>
+      )
+    }
+
+    return (
+      <Link key={item.name} href={item.href}>
+        {button}
+      </Link>
+    )
+  }
 
   const handleCreateSelection = (target: CreateTarget) => {
     setCreateMenuOpen(false)
@@ -239,11 +307,11 @@ export function AppSidebar() {
             </DropdownMenu>
           </div>
 
-          {navigation.map((section, index) => (
+          <div className="space-y-1">{renderItem(werkbak)}</div>
+
+          {navigation.map((section) => (
             <div key={section.title}>
-              {index > 0 && (
-                <Separator className="my-3" />
-              )}
+              <Separator className="my-3" />
               <div className="space-y-1">
                 {!isCollapsed && (
                   <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/60">
@@ -251,41 +319,7 @@ export function AppSidebar() {
                   </h3>
                 )}
 
-                {section.items.map((item) => {
-                  const isActive = pathname.startsWith(item.href)
-                  const button = (
-                    <Button
-                      variant={isActive ? 'secondary' : 'ghost'}
-                      className={cn(
-                        'w-full gap-3 text-sidebar-foreground',
-                        isActive && 'bg-sidebar-accent text-sidebar-accent-foreground',
-                        isCollapsed ? 'justify-center px-2' : 'justify-start'
-                      )}
-                    >
-                      <item.icon className="h-4 w-4" />
-                      {!isCollapsed && <span>{item.name}</span>}
-                    </Button>
-                  )
-
-                  if (isCollapsed) {
-                    return (
-                      <Tooltip key={item.name}>
-                        <TooltipTrigger asChild>
-                          <Link href={item.href}>
-                            {button}
-                          </Link>
-                        </TooltipTrigger>
-                        <TooltipContent side="right">{item.name}</TooltipContent>
-                      </Tooltip>
-                    )
-                  }
-
-                  return (
-                    <Link key={item.name} href={item.href}>
-                      {button}
-                    </Link>
-                  )
-                })}
+                {section.items.map(renderItem)}
               </div>
             </div>
           ))}

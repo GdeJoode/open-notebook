@@ -179,6 +179,15 @@ async function mockSourceDetail(page: Page): Promise<void> {
       body: JSON.stringify([]),
     }),
   )
+  // WB.1: the sidebar reads the Werkbak report on every page.
+  await page.route(`**/api/attention**`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ generated_at: '2026-09-29T00:00:00+00:00', since: null,
+        total: 0, groups: [], arrived: [] }),
+    }),
+  )
   await page.route(`**/api/zotero/status`, (route) =>
     route.fulfill({
       status: 200,
@@ -227,8 +236,8 @@ test.describe('I.A: design tokens visual smoke', () => {
       }),
     )
 
-    // -------- Step 1: dashboard (`/` redirects to `/notebooks`) --------
-    await gotoAndWait(page, '/')
+    // -------- Step 1: dashboard (the notebooks list) --------
+    await gotoAndWait(page, '/notebooks')
     await expect(page).toHaveURL(/\/notebooks\/?$/, { timeout: 15_000 })
     // Wait for a stable, deterministic element of the dashboard chrome —
     // the sidebar nav — so hydration is fully complete before we assert.
