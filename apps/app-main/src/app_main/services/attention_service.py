@@ -127,7 +127,7 @@ def _plural(n: int, one: str, many: Optional[str] = None) -> str:
 
 
 def _job_label(job: Job) -> str:
-    return job.job_type.value.replace("_", " ").capitalize()
+    return str(job.job_type.value).replace("_", " ").capitalize()
 
 
 def _job_item(job: Job, detail: Optional[str], at: Any) -> AttentionItem:
