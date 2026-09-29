@@ -138,6 +138,10 @@ class ConnectionPool:
     leaking a slot. Every wait is bounded: sign-in (``connect_timeout``), the
     liveness ping on reuse (``ping_timeout``), and the whole checkout,
     including the wait for a free slot (``acquire_timeout``).
+
+    A connection goes back to the pool only while its SDK receive task still
+    runs, and never after a cancelled or broken request. Requests go through
+    :func:`_request`, so a cancellation never reaches the SDK.
     """
 
     def __init__(
