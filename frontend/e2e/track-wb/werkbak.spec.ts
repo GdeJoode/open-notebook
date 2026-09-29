@@ -102,7 +102,7 @@ test.describe('WB.1 — the Werkbak', () => {
     await gotoAndWait(page, '/')
     await expect(page.getByTestId('werkbak-group-triage')).toBeVisible({ timeout: 45_000 })
     // The fixture's merge candidates timed out: partial.
-    await expect(page.getByTestId('nav-badge-Werkbak'))
+    await expect(page.getByTestId('nav-badge-The Tray'))
       .toHaveText(`${fixture.total}+ need you, some groups did not load`)
     await expect(page.getByTestId('nav-badge-Knowledge Graph'))
       .toHaveText('1238+ need you, some groups did not load')
