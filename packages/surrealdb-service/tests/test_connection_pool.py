@@ -278,12 +278,16 @@ async def test_idle_connection_with_a_lost_socket_is_replaced(server):
 
 
 async def test_whole_checkout_shares_one_deadline_slow_sign_in(server):
-    pool = _pool(max_size=1, connect_timeout=GUARD * 2, acquire_timeout=0.05)
+    pool = _pool(max_size=1, connect_timeout=0.5, acquire_timeout=0.05)
     server.signin_mode = "hang"
     with pytest.raises(DatabaseUnavailableError):
         await asyncio.wait_for(_use_once(pool), GUARD)
 
+    # The abandoned sign-in keeps the only slot until its connect_timeout.
     server.signin_mode = "ok"
+    with pytest.raises(DatabaseUnavailableError):
+        await asyncio.wait_for(_use_once(pool), GUARD)
+    await asyncio.sleep(0.5)
     await asyncio.wait_for(_use_once(pool), GUARD)
 
 
@@ -396,3 +400,4 @@ async def test_pool_size_comes_from_the_config(server):
     async with pool.acquire(), pool.acquire(), pool.acquire():
         with pytest.raises(DatabaseUnavailableError, match="pool of 3"):
             await _use_once(pool)
+

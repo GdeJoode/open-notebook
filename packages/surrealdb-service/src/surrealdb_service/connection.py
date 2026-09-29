@@ -149,9 +149,11 @@ class ConnectionPool:
     Reuses connections across requests to avoid the overhead of
     opening and closing a connection per query.
 
-    A semaphore holds one permit per connection that exists or is being
-    created, so a failed or cancelled sign-in hands its permit back instead of
-    leaking a slot. Every wait is bounded: sign-in (``connect_timeout``), the
+    A semaphore holds one permit per connection checked out or being
+    created. A failed sign-in hands its permit back; one its caller gave up
+    on keeps it until it has ended and its connection is closed, so a
+    starved database never has more sign-ins than the pool has slots. Every
+    wait is bounded: a sign-in (``connect_timeout`` from its start), the
     liveness ping on reuse (``ping_timeout``), and the whole checkout,
     including the wait for a free slot (``acquire_timeout``).
 
@@ -185,24 +187,39 @@ class ConnectionPool:
         # Set by close_all: connections handed back afterwards are closed.
         self._closed = False
         # Closer of each abandoned sign-in -> that sign-in (``_close_when_done``).
-        self._closers: "Dict[asyncio.Task[None], asyncio.Future[None]]" = {}
+        self._closers: "Dict[asyncio.Task[None], asyncio.Future[AsyncSurreal]]" = {}
 
-    async def _create_connection(self) -> AsyncSurreal:
-        """Create and authenticate a new SurrealDB connection."""
-        db = AsyncSurreal(self.config.url)
-        # Shielded for the reason given at ``_request``. A sign-in abandoned
-        # half-way is still opening its socket, so it cannot be closed now:
-        # ``_close_when_done`` closes it once the sign-in ends.
-        auth = asyncio.ensure_future(self._authenticate(db))
+    async def _new_connection(self) -> AsyncSurreal:
+        """Sign in a new connection on the permit the caller holds.
+
+        The sign-in runs in a task of its own (shielded, for the reason given
+        at ``_request``) and owns the permit until it has ended: a caller that
+        stops waiting leaves it to finish or time out, after which
+        ``_close_when_done`` closes its connection and hands the permit back.
+        So abandoned sign-ins never outnumber the pool.
+        """
+        sign_in = asyncio.ensure_future(self._sign_in())
         try:
-            await asyncio.wait_for(asyncio.shield(auth), self._connect_timeout)
+            return await asyncio.shield(sign_in)
+        except asyncio.CancelledError:
+            self._abandon(sign_in)
+            raise
+        except BaseException:
+            self._slots.release()
+            raise
+
+    async def _sign_in(self) -> AsyncSurreal:
+        """Open and sign in a connection within ``connect_timeout`` of the start."""
+        db = AsyncSurreal(self.config.url)
+        try:
+            await asyncio.wait_for(self._authenticate(db), self._connect_timeout)
         except asyncio.TimeoutError as e:
-            self._abandon(auth, db)
+            await self._close_quietly(db)
             raise DatabaseUnavailableError(
                 f"SurrealDB sign-in did not finish within {self._connect_timeout}s"
             ) from e
         except BaseException:
-            self._abandon(auth, db)
+            await self._close_quietly(db)
             raise
         return db
 
@@ -215,25 +232,22 @@ class ConnectionPool:
         )
         await db.use(self.config.namespace, self.config.database)
 
-    def _abandon(self, auth: "asyncio.Future[None]", db: AsyncSurreal) -> None:
-        closer = asyncio.ensure_future(self._close_when_done(auth, db))
-        self._closers[closer] = auth
+    def _abandon(self, sign_in: "asyncio.Future[AsyncSurreal]") -> None:
+        closer = asyncio.ensure_future(self._close_when_done(sign_in))
+        self._closers[closer] = sign_in
         closer.add_done_callback(lambda done: self._closers.pop(done, None))
 
-    async def _close_when_done(
-        self, auth: "asyncio.Future[None]", db: AsyncSurreal
-    ) -> None:
-        """Close an abandoned connection once its sign-in has ended.
-
-        A sign-in that hangs is cancelled after ``connect_timeout``; the
-        connection is closed right after, so the SDK's state no longer matters.
-        """
+    async def _close_when_done(self, sign_in: "asyncio.Future[AsyncSurreal]") -> None:
+        """Close an abandoned sign-in's connection once it has ended, then
+        hand its permit back. A sign-in that failed closed its own."""
         try:
-            await asyncio.wait_for(auth, self._connect_timeout)
-        except Exception:
+            db = await sign_in
+        except BaseException:
             pass
-        finally:
+        else:
             await self._close_quietly(db)
+        finally:
+            self._slots.release()
 
     async def _health_check(self, conn: AsyncSurreal) -> bool:
         """Check if a connection is still alive."""
@@ -283,10 +297,10 @@ class ConnectionPool:
                 if healthy:
                     return candidate
                 await self._close_quietly(candidate)
-            return await self._create_connection()
         except BaseException:
             self._slots.release()
             raise
+        return await self._new_connection()
 
     @asynccontextmanager
     async def acquire(self) -> AsyncGenerator[AsyncSurreal, None]:
@@ -314,8 +328,8 @@ class ConnectionPool:
         # Ending the sign-ins lets their closers close the connections now. (A
         # closer cancelled before its first step would never run its close.)
         closers = list(self._closers.items())
-        for _, auth in closers:
-            auth.cancel()
+        for _, sign_in in closers:
+            sign_in.cancel()
         await asyncio.gather(*(c for c, _ in closers), return_exceptions=True)
         logger.info("Connection pool closed")
 

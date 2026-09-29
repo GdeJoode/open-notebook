@@ -210,3 +210,73 @@ async def test_sign_in_cut_off_by_the_caller_leaves_no_socket(pool, slow_handsha
         await asyncio.wait_for(execute_query("RETURN 1"), 0.1)
     await asyncio.sleep(1.0)
     assert _live_receive_tasks() == before
+
+
+class _SilentServer:
+    """Accepts TCP connections and never answers: a starved database. Records
+    how many sockets are open at once and how long each lived."""
+
+    def __init__(self) -> None:
+        self.open = 0
+        self.peak = 0
+        self.lifetimes: List[float] = []
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        started = time.perf_counter()
+        self.open += 1
+        self.peak = max(self.peak, self.open)
+        try:
+            while await reader.read(4096):
+                pass
+        finally:
+            self.open -= 1
+            self.lifetimes.append(time.perf_counter() - started)
+            writer.close()
+
+    async def __aenter__(self) -> str:
+        self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        port = self._server.sockets[0].getsockname()[1]
+        return f"ws://127.0.0.1:{port}/rpc"
+
+    async def __aexit__(self, *exc: Any) -> None:
+        self._server.close()
+
+
+async def test_abandoned_sign_ins_stay_within_the_pool_size():
+    """Callers that give up do not leave their sign-ins piling up on a
+    database that does not answer: each keeps its pool slot until it has
+    ended, and none outlives ``connect_timeout``."""
+    silent = _SilentServer()
+    async with silent as url:
+        pool = ConnectionPool(
+            config=SurrealDBConfig(url=url), max_size=2, connect_timeout=0.5
+        )
+
+        async def caller() -> None:
+            async with pool.acquire():
+                pass
+
+        # Twenty callers in a second, each giving up after 50 ms.
+        for _ in range(20):
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(caller(), 0.05)
+        await asyncio.sleep(0.6)
+        assert silent.peak <= 2, silent.peak
+        assert silent.open == 0
+
+        # Callers that give up 0.3 s in: a sign-in timed from then would
+        # live 0.8 s.
+        for _ in range(4):
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(caller(), 0.3)
+        await asyncio.sleep(0.6)
+        assert silent.open == 0
+        assert max(silent.lifetimes) < 0.5 + 0.15, silent.lifetimes
+
+        # A new caller waits for a slot, then gets unavailable, not a hang.
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(caller(), 0.05)
+        await pool.close_all()
+        await asyncio.sleep(0.05)
+        assert silent.open == 0
+
