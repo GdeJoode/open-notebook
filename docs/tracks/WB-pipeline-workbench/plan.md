@@ -295,6 +295,21 @@ redo it.
     - m4: `_current_task_cancelling` documents that a cancel swallowed
       without `uncancel()` leaves the task "cancelling".
 
+> **Carried from the regression fix's review round 3 (approved; minors):**
+> 1. `close_all` can cancel a sign-in again while it is closing its own socket,
+>    cutting that close short (shutdown only).
+> 2. A sign-in that succeeds after its caller gave up is closed, not pooled: on
+>    a slow-but-alive DB (sign-ins longer than callers' deadlines) nothing warms
+>    the pool.
+> 3. `KeyError` is caught across all of `_authenticate`, so an SDK shape change
+>    would read as 503 rather than a bug (SDK pinned `==1.0.6`).
+> 4. Timing margins of ~100–150 ms in three pool tests may flake on a loaded
+>    host.
+> 5. The slot of an abandoned sign-in is held up to `connect_timeout` +
+>    `close_timeout`, not `connect_timeout` alone.
+> 6. A rejected login is a 500 on the API and "offline" with the SDK message on
+>    `/api/config`.
+
 **WB.1 — The Werkbak (attention inbox)** (~2d)
 - **Backend:** one `GET /api/attention` that counts and lists, across all
   notebooks:
