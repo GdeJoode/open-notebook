@@ -179,7 +179,7 @@ def _safe_filename(notebook_id: str) -> str:
     responses={
         200: {
             "content": {"text/turtle": {}},
-            "description": "Turtle serialisation of the notebook's effective schema.",
+            "description": "Turtle serialisation of the notebook's declared base ontology.",
         },
         404: {"description": "Notebook not found."},
     },
@@ -329,9 +329,9 @@ class NotebookSchemaResponse(BaseModel):
 
     Carries everything the Schema tab needs in a single payload so the
     page renders without a fan-out of additional calls. The
-    ``base_ontology_types`` list is read from the base YAML (read-only; edits
-    are made in the ontology editor); ``pending_extensions`` is the notebook's
-    Pass-1 proposal queue.
+    ``base_ontology_types`` are the base ontology's own types as the active
+    registry holds them (read-only; edits are made in the ontology editor);
+    ``pending_extensions`` is the notebook's Pass-1 proposal queue.
     """
 
     notebook_id: str
@@ -414,39 +414,29 @@ def _normalise_extension(ext: Dict[str, Any]) -> _ExtensionView:
     )
 
 
-def _load_base_ontology_types(base_ontology: str) -> List[_EntityTypeNode]:
-    """Parse a YAML ontology and return its entity types as view-model rows.
+async def _load_base_ontology_types(base_ontology: str) -> List[_EntityTypeNode]:
+    """The base ontology's OWN entity types, as the ACTIVE registry holds them.
 
-    Reuses the same YAML resolution as the TTL endpoint
-    (``_ontologies_dir``). The full :class:`Ontology` model carries
-    relationships, concepts, etc. — B.3a only needs entity types for
-    the tree view, so we project to the slimmer ``_EntityTypeNode``.
+    OE.5 (review M1): the ontologies are shared and edited in the ontology
+    editor, so this reads the registry's active version (database first, then
+    the YAML seed), not the YAML file: a type accepted from the queue, renamed
+    or deleted in the editor shows here as it types. Own types only
+    (``resolve_inheritance=False``), as the YAML file held.
 
-    Returns an empty list (and logs an error) if the YAML is missing
-    — this matches the existing TTL endpoint's behaviour of returning
-    a 500 in the same circumstance, but for the JSON endpoint we
-    degrade gracefully: the Schema tab is still useful for showing
-    extensions and coverage even if the base ontology is misconfigured.
+    Returns an empty list (and logs) when the ontology is unknown or cannot be
+    read — the Schema tab is still useful for the queue and coverage.
     """
-    yaml_path = _ontologies_dir() / f"{base_ontology}.yaml"
-    if not yaml_path.exists():
-        logger.error(
-            "Base ontology YAML missing: {} not found (asked for {!r})",
-            yaml_path,
-            base_ontology,
-        )
-        return []
+    from ontology_manager.registry import get_ontology_registry
 
     try:
-        # Local import to keep the module import-cost flat — Ontology
-        # pulls in the full pydantic schema tree.
-        from ontology_manager.schema import Ontology
-
-        ontology = Ontology.from_yaml(yaml_path)
-    except Exception as e:
-        logger.exception(
-            "Failed to parse base ontology YAML {}: {}", yaml_path, e
+        ontology = await get_ontology_registry().get(
+            base_ontology, resolve_inheritance=False
         )
+    except Exception as e:
+        logger.exception("Failed to load base ontology {!r}: {}", base_ontology, e)
+        return []
+    if ontology is None:
+        logger.error("Base ontology {!r} not found in the registry", base_ontology)
         return []
 
     nodes: List[_EntityTypeNode] = []
@@ -501,7 +491,7 @@ async def get_notebook_schema_json(
         notebook_schema = NotebookSchema(
             notebook=notebook_id, base_ontology=_DEFAULT_BASE_ONTOLOGY
         )
-    return _schema_to_response(notebook_id, notebook_schema)
+    return await _schema_to_response(notebook_id, notebook_schema)
 
 
 @router.get(
@@ -580,7 +570,7 @@ async def list_notebook_pass1_results(
 # gate: preview first, a blocking finding refuses with the findings.
 
 
-def _schema_to_response(
+async def _schema_to_response(
     notebook_id: str, schema: NotebookSchema
 ) -> NotebookSchemaResponse:
     """Render a NotebookSchema row into the public response shape."""
@@ -589,7 +579,7 @@ def _schema_to_response(
         notebook_id=notebook_id,
         base_ontology=base_ontology or "",
         base_ontology_types=(
-            _load_base_ontology_types(base_ontology) if base_ontology else []
+            await _load_base_ontology_types(base_ontology) if base_ontology else []
         ),
         pending_extensions=[
             _normalise_extension(e) for e in (schema.pending_extensions or [])
@@ -869,7 +859,7 @@ async def accept_pending_extension(
     except OntologyEditError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
     return AcceptExtensionResponse(
-        notebook_schema=_schema_to_response(notebook_id, updated),
+        notebook_schema=await _schema_to_response(notebook_id, updated),
         published=published,
     )
 
@@ -900,7 +890,7 @@ async def reject_pending_extension(
         updated = await edit_service.reject_extension(notebook_id, type_name)
     except NotebookSchemaNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    return _schema_to_response(notebook_id, updated)
+    return await _schema_to_response(notebook_id, updated)
 
 
 @router.post(

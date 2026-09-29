@@ -171,6 +171,8 @@ export function backend() {
       ...(proposal.rationale ? { description: proposal.rationale } : {}) }
     return content
   }
+  /** `GET /schema`: the base's OWN types as the ACTIVE registry holds them
+   *  (`_load_base_ontology_types`), so a published type is listed. */
   const schemaView = () => ({
     notebook_id: NOTEBOOK, base_ontology: 'deals',
     base_ontology_types: Object.values(state.active.content.types).map((t) => ({

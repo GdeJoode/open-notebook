@@ -384,8 +384,11 @@ async def _stored():
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
 async def test_an_accepted_proposal_is_published_and_types_everywhere(live):
+    from app_main.api.routers.schemas import _load_base_ontology_types
+
     service, _editor, repo = live
     assert await _typed("Streekfonds") == "concept"
+    assert "Streekfonds" not in {t.name for t in await _load_base_ontology_types("deals")}
     target = await service.accept_target("notebook:oe5", "Streekfonds")
     assert target["parent_type"] == "Grant"
     assert "deals" in target["ontologies"]
@@ -403,6 +406,8 @@ async def test_an_accepted_proposal_is_published_and_types_everywhere(live):
     active = [v["version"] for v in await get_ontology_registry().list_versions("deals")
               if v["is_active"]]
     assert active == [published["version"]]
+    # The Schema tab of a notebook based on `deals` lists it (review M1).
+    assert "Streekfonds" in {t.name for t in await _load_base_ontology_types("deals")}
 
 
 @pytest.mark.requires_docker
