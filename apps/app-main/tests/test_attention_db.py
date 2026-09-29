@@ -374,7 +374,10 @@ async def test_stalled_filter_on_sources(env) -> None:
     async with _client(_app()) as c:
         listed = await _paged_sources(c, [("stalled", "true")])
         in_nb1 = await _paged_sources(c, [("stalled", "true"), ("notebook_id", ids["nb1"])])
+        in_nb2 = await _paged_sources(c, [("stalled", "true"), ("notebook_id", ids["nb2"])])
     assert {s["id"] for s in listed} == {ids["stalled"], ids["empty"]}
+    # nb2 holds both stopped sources, plus a busy, a fresh and a complete one.
+    assert {s["id"] for s in in_nb2} == {ids["stalled"], ids["empty"]}
     assert in_nb1 == []
 
 
