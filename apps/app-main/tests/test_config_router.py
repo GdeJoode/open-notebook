@@ -116,4 +116,8 @@ class TestCheckDatabaseHealth:
         assert (await self.mod.check_database_health())["status"] == "offline"
         gate.set()
         await self.mod._probe
+        # The last finished probe succeeded, so slow again is online again.
+        gate.clear()
         assert (await self.mod.check_database_health())["status"] == "online"
+        gate.set()
+        await self.mod._probe

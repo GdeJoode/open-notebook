@@ -201,7 +201,11 @@ async def test_hanging_ping_on_reuse_is_bounded(server):
     server.query_mode = "hang"
     # Reuse pings the idle connection; the ping hangs, so the pool drops it
     # and signs in a fresh one rather than waiting on it.
-    async with pool.acquire() as c:
-        pass
+
+    async def acquire_only() -> FakeSurreal:
+        async with pool.acquire() as c:
+            return c
+
+    c = await asyncio.wait_for(acquire_only(), GUARD)
     assert c is not first
     assert first.closed
