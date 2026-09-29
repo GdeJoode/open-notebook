@@ -163,17 +163,14 @@ class ConnectionPool:
     def __init__(
         self,
         config: Optional[SurrealDBConfig] = None,
-        # One Werkbak report checks out 13-14 connections at once (two
-        # notebooks; its per-notebook groups add one each per notebook). With
-        # 10, its heavy groups queued for a slot behind the others' reads and
-        # ran into their deadline on a cold database, and the pages read next
-        # to it waited too. A pooled connection costs one idle socket.
-        max_size: int = 20,
+        max_size: Optional[int] = None,
         connect_timeout: Optional[float] = None,
         ping_timeout: float = 5.0,
         acquire_timeout: float = 30.0,
     ):
         self.config = config or get_config()
+        if max_size is None:
+            max_size = self.config.pool_size
         self._max_size = max_size
         self._pool: asyncio.Queue[AsyncSurreal] = asyncio.Queue(maxsize=max_size)
         self._slots = asyncio.Semaphore(max_size)

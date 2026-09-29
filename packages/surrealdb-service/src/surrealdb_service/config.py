@@ -29,7 +29,12 @@ class SurrealDBConfig(BaseSettings):
     database: str = Field(default="open_notebook", description="Database name")
 
     # Connection pool settings
-    pool_size: int = Field(default=5, description="Connection pool size")
+    # One Werkbak report checks out 13-14 connections at once (two notebooks;
+    # its per-notebook groups add one each per notebook). With 10, its heavy
+    # groups queued for a slot behind the others' reads and ran into their
+    # deadline on a cold database, and the pages read next to it waited too.
+    # A pooled connection costs one idle socket.
+    pool_size: int = Field(default=20, description="Connection pool size")
     connection_timeout: int = Field(default=30, description="Connection timeout in seconds")
 
     @classmethod

@@ -369,3 +369,11 @@ async def test_our_cancel_stays_a_cancel_when_the_request_ends_cancelled_too():
     caller.cancel()
     with pytest.raises(asyncio.CancelledError):
         await caller
+
+
+async def test_pool_size_comes_from_the_config(server):
+    cfg = SurrealDBConfig(url="ws://fake:1/rpc", pool_size=3)
+    pool = ConnectionPool(config=cfg, acquire_timeout=0.05)
+    async with pool.acquire(), pool.acquire(), pool.acquire():
+        with pytest.raises(DatabaseUnavailableError, match="pool of 3"):
+            await _use_once(pool)

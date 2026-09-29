@@ -27,7 +27,7 @@ class TestSurrealDBConfig:
             assert config.password == "root"
             assert config.namespace == "open_notebook"
             assert config.database == "open_notebook"
-            assert config.pool_size == 5
+            assert config.pool_size == 20
             assert config.connection_timeout == 30
 
     def test_custom_values(self):
