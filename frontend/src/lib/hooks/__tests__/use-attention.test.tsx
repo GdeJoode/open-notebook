@@ -68,8 +68,8 @@ describe('useAttention', () => {
       act(() => focusManager.setFocused(false))
       await act(() => vi.advanceTimersByTimeAsync(10 * 60 * 1000))
       expect(get).toHaveBeenCalledTimes(2)
-      // Back, with a report past its stale time: one read on focus, then the
-      // 90 s refresh again.
+      // Back, with a report older than the refresh interval: one read on
+      // focus, then the 90 s refresh again.
       act(() => focusManager.setFocused(true))
       await act(() => vi.advanceTimersByTimeAsync(0))
       expect(get).toHaveBeenCalledTimes(3)
@@ -77,6 +77,26 @@ describe('useAttention', () => {
       expect(get).toHaveBeenCalledTimes(4)
     } finally {
       focusManager.setFocused(undefined)
+      vi.useRealTimers()
+    }
+  })
+
+  it('an owner who keeps navigating still gets a read about every 90 s', async () => {
+    // Every page renders its own sidebar: a navigation remounts it, and that
+    // restarts the refresh interval. Navigate every 60 s for 10 minutes.
+    vi.useFakeTimers()
+    try {
+      let view = render(<Badge />, { wrapper })
+      await act(() => vi.advanceTimersByTimeAsync(0))
+      for (let minute = 1; minute <= 10; minute++) {
+        await act(() => vi.advanceTimersByTimeAsync(60 * 1000))
+        view.unmount()
+        view = render(<Badge />, { wrapper })
+        await act(() => vi.advanceTimersByTimeAsync(0))
+      }
+      // A read once the report is past 90 s: at 0, 2, 4, 6, 8 and 10 min.
+      expect(get).toHaveBeenCalledTimes(6)
+    } finally {
       vi.useRealTimers()
     }
   })

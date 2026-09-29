@@ -3,26 +3,28 @@
  * read the same query, keyed on the stored "last seen".
  *
  * The report is not cheap (~1.2 s of server time on the live graph, mostly
- * merge candidates), so the sidebar, mounted on every page, reads the cached
- * report instead of refetching per navigation. The Werkbak page (`fresh`)
- * always reads it anew, and the mutations that resolve an item invalidate
- * `ATTENTION_QUERY_KEY`.
+ * merge candidates). What arrives from elsewhere (a source gated later, a
+ * failed job, an MCP upload) is picked up within REFRESH_MS: 90 s keeps the
+ * badges within a minute and a half at about 1 % of one server core per open
+ * tab; nothing here needs seconds. The mutations that resolve an item
+ * invalidate `ATTENTION_QUERY_KEY`, and the Werkbak page (`fresh`) always
+ * reads it anew.
  *
- * What arrives from elsewhere (a source gated later, a failed job, an MCP
- * upload) is picked up by a refresh every REFRESH_MS while the tab is
- * visible, paused while it is hidden. 90 s keeps the badges within a minute
- * and a half of the database at about 1 % of one server core per open tab;
- * nothing here needs seconds. Coming back to a tab whose report is older than
- * the stale time (5 min) refetches once on focus.
+ * The sidebar is rendered inside each page (AppShell), so every navigation
+ * remounts it and restarts the refresh interval. The report is therefore
+ * stale after REFRESH_MS, and a remount or a focus reads it once it is: an
+ * owner who keeps navigating still gets a read about every REFRESH_MS, while
+ * navigating within that window reads nothing. The interval covers a page
+ * left open; it is paused while the tab is hidden.
  */
-
-export const REFRESH_MS = 90 * 1000
 
 import { useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { attentionApi } from '@/lib/api/attention'
 import { getLastSeen, subscribeLastSeen } from '@/lib/werkbak/last-seen'
+
+export const REFRESH_MS = 90 * 1000
 
 export const ATTENTION_QUERY_KEY = ['attention'] as const
 
@@ -35,8 +37,8 @@ export function useAttention({ fresh = false }: { fresh?: boolean } = {}) {
   const query = useQuery({
     queryKey: [...ATTENTION_QUERY_KEY, since],
     queryFn: () => attentionApi.get(since),
-    staleTime: 5 * 60 * 1000,
-    refetchOnMount: fresh ? 'always' : false,
+    staleTime: REFRESH_MS,
+    refetchOnMount: fresh ? 'always' : true,
     refetchOnWindowFocus: true,
     refetchInterval: REFRESH_MS,
     refetchIntervalInBackground: false,
