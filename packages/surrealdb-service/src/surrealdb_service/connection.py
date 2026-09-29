@@ -155,7 +155,7 @@ class ConnectionPool:
     async def _health_check(self, conn: AsyncSurreal) -> bool:
         """Check if a connection is still alive."""
         try:
-            await asyncio.wait_for(conn.query("SELECT 1"), self._ping_timeout)
+            await asyncio.wait_for(conn.query("RETURN true"), self._ping_timeout)
             return True
         except asyncio.CancelledError:
             if _current_task_cancelling():
