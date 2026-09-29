@@ -52,7 +52,11 @@ import {
   type MergedOntology,
 } from '@/lib/utils/ontology-tree'
 
-export function OntologyEditor({ name, initialType }: { name: string; initialType?: string }) {
+export function OntologyEditor({ name, initialType, initialRetypeOpen = false }: {
+  name: string
+  initialType?: string
+  initialRetypeOpen?: boolean
+}) {
   const draftQuery = useOntologyDraft(name)
   const active = useOntology(name)
   const findings = useDraftFindings(name)
@@ -69,7 +73,7 @@ export function OntologyEditor({ name, initialType }: { name: string; initialTyp
   const [formEpoch, setFormEpoch] = useState(0)
   const restart = () => setFormEpoch((e) => e + 1)
   const [newType, setNewType] = useState('')
-  const [retypeOpen, setRetypeOpen] = useState(false)
+  const [retypeOpen, setRetypeOpen] = useState(initialRetypeOpen)
 
   // Every ontology this one inherits from, through the whole chain (`extends`
   // then `includes`, at every level), so each inherited type can be labelled

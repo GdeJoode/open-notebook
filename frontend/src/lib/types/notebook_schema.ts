@@ -63,6 +63,9 @@ export interface AcceptTarget {
   /** The ontology that introduces the parent; `schema_core` when none does. */
   default_ontology: string
   ontologies: string[]
+  /** Where the name (or an alias of it) is already a shared type. Then the
+   *  proposal is marked as covered instead of accepted. */
+  defined_in: { ontology: string; type: string }[]
 }
 
 /** `POST /schema/extensions/{type}/accept`: the queue and what was published

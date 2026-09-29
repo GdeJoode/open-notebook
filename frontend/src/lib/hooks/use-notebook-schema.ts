@@ -196,6 +196,19 @@ export function useAcceptExtension(
   })
 }
 
+/** Take out a proposal a shared ontology already defines (no publish). */
+export function useMarkCovered(notebookId: string) {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  return useMutation({
+    mutationFn: (typeName: string) => notebookSchemaApi.markCovered(notebookId, typeName),
+    onSuccess: (data, typeName) => {
+      queryClient.setQueryData(NOTEBOOK_SCHEMA_QUERY_KEY(notebookId), data.notebook_schema)
+      toast({ title: 'Already covered', description: `${typeName} left the queue` })
+    },
+  })
+}
+
 export function useRejectExtension(
   notebookId: string,
 ): UseMutationResult<NotebookSchemaResponse, Error, string> {

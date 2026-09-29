@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   getAcceptTarget: vi.fn(),
   previewAccept: vi.fn(),
   acceptExtension: vi.fn(),
+  markCovered: vi.fn(),
   rejectExtension: vi.fn(),
 }))
 
@@ -51,7 +52,7 @@ const button = (id: string) => screen.getByTestId(id) as HTMLButtonElement
 beforeEach(() => {
   api.getAcceptTarget.mockResolvedValue({
     type_name: 'Streekfonds', parent_type: 'Grant', default_ontology: 'schema_core',
-    ontologies: ['deals', 'schema_core'],
+    ontologies: ['deals', 'schema_core'], defined_in: [],
   })
 })
 afterEach(() => {
@@ -76,7 +77,8 @@ describe('AcceptExtensionDialog', () => {
       notebook_schema: { notebook_id: NB, base_ontology: '', base_ontology_types: [],
         pending_extensions: [], coverage_pct: 0, review_required: false,
         soft_nudge_dismissed: false },
-      published: { name: 'deals', version: '1.0.0+t', warnings: [], retype: preview().retype },
+      published: { name: 'deals', version: '1.0.0+t', warnings: [], retype: { ...preview().retype, changes: 0,
+        caused_by_this_edit: 0 } },
     })
     const onOpenChange = vi.fn()
     mount(<AcceptExtensionDialog notebookId={NB} extension={PROPOSAL} onOpenChange={onOpenChange} />)
@@ -140,6 +142,50 @@ describe('AcceptExtensionDialog', () => {
     fireEvent.change(screen.getByTestId('accept-ontology'), { target: { value: 'deals' } })
     await waitFor(() => expect(screen.queryByTestId('accept-preview-result')).toBeNull())
     expect(button('accept-publish').disabled).toBe(true)
+  })
+
+  it('a name already shared is marked covered, not published (review M3)', async () => {
+    api.getAcceptTarget.mockResolvedValue({
+      type_name: 'Gemeente', parent_type: 'Organization', default_ontology: 'schema_core',
+      ontologies: ['deals', 'government'], defined_in: [{ ontology: 'government', type: 'Gemeente' }],
+    })
+    api.markCovered.mockResolvedValue({ notebook_schema: { notebook_id: NB, base_ontology: '',
+      base_ontology_types: [], pending_extensions: [], coverage_pct: 0, review_required: false,
+      soft_nudge_dismissed: false }, published: null })
+    const onOpenChange = vi.fn()
+    mount(<AcceptExtensionDialog notebookId={NB}
+      extension={{ ...PROPOSAL, type_name: 'Gemeente' }} onOpenChange={onOpenChange} />)
+    const shown = await screen.findByTestId('accept-already-defined')
+    expect(shown.textContent).toContain('government')
+    expect(shown.querySelector('a')?.getAttribute('href'))
+      .toBe('/ontologies?name=government&tab=edit&type=Gemeente')
+    expect(screen.queryByTestId('accept-publish')).toBeNull()
+    expect(screen.queryByTestId('accept-preview')).toBeNull()
+    fireEvent.click(button('accept-mark-covered'))
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+    expect(api.markCovered).toHaveBeenCalledWith(NB, 'Gemeente')
+    expect(api.acceptExtension).not.toHaveBeenCalled()
+    expect(api.rejectExtension).not.toHaveBeenCalled()
+  })
+
+  it('a publish that moves entities offers their retype (review m4)', async () => {
+    api.previewAccept.mockResolvedValue(preview())
+    api.acceptExtension.mockResolvedValue({
+      notebook_schema: { notebook_id: NB, base_ontology: '', base_ontology_types: [],
+        pending_extensions: [], coverage_pct: 0, review_required: false,
+        soft_nudge_dismissed: false },
+      published: { name: 'deals', version: '1.0.0+t', warnings: [], retype: preview().retype },
+    })
+    const onOpenChange = vi.fn()
+    mount(<AcceptExtensionDialog notebookId={NB} extension={PROPOSAL} onOpenChange={onOpenChange} />)
+    await waitFor(() => expect(button('accept-preview').disabled).toBe(false))
+    fireEvent.change(screen.getByTestId('accept-ontology'), { target: { value: 'deals' } })
+    fireEvent.click(button('accept-preview'))
+    await waitFor(() => expect(button('accept-publish').disabled).toBe(false))
+    fireEvent.click(button('accept-publish'))
+    const link = await screen.findByTestId('accept-retype-link')
+    expect(link.getAttribute('href')).toBe('/ontologies?name=deals&tab=edit&retype=1')
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
   })
 
   it('a proposal that cannot be loaded says so', async () => {

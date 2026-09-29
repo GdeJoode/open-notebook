@@ -10,6 +10,11 @@
  * do, and publishes. A blocking finding refuses it and is shown here; nothing
  * is stored then. An open draft of that ontology in the editor also refuses it
  * (the publish would leave the draft stale).
+ *
+ * A name the shared ontologies already define (by name or alias) is not
+ * published again: the dialog says where it is defined and offers "Mark as
+ * already covered", which takes it out of the queue without a rejection.
+ * After a publish that moves existing entities, it links to the retype.
  */
 
 import Link from 'next/link'
@@ -33,8 +38,10 @@ import {
   useAcceptExtension,
   useAcceptPreview,
   useAcceptTarget,
+  useMarkCovered,
 } from '@/lib/hooks/use-notebook-schema'
-import type { ExtensionView } from '@/lib/types/notebook_schema'
+import type { AcceptExtensionResponse, ExtensionView } from '@/lib/types/notebook_schema'
+import { ontologyEditorHref } from '@/components/notebooks/schema/SchemaBrowser'
 
 interface AcceptExtensionDialogProps {
   notebookId: string
@@ -60,6 +67,9 @@ export function AcceptExtensionDialog({
   const target = useAcceptTarget(notebookId, typeName)
   const preview = useAcceptPreview(notebookId)
   const accept = useAcceptExtension(notebookId)
+  const covered = useMarkCovered(notebookId)
+  // A publish that left existing entities on their old type: offer the retype.
+  const [published, setPublished] = useState<NonNullable<AcceptExtensionResponse['published']> | null>(null)
   const [ontology, setOntology] = useState('')
   const [parent, setParent] = useState('')
   const ontologyId = useId()
@@ -84,8 +94,11 @@ export function AcceptExtensionDialog({
   const shown = preview.data
   const blocking = (shown?.findings ?? []).filter((f) => f.severity === 'block')
   const refused = accept.error ? refusedFindings(accept.error) : []
+  const definedIn = target.data?.defined_in ?? []
   const canPublish =
     !!shown && !shown.blocking && !shown.draft_open && !accept.isPending && !preview.isPending
+  const needsRetype = (r: NonNullable<AcceptExtensionResponse['published']>['retype']) =>
+    r.changes + r.flag_only > 0 || r.collisions_caused_by_this_edit > 0
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -99,7 +112,18 @@ export function AcceptExtensionDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {target.isLoading ? (
+        {published ? (
+          <div className="space-y-2 text-sm" data-testid="accept-retype-offer">
+            <p>
+              {typeName} is now a type of {published.name} (version {published.version}).
+              {' '}{published.retype.changes} existing entit(y/ies) still carry their old type.
+            </p>
+            <Link className="underline" data-testid="accept-retype-link"
+              href={`${ontologyEditorHref(published.name)}&retype=1`}>
+              Review the retype in the ontology editor
+            </Link>
+          </div>
+        ) : target.isLoading ? (
           <div role="status" aria-live="polite" className="flex justify-center py-6">
             <LoadingSpinner />
           </div>
@@ -107,6 +131,30 @@ export function AcceptExtensionDialog({
           <p role="alert" className="text-sm text-destructive">
             Could not load the proposal: {errorDetail(target.error)}
           </p>
+        ) : definedIn.length > 0 ? (
+          <div className="space-y-2 text-sm" data-testid="accept-already-defined">
+            <p>
+              {typeName} is already a shared type, so it is not published again:
+            </p>
+            <ul className="list-disc pl-5">
+              {definedIn.map((d) => (
+                <li key={`${d.ontology}:${d.type}`}>
+                  <Link className="underline" href={ontologyEditorHref(d.ontology, d.type)}>
+                    {d.type}
+                  </Link>{' '}in {d.ontology}
+                </li>
+              ))}
+            </ul>
+            <p className="text-muted-foreground">
+              Mark it as already covered to take it out of the queue. That is not a
+              rejection: nothing is recorded against the name.
+            </p>
+            {covered.isError && (
+              <p role="alert" className="text-destructive">
+                Could not mark it: {errorDetail(covered.error)}
+              </p>
+            )}
+          </div>
         ) : (
           <div className="space-y-3 text-sm">
             <div className="space-y-1">
@@ -177,8 +225,19 @@ export function AcceptExtensionDialog({
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {published ? 'Close' : 'Cancel'}
           </Button>
+          {!published && definedIn.length > 0 && (
+            <Button
+              type="button"
+              data-testid="accept-mark-covered"
+              disabled={covered.isPending}
+              onClick={() => covered.mutate(typeName, { onSuccess: () => onOpenChange(false) })}
+            >
+              {covered.isPending ? 'Marking…' : 'Mark as already covered'}
+            </Button>
+          )}
+          {!published && definedIn.length === 0 && (<>
           <Button
             type="button"
             variant="outline"
@@ -192,10 +251,16 @@ export function AcceptExtensionDialog({
             type="button"
             data-testid="accept-publish"
             disabled={!canPublish}
-            onClick={() => accept.mutate(vars, { onSuccess: () => onOpenChange(false) })}
+            onClick={() => accept.mutate(vars, {
+              onSuccess: (data) => {
+                if (data.published && needsRetype(data.published.retype)) setPublished(data.published)
+                else onOpenChange(false)
+              },
+            })}
           >
             {accept.isPending ? 'Publishing…' : `Publish to ${ontology || '…'}`}
           </Button>
+          </>)}
         </DialogFooter>
       </DialogContent>
     </Dialog>

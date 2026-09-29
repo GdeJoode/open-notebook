@@ -153,6 +153,18 @@ export const notebookSchemaApi = {
     return response.data
   },
 
+  /** Take out a proposal the shared ontologies already define: recorded as
+   *  accepted, nothing published, no rejection. */
+  markCovered: async (
+    notebookId: string,
+    typeName: string,
+  ): Promise<AcceptExtensionResponse> => {
+    const response = await apiClient.post<AcceptExtensionResponse>(
+      `${nbPath(notebookId)}/schema/extensions/${encodeURIComponent(typeName)}/covered`,
+    )
+    return response.data
+  },
+
   /** Reject (drop) a pending extension by type name. */
   rejectExtension: async (
     notebookId: string,
