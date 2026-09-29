@@ -104,16 +104,22 @@ test.describe('WB.1 — the Werkbak', () => {
     await expect(page).toHaveURL(/\/knowledge-graph\/triage$/, { timeout: 45_000 })
   })
 
-  test('stopped sources open the sources list filtered on their stages', async ({ page }) => {
+  test('stopped sources open the sources list filtered on the same set', async ({ page }) => {
     const calls = await mockBackend(page, null)
     await gotoAndWait(page, '/')
     await page.getByTestId('werkbak-action-sources_stalled').click({ timeout: 45_000 })
-    await expect(page).toHaveURL(
-      /\/sources\?stage=ingested&stage=embedded&stage=extracted&stage=graphed$/,
+    await expect(page).toHaveURL(/\/sources\?stalled=true$/, { timeout: 45_000 })
+    await expect(page.getByTestId('sources-stage-filter')).toContainText('stopped sources')
+    await expect.poll(() => calls.sources.at(-1)?.searchParams.get('stalled')).toBe('true')
+  })
+
+  test('a stage link sends the stages as repeated params', async ({ page }) => {
+    const calls = await mockBackend(page, null)
+    await page.goto('/sources?stage=failed&stage=embedded')
+    await expect(page.getByTestId('sources-stage-filter')).toContainText('failed, embedded',
       { timeout: 45_000 })
-    await expect(page.getByTestId('sources-stage-filter')).toContainText('ingested, embedded, extracted, graphed')
     await expect.poll(() => calls.sources.at(-1)?.searchParams.getAll('stage'))
-      .toEqual(['ingested', 'embedded', 'extracted', 'graphed'])
+      .toEqual(['failed', 'embedded'])
   })
 
   test('first visit: nothing is stored until Mark as seen', async ({ page }) => {

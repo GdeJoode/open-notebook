@@ -535,6 +535,7 @@ class SourceRepository(BaseRepository[Source]):
         limit: int = 50,
         offset: int = 0,
         stages: Optional[List[str]] = None,
+        ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         List sources with insight counts and embedding status.
@@ -546,12 +547,19 @@ class SourceRepository(BaseRepository[Source]):
             limit: Max results.
             offset: Skip count.
             stages: Optional ``processing_stage`` filter (any of these).
+            ids: Optional id filter (only these sources).
 
         Returns:
             List of source dicts with metadata fields.
         """
         order_clause = f"ORDER BY {order_by} {order_dir}"
-        where_clause = f"WHERE {STAGE_IN}" if stages else ""
+        conditions = []
+        if stages:
+            conditions.append(STAGE_IN)
+        if ids is not None:
+            conditions.append("id IN $ids")
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        record_ids = [ensure_record_id(i) for i in ids] if ids is not None else None
 
         if notebook_id:
             query = f"""
@@ -574,6 +582,7 @@ class SourceRepository(BaseRepository[Source]):
                     "limit": limit,
                     "offset": offset,
                     "stages": stages,
+                    "ids": record_ids,
                 },
                 self.config,
             )
@@ -593,7 +602,8 @@ class SourceRepository(BaseRepository[Source]):
             """
             return await execute_query(
                 query,
-                {"limit": limit, "offset": offset, "stages": stages},
+                {"limit": limit, "offset": offset, "stages": stages,
+                 "ids": record_ids},
                 self.config,
             )
 
@@ -622,6 +632,17 @@ class SourceRepository(BaseRepository[Source]):
             params,
             self.config,
         ) or []
+
+    async def chunk_counts(self, source_ids: List[str]) -> Dict[str, int]:
+        """Chunks per source for ``source_ids`` (absent = 0)."""
+        if not source_ids:
+            return {}
+        rows = await execute_query(
+            "SELECT source, count() AS n FROM chunk WHERE source IN $ids GROUP BY source;",
+            {"ids": [ensure_record_id(i) for i in source_ids]},
+            self.config,
+        )
+        return {str(r["source"]): int(r["n"]) for r in rows or []}
 
     async def list_created_since(self, since: datetime) -> List[Dict[str, Any]]:
         """Every source created after ``since``, newest first (WB.1).

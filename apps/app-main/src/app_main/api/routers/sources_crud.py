@@ -49,6 +49,7 @@ from app_main.services.chunking.chunk_mutator import (
 )
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
+from app_main.services.stopped_sources import stopped_sources
 from app_main.services.transformation_service import TransformationService
 
 router = APIRouter()
@@ -79,6 +80,13 @@ async def get_sources(
         description=(
             "Filter by processing_stage; repeat for any of several "
             "(?stage=failed&stage=awaiting_schema_review)"
+        ),
+    ),
+    stalled: bool = Query(
+        False,
+        description=(
+            "Only sources that stopped short of complete (the Werkbak's "
+            "'Sources that stopped'; see services/stopped_sources.py)"
         ),
     ),
     source_svc: SourceService = Depends(get_source_service),
@@ -113,6 +121,9 @@ async def get_sources(
         from surrealdb_service.repositories import SourceRepository
 
         source_repo = SourceRepository()
+        ids = None
+        if stalled:
+            ids = [str(r["id"]) for r in await stopped_sources(source_repo)]
         result = await source_repo.list_with_metadata(
             notebook_id=notebook_id,
             order_by=sort_by,
@@ -120,6 +131,7 @@ async def get_sources(
             limit=limit,
             offset=offset,
             stages=stage or None,
+            ids=ids,
         )
 
         # Batch fetch command statuses in a single query

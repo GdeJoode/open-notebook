@@ -16,7 +16,7 @@ the sidebar badges (``frontend/src/components/layout/AppSidebar.tsx``).
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import quote
 
@@ -30,15 +30,11 @@ from surrealdb_service.repositories.source import SourceRepository
 
 from app_main.services.notebook_service import NotebookService
 from app_main.services.paused_extraction import list_paused_jobs_for_notebook
-
-# A source short of ``complete`` with no job queued or running for it counts as
-# stopped once its last write is this old. The pipeline enqueues the next stage
-# in the same step that writes the stage, and a source whose job is still
-# queued or running is excluded outright, so the only legitimate quiet window
-# is the gap between those two writes (seconds). 15 minutes leaves a wide
-# margin for a slow worker restart, while a source that stopped (live: the
-# regio-deal convenants parked at ``embedded``) shows the same session.
-STALLED_AFTER_MINUTES = 15
+from app_main.services.stopped_sources import (
+    STALLED_AFTER_MINUTES,
+    stopped_sources,
+    unfinished_jobs,
+)
 
 # Items listed per group; the count covers them all.
 ITEM_LIMIT = 5
@@ -47,13 +43,6 @@ ITEM_LIMIT = 5
 # live graph (WB.0); a group past this is reported as timed out.
 GROUP_TIMEOUT_S = 5.0
 
-SHORT_OF_COMPLETE = [
-    ProcessingStage.INGESTED.value,
-    ProcessingStage.EMBEDDED.value,
-    ProcessingStage.EXTRACTED.value,
-    ProcessingStage.GRAPHED.value,
-]
-UNFINISHED = [JobStatus.QUEUED, JobStatus.PROCESSING, JobStatus.RETRYING]
 FINISHED = [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]
 
 # The retype panel lives in the ontology editor; it retypes under every active
@@ -163,6 +152,15 @@ async def _shared(read: "asyncio.Future[Any]") -> Any:
     return await asyncio.shield(read)
 
 
+def _stopped_reason(row: Dict[str, Any]) -> str:
+    stage = row.get("processing_stage") or ProcessingStage.INGESTED.value
+    if not row.get("chunks"):
+        # The zero-chunk guard chains nothing after this; only a reprocess
+        # (on the source page) or a delete moves it.
+        return f"No text extracted (at {stage}): reprocess or delete"
+    return f"Stopped at {stage}"
+
+
 def _utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
@@ -176,7 +174,6 @@ class AttentionService:
         job_repo: Optional[JobRepository] = None,
         notebook_service: Optional[NotebookService] = None,
         schema_repo: Optional[NotebookSchemaRepository] = None,
-        stalled_after_minutes: int = STALLED_AFTER_MINUTES,
         group_timeout_s: float = GROUP_TIMEOUT_S,
     ):
         self.source_repo = source_repo or SourceRepository()
@@ -187,7 +184,6 @@ class AttentionService:
             notebook_service = get_notebook_service()
         self.notebook_service = notebook_service
         self.schema_repo = schema_repo or NotebookSchemaRepository()
-        self.stalled_after_minutes = stalled_after_minutes
         self.group_timeout_s = group_timeout_s
 
     async def report(self, since: Optional[datetime] = None) -> AttentionReport:
@@ -285,10 +281,7 @@ class AttentionService:
     # --- shared reads -------------------------------------------------------
 
     async def _unfinished_jobs(self) -> List[Job]:
-        jobs: List[Job] = []
-        for status in UNFINISHED:
-            jobs += await self.job_repo.list_jobs(status=status, limit=10000)
-        return sorted(jobs, key=lambda j: str(j.created or ""), reverse=True)
+        return await unfinished_jobs(self.job_repo)
 
     async def _notebooks(self) -> List[Dict[str, Any]]:
         return await self.notebook_service.get_all_with_counts(
@@ -335,23 +328,17 @@ class AttentionService:
     async def _sources_stalled(
         self, group: AttentionGroup, now: datetime, unfinished: "asyncio.Future[List[Job]]"
     ) -> None:
-        cutoff = now - timedelta(minutes=self.stalled_after_minutes)
-        rows = await self.source_repo.list_by_stage(SHORT_OF_COMPLETE, updated_before=cutoff)
-        busy = {j.source_id for j in await _shared(unfinished) if j.source_id}
-        rows = [r for r in rows if str(r["id"]) not in busy]
+        rows = await stopped_sources(
+            self.source_repo, unfinished=await _shared(unfinished), now=now
+        )
         group.count = len(rows)
-        group.link = "/sources?" + "&".join(f"stage={s}" for s in SHORT_OF_COMPLETE)
+        group.link = "/sources?stalled=true"
         group.detail = (
             f"Short of complete, with no job running, for over "
-            f"{self.stalled_after_minutes} minutes"
+            f"{STALLED_AFTER_MINUTES} minutes"
         )
         group.items = [
-            _source_item(
-                r,
-                f"Stopped at {r.get('processing_stage') or ProcessingStage.INGESTED.value}",
-                source_link(r["id"]),
-                r.get("updated"),
-            )
+            _source_item(r, _stopped_reason(r), source_link(r["id"]), r.get("updated"))
             for r in rows[:ITEM_LIMIT]
         ]
         self._finish(group, f"Check {group.count} stopped {_plural(group.count, 'source')}")

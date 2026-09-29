@@ -50,7 +50,6 @@ _TABLES = (
     "entity", "source_embedding", "source_insight",
 )
 _CLEAN = " ".join(f"DELETE {t};" for t in _TABLES)
-_SHORT = ["ingested", "embedded", "extracted", "graphed"]
 
 
 @pytest.fixture
@@ -66,15 +65,12 @@ async def env(live_surrealdb, monkeypatch):
     conn._pool = original
 
 
-def _app(stalled_after_minutes: int = 0) -> FastAPI:
+def _app() -> FastAPI:
     app = FastAPI()
     app.state.limiter = limiter
     for r in (attention, commands, entity_resolution, notebooks, schemas, sources,
               triage, ontologies):
         app.include_router(r.router, prefix="/api")
-    app.dependency_overrides[get_attention_service] = lambda: AttentionService(
-        stalled_after_minutes=stalled_after_minutes
-    )
     return app
 
 
@@ -93,6 +89,25 @@ async def _source(title: str, stage: str, notebook: str | None = None) -> str:
     if notebook:
         await _q(f"RELATE {sid}->reference->{notebook};")
     return sid
+
+
+async def _age(source_id: str, minutes: int = 60) -> None:
+    """Backdate ``updated``, which the schema sets to now on every write: the
+    field is redefined for the one write, then restored (migration 1)."""
+    await _q(
+        "DEFINE FIELD OVERWRITE updated ON source DEFAULT time::now() "
+        "VALUE $value OR time::now();"
+        "UPDATE type::thing($id) SET updated = $t;"
+        "DEFINE FIELD OVERWRITE updated ON source DEFAULT time::now() VALUE time::now();",
+        {"id": source_id,
+         "t": datetime.now(timezone.utc) - timedelta(minutes=minutes)},
+    )
+
+
+async def _chunk(source_id: str) -> None:
+    await _q("CREATE chunk CONTENT $c;", {"c": {
+        "source": conn.ensure_record_id(source_id), "text": "t", "order": 0,
+        "physical_page": 1, "element_type": "text", "positions": [], "metadata": {}}})
 
 
 async def _notebook(name: str) -> str:
@@ -132,8 +147,14 @@ async def _seed() -> Dict[str, str]:
     ids = {"nb1": nb1, "nb2": nb2}
     ids["failed"] = await _source("Broken", "failed", nb1)
     ids["gated"] = await _source("Gated", "awaiting_schema_review", nb1)
+    # Stopped: short of complete, no live job, last write over 15 minutes ago.
     ids["stalled"] = await _source("Stopped", "embedded", nb2)
+    await _chunk(ids["stalled"])
+    ids["empty"] = await _source("Empty", "ingested", nb2)  # parsed, no text
     ids["busy"] = await _source("Busy", "embedded", nb2)  # a job is queued for it
+    ids["fresh"] = await _source("Fresh", "embedded", nb2)  # written just now
+    for sid in (ids["stalled"], ids["empty"], ids["busy"]):
+        await _age(sid)
     ids["done"] = await _source("Done", "complete", nb2)
 
     await _job("document_parse", "queued", ids["busy"])
@@ -200,11 +221,7 @@ def _endpoint_counts(c: httpx.AsyncClient, since: datetime) -> Dict[str, Callabl
         return len(await _paged_sources(c, [("stage", name)]))
 
     async def stalled() -> int:
-        short = await _paged_sources(c, [("stage", s) for s in _SHORT])
-        busy = set()
-        for s in ("queued", "processing", "retrying"):
-            busy |= {j["source_id"] for j in await _jobs(c, status_filter=s)}
-        return len([s for s in short if s["id"] not in busy])
+        return len(await _paged_sources(c, [("stalled", "true")]))
 
     async def paused() -> int:
         return sum([(await c.get(f"/api/notebooks/{quote(n, safe='')}/extraction/paused"))
@@ -285,8 +302,14 @@ async def test_seeded_values(env) -> None:
     by_key = {g["key"]: g for g in body["groups"]}
     assert body["arrived"] == []
     assert by_key["sources_failed"]["count"] == 1
-    assert by_key["sources_stalled"]["count"] == 1  # "Busy" has a queued job
-    assert [i["id"] for i in by_key["sources_stalled"]["items"]] == [ids["stalled"]]
+    # "Busy" has a queued job; "Fresh" was written less than 15 minutes ago.
+    stalled = by_key["sources_stalled"]
+    assert stalled["link"] == "/sources?stalled=true"
+    reasons = {i["id"]: i["detail"] for i in stalled["items"]}
+    assert reasons == {
+        ids["stalled"]: "Stopped at embedded",
+        ids["empty"]: "No text extracted (at ingested): reprocess or delete",
+    }
     assert by_key["extraction_paused"]["count"] == 1
     assert by_key["schema_proposals"]["count"] == 3
     assert by_key["schema_proposals"]["items"][0]["link"] == (
@@ -301,13 +324,14 @@ async def test_seeded_values(env) -> None:
     assert gated["link"] == f"/notebooks/{quote(ids['nb1'], safe='')}/schema"
 
 
-async def test_stalled_waits_for_the_threshold(env) -> None:
-    """A source short of complete is not "stopped" while its last write is recent."""
-    await _seed()
-    async with _client(_app(stalled_after_minutes=15)) as c:
-        body = (await c.get("/api/attention")).json()
-    stalled = next(g for g in body["groups"] if g["key"] == "sources_stalled")
-    assert stalled["count"] == 0
+async def test_stalled_filter_on_sources(env) -> None:
+    """The group's link lists exactly the counted set, also within a notebook."""
+    ids = await _seed()
+    async with _client(_app()) as c:
+        listed = await _paged_sources(c, [("stalled", "true")])
+        in_nb1 = await _paged_sources(c, [("stalled", "true"), ("notebook_id", ids["nb1"])])
+    assert {s["id"] for s in listed} == {ids["stalled"], ids["empty"]}
+    assert in_nb1 == []
 
 
 async def test_api_source_and_failed_job_show_on_next_open(env) -> None:
@@ -374,7 +398,7 @@ async def test_a_slow_group_times_out_alone(env, monkeypatch) -> None:
     monkeypatch.setattr(TriageQueueRepository, "list_open", slow)
     app = _app()
     app.dependency_overrides[get_attention_service] = lambda: AttentionService(
-        stalled_after_minutes=0, group_timeout_s=0.5)
+        group_timeout_s=0.5)
     async with _client(app) as c:
         started = asyncio.get_running_loop().time()
         body = (await c.get("/api/attention")).json()
@@ -395,8 +419,8 @@ async def test_sources_stage_filter(env) -> None:
         bad = await c.get("/api/sources/", params={"stage": "nonsense"})
     assert [s["id"] for s in one] == [ids["failed"]]
     assert {s["id"] for s in many} == {ids["failed"], ids["done"]}
-    assert {s["id"] for s in in_nb} == {ids["stalled"], ids["busy"]}
-    assert len(everything) == 5
+    assert {s["id"] for s in in_nb} == {ids["stalled"], ids["busy"], ids["fresh"]}
+    assert len(everything) == 7
     assert bad.status_code == 400
 
 
@@ -412,7 +436,7 @@ async def test_a_slow_shared_read_times_out_its_groups(env, monkeypatch) -> None
     monkeypatch.setattr(JobRepository, "list_jobs", slow)
     app = _app()
     app.dependency_overrides[get_attention_service] = lambda: AttentionService(
-        stalled_after_minutes=0, group_timeout_s=0.5)
+        group_timeout_s=0.5)
     async with _client(app) as c:
         r = await c.get("/api/attention")
     assert r.status_code == 200
@@ -432,7 +456,7 @@ async def test_e2e_fixture_follows_the_contract(env) -> None:
     titles, badges' nav, needs_action, and each fixed link."""
     fixture = json.loads(_FIXTURE.read_text(encoding="utf-8"))
     assert AttentionReport.model_validate(fixture).model_dump(mode="json") == fixture
-    real = (await AttentionService(stalled_after_minutes=0)
+    real = (await AttentionService()
             .report(since=datetime.now(timezone.utc))).model_dump(mode="json")
     for part in ("groups", "arrived"):
         assert [g["key"] for g in fixture[part]] == [g["key"] for g in real[part]]

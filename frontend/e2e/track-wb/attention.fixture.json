@@ -6,7 +6,7 @@
     {"key": "sources_failed", "title": "Failed sources", "count": 0, "action": "", "link": "/sources?stage=failed", "nav": "/sources", "needs_action": true, "detail": null, "items": [], "error": null},
     {"key": "sources_awaiting_review", "title": "Sources waiting for a schema review", "count": 1, "action": "Review 1 gated source", "link": "/sources?stage=awaiting_schema_review", "nav": "/sources", "needs_action": true, "detail": null,
      "items": [{"id": "source:gated1", "label": "Convenant Regio Deal Twente", "link": "/notebooks/notebook%3Alive/schema", "detail": "Waiting for a schema review", "at": "2026-09-28T12:00:00+00:00"}], "error": null},
-    {"key": "sources_stalled", "title": "Sources that stopped", "count": 2, "action": "Check 2 stopped sources", "link": "/sources?stage=ingested&stage=embedded&stage=extracted&stage=graphed", "nav": "/sources", "needs_action": true, "detail": "Short of complete, with no job running, for over 15 minutes",
+    {"key": "sources_stalled", "title": "Sources that stopped", "count": 2, "action": "Check 2 stopped sources", "link": "/sources?stalled=true", "nav": "/sources", "needs_action": true, "detail": "Short of complete, with no job running, for over 15 minutes",
      "items": [
        {"id": "source:emb1", "label": "Convenant Regio Deal Achterhoek", "link": "/sources/source%3Aemb1", "detail": "Stopped at embedded", "at": "2026-09-27T10:00:00+00:00"},
        {"id": "source:emb2", "label": "Convenant Regio Deal Zeeland", "link": "/sources/source%3Aemb2", "detail": "Stopped at embedded", "at": "2026-09-27T09:00:00+00:00"}

@@ -30,9 +30,15 @@ export default function SourcesPage() {
   })
   const router = useRouter()
   const queryClient = useQueryClient()
-  // WB.1: `?stage=` (repeatable) filters by processing stage; the Werkbak links here.
+  // WB.1: `?stage=` (repeatable) filters by processing stage, `?stalled=true`
+  // to the sources that stopped (the Werkbak's group, same server predicate).
   const searchParams = useSearchParams()
   const stages = searchParams.getAll('stage')
+  const stalled = searchParams.get('stalled') === 'true'
+  const filtered = stages.length > 0 || stalled
+  const filterLabel = [stalled ? 'stopped sources' : '', stages.join(', ')]
+    .filter(Boolean)
+    .join(' · ')
   const tableRef = useRef<HTMLTableElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
@@ -44,7 +50,7 @@ export default function SourcesPage() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: [...QUERY_KEYS.sources(), sortBy, sortOrder, stages.join(',')] as const,
+    queryKey: [...QUERY_KEYS.sources(), sortBy, sortOrder, stages.join(','), stalled] as const,
     queryFn: ({ pageParam = 0 }) =>
       sourcesApi.list({
         limit: PAGE_SIZE,
@@ -52,6 +58,7 @@ export default function SourcesPage() {
         sort_by: sortBy,
         sort_order: sortOrder,
         stage: stages.length ? stages : undefined,
+        stalled: stalled || undefined,
       }),
     getNextPageParam: (lastPage, allPages) =>
       lastPage.length === PAGE_SIZE
@@ -230,13 +237,13 @@ export default function SourcesPage() {
     )
   }
 
-  if (sources.length === 0 && stages.length > 0) {
+  if (sources.length === 0 && filtered) {
     return (
       <AppShell>
         <EmptyState
           icon={FileText}
-          title="No sources at this stage"
-          description={`Nothing is at ${stages.join(', ')}.`}
+          title="No sources match this filter"
+          description={`Showing only: ${filterLabel}.`}
           action={
             <Button asChild variant="outline">
               <Link href="/sources">Show all sources</Link>
@@ -273,9 +280,9 @@ export default function SourcesPage() {
           <p className="mt-2 text-muted-foreground">
             Browse all sources across your notebooks. Use arrow keys to navigate and Enter to open.
           </p>
-          {stages.length > 0 && (
+          {filtered && (
             <p className="mt-2 text-sm" data-testid="sources-stage-filter">
-              Stage: <span className="font-medium">{stages.join(', ')}</span>
+              Showing only: <span className="font-medium">{filterLabel}</span>
               {' · '}
               <Link href="/sources" className="underline underline-offset-2">
                 Show all
