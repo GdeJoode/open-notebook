@@ -209,3 +209,15 @@ async def test_hanging_ping_on_reuse_is_bounded(server):
     c = await asyncio.wait_for(acquire_only(), GUARD)
     assert c is not first
     assert first.closed
+
+
+async def test_checkout_cancelled_during_reuse_ping_closes_the_candidate(server):
+    pool = _pool(max_size=2, ping_timeout=GUARD)
+    first = await asyncio.wait_for(_use_once(pool), GUARD)
+
+    server.query_mode = "hang"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_use_once(pool), 0.05)
+
+    assert first.closed
+    assert pool._pool.empty()

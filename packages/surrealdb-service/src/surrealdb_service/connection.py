@@ -165,7 +165,14 @@ class ConnectionPool:
         try:
             while not self._pool.empty():
                 candidate = self._pool.get_nowait()
-                if await self._health_check(candidate):
+                try:
+                    healthy = await self._health_check(candidate)
+                except BaseException:
+                    # Cancelled mid-ping: the candidate is off the queue and
+                    # nobody else will close it.
+                    await self._close_quietly(candidate)
+                    raise
+                if healthy:
                     return candidate
                 await self._close_quietly(candidate)
             return await self._create_connection()
