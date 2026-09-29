@@ -79,6 +79,29 @@ class SourceRepository(BaseRepository[Source]):
             )
             return None
 
+    async def get_notebook_id_many(
+        self, source_ids: List[str]
+    ) -> Dict[str, Optional[str]]:
+        """:meth:`get_notebook_id` for many sources in one query (WB.1).
+
+        Each row runs the same subquery ``get_notebook_id`` runs, so a source
+        in several notebooks resolves to the same one. Sources that do not
+        exist are absent; an unlinked source maps to ``None``. Raises on a
+        failed read.
+        """
+        if not source_ids:
+            return {}
+        rows = await execute_query(
+            "SELECT id, (SELECT VALUE out FROM reference WHERE in = $parent.id "
+            "LIMIT 1)[0] AS notebook FROM source WHERE id IN $ids;",
+            {"ids": [ensure_record_id(s) for s in source_ids]},
+            self.config,
+        )
+        return {
+            str(r["id"]): (str(r["notebook"]) if r.get("notebook") else None)
+            for r in rows or []
+        }
+
     async def get_notebook_ids(self, source_id: str) -> List[str]:
         """Return every notebook linked to ``source_id`` (possibly empty).
 

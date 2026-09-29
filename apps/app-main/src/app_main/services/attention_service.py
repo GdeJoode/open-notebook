@@ -359,9 +359,8 @@ class AttentionService:
             return
         # A gated source is released on the Schema tab of the notebook its
         # extraction anchored on (``get_notebook_id``): one item per notebook.
-        notebook_ids = await asyncio.gather(
-            *(self.source_repo.get_notebook_id(str(r["id"])) for r in rows)
-        )
+        anchors = await self.source_repo.get_notebook_id_many([str(r["id"]) for r in rows])
+        notebook_ids = [anchors.get(str(r["id"])) for r in rows]
         names = {str(nb["id"]): nb.get("name") for nb in await _shared(notebooks)}
         by_notebook: Dict[Optional[str], List[Dict[str, Any]]] = {}
         for r, nb in zip(rows, notebook_ids):

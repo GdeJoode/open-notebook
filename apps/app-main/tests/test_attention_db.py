@@ -541,12 +541,26 @@ async def test_a_failed_source_group_owns_nothing(env, monkeypatch) -> None:
     counts in the total again."""
     await _seed()
 
-    async def failing(self, source_id):
+    async def failing(self, source_ids):
         raise RuntimeError("reference table unreadable")
 
-    monkeypatch.setattr(SourceRepository, "get_notebook_id", failing)
+    monkeypatch.setattr(SourceRepository, "get_notebook_id_many", failing)
     async with _client(_app()) as c:
         body = (await c.get("/api/attention")).json()
     by_key = {g["key"]: g for g in body["groups"]}
     assert by_key["sources_awaiting_review"]["error"] == "reference table unreadable"
     assert by_key["extraction_paused"]["counted"] == 1
+
+
+async def test_batched_notebook_lookup_matches_the_single_one(env) -> None:
+    """One query for all gated sources, and the same answer as get_notebook_id
+    for a source in no, one and two notebooks."""
+    nb1, nb2 = await _notebook("One"), await _notebook("Two")
+    none = await _source("Loose", "awaiting_schema_review")
+    one = await _source("In one", "awaiting_schema_review", nb1)
+    two = await _source("In two", "awaiting_schema_review", nb2)
+    await _q(f"RELATE {two}->reference->{nb1};")
+    repo = SourceRepository()
+    many = await repo.get_notebook_id_many([none, one, two, "source:missing"])
+    assert many == {s: await repo.get_notebook_id(s) for s in (none, one, two)}
+    assert many[none] is None and many[one] == nb1
