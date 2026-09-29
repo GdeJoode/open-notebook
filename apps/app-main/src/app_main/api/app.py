@@ -303,6 +303,7 @@ def create_app() -> FastAPI:
     from app_main.api.routers import (
         agent_keys,
         agents,
+        attention,
         audit,
         auth,
         chat,
@@ -414,6 +415,7 @@ def create_app() -> FastAPI:
         services_proxy.router, prefix="/api", tags=["services"]
     )
     application.include_router(health.router, prefix="/api", tags=["health"])
+    application.include_router(attention.router, prefix="/api", tags=["attention"])
 
     # --- Exception Handlers ---
     @application.exception_handler(NotFoundError)
