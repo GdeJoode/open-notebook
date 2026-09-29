@@ -9,6 +9,7 @@ import {
   SourceStatusResponse
 } from '@/lib/types/api'
 import { isPollableStage } from '@/lib/pipeline/processing-stage'
+import { ATTENTION_QUERY_KEY } from '@/lib/hooks/use-attention'
 
 /** Poll cadence (ms) for an in-flight source's pipeline stage. */
 const PIPELINE_POLL_MS = 2000
@@ -82,6 +83,7 @@ export function useCreateSource() {
   return useMutation({
     mutationFn: (data: CreateSourceRequest) => sourcesApi.create(data),
     onSuccess: (result: SourceResponse, variables) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       // Invalidate queries for all relevant notebooks with immediate refetch
       if (variables.notebooks) {
         variables.notebooks.forEach(notebookId => {
@@ -159,6 +161,7 @@ export function useDeleteSource() {
   return useMutation({
     mutationFn: (id: string) => sourcesApi.delete(id),
     onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       // Invalidate ALL sources queries (both general and notebook-specific)
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources() })
       // Also invalidate the specific source
@@ -186,6 +189,7 @@ export function useFileUpload() {
     mutationFn: ({ file, notebookId }: { file: File; notebookId: string }) =>
       sourcesApi.upload(file, notebookId),
     onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       queryClient.invalidateQueries({ 
         queryKey: QUERY_KEYS.sources(variables.notebookId) 
       })
@@ -238,6 +242,7 @@ export function useRetrySource() {
   return useMutation({
     mutationFn: (sourceId: string) => sourcesApi.retry(sourceId),
     onSuccess: (result, sourceId) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       // Invalidate status query to refetch latest status
       queryClient.invalidateQueries({
         queryKey: QUERY_KEYS.sourceStatus(sourceId)

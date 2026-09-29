@@ -1,10 +1,12 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { sourcesApi } from '@/lib/api/sources'
 import { QUERY_KEYS } from '@/lib/api/query-client'
+import { ATTENTION_QUERY_KEY } from '@/lib/hooks/use-attention'
 import { SourceListResponse } from '@/lib/types/api'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { EmptyState } from '@/components/common/EmptyState'
@@ -29,6 +31,15 @@ export default function SourcesPage() {
   })
   const router = useRouter()
   const queryClient = useQueryClient()
+  // WB.1: `?stage=` (repeatable) filters by processing stage, `?stalled=true`
+  // to the sources that stopped (the Werkbak's group, same server predicate).
+  const searchParams = useSearchParams()
+  const stages = searchParams.getAll('stage')
+  const stalled = searchParams.get('stalled') === 'true'
+  const filtered = stages.length > 0 || stalled
+  const filterLabel = [stalled ? 'stopped sources' : '', stages.join(', ')]
+    .filter(Boolean)
+    .join(' · ')
   const tableRef = useRef<HTMLTableElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
@@ -40,13 +51,15 @@ export default function SourcesPage() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: [...QUERY_KEYS.sources(), sortBy, sortOrder] as const,
+    queryKey: [...QUERY_KEYS.sources(), sortBy, sortOrder, stages.join(','), stalled] as const,
     queryFn: ({ pageParam = 0 }) =>
       sourcesApi.list({
         limit: PAGE_SIZE,
         offset: pageParam as number,
         sort_by: sortBy,
         sort_order: sortOrder,
+        stage: stages.length ? stages : undefined,
+        stalled: stalled || undefined,
       }),
     getNextPageParam: (lastPage, allPages) =>
       lastPage.length === PAGE_SIZE
@@ -198,6 +211,7 @@ export default function SourcesPage() {
       await sourcesApi.delete(deleteDialog.source.id)
       toast.success('Source deleted successfully')
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources() })
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       setDeleteDialog({ open: false, source: null })
     } catch (err) {
       console.error('Failed to delete source:', err)
@@ -221,6 +235,23 @@ export default function SourcesPage() {
         <div className="flex h-full items-center justify-center">
           <p className="text-red-500">Failed to load sources</p>
         </div>
+      </AppShell>
+    )
+  }
+
+  if (sources.length === 0 && filtered) {
+    return (
+      <AppShell>
+        <EmptyState
+          icon={FileText}
+          title="No sources match this filter"
+          description={`Showing only: ${filterLabel}.`}
+          action={
+            <Button asChild variant="outline">
+              <Link href="/sources">Show all sources</Link>
+            </Button>
+          }
+        />
       </AppShell>
     )
   }
@@ -251,6 +282,15 @@ export default function SourcesPage() {
           <p className="mt-2 text-muted-foreground">
             Browse all sources across your notebooks. Use arrow keys to navigate and Enter to open.
           </p>
+          {filtered && (
+            <p className="mt-2 text-sm" data-testid="sources-stage-filter">
+              Showing only: <span className="font-medium">{filterLabel}</span>
+              {' · '}
+              <Link href="/sources" className="underline underline-offset-2">
+                Show all
+              </Link>
+            </p>
+          )}
         </div>
 
         <div ref={scrollContainerRef} className="flex-1 rounded-md border overflow-auto">

@@ -98,8 +98,15 @@ export const sourcesApi = {
     offset?: number
     sort_by?: 'created' | 'updated'
     sort_order?: 'asc' | 'desc'
+    /** processing_stage filter (any of these); sent as repeated `stage=`. */
+    stage?: string[]
+    /** Only the sources that stopped short of complete (the Werkbak's group). */
+    stalled?: boolean
   }) => {
-    const response = await apiClient.get<SourceListResponse[]>('/sources', { params })
+    const response = await apiClient.get<SourceListResponse[]>('/sources', {
+      params,
+      paramsSerializer: { indexes: null },
+    })
     return response.data
   },
 

@@ -4,13 +4,12 @@ import { gotoAndWait, isOnLoginPage } from './_helpers'
 /**
  * Smoke test: validates Playwright is wired correctly against the running stack.
  *
- * Hits `/` which redirects to `/notebooks` (see `frontend/src/app/page.tsx`).
- * From there the redirect chain settles at one of three legitimate states,
- * depending on backend config:
+ * Hits `/`, the Werkbak (`frontend/src/app/(dashboard)/page.tsx`, WB.1). The
+ * page settles at one of three legitimate states, depending on backend config:
  *
  *   1. `/login` — backend has `OPEN_NOTEBOOK_PASSWORD` set and the user is
  *      not authenticated (auth-on path).
- *   2. `/notebooks` — auth is off (or user is authenticated) AND a default
+ *   2. `/` — auth is off (or user is authenticated) AND a default
  *      chat + embedding model are configured.
  *   3. `/models?setup_required=true` — auth is off (or user is authenticated)
  *      but no default models are configured. The dashboard layout
@@ -23,7 +22,7 @@ import { gotoAndWait, isOnLoginPage } from './_helpers'
  * assert on the string "Noesis" — the app name. It appears in:
  *   - the LoginForm card title (login state)
  *   - the AppSidebar header (all dashboard routes wrapped in AppShell, which
- *     includes `/notebooks`, `/models`, `/sources`, etc.)
+ *     includes `/`, `/models`, `/sources`, etc.)
  *
  * That makes the assertion a true smoke check: if the app mounts on any of
  * the three legitimate landed states, "Noesis" is visible. If the page renders
@@ -34,10 +33,10 @@ test.describe('smoke', () => {
   test('app root mounts on a legitimate landed state', async ({ page }) => {
     await gotoAndWait(page, '/')
 
-    // Wait for the redirect chain to settle on one of three valid terminal
-    // states. Anything else is a regression. The trailing `(\?|$)` anchors
-    // the path so we don't accidentally match a deeper nested route.
-    const validLanded = /\/(notebooks|login|models)(\?|$)/
+    // Wait for the page to settle on one of three valid terminal states.
+    // Anything else is a regression. The trailing `(\?|$)` anchors the path so
+    // we don't accidentally match a deeper nested route.
+    const validLanded = /^https?:\/\/[^/]+\/(login|models)?(\?|$)/
     await page.waitForURL(validLanded, { timeout: 15_000 })
     await expect(page).toHaveURL(validLanded)
 

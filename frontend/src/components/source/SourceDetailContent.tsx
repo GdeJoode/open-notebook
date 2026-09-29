@@ -5,6 +5,8 @@ import { isAxiosError } from 'axios'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { sourcesApi } from '@/lib/api/sources'
+import { queryClient } from '@/lib/api/query-client'
+import { ATTENTION_QUERY_KEY } from '@/lib/hooks/use-attention'
 import { insightsApi, SourceInsightResponse } from '@/lib/api/insights'
 import { transformationsApi } from '@/lib/api/transformations'
 import { embeddingApi } from '@/lib/api/embedding'
@@ -268,6 +270,7 @@ export function SourceDetailContent({
       await sourcesApi.reprocess(sourceId, reprocessConfig)
       toast.success('Reprocessing started — document will be re-ingested')
       setShowReprocessDialog(false)
+      void queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       await fetchSource()
     } catch (err) {
       console.error('Failed to reprocess:', err)
@@ -282,6 +285,7 @@ export function SourceDetailContent({
     try {
       await sourcesApi.retry(sourceId)
       toast.success('Source requeued for processing')
+      void queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       await fetchSource()
     } catch (err) {
       console.error('Failed to retry source:', err)
@@ -439,6 +443,7 @@ export function SourceDetailContent({
       try {
         await sourcesApi.delete(source.id)
         toast.success('Source deleted successfully')
+        void queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
         onClose?.()
       } catch (error) {
         console.error('Failed to delete source:', error)

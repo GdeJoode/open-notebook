@@ -16,7 +16,9 @@ roundtrip for the overlay table lives in ``test_alias_overlay_roundtrip.py``.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -997,3 +999,51 @@ async def test_scoring_runs_off_the_event_loop(monkeypatch) -> None:
     assert report.auto_merge_count == 1
     assert seen and all(t != loop_thread for t in seen)
     assert asyncio.get_running_loop().is_running()
+
+
+# --- WB.1 review r4: one scoring run at a time --------------------------------
+
+
+def _counting_service(runs: List[int], delay: float = 0.2) -> CandidateDedupService:
+    svc = _service([_entity("entity:a", "Koninkrijksrelaties"),
+                    _entity("entity:b", "Koninkrijksreiaties")])
+    score = svc._propose_from_rows
+
+    def slow(*args):
+        runs.append(1)
+        time.sleep(delay)  # the scoring thread; it cannot be cancelled
+        return score(*args)
+
+    svc._propose_from_rows = slow
+    return svc
+
+
+@pytest.mark.asyncio
+async def test_overlapping_reads_start_one_scoring_run() -> None:
+    runs: List[int] = []
+    first, second = await asyncio.gather(
+        _counting_service(runs).propose_candidates(),
+        _counting_service(runs).propose_candidates(),
+    )
+    assert len(runs) == 1
+    assert _all_pairs(first) == _all_pairs(second) != set()
+
+
+@pytest.mark.asyncio
+async def test_a_caller_that_gives_up_leaves_the_run_for_the_next() -> None:
+    """The Werkbak's group deadline cancels its caller, not the run: a retry
+    joins the run in progress instead of starting a second thread."""
+    runs: List[int] = []
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_counting_service(runs).propose_candidates(), 0.05)
+    report = await _counting_service(runs).propose_candidates()
+    assert len(runs) == 1
+    assert _all_pairs(report) != set()
+
+
+@pytest.mark.asyncio
+async def test_a_read_after_the_run_finished_scores_again() -> None:
+    runs: List[int] = []
+    await _counting_service(runs, delay=0).propose_candidates()
+    await _counting_service(runs, delay=0).propose_candidates()
+    assert len(runs) == 2

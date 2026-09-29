@@ -41,6 +41,7 @@ import type {
   ReextractResponse,
 } from '@/lib/types/notebook_schema'
 import { useToast } from '@/lib/hooks/use-toast'
+import { ATTENTION_QUERY_KEY } from '@/lib/hooks/use-attention'
 
 export const NOTEBOOK_SCHEMA_QUERY_KEY = (id: string) =>
   ['notebook-schema', id] as const
@@ -182,6 +183,7 @@ export function useAcceptExtension(
         parent_type: parentType,
       }),
     onSuccess: (data, { typeName, ontology }) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       queryClient.setQueryData(NOTEBOOK_SCHEMA_QUERY_KEY(notebookId), data.notebook_schema)
       // The shared ontology changed: the browse views and the editor follow.
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.ontologies })
@@ -203,6 +205,7 @@ export function useMarkCovered(notebookId: string) {
   return useMutation({
     mutationFn: (typeName: string) => notebookSchemaApi.markCovered(notebookId, typeName),
     onSuccess: (data, typeName) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       queryClient.setQueryData(NOTEBOOK_SCHEMA_QUERY_KEY(notebookId), data.notebook_schema)
       toast({ title: 'Already covered', description: `${typeName} left the queue` })
     },
@@ -218,6 +221,7 @@ export function useRejectExtension(
     mutationFn: (typeName: string) =>
       notebookSchemaApi.rejectExtension(notebookId, typeName),
     onSuccess: (data: NotebookSchemaResponse) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       queryClient.setQueryData(NOTEBOOK_SCHEMA_QUERY_KEY(notebookId), data)
       toast({ title: 'Success', description: 'Extension rejected' })
     },
@@ -281,6 +285,7 @@ export function useResumeExtraction(notebookId: string) {
   return useMutation({
     mutationFn: () => notebookSchemaApi.resumeExtraction(notebookId),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       queryClient.invalidateQueries({
         queryKey: NOTEBOOK_SCHEMA_QUERY_KEY(notebookId),
       })
@@ -364,6 +369,7 @@ export function useReextractMutation(
     mutationFn: (payload: ReextractRequest) =>
       notebookSchemaApi.enqueueReextract(notebookId, payload),
     onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       // Bust the events poll so the banner refetches with the latest
       // read_at state. Source list isn't invalidated because re-extract
       // doesn't change the candidate set. We invalidate the entire

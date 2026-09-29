@@ -545,6 +545,13 @@ def get_ontology_edit_service():
     return OntologyEditService()
 
 
+def get_attention_service():
+    """Track WB.1: the Werkbak's read across every review page."""
+    from app_main.services.attention_service import AttentionService
+
+    return AttentionService()
+
+
 def get_entity_retype_service():
     """Track OE.4: retype existing entities after a publish (dry run, confirmed apply)."""
     from app_main.services.entity_retype_service import EntityRetypeService

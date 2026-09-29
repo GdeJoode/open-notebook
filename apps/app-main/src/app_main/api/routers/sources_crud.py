@@ -5,6 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from shared.retrieval import FusionWeights, get_preset
+from shared.types.enums import ProcessingStage
 from surrealdb_service.connection import DatabaseUnavailableError
 from surrealdb_service.repositories.source import ChunkRepository
 
@@ -48,9 +49,12 @@ from app_main.services.chunking.chunk_mutator import (
 )
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
+from app_main.services.stopped_sources import stopped_sources
 from app_main.services.transformation_service import TransformationService
 
 router = APIRouter()
+
+_STAGES = {s.value for s in ProcessingStage}
 
 
 # ---------------------------------------------------------------------------
@@ -71,11 +75,31 @@ async def get_sources(
         "updated", description="Field to sort by (created or updated)"
     ),
     sort_order: str = Query("desc", description="Sort order (asc or desc)"),
+    stage: Optional[List[str]] = Query(
+        None,
+        description=(
+            "Filter by processing_stage; repeat for any of several "
+            "(?stage=failed&stage=awaiting_schema_review)"
+        ),
+    ),
+    stalled: bool = Query(
+        False,
+        description=(
+            "Only sources that stopped short of complete (the Werkbak's "
+            "'Sources that stopped'; see services/stopped_sources.py)"
+        ),
+    ),
     source_svc: SourceService = Depends(get_source_service),
     notebook_svc: NotebookService = Depends(get_notebook_service),
 ):
     """Get sources with pagination and sorting support."""
     try:
+        unknown = sorted(set(stage or []) - _STAGES)
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown stage(s) {unknown}; one of {sorted(_STAGES)}",
+            )
         if sort_by not in ["created", "updated"]:
             raise HTTPException(
                 status_code=400,
@@ -97,12 +121,17 @@ async def get_sources(
         from surrealdb_service.repositories import SourceRepository
 
         source_repo = SourceRepository()
+        ids = None
+        if stalled:
+            ids = [str(r["id"]) for r in await stopped_sources(source_repo)]
         result = await source_repo.list_with_metadata(
             notebook_id=notebook_id,
             order_by=sort_by,
             order_dir=sort_order.upper(),
             limit=limit,
             offset=offset,
+            stages=stage or None,
+            ids=ids,
         )
 
         # Batch fetch command statuses in a single query

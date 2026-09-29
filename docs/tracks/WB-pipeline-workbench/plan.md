@@ -247,6 +247,173 @@ redo it.
     closed, both appear on the Werkbak on the next open, each with a link
     that lands on the page where it is resolved;
   - every count equals its source endpoint (a test compares them).
+- **WB.1 built** (branch `feature/wb1-werkbak`):
+  - `GET /api/attention` (`AttentionService`) returns ten groups: failed,
+    gated and stopped sources, paused extraction, Pass-1 proposals, triage,
+    merge candidates, retype, failed jobs, jobs in progress. With `?since=`
+    it adds new sources and finished jobs. Each group reads through its
+    page's own service. Each group and item carries the route where it is
+    resolved, and a `nav` for the sidebar badge.
+  - Groups run concurrently with a 5 s deadline each. A failing or slow
+    group returns `error`; the others still answer.
+  - "Stopped" means: short of `complete`, no queued or running job for the
+    source, and the last write more than 15 minutes old. With the job check
+    in place, the only normal quiet gap is between a stage write and the
+    next enqueue.
+  - A failed job counts until a later job of the same type for the same
+    source exists, or until its source is deleted (live: 3 of 22). Exposed as
+    `GET /commands/jobs?unresolved=true`.
+  - Retype counts changes + flag-only, as the retype panel does; collisions
+    show as detail.
+  - `?stage=` (repeatable) on `GET /sources/`; the Sources page reads it.
+  - `/` is the Werkbak; `app/page.tsx` and the middleware redirect are gone.
+    The sidebar has a Werkbak entry with the total, and badges on Sources,
+    Notebooks, Knowledge Graph and Ontologies. "Last visit" is the
+    `generated_at` of the report marked as seen (localStorage). It moves
+    only on "Mark as seen".
+  - Live, read-only: warm 1.15–1.2 s, bounded by merge candidates (1.05 s
+    on their own at the time). Every other group takes 0.06–0.56 s. A cold
+    process needs 5.8 s for the pool sign-ins. Live counts: 8 stopped
+    sources, 79 proposals, 1,238 triage rows, 48 merge candidates, 3 failed
+    jobs.
+  - Limits:
+    - the < 1 s target is missed by the merge-candidates read;
+    - `JobRepository.list_jobs` and `NotebookSchemaRepository.get_by_notebook`
+      swallow read errors, so those groups read 0 instead of reporting an
+      error;
+    - no jobs page exists; a job without a source or notebook links to
+      `/podcasts`, `/settings` or `/notebooks` by type;
+    - `design-tokens.spec.ts` fails without a backend: 32 console errors
+      from endpoints it does not mock. `/api/attention` is now mocked, so
+      none of them come from WB.1.
+- **Review round 1** (REVISIONS_NEEDED, 2 majors, 8 minors), all addressed:
+  - M1: "stopped" now has one predicate (`services/stopped_sources.py`).
+    Both the group and `GET /sources/?stalled=true` use it, and the group
+    links there. The Sources page shows "Showing only: stopped sources".
+    Tests use the real 15 min threshold: they backdate `updated` and leave
+    out a busy source and a freshly written one.
+  - M2: the paused-jobs read moved to `services/paused_extraction.py`; the
+    router and the Werkbak both call it.
+  - m3: the new `counted` field goes into `total` and the badges, so each
+    thing to act on counts once. A source listed in a source group owns its
+    paused extraction and its failed jobs. Proposals count in full. A group
+    that fails owns nothing.
+  - m4: the mutations that resolve an item invalidate `['attention']`.
+  - m9: the sidebar reads the cached report with no refetch on mount or
+    focus; the Werkbak page always reads anew.
+  - m5: without a mark, arrivals cover the last 7 days and are labelled so
+    (`since_default`).
+  - m6: gated sources, paused extraction and proposals show one item per
+    notebook, each linked to that notebook's page, with no cap. Failed jobs
+    say plainly that there is no jobs page.
+  - m7: a stopped source without chunks reads "No text extracted:
+    reprocess or delete" and links to its page, where Reprocess is.
+  - m8: merge candidates include the Resolution page's plan clusters.
+  - m10: a failure is keyed by type, source and the payload's
+    `notebook_id`. The later jobs are read one row per key, for the
+    failures' keys only.
+  - Live, read-only after the round: 1.19–1.47 s, still bounded by merge
+    candidates (1.18 s). Total 1,375: the 3 failed jobs count 2, because one
+    belongs to a listed source. 8 stopped sources, all "Stopped at
+    embedded".
+  - Limits:
+    - the < 1 s target is still missed;
+    - the scoring runs in `asyncio.to_thread`, so a merge-candidates timeout
+      does not stop it: the thread runs to the end;
+    - `list_jobs` and `get_by_notebook` still swallow read errors.
+- **Review round 2** (REVISIONS_NEEDED, 2 majors, 5 minors), all addressed:
+  - M1: "and N more" counted the group's count, not its items: 79
+    proposals in one notebook read "and 78 more". Each group now returns
+    `item_total`, the items it has. Per-notebook groups list all of theirs,
+    so no "more" appears, and each notebook item keeps its own count ("12
+    proposals: ..."). The fixture carries `item_total`.
+  - M2: the report refreshes every 90 s while the tab is visible, paused
+    while it is hidden. A return to a report past its 5 min stale time
+    reads it once on focus. 90 s keeps the badges within a minute and a
+    half, at about 1 % of one server core per open tab.
+  - m3: the notebook-scoped `?stalled=true` test also asserts nb2's exact
+    set.
+  - m4: the per-notebook groups (gated, paused, proposals) have a card
+    action only when one notebook is involved. With several, the card says
+    "In N places: open each below" and each item links to its notebook.
+  - m5: the gated sources' notebooks come from one query
+    (`get_notebook_id_many`). It uses the same subquery as `get_notebook_id`,
+    and a test pins that both give the same answer.
+  - m6: `stopped_sources` is the predicate only. The busy sources are one
+    query (`unfinished_source_ids`). The chunk counts behind the reason text
+    are read by the Werkbak for the rows it shows (`add_chunk_counts`), so
+    `?stalled=true` reads none. The unfinished-jobs read had one user left
+    and is no longer shared.
+  - m7: `chunk` is cleaned up between tests.
+  - Two guards no test held, found by mutation checks and now pinned:
+    - the shield on the shared notebooks read: the DB test times all
+      waiters out in one tick, so a unit test now cancels one waiter;
+    - the unfinished-status filter behind "busy": the stopped seed source
+      now has a completed parse job.
+  - Live, read-only after the round:
+    - warm reads take 1.34–2.65 s under the current host load;
+    - 79 proposals in one notebook show 1 item and no "more";
+    - a cold process can pass the 5 s group deadline on its first read, and
+      those groups then report a timeout.
+- **Review round 3** (REVISIONS_NEEDED, 2 majors, 4 minors), all addressed:
+  - M1: each page renders its own sidebar, so a navigation restarted the
+    90 s interval, and `refetchOnMount: false` blocked the read on remount.
+    The report is now stale after 90 s (`staleTime: REFRESH_MS`), and a
+    remount or focus reads it once it is. Navigating every 60 s for 10
+    minutes reads 6 times; before the fix it read once. AppShell stays in
+    the pages (WB.2/WB.4).
+  - M2a: the report carries `partial` (an action group failed or timed
+    out). The heading shows "(1257+)", and the Werkbak badge and each badge
+    over a failed group show "N+", each with sr-only "some groups did not
+    load". A partial report is read again after 5 s instead of 90 s, still
+    paused while hidden; the marker goes once the groups load.
+  - M2b, measured instead of built. The round-2 "6.02 s cold, total 89"
+    came from my probe script: its groups import `app_main.dependencies`
+    and `entity_resolution` lazily (42 s + 6 s cold), which blocks the event
+    loop. The server has imported both at startup through its routers.
+    After the app import, the cold first report takes 2.7–4.3 s with no
+    timeouts, and 8 warm sign-ins take 0.1–0.2 s. A pool warm-up would save
+    at most that, so it is not built.
+  - m3: `REFRESH_MS` sits below the imports.
+  - m4: `unfinished_source_ids` returns `Set[str]`.
+  - m5: a test covers one notebook plus a gated source in no notebook: two
+    places, no card action.
+  - m6: the local e2e scripts (gitignored) now warm the specs' routes
+    before the run and pass `--retries=1`. The committed Playwright config
+    is unchanged.
+- **Review round 4** (REVISIONS_NEEDED, 1 major, 2 minors), all addressed:
+  - M1a: the quick re-read of a partial report backs off: 5 s, 15 s,
+    45 s, then 90 s. It resets on a complete report. A report that stays
+    partial for 10 minutes is read 9 times; the old fixed 5 s re-read read
+    it 120 times.
+  - M1b: one candidate scoring run per scope at a time
+    (`CandidateDedupService.propose_candidates`). A caller that arrives
+    while a run is in progress joins it. Callers await the run shielded,
+    so a caller that gives up (the group deadline) leaves the run for the
+    next one instead of stacking another uncancellable thread. A finished
+    run is forgotten, so the next read scores again.
+    `/entity-resolution/candidates` goes through the same path.
+  - m2: the group deadline is 8 s. The cold first read takes 2.7–4.3 s, so
+    8 s is about twice the slowest measured read; a hung group still gives
+    up within seconds.
+  - m3: the stale time follows the same delay, so a navigation reads a
+    partial report once its retry delay has passed.
+
+> **Carried from WB.1 review round 5 (approved; minors, not blocking):**
+> 1. Pipeline callers (triage B1 at `triage_pipeline.py:300`, OKF import at
+>    `okf_import_service.py:821`) now join an in-flight candidates run too. A
+>    triage batch that joins a run started before its entities were saved
+>    skips that batch's match-conflict rows for good (low odds: 1–4 s run vs a
+>    90 s poll, one job at a time). The pair still shows as a merge candidate.
+>    First follow-up: let pipeline callers bypass the single-flight.
+> 2. A run whose DB call never returns pins its key until restart (the pool
+>    bounds acquire, not the query); later callers all join it.
+> 3. A run in flight when an apply/"kept apart" commits can show the pair once
+>    more; re-applying is harmless.
+> 4. While `/api/attention` itself fails after a partial report, the client
+>    keeps the last partial delay (e.g. 5 s) instead of backing off.
+> 5. No test for "a run raises, then the next call scores again"; the
+>    `id(loop)` key can outlive a closed test loop.
 
 **WB.2 — Pipeline navigation** (~1.5d)
 - **Nav regrouped in pipeline order:**

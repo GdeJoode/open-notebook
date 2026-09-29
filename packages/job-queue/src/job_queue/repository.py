@@ -5,7 +5,7 @@ Extends BaseRepository with job-specific query methods.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger
 
@@ -13,7 +13,7 @@ from shared.models import Job
 from shared.models.jobs import JobSubmitRequest
 from shared.types.enums import JobPriority, JobStatus, JobType
 from surrealdb_service.config import SurrealDBConfig
-from surrealdb_service.connection import execute_query
+from surrealdb_service.connection import ensure_record_id, execute_query
 from surrealdb_service.repositories.base import BaseRepository
 
 
@@ -138,6 +138,85 @@ class JobRepository(BaseRepository[Job]):
         except Exception as e:
             logger.error(f"Failed to get job stats: {e}")
             return {"total": 0}
+
+    async def list_finished_since(
+        self, since: datetime, statuses: List[JobStatus]
+    ) -> List[Job]:
+        """Jobs that ended in one of ``statuses`` after ``since``, newest first
+        (WB.1: what finished while the owner was away). Raises on a failed
+        read, unlike :meth:`query`, so the Werkbak reports an error rather
+        than an empty list."""
+        rows = await execute_query(
+            "SELECT * FROM job WHERE completed_at > $since AND status IN $statuses "
+            "ORDER BY completed_at DESC;",
+            {"since": since, "statuses": [s.value for s in statuses]},
+            self.config,
+        )
+        return [Job(**r) for r in rows or []]
+
+    async def unfinished_source_ids(self, statuses: List[str]) -> Set[str]:
+        """The sources with a job in one of ``statuses``, in one query (WB.1:
+        a source with a live job has not stopped). Raises on a failed read."""
+        rows = await execute_query(
+            "SELECT VALUE source_id FROM job WHERE status IN $statuses "
+            "AND source_id != NONE;",
+            {"statuses": statuses},
+            self.config,
+        )
+        return {str(r) for r in rows or [] if r}
+
+    async def list_unresolved_failures(self) -> List[Job]:
+        """Failed jobs nothing has resolved since, newest first (WB.1).
+
+        A failure is resolved once a later job with the same key exists (a
+        re-run, whatever its outcome), or once its source is gone: nothing is
+        left to act on. The key is the job type, the source and the
+        payload's ``notebook_id``, so a failed notebook export is resolved by
+        a later export of that notebook, not of another one.
+
+        The later jobs are read as one row per key (the latest ``created``),
+        for the failures' keys only. Raises on a failed read, unlike
+        :meth:`query`.
+        """
+        failed = await execute_query(
+            "SELECT * FROM job WHERE status = $status ORDER BY created DESC;",
+            {"status": JobStatus.FAILED.value},
+            self.config,
+        ) or []
+        if not failed:
+            return []
+
+        def key(row: Dict[str, Any]) -> tuple:
+            return (row.get("job_type"), row.get("source_id"),
+                    (row.get("payload") or {}).get("notebook_id"))
+
+        source_ids = sorted({r["source_id"] for r in failed if r.get("source_id")})
+        latest_rows = await execute_query(
+            "SELECT job_type, source_id, payload.notebook_id AS notebook_id, "
+            "time::max(created) AS latest FROM job "
+            "WHERE job_type IN $types AND (source_id = NONE OR source_id IN $sources) "
+            "GROUP BY job_type, source_id, notebook_id;",
+            {"types": sorted({r["job_type"] for r in failed}), "sources": source_ids},
+            self.config,
+        )
+        latest = {
+            (r.get("job_type"), r.get("source_id"), r.get("notebook_id")): r["latest"]
+            for r in latest_rows or []
+        }
+        existing: set = set()
+        if source_ids:
+            found = await execute_query(
+                "SELECT VALUE id FROM source WHERE id IN $ids;",
+                {"ids": [ensure_record_id(s) for s in source_ids]},
+                self.config,
+            )
+            existing = {str(r) for r in found or []}
+        return [
+            Job(**r)
+            for r in failed
+            if not r["created"] < latest.get(key(r), r["created"])
+            and (not r.get("source_id") or r["source_id"] in existing)
+        ]
 
     async def get_retryable(self) -> List[Job]:
         """Get failed jobs that can be retried."""

@@ -2,6 +2,7 @@
 Source repository with specialized operations.
 """
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -10,6 +11,11 @@ from shared.models import Asset, Chunk, Source, SourceEmbedding, SourceInsight
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
 from surrealdb_service.repositories.base import BaseRepository, _validate_record_id
+
+# The ``processing_stage`` filter shared by the sources list (``?stage=``) and
+# the Werkbak (WB.1), so both count the same rows. The field is a strict string
+# defaulting to ``ingested`` (migration 71), so every row has a stage.
+STAGE_IN = "processing_stage IN $stages"
 
 
 class SourceRepository(BaseRepository[Source]):
@@ -72,6 +78,29 @@ class SourceRepository(BaseRepository[Source]):
                 f"Failed to fetch notebook for source {source_id}: {e}"
             )
             return None
+
+    async def get_notebook_id_many(
+        self, source_ids: List[str]
+    ) -> Dict[str, Optional[str]]:
+        """:meth:`get_notebook_id` for many sources in one query (WB.1).
+
+        Each row runs the same subquery ``get_notebook_id`` runs, so a source
+        in several notebooks resolves to the same one. Sources that do not
+        exist are absent; an unlinked source maps to ``None``. Raises on a
+        failed read.
+        """
+        if not source_ids:
+            return {}
+        rows = await execute_query(
+            "SELECT id, (SELECT VALUE out FROM reference WHERE in = $parent.id "
+            "LIMIT 1)[0] AS notebook FROM source WHERE id IN $ids;",
+            {"ids": [ensure_record_id(s) for s in source_ids]},
+            self.config,
+        )
+        return {
+            str(r["id"]): (str(r["notebook"]) if r.get("notebook") else None)
+            for r in rows or []
+        }
 
     async def get_notebook_ids(self, source_id: str) -> List[str]:
         """Return every notebook linked to ``source_id`` (possibly empty).
@@ -528,6 +557,8 @@ class SourceRepository(BaseRepository[Source]):
         order_dir: str = "DESC",
         limit: int = 50,
         offset: int = 0,
+        stages: Optional[List[str]] = None,
+        ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         List sources with insight counts and embedding status.
@@ -538,11 +569,20 @@ class SourceRepository(BaseRepository[Source]):
             order_dir: Sort direction (ASC or DESC).
             limit: Max results.
             offset: Skip count.
+            stages: Optional ``processing_stage`` filter (any of these).
+            ids: Optional id filter (only these sources).
 
         Returns:
             List of source dicts with metadata fields.
         """
         order_clause = f"ORDER BY {order_by} {order_dir}"
+        conditions = []
+        if stages:
+            conditions.append(STAGE_IN)
+        if ids is not None:
+            conditions.append("id IN $ids")
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        record_ids = [ensure_record_id(i) for i in ids] if ids is not None else None
 
         if notebook_id:
             query = f"""
@@ -554,6 +594,7 @@ class SourceRepository(BaseRepository[Source]):
                 ((SELECT VALUE id FROM source_embedding
                   WHERE source = $parent.id LIMIT 1)) != NONE AS embedded
                 FROM (select value in from reference where out=$notebook_id)
+                {where_clause}
                 {order_clause}
                 LIMIT $limit START $offset
             """
@@ -563,6 +604,8 @@ class SourceRepository(BaseRepository[Source]):
                     "notebook_id": ensure_record_id(notebook_id),
                     "limit": limit,
                     "offset": offset,
+                    "stages": stages,
+                    "ids": record_ids,
                 },
                 self.config,
             )
@@ -576,12 +619,66 @@ class SourceRepository(BaseRepository[Source]):
                 ((SELECT VALUE id FROM source_embedding
                   WHERE source = $parent.id LIMIT 1)) != NONE AS embedded
                 FROM source
+                {where_clause}
                 {order_clause}
                 LIMIT $limit START $offset
             """
             return await execute_query(
-                query, {"limit": limit, "offset": offset}, self.config
+                query,
+                {"limit": limit, "offset": offset, "stages": stages,
+                 "ids": record_ids},
+                self.config,
             )
+
+    async def list_by_stage(
+        self,
+        stages: List[str],
+        updated_before: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Every source at one of ``stages``, newest change first (WB.1).
+
+        The Werkbak's reader: lean rows (``id``, ``title``, ``processing_stage``,
+        ``created``, ``updated``) without the per-row insight and embedding
+        subqueries of :meth:`list_with_metadata`, and no page limit, so its
+        count is the whole set. The filter is the same :data:`STAGE_IN` as the
+        list endpoint's ``?stage=``. ``updated_before`` keeps the sources whose
+        last write is older (``updated`` is set on every write).
+        """
+        where = STAGE_IN
+        params: Dict[str, Any] = {"stages": stages}
+        if updated_before is not None:
+            where += " AND updated < $before"
+            params["before"] = updated_before
+        return await execute_query(
+            "SELECT id, title, processing_stage, created, updated FROM source "
+            f"WHERE {where} ORDER BY updated DESC;",
+            params,
+            self.config,
+        ) or []
+
+    async def chunk_counts(self, source_ids: List[str]) -> Dict[str, int]:
+        """Chunks per source for ``source_ids`` (absent = 0)."""
+        if not source_ids:
+            return {}
+        rows = await execute_query(
+            "SELECT source, count() AS n FROM chunk WHERE source IN $ids GROUP BY source;",
+            {"ids": [ensure_record_id(i) for i in source_ids]},
+            self.config,
+        )
+        return {str(r["source"]): int(r["n"]) for r in rows or []}
+
+    async def list_created_since(self, since: datetime) -> List[Dict[str, Any]]:
+        """Every source created after ``since``, newest first (WB.1).
+
+        Sources added through the API, MCP or the watcher land here as well
+        as uploads: ``created`` is set by the database on insert.
+        """
+        return await execute_query(
+            "SELECT id, title, processing_stage, created, updated FROM source "
+            "WHERE created > $since ORDER BY created DESC;",
+            {"since": since},
+            self.config,
+        ) or []
 
     async def batch_get_command_status(
         self, command_ids: List[str]

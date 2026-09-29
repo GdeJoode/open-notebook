@@ -19,6 +19,7 @@ import {
 } from '@/lib/api/ontologies'
 import { QUERY_KEYS } from '@/lib/api/query-client'
 import { useToast } from '@/lib/hooks/use-toast'
+import { ATTENTION_QUERY_KEY } from '@/lib/hooks/use-attention'
 
 export const ONTOLOGY_EDITOR_KEYS = {
   draft: (name: string) => ['ontology-editor', name, 'draft'] as const,
@@ -117,6 +118,8 @@ function useActiveChanged() {
   return () => {
     queryClient.invalidateQueries({ queryKey: editorKey() })
     queryClient.invalidateQueries({ queryKey: QUERY_KEYS.ontologies })
+    // A publish or rollback can change what the retype would do.
+    queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
   }
 }
 
@@ -171,6 +174,7 @@ export function useApplyRetype() {
   return useMutation({
     mutationFn: (fingerprint: string) => retypeApi.apply(fingerprint),
     onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       refresh()
       toast({ title: 'Retyped', description: `${result.written} entities written` })
     },
@@ -187,6 +191,7 @@ export function useUndoRetype() {
   return useMutation({
     mutationFn: (rollbackId: string) => retypeApi.undo(rollbackId),
     onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       queryClient.invalidateQueries({ queryKey: ONTOLOGY_EDITOR_KEYS.retype })
       toast({ title: 'Retype undone', description: `${result.written} entities restored` })
     },
