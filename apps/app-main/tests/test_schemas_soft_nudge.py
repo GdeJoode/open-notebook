@@ -400,10 +400,9 @@ class TestSentinelFiltering:
         client = _make_app(notebook_svc, schema_repo)
         resp = client.get("/api/notebooks/notebook:b3c/schema")
         assert resp.status_code == 200
-        body = resp.json()
-        accepted_names = [e["type_name"] for e in body["accepted_extensions"]]
-        assert "ClinicalTrial" in accepted_names
-        assert "_resumed_without_extensions" not in accepted_names
+        # OE.5: the accepted list is not part of the response at all.
+        assert "_resumed_without_extensions" not in resp.text
+        assert "accepted_extensions" not in resp.json()
 
     def test_ttl_export_skips_sentinel(self):
         notebook_svc = AsyncMock(spec=NotebookService)

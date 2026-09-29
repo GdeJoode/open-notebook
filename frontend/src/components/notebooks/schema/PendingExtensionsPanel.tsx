@@ -1,10 +1,10 @@
 'use client'
 
+import { useState } from 'react'
+
+import { AcceptExtensionDialog } from '@/components/notebooks/schema/AcceptExtensionDialog'
 import { Button } from '@/components/ui/button'
-import {
-  useAcceptExtension,
-  useRejectExtension,
-} from '@/lib/hooks/use-notebook-schema'
+import { useRejectExtension } from '@/lib/hooks/use-notebook-schema'
 import type { ExtensionView } from '@/lib/types/notebook_schema'
 
 interface PendingExtensionsPanelProps {
@@ -18,32 +18,25 @@ interface PendingExtensionsPanelProps {
 }
 
 /**
- * Pending-extensions panel with Accept / Reject mutations (B.3b).
+ * The notebook's queue of Pass-1 proposals (B.3b, OE.5).
  *
  * Each row shows the proposed `type_name`, optional `parent_type` and
  * `rationale` from the LLM, plus two action buttons.
  *
- * - Accept moves the extension into `accepted_extensions`. The list
- *   updates in place via React Query cache replacement (B.3b mutation
- *   hooks return the full updated schema).
- * - Reject drops the extension.
+ * - Accept opens {@link AcceptExtensionDialog}: the type is published to a
+ *   SHARED ontology through the ontology editor's gate (OE.5), and leaves the
+ *   queue once published.
+ * - Reject drops the proposal; the "no" is remembered.
  *
- * Disabled-while-pending: every button on a row disables when the
- * row's mutation is in flight so a user can't double-fire it. Other
- * rows stay enabled — useful when reviewing a batch.
- *
- * # B.3a → B.3b note
- *
- * The B.3a version of this component intentionally rendered disabled
- * buttons with a "coming in next release" tooltip. That stub is fully
- * superseded here — the buttons live, and the tooltip is gone.
+ * Disabled-while-pending: both buttons on a row disable while its reject is
+ * in flight so a user can't double-fire it. Other rows stay enabled.
  */
 export function PendingExtensionsPanel({
   extensions,
   notebookId,
 }: PendingExtensionsPanelProps) {
-  const acceptMutation = useAcceptExtension(notebookId ?? '')
   const rejectMutation = useRejectExtension(notebookId ?? '')
+  const [accepting, setAccepting] = useState<ExtensionView | null>(null)
 
   if (extensions.length === 0) {
     return (
@@ -58,17 +51,14 @@ export function PendingExtensionsPanel({
     )
   }
 
-  // Track which row's mutation is in flight so we can disable BOTH
-  // buttons on that row (preventing accept-then-immediately-reject
-  // races) while leaving every other row interactive.
-  const pendingTypeName =
-    acceptMutation.isPending
-      ? (acceptMutation.variables as string | undefined)
-      : rejectMutation.isPending
-        ? (rejectMutation.variables as string | undefined)
-        : undefined
+  // Track which row's reject is in flight so we can disable BOTH buttons on
+  // that row while leaving every other row interactive.
+  const pendingTypeName = rejectMutation.isPending
+    ? (rejectMutation.variables as string | undefined)
+    : undefined
 
   return (
+    <>
     <ul
       className="flex flex-col gap-2"
       data-testid="pending-extensions-panel"
@@ -112,10 +102,7 @@ export function PendingExtensionsPanel({
                   size="sm"
                   data-testid={`accept-${key}`}
                   disabled={buttonsDisabled}
-                  onClick={() =>
-                    notebookId &&
-                    acceptMutation.mutate(ext.type_name)
-                  }
+                  onClick={() => notebookId && setAccepting(ext)}
                 >
                   Accept
                 </Button>
@@ -138,5 +125,15 @@ export function PendingExtensionsPanel({
         )
       })}
     </ul>
+    {notebookId && accepting && (
+      <AcceptExtensionDialog
+        notebookId={notebookId}
+        extension={accepting}
+        onOpenChange={(open) => {
+          if (!open) setAccepting(null)
+        }}
+      />
+    )}
+    </>
   )
 }

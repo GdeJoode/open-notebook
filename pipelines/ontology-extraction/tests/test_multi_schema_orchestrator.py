@@ -627,7 +627,6 @@ def _pass_result(
             metadata={
                 "ontology_name": schema,
                 "chunk_count": chunks,
-                "extensions_count": 0,
                 "total_entities": kept,
                 "total_relations": 0,
                 "parse_failures": 0,
@@ -1217,7 +1216,7 @@ class TestTokenBudgetGuard:
         ontology = _scholarly_ontology()
         chunks = _three_chunks()
         for chunk in chunks:
-            prompt = build_pass2_prompt(ontology, chunk["text"], [])
+            prompt = build_pass2_prompt(ontology, chunk["text"])
             assert _estimate_tokens(prompt) <= 3000
 
     def test_internal_budget_target_holds(self):
@@ -1523,7 +1522,6 @@ class TestRunMultiSchema:
         direct = await run_pass2(
             chunks=chunks,
             ontology=ontology,
-            accepted_extensions=[],
             llm_caller=pass2_only_llm,
         )
 
@@ -1644,58 +1642,6 @@ class TestRunMultiSchema:
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_per_schema_accepted_extensions_passed_through(self):
-        applicable = [
-            (_scholarly_ontology(), 0.92),
-            (_policy_ontology(), 0.55),
-        ]
-        # Capture the accepted-extensions argument seen by each Pass-2
-        # call so we can assert the per-schema routing.
-        seen_for: Dict[str, List[Dict[str, Any]]] = {}
-
-        async def fake_run_pass2(
-            chunks: List[Dict[str, Any]],
-            ontology: Ontology,
-            accepted_extensions=None,
-            llm_caller=None,
-            model: str = "default",
-            token_budget=None,
-        ) -> ExtractionResult:
-            seen_for[ontology.metadata.name] = accepted_extensions or []
-            return ExtractionResult()
-
-        fake_llm = _make_dual_pass_callers(
-            pass1_responses={
-                "scholarly": _make_pass1_response("scholarly", 0.85),
-                "policy": _make_pass1_response("policy", 0.6),
-            },
-            pass2_responses={
-                "scholarly": _make_pass2_response([]),
-                "policy": _make_pass2_response([]),
-            },
-        )
-
-        with patch(
-            "ontology_extraction.multi_schema_orchestrator.run_pass2",
-            side_effect=fake_run_pass2,
-        ):
-            await run_multi_schema(
-                source_id="source:1",
-                notebook_id="notebook:1",
-                chunks=_three_chunks(),
-                applicable_schemas=applicable,
-                llm_caller=fake_llm,
-                pass1_repo=_FakePass1Repo(),
-                accepted_extensions_by_schema={
-                    "scholarly": [{"type_name": "Postdoc"}],
-                    "policy": [{"type_name": "Lobbyist"}],
-                },
-            )
-
-        assert [e["type_name"] for e in seen_for["scholarly"]] == ["Postdoc"]
-        assert [e["type_name"] for e in seen_for["policy"]] == ["Lobbyist"]
-
-    @pytest.mark.asyncio
     async def test_metadata_carries_schemas_attempted(self):
         applicable = [
             (_scholarly_ontology(), 0.92),
@@ -1735,7 +1681,6 @@ class TestRunMultiSchema:
         async def fake_run_pass2(
             chunks: List[Dict[str, Any]],
             ontology: Ontology,
-            accepted_extensions=None,
             llm_caller=None,
             model: str = "default",
             token_budget=None,

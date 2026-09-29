@@ -2,8 +2,9 @@
 
 Covers ``GET /api/notebooks/{id}/schema.ttl`` (B.2b):
 
-* happy path with two accepted extensions → 2 extra ``owl:Class`` declarations
-* empty-extensions path (no notebook_schema row) → base ontology unchanged
+* OE.5: nothing of the retired per-notebook layer is exported — the TTL is
+  the declared base ontology
+* no notebook_schema row → the default base ontology
 * 404 for unknown notebook id
 * response headers: ``Content-Type: text/turtle`` and an attachment filename
 * roundtrip: returned body parses back via ``rdflib.Graph().parse(format="turtle")``
@@ -11,7 +12,7 @@ Covers ``GET /api/notebooks/{id}/schema.ttl`` (B.2b):
 And ``GET /api/notebooks/{id}/schema`` + ``GET /api/notebooks/{id}/pass1_results``
 (B.3a):
 
-* schema JSON happy path: base entity types + accepted/pending extensions + flags
+* schema JSON happy path: base entity types + pending extensions + flags
 * schema JSON 404 for unknown notebook
 * schema JSON empty-state: returns the default base ontology + empty extensions
 * pass1_results: enriches each row with the source title
@@ -29,7 +30,7 @@ from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from rdflib import Graph, Literal
+from rdflib import Graph
 from rdflib.namespace import OWL, RDF, RDFS
 
 from app_main.api.routers.schemas import router
@@ -73,64 +74,66 @@ def _make_app(notebook_svc: AsyncMock, schema_repo: AsyncMock) -> TestClient:
 
 
 # ---------------------------------------------------------------------------
-# Happy path — notebook with accepted extensions
+# OE.5 — the retired per-notebook layer is not exported
 # ---------------------------------------------------------------------------
 
+# One entry of every kind the layer stored: accepted extensions, a re-parent of
+# a base class, a rename, the resume sentinel.
+_OLD_LAYER = [
+    {"extension_id": "ext-1", "type_name": "PreprintServer",
+     "parent_type": "Organization", "properties": [{"name": "preprintUrl", "data_type": "url"}]},
+    {"extension_id": "ext-2", "type_name": "Cohort", "description": "A study cohort."},
+    {"reparent_id": "reparent::ScholarlyArticle->Thesis", "op": "reparent",
+     "type_name": "ScholarlyArticle", "new_parent": "Thesis", "parent_type": "Thesis"},
+    {"rename_id": "rn", "op": "rename", "old_name": "Person", "new_name": "Onderzoeker",
+     "type_name": "Onderzoeker"},
+    {"type_name": "_resumed_without_extensions", "is_resume_sentinel": True},
+]
 
-class TestExportWithAcceptedExtensions:
-    def test_returns_ttl_with_extra_owl_classes(self):
-        """Two accepted extensions → 2 additional ``owl:Class`` triples."""
-        notebook_svc = AsyncMock(spec=NotebookService)
-        notebook_svc.get.return_value = _make_notebook()
 
-        schema_repo = AsyncMock(spec=NotebookSchemaRepository)
-        schema_repo.get_by_notebook.return_value = NotebookSchema(
-            notebook="notebook:test1",
-            base_ontology="scholarly",
-            accepted_extensions=[
-                {
-                    "extension_id": "ext-1",
-                    "type_name": "PreprintServer",
-                    "parent_type": "Organization",
-                    "properties": [
-                        {"name": "preprintUrl", "data_type": "url"},
-                    ],
-                },
-                {
-                    "extension_id": "ext-2",
-                    "type_name": "Cohort",
-                    "description": "A study cohort.",
-                },
-            ],
-            pending_extensions=[],
-        )
+def _client_with(accepted, base="scholarly", excluded=()):
+    notebook_svc = AsyncMock(spec=NotebookService)
+    notebook_svc.get.return_value = _make_notebook()
+    schema_repo = AsyncMock(spec=NotebookSchemaRepository)
+    schema_repo.get_by_notebook.return_value = NotebookSchema(
+        notebook="notebook:test1", base_ontology=base,
+        accepted_extensions=list(accepted), excluded_types=list(excluded),
+    )
+    return _make_app(notebook_svc, schema_repo)
 
-        client = _make_app(notebook_svc, schema_repo)
-        resp = client.get("/api/notebooks/notebook:test1/schema.ttl")
 
+class TestTheOldLayerIsNotExported:
+    def _graph(self, accepted, **kw):
+        resp = _client_with(accepted, **kw).get("/api/notebooks/notebook:test1/schema.ttl")
         assert resp.status_code == 200
-        body = resp.text
-        assert body.lstrip().startswith("@prefix")
+        return Graph().parse(data=resp.text, format="turtle")
 
-        # Roundtrip — parses cleanly
-        with_ext = Graph()
-        with_ext.parse(data=body, format="turtle")
-
-        # Baseline: load scholarly directly with NO extensions and compare
-        # the count of owl:Class subjects.
+    def test_the_ttl_is_the_base_ontology(self):
         from ontology_manager.rdf_owl_shacl import load_yaml_ontology
         from app_main.api.routers.schemas import _ontologies_dir
 
         baseline = load_yaml_ontology(_ontologies_dir() / "scholarly.yaml")
-        base_classes = set(baseline.subjects(RDF.type, OWL.Class))
-        merged_classes = set(with_ext.subjects(RDF.type, OWL.Class))
+        exported = self._graph(_OLD_LAYER, excluded=["Thesis"])
+        assert set(exported) == set(Graph().parse(
+            data=baseline.serialize(format="turtle"), format="turtle"))
 
-        # The two new classes show up as additional subjects.
-        new_classes = merged_classes - base_classes
-        assert len(new_classes) == 2
+    def test_the_old_layer_would_have_shown(self):
+        """Vacuity guard: the layer names classes the base does not have and
+        moves one it does, so equality above is about the export."""
+        from ontology_manager.rdf_owl_shacl import ON
 
-        labels = {str(s).rsplit("/", 1)[-1] for s in new_classes}
-        assert labels == {"PreprintServer", "Cohort"}
+        graph = self._graph([])
+        assert (ON["PreprintServer"], RDF.type, OWL.Class) not in graph
+        assert {str(o) for o in graph.objects(ON["ScholarlyArticle"], RDFS.subClassOf)} \
+            == {"https://open-notebook.dev/ontology/Article"}
+
+    def test_the_schema_json_reports_the_base_as_declared(self):
+        body = _client_with(_OLD_LAYER, excluded=["Thesis"]).get(
+            "/api/notebooks/notebook:test1/schema").json()
+        assert "accepted_extensions" not in body and "excluded_types" not in body
+        types = {t["name"]: t for t in body["base_ontology_types"]}
+        assert types["ScholarlyArticle"]["parent_type"] == "Article"
+        assert "Thesis" in types and "Onderzoeker" not in types
 
 
 # ---------------------------------------------------------------------------
@@ -263,125 +266,6 @@ class TestRoundtripParse:
 
 
 # ---------------------------------------------------------------------------
-# URI sanitisation — type_name with URI-illegal characters
-# ---------------------------------------------------------------------------
-
-
-class TestTypeNameSanitisation:
-    """Reviewer-flagged major: extensions whose ``type_name`` contains
-    spaces or punctuation must not crash rdflib's Turtle serializer.
-
-    Acceptance: the response is 200, the URI fragment is CamelCase
-    (e.g. ``MyClassWithSpaces``), and the original human-readable name
-    survives as ``rdfs:label``.
-    """
-
-    def _request(self, type_name: str):
-        notebook_svc = AsyncMock(spec=NotebookService)
-        notebook_svc.get.return_value = _make_notebook()
-
-        schema_repo = AsyncMock(spec=NotebookSchemaRepository)
-        schema_repo.get_by_notebook.return_value = NotebookSchema(
-            notebook="notebook:test1",
-            base_ontology="scholarly",
-            accepted_extensions=[
-                {"extension_id": "e1", "type_name": type_name},
-            ],
-        )
-        client = _make_app(notebook_svc, schema_repo)
-        return client.get("/api/notebooks/notebook:test1/schema.ttl")
-
-    def test_spaces_in_type_name_produce_camelcase_uri_and_label(self):
-        """The canonical case from the review report.
-
-        Input  : ``"My Class With Spaces"``
-        Expects: URI fragment ``MyClassWithSpaces``,
-                 rdfs:label ``"My Class With Spaces"``,
-                 200 response (NOT a 500).
-        """
-        resp = self._request("My Class With Spaces")
-        assert resp.status_code == 200
-
-        g = Graph()
-        g.parse(data=resp.text, format="turtle")
-
-        # 1) The CamelCase URI is present as an owl:Class.
-        from app_main.api.routers.schemas import ON
-
-        expected_uri = ON["MyClassWithSpaces"]
-        assert (expected_uri, RDF.type, OWL.Class) in g
-
-        # 2) The original human-readable name survives as rdfs:label.
-        assert (
-            expected_uri,
-            RDFS.label,
-            Literal("My Class With Spaces"),
-        ) in g
-
-    def test_punctuation_in_type_name_is_stripped(self):
-        """Slashes, parentheses, hyphens → all collapsed into CamelCase."""
-        resp = self._request("Author/Editor (Senior)")
-        assert resp.status_code == 200
-
-        g = Graph()
-        g.parse(data=resp.text, format="turtle")
-
-        from app_main.api.routers.schemas import ON
-
-        assert (ON["AuthorEditorSenior"], RDF.type, OWL.Class) in g
-        assert (
-            ON["AuthorEditorSenior"],
-            RDFS.label,
-            Literal("Author/Editor (Senior)"),
-        ) in g
-
-    def test_leading_digit_type_name_gets_underscore_prefix(self):
-        """URI fragments cannot start with a digit (NCName rule)."""
-        resp = self._request("2024 cohort")
-        assert resp.status_code == 200
-
-        g = Graph()
-        g.parse(data=resp.text, format="turtle")
-
-        from app_main.api.routers.schemas import ON
-
-        assert (ON["_2024Cohort"], RDF.type, OWL.Class) in g
-
-    def test_parent_type_with_spaces_also_sanitised(self):
-        """parent_type goes into rdfs:subClassOf — same sanitisation rules."""
-        notebook_svc = AsyncMock(spec=NotebookService)
-        notebook_svc.get.return_value = _make_notebook()
-
-        schema_repo = AsyncMock(spec=NotebookSchemaRepository)
-        schema_repo.get_by_notebook.return_value = NotebookSchema(
-            notebook="notebook:test1",
-            base_ontology="scholarly",
-            accepted_extensions=[
-                {
-                    "extension_id": "e1",
-                    "type_name": "Clinical Trial",
-                    "parent_type": "Research Study",
-                },
-            ],
-        )
-        client = _make_app(notebook_svc, schema_repo)
-        resp = client.get("/api/notebooks/notebook:test1/schema.ttl")
-
-        assert resp.status_code == 200
-
-        g = Graph()
-        g.parse(data=resp.text, format="turtle")
-
-        from app_main.api.routers.schemas import ON
-
-        assert (
-            ON["ClinicalTrial"],
-            RDFS.subClassOf,
-            ON["ResearchStudy"],
-        ) in g
-
-
-# ---------------------------------------------------------------------------
 # Filename sanitisation — Content-Disposition header safety
 # ---------------------------------------------------------------------------
 
@@ -495,7 +379,7 @@ def _make_app_b3a(
 
 
 class TestSchemaJsonHappyPath:
-    """Schema JSON returns base types + accepted + pending extensions."""
+    """Schema JSON returns base types + pending extensions + flags."""
 
     def test_returns_full_payload_with_extensions(self):
         notebook_svc = AsyncMock(spec=NotebookService)
@@ -549,14 +433,8 @@ class TestSchemaJsonHappyPath:
         assert "name" in first
         assert "properties" in first
 
-        # Extensions normalised into the typed view-model.
-        assert len(body["accepted_extensions"]) == 1
-        acc = body["accepted_extensions"][0]
-        assert acc["extension_id"] == "ext-acc-1"
-        assert acc["type_name"] == "PreprintServer"
-        assert acc["parent_type"] == "Organization"
-        assert len(acc["properties"]) == 1
-        assert acc["properties"][0]["name"] == "preprintUrl"
+        # OE.5: the accepted list is the queue's history, not a schema.
+        assert "accepted_extensions" not in body
 
         assert len(body["pending_extensions"]) == 1
         pen = body["pending_extensions"][0]
@@ -584,7 +462,6 @@ class TestSchemaJsonEmptyState:
         from app_main.api.routers.schemas import _DEFAULT_BASE_ONTOLOGY
 
         assert body["base_ontology"] == _DEFAULT_BASE_ONTOLOGY
-        assert body["accepted_extensions"] == []
         assert body["pending_extensions"] == []
         assert body["coverage_pct"] == 0.0
         assert body["review_required"] is False
@@ -798,238 +675,6 @@ class TestPass1ResultsOrphanedSource:
         assert rows[0]["source_title"] is None
 
 
-# ---------------------------------------------------------------------------
-# A re-parent REPLACES the declared parent (Track N.4d.3)
-# ---------------------------------------------------------------------------
-
-
-class TestExportWithAReparent:
-    """A re-parented class must end up with ONE ``rdfs:subClassOf`` edge.
-
-    Adding the new parent without dropping the declared one exports a different
-    statement from the curator's: both parents would be asserted, and a consumer
-    reading the graph would see a multiple-inheritance claim nobody made.
-    """
-
-    @staticmethod
-    def _graph_for(accepted):
-        notebook_svc = AsyncMock(spec=NotebookService)
-        notebook_svc.get.return_value = _make_notebook()
-        schema_repo = AsyncMock(spec=NotebookSchemaRepository)
-        schema_repo.get_by_notebook.return_value = NotebookSchema(
-            notebook="notebook:test1",
-            base_ontology="scholarly",
-            accepted_extensions=accepted,
-            pending_extensions=[],
-        )
-        client = _make_app(notebook_svc, schema_repo)
-        resp = client.get("/api/notebooks/notebook:test1/schema.ttl")
-        assert resp.status_code == 200
-        graph = Graph()
-        graph.parse(data=resp.text, format="turtle")
-        return graph
-
-    @staticmethod
-    def _parents_of(graph, fragment):
-        from ontology_manager.rdf_owl_shacl import ON
-
-        return {str(o) for o in graph.objects(ON[fragment], RDFS.subClassOf)}
-
-    def test_the_declared_parent_is_shipped_as_the_baseline(self):
-        """Vacuity guard: without the edit `ScholarlyArticle` really does hang
-        from `Article`, so the assertion below is about the edit and not about a
-        type that had no parent to begin with.
-        """
-        graph = self._graph_for([])
-        assert self._parents_of(graph, "ScholarlyArticle") == {
-            "https://open-notebook.dev/ontology/Article"
-        }
-
-    def test_a_reparent_replaces_rather_than_adds(self):
-        graph = self._graph_for(
-            [
-                {
-                    "reparent_id": "reparent::ScholarlyArticle->Thesis",
-                    "op": "reparent",
-                    "type_name": "ScholarlyArticle",
-                    "new_parent": "Thesis",
-                    "parent_type": "Thesis",
-                }
-            ]
-        )
-        assert self._parents_of(graph, "ScholarlyArticle") == {
-            "https://open-notebook.dev/ontology/Thesis"
-        }
-
-    def test_a_reparent_does_not_count_as_a_class_added(self):
-        """The class already existed; only genuinely new declarations count.
-
-        Asserted through the exported graph rather than the return value: the
-        class set must be identical to the baseline's.
-        """
-        baseline = self._graph_for([])
-        moved = self._graph_for(
-            [
-                {
-                    "reparent_id": "reparent::ScholarlyArticle->Thesis",
-                    "op": "reparent",
-                    "type_name": "ScholarlyArticle",
-                    "new_parent": "Thesis",
-                    "parent_type": "Thesis",
-                }
-            ]
-        )
-        assert set(moved.subjects(RDF.type, OWL.Class)) == set(
-            baseline.subjects(RDF.type, OWL.Class)
-        )
-
-    def test_a_reparent_of_a_class_the_base_never_declared_is_skipped(self):
-        """Minting a class here would assert something the exported ontology
-        cannot support, from a row the projection refuses for the same reason.
-        """
-        from ontology_manager.rdf_owl_shacl import ON
-
-        graph = self._graph_for(
-            [
-                {
-                    "reparent_id": "reparent::NotInTheBase->Thesis",
-                    "op": "reparent",
-                    "type_name": "NotInTheBase",
-                    "new_parent": "Thesis",
-                    "parent_type": "Thesis",
-                }
-            ]
-        )
-        assert (ON["NotInTheBase"], RDF.type, OWL.Class) not in graph
-        assert set(graph.subjects(RDF.type, OWL.Class)) == set(
-            self._graph_for([]).subjects(RDF.type, OWL.Class)
-        )
-
-    def test_a_normal_extension_still_keeps_its_parent(self):
-        """The removal must be scoped to re-parents — a plain accepted extension
-        that declares a parent still gets one.
-        """
-        graph = self._graph_for(
-            [
-                {
-                    "extension_id": "ext-1",
-                    "type_name": "PreprintServer",
-                    "parent_type": "Organization",
-                }
-            ]
-        )
-        assert self._parents_of(graph, "PreprintServer") == {
-            "https://open-notebook.dev/ontology/Organization"
-        }
-
-
-# ---------------------------------------------------------------------------
-# The schema JSON reports the EFFECTIVE parent (Track N.4d.3)
-# ---------------------------------------------------------------------------
-
-
-class TestSchemaJsonWithAReparent:
-    """A re-parent is not an extension, and the browser shows one row per type.
-
-    Rendered as an extension, a re-parented base type appears TWICE — once with
-    the parent it was declared with, once with the new one — and two moves of the
-    same type collide on the browser's `ext:${type_name}` key, because a
-    re-parent carries no `extension_id`.
-    """
-
-    @staticmethod
-    def _body_for(accepted):
-        notebook_svc = AsyncMock(spec=NotebookService)
-        notebook_svc.get.return_value = _make_notebook()
-        schema_repo = AsyncMock(spec=NotebookSchemaRepository)
-        schema_repo.get_by_notebook.return_value = NotebookSchema(
-            notebook="notebook:test1",
-            base_ontology="scholarly",
-            accepted_extensions=accepted,
-            pending_extensions=[],
-        )
-        client = _make_app(notebook_svc, schema_repo)
-        resp = client.get("/api/notebooks/notebook:test1/schema")
-        assert resp.status_code == 200
-        return resp.json()
-
-    @staticmethod
-    def _move(type_name, new_parent):
-        return {
-            "reparent_id": f"reparent::{type_name}->{new_parent}",
-            "op": "reparent",
-            "type_name": type_name,
-            "new_parent": new_parent,
-            "parent_type": new_parent,
-        }
-
-    def test_the_declared_parent_is_the_baseline(self):
-        """Vacuity guard: the type really does hang from `Article` unmoved."""
-        body = self._body_for([])
-        node = next(
-            t for t in body["base_ontology_types"] if t["name"] == "ScholarlyArticle"
-        )
-        assert node["parent_type"] == "Article"
-
-    def test_the_row_reports_the_new_parent(self):
-        body = self._body_for([self._move("ScholarlyArticle", "Thesis")])
-        node = next(
-            t for t in body["base_ontology_types"] if t["name"] == "ScholarlyArticle"
-        )
-        assert node["parent_type"] == "Thesis"
-
-    def test_the_type_is_not_also_listed_as_an_extension(self):
-        body = self._body_for([self._move("ScholarlyArticle", "Thesis")])
-        assert [e["type_name"] for e in body["accepted_extensions"]] == []
-
-    def test_two_moves_of_one_type_report_the_latest(self):
-        """Last wins, matching what the projection does with the same rows — and
-        the two entries cannot collide, because neither is rendered as a row.
-        """
-        body = self._body_for(
-            [
-                self._move("ScholarlyArticle", "Thesis"),
-                self._move("ScholarlyArticle", "Periodical"),
-            ]
-        )
-        node = next(
-            t for t in body["base_ontology_types"] if t["name"] == "ScholarlyArticle"
-        )
-        assert node["parent_type"] == "Periodical"
-        assert body["accepted_extensions"] == []
-
-    def test_a_moved_accepted_extension_reports_the_new_parent(self):
-        body = self._body_for(
-            [
-                {
-                    "extension_id": "ext-1",
-                    "type_name": "PreprintServer",
-                    "parent_type": "Organization",
-                },
-                self._move("PreprintServer", "Periodical"),
-            ]
-        )
-        ext = next(
-            e for e in body["accepted_extensions"] if e["type_name"] == "PreprintServer"
-        )
-        assert ext["parent_type"] == "Periodical"
-
-    def test_a_normal_extension_is_untouched(self):
-        body = self._body_for(
-            [
-                {
-                    "extension_id": "ext-1",
-                    "type_name": "PreprintServer",
-                    "parent_type": "Organization",
-                }
-            ]
-        )
-        ext = next(
-            e for e in body["accepted_extensions"] if e["type_name"] == "PreprintServer"
-        )
-        assert ext["parent_type"] == "Organization"
-
-
 class TestANotebookWithNoDeclaredBase:
     """PC.4b: `base_ontology = ""` declares NO base (the owner cleared it so
     documents select their ontologies per document). The readers turned "" into
@@ -1052,14 +697,10 @@ class TestANotebookWithNoDeclaredBase:
         body = self._client().get("/api/notebooks/notebook:test1/schema").json()
         assert body["base_ontology"] == ""
         assert body["base_ontology_types"] == []
-        assert [e["type_name"] for e in body["accepted_extensions"]] == ["Cohort"]
 
-    def test_the_ttl_export_holds_only_the_notebooks_own_classes(self):
+    def test_the_ttl_export_is_empty(self):
+        """No declared base, and since OE.5 no per-notebook classes either."""
         resp = self._client().get("/api/notebooks/notebook:test1/schema.ttl")
         assert resp.status_code == 200
         graph = Graph().parse(data=resp.text, format="turtle")
-        labels = {str(o) for o in graph.objects(None, RDFS.label)}
-        assert "Cohort" in labels
-        # Nothing from any base ontology — `scholarly` declares Person, Article…
-        assert not {"Person", "Article", "ScholarlyArticle"} & labels
-        assert len(set(graph.subjects(RDF.type, OWL.Class))) == 1
+        assert len(graph) == 0

@@ -119,6 +119,12 @@ describe('OntologyEditor', () => {
     expect(publishButton().disabled).toBe(true)
   })
 
+  it('opens on the type a link names (OE.5: the Schema tab routes edits here)', async () => {
+    mount(<OntologyEditor name="deals" initialType="Project" />)
+    const form = await screen.findByTestId('ontology-type-form')
+    expect(within(form).getByRole('heading').textContent).toBe('Project')
+  })
+
   it('refuses to "add" a type that exists (review M1)', async () => {
     mount(<OntologyEditor name="deals" />)
     await screen.findByTestId('ontology-type-Project')
@@ -129,7 +135,7 @@ describe('OntologyEditor', () => {
 
   it('drops the preview when the draft changes (review M4)', async () => {
     api.preview.mockResolvedValue({
-      findings: [], blocking: false, detection: [], detection_error: null, notebook_edits: 0,
+      findings: [], blocking: false, detection: [], detection_error: null,
       label_changes: [{ label: 'Project', before: 'programme', after: 'creative_work', entities: 3 }],
       retype: { changes: 3, collisions: 0, flag_only: 0, caused_by_this_edit: 3,
         collisions_caused_by_this_edit: 0 },
@@ -152,7 +158,7 @@ describe('OntologyEditor: the retype after a publish (OE.4)', () => {
 
   beforeEach(() => {
     retype.dryRun.mockResolvedValue({ total: 1, changes: [], collisions: [], flag_only: [],
-      counts: { changes: 0, collisions: 0, flag_only: 0 }, fingerprint: 'fp', notebook_edits: [] })
+      counts: { changes: 0, collisions: 0, flag_only: 0 }, fingerprint: 'fp' })
   })
 
   it('a publish that moves entities offers their retype', async () => {

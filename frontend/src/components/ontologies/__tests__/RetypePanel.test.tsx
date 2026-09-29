@@ -31,7 +31,6 @@ function plan(overrides: Partial<RetypeDryRun> = {}): RetypeDryRun {
     collisions: [{ ...row('entity:2', 'Fonds Zuid', 'concept', 'grant'), held_by: ['entity:3'] }],
     flag_only: [],
     fingerprint: 'fp-1',
-    notebook_edits: [],
     ...overrides,
   }
   return { ...base, counts: { changes: base.changes.length, collisions: base.collisions.length,
@@ -108,14 +107,6 @@ describe('RetypePanel', () => {
     await screen.findByTestId('ontology-retype-empty')
     expect(screen.queryByTestId('ontology-retype-apply')).toBeNull()
     expect(screen.queryByTestId('ontology-retype-collisions')).toBeNull()
-  })
-
-  it('notebook schema edits block the apply', async () => {
-    retype.dryRun.mockResolvedValue(plan({ notebook_edits: ['notebook:a'] }))
-    mount()
-    const apply = await screen.findByTestId('ontology-retype-apply') as HTMLButtonElement
-    expect(apply.disabled).toBe(true)
-    expect(screen.getByRole('alert').textContent).toContain('notebook:a')
   })
 
   it('a failed dry run says so', async () => {

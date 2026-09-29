@@ -83,10 +83,13 @@ class NotebookSchema(ObjectModel):
     accepted_extensions: List[Dict[str, Any]] = Field(
         default_factory=list,
         description=(
-            "Extensions the user has approved into this notebook's "
-            "ontology. Each dict is shaped roughly "
-            "{type_name, parent_type, properties[]}; kept FLEXIBLE on "
-            "the DB side so the exact shape can evolve."
+            "The proposal queue's history. Since OE.5 an accepted proposal "
+            "is published to a shared ontology and recorded here with "
+            "`published_to` / `published_version`; nothing reads this list "
+            "for typing, detection or prompts. Rows written by the retired "
+            "per-notebook edit ops (rename/merge/split/reparent) are ignored. "
+            "It still keeps a proposal from re-queueing and satisfies the "
+            "review gate."
         ),
     )
     pending_extensions: List[Dict[str, Any]] = Field(
@@ -120,11 +123,8 @@ class NotebookSchema(ObjectModel):
     excluded_types: List[str] = Field(
         default_factory=list,
         description=(
-            "Soft-delete list of type names the user has hidden from "
-            "the effective schema. The base YAML is never mutated; "
-            "downstream consumers (TTL export, SchemaBrowser, Pass 2 "
-            "extraction) filter against this list. Populated by the "
-            "B.3b DELETE /schema/types/{type_name} endpoint."
+            "Retired (OE.5). Written by the removed B.3b soft-delete; "
+            "stored values are kept and read by nothing."
         ),
     )
     rejected_extensions: List[str] = Field(
@@ -132,8 +132,7 @@ class NotebookSchema(ObjectModel):
         description=(
             "Type names a curator REJECTED from the pending queue (PC.5, "
             "migration 84). `merge_pending_extensions` skips them, so a "
-            "rejection survives the next document proposing the same type — "
-            "the same guarantee `excluded_types` gives a soft-delete."
+            "rejection survives the next document proposing the same type."
         ),
     )
     last_modified_by: Optional[str] = Field(

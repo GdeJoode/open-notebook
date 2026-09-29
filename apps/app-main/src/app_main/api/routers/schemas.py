@@ -1,8 +1,9 @@
-"""Notebook-effective-schema TTL export router (Phase B.2b).
+"""Notebook schema router: the Schema tab and its TTL export (Phase B.2b).
 
-Exposes ``GET /api/notebooks/{notebook_id}/schema.ttl`` — the canonical
-download endpoint for a notebook's *effective* schema: the base ontology
-plus any user-accepted extensions tracked in ``notebook_schema``.
+Exposes ``GET /api/notebooks/{notebook_id}/schema.ttl`` — the download of the
+notebook's declared base ontology. Since OE.5 the ontologies are shared by
+every notebook and nothing per notebook is added to them here: a curator's
+decision reaches them through the ontology editor.
 
 Design notes
 ------------
@@ -14,25 +15,9 @@ Design notes
   cacheable per-notebook without needing the notebook's display name.
 
 * **Missing notebook_schema row is *not* a 404.** B.1c populates the
-  row on the first pass-1 run; before then the effective schema is
-  simply the base ontology default with zero extensions. The API
-  contract is "give me the effective schema", which is still defined
-  in that state. Only a genuinely unknown notebook id returns 404, and
+  row on the first pass-1 run; before then the export is the base
+  ontology default, which is still defined in that state. Only a genuinely unknown notebook id returns 404, and
   we delegate that decision to ``NotebookService.get``.
-
-* **Extension shape is flexible.** B.1c writes
-  ``{extension_id, type_name, parent_type, properties: [...]}`` into
-  ``accepted_extensions``. We tolerate missing keys defensively because
-  the dict shape is intentionally schemaless on the DB side (see
-  ``shared.models.notebook_schema`` for rationale).
-
-* **type_name sanitisation for URIs.** LLM-generated extensions
-  (B.1c/B.1d) may produce ``type_name`` values containing spaces or
-  punctuation. rdflib's Turtle serializer rejects those because
-  ``https://open-notebook.dev/ontology/My Class`` is not a valid URI.
-  We CamelCase the URI fragment and preserve the original
-  human-readable string in ``rdfs:label`` — the standard RDF/OWL
-  convention.
 
 * **Serialisation footprint.** Current output is buffered in memory.
   At present scale (single-notebook ontology with ~10-50 classes) this
@@ -62,23 +47,18 @@ from app_main.dependencies import (
     get_reextract_service,
     get_schema_edit_service,
     get_source_repo,
-    get_type_placement_service,
 )
 from app_main.services.notebook_service import NotebookService
 from app_main.services.reextract_service import ReextractService
+from app_main.services.ontology_edit_service import OntologyEditError
 from app_main.services.schema_edit_service import (
     NotebookSchemaNotFoundError,
     SchemaEditService,
     UnknownExtensionError,
 )
-from shared.models import NotebookSchema
-from ontology_manager.rdf_owl_shacl import (
-    ON,
-    load_yaml_ontology,
-)
+from ontology_manager.rdf_owl_shacl import load_yaml_ontology
 from ontology_manager.registry import OntologyRegistry
-from rdflib import Graph, Literal, URIRef
-from rdflib.namespace import OWL, RDF, RDFS
+from rdflib import Graph
 from shared.models.notebook_schema import (
     DEFAULT_BASE_ONTOLOGY,
     NotebookSchema,
@@ -166,171 +146,6 @@ def _ontologies_dir() -> Path:
 # ---------------------------------------------------------------------------
 
 
-_CAMEL_SPLIT_RE = re.compile(r"[^A-Za-z0-9]+")
-
-
-def _to_camel_case_uri_fragment(name: str) -> str:
-    """Convert a human-readable type name into a CamelCase URI fragment.
-
-    rdflib's Turtle serializer rejects URIs containing spaces or other
-    URI-illegal characters. Since LLM-generated extension names
-    inevitably contain such characters ("Clinical Trial Phase",
-    "Author/Editor"), we transform them into CamelCase before building
-    the URI. The original string is preserved separately in
-    ``rdfs:label`` so human readability survives the trip.
-
-    Examples::
-
-        "My Class With Spaces"   → "MyClassWithSpaces"
-        "preprint server"        → "PreprintServer"
-        "Author/Editor"          → "AuthorEditor"
-        "ARXiv paper"            → "ARXivPaper"
-        "PreprintServer"         → "PreprintServer"   (no-op when valid)
-        "2024 cohort"            → "_2024Cohort"      (leading-digit guard)
-    """
-    parts = [p for p in _CAMEL_SPLIT_RE.split(name) if p]
-    if not parts:
-        return ""
-
-    # Preserve already-internally-capitalised words ("ARXiv",
-    # "PreprintServer") by only upper-casing the first character if
-    # it's lower-case. Avoids destroying intentional capitalisation.
-    def _cap_first(s: str) -> str:
-        return s[0].upper() + s[1:] if s else s
-
-    fragment = "".join(_cap_first(p) for p in parts)
-
-    # URI fragments cannot start with a digit if we want a valid QName
-    # (Turtle's prefixed-name form uses NCName rules). Prefix with an
-    # underscore in that case — still serialisable, still unique.
-    if fragment and fragment[0].isdigit():
-        fragment = "_" + fragment
-
-    return fragment
-
-
-# N.4d.3: the discriminator on an ``accepted_extensions`` entry that records a
-# re-parent rather than a new type. Defined here (not imported from the service)
-# to keep the router free of a service-layer import for one string.
-_REPARENT_OP = "reparent"
-
-
-def _apply_extensions(graph: Graph, extensions: List[Dict[str, Any]]) -> int:
-    """Add accepted-extension classes (and their properties) to ``graph``.
-
-    Each extension dict roughly follows::
-
-        {
-            "extension_id": "...",
-            "type_name": "MyType",
-            "parent_type": "ParentType",  # optional
-            "properties": [               # optional
-                {"name": "...", "data_type": "string"},
-                ...
-            ],
-        }
-
-    We add an ``owl:Class`` declaration plus an ``rdfs:subClassOf`` edge
-    when ``parent_type`` is set. Properties become ``owl:DatatypeProperty``
-    declarations (object-property nuance is left to B.3b's full editor).
-
-    ``type_name`` is sanitised to a CamelCase URI fragment via
-    ``_to_camel_case_uri_fragment``; the original human-readable string
-    is written to ``rdfs:label``. The same transform is applied to
-    ``parent_type`` so the ``rdfs:subClassOf`` URI also stays valid.
-
-    N.4d.3 — a ``reparent`` entry REPLACES the class's declared parent instead
-    of adding a second one. Without that the exported graph would give a
-    re-parented type two ``rdfs:subClassOf`` edges, which is a different
-    statement from the one the curator made: the base's parent and the new one
-    would both be true. It is not counted as a class added either — the class
-    already existed. The class URI is safe to target because the base emits
-    ``ON[name]`` while this function emits ``ON[camel_case(name)]``, and no
-    shipped ontology has a type name where those differ (measured: zero names
-    containing a space or a slash across all eleven).
-
-    Returns the number of new ``owl:Class`` declarations actually added.
-    Defensive of missing keys: an extension dict without ``type_name`` is
-    skipped with a warning rather than raising — that matches the
-    FLEXIBLE storage contract on the DB side.
-    """
-    classes_added = 0
-    for ext in extensions:
-        # B.3c: skip resume sentinels — they only exist to satisfy the
-        # review-gate predicate (see ``_RESUME_SENTINEL_TYPE_NAME``) and
-        # carry no schema content.
-        if ext.get("is_resume_sentinel") is True:
-            continue
-        type_name = ext.get("type_name")
-        if not type_name or not isinstance(type_name, str):
-            logger.warning(
-                "Skipping extension without valid type_name: {!r}", ext
-            )
-            continue
-
-        uri_fragment = _to_camel_case_uri_fragment(type_name)
-        if not uri_fragment:
-            logger.warning(
-                "Skipping extension with un-sanitisable type_name: {!r}",
-                type_name,
-            )
-            continue
-
-        cls_uri: URIRef = ON[uri_fragment]
-
-        if ext.get("op") == _REPARENT_OP:
-            if (cls_uri, RDF.type, OWL.Class) not in graph:
-                # A re-parent moves an EXISTING class. Naming one the base graph
-                # does not declare would otherwise mint a phantom class here —
-                # an assertion the exported ontology cannot support, from a row
-                # the projection would refuse for the same reason.
-                logger.warning(
-                    "Skipping re-parent of a class absent from the base "
-                    "ontology: {!r}",
-                    type_name,
-                )
-                continue
-            # Drop the parent it was declared with so the new one REPLACES it
-            # rather than joining it.
-            graph.remove((cls_uri, RDFS.subClassOf, None))
-        else:
-            classes_added += 1
-
-        graph.add((cls_uri, RDF.type, OWL.Class))
-        # Preserve the original human-readable name — this is the value
-        # users see in Protégé / a KG browser regardless of URI mangling.
-        graph.add((cls_uri, RDFS.label, Literal(type_name)))
-
-        parent = ext.get("parent_type")
-        if isinstance(parent, str) and parent:
-            parent_fragment = _to_camel_case_uri_fragment(parent)
-            if parent_fragment:
-                graph.add((cls_uri, RDFS.subClassOf, ON[parent_fragment]))
-
-        description = ext.get("description")
-        if isinstance(description, str) and description:
-            graph.add((cls_uri, RDFS.comment, Literal(description)))
-
-        for prop in ext.get("properties", []) or []:
-            if not isinstance(prop, dict):
-                continue
-            pname = prop.get("name")
-            if not pname or not isinstance(pname, str):
-                continue
-            pfragment = _to_camel_case_uri_fragment(pname)
-            if not pfragment:
-                continue
-            # Property URIs use lower-camel by convention; lower-case the
-            # very first character.
-            pfragment = pfragment[0].lower() + pfragment[1:]
-            prop_uri = ON[pfragment]
-            graph.add((prop_uri, RDF.type, OWL.DatatypeProperty))
-            graph.add((prop_uri, RDFS.domain, cls_uri))
-            graph.add((prop_uri, RDFS.label, Literal(pname)))
-
-    return classes_added
-
-
 # Characters that either break the Content-Disposition header itself
 # (CR/LF, embedded quotes) or trip OS save dialogs (path separators,
 # colon on older Windows clients).
@@ -364,7 +179,7 @@ def _safe_filename(notebook_id: str) -> str:
     responses={
         200: {
             "content": {"text/turtle": {}},
-            "description": "Turtle serialisation of the notebook's effective schema.",
+            "description": "Turtle serialisation of the notebook's declared base ontology.",
         },
         404: {"description": "Notebook not found."},
     },
@@ -374,12 +189,13 @@ async def export_notebook_schema_ttl(
     notebook_service: NotebookService = Depends(get_notebook_service),
     schema_repo: NotebookSchemaRepository = Depends(get_notebook_schema_repo),
 ) -> Response:
-    """Export the notebook's effective schema as Turtle.
+    """Export the notebook's declared base ontology as Turtle.
 
-    The "effective schema" is the base ontology referenced by
-    ``notebook_schema.base_ontology`` plus every entry in
-    ``notebook_schema.accepted_extensions`` materialised as
-    ``owl:Class`` declarations.
+    OE.5: the entries in ``accepted_extensions`` are no longer added. They are
+    the proposal queue's history; a proposal accepted since OE.5 is part of the
+    shared ontology it was published to, and the per-notebook edits recorded
+    before are retired. This export reads the base YAML (not the registry) until
+    OE.6.
 
     Returns 404 when ``notebook_id`` doesn't resolve to a real notebook.
     Returns 200 with the bare base ontology if the notebook exists but
@@ -393,15 +209,12 @@ async def export_notebook_schema_ttl(
 
     if notebook_schema is None:
         base_ontology = _DEFAULT_BASE_ONTOLOGY
-        accepted_extensions: List[Dict[str, Any]] = []
     else:
         base_ontology = _declared_base(notebook_schema.base_ontology)
-        accepted_extensions = notebook_schema.accepted_extensions or []
 
     if base_ontology is None:
-        # PC.4b: no declared base — the export is the notebook's own classes.
+        # PC.4b: no declared base — an empty graph.
         graph = Graph()
-        _apply_extensions(graph, accepted_extensions)
         filename = _safe_filename(notebook_id)
         return Response(
             content=graph.serialize(format="turtle"),
@@ -426,12 +239,8 @@ async def export_notebook_schema_ttl(
         )
 
     graph: Graph = load_yaml_ontology(yaml_path)
-    classes_added = _apply_extensions(graph, accepted_extensions)
     logger.info(
-        "Exporting schema TTL for {} (base={}, extensions_added={})",
-        notebook_id,
-        base_ontology,
-        classes_added,
+        "Exporting schema TTL for {} (base={})", notebook_id, base_ontology
     )
 
     turtle = graph.serialize(format="turtle")
@@ -450,10 +259,9 @@ async def export_notebook_schema_ttl(
 # JSON browse endpoints (Phase B.3a)
 # ---------------------------------------------------------------------------
 #
-# These two GETs back the Schema-tab UI. They are intentionally
-# read-only — the four edit ops (rename/merge/split/delete) and the
-# Accept/Reject mutations on pending extensions land in B.3b, which
-# extends this same router.
+# These two GETs back the Schema-tab UI. They are read-only; the Accept /
+# Reject decisions on pending extensions are further down (OE.5: Accept
+# publishes to the shared ontology).
 #
 # Design notes
 # ------------
@@ -467,7 +275,7 @@ async def export_notebook_schema_ttl(
 # * **Empty-state behaviour mirrors the TTL endpoint.** A notebook
 #   that has never been pass-1-processed (no ``notebook_schema`` row)
 #   gets sensible defaults — the configured ``_DEFAULT_BASE_ONTOLOGY``
-#   and empty extension lists. That keeps the Schema tab usable on a
+#   and an empty queue. That keeps the Schema tab usable on a
 #   freshly-created notebook.
 #
 # * **pass1_results is append-only** — we surface the full list ordered
@@ -490,7 +298,7 @@ class _EntityTypeNode(BaseModel):
     Mirrors the fields the SchemaBrowser tree actually renders — name,
     parent (for the tree hierarchy), tooltip text, and a flat list of
     properties for the side panel. Aliases / extraction-hints are
-    omitted in B.3a; B.3b's editor surfaces them.
+    omitted; the ontology editor shows them.
     """
 
     name: str
@@ -500,7 +308,7 @@ class _EntityTypeNode(BaseModel):
 
 
 class _ExtensionView(BaseModel):
-    """View-model row for an accepted or pending extension.
+    """View-model row for a pending extension (a Pass-1 proposal).
 
     The DB stores extensions as FLEXIBLE dicts. This model normalises
     that bag into a predictable shape for the frontend, defending
@@ -516,65 +324,20 @@ class _ExtensionView(BaseModel):
     properties: List[_PropertyDef] = Field(default_factory=list)
 
 
-class _PlacementView(BaseModel):
-    """Where an accepted type sits, and what a judge thinks belongs under it.
-
-    A REPORT, never an applied change: ``selected`` names the siblings the judge
-    would move under this type, and the curator applies them (or does not) via
-    ``POST /schema/reparent``.
-
-    ``candidates`` and ``selected`` are both present because an empty
-    ``selected`` over five candidates reads nothing like an empty ``selected``
-    over zero. ``judge_status`` says which of FOUR states produced it —
-    ``not_asked`` (no model wired, or no candidates), ``unavailable`` (the model
-    could not be reached), ``refused`` (a reply came back and the parser would
-    not use it — among them a top-level array, unparseable JSON, a non-list
-    selection, and an object omitting the key), ``decided`` (the judge answered;
-    an empty ``selected`` here is ordinarily its decision, the exception being a
-    reply that named only ids never offered). ``judged`` is ``judge_status == "decided"``, kept because
-    three of the four states carry an empty ``selected`` and a client must not
-    read emptiness as a verdict.
-
-    ``vocabulary`` names the schemas the placement was computed against: the
-    notebook-level forced set. See D-N4-13 — a verdict CAN differ from the one a
-    given document's applied set would give (adding a schema turns ``PLACED``
-    into ``DUPLICATE``), which is tolerable only because this is advisory: it
-    writes nothing, and a re-parent is applied by an explicit
-    ``POST /schema/reparent``.
-    """
-
-    type_name: str
-    verdict: str
-    reason_code: str
-    evidence: str
-    parent: Optional[str] = None
-    duplicate_of: Optional[str] = None
-    candidates: List[str] = Field(default_factory=list)
-    selected: List[str] = Field(default_factory=list)
-    judged: bool = False
-    judge_status: str = "not_asked"
-    judge_evidence: str = ""
-    vocabulary: List[str] = Field(default_factory=list)
-
-
 class NotebookSchemaResponse(BaseModel):
     """JSON contract for ``GET /api/notebooks/{id}/schema``.
 
     Carries everything the Schema tab needs in a single payload so the
     page renders without a fan-out of additional calls. The
-    ``base_ontology_types`` list is sourced from the YAML registry — it
-    is the immutable backbone; ``accepted_extensions`` and
-    ``pending_extensions`` come from the DB and evolve over time.
+    ``base_ontology_types`` are the base ontology's own types as the active
+    registry holds them (read-only; edits are made in the ontology editor);
+    ``pending_extensions`` is the notebook's Pass-1 proposal queue.
     """
 
     notebook_id: str
     base_ontology: str
     base_ontology_types: List[_EntityTypeNode] = Field(default_factory=list)
-    accepted_extensions: List[_ExtensionView] = Field(default_factory=list)
-    # N.4d.3 — populated only by the accept endpoint; null everywhere else.
-    placement: Optional[_PlacementView] = None
     pending_extensions: List[_ExtensionView] = Field(default_factory=list)
-    excluded_types: List[str] = Field(default_factory=list)
     coverage_pct: float = 0.0
     review_required: bool = False
     soft_nudge_dismissed: bool = False
@@ -609,7 +372,7 @@ def _normalise_extension(ext: Dict[str, Any]) -> _ExtensionView:
     Defensive of missing keys: an extension without ``type_name`` is
     surfaced as ``"(unknown)"`` rather than dropped silently — the
     frontend should still render a row so the user can reject the
-    invalid extension via the (B.3b) edit ops. Properties is a list
+    invalid extension. Properties is a list
     of dicts on the DB side; we accept either ``{name, data_type,
     description, required}`` or just ``{name}``.
     """
@@ -651,85 +414,29 @@ def _normalise_extension(ext: Dict[str, Any]) -> _ExtensionView:
     )
 
 
-def _reparented_types(extensions: List[Dict[str, Any]]) -> Dict[str, str]:
-    """``{type_name: new_parent}`` from the recorded re-parents, last one wins.
+async def _load_base_ontology_types(base_ontology: str) -> List[_EntityTypeNode]:
+    """The base ontology's OWN entity types, as the ACTIVE registry holds them.
 
-    Last-wins matches what ``ontology_manager.schema_projection`` does with the
-    same rows, so the browser shows the parent extraction will actually use. A
-    row missing either field is skipped rather than rendered half-applied.
+    OE.5 (review M1): the ontologies are shared and edited in the ontology
+    editor, so this reads the registry's active version (database first, then
+    the YAML seed), not the YAML file: a type accepted from the queue, renamed
+    or deleted in the editor shows here as it types. Own types only
+    (``resolve_inheritance=False``), as the YAML file held.
+
+    Returns an empty list (and logs) when the ontology is unknown or cannot be
+    read — the Schema tab is still useful for the queue and coverage.
     """
-    moves: Dict[str, str] = {}
-    for ext in extensions:
-        if ext.get("op") != _REPARENT_OP:
-            continue
-        name = ext.get("type_name")
-        parent = ext.get("new_parent")
-        if isinstance(name, str) and name and isinstance(parent, str) and parent:
-            moves[name] = parent
-    return moves
-
-
-def _apply_reparents_to_views(
-    types: List[_EntityTypeNode], moves: Dict[str, str]
-) -> List[_EntityTypeNode]:
-    if not moves:
-        return types
-    return [
-        node.model_copy(update={"parent_type": moves[node.name]})
-        if node.name in moves
-        else node
-        for node in types
-    ]
-
-
-def _apply_reparents_to_extensions(
-    extensions: List[Dict[str, Any]], moves: Dict[str, str]
-) -> List[Dict[str, Any]]:
-    """A re-parent can also move a type the curator accepted as an extension."""
-    if not moves:
-        return extensions
-    out: List[Dict[str, Any]] = []
-    for ext in extensions:
-        name = ext.get("type_name")
-        if isinstance(name, str) and name in moves:
-            ext = {**ext, "parent_type": moves[name]}
-        out.append(ext)
-    return out
-
-
-def _load_base_ontology_types(base_ontology: str) -> List[_EntityTypeNode]:
-    """Parse a YAML ontology and return its entity types as view-model rows.
-
-    Reuses the same YAML resolution as the TTL endpoint
-    (``_ontologies_dir``). The full :class:`Ontology` model carries
-    relationships, concepts, etc. — B.3a only needs entity types for
-    the tree view, so we project to the slimmer ``_EntityTypeNode``.
-
-    Returns an empty list (and logs an error) if the YAML is missing
-    — this matches the existing TTL endpoint's behaviour of returning
-    a 500 in the same circumstance, but for the JSON endpoint we
-    degrade gracefully: the Schema tab is still useful for showing
-    extensions and coverage even if the base ontology is misconfigured.
-    """
-    yaml_path = _ontologies_dir() / f"{base_ontology}.yaml"
-    if not yaml_path.exists():
-        logger.error(
-            "Base ontology YAML missing: {} not found (asked for {!r})",
-            yaml_path,
-            base_ontology,
-        )
-        return []
+    from ontology_manager.registry import get_ontology_registry
 
     try:
-        # Local import to keep the module import-cost flat — Ontology
-        # pulls in the full pydantic schema tree.
-        from ontology_manager.schema import Ontology
-
-        ontology = Ontology.from_yaml(yaml_path)
-    except Exception as e:
-        logger.exception(
-            "Failed to parse base ontology YAML {}: {}", yaml_path, e
+        ontology = await get_ontology_registry().get(
+            base_ontology, resolve_inheritance=False
         )
+    except Exception as e:
+        logger.exception("Failed to load base ontology {!r}: {}", base_ontology, e)
+        return []
+    if ontology is None:
+        logger.error("Base ontology {!r} not found in the registry", base_ontology)
         return []
 
     nodes: List[_EntityTypeNode] = []
@@ -764,12 +471,11 @@ async def get_notebook_schema_json(
     notebook_service: NotebookService = Depends(get_notebook_service),
     schema_repo: NotebookSchemaRepository = Depends(get_notebook_schema_repo),
 ) -> NotebookSchemaResponse:
-    """Browse the notebook's effective schema as JSON.
+    """Browse the notebook's schema as JSON.
 
-    Returns the base ontology's entity types, the currently-accepted
-    extensions, the pending extensions awaiting user decision, and the
-    per-notebook review/soft-nudge toggles. The frontend renders this
-    as the Schema-tab tree + side panels.
+    Returns the declared base ontology's entity types, the pending Pass-1
+    proposals awaiting a decision, and the per-notebook review/soft-nudge
+    toggles. The frontend renders this as the Schema tab.
 
     Returns 404 if ``notebook_id`` does not resolve to a real notebook.
     Returns 200 with the bare base-ontology defaults if the notebook
@@ -781,59 +487,11 @@ async def get_notebook_schema_json(
         raise HTTPException(status_code=404, detail="Notebook not found")
 
     notebook_schema = await schema_repo.get_by_notebook(notebook_id)
-
     if notebook_schema is None:
-        base_ontology = _DEFAULT_BASE_ONTOLOGY
-        accepted_raw: List[Dict[str, Any]] = []
-        pending_raw: List[Dict[str, Any]] = []
-        excluded_types: List[str] = []
-        coverage_pct = 0.0
-        review_required = False
-        soft_nudge_dismissed = False
-    else:
-        base_ontology = _declared_base(notebook_schema.base_ontology)
-        accepted_raw = notebook_schema.accepted_extensions or []
-        pending_raw = notebook_schema.pending_extensions or []
-        excluded_types = list(notebook_schema.excluded_types or [])
-        coverage_pct = float(notebook_schema.coverage_pct)
-        review_required = bool(notebook_schema.review_required)
-        soft_nudge_dismissed = bool(notebook_schema.soft_nudge_dismissed)
-
-    # B.3c: hide resume sentinels from the SchemaBrowser — they are
-    # an implementation detail of the pause/resume flow.
-    #
-    # N.4d.3: re-parents are hidden from this list too, and APPLIED to the row
-    # of the type they move instead. They are not extensions: rendered as one, a
-    # re-parented base type appears TWICE — once under base types with the parent
-    # it was declared with, once as an "extension" with the new one — and two
-    # moves of the same type collide on the browser's `ext:${type_name}` key,
-    # since a re-parent carries no `extension_id`. This endpoint reports the
-    # notebook's effective schema, so the effective parent is what belongs on the
-    # row.
-    visible_accepted = [
-        e
-        for e in accepted_raw
-        if e.get("is_resume_sentinel") is not True
-        and e.get("op") != _REPARENT_OP
-    ]
-    reparented = _reparented_types(accepted_raw)
-    return NotebookSchemaResponse(
-        notebook_id=notebook_id,
-        base_ontology=base_ontology or "",
-        base_ontology_types=_apply_reparents_to_views(
-            _load_base_ontology_types(base_ontology) if base_ontology else [],
-            reparented,
-        ),
-        accepted_extensions=[
-            _normalise_extension(e)
-            for e in _apply_reparents_to_extensions(visible_accepted, reparented)
-        ],
-        pending_extensions=[_normalise_extension(e) for e in pending_raw],
-        excluded_types=excluded_types,
-        coverage_pct=coverage_pct,
-        review_required=review_required,
-        soft_nudge_dismissed=soft_nudge_dismissed,
-    )
+        notebook_schema = NotebookSchema(
+            notebook=notebook_id, base_ontology=_DEFAULT_BASE_ONTOLOGY
+        )
+    return await _schema_to_response(notebook_id, notebook_schema)
 
 
 @router.get(
@@ -902,174 +560,64 @@ async def list_notebook_pass1_results(
 
 
 # ---------------------------------------------------------------------------
-# Edit-ops endpoints (Phase B.3b)
+# The proposal queue: accept into the shared ontology, or reject (OE.5)
 # ---------------------------------------------------------------------------
 #
-# Six mutations that drive the Schema-tab edit UI. Each delegates to
-# :class:`SchemaEditService`, which is responsible for state diffing +
-# idempotency + emitting one ``notebook_event{type:"schema_changed"}``
-# row per successful op.
-#
-# The handler layer is intentionally thin: validate inputs, translate
-# service-level exceptions to HTTP status codes, serialise the updated
-# ``NotebookSchema`` into the existing ``NotebookSchemaResponse`` so the
-# client can refresh in place.
-#
-# Design notes
-# ------------
-#
-# * **POST for state-changing ops** (except DELETE for ``delete_type``).
-#   Even rename / merge / split create new "extension" entries in
-#   the per-notebook schema row — they aren't strictly REST-idempotent
-#   on the URL, so POST is the cleaner verb.
-#
-# * **Two flavours of 404**:
-#   - "notebook does not exist" → caught by the notebook_service.get
-#     guard at the top of every handler.
-#   - "notebook exists but no schema row" / "no such extension" →
-#     bubbled up by the service via NotebookSchemaNotFoundError /
-#     UnknownExtensionError.
-#   We deliberately surface both as 404 so the client behaviour is
-#   uniform; the detail message distinguishes them.
-#
-# * **Response shape == GET /schema response shape**. The frontend
-#   uses the same NotebookSchemaResponse for read + write so it can
-#   replace the React Query cache directly. We re-load + re-render the
-#   base ontology types here on each write (B.3c may switch to a
-#   slimmer "delta" response if this becomes a perf concern; the YAML
-#   read is cheap at current scale).
+# The per-notebook edit ops B.3b added (rename / merge / split / re-parent /
+# delete) are gone: the ontologies are shared by every notebook, and those are
+# edits of the shared ontology, made in the ontology editor. Accepting a
+# proposal publishes it to the ontology the curator picks, through the editor's
+# gate: preview first, a blocking finding refuses with the findings.
 
 
-class RenameTypeRequest(BaseModel):
-    """Payload for ``POST /api/notebooks/{id}/schema/rename``.
-
-    Both names are required and non-empty; the service short-circuits
-    when ``old_name == new_name`` so the client doesn't have to guard.
-    """
-
-    old_name: str = Field(min_length=1)
-    new_name: str = Field(min_length=1)
-
-
-class MergeTypesRequest(BaseModel):
-    """Payload for ``POST /api/notebooks/{id}/schema/merge``.
-
-    ``type_names`` must contain at least two distinct entries (service
-    raises ValueError otherwise → translated to 422).
-    """
-
-    type_names: List[str] = Field(min_length=2)
-    merged_name: str = Field(min_length=1)
-
-
-class ReparentTypeRequest(BaseModel):
-    """Payload for ``POST /api/notebooks/{id}/schema/reparent`` (N.4d.3).
-
-    ``type_names`` are the types moving; ``new_parent`` is where they land. The
-    service raises ValueError — translated to 422 — for an empty list, a blank
-    parent, or a type moved under itself.
-    """
-
-    type_names: List[str] = Field(min_length=1)
-    new_parent: str = Field(min_length=1)
-
-
-class SplitTypeRequest(BaseModel):
-    """Payload for ``POST /api/notebooks/{id}/schema/split``.
-
-    ``criterion`` is a free-form hint passed to Pass 2 prompts so the
-    LLM can disambiguate the source type (e.g. "by year published").
-    """
-
-    type_name: str = Field(min_length=1)
-    into: List[str] = Field(min_length=2)
-    criterion: str = Field(min_length=1)
-
-
-def _schema_to_response(
+async def _schema_to_response(
     notebook_id: str, schema: NotebookSchema
 ) -> NotebookSchemaResponse:
-    """Render an updated NotebookSchema row into the public response shape.
-
-    The base ontology types (loaded from YAML) are re-projected here so
-    the response is self-contained — the client refreshes its cached
-    view from a single POST/DELETE.
-    """
+    """Render a NotebookSchema row into the public response shape."""
     base_ontology = _declared_base(schema.base_ontology)
-    accepted_raw = schema.accepted_extensions or []
-    # N.4d.3: the same effective-schema rendering the GET does. Diverging here
-    # would let a client that refreshes from a POST see a re-parented type twice
-    # while a client that refreshes from the GET sees it once.
-    reparented = _reparented_types(accepted_raw)
     return NotebookSchemaResponse(
         notebook_id=notebook_id,
         base_ontology=base_ontology or "",
-        base_ontology_types=_apply_reparents_to_views(
-            _load_base_ontology_types(base_ontology) if base_ontology else [],
-            reparented,
+        base_ontology_types=(
+            await _load_base_ontology_types(base_ontology) if base_ontology else []
         ),
-        accepted_extensions=[
-            _normalise_extension(e)
-            for e in _apply_reparents_to_extensions(
-                [e for e in accepted_raw if e.get("op") != _REPARENT_OP], reparented
-            )
-        ],
         pending_extensions=[
             _normalise_extension(e) for e in (schema.pending_extensions or [])
         ],
-        excluded_types=list(schema.excluded_types or []),
         coverage_pct=float(schema.coverage_pct),
         review_required=bool(schema.review_required),
         soft_nudge_dismissed=bool(schema.soft_nudge_dismissed),
     )
 
 
-async def _placement_for_accepted(
-    placement_service, schema: NotebookSchema, type_name: str
-) -> Optional[_PlacementView]:
-    """Report where the just-accepted type sits. Advisory — never fails the accept.
+class AcceptExtensionRequest(BaseModel):
+    """Where an accepted proposal goes: a shared ontology, and optionally a
+    parent other than the one Pass 1 proposed (``""`` for none)."""
 
-    The declared parent comes from the accepted entry itself, because
-    ``place_proposed_type`` VALIDATES a proposer's claim rather than inventing
-    one. An entry with no ``parent_type`` therefore yields an honest
-    ``UNPARENTED`` verdict instead of a guessed placement.
-    """
-    entry = next(
-        (
-            e
-            for e in (schema.accepted_extensions or [])
-            if e.get("type_name") == type_name and e.get("op") is None
-        ),
-        None,
-    )
-    if entry is None:
-        return None
-    try:
-        report = await placement_service.placement_for(
-            schema,
-            type_name,
-            entry.get("parent_type"),
-            str(entry.get("description") or entry.get("rationale") or ""),
-        )
-    except Exception as e:
-        logger.warning(
-            "placement unavailable for {!r} in {}: {}", type_name, schema.notebook, e
-        )
-        return None
-    return _PlacementView(
-        type_name=report.type_name,
-        verdict=report.verdict,
-        reason_code=report.reason_code,
-        evidence=report.evidence,
-        parent=report.parent,
-        duplicate_of=report.duplicate_of,
-        candidates=list(report.candidates),
-        selected=list(report.selected),
-        judged=report.judged,
-        judge_status=report.judge_status,
-        judge_evidence=report.judge_evidence,
-        vocabulary=list(report.vocabulary),
-    )
+    ontology: str = Field(min_length=1)
+    parent_type: Optional[str] = None
+
+
+class AcceptTargetResponse(BaseModel):
+    """The proposal and the ontology it goes to unless the curator picks
+    another (``default_ontology``: the one that introduces its parent, else
+    ``schema_core``)."""
+
+    type_name: str
+    parent_type: Optional[str] = None
+    default_ontology: str
+    ontologies: List[str] = Field(default_factory=list)
+    # Where the name (or an alias of it) is already a shared type: the
+    # proposal is then marked as covered, not accepted (OE.5 review M3).
+    defined_in: List[Dict[str, str]] = Field(default_factory=list)
+
+
+class AcceptExtensionResponse(BaseModel):
+    """The updated queue and what was published (``None`` when the proposal
+    had already been accepted)."""
+
+    notebook_schema: NotebookSchemaResponse
+    published: Optional[Dict[str, Any]] = None
 
 
 async def _ensure_notebook_exists(
@@ -1105,12 +653,7 @@ async def _ensure_notebook_exists(
 # the B.3c plan (sentinel) over per-source approval tracking because:
 #
 #  1. It re-uses the existing field — no new migration, no new repo.
-#  2. The sentinel is filtered out by the TTL export defensively
-#     (``type_name`` validation is already there) — see
-#     ``_apply_extensions``: a sentinel with ``type_name`` starting with
-#     ``_`` parses to an empty fragment after the leading-digit guard;
-#     the TTL exporter additionally skips it explicitly below.
-#  3. ``last_modified_by`` (``last_modified_at`` via ``upsert``) records
+#  2. ``last_modified_by`` (``last_modified_at`` via ``upsert``) records
 #     the resume action for the audit log.
 #
 # Documented sentinel shape::
@@ -1122,29 +665,9 @@ async def _ensure_notebook_exists(
 #       "source_id": "<source record id triggering the resume, optional>",
 #     }
 #
-# Future B.3b/B.3d edit-ops should treat ``is_resume_sentinel=True``
-# entries as "do not show in the SchemaBrowser tree". As of B.3c
-# attempt-2 there are now FOUR sentinel filter sites (defence-in-depth):
-#
-#  1. ``get_notebook_schema_json`` here (this file ~L633) — strips
-#     sentinels from the JSON contract so they never reach the frontend.
-#  2. ``_apply_extensions`` here (this file ~L214) — strips sentinels
-#     from the TTL exporter so they never enter downloaded ontologies.
-#  3. ``EntityExtractionService._run_multi_schema`` — strips sentinels
-#     before forwarding ``accepted_extensions_by_schema`` to the
-#     workflow, so Pass-2 never sees them.
-#  4. ``ontology_extraction.prompts.pass2._format_accepted_extensions``
-#     — strips sentinels at the prompt-render seam as a final guard
-#     against any consumer that forgets the upstream filter.
-#  4b. ``ontology_manager.schema_projection.project_accepted_edits`` (N.4d.3)
-#     — strips sentinels before projecting the notebook's accepted edits onto
-#     its ontologies, so the marker never becomes a defined entity type.
-#  5. ``SchemaBrowser.tsx`` — frontend belt-and-braces filter using
-#     ``is_resume_sentinel === true`` OR ``type_name.startsWith('_')``.
-#
-# If you add a new ``accepted_extensions`` consumer, add the sentinel
-# filter to that consumer too — the marker is infrastructure, not
-# ontology content.
+# Since OE.5 nothing renders ``accepted_extensions`` into a schema, an
+# export or a prompt, so the sentinel only ever meets the review gate. It
+# must stay out of any consumer that someday renders that list again.
 
 _RESUME_SENTINEL_TYPE_NAME = "_resumed_without_extensions"
 
@@ -1256,47 +779,122 @@ async def set_review_required(
     )
 
 
+@router.get(
+    "/schema/extensions/{type_name}/accept",
+    response_model=AcceptTargetResponse,
+    responses={404: {"description": "Notebook, schema row or proposal not found."}},
+)
+async def get_accept_target(
+    notebook_id: str,
+    type_name: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    edit_service: SchemaEditService = Depends(get_schema_edit_service),
+) -> AcceptTargetResponse:
+    """The pending proposal and the shared ontology it goes to by default."""
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        return AcceptTargetResponse(
+            **await edit_service.accept_target(notebook_id, type_name)
+        )
+    except (NotebookSchemaNotFoundError, UnknownExtensionError) as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.post(
+    "/schema/extensions/{type_name}/accept/preview",
+    response_model=Dict[str, Any],
+    responses={404: {"description": "Notebook, proposal or ontology not found."},
+               409: {"description": "The ontology already defines the type."},
+               422: {"description": "Not a valid entity type."}},
+)
+async def preview_accept_extension(
+    notebook_id: str,
+    type_name: str,
+    body: AcceptExtensionRequest,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    edit_service: SchemaEditService = Depends(get_schema_edit_service),
+) -> Dict[str, Any]:
+    """What accepting into ``body.ontology`` would do: the ontology editor's
+    preview (findings, ``blocking``, label changes, retype, detection) plus
+    ``draft_open``. Writes nothing."""
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        return await edit_service.preview_accept(
+            notebook_id, type_name, body.ontology, body.parent_type
+        )
+    except (NotebookSchemaNotFoundError, UnknownExtensionError) as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except OntologyEditError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
+
+
 @router.post(
     "/schema/extensions/{type_name}/accept",
-    response_model=NotebookSchemaResponse,
+    response_model=AcceptExtensionResponse,
     responses={
-        404: {"description": "Notebook, schema row or extension not found."},
+        404: {"description": "Notebook, schema row, proposal or ontology not found."},
+        409: {"description": "The ontology has an open draft, or already defines the type."},
+        422: {"description": "Blocking findings (``detail.findings``); nothing stored."},
     },
 )
 async def accept_pending_extension(
     notebook_id: str,
     type_name: str,
+    body: AcceptExtensionRequest,
     notebook_service: NotebookService = Depends(get_notebook_service),
     edit_service: SchemaEditService = Depends(get_schema_edit_service),
-    placement_service=Depends(get_type_placement_service),
-) -> NotebookSchemaResponse:
-    """Move the matching pending extension into ``accepted_extensions``.
+) -> AcceptExtensionResponse:
+    """Publish the proposal to the shared ``body.ontology`` and take it out of
+    the queue.
 
-    Idempotent — re-accepting an already-accepted type returns the
-    current state with no new event. Returns 404 if the type_name does
-    not exist in either list (no-op-but-state-mismatch is distinct
-    from "name unknown").
-
-    N.4d.3 — the response carries a ``placement``: where the accepted type sits
-    in the notebook's vocabulary, and which of its siblings a judge thinks belong
-    under it. It is a REPORT. Nothing is re-parented here; the curator applies a
-    move by posting it to ``/schema/reparent``. A placement that cannot be
-    computed (no ontology, no model) comes back ``null`` rather than failing the
-    accept.
+    Goes through the ontology editor's gate: a blocking finding is a 422 with
+    the findings, and neither the ontology nor the queue changes. Idempotent —
+    re-accepting an accepted proposal publishes nothing (``published`` is
+    null).
     """
     await _ensure_notebook_exists(notebook_id, notebook_service)
     try:
-        updated = await edit_service.accept_extension(notebook_id, type_name)
-    except NotebookSchemaNotFoundError as e:
+        updated, published = await edit_service.accept_extension(
+            notebook_id, type_name, body.ontology, body.parent_type
+        )
+    except (NotebookSchemaNotFoundError, UnknownExtensionError) as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    except UnknownExtensionError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-
-    response = _schema_to_response(notebook_id, updated)
-    response.placement = await _placement_for_accepted(
-        placement_service, updated, type_name
+    except OntologyEditError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
+    return AcceptExtensionResponse(
+        notebook_schema=await _schema_to_response(notebook_id, updated),
+        published=published,
     )
-    return response
+
+
+@router.post(
+    "/schema/extensions/{type_name}/covered",
+    response_model=AcceptExtensionResponse,
+    responses={
+        404: {"description": "Notebook, schema row or proposal not found."},
+        409: {"description": "No shared ontology defines the name."},
+    },
+)
+async def mark_extension_covered(
+    notebook_id: str,
+    type_name: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    edit_service: SchemaEditService = Depends(get_schema_edit_service),
+) -> AcceptExtensionResponse:
+    """Take out a proposal the shared ontologies already define: recorded as
+    accepted with the defining ontology; nothing is published and no
+    rejection is recorded."""
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        updated = await edit_service.mark_covered(notebook_id, type_name)
+    except (NotebookSchemaNotFoundError, UnknownExtensionError) as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except OntologyEditError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
+    return AcceptExtensionResponse(
+        notebook_schema=await _schema_to_response(notebook_id, updated),
+        published=None,
+    )
 
 
 @router.post(
@@ -1325,165 +923,7 @@ async def reject_pending_extension(
         updated = await edit_service.reject_extension(notebook_id, type_name)
     except NotebookSchemaNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    return _schema_to_response(notebook_id, updated)
-
-
-@router.post(
-    "/schema/rename",
-    response_model=NotebookSchemaResponse,
-    responses={
-        404: {"description": "Notebook or schema row not found."},
-    },
-)
-async def rename_type(
-    notebook_id: str,
-    payload: RenameTypeRequest,
-    notebook_service: NotebookService = Depends(get_notebook_service),
-    edit_service: SchemaEditService = Depends(get_schema_edit_service),
-) -> NotebookSchemaResponse:
-    """Record a rename as a synonym in ``accepted_extensions``.
-
-    The base ontology YAML is not mutated. Idempotent on
-    (old_name, new_name).
-    """
-    await _ensure_notebook_exists(notebook_id, notebook_service)
-    try:
-        updated = await edit_service.rename_type(
-            notebook_id, payload.old_name, payload.new_name
-        )
-    except NotebookSchemaNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    return _schema_to_response(notebook_id, updated)
-
-
-@router.post(
-    "/schema/merge",
-    response_model=NotebookSchemaResponse,
-    responses={
-        404: {"description": "Notebook or schema row not found."},
-        422: {"description": "merge requires at least two distinct type names."},
-    },
-)
-async def merge_types(
-    notebook_id: str,
-    payload: MergeTypesRequest,
-    notebook_service: NotebookService = Depends(get_notebook_service),
-    edit_service: SchemaEditService = Depends(get_schema_edit_service),
-) -> NotebookSchemaResponse:
-    """Record a merge of N types into one in ``accepted_extensions``.
-
-    Idempotent on (sorted source-type set, merged_name).
-    """
-    await _ensure_notebook_exists(notebook_id, notebook_service)
-    try:
-        updated = await edit_service.merge_types(
-            notebook_id, payload.type_names, payload.merged_name
-        )
-    except NotebookSchemaNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
-    return _schema_to_response(notebook_id, updated)
-
-
-@router.post(
-    "/schema/split",
-    response_model=NotebookSchemaResponse,
-    responses={
-        404: {"description": "Notebook or schema row not found."},
-        422: {"description": "split requires at least two distinct target names."},
-    },
-)
-async def split_type(
-    notebook_id: str,
-    payload: SplitTypeRequest,
-    notebook_service: NotebookService = Depends(get_notebook_service),
-    edit_service: SchemaEditService = Depends(get_schema_edit_service),
-) -> NotebookSchemaResponse:
-    """Record a split of one type into N new ones.
-
-    ``criterion`` is plumbed through to Pass 2 prompts so the LLM can
-    decide which target each instance belongs to. Idempotent on
-    (source, sorted-into set, criterion).
-    """
-    await _ensure_notebook_exists(notebook_id, notebook_service)
-    try:
-        updated = await edit_service.split_type(
-            notebook_id, payload.type_name, payload.into, payload.criterion
-        )
-    except NotebookSchemaNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
-    return _schema_to_response(notebook_id, updated)
-
-
-@router.post(
-    "/schema/reparent",
-    response_model=NotebookSchemaResponse,
-    responses={
-        404: {"description": "Notebook or schema row not found."},
-        422: {
-            "description": (
-                "reparent requires a non-empty new_parent, at least one type "
-                "name, and no type moved under itself."
-            )
-        },
-    },
-)
-async def reparent_type(
-    notebook_id: str,
-    payload: ReparentTypeRequest,
-    notebook_service: NotebookService = Depends(get_notebook_service),
-    edit_service: SchemaEditService = Depends(get_schema_edit_service),
-) -> NotebookSchemaResponse:
-    """Record that N types now hang under ``new_parent`` (Track N.4d.3).
-
-    This is how an accepted ``BROADER_THAN`` placement is applied: as a schema
-    edit, on the curator's decision. The base ontology YAML is never mutated —
-    the edit is projected onto COPIES of the applied ontologies at extraction
-    time, which is what lets entities of a moved type resolve through their new
-    ancestor without a single per-entity write.
-
-    Idempotent per (type, parent).
-    """
-    await _ensure_notebook_exists(notebook_id, notebook_service)
-    try:
-        updated = await edit_service.reparent_type(
-            notebook_id, payload.type_names, payload.new_parent
-        )
-    except NotebookSchemaNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
-    return _schema_to_response(notebook_id, updated)
-
-
-@router.delete(
-    "/schema/types/{type_name}",
-    response_model=NotebookSchemaResponse,
-    responses={
-        404: {"description": "Notebook or schema row not found."},
-    },
-)
-async def delete_type(
-    notebook_id: str,
-    type_name: str,
-    notebook_service: NotebookService = Depends(get_notebook_service),
-    edit_service: SchemaEditService = Depends(get_schema_edit_service),
-) -> NotebookSchemaResponse:
-    """Soft-delete a type by adding it to ``excluded_types``.
-
-    The base ontology YAML is never mutated. Idempotent: re-deleting
-    a name already in the exclusion list returns the current state
-    with no new event.
-    """
-    await _ensure_notebook_exists(notebook_id, notebook_service)
-    try:
-        updated = await edit_service.delete_type(notebook_id, type_name)
-    except NotebookSchemaNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    return _schema_to_response(notebook_id, updated)
+    return await _schema_to_response(notebook_id, updated)
 
 
 @router.post(

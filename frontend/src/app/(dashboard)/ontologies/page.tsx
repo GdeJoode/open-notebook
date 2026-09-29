@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useSearchParams } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import { AppShell } from '@/components/layout/AppShell'
 import { EmptyState } from '@/components/common/EmptyState'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
@@ -19,8 +20,21 @@ import { Network, ArrowLeft, ArrowRight } from 'lucide-react'
 import type { OntologySummary } from '@/lib/api/ontologies'
 import { OntologyEditor } from '@/components/ontologies/OntologyEditor'
 
+const TABS = ['entity-types', 'relationships', 'edit', 'concepts']
+
 export default function OntologiesPage() {
-  const [selectedOntology, setSelectedOntology] = useState<string | null>(null)
+  // A link can open an ontology on a tab with a type selected, e.g. the
+  // Schema tab's "edit in the ontology editor" (OE.5):
+  // `/ontologies?name=deals&tab=edit&type=Project` (`&retype=1` opens the
+  // retype). An unknown tab falls back to the default one; a link followed
+  // while the page is open selects its ontology.
+  const searchParams = useSearchParams()
+  const linked = searchParams.get('name')
+  const [selectedOntology, setSelectedOntology] = useState<string | null>(linked)
+  useEffect(() => {
+    if (linked) setSelectedOntology(linked)
+  }, [linked])
+  const tab = searchParams.get('tab')
 
   return (
     <AppShell>
@@ -29,7 +43,11 @@ export default function OntologiesPage() {
           <div className="max-w-6xl">
             {selectedOntology ? (
               <OntologyDetail
+                key={searchParams.toString()}
                 name={selectedOntology}
+                initialTab={tab && TABS.includes(tab) ? tab : undefined}
+                initialType={searchParams.get('type') ?? undefined}
+                initialRetypeOpen={searchParams.get('retype') === '1'}
                 onBack={() => setSelectedOntology(null)}
               />
             ) : (
@@ -103,9 +121,15 @@ function OntologyList({ onSelect }: { onSelect: (name: string) => void }) {
 
 function OntologyDetail({
   name,
+  initialTab,
+  initialType,
+  initialRetypeOpen,
   onBack,
 }: {
   name: string
+  initialTab?: string
+  initialType?: string
+  initialRetypeOpen?: boolean
   onBack: () => void
 }) {
   const { data: ontology, isLoading, error } = useOntology(name)
@@ -137,7 +161,7 @@ function OntologyDetail({
         <p className="text-muted-foreground mb-6">{ontology.description}</p>
       )}
 
-      <Tabs defaultValue="entity-types">
+      <Tabs defaultValue={initialTab ?? 'entity-types'}>
         <TabsList>
           <TabsTrigger value="entity-types">
             Entity Types ({ontology.entity_types.length})
@@ -274,7 +298,8 @@ function OntologyDetail({
         </TabsContent>
 
         <TabsContent value="edit" className="mt-4">
-          <OntologyEditor name={name} />
+          <OntologyEditor name={name} initialType={initialType}
+            initialRetypeOpen={initialRetypeOpen} />
         </TabsContent>
 
         <TabsContent value="concepts" className="mt-4">

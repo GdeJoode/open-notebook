@@ -436,6 +436,113 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
   identity split exists.
 
 **OE.5 — Retire the per-notebook layer** (~1.5d, OE-D2)
+
+> **OE.5 built 2026-09-29** (branch `feature/oe5-retire-notebook-layer`).
+> - **Typing** is the registry's active set: `_typing_schemas_for` projects
+>   nothing per notebook; `_project_notebook_edits`, `schema_projection` and
+>   the N.4d.3 placement service (its advice was applied through the retired
+>   `/schema/reparent`) are gone.
+> - **Pass 2**: the accepted-extension map, its workflow / orchestrator /
+>   `run_pass2` / `build_pass2_prompt` parameters, the prompt section and the
+>   rule pointing at it are removed.
+> - **Selection** stays per document. A declared `base_ontology` still forces
+>   its base and bundle in (it changes the selection, not the type; 1 live
+>   row, base `""`). The schema named on an accepted extension no longer does.
+> - **Accept** publishes the proposal to a shared ontology:
+>   - through `OntologyEditService.publish_new_entity_type`, which shares the
+>     gate and store of a draft's publish (`_store`);
+>   - a blocking finding is a 422 with the findings and stores nothing; an
+>     open draft of that ontology is a 409 (the publish would leave it stale);
+>   - previewed first (`POST …/accept/preview`, the OE.1 preview plus
+>     `draft_open`);
+>   - the default ontology is the one that introduces the proposed parent
+>     (fewest `extends`, then the most built upon), else `schema_core`;
+>   - on success the proposal leaves the queue and is recorded in
+>     `accepted_extensions` with `published_to` / `published_version`. That
+>     list is now only the queue's history (dedup, review gate).
+> - **Retired write paths:** `/schema/rename|merge|split|reparent`,
+>   `DELETE /schema/types/{t}`, their service ops, `SchemaEditDialog`, hooks
+>   and client calls.
+> - **Retired readers:** the old layer in the TTL export and the Schema JSON
+>   (`accepted_extensions`, `excluded_types`), the `excluded_types` skip in
+>   the queue.
+> - **UI:** the Schema tab lists the base read-only; each type links to
+>   `/ontologies?name=…&tab=edit&type=…`, which opens there.
+>   `AcceptExtensionDialog`: ontology (default stated), parent, preview,
+>   publish.
+> - **Retype:** the notebook-edits refusal is gone (service, dry run,
+>   preview count, script flag, UI).
+> - **Stored data:** no migration. Rows of the old layer stay and are ignored.
+>   Live on 2026-09-29: 1 `notebook_schema` row, 0 accepted, 0 excluded,
+>   79 pending.
+> - **Tests:**
+>   - `test_typing_is_stable`, the AC: every notebook × every selection. The
+>     notebooks are no row, and each base (none, the 11 shipped ones, one
+>     unknown) with an empty layer and with one entry of every kind the layer
+>     wrote. That is 27 notebooks × 1,111 selections through the real
+>     `_run_multi_schema`: every label and layer name types as under all
+>     ontologies, and the vocabulary is the registry's own objects.
+>   - The Pass-2 prompt through the real workflow carries none of the layer.
+>   - `test_schema_edit_service`, against SurrealDB: an accept publishes and
+>     types; a blocking candidate and an open draft are refused, nothing
+>     stored.
+>   - `AcceptExtensionDialog` / `SchemaBrowser` vitest; e2e
+>     `notebook-accept.spec.ts` (4) on the OE backend, now shared as
+>     `_ontology-backend.ts`.
+>
+>   Mutation-checked:
+>   - the old projection and the old Pass-2 path fail the AC and the prompt
+>     test;
+>   - removing the gate, the open-draft guard or publish-before-dequeue fails
+>     its test;
+>   - in the dialog, ignoring `blocking` or `draft_open`, or keeping a stale
+>     preview, fails its test.
+> - **Limits:**
+>   - A publish that succeeds while the queue write fails leaves the proposal
+>     pending; a retry is then a 409 (the type exists).
+>   - `ontology_manager.type_placement` / `type_placement_judge` have no
+>     production caller now (reported, not removed).
+>   - The TTL export still reads the YAML (OE.6).
+>
+> **Review round 1 (REVISIONS_NEEDED: 3 majors, 6 minors), fixed:**
+> - M1: the Schema tab's base list reads the ACTIVE registry (own types), so
+>   a type accepted, renamed or deleted in the editor shows there. The e2e
+>   mock follows that contract. DB test, mutation-checked against the YAML
+>   read.
+> - M2: the live fixture used registry methods captured under the autouse
+>   YAML patch unless another file was collected first. conftest now keeps
+>   the originals (`REGISTRY_LOAD_FROM_DB` / `REGISTRY_LIST_ONTOLOGIES`). The
+>   file passes on its own; the old fixture fails on its own.
+> - M3: a name (or alias) any shared ontology defines, matched as typing
+>   matches, is never published again.
+>   - The editor's new-type path refuses it (409 `defined_in`); the accept
+>     target and preview report it.
+>   - `POST …/covered` takes the proposal out as accepted (`covered: true`,
+>     the defining ontology), with no publish and no rejection.
+>   - Pass-1 proposals the shared ontologies define are no longer queued.
+>   - DB tests: the chosen ontology defines it, another one does, by alias.
+>     Mutation-checked: the guard, the absent rejection, the queue filter.
+> - m4: an accept that leaves entities on their old type links to the
+>   retype (`&retype=1` opens the RetypePanel).
+> - m5: accept and covered re-read the row after the publish and move only
+>   their proposal.
+> - m6: the mock uses `description or rationale`; its simplified default
+>   rule is documented.
+> - m7: an unknown `tab` falls back; a link followed on the open page selects
+>   its ontology.
+> - m8: ARCHITECTURE.md `notebook_schema`. m9: the TTL route's description.
+> - UI guards mutation-checked.
+> - Runs: app-main 1965 passed / 6 skipped against a scratch SurrealDB
+>   (the whole `test_entity_extraction_service` file included); vitest 37
+>   in the touched dirs; track-oe e2e 18/18.
+> - Not run: mypy.
+> - The ontology-manager suite hangs without a reachable SurrealDB in
+>   `test_is_a_predicate.py::test_is_a_is_declared_in_every_shipped_ontology[scholarly]`.
+>   - It reads through `OntologyRegistry().get`, database first; the hang is
+>     pre-existing and untouched by OE.5.
+>   - Every other file passes per file with a 120 s cap; with a scratch
+>     SurrealDB the whole suite passes.
+
 - Pass-1 proposals stay a per-notebook queue. "Accept" publishes the type to
   the shared ontology through OE.2 (validated, previewed).
 - The Schema tab's rename/merge/split/re-parent/delete route to the editor.
@@ -444,6 +551,23 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 - The leaks are closed: nothing of the old layer reaches the Pass-2 prompt.
 - **AC:** the same label types identically in every notebook (extends PC.4's
   test from "every selection" to "every notebook").
+
+> **Carried from OE.5 review round 2 (approved; minors, not blocking):**
+> 1. `mark_covered` applies the default-ontology rule to the defining
+>    ontologies only, so `published_to` in the history can name `base` where
+>    the full rule gives `schema_core`.
+> 2. `mark_covered` runs outside the publish lock and `_dequeue` does not
+>    check the proposal is still pending: an accept plus a concurrent
+>    covered/reject can leave duplicate or contradictory history (the queue
+>    itself stays right).
+> 3. The Accept dialog's retype offer counts `changes + flag_only` / all
+>    changes, not `caused_by_this_edit`, and its text shows only `changes`.
+> 4. A 409 `defined_in` on publish (another tab published meanwhile) does not
+>    refetch the target, so "Mark as already covered" appears only on reopen.
+> 5. `/ontologies`: after Back, a different ontology still gets the URL's
+>    `tab`/`type`/`retype=1`; following the same link again does nothing.
+> - Seen, outside OE.5: `OntologyEditor` logs "final argument passed to
+>   useMemo changed size between renders" in the OE.4 retype test.
 
 **OE.6 — Exports and the extraction service** (~0.5–1d, OE-D5)
 - The TTL export goes through the registry (with `extends`) and exports

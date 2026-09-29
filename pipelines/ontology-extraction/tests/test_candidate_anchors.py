@@ -22,18 +22,18 @@ def _ontology():
 
 
 def test_no_anchor_section_when_none():
-    p = build_pass2_prompt(_ontology(), "some text", None, candidate_anchors=None)
+    p = build_pass2_prompt(_ontology(), "some text", candidate_anchors=None)
     assert "Candidate anchors" not in p
 
 
 def test_no_anchor_section_when_empty_list():
-    p = build_pass2_prompt(_ontology(), "some text", None, candidate_anchors=[])
+    p = build_pass2_prompt(_ontology(), "some text", candidate_anchors=[])
     assert "Candidate anchors" not in p
 
 
 def test_anchor_section_present_and_framed_as_precision_aid():
     p = build_pass2_prompt(
-        _ontology(), "text", None, candidate_anchors=["Audit Trail", "Backup Service"]
+        _ontology(), "text", candidate_anchors=["Audit Trail", "Backup Service"]
     )
     assert "## Candidate anchors (precision aid — NOT a shortlist)" in p
     assert "- Audit Trail" in p
@@ -44,7 +44,7 @@ def test_anchor_section_present_and_framed_as_precision_aid():
 
 def test_anchor_block_is_budget_capped():
     many = [f"candidate-term-{i:04d}" for i in range(500)]
-    p = build_pass2_prompt(_ontology(), "text", None, candidate_anchors=many)
+    p = build_pass2_prompt(_ontology(), "text", candidate_anchors=many)
     rendered = [line for line in p.splitlines() if line.startswith("- candidate-term-")]
     # not all 500 anchors survive the char budget
     assert 0 < len(rendered) < 500
@@ -54,7 +54,7 @@ def test_anchor_block_is_budget_capped():
 
 def test_blank_anchors_are_dropped():
     p = build_pass2_prompt(
-        _ontology(), "text", None, candidate_anchors=["  ", "", "Real Term"]
+        _ontology(), "text", candidate_anchors=["  ", "", "Real Term"]
     )
     assert "- Real Term" in p
     assert "- \n" not in p
@@ -79,7 +79,7 @@ def test_anchors_dropped_when_they_would_breach_budget():
         {"text": chunk_text, "id": "c1"},
         {"text": chunk_text + " Extra Term", "id": "c2"},
     ]
-    base = _estimate_tokens(build_pass2_prompt(ont, chunk_text, []))
+    base = _estimate_tokens(build_pass2_prompt(ont, chunk_text))
     budget = base + 5  # base fits; base + the ~150-token anchor block does not
 
     captured: dict = {}

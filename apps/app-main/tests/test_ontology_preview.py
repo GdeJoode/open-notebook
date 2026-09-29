@@ -42,7 +42,7 @@ async def _project_back_under_creative_work():
 
 async def test_an_unchanged_candidate_changes_nothing():
     active = await load_own_ontologies()
-    result = await preview(active, active, rows=ROWS, include_detection=False, count_notebook_edits=False)
+    result = await preview(active, active, rows=ROWS, include_detection=False)
     assert result["blocking"] is False
     assert result["label_changes"] == []
     assert result["retype"]["changes"] == result["retype"]["caused_by_this_edit"] == 0
@@ -50,7 +50,7 @@ async def test_an_unchanged_candidate_changes_nothing():
 
 async def test_an_edit_shows_the_labels_and_the_entities_it_moves():
     active, candidate = await _project_back_under_creative_work()
-    result = await preview(candidate, active, rows=ROWS, include_detection=False, count_notebook_edits=False)
+    result = await preview(candidate, active, rows=ROWS, include_detection=False)
     project = [c for c in result["label_changes"] if c["label"] == "Project"]
     assert project == [{"label": "Project", "before": "programme",
                         "after": "creative_work", "entities": 2}]
@@ -90,8 +90,7 @@ async def test_the_preview_counts_what_the_retype_script_would_do(monkeypatch):
     monkeypatch.setattr(retype_planner, "execute_query", _rows)
     dry_run = await script.plan()
 
-    result = await preview(candidate, active, rows=ROWS, include_detection=False,
-                           count_notebook_edits=False)
+    result = await preview(candidate, active, rows=ROWS, include_detection=False)
     assert result["retype"]["changes"] == len(dry_run["changes"]) == 2
     assert result["retype"]["collisions"] == len(dry_run["collisions"])
 
@@ -101,7 +100,7 @@ async def test_already_due_changes_are_not_blamed_on_the_edit():
     but not caused by this edit."""
     active = await load_own_ontologies()
     stale = [_row(9, "Waterschap Bb", "concept", "Waterschap")]  # active types it gov_org
-    result = await preview(active, active, rows=stale, include_detection=False, count_notebook_edits=False)
+    result = await preview(active, active, rows=stale, include_detection=False)
     assert result["retype"]["changes"] == 1
     assert result["retype"]["caused_by_this_edit"] == 0
 
@@ -110,7 +109,7 @@ async def test_a_blocking_finding_is_reported():
     active = await load_own_ontologies()
     candidate = {k: v.model_copy(deep=True) for k, v in active.items()}
     candidate["policy"].entity_types["Legislation"].schema_org_type = None
-    result = await preview(candidate, active, rows=ROWS, include_detection=False, count_notebook_edits=False)
+    result = await preview(candidate, active, rows=ROWS, include_detection=False)
     assert result["blocking"] is True
     assert any(f["rule"] == "base_named_type_misses_its_base" for f in result["findings"])
 

@@ -52,7 +52,11 @@ import {
   type MergedOntology,
 } from '@/lib/utils/ontology-tree'
 
-export function OntologyEditor({ name }: { name: string }) {
+export function OntologyEditor({ name, initialType, initialRetypeOpen = false }: {
+  name: string
+  initialType?: string
+  initialRetypeOpen?: boolean
+}) {
   const draftQuery = useOntologyDraft(name)
   const active = useOntology(name)
   const findings = useDraftFindings(name)
@@ -60,7 +64,7 @@ export function OntologyEditor({ name }: { name: string }) {
   const discard = useDiscardDraft(name)
   const previewMutation = useDraftPreview(name)
   const publish = usePublishDraft(name)
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useState<string | null>(initialType ?? null)
   const [note, setNote] = useState('')
   // Bumped when the draft is replaced wholesale (discard, publish, rollback):
   // the type form starts over then, and only then. Keying it on the draft's
@@ -69,7 +73,7 @@ export function OntologyEditor({ name }: { name: string }) {
   const [formEpoch, setFormEpoch] = useState(0)
   const restart = () => setFormEpoch((e) => e + 1)
   const [newType, setNewType] = useState('')
-  const [retypeOpen, setRetypeOpen] = useState(false)
+  const [retypeOpen, setRetypeOpen] = useState(initialRetypeOpen)
 
   // Every ontology this one inherits from, through the whole chain (`extends`
   // then `includes`, at every level), so each inherited type can be labelled
@@ -305,10 +309,6 @@ function PreviewPanel({ preview }: { preview: OntologyPreview }) {
       {preview.detection_error && (
         <p className="text-destructive">Detection replay failed: {preview.detection_error}</p>
       )}
-      {preview.notebook_edits ? (
-        <p className="text-muted-foreground">
-          {preview.notebook_edits} notebook-level schema edit(s) are not included.</p>
-      ) : null}
     </div>
   )
 }

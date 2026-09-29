@@ -1,8 +1,7 @@
 """Prompt template for Pass-2 typed extraction (B.1d).
 
-Single-schema only. Pass-2 takes an ontology, an optional list of
-"accepted extensions" (extra entity types accepted by the curator in
-B.3c, conceptually) and a chunk of source text, and asks the LLM to
+Single-schema only. Pass-2 takes an ontology and a chunk of source text,
+and asks the LLM to
 return ``{entities: [...], relations: [...]}`` with a confidence
 score for **every** entity and relation.
 
@@ -12,8 +11,8 @@ Why a dedicated module
 The existing ``LLMExtractor.extract`` path uses
 ``OntologyPromptGenerator.generate_combined_extraction_prompt`` from
 ``ontology-manager``. That prompt is richer (concepts + claims) but
-does not know how to inject extension types or how to enforce the
-B4 "confidence on every element" contract. Rather than fork the
+does not know how to enforce the B4 "confidence on every element"
+contract. Rather than fork the
 generator we build a focused per-chunk prompt here and let B.1f
 swap callers.
 
@@ -32,13 +31,10 @@ Structure
    "confidence is mandatory" reminder.
 2. **Entity types** (~600 tokens for small ontologies; auto-compressed
    above the threshold). One bullet per type: ``name — description``.
-3. **Accepted extensions** (~150 tokens, only when non-empty). New
-   entity types the curator accepted for this schema. Each rendered
-   as ``name (parent: parent_type) — rationale``.
-4. **Relationship types** (~300 tokens). Single-line ``name`` plus
+3. **Relationship types** (~300 tokens). Single-line ``name`` plus
    any domain/range hints.
-5. **Text chunk** (~1500 tokens for a typical chunk).
-6. **Output schema** (~250 tokens). A compact JSON-schema sketch +
+4. **Text chunk** (~1500 tokens for a typical chunk).
+5. **Output schema** (~250 tokens). A compact JSON-schema sketch +
    strict rules pinned to the B4 contract.
 """
 
@@ -132,74 +128,6 @@ def _format_relationship_types(ontology: Ontology) -> List[str]:
     return lines
 
 
-def _format_accepted_extensions(extensions: List[Dict[str, Any]]) -> List[str]:
-    """Render the curator-accepted extension types as bullets.
-
-    Each extension dict is expected to carry at least
-    ``type_name``; ``parent_type`` and ``rationale`` are surfaced
-    when present so the LLM understands the relationship to the base
-    ontology. Missing fields render as ``(unknown parent)`` / no
-    rationale to keep the prompt parseable even if upstream sends
-    sparse data.
-
-    B.3c — Defence-in-depth: resume-sentinel entries (carrying
-    ``is_resume_sentinel=True``) are filtered out here as well as at
-    the extraction-service seam. They are infrastructure markers for
-    the pause/resume flow — letting them through would render
-    ``_resumed_without_extensions`` into the LLM prompt as a real
-    entity type. If the upstream filter ever regresses, the prompt
-    builder still scrubs the leak before it reaches the LLM.
-    """
-    if not extensions:
-        return []
-
-    # Filter sentinels up-front so the empty-result branch below
-    # behaves correctly when the entire list is sentinels.
-    #
-    # N.4d.3 — re-parent entries are filtered the same way and for the same
-    # reason. They record that an EXISTING type moved under a different parent,
-    # not that a new type exists; rendered here they would tell the LLM to treat
-    # a base-ontology type as a curator addition. The move is applied to the
-    # ontology objects this prompt already reads its vocabulary from
-    # (``ontology_manager.schema_projection``), so nothing is lost by skipping
-    # them. Filtered at the extraction-service seam too — this is the same
-    # defence-in-depth the sentinel gets.
-    visible = [
-        ext
-        for ext in extensions
-        if not ext.get("is_resume_sentinel") and ext.get("op") != "reparent"
-    ]
-    if not visible:
-        return []
-
-    lines = [
-        "",
-        "## Accepted Extension Types",
-        "",
-        (
-            "These are additional entity types the schema curator "
-            "accepted for this notebook. Treat them as first-class "
-            "members of the schema and use the exact ``type_name`` as "
-            "the ``label`` value when you extract instances."
-        ),
-        "",
-    ]
-    for ext in visible:
-        name = str(ext.get("type_name", "")).strip()
-        if not name:
-            # Skip malformed entries — no usable label.
-            continue
-        parent = str(ext.get("parent_type", "")).strip()
-        rationale = str(ext.get("rationale", "")).strip().replace("\n", " ")
-        if len(rationale) > 160:
-            rationale = rationale[:157] + "..."
-
-        parent_part = f"parent: {parent}" if parent else "no parent"
-        head = f"- **{name}** ({parent_part})"
-        lines.append(f"{head} — {rationale}" if rationale else head)
-    return lines
-
-
 _OUTPUT_FORMAT_SECTION = """\
 ## Output Format
 
@@ -230,8 +158,8 @@ Return ONLY this JSON object (no prose, no markdown fence):
 Rules:
 - ``entities``: every item MUST include a ``confidence`` ∈ [0.0, 1.0].
 - ``relations``: every item MUST include a ``confidence`` ∈ [0.0, 1.0].
-- ``label`` and relation ``type`` MUST come from the schema or the
-  accepted-extension list above. Do not invent new type names.
+- ``label`` and relation ``type`` MUST come from the schema above.
+  Do not invent new type names.
 - ``source``/``target`` must reference an entity ``text`` you also
   extracted in this same response.
 - ``properties`` may be ``{}`` if you have nothing to add.
@@ -282,7 +210,6 @@ def _format_candidate_anchors(anchors: List[str]) -> List[str]:
 def build_pass2_prompt(
     ontology: Ontology,
     chunk_text: str,
-    accepted_extensions: Optional[List[Dict[str, Any]]] = None,
     candidate_anchors: Optional[List[str]] = None,
 ) -> str:
     """Assemble the Pass-2 user prompt for one chunk.
@@ -292,11 +219,6 @@ def build_pass2_prompt(
         chunk_text: The text of a single chunk. The caller controls
             chunking — this function does not truncate (so a budget
             miss in the validator is loud, not silent).
-        accepted_extensions: Optional list of extension dicts from
-            ``Pass1Output.proposed_extensions`` that the curator
-            (B.3c, conceptually) approved. Empty list / ``None`` is
-            equivalent — preserves back-compat with callers that only
-            pass an ontology.
         candidate_anchors: Optional pre-LLM salient terms (Track N.1) rendered
             as a budget-capped PRECISION-aid block. ``None`` / empty omits the
             section entirely (byte-identical to the pre-N.1 prompt).
@@ -304,8 +226,6 @@ def build_pass2_prompt(
     Returns:
         A multi-section prompt string.
     """
-    extensions = accepted_extensions or []
-
     schema_name = ontology.metadata.name if ontology.metadata else "unknown"
     parts: List[str] = [
         "# Pass-2 Typed Extraction",
@@ -358,8 +278,6 @@ def build_pass2_prompt(
     parts.append("## Relationship Types")
     parts.append("")
     parts.extend(_format_relationship_types(ontology))
-
-    parts.extend(_format_accepted_extensions(extensions))
 
     if candidate_anchors:
         parts.extend(_format_candidate_anchors(candidate_anchors))
