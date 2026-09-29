@@ -81,6 +81,7 @@ import { DEFAULT_PIPELINE_CONFIG, type DoclingPipelineConfig } from '@/lib/api/s
 import { useSourceChunks, useSourcePipeline } from '@/lib/hooks/use-sources'
 import { isPollableStage } from '@/lib/pipeline/processing-stage'
 import { toPipelineCounts } from '@/lib/pipeline/source-counts'
+import { schemaReviewHref } from '@/lib/pipeline/schema-review'
 import type { PipelineDeepLinkTab, PipelineNodeAction } from '@/lib/pipeline/pipeline-stages'
 import { useZoteroStatus, useZoteroPush } from '@/lib/hooks/use-zotero'
 
@@ -300,10 +301,10 @@ export function SourceDetailContent({
   }
 
   const handlePipelineNodeAction = (action: PipelineNodeAction) => {
-    // Gated ⇒ send the user to the Entities tab (schema/entity review lives
-    // there); Failed ⇒ requeue via the existing retry path.
+    // Gated ⇒ the notebook's Schema tab, where the proposal is accepted and
+    // the extraction resumed; Failed ⇒ requeue via the existing retry path.
     if (action === 'review-schema') {
-      setActiveTab('entities')
+      router.push(schemaReviewHref(source?.notebooks))
     } else if (action === 'retry') {
       void handleRetry()
     }

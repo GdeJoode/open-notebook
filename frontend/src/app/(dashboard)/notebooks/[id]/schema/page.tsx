@@ -10,6 +10,8 @@ import { OrphansDashboard } from '@/components/notebooks/orphans/OrphansDashboar
 import { AuditWidget } from '@/components/notebooks/audit/AuditWidget'
 import { LibrarianSettings } from '@/components/notebooks/audit/LibrarianSettings'
 import { PendingExtensionsPanel } from '@/components/notebooks/schema/PendingExtensionsPanel'
+import { ExtractionPausedBanner } from '@/components/notebooks/schema/ExtractionPausedBanner'
+import { NextStepLink } from '@/components/common/NextStepLink'
 import { TtlDownloadButton } from '@/components/notebooks/schema/TtlDownloadButton'
 import { NetworkxExportMenu } from '@/components/notebooks/exports/NetworkxExportMenu'
 import { useNotebook } from '@/lib/hooks/use-notebooks'
@@ -117,11 +119,21 @@ export default function NotebookSchemaPage() {
             >
               Pending extensions
             </h2>
+            {/* WB.2: a gated source waits here. Accepting a proposal does not
+                resume its extraction; this banner does. */}
+            <ExtractionPausedBanner notebookId={notebookId} showSchemaLink={false} />
             {schema && (
               <PendingExtensionsPanel
                 extensions={schema.pending_extensions}
                 notebookId={notebookId}
               />
+            )}
+            {schema && schema.pending_extensions.length === 0 && (
+              <div className="mt-3">
+                <NextStepLink href="/" data-testid="schema-next">
+                  Next: The Tray
+                </NextStepLink>
+              </div>
             )}
           </section>
 
