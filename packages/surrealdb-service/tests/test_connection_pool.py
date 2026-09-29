@@ -11,7 +11,7 @@ hang, and a query raise or hang, the way the real client does.
 """
 
 import asyncio
-from typing import Any, Callable, List, Optional
+from typing import Any, AsyncIterator, Callable, List, Optional
 
 import pytest
 
@@ -67,7 +67,10 @@ class FakeSurreal:
         if self.recv_task.done():
             raise KeyError("request-id")
         if self.server.query_mode == "hang":
-            await asyncio.Event().wait()
+            # Unanswered until the socket goes, as a real hang: closing the
+            # client ends it (the receive task stops, the request fails).
+            await asyncio.wait({self.recv_task})
+            raise KeyError("request-id")
         return [{"result": 1}]
 
     async def close(self) -> None:
@@ -78,18 +81,34 @@ class FakeSurreal:
             self.recv_task.cancel()
 
 
+_POOLS: List[ConnectionPool] = []
+
+
 @pytest.fixture
-def server(monkeypatch) -> FakeServer:
+async def server(monkeypatch) -> AsyncIterator[FakeServer]:
     srv = FakeServer()
     monkeypatch.setattr(
         conn_mod, "AsyncSurreal", lambda url: FakeSurreal(srv, url)
     )
-    return srv
+    yield srv
+    # Shielded requests and abandoned sign-ins outlive the test body: end
+    # them the way the app does (close the pools and clients), then check
+    # nothing is left running.
+    srv.close_mode = "ok"
+    while _POOLS:
+        await _POOLS.pop().close_all()
+    for client in [c for c in srv.clients if not c.closed]:
+        await client.close()
+    await asyncio.sleep(0)
+    current = asyncio.current_task()
+    assert [t for t in asyncio.all_tasks() if t is not current and not t.done()] == []
 
 
 def _pool(**kwargs) -> ConnectionPool:
     cfg = SurrealDBConfig(url="ws://fake:1/rpc")
-    return ConnectionPool(config=cfg, **kwargs)
+    pool = ConnectionPool(config=cfg, **kwargs)
+    _POOLS.append(pool)
+    return pool
 
 
 async def _until(condition: Callable[[], bool]) -> None:

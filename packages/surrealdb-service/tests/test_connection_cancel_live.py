@@ -117,6 +117,9 @@ async def test_cancel_racing_the_response_leaves_the_pool_healthy(pool, logged):
 
 
 async def test_many_mid_flight_cancels_then_normal_queries(pool, logged):
+    """Smoke test, not a guard: ordinary concurrent cancels hit the race only
+    sometimes (it did in one run on main, not in another). The race test
+    above is the guard."""
     await _warm(pool)
     for _ in range(3):
         slow = [

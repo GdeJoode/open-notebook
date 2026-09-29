@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List
@@ -652,14 +653,21 @@ async def test_a_report_leaves_pool_slots_for_the_pages(env, monkeypatch) -> Non
     Werkbak page reads three endpoints next to it, so those stay free too."""
     await _seed()
     pool = conn._pool
-    demand: List[int] = []
-    checkout = pool._checkout
+    acquire = pool.acquire
+    held = peak = 0
 
+    @asynccontextmanager
     async def counted():
-        waiting = len(pool._slots._waiters or ())
-        demand.append(pool._max_size - pool._slots._value + waiting + 1)
-        return await checkout()
+        """Every caller that wants a connection, waiting or holding one."""
+        nonlocal held, peak
+        held += 1
+        peak = max(peak, held)
+        try:
+            async with acquire() as c:
+                yield c
+        finally:
+            held -= 1
 
-    monkeypatch.setattr(pool, "_checkout", counted)
+    monkeypatch.setattr(pool, "acquire", counted)
     await AttentionService().report()
-    assert max(demand) + 3 <= pool._max_size, max(demand)
+    assert peak + 3 <= pool.config.pool_size, peak
