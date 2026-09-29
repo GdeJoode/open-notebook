@@ -2,8 +2,15 @@
  * The OE e2e specs' in-memory backend: the OE.2 ontology API, the OE.4 retype
  * and (OE.5) one notebook's Pass-1 proposal queue, whose Accept publishes into
  * the same ontologies through the same gate — refused on a blocking finding
- * (422 `{message, findings}`, nothing stored) or an open draft (409). Shared by
- * `ontology-editor.spec.ts` and `notebook-accept.spec.ts`.
+ * (422 `{message, findings}`, nothing stored) or an open draft (409), and a
+ * name some shared ontology already defines (by name or alias,
+ * case-insensitively) is refused (409 `defined_in`) and can be marked covered
+ * instead. Shared by `ontology-editor.spec.ts` and `notebook-accept.spec.ts`.
+ *
+ * Simplified: only `deals` accepts new types, and the default ontology is
+ * `deals` when `deals` defines the proposed parent, else `schema_core` — the
+ * real rule (the ontology that introduces the parent) gives the same answer
+ * for every proposal here.
  */
 
 import type { Route } from '@playwright/test'
@@ -11,7 +18,13 @@ import type { Route } from '@playwright/test'
 export const NOTEBOOK = 'notebook:oe5'
 
 type Proposal = { extension_id: string; type_name: string; parent_type: string | null;
-  rationale: string | null; properties: unknown[] }
+  description?: string | null; rationale: string | null; properties: unknown[] }
+
+/** The OWN types of the other shared ontologies (`deals` is `state.active`). */
+const OTHER_OWN: Record<string, { name: string; aliases?: string[] }[]> = {
+  instruments: [{ name: 'Subsidie' }],
+  schema_core: [{ name: 'Person' }],
+}
 
 type EntityType = { name: string; parent_type?: string; aliases?: string[]; [k: string]: unknown }
 type Relationship = { name: string; [k: string]: unknown }
@@ -100,8 +113,13 @@ export function backend() {
         rationale: 'A regional fund', properties: [] },
       { extension_id: 'pass1::zwerfbegrip', type_name: 'Zwerfbegrip', parent_type: 'Nergens',
         rationale: null, properties: [] },
+      // Already a shared type (instruments), proposed in lower case.
+      { extension_id: 'pass1::subsidie', type_name: 'subsidie', parent_type: 'Grant',
+        rationale: null, properties: [] },
     ] as Proposal[],
-    accepted: [] as (Proposal & { published_to: string; published_version: string })[],
+    accepted: [] as (Proposal & { published_to: string; published_version: string;
+      covered?: boolean })[],
+    rejected: [] as string[],
   }
   /** The retype counts a publish of `content` reports (the preview's `retype`). */
   const retypeCounts = (content: Content) => {
@@ -168,8 +186,18 @@ export function backend() {
     const chosen = parent === undefined ? proposal.parent_type : parent
     content.types[proposal.type_name] = { name: proposal.type_name,
       ...(chosen ? { parent_type: chosen } : {}),
-      ...(proposal.rationale ? { description: proposal.rationale } : {}) }
+      ...((proposal.description || proposal.rationale)
+        ? { description: proposal.description || proposal.rationale } : {}) }
     return content
+  }
+  /** Where a name is a shared type: own types by name or alias, any case. */
+  const definedIn = (name: string) => {
+    const own: Record<string, { name: string; aliases?: string[] }[]> = {
+      ...OTHER_OWN, deals: Object.values(state.active.content.types) }
+    const key = name.toLowerCase()
+    return Object.keys(own).sort().flatMap((o) => own[o]
+      .filter((t) => t.name.toLowerCase() === key || (t.aliases ?? []).some((a) => a.toLowerCase() === key))
+      .map((t) => ({ ontology: o, type: t.name })))
   }
   /** `GET /schema`: the base's OWN types as the ACTIVE registry holds them
    *  (`_load_base_ontology_types`), so a published type is listed. */
@@ -195,12 +223,13 @@ export function backend() {
     }
     if (path === '/schema' && method === 'GET') return json(route, schemaView())
     if (path === '/pass1_results') return json(route, [])
-    const m = path.match(/^\/schema\/extensions\/([^/]+)\/(accept|accept\/preview|reject)$/)
+    const m = path.match(/^\/schema\/extensions\/([^/]+)\/(accept|accept\/preview|covered|reject)$/)
     // Everything else on the page (orphans, audit, events, …) is not this
     // spec's: left to the network, as the track-b specs do.
     if (!m) return route.fallback()
     const proposal = state.pending.find((p) => p.type_name === m[1])
     if (m[2] === 'reject') {
+      if (proposal) state.rejected.push(proposal.type_name)
       state.pending = state.pending.filter((p) => p !== proposal)
       return json(route, schemaView())
     }
@@ -214,12 +243,30 @@ export function backend() {
       const defined = Object.values(state.active.content.types)
         .some((t) => t.name.toLowerCase() === (proposal.parent_type ?? '').toLowerCase())
       return json(route, { type_name: proposal.type_name, parent_type: proposal.parent_type,
-        default_ontology: defined ? 'deals' : 'schema_core', ontologies: ['deals', 'schema_core'] })
+        default_ontology: defined ? 'deals' : 'schema_core',
+        ontologies: ['deals', 'instruments', 'schema_core'], defined_in: definedIn(proposal.type_name) })
+    }
+    const existing = definedIn(proposal.type_name)
+    if (m[2] === 'covered') {
+      if (!existing.length) {
+        return json(route, { detail: `'${proposal.type_name}' is not defined in any shared ontology` }, 409)
+      }
+      state.pending = state.pending.filter((p) => p !== proposal)
+      state.accepted.push({ ...proposal, published_to: existing[0].ontology,
+        published_version: '1.0.0', covered: true })
+      return json(route, { notebook_schema: schemaView(), published: null })
     }
     const { ontology, parent_type } = body as { ontology: string; parent_type?: string | null }
     if (ontology !== 'deals') return json(route, { detail: `unmocked ontology ${ontology}` }, 500)
-    if (state.active.content.types[proposal.type_name]) {
-      return json(route, { detail: `'deals' already defines '${proposal.type_name}'` }, 409)
+    // As `publish_new_entity_type`: an open draft first (accept only), then a
+    // name already defined anywhere, then the gate.
+    if (m[2] === 'accept' && state.draft) {
+      return json(route, { detail: "'deals' has an unpublished draft in the ontology editor; " +
+        'publish or discard it first' }, 409)
+    }
+    if (existing.length) {
+      return json(route, { detail: { message: `'${proposal.type_name}' is already defined in ` +
+        'the shared ontologies', defined_in: existing } }, 409)
     }
     const candidate = withNewType(proposal, parent_type === '' ? null : parent_type)
     const found = gate(candidate)
@@ -227,10 +274,6 @@ export function backend() {
       return json(route, { findings: found, blocking: found.some((f) => f.severity === 'block'),
         draft_open: state.draft !== null, detection: [], detection_error: null,
         label_changes: [], retype: retypeCounts(candidate) })
-    }
-    if (state.draft) {
-      return json(route, { detail: "'deals' has an unpublished draft in the ontology editor; " +
-        'publish or discard it first' }, 409)
     }
     if (found.some((f) => f.severity === 'block')) {
       return json(route, { detail: { message: 'the new type has blocking findings',

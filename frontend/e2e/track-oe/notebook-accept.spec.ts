@@ -103,6 +103,23 @@ test.describe('OE.5 — a notebook proposal goes to the shared ontology', () => 
     expect(api.state.active.content.types.Streekfonds).toBeUndefined()
   })
 
+  test('a proposal already shared is marked covered: no publish, no rejection', async ({ page }) => {
+    const api = await openSchemaTab(page)
+    const before = { version: api.state.active.version, versions: api.state.versions.length }
+    await page.getByTestId('accept-pass1::subsidie').click()
+    const dialog = page.getByTestId('accept-extension-dialog')
+    await expect(dialog.getByTestId('accept-already-defined')).toContainText('instruments')
+    await expect(dialog.getByTestId('accept-publish')).toHaveCount(0)
+    await dialog.getByTestId('accept-mark-covered').click()
+    await expect(dialog).toBeHidden()
+    await expect(page.getByTestId('pending-extension-subsidie')).toHaveCount(0)
+    expect(api.state.accepted.find((a) => a.type_name === 'subsidie'))
+      .toMatchObject({ covered: true, published_to: 'instruments' })
+    expect(api.state.rejected).toEqual([])
+    expect(api.state.active.version).toBe(before.version)
+    expect(api.state.versions.length).toBe(before.versions)
+  })
+
   test('the Schema tab has no per-notebook edit left', async ({ page }) => {
     await openSchemaTab(page)
     await expect(page.getByTestId('schema-row-edit-Deal')).toBeVisible()
