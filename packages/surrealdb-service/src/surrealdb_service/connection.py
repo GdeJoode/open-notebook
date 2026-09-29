@@ -100,7 +100,10 @@ def _current_task_cancelling() -> bool:
     """True when the running task itself has been asked to cancel.
 
     ``Task.cancelling`` exists from Python 3.11; without it every
-    ``CancelledError`` is taken to be ours.
+    ``CancelledError`` is taken to be ours. The count is only lowered by
+    ``Task.uncancel()``: a task that once swallowed a cancel without calling
+    it stays "cancelling" for the rest of its life, and a request the SDK
+    cancelled in it then surfaces as a cancel, not as unavailable.
     """
     task = asyncio.current_task()
     cancelling = getattr(task, "cancelling", None)
