@@ -212,8 +212,11 @@ class ConnectionPool:
         broken = False
         try:
             yield conn
-        except _BROKEN_CONNECTION_ERRORS:
+        except _BROKEN_CONNECTION_ERRORS as e:
             broken = True
+            if isinstance(e, asyncio.CancelledError) and not _current_task_cancelling():
+                # The SDK cancelled the query because the socket closed.
+                raise DatabaseUnavailableError("SurrealDB connection lost") from e
             raise
         finally:
             keep = not broken and not self._closed

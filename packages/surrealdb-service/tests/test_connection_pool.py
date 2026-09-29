@@ -282,3 +282,13 @@ async def test_connection_returned_after_close_all_is_closed(server):
         await pool.close_all()
     assert held.closed
     assert pool._pool.empty()
+
+
+async def test_sdk_cancelled_query_in_a_request_is_unavailable_not_cancelled(server):
+    pool = _pool(max_size=2)
+    with pytest.raises(DatabaseUnavailableError):
+        async with pool.acquire() as c:
+            c.socket_gone = True
+            await c.query("SELECT * FROM source")
+    assert c.closed
+    await asyncio.wait_for(_use_once(pool), GUARD)
