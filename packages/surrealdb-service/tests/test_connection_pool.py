@@ -126,7 +126,7 @@ async def test_failed_signins_do_not_leak_slots(server):
     pool = _pool(max_size=2)
     server.signin_mode = "raise"
     for _ in range(5):
-        with pytest.raises(OSError):
+        with pytest.raises(DatabaseUnavailableError):
             await asyncio.wait_for(_use_once(pool), GUARD)
 
     server.signin_mode = "ok"

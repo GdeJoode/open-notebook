@@ -280,3 +280,24 @@ async def test_abandoned_sign_ins_stay_within_the_pool_size():
         await asyncio.sleep(0.05)
         assert silent.open == 0
 
+
+async def test_refused_sign_in_is_unavailable():
+    pool = ConnectionPool(config=SurrealDBConfig(url="ws://127.0.0.1:9/rpc"))
+    with pytest.raises(DatabaseUnavailableError):
+        async with pool.acquire():
+            pass
+
+
+async def test_socket_lost_during_sign_in_is_unavailable(live_surrealdb, monkeypatch):
+    real = websockets.connect
+
+    async def dropped(*args: Any, **kwargs: Any) -> Any:
+        ws = await real(*args, **kwargs)
+        ws.transport.abort()
+        return ws
+
+    monkeypatch.setattr(websockets, "connect", dropped)
+    pool = ConnectionPool(config=live_surrealdb)
+    with pytest.raises(DatabaseUnavailableError):
+        async with pool.acquire():
+            pass

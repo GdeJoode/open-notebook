@@ -209,7 +209,11 @@ class ConnectionPool:
             raise
 
     async def _sign_in(self) -> AsyncSurreal:
-        """Open and sign in a connection within ``connect_timeout`` of the start."""
+        """Open and sign in a connection within ``connect_timeout`` of the start.
+
+        A sign-in that fails for the connection's sake (refused, lost, too
+        slow) raises :class:`DatabaseUnavailableError`; its socket is closed.
+        """
         db = AsyncSurreal(self.config.url)
         try:
             await asyncio.wait_for(self._authenticate(db), self._connect_timeout)
@@ -218,6 +222,10 @@ class ConnectionPool:
             raise DatabaseUnavailableError(
                 f"SurrealDB sign-in did not finish within {self._connect_timeout}s"
             ) from e
+        except (OSError, WebSocketException, KeyError) as e:
+            # Refused, or the socket went mid-sign-in (1.0.6 raises KeyError).
+            await self._close_quietly(db)
+            raise DatabaseUnavailableError(f"SurrealDB sign-in failed: {e!r}") from e
         except BaseException:
             await self._close_quietly(db)
             raise
