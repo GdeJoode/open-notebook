@@ -210,6 +210,19 @@ redo it.
   - m8: candidate scoring runs in `asyncio.to_thread`.
   - Live timings are verified after merge and rebuild.
 
+> **Carried from WB.0 review round 2 (approved; minors, not blocking):**
+> 1. An SDK-caused `CancelledError` during `signin`/`use` (socket closed by a
+>    restarting server) still escapes `_create_connection` as a raw cancel;
+>    the m2 handling covers the ping and the body only.
+> 2. `/api/config` decides by `probe.cancelled()` alone: a request cancelled
+>    in the same tick as a cancelled shared probe answers "offline" and
+>    swallows its own cancellation.
+> 3. The SDK's `close()` swallows a cancel while awaiting its receive task, so
+>    a deadline firing during `_close_quietly` can be missed (bounded by the
+>    next wait). Pre-existing.
+> - The `to_thread` test's last assert checks nothing; the thread-id assert is
+>   the guard.
+
 **WB.1 — The Werkbak (attention inbox)** (~2d)
 - **Backend:** one `GET /api/attention` that counts and lists, across all
   notebooks:
