@@ -630,11 +630,57 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 >   - An ontology reached through both `extends` and `includes` now contributes
 >     once. The old per-process cache contributed it twice; the output is the
 >     same for every shipped ontology.
->   - About 100 KB of ontologies travel with each `/extract` request.
+>   - About 100 KB of ontologies travel with each `/extract` request, and
+>     app-main serialises every ontology for it (review round 1, 8).
+>   - The registry's `_load_from_db` falls back to the YAML silently when the
+>     database errors, so an export or an extraction during a database fault
+>     uses the seed, not the active version (review round 1, 9; as OE.2).
 >   - `export.yaml` still writes list-form collections as mappings.
 > - Runs, against a scratch SurrealDB: app-main 1993 passed / 6 skipped (the
 >   three `git ls-files` tests through `data/gitshim`); ontology-manager 352
 >   (with `test_is_a_predicate`); `services/extraction` 30. Not run: mypy.
+>
+> **Review round 1 (REVISIONS_NEEDED: 1 blocker, 1 major, 7 minors), fixed:**
+> - B1: a name with a space or a slash (an accepted Pass-1 proposal, an editor
+>   edit) made `schema.ttl` a 500. `iri_fragment` builds every IRI (types,
+>   parents, relationships, endpoints, properties): a name of letters, digits
+>   and `-._~` is kept (every shipped name, pinned); any other character is
+>   percent-encoded, `%` included. It decodes back to the name, so two names
+>   never share an IRI (the pre-OE.5 CamelCase merged `Clinical Trial` with
+>   `ClinicalTrial` and `PUBLISHED_IN`). The name stays in `rdfs:label`.
+>   - The gate does not warn on such names: the export now carries any name
+>     losslessly, and a warning would fire on every accepted proposal.
+> - M2: several endpoint types were one `rdfs:domain` / `rdfs:range` triple
+>   each, i.e. their intersection. Now one anonymous `owl:unionOf` class
+>   (one type stays itself; `"*"` in the list is `owl:Thing`). The same for a
+>   property several types declare (its domain; its ranges, e.g. `policy`'s
+>   `jurisdiction`: `xsd:string` or `AdministrativeArea`, a mixed union OWL DL
+>   rejects; a data issue, left). SHACL: one shape per named class, found
+>   through the union; a union range is `sh:or` of `sh:class` /
+>   `sh:datatype`. The export test pins exactly one domain / range per
+>   relationship, a union when the YAML lists several.
+> - m3: the stale comment in `notebook_schema.py` (`DEFAULT_BASE_ONTOLOGY`
+>   unchanged). m4: section headers. `semantic-intelligence/scripts/
+>   test_pipeline.py` still calls `load_all_ontologies(dir)`, now async; the
+>   script already fails on its import, left as it is.
+> - m5: `CHANGELOG.md` gets an OE section with the deploy order.
+> - m6: an unknown base is a 500, tested.
+> - m7: properties have their own namespace
+>   (`https://open-notebook.dev/ontology/property/`), so a property and a
+>   relationship type never share an IRI; `validate_entities` writes its data
+>   graph with the same IRIs. The test against the old export maps its
+>   property triples to the new namespace and its domains / ranges to union
+>   members.
+> - Tests: `test_rdf_export_names.py` (24, no database) and
+>   `test_ontology_exports.py` (31). Blank nodes: the roundtrip and router
+>   tests compare canonical / isomorphic graphs.
+>   Runs against a scratch SurrealDB: app-main 1996 passed / 6 skipped,
+>   ontology-manager 376, `services/extraction` 30.
+>
+>   Mutation-checked, each failing its test: names left as they are, `%` left
+>   alone, separate endpoint triples (relationships, then properties), one
+>   `sh:class` per union member, shapes for the unions, properties in `ON`,
+>   an unknown base answered 200.
 
 Rough total ~9–10 days. OE.0 and OE.1 are worth doing first on their own: even
 without a UI they make every YAML change safe (the validator can run in CI),
