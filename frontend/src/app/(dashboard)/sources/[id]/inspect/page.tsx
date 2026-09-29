@@ -2,7 +2,6 @@
 
 import { useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { AppShell } from '@/components/layout/AppShell'
 import { DocumentInspectWorkspace } from '@/components/source/inspect/DocumentInspectWorkspace'
 
 export default function SourceInspectPage() {
@@ -15,8 +14,6 @@ export default function SourceInspectPage() {
   }, [router, sourceId])
 
   return (
-    <AppShell>
-      <DocumentInspectWorkspace sourceId={sourceId} onBack={handleBack} />
-    </AppShell>
+    <DocumentInspectWorkspace sourceId={sourceId} onBack={handleBack} />
   )
 }

@@ -10,20 +10,19 @@
  * invalidate `ATTENTION_QUERY_KEY`, and the Werkbak page (`fresh`) always
  * reads it anew.
  *
- * The sidebar is rendered inside each page (AppShell), so every navigation
- * remounts it and restarts the refresh interval. The report is therefore
- * stale after REFRESH_MS, and a remount or a focus reads it once it is: an
- * owner who keeps navigating still gets a read about every REFRESH_MS, while
- * navigating within that window reads nothing. The interval covers a page
- * left open; it is paused while the tab is hidden.
+ * The sidebar lives in the dashboard layout (WB.2): it stays mounted across
+ * navigations, so its interval reads the report every REFRESH_MS as the
+ * owner moves between pages, paused while the tab is hidden. The report is
+ * stale after the same delay, so a focus (or a remount, e.g. after signing
+ * in) reads it once it is, and not before.
  *
  * A report with a group that failed or timed out (`partial`) is read again
  * sooner, backing off over consecutive partial reports (RETRY_BACKOFF_MS:
  * 5 s, 15 s, 45 s, then REFRESH_MS again) and resetting on a complete
  * report. A slow first read after a restart is corrected within seconds, and
  * a group that keeps failing costs a read every 90 s, not every 5 s. The
- * stale time follows the same delay, so a remount (every navigation) reads a
- * partial report once its delay has passed.
+ * stale time follows the same delay, so a focus reads a partial report once
+ * its delay has passed.
  */
 
 import { useSyncExternalStore } from 'react'

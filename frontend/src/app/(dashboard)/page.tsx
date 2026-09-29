@@ -5,7 +5,6 @@ import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
 import { AlertTriangle, ArrowRight, CheckCircle2, RefreshCw } from 'lucide-react'
 
-import { AppShell } from '@/components/layout/AppShell'
 import { EmptyState } from '@/components/common/EmptyState'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -46,127 +45,125 @@ export default function WerkbakPage() {
   }, [ready])
 
   return (
-    <AppShell>
-      <div className="flex-1 overflow-y-auto">
-        <div className="p-6 space-y-8 max-w-6xl">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-bold">The Tray</h1>
-              <p className="text-base text-muted-foreground mt-1">
-                What needs you, across every notebook.
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => refetch()}
-              disabled={isFetching}
-              aria-label="Refresh The Tray"
-            >
-              <RefreshCw className={isFetching ? 'animate-spin' : undefined} />
-              Refresh
-            </Button>
+    <div className="flex-1 overflow-y-auto">
+      <div className="p-6 space-y-8 max-w-6xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold">The Tray</h1>
+            <p className="text-base text-muted-foreground mt-1">
+              What needs you, across every notebook.
+            </p>
           </div>
-
-          {isLoading ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" data-testid="werkbak-loading">
-              {[0, 1, 2].map((i) => (
-                <Skeleton key={i} className="h-40 w-full" />
-              ))}
-            </div>
-          ) : isError || !data ? (
-            <Alert variant="destructive" data-testid="werkbak-error">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>Could not load The Tray</AlertTitle>
-              <AlertDescription>
-                <p>{error instanceof Error ? error.message : 'The request failed.'}</p>
-                <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>
-                  Try again
-                </Button>
-              </AlertDescription>
-            </Alert>
-          ) : (
-            <>
-              <section aria-labelledby="werkbak-since" className="space-y-4">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <h2 id="werkbak-since" className="text-lg font-semibold">
-                      Since your last visit
-                    </h2>
-                    <p className="text-sm text-muted-foreground" data-testid="werkbak-since-note">
-                      {data.since_default
-                        ? 'The last 7 days: nothing marked as seen on this browser yet.'
-                        : `Marked as seen ${formatDistanceToNow(new Date(data.since), { addSuffix: true })}.`}
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setLastSeen(data.generated_at)}
-                    data-testid="werkbak-mark-seen"
-                  >
-                    <CheckCircle2 />
-                    Mark as seen
-                  </Button>
-                </div>
-                {arrived.length > 0 ? (
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    {arrived.map((g) => (
-                      <GroupCard key={g.key} group={g} />
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground" data-testid="werkbak-nothing-new">
-                    Nothing new.
-                  </p>
-                )}
-              </section>
-
-              <section aria-labelledby="werkbak-needs-you" className="space-y-4">
-                <h2 id="werkbak-needs-you" className="text-lg font-semibold">
-                  Needs you
-                  {(data.total > 0 || data.partial) && (
-                    <span className="ml-2 font-normal text-muted-foreground" data-testid="werkbak-total">
-                      ({data.total}
-                      {data.partial && '+'})
-                      {data.partial && <span className="sr-only"> some groups did not load</span>}
-                    </span>
-                  )}
-                </h2>
-                {needsYou.length === 0 ? (
-                  <div data-testid="werkbak-empty">
-                    <EmptyState
-                      icon={CheckCircle2}
-                      title="Nothing needs you"
-                      description="No failed or stopped sources, proposals, reviews or failed jobs."
-                    />
-                  </div>
-                ) : (
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    {needsYou.map((g) => (
-                      <GroupCard key={g.key} group={g} />
-                    ))}
-                  </div>
-                )}
-              </section>
-
-              {inProgress.length > 0 && (
-                <section aria-labelledby="werkbak-in-progress" className="space-y-4">
-                  <h2 id="werkbak-in-progress" className="text-lg font-semibold">
-                    In progress
-                  </h2>
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    {inProgress.map((g) => (
-                      <GroupCard key={g.key} group={g} />
-                    ))}
-                  </div>
-                </section>
-              )}
-            </>
-          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            aria-label="Refresh The Tray"
+          >
+            <RefreshCw className={isFetching ? 'animate-spin' : undefined} />
+            Refresh
+          </Button>
         </div>
+
+        {isLoading ? (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" data-testid="werkbak-loading">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-40 w-full" />
+            ))}
+          </div>
+        ) : isError || !data ? (
+          <Alert variant="destructive" data-testid="werkbak-error">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Could not load The Tray</AlertTitle>
+            <AlertDescription>
+              <p>{error instanceof Error ? error.message : 'The request failed.'}</p>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>
+                Try again
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <>
+            <section aria-labelledby="werkbak-since" className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 id="werkbak-since" className="text-lg font-semibold">
+                    Since your last visit
+                  </h2>
+                  <p className="text-sm text-muted-foreground" data-testid="werkbak-since-note">
+                    {data.since_default
+                      ? 'The last 7 days: nothing marked as seen on this browser yet.'
+                      : `Marked as seen ${formatDistanceToNow(new Date(data.since), { addSuffix: true })}.`}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setLastSeen(data.generated_at)}
+                  data-testid="werkbak-mark-seen"
+                >
+                  <CheckCircle2 />
+                  Mark as seen
+                </Button>
+              </div>
+              {arrived.length > 0 ? (
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {arrived.map((g) => (
+                    <GroupCard key={g.key} group={g} />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground" data-testid="werkbak-nothing-new">
+                  Nothing new.
+                </p>
+              )}
+            </section>
+
+            <section aria-labelledby="werkbak-needs-you" className="space-y-4">
+              <h2 id="werkbak-needs-you" className="text-lg font-semibold">
+                Needs you
+                {(data.total > 0 || data.partial) && (
+                  <span className="ml-2 font-normal text-muted-foreground" data-testid="werkbak-total">
+                    ({data.total}
+                    {data.partial && '+'})
+                    {data.partial && <span className="sr-only"> some groups did not load</span>}
+                  </span>
+                )}
+              </h2>
+              {needsYou.length === 0 ? (
+                <div data-testid="werkbak-empty">
+                  <EmptyState
+                    icon={CheckCircle2}
+                    title="Nothing needs you"
+                    description="No failed or stopped sources, proposals, reviews or failed jobs."
+                  />
+                </div>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {needsYou.map((g) => (
+                    <GroupCard key={g.key} group={g} />
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {inProgress.length > 0 && (
+              <section aria-labelledby="werkbak-in-progress" className="space-y-4">
+                <h2 id="werkbak-in-progress" className="text-lg font-semibold">
+                  In progress
+                </h2>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {inProgress.map((g) => (
+                    <GroupCard key={g.key} group={g} />
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
+        )}
       </div>
-    </AppShell>
+    </div>
   )
 }
 

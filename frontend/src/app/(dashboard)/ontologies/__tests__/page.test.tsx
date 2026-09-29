@@ -9,9 +9,6 @@ import { cleanup, render, screen } from '@testing-library/react'
 
 const nav = vi.hoisted(() => ({ params: new URLSearchParams() }))
 vi.mock('next/navigation', () => ({ useSearchParams: () => nav.params }))
-vi.mock('@/components/layout/AppShell', () => ({
-  AppShell: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}))
 vi.mock('@/lib/hooks/use-ontologies', () => ({
   useOntologies: () => ({ data: [], isLoading: false, error: null }),
   useOntology: (name: string) => ({

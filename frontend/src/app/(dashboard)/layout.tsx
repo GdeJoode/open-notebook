@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { ErrorBoundary } from '@/components/common/ErrorBoundary'
+import { AppShell } from '@/components/layout/AppShell'
 import { ModalProvider } from '@/components/providers/ModalProvider'
 import { useModelStatus } from '@/lib/hooks/use-models'
 
@@ -72,9 +73,10 @@ export default function DashboardLayout({
     )
   }
 
+  // One shell for every page: the sidebar stays mounted across navigations.
   return (
     <ErrorBoundary>
-      {children}
+      <AppShell>{children}</AppShell>
       <ModalProvider />
     </ErrorBoundary>
   )

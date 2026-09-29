@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
-import { AppShell } from '@/components/layout/AppShell'
 import { NotebookHeader } from '../components/NotebookHeader'
 import { SourcesColumn } from '../components/SourcesColumn'
 import { NotesColumn } from '../components/NotesColumn'
@@ -92,71 +91,67 @@ export default function NotebookPage() {
 
   if (!notebook) {
     return (
-      <AppShell>
-        <div className="p-6">
-          <h1 className="text-2xl font-bold mb-4">Notebook Not Found</h1>
-          <p className="text-muted-foreground">The requested notebook could not be found.</p>
-        </div>
-      </AppShell>
+      <div className="p-6">
+        <h1 className="text-2xl font-bold mb-4">Notebook Not Found</h1>
+        <p className="text-muted-foreground">The requested notebook could not be found.</p>
+      </div>
     )
   }
 
   return (
-    <AppShell>
-      <div className="flex flex-col flex-1 min-h-0">
-        <div className="flex-shrink-0 p-6 pb-0">
-          <NotebookHeader notebook={notebook} />
+    <div className="flex flex-col flex-1 min-h-0">
+      <div className="flex-shrink-0 p-6 pb-0">
+        <NotebookHeader notebook={notebook} />
+      </div>
+
+      <div className="flex-1 p-6 pt-6 overflow-hidden flex flex-col min-h-0">
+        {/*
+          Banner stack — all three self-hide when there's nothing to
+          surface, so the column grid takes the full height in the
+          common case. SchemaSoftNudge first by convention (it's the
+          informational coverage banner); ExtractionPausedBanner is
+          actionable (Resume) and points to the next user step;
+          ReextractPromptBanner is the B.3d schema-changed prompt
+          and lives below so it doesn't overshadow the paused-blocker
+          when both fire at once.
+        */}
+        <div className="flex-shrink-0">
+          <SchemaSoftNudge notebookId={notebookId} />
+          <ExtractionPausedBanner notebookId={notebookId} />
+          <ReextractPromptBanner notebookId={notebookId} />
         </div>
-
-        <div className="flex-1 p-6 pt-6 overflow-hidden flex flex-col min-h-0">
-          {/*
-            Banner stack — all three self-hide when there's nothing to
-            surface, so the column grid takes the full height in the
-            common case. SchemaSoftNudge first by convention (it's the
-            informational coverage banner); ExtractionPausedBanner is
-            actionable (Resume) and points to the next user step;
-            ReextractPromptBanner is the B.3d schema-changed prompt
-            and lives below so it doesn't overshadow the paused-blocker
-            when both fire at once.
-          */}
-          <div className="flex-shrink-0">
-            <SchemaSoftNudge notebookId={notebookId} />
-            <ExtractionPausedBanner notebookId={notebookId} />
-            <ReextractPromptBanner notebookId={notebookId} />
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0">
-            <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6 h-full min-h-0">
-              <div className="flex flex-col h-full min-h-0 overflow-hidden">
-                <SourcesColumn
-                  sources={sources}
-                  isLoading={sourcesLoading}
-                  notebookId={notebookId}
-                  notebookName={notebook?.name}
-                  onRefresh={refetchSources}
-                  contextSelections={contextSelections.sources}
-                  onContextModeChange={(sourceId, mode) => handleContextModeChange(sourceId, mode, 'source')}
-                />
-              </div>
-              <div className="flex flex-col h-full min-h-0 overflow-hidden">
-                <NotesColumn
-                  notes={notes}
-                  isLoading={notesLoading}
-                  notebookId={notebookId}
-                  contextSelections={contextSelections.notes}
-                  onContextModeChange={(noteId, mode) => handleContextModeChange(noteId, mode, 'note')}
-                />
-              </div>
-            </div>
-
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0">
+          <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6 h-full min-h-0">
             <div className="flex flex-col h-full min-h-0 overflow-hidden">
-              <ChatColumn
+              <SourcesColumn
+                sources={sources}
+                isLoading={sourcesLoading}
                 notebookId={notebookId}
-                contextSelections={contextSelections}
+                notebookName={notebook?.name}
+                onRefresh={refetchSources}
+                contextSelections={contextSelections.sources}
+                onContextModeChange={(sourceId, mode) => handleContextModeChange(sourceId, mode, 'source')}
+              />
+            </div>
+            <div className="flex flex-col h-full min-h-0 overflow-hidden">
+              <NotesColumn
+                notes={notes}
+                isLoading={notesLoading}
+                notebookId={notebookId}
+                contextSelections={contextSelections.notes}
+                onContextModeChange={(noteId, mode) => handleContextModeChange(noteId, mode, 'note')}
               />
             </div>
           </div>
+
+          <div className="flex flex-col h-full min-h-0 overflow-hidden">
+            <ChatColumn
+              notebookId={notebookId}
+              contextSelections={contextSelections}
+            />
+          </div>
         </div>
       </div>
-    </AppShell>
+    </div>
   )
 }

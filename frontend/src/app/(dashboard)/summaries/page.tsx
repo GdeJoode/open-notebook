@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { AppShell } from '@/components/layout/AppShell'
 import { EmptyState } from '@/components/common/EmptyState'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { useStrategies, useSummaries, useSummary, useGenerateSummary } from '@/lib/hooks/use-summaries'
@@ -40,22 +39,20 @@ export default function SummariesPage() {
   const [selectedSummaryId, setSelectedSummaryId] = useState<string | null>(null)
 
   return (
-    <AppShell>
-      <div className="flex-1 overflow-y-auto">
-        <div className="p-6">
-          <div className="max-w-6xl">
-            {selectedSummaryId ? (
-              <SummaryDetail
-                id={selectedSummaryId}
-                onBack={() => setSelectedSummaryId(null)}
-              />
-            ) : (
-              <SummaryListView onSelect={setSelectedSummaryId} />
-            )}
-          </div>
+    <div className="flex-1 overflow-y-auto">
+      <div className="p-6">
+        <div className="max-w-6xl">
+          {selectedSummaryId ? (
+            <SummaryDetail
+              id={selectedSummaryId}
+              onBack={() => setSelectedSummaryId(null)}
+            />
+          ) : (
+            <SummaryListView onSelect={setSelectedSummaryId} />
+          )}
         </div>
       </div>
-    </AppShell>
+    </div>
   )
 }
 

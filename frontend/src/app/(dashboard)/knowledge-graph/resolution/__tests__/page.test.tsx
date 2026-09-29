@@ -15,9 +15,6 @@ import type { MergeCandidate } from '@/lib/api/entity-resolution'
 
 const apply = vi.fn()
 
-vi.mock('@/components/layout/AppShell', () => ({
-  AppShell: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-}))
 vi.mock('next/link', () => ({
   default: ({ children, href }: { children: ReactNode; href: string }) => <a href={href}>{children}</a>,
 }))

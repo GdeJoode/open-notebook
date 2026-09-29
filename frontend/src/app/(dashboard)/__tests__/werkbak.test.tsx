@@ -16,9 +16,6 @@ import type { AttentionReport } from '@/lib/api/attention'
 
 const get = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/api/attention', () => ({ attentionApi: { get } }))
-vi.mock('@/components/layout/AppShell', () => ({
-  AppShell: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-}))
 vi.mock('next/link', () => ({
   default: ({ children, href, ...rest }: { children: ReactNode; href: string }) => (
     <a href={href} {...rest}>{children}</a>

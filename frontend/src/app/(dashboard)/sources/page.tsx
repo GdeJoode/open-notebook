@@ -10,7 +10,6 @@ import { ATTENTION_QUERY_KEY } from '@/lib/hooks/use-attention'
 import { SourceListResponse } from '@/lib/types/api'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { EmptyState } from '@/components/common/EmptyState'
-import { AppShell } from '@/components/layout/AppShell'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { FileText, Link as LinkIcon, Upload, AlignLeft, Trash2, ArrowUpDown } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
@@ -221,61 +220,53 @@ export default function SourcesPage() {
 
   if (isLoading) {
     return (
-      <AppShell>
-        <div className="flex h-full items-center justify-center">
-          <LoadingSpinner />
-        </div>
-      </AppShell>
+      <div className="flex h-full items-center justify-center">
+        <LoadingSpinner />
+      </div>
     )
   }
 
   if (error) {
     return (
-      <AppShell>
-        <div className="flex h-full items-center justify-center">
-          <p className="text-red-500">Failed to load sources</p>
-        </div>
-      </AppShell>
+      <div className="flex h-full items-center justify-center">
+        <p className="text-red-500">Failed to load sources</p>
+      </div>
     )
   }
 
   if (sources.length === 0 && filtered) {
     return (
-      <AppShell>
-        <EmptyState
-          icon={FileText}
-          title="No sources match this filter"
-          description={`Showing only: ${filterLabel}.`}
-          action={
-            <Button asChild variant="outline">
-              <Link href="/sources">Show all sources</Link>
-            </Button>
-          }
-        />
-      </AppShell>
+      <EmptyState
+        icon={FileText}
+        title="No sources match this filter"
+        description={`Showing only: ${filterLabel}.`}
+        action={
+          <Button asChild variant="outline">
+            <Link href="/sources">Show all sources</Link>
+          </Button>
+        }
+      />
     )
   }
 
   if (sources.length === 0) {
     return (
-      <AppShell>
-        <EmptyState
-          icon={FileText}
-          title="No sources yet"
-          description="Upload a document, paste a link, or enter text to get started. Sources are the foundation of your knowledge base."
-          action={
-            <Button onClick={() => router.push('/sources/new')}>
-              <Upload className="h-4 w-4 mr-2" />
-              Create your first source
-            </Button>
-          }
-        />
-      </AppShell>
+      <EmptyState
+        icon={FileText}
+        title="No sources yet"
+        description="Upload a document, paste a link, or enter text to get started. Sources are the foundation of your knowledge base."
+        action={
+          <Button onClick={() => router.push('/sources/new')}>
+            <Upload className="h-4 w-4 mr-2" />
+            Create your first source
+          </Button>
+        }
+      />
     )
   }
 
   return (
-    <AppShell>
+    <>
       <div className="flex flex-col h-full w-full max-w-none px-6 py-6">
         <div className="mb-6 flex-shrink-0">
           <h1 className="text-3xl font-bold">All Sources</h1>
@@ -425,6 +416,6 @@ export default function SourcesPage() {
         confirmVariant="destructive"
         onConfirm={handleDeleteConfirm}
       />
-    </AppShell>
+    </>
   )
 }
