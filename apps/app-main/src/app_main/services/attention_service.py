@@ -201,12 +201,6 @@ def _count_once(groups: List[AttentionGroup]) -> None:
             g.counted = g.count
 
 
-def _in_notebooks(group: AttentionGroup) -> str:
-    """ " in N notebooks" when the group's items are several notebooks."""
-    n = sum(1 for i in group.items if i.id.startswith("notebook:"))
-    return f" in {n} notebooks" if n > 1 else ""
-
-
 def _utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
@@ -327,6 +321,20 @@ class AttentionService:
         if not group.link and group.items:
             group.link = group.items[0].link
 
+    @staticmethod
+    def _finish_per_notebook(group: AttentionGroup, action: str) -> None:
+        """For a group resolved per notebook (one item each). One page covers
+        the set only when one notebook is involved: then the card's action
+        goes there. With several, the items are the way in, and the card has
+        no action of its own (a first notebook's page would not cover it)."""
+        if len(group.items) == 1:
+            group.action = action if group.count else ""
+            group.link = group.items[0].link
+        elif group.items:
+            group.action = ""
+            group.link = ""
+            group.detail = f"In {len(group.items)} places: open each below."
+
     # --- shared reads -------------------------------------------------------
 
     async def _notebooks(self) -> List[Dict[str, Any]]:
@@ -382,8 +390,9 @@ class AttentionService:
                 link=f"/notebooks/{_q(nb)}/schema",
                 detail=f"{len(members)} {_plural(len(members), 'source')} waiting: {shown}",
             ))
-        self._finish(group, f"Review {group.count} gated {_plural(group.count, 'source')}"
-                     + _in_notebooks(group))
+        self._finish_per_notebook(
+            group, f"Review {group.count} gated {_plural(group.count, 'source')}"
+        )
 
     async def _sources_stalled(self, group: AttentionGroup, now: datetime) -> None:
         # The same call as GET /sources/?stalled=true, so the count is its list.
@@ -433,9 +442,8 @@ class AttentionService:
             )
             for nb, n in items
         ]
-        self._finish(
+        self._finish_per_notebook(
             group, f"Resume {group.count} paused {_plural(group.count, 'extraction')}"
-            + _in_notebooks(group)
         )
 
     async def _schema_proposals(
@@ -464,8 +472,9 @@ class AttentionService:
                     detail=f"{len(pending)} {_plural(len(pending), 'proposal')}: {shown}",
                 )
             )
-        self._finish(group, f"Review {group.count} {_plural(group.count, 'proposal')}"
-                     + _in_notebooks(group))
+        self._finish_per_notebook(
+            group, f"Review {group.count} {_plural(group.count, 'proposal')}"
+        )
 
     # --- the knowledge graph ------------------------------------------------
 

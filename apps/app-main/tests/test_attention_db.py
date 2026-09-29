@@ -299,7 +299,9 @@ async def test_every_count_equals_its_endpoint(env) -> None:
             assert g["error"] is None, g
             assert g["count"] > 0, f"{g['key']}: the seed must reach every group"
             assert g["count"] == await comparators[g["key"]](), g["key"]
-            assert g["link"].startswith("/"), g
+            # A group spread over several notebooks has no card-level link.
+            assert g["link"].startswith("/") or (
+                g["link"] == g["action"] == "" and len(g["items"]) > 1), g
             assert all(i["link"].startswith("/") for i in g["items"]), g
         assert body["total"] == sum(g["counted"] for g in body["groups"])
 
@@ -344,14 +346,21 @@ async def test_seeded_values(env) -> None:
     assert counted["jobs_running"] == 0
     assert body["total"] == sum(counted.values()) == 1 + 2 + 2 + 0 + 3 + 1 + by_key[
         "merge_candidates"]["count"] + 1 + 1
-    # One item per notebook, each linked to its Schema tab; the action to the first.
+    # One item per notebook, each linked to its Schema tab. Two notebooks: no
+    # card-level action, since no one page covers both.
     gated = by_key["sources_awaiting_review"]
     schema = {nb: f"/notebooks/{quote(ids[nb], safe='')}/schema" for nb in ("nb1", "nb2")}
     assert {i["id"]: i["link"] for i in gated["items"]} == {
         ids["nb1"]: schema["nb1"], ids["nb2"]: schema["nb2"]}
-    assert gated["link"] in schema.values()
-    assert gated["action"] == "Review 2 gated sources in 2 notebooks"
-    assert {i["link"] for i in by_key["schema_proposals"]["items"]} == set(schema.values())
+    assert (gated["link"], gated["action"]) == ("", "")
+    assert gated["detail"] == "In 2 places: open each below."
+    proposals = by_key["schema_proposals"]
+    assert {i["link"] for i in proposals["items"]} == set(schema.values())
+    assert (proposals["link"], proposals["action"]) == ("", "")
+    # One notebook: the action goes to its page.
+    paused = by_key["extraction_paused"]
+    assert paused["link"] == f"/notebooks/{quote(ids['nb1'], safe='')}"
+    assert paused["action"] == "Resume 1 paused extraction"
     assert by_key["merge_candidates"]["detail"].startswith("1 cluster, ")
 
 
