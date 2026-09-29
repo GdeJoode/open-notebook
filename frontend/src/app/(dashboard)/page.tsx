@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect } from 'react'
 import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
 import { AlertTriangle, ArrowRight, CheckCircle2, RefreshCw } from 'lucide-react'
@@ -31,6 +32,18 @@ export default function WerkbakPage() {
   const needsYou = data?.groups.filter((g) => g.needs_action && shown(g)) ?? []
   const inProgress = data?.groups.filter((g) => !g.needs_action && shown(g)) ?? []
   const arrived = data?.arrived.filter(shown) ?? []
+
+  // A link to one card (`/#schema_proposals`, the sidebar's "Schema
+  // proposals"): the cards only exist once the report is in, so the browser's
+  // own jump to the anchor may have found nothing yet.
+  const ready = !!data
+  useEffect(() => {
+    if (!ready) return
+    const card = document.getElementById(window.location.hash.slice(1))
+    if (!card) return
+    card.scrollIntoView({ block: 'start' })
+    card.focus({ preventScroll: true })
+  }, [ready])
 
   return (
     <AppShell>
@@ -161,7 +174,12 @@ function GroupCard({ group }: { group: AttentionGroup }) {
   const more = group.item_total - group.items.length
   const elsewhere = group.needs_action && !group.error ? group.count - group.counted : 0
   return (
-    <Card className="gap-3 py-4" data-testid={`werkbak-group-${group.key}`}>
+    <Card
+      id={group.key}
+      tabIndex={-1}
+      className="gap-3 py-4 scroll-mt-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      data-testid={`werkbak-group-${group.key}`}
+    >
       <div className="flex items-start justify-between gap-3 px-4">
         <div className="min-w-0">
           <h3 className="text-base font-semibold">{group.title}</h3>

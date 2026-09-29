@@ -104,8 +104,9 @@ test.describe('WB.1 — the Werkbak', () => {
     // The fixture's merge candidates timed out: partial.
     await expect(page.getByTestId('nav-badge-The Tray'))
       .toHaveText(`${fixture.total}+ need you, some groups did not load`)
-    await expect(page.getByTestId('nav-badge-Knowledge Graph'))
-      .toHaveText('1238+ need you, some groups did not load')
+    await expect(page.getByTestId('nav-badge-Triage')).toHaveText('1238 need you')
+    await expect(page.getByTestId('nav-badge-Duplicates'))
+      .toHaveText('0+ need you, some groups did not load')
 
     await page.getByTestId('werkbak-action-triage').click()
     await expect(page).toHaveURL(/\/knowledge-graph\/triage$/, { timeout: 45_000 })
