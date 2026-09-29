@@ -147,7 +147,12 @@ class ConnectionPool:
     def __init__(
         self,
         config: Optional[SurrealDBConfig] = None,
-        max_size: int = 10,
+        # One Werkbak report checks out 13-14 connections at once (two
+        # notebooks; its per-notebook groups add one each per notebook). With
+        # 10, its heavy groups queued for a slot behind the others' reads and
+        # ran into their deadline on a cold database, and the pages read next
+        # to it waited too. A pooled connection costs one idle socket.
+        max_size: int = 20,
         connect_timeout: Optional[float] = None,
         ping_timeout: float = 5.0,
         acquire_timeout: float = 30.0,

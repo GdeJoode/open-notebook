@@ -645,3 +645,21 @@ async def test_reports_cut_short_by_deadlines_leave_later_reads_fast(env) -> Non
     assert "KeyError" not in "\n".join(logged)
     assert all(c.recv_task and not c.recv_task.done() for c in conn._pool._pool._queue)
 
+
+async def test_a_report_leaves_pool_slots_for_the_pages(env, monkeypatch) -> None:
+    """A report whose reads outnumber the pool queues its groups behind each
+    other's reads: on a cold database they ran into their deadlines. The
+    Werkbak page reads three endpoints next to it, so those stay free too."""
+    await _seed()
+    pool = conn._pool
+    demand: List[int] = []
+    checkout = pool._checkout
+
+    async def counted():
+        waiting = len(pool._slots._waiters or ())
+        demand.append(pool._max_size - pool._slots._value + waiting + 1)
+        return await checkout()
+
+    monkeypatch.setattr(pool, "_checkout", counted)
+    await AttentionService().report()
+    assert max(demand) + 3 <= pool._max_size, max(demand)
