@@ -502,8 +502,46 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 >     pending; a retry is then a 409 (the type exists).
 >   - `ontology_manager.type_placement` / `type_placement_judge` have no
 >     production caller now (reported, not removed).
->   - The Schema tab's base list and the TTL export still read the YAML
->     (OE.6).
+>   - The TTL export still reads the YAML (OE.6).
+>
+> **Review round 1 (REVISIONS_NEEDED: 3 majors, 6 minors), fixed:**
+> - M1: the Schema tab's base list reads the ACTIVE registry (own types), so
+>   a type accepted, renamed or deleted in the editor shows there. The e2e
+>   mock follows that contract. DB test, mutation-checked against the YAML
+>   read.
+> - M2: the live fixture used registry methods captured under the autouse
+>   YAML patch unless another file was collected first. conftest now keeps
+>   the originals (`REGISTRY_LOAD_FROM_DB` / `REGISTRY_LIST_ONTOLOGIES`). The
+>   file passes on its own; the old fixture fails on its own.
+> - M3: a name (or alias) any shared ontology defines, matched as typing
+>   matches, is never published again.
+>   - The editor's new-type path refuses it (409 `defined_in`); the accept
+>     target and preview report it.
+>   - `POST …/covered` takes the proposal out as accepted (`covered: true`,
+>     the defining ontology), with no publish and no rejection.
+>   - Pass-1 proposals the shared ontologies define are no longer queued.
+>   - DB tests: the chosen ontology defines it, another one does, by alias.
+>     Mutation-checked: the guard, the absent rejection, the queue filter.
+> - m4: an accept that leaves entities on their old type links to the
+>   retype (`&retype=1` opens the RetypePanel).
+> - m5: accept and covered re-read the row after the publish and move only
+>   their proposal.
+> - m6: the mock uses `description or rationale`; its simplified default
+>   rule is documented.
+> - m7: an unknown `tab` falls back; a link followed on the open page selects
+>   its ontology.
+> - m8: ARCHITECTURE.md `notebook_schema`. m9: the TTL route's description.
+> - UI guards mutation-checked.
+> - Runs: app-main 1965 passed / 6 skipped against a scratch SurrealDB
+>   (the whole `test_entity_extraction_service` file included); vitest 37
+>   in the touched dirs; track-oe e2e 18/18.
+> - Not run: mypy.
+> - The ontology-manager suite hangs without a reachable SurrealDB in
+>   `test_is_a_predicate.py::test_is_a_is_declared_in_every_shipped_ontology[scholarly]`.
+>   - It reads through `OntologyRegistry().get`, database first; the hang is
+>     pre-existing and untouched by OE.5.
+>   - Every other file passes per file with a 120 s cap; with a scratch
+>     SurrealDB the whole suite passes.
 
 - Pass-1 proposals stay a per-notebook queue. "Accept" publishes the type to
   the shared ontology through OE.2 (validated, previewed).
