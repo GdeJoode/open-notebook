@@ -4,7 +4,7 @@ SurrealDB connection management.
 
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+from typing import Any, AsyncGenerator, Awaitable, Dict, List, Optional, TypeVar, Union
 
 from loguru import logger
 from surrealdb import AsyncSurreal, RecordID
@@ -79,16 +79,51 @@ _BROKEN_CONNECTION_ERRORS = (
     WebSocketException,
 )
 
+T = TypeVar("T")
 
-def _current_task_cancelling() -> bool:
-    """True when the running task itself has been asked to cancel.
 
-    ``Task.cancelling`` exists from Python 3.11; without it every
-    ``CancelledError`` is taken to be ours, which is the old behaviour.
+def _receiving(conn: AsyncSurreal) -> bool:
+    """True while the SDK's receive task reads the connection's socket.
+
+    That one task answers every request; once it has ended (the socket closed,
+    or it died of an error) nothing sent on the connection is answered again,
+    though the socket may still be open. The HTTP client has no such task.
     """
-    task = asyncio.current_task()
-    cancelling = getattr(task, "cancelling", None)
-    return cancelling is None or cancelling() > 0
+    if not hasattr(conn, "recv_task"):
+        return True
+    task = conn.recv_task
+    return task is not None and not task.done()
+
+
+def _discard_outcome(request: "asyncio.Future[Any]") -> None:
+    if not request.cancelled():
+        request.exception()
+
+
+async def _request(conn: AsyncSurreal, call: Awaitable[T]) -> T:
+    """Await an SDK request without letting a cancellation into the SDK.
+
+    SDK 1.0.6 cannot take one: when the response arrives in the loop turn the
+    cancel lands in, its receive task sets the result on the cancelled future,
+    dies of the ``InvalidStateError`` and fails every request on the
+    connection from then on, the cancelled one with a ``KeyError`` instead of
+    ``CancelledError``. So the request runs in a task of its own and only the
+    wait for it is cancelled. The pool then closes the connection, which ends
+    the request and stops the statement on the server.
+
+    A request that fails because the receive task ended (the socket was lost)
+    raises :class:`DatabaseUnavailableError`.
+    """
+    request = asyncio.ensure_future(call)
+    try:
+        return await asyncio.shield(request)
+    except asyncio.CancelledError:
+        request.add_done_callback(_discard_outcome)
+        raise
+    except Exception as e:
+        if _receiving(conn):
+            raise
+        raise DatabaseUnavailableError("SurrealDB connection lost") from e
 
 
 class ConnectionPool:
@@ -144,25 +179,24 @@ class ConnectionPool:
         return db
 
     async def _authenticate(self, db: AsyncSurreal) -> None:
-        await db.signin(
-            {
-                "username": self.config.username,
-                "password": self.config.password,
-            }
+        await _request(
+            db,
+            db.signin(
+                {
+                    "username": self.config.username,
+                    "password": self.config.password,
+                }
+            ),
         )
-        await db.use(self.config.namespace, self.config.database)
+        await _request(db, db.use(self.config.namespace, self.config.database))
 
     async def _health_check(self, conn: AsyncSurreal) -> bool:
         """Check if a connection is still alive."""
         try:
-            await asyncio.wait_for(conn.query("RETURN true"), self._ping_timeout)
+            await asyncio.wait_for(
+                _request(conn, conn.query("RETURN true")), self._ping_timeout
+            )
             return True
-        except asyncio.CancelledError:
-            if _current_task_cancelling():
-                raise
-            # The SDK cancels pending requests when the server closes the
-            # socket; nobody cancelled us, so the connection is dead.
-            return False
         except Exception:
             return False
 
@@ -190,6 +224,10 @@ class ConnectionPool:
         try:
             while not self._pool.empty():
                 candidate = self._pool.get_nowait()
+                if not _receiving(candidate):
+                    # A ping on it would wait out ``ping_timeout`` unanswered.
+                    await self._close_quietly(candidate)
+                    continue
                 try:
                     healthy = await self._health_check(candidate)
                 except BaseException:
@@ -212,14 +250,11 @@ class ConnectionPool:
         broken = False
         try:
             yield conn
-        except _BROKEN_CONNECTION_ERRORS as e:
+        except _BROKEN_CONNECTION_ERRORS:
             broken = True
-            if isinstance(e, asyncio.CancelledError) and not _current_task_cancelling():
-                # The SDK cancelled the query because the socket closed.
-                raise DatabaseUnavailableError("SurrealDB connection lost") from e
             raise
         finally:
-            keep = not broken and not self._closed
+            keep = not broken and not self._closed and _receiving(conn)
             if keep:
                 self._pool.put_nowait(conn)
             self._slots.release()
@@ -276,7 +311,9 @@ async def execute_query(
     pool = get_pool(config)
     async with pool.acquire() as connection:
         try:
-            result = parse_record_ids(await connection.query(query, params))
+            result = parse_record_ids(
+                await _request(connection, connection.query(query, params))
+            )
             if isinstance(result, str):
                 raise RuntimeError(result)
             return result
@@ -333,7 +370,9 @@ async def execute_transaction(
     pool = get_pool(config)
     async with pool.acquire() as connection:
         try:
-            response = await connection.query_raw(query, params or {})
+            response = await _request(
+                connection, connection.query_raw(query, params or {})
+            )
         except Exception as e:
             logger.error(
                 f"Transaction failed: {query[:200]} params: {params}"

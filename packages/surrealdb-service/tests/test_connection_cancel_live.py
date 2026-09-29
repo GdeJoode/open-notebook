@@ -1,26 +1,145 @@
-"""Pooled connections with the real SDK and a real SurrealDB."""
+"""Cancel safety of pooled connections, with the real SDK and a real SurrealDB.
 
-from typing import Any, List
+The live app degraded after one Werkbak read (2026-09-29): a group deadline
+cancelled a query in the same event-loop turn in which its response arrived.
+SDK 1.0.6 then sets the result on the cancelled future, its receive task dies
+of the ``InvalidStateError``, it clears every pending request, and the caller
+gets a ``KeyError`` instead of ``CancelledError``. The pool took that for a
+statement error and kept the connection; every later request on it waited
+for nothing until the 5 s reuse ping gave up. A socket lost mid-query ends
+the receive task the same way, so its request also sees a ``KeyError``.
+
+These tests produce both states with the real client, then check that the
+pool neither keeps nor hands out such a connection.
+"""
+
+import asyncio
+import gc
+import logging
+import time
+from typing import Any, Callable, List
 
 import pytest
+from loguru import logger
 
 from surrealdb_service import connection as conn_mod
 from surrealdb_service.config import SurrealDBConfig
-from surrealdb_service.connection import ConnectionPool, execute_query
+from surrealdb_service.connection import (
+    ConnectionPool,
+    DatabaseUnavailableError,
+    execute_query,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.requires_docker]
 
+# A local SurrealDB answers ``RETURN 1`` in milliseconds; this leaves room for
+# a loaded CI box while still failing on a 5 s reuse ping.
+NORMAL_S = 1.0
+
 
 @pytest.fixture
-def pool(live_surrealdb: SurrealDBConfig):
+async def pool(live_surrealdb: SurrealDBConfig):
     original = conn_mod._pool
+    # A reuse ping far above NORMAL_S: a dead connection that is pinged
+    # instead of recognised shows as a slow query.
     conn_mod._pool = ConnectionPool(config=live_surrealdb, max_size=4, ping_timeout=5.0)
     yield conn_mod._pool
+    await conn_mod._pool.close_all()
     conn_mod._pool = original
+
+
+@pytest.fixture
+def logged(caplog) -> Callable[[], str]:
+    """Everything logged so far: our loguru lines, the SDK's stdlib debug lines
+    (where its receive task reports the error it died of) and asyncio's."""
+    caplog.set_level(logging.DEBUG, logger="surrealdb")
+    lines: List[str] = []
+    sink = logger.add(lambda m: lines.append(str(m)), level="DEBUG")
+
+    def text() -> str:
+        gc.collect()  # a task whose error nobody read reports it when collected
+        return "\n".join(lines + [r.getMessage() for r in caplog.records])
+
+    yield text
+    logger.remove(sink)
+
+
+async def _warm(pool: ConnectionPool) -> None:
+    await asyncio.gather(*(execute_query("RETURN 1") for _ in range(pool._max_size)))
 
 
 def _idle(pool: ConnectionPool) -> List[Any]:
     return list(pool._pool._queue)
+
+
+async def _cancel_as_the_response_arrives(query: str = "SLEEP 150ms; RETURN 1;") -> BaseException:
+    """Cancel an in-flight query in the loop turn its response is read.
+
+    The deadline and the response land while the loop is busy (the Werkbak's
+    other groups, in the live app), so both are handled in one turn: the
+    response wakes the SDK's receive task first, the cancel lands before it runs.
+    """
+    task = asyncio.ensure_future(execute_query(query))
+    await asyncio.sleep(0.05)  # checked out and sent
+    asyncio.get_running_loop().call_later(0.05, task.cancel)
+    time.sleep(0.4)  # a busy loop: the response and the deadline both arrive
+    try:
+        await task
+    except BaseException as e:  # noqa: BLE001 - the type is the assertion
+        return e
+    raise AssertionError("the query was not cancelled")
+
+
+async def _fifty_normal_queries() -> List[float]:
+    took = []
+    for i in range(50):
+        t = time.perf_counter()
+        rows = await asyncio.wait_for(execute_query(f"RETURN {i}"), 10)
+        took.append(time.perf_counter() - t)
+        assert rows == i
+    return took
+
+
+async def test_cancel_racing_the_response_leaves_the_pool_healthy(pool, logged):
+    await _warm(pool)
+    for _ in range(4):
+        err = await _cancel_as_the_response_arrives()
+        # The caller sees its own cancellation, so a deadline reads as one.
+        assert isinstance(err, asyncio.CancelledError), repr(err)
+        assert all(not c.recv_task.done() for c in _idle(pool))
+
+    took = await _fifty_normal_queries()
+    assert max(took) < NORMAL_S, took
+    log = logged()
+    assert "KeyError" not in log
+    assert "Unexpected error in _recv_task" not in log
+
+
+async def test_many_mid_flight_cancels_then_normal_queries(pool, logged):
+    await _warm(pool)
+    for _ in range(3):
+        slow = [
+            asyncio.wait_for(execute_query("SLEEP 300ms; RETURN 1;"), 0.02 + 0.03 * i)
+            for i in range(8)
+        ]
+        results = await asyncio.gather(*slow, return_exceptions=True)
+        assert all(isinstance(r, asyncio.TimeoutError) for r in results), results
+
+    took = await _fifty_normal_queries()
+    assert max(took) < NORMAL_S, took
+    assert "KeyError" not in logged()
+
+
+async def test_socket_lost_mid_query_is_unavailable_and_not_pooled(pool):
+    await _warm(pool)
+    for c in _idle(pool):
+        asyncio.get_running_loop().call_later(0.1, c.socket.transport.abort)
+
+    with pytest.raises(DatabaseUnavailableError):
+        await asyncio.wait_for(execute_query("SLEEP 500ms; RETURN 1;"), 5)
+    # The query's connection was not handed back.
+    assert len(_idle(pool)) == pool._max_size - 1
+    assert await asyncio.wait_for(execute_query("RETURN 7"), 5) == 7
 
 
 async def test_an_idle_connection_is_reused(pool):
@@ -32,3 +151,17 @@ async def test_an_idle_connection_is_reused(pool):
     for i in range(5):
         assert await execute_query(f"RETURN {i}") == i
     assert _idle(pool) == idle
+
+
+async def test_a_dead_idle_connection_is_dropped_without_the_ping(pool):
+    """The state the race leaves: socket open, nobody reading it. A ping on it
+    is sent and never answered, so it costs the whole ping timeout."""
+    await _warm(pool)
+    for c in _idle(pool):
+        c.recv_task.cancel()
+    await asyncio.sleep(0.05)
+    assert all(c.recv_task.done() and c.socket.state.name == "OPEN" for c in _idle(pool))
+
+    t = time.perf_counter()
+    assert await asyncio.wait_for(execute_query("RETURN 8"), 10) == 8
+    assert time.perf_counter() - t < NORMAL_S

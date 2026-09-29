@@ -39,11 +39,16 @@ class FakeSurreal:
         self.url = url
         self.closed = False
         self.signed_in = False
-        # The SDK's receive task ended (server closed the socket): it cancels
-        # every pending request future, so ``query`` raises CancelledError in
-        # a task nobody cancelled.
-        self.socket_gone = False
+        # The SDK's receive task, which answers every request. It ends when
+        # the socket is lost; SDK 1.0.6 then clears its request map, so a
+        # request fails with a ``KeyError`` on its own id.
+        self.recv_task: "asyncio.Future[None]" = (
+            asyncio.get_running_loop().create_future()
+        )
         server.clients.append(self)
+
+    def lose_socket(self) -> None:
+        self.recv_task.set_result(None)
 
     async def signin(self, vars: dict) -> str:
         if self.server.signin_mode == "raise":
@@ -59,8 +64,8 @@ class FakeSurreal:
     async def query(self, query: str, vars: Optional[dict] = None) -> Any:
         if self.closed:
             raise OSError("socket closed")
-        if self.socket_gone:
-            raise asyncio.CancelledError()
+        if self.recv_task.done():
+            raise KeyError("request-id")
         if self.server.query_mode == "hang":
             await asyncio.Event().wait()
         return [{"result": 1}]
@@ -69,6 +74,8 @@ class FakeSurreal:
         if self.server.close_mode == "hang":
             await asyncio.Event().wait()
         self.closed = True
+        if not self.recv_task.done():
+            self.recv_task.cancel()
 
 
 @pytest.fixture
@@ -234,11 +241,11 @@ async def test_checkout_cancelled_during_reuse_ping_closes_the_candidate(server)
     assert len(server.clients) == 1
 
 
-async def test_sdk_cancelled_ping_is_a_dead_candidate_not_an_abort(server):
+async def test_idle_connection_with_a_lost_socket_is_replaced(server):
     pool = _pool(max_size=2)
     first = await asyncio.wait_for(_use_once(pool), GUARD)
 
-    first.socket_gone = True
+    first.lose_socket()
     second = await asyncio.wait_for(_use_once(pool), GUARD)
 
     assert second is not first
@@ -284,11 +291,11 @@ async def test_connection_returned_after_close_all_is_closed(server):
     assert pool._pool.empty()
 
 
-async def test_sdk_cancelled_query_in_a_request_is_unavailable_not_cancelled(server):
+async def test_socket_lost_during_a_query_is_unavailable(server):
     pool = _pool(max_size=2)
     with pytest.raises(DatabaseUnavailableError):
         async with pool.acquire() as c:
-            c.socket_gone = True
-            await c.query("SELECT * FROM source")
+            c.lose_socket()
+            await conn_mod._request(c, c.query("SELECT * FROM source"))
     assert c.closed
     await asyncio.wait_for(_use_once(pool), GUARD)
