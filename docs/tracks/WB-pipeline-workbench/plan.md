@@ -286,6 +286,41 @@ redo it.
     - `design-tokens.spec.ts` fails without a backend: 32 console errors
       from endpoints it does not mock. `/api/attention` is now mocked, so
       none of them come from WB.1.
+- **Review round 1** (REVISIONS_NEEDED, 2 majors, 8 minors), all addressed:
+  - M1: "stopped" now has one predicate (`services/stopped_sources.py`).
+    Both the group and `GET /sources/?stalled=true` use it, and the group
+    links there. The Sources page shows "Showing only: stopped sources".
+    Tests use the real 15 min threshold: they backdate `updated` and leave
+    out a busy source and a freshly written one.
+  - M2: the paused-jobs read moved to `services/paused_extraction.py`; the
+    router and the Werkbak both call it.
+  - m3: the new `counted` field goes into `total` and the badges, so each
+    thing to act on counts once. A source listed in a source group owns its
+    paused extraction and its failed jobs. Proposals count in full. A group
+    that fails owns nothing.
+  - m4: the mutations that resolve an item invalidate `['attention']`.
+  - m9: the sidebar reads the cached report with no refetch on mount or
+    focus; the Werkbak page always reads anew.
+  - m5: without a mark, arrivals cover the last 7 days and are labelled so
+    (`since_default`).
+  - m6: gated sources, paused extraction and proposals show one item per
+    notebook, each linked to that notebook's page, with no cap. Failed jobs
+    say plainly that there is no jobs page.
+  - m7: a stopped source without chunks reads "No text extracted:
+    reprocess or delete" and links to its page, where Reprocess is.
+  - m8: merge candidates include the Resolution page's plan clusters.
+  - m10: a failure is keyed by type, source and the payload's
+    `notebook_id`. The later jobs are read one row per key, for the
+    failures' keys only.
+  - Live, read-only after the round: 1.19–1.47 s, still bounded by merge
+    candidates (1.18 s). Total 1,375: the 3 failed jobs count 2, because one
+    belongs to a listed source. 8 stopped sources, all "Stopped at
+    embedded".
+  - Limits:
+    - the < 1 s target is still missed;
+    - the scoring runs in `asyncio.to_thread`, so a merge-candidates timeout
+      does not stop it: the thread runs to the end;
+    - `list_jobs` and `get_by_notebook` still swallow read errors.
 
 **WB.2 — Pipeline navigation** (~1.5d)
 - **Nav regrouped in pipeline order:**
