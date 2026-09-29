@@ -42,6 +42,7 @@ from app_main.api.routers import (
 )
 from app_main.dependencies import get_attention_service
 from app_main.services.attention_service import AttentionReport, AttentionService
+from app_main.services.notebook_service import NotebookService
 from app_main.services.triage.triage_queue import TriageQueueRepository
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.requires_docker]
@@ -354,6 +355,19 @@ async def test_seeded_values(env) -> None:
     assert by_key["merge_candidates"]["detail"].startswith("1 cluster, ")
 
 
+async def test_stalled_list_reads_no_chunk_counts(env, monkeypatch) -> None:
+    """The list needs the predicate only; the reason text is the Werkbak's."""
+    ids = await _seed()
+
+    async def no_chunks(self, source_ids):
+        raise AssertionError("the list endpoint read chunk counts")
+
+    monkeypatch.setattr(SourceRepository, "chunk_counts", no_chunks)
+    async with _client(_app()) as c:
+        listed = await _paged_sources(c, [("stalled", "true")])
+    assert {s["id"] for s in listed} == {ids["stalled"], ids["empty"]}
+
+
 async def test_stalled_filter_on_sources(env) -> None:
     """The group's link lists exactly the counted set, also within a notebook."""
     ids = await _seed()
@@ -456,15 +470,16 @@ async def test_sources_stage_filter(env) -> None:
 
 
 async def test_a_slow_shared_read_times_out_its_groups(env, monkeypatch) -> None:
-    """Two groups wait on the shared job read; the first deadline must not cancel
-    it under the second (that would escape as a raw cancel and fail the read)."""
+    """Three groups wait on the shared notebooks read; the first deadline must
+    not cancel it under the others (that would escape as a raw cancel and fail
+    the read)."""
     await _seed()
 
     async def slow(self, **kwargs):
         await asyncio.sleep(5)
         return []
 
-    monkeypatch.setattr(JobRepository, "list_jobs", slow)
+    monkeypatch.setattr(NotebookService, "get_all_with_counts", slow)
     app = _app()
     app.dependency_overrides[get_attention_service] = lambda: AttentionService(
         group_timeout_s=0.5)
@@ -472,8 +487,8 @@ async def test_a_slow_shared_read_times_out_its_groups(env, monkeypatch) -> None
         r = await c.get("/api/attention")
     assert r.status_code == 200
     by_key = {g["key"]: g for g in r.json()["groups"]}
-    assert by_key["sources_stalled"]["error"] == "timed out after 0.5 s"
-    assert by_key["jobs_running"]["error"] == "timed out after 0.5 s"
+    for key in ("sources_awaiting_review", "extraction_paused", "schema_proposals"):
+        assert by_key[key]["error"] == "timed out after 0.5 s", key
     assert by_key["sources_failed"]["count"] == 1
 
 

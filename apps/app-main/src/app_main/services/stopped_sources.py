@@ -11,13 +11,14 @@ enqueues the next stage in the step that writes the stage, and a source
 with a live job is excluded, so the only normal quiet gap is between those
 two writes (seconds); 15 minutes leaves room for a slow worker restart.
 
-Each row carries ``chunks``: a source with none (a parse that extracted no
-text; the zero-chunk guard then chains nothing) stays here until it is
-reprocessed or deleted, and the Werkbak says so.
+A source without chunks (a parse that extracted no text; the zero-chunk
+guard then chains nothing) stays here until it is reprocessed or deleted;
+the Werkbak reads the chunk counts of the rows it shows
+(:func:`add_chunk_counts`) and says so.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from job_queue.repository import JobRepository
 from shared.models.jobs import Job
@@ -47,21 +48,30 @@ async def stopped_sources(
     source_repo: SourceRepository,
     job_repo: Optional[JobRepository] = None,
     *,
-    unfinished: Optional[List[Job]] = None,
+    busy: Optional[Set[str]] = None,
     now: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
-    """The stopped sources, newest change first, each with its ``chunks``.
+    """The stopped sources, newest change first: the predicate only.
 
-    ``unfinished`` may be passed when the caller already read it.
+    ``busy`` (the sources with a queued, processing or retrying job) may be
+    passed when the caller already read the unfinished jobs; otherwise it is
+    one query. The reason text is :func:`add_chunk_counts`, for the rows a
+    caller shows.
     """
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=STALLED_AFTER_MINUTES)
     rows = await source_repo.list_by_stage(SHORT_OF_COMPLETE, updated_before=cutoff)
-    if unfinished is None:
-        unfinished = await unfinished_jobs(job_repo or JobRepository())
-    busy = {j.source_id for j in unfinished if j.source_id}
-    rows = [r for r in rows if str(r["id"]) not in busy]
+    if busy is None:
+        busy = await (job_repo or JobRepository()).unfinished_source_ids(
+            [s.value for s in UNFINISHED]
+        )
+    return [r for r in rows if str(r["id"]) not in busy]
+
+
+async def add_chunk_counts(
+    source_repo: SourceRepository, rows: List[Dict[str, Any]]
+) -> None:
+    """Set ``chunks`` on each row: 0 means the parse extracted no text."""
     counts = await source_repo.chunk_counts([str(r["id"]) for r in rows])
     for r in rows:
         r["chunks"] = counts.get(str(r["id"]), 0)
-    return rows

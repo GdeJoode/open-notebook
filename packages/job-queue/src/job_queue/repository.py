@@ -154,6 +154,17 @@ class JobRepository(BaseRepository[Job]):
         )
         return [Job(**r) for r in rows or []]
 
+    async def unfinished_source_ids(self, statuses: List[str]) -> set:
+        """The sources with a job in one of ``statuses``, in one query (WB.1:
+        a source with a live job has not stopped). Raises on a failed read."""
+        rows = await execute_query(
+            "SELECT VALUE source_id FROM job WHERE status IN $statuses "
+            "AND source_id != NONE;",
+            {"statuses": statuses},
+            self.config,
+        )
+        return {str(r) for r in rows or [] if r}
+
     async def list_unresolved_failures(self) -> List[Job]:
         """Failed jobs nothing has resolved since, newest first (WB.1).
 

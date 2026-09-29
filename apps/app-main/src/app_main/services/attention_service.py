@@ -32,6 +32,7 @@ from app_main.services.notebook_service import NotebookService
 from app_main.services.paused_extraction import list_paused_jobs_for_notebook
 from app_main.services.stopped_sources import (
     STALLED_AFTER_MINUTES,
+    add_chunk_counts,
     stopped_sources,
     unfinished_jobs,
 )
@@ -233,8 +234,7 @@ class AttentionService:
 
     async def report(self, since: Optional[datetime] = None) -> AttentionReport:
         now = datetime.now(timezone.utc)
-        # Read once, shared by the groups that need them (through ``_shared``).
-        unfinished = asyncio.ensure_future(self._unfinished_jobs())
+        # Read once, shared by the groups that need it (through ``_shared``).
         notebooks = asyncio.ensure_future(self._notebooks())
 
         specs: List[tuple] = [
@@ -245,7 +245,7 @@ class AttentionService:
              lambda g: self._sources_awaiting_review(g, notebooks)),
             (AttentionGroup(key="sources_stalled", title="Sources that stopped",
                             nav="/sources"),
-             lambda g: self._sources_stalled(g, now, unfinished)),
+             lambda g: self._sources_stalled(g, now)),
             (AttentionGroup(key="extraction_paused", title="Paused extraction",
                             nav="/notebooks"),
              lambda g: self._extraction_paused(g, notebooks)),
@@ -264,7 +264,7 @@ class AttentionService:
             (AttentionGroup(key="jobs_failed", title="Failed jobs"), self._jobs_failed),
             (AttentionGroup(key="jobs_running", title="Jobs in progress",
                             needs_action=False),
-             lambda g: self._jobs_running(g, unfinished)),
+             self._jobs_running),
         ]
         since_default = since is None
         since = now - timedelta(days=DEFAULT_SINCE_DAYS) if since is None else _utc(since)
@@ -282,11 +282,10 @@ class AttentionService:
                 *(self._run(g, fn) for g, fn in specs + arrived_specs)
             )
         finally:
-            for task in (unfinished, notebooks):
-                if not task.done():
-                    task.cancel()
-                elif not task.cancelled():
-                    task.exception()  # retrieved: a failure is on its groups
+            if not notebooks.done():
+                notebooks.cancel()
+            elif not notebooks.cancelled():
+                notebooks.exception()  # retrieved: a failure is on its groups
 
         groups = [g for g, _ in specs]
         _count_once(groups)
@@ -329,9 +328,6 @@ class AttentionService:
             group.link = group.items[0].link
 
     # --- shared reads -------------------------------------------------------
-
-    async def _unfinished_jobs(self) -> List[Job]:
-        return await unfinished_jobs(self.job_repo)
 
     async def _notebooks(self) -> List[Dict[str, Any]]:
         return await self.notebook_service.get_all_with_counts(
@@ -390,12 +386,10 @@ class AttentionService:
         self._finish(group, f"Review {group.count} gated {_plural(group.count, 'source')}"
                      + _in_notebooks(group))
 
-    async def _sources_stalled(
-        self, group: AttentionGroup, now: datetime, unfinished: "asyncio.Future[List[Job]]"
-    ) -> None:
-        rows = await stopped_sources(
-            self.source_repo, unfinished=await _shared(unfinished), now=now
-        )
+    async def _sources_stalled(self, group: AttentionGroup, now: datetime) -> None:
+        # The same call as GET /sources/?stalled=true, so the count is its list.
+        rows = await stopped_sources(self.source_repo, self.job_repo, now=now)
+        await add_chunk_counts(self.source_repo, rows[:ITEM_LIMIT])
         group.count = len(rows)
         group._owns = {str(r["id"]) for r in rows}
         group.link = "/sources?stalled=true"
@@ -561,10 +555,8 @@ class AttentionService:
         ]
         self._finish(group, f"Check {group.count} failed {_plural(group.count, 'job')}")
 
-    async def _jobs_running(
-        self, group: AttentionGroup, unfinished: "asyncio.Future[List[Job]]"
-    ) -> None:
-        jobs = await _shared(unfinished)
+    async def _jobs_running(self, group: AttentionGroup) -> None:
+        jobs = await unfinished_jobs(self.job_repo)
         group.count = len(jobs)
         group.items = [_job_item(j, j.status.value, j.created) for j in jobs[:ITEM_LIMIT]]
         self._finish(group, f"{group.count} {_plural(group.count, 'job')} in progress")
