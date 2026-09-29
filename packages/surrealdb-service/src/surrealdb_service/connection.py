@@ -171,33 +171,56 @@ class ConnectionPool:
         self._close_timeout = 2.0
         # Set by close_all: connections handed back afterwards are closed.
         self._closed = False
+        # Closers of abandoned sign-ins (see ``_close_when_done``).
+        self._closers: "set[asyncio.Task[None]]" = set()
 
     async def _create_connection(self) -> AsyncSurreal:
         """Create and authenticate a new SurrealDB connection."""
         db = AsyncSurreal(self.config.url)
+        # Shielded for the reason given at ``_request``. A sign-in abandoned
+        # half-way is still opening its socket, so it cannot be closed now:
+        # ``_close_when_done`` closes it once the sign-in ends.
+        auth = asyncio.ensure_future(self._authenticate(db))
         try:
-            await asyncio.wait_for(self._authenticate(db), self._connect_timeout)
+            await asyncio.wait_for(asyncio.shield(auth), self._connect_timeout)
         except asyncio.TimeoutError as e:
-            await self._close_quietly(db)
+            self._abandon(auth, db)
             raise DatabaseUnavailableError(
                 f"SurrealDB sign-in did not finish within {self._connect_timeout}s"
             ) from e
         except BaseException:
-            await self._close_quietly(db)
+            self._abandon(auth, db)
             raise
         return db
 
     async def _authenticate(self, db: AsyncSurreal) -> None:
-        await _request(
-            db,
-            db.signin(
-                {
-                    "username": self.config.username,
-                    "password": self.config.password,
-                }
-            ),
+        await db.signin(
+            {
+                "username": self.config.username,
+                "password": self.config.password,
+            }
         )
-        await _request(db, db.use(self.config.namespace, self.config.database))
+        await db.use(self.config.namespace, self.config.database)
+
+    def _abandon(self, auth: "asyncio.Future[None]", db: AsyncSurreal) -> None:
+        closer = asyncio.ensure_future(self._close_when_done(auth, db))
+        self._closers.add(closer)
+        closer.add_done_callback(self._closers.discard)
+
+    async def _close_when_done(
+        self, auth: "asyncio.Future[None]", db: AsyncSurreal
+    ) -> None:
+        """Close an abandoned connection once its sign-in has ended.
+
+        A sign-in that hangs is cancelled after ``connect_timeout``; the
+        connection is closed right after, so the SDK's state no longer matters.
+        """
+        try:
+            await asyncio.wait_for(auth, self._connect_timeout)
+        except Exception:
+            pass
+        finally:
+            await self._close_quietly(db)
 
     async def _health_check(self, conn: AsyncSurreal) -> bool:
         """Check if a connection is still alive."""
@@ -275,6 +298,11 @@ class ConnectionPool:
         self._closed = True
         while not self._pool.empty():
             await self._close_quietly(self._pool.get_nowait())
+        # Cancelling a closer stops its wait; it still closes its connection.
+        closers = list(self._closers)
+        for closer in closers:
+            closer.cancel()
+        await asyncio.gather(*closers, return_exceptions=True)
         logger.info("Connection pool closed")
 
 

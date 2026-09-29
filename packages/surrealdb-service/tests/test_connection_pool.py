@@ -11,7 +11,7 @@ hang, and a query raise or hang, the way the real client does.
 """
 
 import asyncio
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 import pytest
 
@@ -92,6 +92,11 @@ def _pool(**kwargs) -> ConnectionPool:
     return ConnectionPool(config=cfg, **kwargs)
 
 
+async def _until(condition: Callable[[], bool]) -> None:
+    while not condition():
+        await asyncio.sleep(0.01)
+
+
 async def _use_once(pool: ConnectionPool) -> FakeSurreal:
     async with pool.acquire() as c:
         await c.query("RETURN 1")
@@ -112,13 +117,14 @@ async def test_failed_signins_do_not_leak_slots(server):
 
 async def test_cancelled_signins_do_not_leak_slots(server):
     """The production path: a caller's timeout cancels a slow sign-in."""
-    pool = _pool(max_size=2)
+    pool = _pool(max_size=2, connect_timeout=0.2)
     server.signin_mode = "hang"
     for _ in range(5):
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(_use_once(pool), 0.05)
-    # The abandoned half-open clients are closed, not left dangling.
-    assert all(c.closed for c in server.clients)
+    # The abandoned half-open clients are closed once their sign-in is given
+    # up on (``connect_timeout``), not left dangling.
+    await asyncio.wait_for(_until(lambda: all(c.closed for c in server.clients)), GUARD)
 
     server.signin_mode = "ok"
     c = await asyncio.wait_for(_use_once(pool), GUARD)
@@ -299,3 +305,34 @@ async def test_socket_lost_during_a_query_is_unavailable(server):
             await conn_mod._request(c, c.query("SELECT * FROM source"))
     assert c.closed
     await asyncio.wait_for(_use_once(pool), GUARD)
+
+
+async def test_a_sign_in_that_ends_after_its_deadline_is_closed(server, monkeypatch):
+    """A sign-in is shielded, so it goes on after the caller gave up on it; the
+    connection it opens is closed when it ends, not pooled or left open."""
+    gate = asyncio.Event()
+    signin = FakeSurreal.signin
+
+    async def slow_signin(self: FakeSurreal, vars: dict) -> str:
+        await gate.wait()
+        return await signin(self, vars)
+
+    monkeypatch.setattr(FakeSurreal, "signin", slow_signin)
+    pool = _pool(max_size=1, connect_timeout=GUARD)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_use_once(pool), 0.05)
+    abandoned = server.clients[0]
+    assert not abandoned.closed  # still signing in
+    gate.set()
+    await asyncio.wait_for(_until(lambda: abandoned.closed), GUARD)
+    assert abandoned.signed_in and pool._pool.empty()
+
+
+async def test_close_all_closes_a_sign_in_still_running(server):
+    pool = _pool(max_size=1, connect_timeout=GUARD * 10)
+    server.signin_mode = "hang"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_use_once(pool), 0.05)
+
+    await asyncio.wait_for(pool.close_all(), GUARD)
+    assert server.clients[0].closed

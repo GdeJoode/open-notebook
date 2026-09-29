@@ -20,6 +20,7 @@ import time
 from typing import Any, Callable, List
 
 import pytest
+import websockets
 from loguru import logger
 
 from surrealdb_service import connection as conn_mod
@@ -165,3 +166,44 @@ async def test_a_dead_idle_connection_is_dropped_without_the_ping(pool):
     t = time.perf_counter()
     assert await asyncio.wait_for(execute_query("RETURN 8"), 10) == 8
     assert time.perf_counter() - t < NORMAL_S
+
+
+def _live_receive_tasks() -> int:
+    """SDK receive tasks still running: each is an open, signed-in socket."""
+    return sum(
+        1
+        for t in asyncio.all_tasks()
+        if not t.done() and "_recv_task" in t.get_coro().__qualname__
+    )
+
+
+@pytest.fixture
+def slow_handshake(monkeypatch):
+    """The WebSocket handshake takes 0.3 s, as on a slow or restarting DB."""
+    real = websockets.connect
+
+    async def slow(*args: Any, **kwargs: Any) -> Any:
+        await asyncio.sleep(0.3)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(websockets, "connect", slow)
+
+
+async def test_sign_in_past_connect_timeout_leaves_no_socket(
+    live_surrealdb, slow_handshake
+):
+    before = _live_receive_tasks()
+    pool = ConnectionPool(config=live_surrealdb, connect_timeout=0.1)
+    with pytest.raises(DatabaseUnavailableError):
+        async with pool.acquire():
+            pass
+    await asyncio.sleep(1.0)  # the handshake and sign-in finish meanwhile
+    assert _live_receive_tasks() == before
+
+
+async def test_sign_in_cut_off_by_the_caller_leaves_no_socket(pool, slow_handshake):
+    before = _live_receive_tasks()
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(execute_query("RETURN 1"), 0.1)
+    await asyncio.sleep(1.0)
+    assert _live_receive_tasks() == before
