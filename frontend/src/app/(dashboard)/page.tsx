@@ -155,12 +155,18 @@ export default function WerkbakPage() {
 
 function GroupCard({ group }: { group: AttentionGroup }) {
   const more = group.count - group.items.length
+  const elsewhere = group.needs_action && !group.error ? group.count - group.counted : 0
   return (
     <Card className="gap-3 py-4" data-testid={`werkbak-group-${group.key}`}>
       <div className="flex items-start justify-between gap-3 px-4">
         <div className="min-w-0">
           <h3 className="text-base font-semibold">{group.title}</h3>
           {group.detail && <p className="text-sm text-muted-foreground">{group.detail}</p>}
+          {elsewhere > 0 && (
+            <p className="text-sm text-muted-foreground" data-testid={`werkbak-elsewhere-${group.key}`}>
+              {elsewhere} already counted with their source
+            </p>
+          )}
         </div>
         {!group.error && (
           <Badge

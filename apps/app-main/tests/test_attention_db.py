@@ -167,6 +167,9 @@ async def _seed() -> Dict[str, str]:
     await asyncio.sleep(0.01)
     await _job("entity_extract", "completed", ids["done"], completed=True)
     await _job("document_parse", "failed", "source:gone", "not found", completed=True)
+    # A failure on a complete source: no source group owns it.
+    ids["insight_job"] = await _job("insight_extract", "failed", ids["done"], "llm down",
+                                    completed=True)
 
     schema_repo = NotebookSchemaRepository()
     await schema_repo.upsert(NotebookSchema(notebook=nb1, base_ontology="",
@@ -291,7 +294,7 @@ async def test_every_count_equals_its_endpoint(env) -> None:
             assert g["count"] == await comparators[g["key"]](), g["key"]
             assert g["link"].startswith("/"), g
             assert all(i["link"].startswith("/") for i in g["items"]), g
-        assert body["total"] == sum(g["count"] for g in body["groups"] if g["needs_action"])
+        assert body["total"] == sum(g["counted"] for g in body["groups"])
 
 
 async def test_seeded_values(env) -> None:
@@ -316,10 +319,21 @@ async def test_seeded_values(env) -> None:
         f"/notebooks/{quote(ids['nb1'], safe='')}/schema")
     assert by_key["triage"]["count"] == 1
     assert by_key["retype"]["count"] == 1
-    assert by_key["jobs_failed"]["count"] == 1  # the re-run and the deleted source left
-    assert [i["id"] for i in by_key["jobs_failed"]["items"]] == [ids["failed_job"]]
+    # The re-run and the deleted source left.
+    assert by_key["jobs_failed"]["count"] == 2
+    assert {i["id"] for i in by_key["jobs_failed"]["items"]} == {
+        ids["failed_job"], ids["insight_job"]}
     assert by_key["jobs_running"]["count"] == 2
     assert by_key["jobs_running"]["needs_action"] is False
+    # Counted once: the paused job belongs to the gated source, the parse
+    # failure to the failed source; proposals are decisions of their own.
+    counted = {k: g["counted"] for k, g in by_key.items()}
+    assert counted["extraction_paused"] == 0
+    assert counted["jobs_failed"] == 1
+    assert counted["schema_proposals"] == 3
+    assert counted["jobs_running"] == 0
+    assert body["total"] == sum(counted.values()) == 1 + 1 + 2 + 0 + 3 + 1 + by_key[
+        "merge_candidates"]["count"] + 1 + 1
     gated = by_key["sources_awaiting_review"]["items"][0]
     assert gated["link"] == f"/notebooks/{quote(ids['nb1'], safe='')}/schema"
 
@@ -385,8 +399,8 @@ async def test_a_failing_group_degrades_alone(env, monkeypatch) -> None:
     assert by_key["triage"]["error"] == "triage table unreadable"
     assert by_key["triage"]["count"] == 0 and by_key["triage"]["items"] == []
     assert by_key["sources_failed"]["count"] == 1 and by_key["sources_failed"]["error"] is None
-    assert r.json()["total"] == sum(g["count"] for g in by_key.values()
-                                    if g["needs_action"] and not g["error"])
+    assert by_key["triage"]["counted"] == 0
+    assert r.json()["total"] == sum(g["counted"] for g in by_key.values())
 
 
 async def test_a_slow_group_times_out_alone(env, monkeypatch) -> None:
@@ -465,8 +479,7 @@ async def test_e2e_fixture_follows_the_contract(env) -> None:
                 r["title"], r["nav"], r["needs_action"]), f["key"]
             if r["link"]:
                 assert f["link"] == r["link"], f["key"]
-    assert fixture["total"] == sum(g["count"] for g in fixture["groups"]
-                                   if g["needs_action"] and not g["error"])
+    assert fixture["total"] == sum(g["counted"] for g in fixture["groups"])
 
 
 async def test_a_sourceless_failure_is_resolved_per_notebook(env) -> None:

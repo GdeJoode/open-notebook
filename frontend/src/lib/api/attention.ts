@@ -34,13 +34,19 @@ export interface AttentionGroup {
   items: AttentionItem[]
   /** Set when the group failed or timed out; the rest still answered. */
   error?: string | null
+  /**
+   * The part of `count` that goes into `total` and the badges: a paused
+   * extraction or failed job whose source a source group already lists is
+   * not counted twice. 0 for a failed group or one that needs no action.
+   */
+  counted: number
 }
 
 export interface AttentionReport {
   /** Server time of the read; stored as "last seen" when marked as seen. */
   generated_at: string
   since?: string | null
-  /** Sum of the counts of the groups that need action and did not fail. */
+  /** Sum of the groups' `counted`: each thing to act on once. */
   total: number
   groups: AttentionGroup[]
   /** What arrived after `since`; empty without it. */

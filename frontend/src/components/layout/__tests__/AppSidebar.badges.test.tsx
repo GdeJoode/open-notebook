@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * WB.1: the sidebar's Werkbak entry carries the report's total, and each entry
- * the sum of the groups whose `nav` it is.
+ * the sum of `counted` of the groups whose `nav` it is.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
@@ -44,11 +44,11 @@ describe('sidebar badges', () => {
     report.data = REPORT
     render(<AppSidebar />)
     expect(screen.getByRole('link', { name: /Werkbak/ }).getAttribute('href')).toBe('/')
-    expect(badge('Werkbak')).toBe('1258 need you')
+    expect(badge('Werkbak')).toBe('1257 need you')
     // gated 1 + stopped 2 (failed is 0; "new sources" asks nothing)
     expect(badge('Sources')).toBe('3 need you')
-    // paused 1 + proposals 3
-    expect(badge('Notebooks')).toBe('4 need you')
+    // proposals 3; the paused extraction is its gated source's (counted 0)
+    expect(badge('Notebooks')).toBe('3 need you')
     // triage 1238; merge candidates failed (count 0)
     expect(badge('Knowledge Graph')).toBe('1238 need you')
     expect(badge('Ontologies')).toBe('12 need you')

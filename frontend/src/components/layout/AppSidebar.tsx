@@ -98,15 +98,15 @@ export function AppSidebar() {
   const [notebookDialogOpen, setNotebookDialogOpen] = useState(false)
   const [podcastDialogOpen, setPodcastDialogOpen] = useState(false)
 
-  // WB.1: the Werkbak's total, and per entry the groups whose `nav` it is
-  // (every group with a `nav` needs action; a failed group counts 0).
+  // WB.1: the Werkbak's total, and per entry the `counted` of the groups
+  // whose `nav` it is (each thing to act on once).
   const { data: attention } = useAttention()
   const badgeFor = (href: string): number => {
     if (!attention) return 0
     if (href === werkbak.href) return attention.total
     return attention.groups
       .filter((g) => g.nav === href)
-      .reduce((sum, g) => sum + g.count, 0)
+      .reduce((sum, g) => sum + g.counted, 0)
   }
 
   const renderItem = (item: { name: string; href: string; icon: LucideIcon }) => {

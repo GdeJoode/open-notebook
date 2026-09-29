@@ -69,7 +69,11 @@ describe('Werkbak', () => {
     // The gated source links to the Schema tab where its proposal is accepted.
     expect(screen.getByTestId('werkbak-item-source:gated1').getAttribute('href'))
       .toBe('/notebooks/notebook%3Alive/schema')
-    expect(screen.getByRole('heading', { name: /Needs you/ }).textContent).toContain('(1258)')
+    expect(screen.getByRole('heading', { name: /Needs you/ }).textContent).toContain('(1257)')
+    // Its source is listed as waiting for review: shown, not counted again.
+    expect(screen.getByTestId('werkbak-elsewhere-extraction_paused').textContent)
+      .toBe('1 already counted with their source')
+    expect(screen.queryByTestId('werkbak-elsewhere-schema_proposals')).toBeNull()
   })
 
   it('a failed group shows its error and no count; the others still render', async () => {

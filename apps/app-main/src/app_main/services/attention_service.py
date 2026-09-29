@@ -22,7 +22,7 @@ from urllib.parse import quote
 
 from job_queue.repository import JobRepository
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 from shared.models.jobs import Job
 from shared.types.enums import JobStatus, JobType, ProcessingStage
 from surrealdb_service.repositories.notebook_schema import NotebookSchemaRepository
@@ -62,9 +62,17 @@ class AttentionGroup(BaseModel):
     """One Werkbak card: a count, the top items, and where to resolve them.
 
     ``nav`` is the sidebar entry the group belongs to (its badge sums the
-    groups with that ``nav``). ``needs_action`` is false for information that
-    asks nothing of the owner (jobs in progress, arrivals); those groups are
-    left out of ``total`` and the badges.
+    ``counted`` of the groups with that ``nav``). ``needs_action`` is false
+    for information that asks nothing of the owner (jobs in progress,
+    arrivals).
+
+    ``count`` is the group's own count, as its page shows it. ``counted`` is
+    the part that goes into ``total`` and the badges, where each thing to act
+    on counts once. A source listed in a source group (failed, waiting for a
+    review, stopped) owns its paused extraction and its failed jobs: those
+    are in ``count`` but not in ``counted``. Pass-1 proposals are counted in
+    full: each is a decision of its own, while the gated source waits on it.
+    A group that failed, or that needs no action, counts 0.
     """
 
     key: str
@@ -77,6 +85,12 @@ class AttentionGroup(BaseModel):
     detail: Optional[str] = None
     items: List[AttentionItem] = Field(default_factory=list)
     error: Optional[str] = None
+    counted: int = 0
+
+    # The sources a source group lists (it owns them), and for the groups a
+    # source group can own, the source of each counted unit.
+    _owns: set = PrivateAttr(default_factory=set)
+    _unit_sources: List[Optional[str]] = PrivateAttr(default_factory=list)
 
 
 class AttentionReport(BaseModel):
@@ -159,6 +173,25 @@ def _stopped_reason(row: Dict[str, Any]) -> str:
         # (on the source page) or a delete moves it.
         return f"No text extracted (at {stage}): reprocess or delete"
     return f"Stopped at {stage}"
+
+
+# The groups whose units a source group can own (see ``AttentionGroup``).
+_OWNED_BY_SOURCES = {"extraction_paused", "jobs_failed"}
+
+
+def _count_once(groups: List[AttentionGroup]) -> None:
+    """Set each group's ``counted``: its count less what a source group owns."""
+    owned: set = set()
+    for g in groups:
+        if not g.error:
+            owned |= g._owns
+    for g in groups:
+        if g.error or not g.needs_action:
+            g.counted = 0
+        elif g.key in _OWNED_BY_SOURCES:
+            g.counted = sum(1 for sid in g._unit_sources if sid not in owned)
+        else:
+            g.counted = g.count
 
 
 def _utc(value: datetime) -> datetime:
@@ -245,10 +278,11 @@ class AttentionService:
                     task.exception()  # retrieved: a failure is on its groups
 
         groups = [g for g, _ in specs]
+        _count_once(groups)
         return AttentionReport(
             generated_at=now.isoformat(),
             since=since.isoformat() if since else None,
-            total=sum(g.count for g in groups if g.needs_action and not g.error),
+            total=sum(g.counted for g in groups),
             groups=groups,
             arrived=[g for g, _ in arrived_specs],
         )
@@ -294,6 +328,7 @@ class AttentionService:
         stage = ProcessingStage.FAILED.value
         rows = await self.source_repo.list_by_stage([stage])
         group.count = len(rows)
+        group._owns = {str(r["id"]) for r in rows}
         group.link = f"/sources?stage={stage}"
         group.items = [
             _source_item(r, "Failed", source_link(r["id"]), r.get("updated"))
@@ -305,6 +340,7 @@ class AttentionService:
         stage = ProcessingStage.AWAITING_SCHEMA_REVIEW.value
         rows = await self.source_repo.list_by_stage([stage])
         group.count = len(rows)
+        group._owns = {str(r["id"]) for r in rows}
         group.link = f"/sources?stage={stage}"
         top = rows[:ITEM_LIMIT]
         # The proposal that gates a source is accepted on the Schema tab of the
@@ -332,6 +368,7 @@ class AttentionService:
             self.source_repo, unfinished=await _shared(unfinished), now=now
         )
         group.count = len(rows)
+        group._owns = {str(r["id"]) for r in rows}
         group.link = "/sources?stalled=true"
         group.detail = (
             f"Short of complete, with no job running, for over "
@@ -361,6 +398,7 @@ class AttentionService:
                   for nb in nbs)
             )
             items = [(nb, len(jobs)) for nb, jobs in zip(nbs, per_notebook) if jobs]
+            group._unit_sources = [j.source_id for jobs in per_notebook for j in jobs]
         items.sort(key=lambda x: -x[1])
         group.count = sum(n for _, n in items)
         group.items = [
@@ -470,6 +508,7 @@ class AttentionService:
     async def _jobs_failed(self, group: AttentionGroup) -> None:
         jobs = await self.job_repo.list_unresolved_failures()
         group.count = len(jobs)
+        group._unit_sources = [j.source_id for j in jobs]
         group.detail = "Not re-run since"
         group.items = [
             _job_item(j, (j.error_message or "Failed")[:160], j.completed_at or j.created)
