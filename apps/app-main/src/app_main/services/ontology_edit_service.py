@@ -36,6 +36,7 @@ import weakref
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from ontology_manager.canonical_bridge import _find_definition
 from ontology_manager.registry import get_ontology_registry
 from ontology_manager.schema import (
     EntityTypeDefinition,
@@ -82,6 +83,18 @@ class OntologyEditError(Exception):
 
 def _findings(findings) -> List[Dict[str, Any]]:
     return [f.__dict__ for f in findings]
+
+
+def defined_in(ontologies: Dict[str, Ontology], type_name: str) -> List[Dict[str, str]]:
+    """Every ontology whose OWN content defines ``type_name``, by name or alias,
+    matched as typing matches a label (``canonical_bridge._find_definition``:
+    case-insensitive, name or alias). ``type`` is the defining type's name."""
+    out: List[Dict[str, str]] = []
+    for name in sorted(ontologies):
+        definition = _find_definition(type_name, [ontologies[name]])
+        if definition is not None:
+            out.append({"ontology": name, "type": definition.name})
+    return out
 
 
 class OntologyEditService:
@@ -293,8 +306,13 @@ class OntologyEditService:
         own = active.get(name)
         if own is None:
             raise OntologyEditError(404, f"Ontology '{name}' not found")
-        if type_name in own.entity_types:
-            raise OntologyEditError(409, f"'{name}' already defines '{type_name}'")
+        # A second definition of a name typing already resolves would make the
+        # type depend on which one is found first (OE.5 review M3).
+        existing = defined_in(active, type_name)
+        if existing:
+            raise OntologyEditError(409, {
+                "message": f"'{type_name}' is already defined in the shared ontologies",
+                "defined_in": existing})
         try:
             definition = EntityTypeDefinition(**{**fields, "name": type_name})
         except Exception as exc:
@@ -357,4 +375,4 @@ class OntologyEditService:
         return active.to_yaml_string()
 
 
-__all__ = ["OntologyEditError", "OntologyEditService"]
+__all__ = ["OntologyEditError", "OntologyEditService", "defined_in"]

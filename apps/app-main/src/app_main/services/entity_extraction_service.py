@@ -27,6 +27,7 @@ from ontology_extraction.multi_schema_orchestrator import (
     detect_applicable_schemas,
 )
 from ontology_extraction.workflow import ExtractionWorkflow
+from ontology_manager.canonical_bridge import _find_definition
 from shared.config_coherence import ConfigurationError
 from shared.services.metrics import record_metric
 from surrealdb_service.connection import execute_query
@@ -1000,8 +1001,15 @@ class EntityExtractionService:
         notebook_schema_repo: "NotebookSchemaRepository",
         pass1_repo: "Pass1ResultRepository",
         source_id: str = "",
+        shared_ontologies: Optional[List["Ontology"]] = None,
     ) -> None:
         """Move Pass 1's findings to where a curator can act on them (PC.1).
+
+        OE.5 (review M3): a proposal whose name (or an alias of it) one of the
+        ``shared_ontologies`` already defines, matched as typing matches, is not
+        queued: typing already resolves it, and accepting it would publish a
+        second definition. Pass 1 proposes against the SELECTED ontologies only,
+        so this is common.
 
         Pass 1 already worked and was already persisted to ``pass1_results``. What
         did not happen is the step that makes it ACTIONABLE:
@@ -1023,6 +1031,12 @@ class EntityExtractionService:
         """
         metadata = getattr(result, "metadata", None) or {}
         proposals = metadata.get("proposed_extensions") or []
+        if shared_ontologies:
+            proposals = [
+                p for p in proposals
+                if not isinstance(p, dict)
+                or _find_definition(str(p.get("type_name") or ""), shared_ontologies) is None
+            ]
 
         try:
             if proposals:
@@ -1659,7 +1673,8 @@ class EntityExtractionService:
             pass2_token_budget=self._pass2_token_budget,
         )
         await self._record_pass1_outcome(
-            result, notebook_id, notebook_schema_repo, pass1_repo, source_id
+            result, notebook_id, notebook_schema_repo, pass1_repo, source_id,
+            shared_ontologies=candidate_ontologies,
         )
         return result
 

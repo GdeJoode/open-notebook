@@ -607,6 +607,9 @@ class AcceptTargetResponse(BaseModel):
     parent_type: Optional[str] = None
     default_ontology: str
     ontologies: List[str] = Field(default_factory=list)
+    # Where the name (or an alias of it) is already a shared type: the
+    # proposal is then marked as covered, not accepted (OE.5 review M3).
+    defined_in: List[Dict[str, str]] = Field(default_factory=list)
 
 
 class AcceptExtensionResponse(BaseModel):
@@ -861,6 +864,36 @@ async def accept_pending_extension(
     return AcceptExtensionResponse(
         notebook_schema=await _schema_to_response(notebook_id, updated),
         published=published,
+    )
+
+
+@router.post(
+    "/schema/extensions/{type_name}/covered",
+    response_model=AcceptExtensionResponse,
+    responses={
+        404: {"description": "Notebook, schema row or proposal not found."},
+        409: {"description": "No shared ontology defines the name."},
+    },
+)
+async def mark_extension_covered(
+    notebook_id: str,
+    type_name: str,
+    notebook_service: NotebookService = Depends(get_notebook_service),
+    edit_service: SchemaEditService = Depends(get_schema_edit_service),
+) -> AcceptExtensionResponse:
+    """Take out a proposal the shared ontologies already define: recorded as
+    accepted with the defining ontology; nothing is published and no
+    rejection is recorded."""
+    await _ensure_notebook_exists(notebook_id, notebook_service)
+    try:
+        updated = await edit_service.mark_covered(notebook_id, type_name)
+    except (NotebookSchemaNotFoundError, UnknownExtensionError) as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except OntologyEditError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
+    return AcceptExtensionResponse(
+        notebook_schema=await _schema_to_response(notebook_id, updated),
+        published=None,
     )
 
 

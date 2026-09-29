@@ -159,6 +159,29 @@ class TestAcceptExtension:
         assert [e["type_name"] for e in state["current"].pending_extensions] == ["Cohort"]
 
     @pytest.mark.asyncio
+    async def test_the_queue_is_re_read_after_the_publish(
+        self, service, schema_repo, editor
+    ) -> None:
+        """Review m5: a proposal merged, and one rejected from another tab,
+        while the publish ran are kept as they are now."""
+        state = _bind_state(schema_repo, _make_schema(pending=[
+            {"type_name": "Cohort"}, {"type_name": "Gone"}]))
+
+        async def publish(*_a, **_k):
+            current = state["current"]
+            current.pending_extensions = [
+                e for e in current.pending_extensions if e["type_name"] != "Gone"
+            ] + [{"type_name": "Late"}]
+            current.rejected_extensions = ["Gone"]
+            return {"name": "scholarly", "version": "1.0+t", "warnings": [], "retype": {}}
+
+        editor.publish_new_entity_type.side_effect = publish
+        result, _ = await service.accept_extension(NOTEBOOK_ID, "Cohort", "scholarly")
+        assert [e["type_name"] for e in result.pending_extensions] == ["Late"]
+        assert result.rejected_extensions == ["Gone"]
+        assert [e["type_name"] for e in result.accepted_extensions] == ["Cohort"]
+
+    @pytest.mark.asyncio
     async def test_accept_is_idempotent_when_already_accepted(
         self, service, schema_repo, event_repo, editor
     ) -> None:
@@ -352,6 +375,12 @@ async def live(live_surrealdb, monkeypatch):
              "parent_type": "Grant", "rationale": "a regional fund"},
             {"extension_id": "pass1::zwerfbegrip", "type_name": "Zwerfbegrip",
              "parent_type": "Nergens"},
+            # Already shared types (review M3): `deals` defines Project;
+            # `government` defines Gemeente; `general`'s Topic has alias Theme.
+            {"extension_id": "pass1::project", "type_name": "Project", "parent_type": "Deal"},
+            {"extension_id": "pass1::gemeente", "type_name": "Gemeente",
+             "parent_type": "Organization"},
+            {"extension_id": "pass1::theme", "type_name": "theme", "parent_type": "Concept"},
         ],
     ))
     editor = OntologyEditService()
@@ -399,7 +428,8 @@ async def test_an_accepted_proposal_is_published_and_types_everywhere(live):
 
     row, published = await service.accept_extension("notebook:oe5", "Streekfonds", "deals")
     assert await _typed("Streekfonds") == "grant"
-    assert [e["type_name"] for e in row.pending_extensions] == ["Zwerfbegrip"]
+    assert [e["type_name"] for e in row.pending_extensions] == [
+        "Zwerfbegrip", "Project", "Gemeente", "theme"]
     assert row.accepted_extensions[-1]["published_version"] == published["version"]
     from ontology_manager.registry import get_ontology_registry
 
@@ -422,7 +452,7 @@ async def test_a_blocking_proposal_is_refused_and_nothing_is_stored(live):
     assert any(f["severity"] == "block" for f in refused.value.detail["findings"])
     assert await _stored() == ([], [])
     row = await repo.get_by_notebook("notebook:oe5")
-    assert [e["type_name"] for e in row.pending_extensions] == ["Streekfonds", "Zwerfbegrip"]
+    assert [e["type_name"] for e in row.pending_extensions][:2] == ["Streekfonds", "Zwerfbegrip"]
     assert row.accepted_extensions == []
 
 
@@ -439,4 +469,49 @@ async def test_an_open_draft_refuses_the_accept_and_nothing_is_stored(live):
     assert versions == [] and len(drafts) == 1
     assert "Streekfonds" not in (await editor.get_draft("deals"))["ontology"].entity_types
     row = await repo.get_by_notebook("notebook:oe5")
-    assert [e["type_name"] for e in row.pending_extensions] == ["Streekfonds", "Zwerfbegrip"]
+    assert [e["type_name"] for e in row.pending_extensions][:2] == ["Streekfonds", "Zwerfbegrip"]
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name, into, where", [
+    # (a) the chosen ontology already defines it
+    ("Project", "deals", {"ontology": "deals", "type": "Project"}),
+    # (b) another ontology defines it, by name and by alias (lowercase)
+    ("Gemeente", "deals", {"ontology": "government", "type": "Gemeente"}),
+    ("theme", "deals", {"ontology": "general", "type": "Topic"}),
+])
+async def test_a_proposal_already_shared_is_not_published_again(live, name, into, where):
+    """OE.5 review M3: Accept refuses a second definition (409 `defined_in`),
+    the target and the preview say where it is defined, nothing is stored."""
+    service, _editor, repo = live
+    target = await service.accept_target("notebook:oe5", name)
+    assert where in target["defined_in"]
+    for attempt in (service.preview_accept, service.accept_extension):
+        with pytest.raises(OntologyEditError) as refused:
+            await attempt("notebook:oe5", name, into)
+        assert refused.value.status == 409
+        assert where in refused.value.detail["defined_in"]
+    assert await _stored() == ([], [])
+    row = await repo.get_by_notebook("notebook:oe5")
+    assert name in [e["type_name"] for e in row.pending_extensions]
+
+
+@pytest.mark.requires_docker
+@pytest.mark.asyncio
+async def test_mark_covered_takes_it_out_as_accepted_without_a_rejection(live):
+    service, _editor, repo = live
+    row = await service.mark_covered("notebook:oe5", "Gemeente")
+    assert "Gemeente" not in [e["type_name"] for e in row.pending_extensions]
+    [record] = [e for e in row.accepted_extensions if e["type_name"] == "Gemeente"]
+    assert record["covered"] is True
+    assert record["published_to"] == "government"
+    assert record["published_version"]
+    assert row.rejected_extensions == []
+    assert await _stored() == ([], [])
+    # The next document proposing it does not re-queue it.
+    assert await repo.merge_pending_extensions("notebook:oe5", [{"type_name": "gemeente"}]) == 0
+    # A name no shared ontology defines cannot be marked covered.
+    with pytest.raises(OntologyEditError) as refused:
+        await service.mark_covered("notebook:oe5", "Streekfonds")
+    assert refused.value.status == 409

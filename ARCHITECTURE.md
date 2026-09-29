@@ -120,7 +120,7 @@ and three new fields on `entity`. Migration files live in `migrations/`:
 | Table / Field | Migration | Purpose | Owner |
 |---|---|---|---|
 | `entity.type_tags` / `entity.primary_type` | 44 | Multi-schema type-tagging on existing entities; `type_tags` accumulates via union, `primary_type` set from the highest-confidence pass | B.1a |
-| `notebook_schema` | 45 | Per-notebook ontology-evolution state (base ontology, accepted/pending extensions, soft-delete `excluded_types`, review-required toggle) | B.1b |
+| `notebook_schema` | 45 | Per-notebook Pass-1 proposal queue (pending extensions; accepted ones are published to the shared ontologies and kept here as history, OE.5), declared base ontology, coverage and review-required toggle. No per-notebook ontology edits since OE.5; the stored `excluded_types` is unread | B.1b |
 | `pass1_results` | 45 | Append-only first-pass LLM schema-validation output per source (coverage_pct, alternative_schemas, proposed_extensions) | B.1b |
 | `notebook_event` | 46 | Shared append-only domain-event log per notebook (`schema_changed`, `extension_suggested`, `schema_mismatch`) consumed by the soft-nudge banner and Track G5 webhooks | B.3b |
 | `metrics` | 47 | Always-on extraction telemetry (composite index on `(event_type, created_at)`, FLEXIBLE payload, env-toggle opt-out) | B.4 |

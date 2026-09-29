@@ -11,6 +11,10 @@ ontologies themselves are SHARED by every notebook (owner, 2026-09-28; OE-D2
   refuses it (422, nothing stored), and it is previewed first with
   ``preview_accept``. On success the proposal leaves the queue and is recorded
   in ``accepted_extensions`` with the ontology and version it was published to.
+* ``mark_covered`` takes out a proposal the shared ontologies already define
+  (by name or alias, as typing matches): recorded as accepted with the
+  defining ontology, nothing published, no rejection. Accept refuses such a
+  proposal (409 ``defined_in``) instead of publishing a second definition.
 * ``reject_extension`` drops it and remembers the "no" (PC.5).
 
 ``accepted_extensions`` is the queue's history. Since OE.5 nothing reads it for
@@ -37,7 +41,11 @@ from surrealdb_service.repositories.notebook_schema import (
     record_rejection,
 )
 
-from app_main.services.ontology_edit_service import OntologyEditService
+from app_main.services.ontology_edit_service import (
+    OntologyEditError,
+    OntologyEditService,
+    defined_in,
+)
 from app_main.services.ontology_preview_service import load_own_ontologies
 
 SCHEMA_CHANGED_EVENT_TYPE = "schema_changed"
@@ -200,6 +208,9 @@ class SchemaEditService:
             "parent_type": parent,
             "default_ontology": default_ontology(ontologies, parent),
             "ontologies": sorted(ontologies),
+            # Where the proposed name is already a shared type (review M3):
+            # then it is not accepted but marked as covered.
+            "defined_in": defined_in(ontologies, type_name),
         }
 
     async def preview_accept(
@@ -233,7 +244,7 @@ class SchemaEditService:
         queue is left as it was.
         """
         schema = await self._load_or_raise(notebook_id)
-        matched, remaining = self._pending(schema, type_name)
+        matched, _ = self._pending(schema, type_name)
         if matched is None:
             if self._already_accepted(schema, type_name):
                 return schema, None
@@ -246,8 +257,10 @@ class SchemaEditService:
             ontology, type_name, fields,
             note=f"accepted from {notebook_id}'s Pass-1 proposals",
         )
-        schema.pending_extensions = remaining
-        schema.accepted_extensions.append({
+        # Re-read: the publish takes a while, and proposals merged or decided
+        # meanwhile must not be overwritten (review m5). Only this proposal
+        # moves.
+        schema = await self._dequeue(notebook_id, type_name, {
             **matched,
             "parent_type": fields["parent_type"],
             "published_to": ontology,
@@ -265,6 +278,59 @@ class SchemaEditService:
             },
         )
         return updated, published
+
+    async def _dequeue(
+        self, notebook_id: str, type_name: str, record: Dict[str, Any]
+    ) -> NotebookSchema:
+        """A FRESH read of the row with only ``type_name`` moved from the queue
+        into ``accepted_extensions`` as ``record``."""
+        schema = await self._load_or_raise(notebook_id)
+        schema.pending_extensions = [
+            e for e in schema.pending_extensions if e.get("type_name") != type_name
+        ]
+        schema.accepted_extensions.append(record)
+        return schema
+
+    async def mark_covered(
+        self, notebook_id: str, type_name: str
+    ) -> NotebookSchema:
+        """Take a proposal the shared ontologies already define out of the
+        queue, as accepted, without publishing anything.
+
+        ``published_to`` is the ontology that introduces the name (the
+        :func:`default_ontology` rule over its definitions), ``published_version``
+        its active version, ``covered`` marks that nothing was published. Not a
+        rejection: nothing goes to ``rejected_extensions``. 409 when no shared
+        ontology defines the name (then it is accepted or rejected instead).
+        """
+        schema = await self._load_or_raise(notebook_id)
+        matched, _ = self._pending(schema, type_name)
+        if matched is None:
+            if self._already_accepted(schema, type_name):
+                return schema
+            raise UnknownExtensionError(
+                f"No pending or accepted extension named {type_name!r}"
+            )
+        ontologies = await load_own_ontologies()
+        existing = defined_in(ontologies, type_name)
+        if not existing:
+            raise OntologyEditError(409, (
+                f"'{type_name}' is not defined in any shared ontology; accept or "
+                "reject it"))
+        covered_by = default_ontology(
+            {e["ontology"]: ontologies[e["ontology"]] for e in existing}, type_name
+        )
+        schema = await self._dequeue(notebook_id, type_name, {
+            **matched,
+            "published_to": covered_by,
+            "published_version": ontologies[covered_by].metadata.version,
+            "covered": True,
+        })
+        return await self._persist(
+            schema,
+            notebook_id,
+            {"op": "mark_covered", "type_name": type_name, "ontology": covered_by},
+        )
 
     # ------------------------------------------------------------------
     # Reject

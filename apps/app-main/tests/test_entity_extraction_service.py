@@ -2054,6 +2054,32 @@ class TestTheSoftNudgeReachesItsBanner:
         assert payload["source_id"] == "source:test"
 
 
+@pytest.mark.asyncio
+async def test_a_proposal_the_shared_ontologies_define_is_not_queued(
+    base_source_repo, notebook_schema_repo_fixture, pass1_repo_fixture
+):
+    """OE.5 review M3: Pass 1 proposes against the SELECTED ontologies, so it
+    proposes types another shared ontology already defines. Those are typed
+    already and are not queued; matched by name or alias, as typing matches."""
+    from app_main.services.entity_persistence_service import load_typing_ontologies
+
+    notebook_schema_repo_fixture.merge_pending_extensions = AsyncMock(return_value=1)
+    notebook_schema_repo_fixture.set_coverage_pct = AsyncMock(return_value=True)
+    pass1_repo_fixture.list_by_notebook = AsyncMock(return_value=[])
+    svc = EntityExtractionService(
+        source_repo=base_source_repo, notebook_schema_repo=notebook_schema_repo_fixture,
+        pass1_repo=pass1_repo_fixture, notebook_event_repo=AsyncMock(),
+    )
+    result = ExtractionResult(entities=[], relations=[], metadata={"proposed_extensions": [
+        {"type_name": "Gemeente"}, {"type_name": "theme"}, {"type_name": "Streekfonds"}]})
+    await svc._record_pass1_outcome(
+        result, "notebook:abc", notebook_schema_repo_fixture, pass1_repo_fixture,
+        "source:t", shared_ontologies=await load_typing_ontologies(),
+    )
+    queued = notebook_schema_repo_fixture.merge_pending_extensions.await_args.args[1]
+    assert [p["type_name"] for p in queued] == ["Streekfonds"]
+
+
 class TestApplicabilitySample:
     """PC.1 — what the schema detector is allowed to see.
 
