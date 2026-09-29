@@ -27,6 +27,7 @@ from job_queue.repository import JobRepository
 from shared.models.notebook_schema import NotebookSchema
 from shared.types.enums import JobStatus
 from surrealdb_service.repositories.notebook_schema import NotebookSchemaRepository
+from surrealdb_service.repositories.source import SourceRepository
 
 from app_main.api.rate_limit import limiter
 from app_main.api.routers import (
@@ -514,3 +515,22 @@ async def test_a_sourceless_failure_is_resolved_per_notebook(env) -> None:
         body = (await c.get("/api/attention")).json()
     failed = next(g for g in body["groups"] if g["key"] == "jobs_failed")
     assert [i["link"] for i in failed["items"]] == [f"/notebooks/{quote(nb1, safe='')}"]
+
+
+async def test_a_failed_source_group_owns_nothing(env, monkeypatch) -> None:
+    """When the failed-sources read fails, its sources' failed jobs count in the
+    total again: nothing else lists them."""
+    await _seed()
+    original = SourceRepository.list_by_stage
+
+    async def failing(self, stages, updated_before=None):
+        if stages == ["failed"]:
+            raise RuntimeError("source table unreadable")
+        return await original(self, stages, updated_before=updated_before)
+
+    monkeypatch.setattr(SourceRepository, "list_by_stage", failing)
+    async with _client(_app()) as c:
+        body = (await c.get("/api/attention")).json()
+    by_key = {g["key"]: g for g in body["groups"]}
+    assert by_key["sources_failed"]["error"] == "source table unreadable"
+    assert by_key["jobs_failed"]["counted"] == 2
