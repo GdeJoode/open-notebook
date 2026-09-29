@@ -5,6 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from shared.retrieval import FusionWeights, get_preset
+from surrealdb_service.connection import DatabaseUnavailableError
 from surrealdb_service.repositories.source import ChunkRepository
 
 from app_main.api.routers.sources_files import _is_source_file_available
@@ -177,7 +178,7 @@ async def get_sources(
             )
 
         return response_list
-    except HTTPException:
+    except (HTTPException, DatabaseUnavailableError):
         raise
     except Exception as e:
         logger.error(f"Error fetching sources: {e}")
