@@ -2,11 +2,21 @@
  * The Werkbak report (WB.1), shared by the page and the sidebar badges: both
  * read the same query, keyed on the stored "last seen".
  *
- * The report is not cheap (merge candidates alone ~1 s on the live graph), so
- * the sidebar, mounted on every page, reads the cached report and does not
- * refetch on mount or focus. The Werkbak page (`fresh`) always reads it anew.
- * The mutations that resolve an item invalidate `ATTENTION_QUERY_KEY`.
+ * The report is not cheap (~1.2 s of server time on the live graph, mostly
+ * merge candidates), so the sidebar, mounted on every page, reads the cached
+ * report instead of refetching per navigation. The Werkbak page (`fresh`)
+ * always reads it anew, and the mutations that resolve an item invalidate
+ * `ATTENTION_QUERY_KEY`.
+ *
+ * What arrives from elsewhere (a source gated later, a failed job, an MCP
+ * upload) is picked up by a refresh every REFRESH_MS while the tab is
+ * visible, paused while it is hidden. 90 s keeps the badges within a minute
+ * and a half of the database at about 1 % of one server core per open tab;
+ * nothing here needs seconds. Coming back to a tab whose report is older than
+ * the stale time (5 min) refetches once on focus.
  */
+
+export const REFRESH_MS = 90 * 1000
 
 import { useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -27,7 +37,9 @@ export function useAttention({ fresh = false }: { fresh?: boolean } = {}) {
     queryFn: () => attentionApi.get(since),
     staleTime: 5 * 60 * 1000,
     refetchOnMount: fresh ? 'always' : false,
-    refetchOnWindowFocus: fresh,
+    refetchOnWindowFocus: true,
+    refetchInterval: REFRESH_MS,
+    refetchIntervalInBackground: false,
   })
   return { ...query, since }
 }

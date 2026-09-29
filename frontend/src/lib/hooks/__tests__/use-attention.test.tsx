@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 /**
- * WB.1 review: the sidebar (on every page) reads the cached report and does
- * not refetch on mount or focus, even once it is stale; the Werkbak page
- * reads it anew; a mutation that resolves an item (here a triage decision)
- * makes it read again.
+ * WB.1 review: the sidebar (on every page) reads the cached report instead of
+ * refetching per page, refreshes every 90 s while the tab is visible (not
+ * while hidden); the Werkbak page reads it anew; a mutation that resolves an
+ * item (here a triage decision) makes it read again.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react'
@@ -18,7 +18,7 @@ vi.mock('@/lib/api/attention', () => ({ attentionApi: { get } }))
 vi.mock('@/lib/api/triage', () => ({ triageApi: { decide } }))
 vi.mock('@/lib/hooks/use-toast', () => ({ useToast: () => ({ toast: vi.fn() }) }))
 
-import { useAttention } from '../use-attention'
+import { REFRESH_MS, useAttention } from '../use-attention'
 import { useDecideQueueRow } from '../use-triage'
 
 let client: QueryClient
@@ -53,15 +53,32 @@ describe('useAttention', () => {
     expect(get).toHaveBeenCalledTimes(1)
   })
 
-  it('the sidebar does not refetch on focus, even when the report is stale', async () => {
-    client.setQueryData(['attention', null], fixture, { updatedAt: Date.now() - 60 * 60 * 1000 })
-    render(<Badge />, { wrapper })
-    act(() => {
-      focusManager.setFocused(false)
-      focusManager.setFocused(true)
-    })
-    await new Promise((r) => setTimeout(r, 20))
-    expect(get).not.toHaveBeenCalled()
+  it('the sidebar refreshes every 90 s while visible, not while hidden', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<Badge />, { wrapper })
+      await act(() => vi.advanceTimersByTimeAsync(0))
+      expect(get).toHaveBeenCalledTimes(1)
+      await act(() => vi.advanceTimersByTimeAsync(REFRESH_MS - 1000))
+      expect(get).toHaveBeenCalledTimes(1)
+      await act(() => vi.advanceTimersByTimeAsync(1500))
+      expect(get).toHaveBeenCalledTimes(2)
+
+      // Hidden for 10 minutes: no refresh.
+      act(() => focusManager.setFocused(false))
+      await act(() => vi.advanceTimersByTimeAsync(10 * 60 * 1000))
+      expect(get).toHaveBeenCalledTimes(2)
+      // Back, with a report past its stale time: one read on focus, then the
+      // 90 s refresh again.
+      act(() => focusManager.setFocused(true))
+      await act(() => vi.advanceTimersByTimeAsync(0))
+      expect(get).toHaveBeenCalledTimes(3)
+      await act(() => vi.advanceTimersByTimeAsync(REFRESH_MS + 500))
+      expect(get).toHaveBeenCalledTimes(4)
+    } finally {
+      focusManager.setFocused(undefined)
+      vi.useRealTimers()
+    }
   })
 
   it('the Werkbak page reads anew when it opens', async () => {
