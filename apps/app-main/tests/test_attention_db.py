@@ -49,7 +49,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.requires_docker]
 
 _TABLES = (
     "source", "job", "notebook", "reference", "notebook_schema", "triage_queue",
-    "entity", "source_embedding", "source_insight",
+    "entity", "source_embedding", "source_insight", "chunk",
 )
 _CLEAN = " ".join(f"DELETE {t};" for t in _TABLES)
 
