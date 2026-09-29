@@ -33,3 +33,18 @@ def test_werkbak_lists_answer_503_when_the_pool_gives_up(monkeypatch, path):
     resp = TestClient(create_app()).get(path)
 
     assert resp.status_code == 503, resp.text
+
+
+def test_refused_database_is_503(monkeypatch):
+    """The real client against a port nothing listens on: the sign-in fails
+    with ConnectionRefusedError, which must reach the client as 503."""
+    import surrealdb_service.connection as conn
+    from surrealdb_service.config import SurrealDBConfig
+
+    monkeypatch.setattr(
+        conn, "_pool", ConnectionPool(config=SurrealDBConfig(url="ws://127.0.0.1:9/rpc"))
+    )
+
+    resp = TestClient(create_app()).get("/api/notebooks")
+
+    assert resp.status_code == 503, resp.text

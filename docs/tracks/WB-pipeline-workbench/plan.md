@@ -223,6 +223,93 @@ redo it.
 > - The `to_thread` test's last assert checks nothing; the thread-id assert is
 >   the guard.
 
+- **Post-merge regression fix** (branch `fix/db-cancel-safety`, 2026-09-29).
+  After the WB.1 rebuild, one `/api/attention` read timed out three groups,
+  logged `CancelledError` + `KeyError` from the SDK, and later page reads
+  got slower each time (sources 30 s, SurrealDB idle). Reproduced with the
+  real SDK on a testcontainers SurrealDB. Three causes:
+  - SDK 1.0.6 cannot take a cancel. When a deadline lands in the loop turn
+    that reads the response, the receive task sets the result on the
+    cancelled future and dies of the `InvalidStateError` (logged at debug
+    only). The caller gets `KeyError` instead of `CancelledError`, and the
+    pool took that for a statement error and pooled a connection nobody
+    reads any more. The next checkout waited out the 5 s ping on it. A
+    socket lost mid-query surfaces as the same `KeyError` (m2 above assumed
+    a `CancelledError`; the fake was wrong). Fix: every query and ping runs
+    in its own task behind `asyncio.shield`, and so does each sign-in as a
+    whole (see review rounds 1 and 2), so only the wait is cancelled. The
+    pool still closes the connection after a cancel, which also stops the
+    statement on the server (measured). A connection goes back only while
+    its receive task runs; checkout drops a dead one without pinging it. A
+    request or sign-in on a lost or refused socket raises
+    `DatabaseUnavailableError`. This also settles carried minor 1.
+  - The reuse ping was `SELECT 1`, a parse error on SurrealDB v2. So every
+    checkout closed every idle connection and signed in anew (28 sign-ins
+    per report). The pool never reused a connection. Now `RETURN true`.
+  - One report checks out 13–14 connections at once (two notebooks); the
+    pool had 10. The heavy groups (schema proposals, merge candidates,
+    retype: the most sequential reads) queued for slots behind the other
+    groups' reads, each read paying a sign-in, and hit the 8 s deadline on
+    a cold database. The pool is now 20. Cold reads remain slow on their
+    own: after an idle hour the first full read of entity embeddings took
+    up to 14.7 s and a count over `entity` 7.6 s (0.4 s and 0.02 s warm).
+  - Tests: `test_connection_cancel_live.py` (real SDK), two new tests in
+    `test_attention_db.py`, the fake in `test_connection_pool.py` now
+    follows the 1.0.6 contract. Each guard is mutation-checked, except
+    `test_many_mid_flight_cancels_then_normal_queries`: a smoke test that
+    hits the race only sometimes. The race test is the guard.
+  - **Review round 1** (REVISIONS_NEEDED, 1 major, 5 minors), all fixed:
+    - M1: the shielded sign-in outlived a `connect_timeout` or a cancelled
+      caller while still in its handshake, so the close found no socket and
+      the connection stayed open and signed in. Now an abandoned sign-in is
+      closed once it ends, and `close_all` ends pending sign-ins so their
+      connections close. Live tests with a 0.3 s handshake leave no receive
+      task behind. (Round 2 bounds its lifetime and its slot.)
+    - m2: SDK pinned to `==1.0.6`. A request the SDK cancels while the
+      caller was not cancelled raises `DatabaseUnavailableError`, and that
+      error never pools its connection. A client without `recv_task` is not
+      reused.
+    - m3: the `/api/config` probe comment no longer says the SDK cancels it.
+    - m4: the smoke test is labelled; the pool-demand test counts through
+      an `acquire` wrapper; the fake's hangs end on close and the fixture
+      checks no task is left pending.
+    - m5: the pool size comes from `SurrealDBConfig.pool_size` (default 20,
+      `SURREAL_POOL_SIZE`).
+  - **Review round 2** (REVISIONS_NEEDED, 1 major, 3 minors), all fixed:
+    - M1: round 1 released the slot when the caller gave up while the
+      sign-in went on for up to another `connect_timeout`: against a server
+      that never answers, 20 callers cut off after 50 ms with a pool of 2
+      left 11 sockets open at once. Now the sign-in task owns the caller's
+      slot until it has ended and its connection is closed, and
+      `connect_timeout` counts from its start: a sign-in lives at most
+      `connect_timeout`, and there are never more sign-ins than slots. New
+      callers wait for a slot within the checkout deadline and get a 503.
+    - m2: round 1 left sign-in errors untranslated (refused:
+      `ConnectionRefusedError`, lost mid-sign-in: `KeyError`, so 500). A
+      sign-in that fails for the connection's sake raises
+      `DatabaseUnavailableError` again; `/api/notebooks` against a refused
+      port answers 503.
+    - m3: `close_all` repeats until no abandoned sign-in is left, and one
+      abandoned on a closed pool is ended at once, so "Connection pool
+      closed" is true when it is logged.
+    - m4: `_current_task_cancelling` documents that a cancel swallowed
+      without `uncancel()` leaves the task "cancelling".
+
+> **Carried from the regression fix's review round 3 (approved; minors):**
+> 1. `close_all` can cancel a sign-in again while it is closing its own socket,
+>    cutting that close short (shutdown only).
+> 2. A sign-in that succeeds after its caller gave up is closed, not pooled: on
+>    a slow-but-alive DB (sign-ins longer than callers' deadlines) nothing warms
+>    the pool.
+> 3. `KeyError` is caught across all of `_authenticate`, so an SDK shape change
+>    would read as 503 rather than a bug (SDK pinned `==1.0.6`).
+> 4. Timing margins of ~100–150 ms in three pool tests may flake on a loaded
+>    host.
+> 5. The slot of an abandoned sign-in is held up to `connect_timeout` +
+>    `close_timeout`, not `connect_timeout` alone.
+> 6. A rejected login is a 500 on the API and "offline" with the SDK message on
+>    `/api/config`.
+
 **WB.1 — The Werkbak (attention inbox)** (~2d)
 - **Backend:** one `GET /api/attention` that counts and lists, across all
   notebooks:

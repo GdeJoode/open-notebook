@@ -4,7 +4,7 @@ SurrealDB connection management.
 
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+from typing import Any, AsyncGenerator, Awaitable, Dict, List, Optional, TypeVar, Union
 
 from loguru import logger
 from surrealdb import AsyncSurreal, RecordID
@@ -73,22 +73,76 @@ class DatabaseUnavailableError(RuntimeError):
 # server rejected arrives as a plain ``Exception`` from the SDK and leaves the
 # socket usable, so it is not listed here.
 _BROKEN_CONNECTION_ERRORS = (
+    DatabaseUnavailableError,
     asyncio.CancelledError,
     asyncio.TimeoutError,
     OSError,
     WebSocketException,
 )
 
+T = TypeVar("T")
+
+
+def _receiving(conn: AsyncSurreal) -> bool:
+    """True while the SDK's receive task reads the connection's socket.
+
+    That one task answers every request; once it has ended (the socket closed,
+    or it died of an error) nothing sent on the connection is answered again,
+    though the socket may still be open. ``recv_task`` is the SDK's private
+    attribute: a client without it (the HTTP one, another SDK version) counts
+    as not receiving, so it is closed after use rather than pooled blind.
+    """
+    task = getattr(conn, "recv_task", None)
+    return task is not None and not task.done()
+
 
 def _current_task_cancelling() -> bool:
     """True when the running task itself has been asked to cancel.
 
     ``Task.cancelling`` exists from Python 3.11; without it every
-    ``CancelledError`` is taken to be ours, which is the old behaviour.
+    ``CancelledError`` is taken to be ours. The count is only lowered by
+    ``Task.uncancel()``: a task that once swallowed a cancel without calling
+    it stays "cancelling" for the rest of its life, and a request the SDK
+    cancelled in it then surfaces as a cancel, not as unavailable.
     """
     task = asyncio.current_task()
     cancelling = getattr(task, "cancelling", None)
     return cancelling is None or cancelling() > 0
+
+
+def _discard_outcome(request: "asyncio.Future[Any]") -> None:
+    if not request.cancelled():
+        request.exception()
+
+
+async def _request(conn: AsyncSurreal, call: Awaitable[T]) -> T:
+    """Await an SDK request without letting a cancellation into the SDK.
+
+    SDK 1.0.6 cannot take one: when the response arrives in the loop turn the
+    cancel lands in, its receive task sets the result on the cancelled future,
+    dies of the ``InvalidStateError`` and fails every request on the
+    connection from then on, the cancelled one with a ``KeyError`` instead of
+    ``CancelledError``. So the request runs in a task of its own and only the
+    wait for it is cancelled. The pool then closes the connection, which ends
+    the request and stops the statement on the server.
+
+    A request that fails because the receive task ended (the socket was lost)
+    raises :class:`DatabaseUnavailableError`. So does a request the SDK
+    cancelled itself while our task was not cancelled (1.0.6 raises
+    ``KeyError`` there; an SDK that cancels pending requests would not).
+    """
+    request = asyncio.ensure_future(call)
+    try:
+        return await asyncio.shield(request)
+    except asyncio.CancelledError as e:
+        if request.cancelled() and not _current_task_cancelling():
+            raise DatabaseUnavailableError("SurrealDB connection lost") from e
+        request.add_done_callback(_discard_outcome)
+        raise
+    except Exception as e:
+        if _receiving(conn):
+            raise
+        raise DatabaseUnavailableError("SurrealDB connection lost") from e
 
 
 class ConnectionPool:
@@ -98,22 +152,30 @@ class ConnectionPool:
     Reuses connections across requests to avoid the overhead of
     opening and closing a connection per query.
 
-    A semaphore holds one permit per connection that exists or is being
-    created, so a failed or cancelled sign-in hands its permit back instead of
-    leaking a slot. Every wait is bounded: sign-in (``connect_timeout``), the
+    A semaphore holds one permit per connection checked out or being
+    created. A failed sign-in hands its permit back; one its caller gave up
+    on keeps it until it has ended and its connection is closed, so a
+    starved database never has more sign-ins than the pool has slots. Every
+    wait is bounded: a sign-in (``connect_timeout`` from its start), the
     liveness ping on reuse (``ping_timeout``), and the whole checkout,
     including the wait for a free slot (``acquire_timeout``).
+
+    A connection goes back to the pool only while its SDK receive task still
+    runs, and never after a cancelled or broken request. Requests go through
+    :func:`_request`, so a cancellation never reaches the SDK.
     """
 
     def __init__(
         self,
         config: Optional[SurrealDBConfig] = None,
-        max_size: int = 10,
+        max_size: Optional[int] = None,
         connect_timeout: Optional[float] = None,
         ping_timeout: float = 5.0,
         acquire_timeout: float = 30.0,
     ):
         self.config = config or get_config()
+        if max_size is None:
+            max_size = self.config.pool_size
         self._max_size = max_size
         self._pool: asyncio.Queue[AsyncSurreal] = asyncio.Queue(maxsize=max_size)
         self._slots = asyncio.Semaphore(max_size)
@@ -127,9 +189,34 @@ class ConnectionPool:
         self._close_timeout = 2.0
         # Set by close_all: connections handed back afterwards are closed.
         self._closed = False
+        # Closer of each abandoned sign-in -> that sign-in (``_close_when_done``).
+        self._closers: "Dict[asyncio.Task[None], asyncio.Future[AsyncSurreal]]" = {}
 
-    async def _create_connection(self) -> AsyncSurreal:
-        """Create and authenticate a new SurrealDB connection."""
+    async def _new_connection(self) -> AsyncSurreal:
+        """Sign in a new connection on the permit the caller holds.
+
+        The sign-in runs in a task of its own (shielded, for the reason given
+        at ``_request``) and owns the permit until it has ended: a caller that
+        stops waiting leaves it to finish or time out, after which
+        ``_close_when_done`` closes its connection and hands the permit back.
+        So abandoned sign-ins never outnumber the pool.
+        """
+        sign_in = asyncio.ensure_future(self._sign_in())
+        try:
+            return await asyncio.shield(sign_in)
+        except asyncio.CancelledError:
+            self._abandon(sign_in)
+            raise
+        except BaseException:
+            self._slots.release()
+            raise
+
+    async def _sign_in(self) -> AsyncSurreal:
+        """Open and sign in a connection within ``connect_timeout`` of the start.
+
+        A sign-in that fails for the connection's sake (refused, lost, too
+        slow) raises :class:`DatabaseUnavailableError`; its socket is closed.
+        """
         db = AsyncSurreal(self.config.url)
         try:
             await asyncio.wait_for(self._authenticate(db), self._connect_timeout)
@@ -138,6 +225,10 @@ class ConnectionPool:
             raise DatabaseUnavailableError(
                 f"SurrealDB sign-in did not finish within {self._connect_timeout}s"
             ) from e
+        except (OSError, WebSocketException, KeyError) as e:
+            # Refused, or the socket went mid-sign-in (1.0.6 raises KeyError).
+            await self._close_quietly(db)
+            raise DatabaseUnavailableError(f"SurrealDB sign-in failed: {e!r}") from e
         except BaseException:
             await self._close_quietly(db)
             raise
@@ -152,17 +243,33 @@ class ConnectionPool:
         )
         await db.use(self.config.namespace, self.config.database)
 
+    def _abandon(self, sign_in: "asyncio.Future[AsyncSurreal]") -> None:
+        if self._closed:
+            # close_all may already have ended the sign-ins it knew of.
+            sign_in.cancel()
+        closer = asyncio.ensure_future(self._close_when_done(sign_in))
+        self._closers[closer] = sign_in
+        closer.add_done_callback(lambda done: self._closers.pop(done, None))
+
+    async def _close_when_done(self, sign_in: "asyncio.Future[AsyncSurreal]") -> None:
+        """Close an abandoned sign-in's connection once it has ended, then
+        hand its permit back. A sign-in that failed closed its own."""
+        try:
+            db = await sign_in
+        except BaseException:
+            pass
+        else:
+            await self._close_quietly(db)
+        finally:
+            self._slots.release()
+
     async def _health_check(self, conn: AsyncSurreal) -> bool:
         """Check if a connection is still alive."""
         try:
-            await asyncio.wait_for(conn.query("SELECT 1"), self._ping_timeout)
+            await asyncio.wait_for(
+                _request(conn, conn.query("RETURN true")), self._ping_timeout
+            )
             return True
-        except asyncio.CancelledError:
-            if _current_task_cancelling():
-                raise
-            # The SDK cancels pending requests when the server closes the
-            # socket; nobody cancelled us, so the connection is dead.
-            return False
         except Exception:
             return False
 
@@ -190,6 +297,10 @@ class ConnectionPool:
         try:
             while not self._pool.empty():
                 candidate = self._pool.get_nowait()
+                if not _receiving(candidate):
+                    # A ping on it would wait out ``ping_timeout`` unanswered.
+                    await self._close_quietly(candidate)
+                    continue
                 try:
                     healthy = await self._health_check(candidate)
                 except BaseException:
@@ -200,10 +311,10 @@ class ConnectionPool:
                 if healthy:
                     return candidate
                 await self._close_quietly(candidate)
-            return await self._create_connection()
         except BaseException:
             self._slots.release()
             raise
+        return await self._new_connection()
 
     @asynccontextmanager
     async def acquire(self) -> AsyncGenerator[AsyncSurreal, None]:
@@ -212,14 +323,11 @@ class ConnectionPool:
         broken = False
         try:
             yield conn
-        except _BROKEN_CONNECTION_ERRORS as e:
+        except _BROKEN_CONNECTION_ERRORS:
             broken = True
-            if isinstance(e, asyncio.CancelledError) and not _current_task_cancelling():
-                # The SDK cancelled the query because the socket closed.
-                raise DatabaseUnavailableError("SurrealDB connection lost") from e
             raise
         finally:
-            keep = not broken and not self._closed
+            keep = not broken and not self._closed and _receiving(conn)
             if keep:
                 self._pool.put_nowait(conn)
             self._slots.release()
@@ -231,6 +339,14 @@ class ConnectionPool:
         self._closed = True
         while not self._pool.empty():
             await self._close_quietly(self._pool.get_nowait())
+        # Ending the sign-ins lets their closers close the connections now. (A
+        # closer cancelled before its first step would never run its close.)
+        # Sign-ins abandoned from here on are ended at once (``_abandon``).
+        while self._closers:
+            closers = list(self._closers.items())
+            for _, sign_in in closers:
+                sign_in.cancel()
+            await asyncio.gather(*(c for c, _ in closers), return_exceptions=True)
         logger.info("Connection pool closed")
 
 
@@ -276,7 +392,9 @@ async def execute_query(
     pool = get_pool(config)
     async with pool.acquire() as connection:
         try:
-            result = parse_record_ids(await connection.query(query, params))
+            result = parse_record_ids(
+                await _request(connection, connection.query(query, params))
+            )
             if isinstance(result, str):
                 raise RuntimeError(result)
             return result
@@ -333,7 +451,9 @@ async def execute_transaction(
     pool = get_pool(config)
     async with pool.acquire() as connection:
         try:
-            response = await connection.query_raw(query, params or {})
+            response = await _request(
+                connection, connection.query_raw(query, params or {})
+            )
         except Exception as e:
             logger.error(
                 f"Transaction failed: {query[:200]} params: {params}"

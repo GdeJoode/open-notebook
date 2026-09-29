@@ -11,7 +11,7 @@ hang, and a query raise or hang, the way the real client does.
 """
 
 import asyncio
-from typing import Any, List, Optional
+from typing import Any, AsyncIterator, Callable, List, Optional
 
 import pytest
 
@@ -39,11 +39,16 @@ class FakeSurreal:
         self.url = url
         self.closed = False
         self.signed_in = False
-        # The SDK's receive task ended (server closed the socket): it cancels
-        # every pending request future, so ``query`` raises CancelledError in
-        # a task nobody cancelled.
-        self.socket_gone = False
+        # The SDK's receive task, which answers every request. It ends when
+        # the socket is lost; SDK 1.0.6 then clears its request map, so a
+        # request fails with a ``KeyError`` on its own id.
+        self.recv_task: "asyncio.Future[None]" = (
+            asyncio.get_running_loop().create_future()
+        )
         server.clients.append(self)
+
+    def lose_socket(self) -> None:
+        self.recv_task.set_result(None)
 
     async def signin(self, vars: dict) -> str:
         if self.server.signin_mode == "raise":
@@ -59,30 +64,56 @@ class FakeSurreal:
     async def query(self, query: str, vars: Optional[dict] = None) -> Any:
         if self.closed:
             raise OSError("socket closed")
-        if self.socket_gone:
-            raise asyncio.CancelledError()
+        if self.recv_task.done():
+            raise KeyError("request-id")
         if self.server.query_mode == "hang":
-            await asyncio.Event().wait()
+            # Unanswered until the socket goes, as a real hang: closing the
+            # client ends it (the receive task stops, the request fails).
+            await asyncio.wait({self.recv_task})
+            raise KeyError("request-id")
         return [{"result": 1}]
 
     async def close(self) -> None:
         if self.server.close_mode == "hang":
             await asyncio.Event().wait()
         self.closed = True
+        if not self.recv_task.done():
+            self.recv_task.cancel()
+
+
+_POOLS: List[ConnectionPool] = []
 
 
 @pytest.fixture
-def server(monkeypatch) -> FakeServer:
+async def server(monkeypatch) -> AsyncIterator[FakeServer]:
     srv = FakeServer()
     monkeypatch.setattr(
         conn_mod, "AsyncSurreal", lambda url: FakeSurreal(srv, url)
     )
-    return srv
+    yield srv
+    # Shielded requests and abandoned sign-ins outlive the test body: end
+    # them the way the app does (close the pools and clients), then check
+    # nothing is left running.
+    srv.close_mode = "ok"
+    while _POOLS:
+        await _POOLS.pop().close_all()
+    for client in [c for c in srv.clients if not c.closed]:
+        await client.close()
+    await asyncio.sleep(0)
+    current = asyncio.current_task()
+    assert [t for t in asyncio.all_tasks() if t is not current and not t.done()] == []
 
 
 def _pool(**kwargs) -> ConnectionPool:
     cfg = SurrealDBConfig(url="ws://fake:1/rpc")
-    return ConnectionPool(config=cfg, **kwargs)
+    pool = ConnectionPool(config=cfg, **kwargs)
+    _POOLS.append(pool)
+    return pool
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+    while not condition():
+        await asyncio.sleep(0.01)
 
 
 async def _use_once(pool: ConnectionPool) -> FakeSurreal:
@@ -95,7 +126,7 @@ async def test_failed_signins_do_not_leak_slots(server):
     pool = _pool(max_size=2)
     server.signin_mode = "raise"
     for _ in range(5):
-        with pytest.raises(OSError):
+        with pytest.raises(DatabaseUnavailableError):
             await asyncio.wait_for(_use_once(pool), GUARD)
 
     server.signin_mode = "ok"
@@ -105,13 +136,14 @@ async def test_failed_signins_do_not_leak_slots(server):
 
 async def test_cancelled_signins_do_not_leak_slots(server):
     """The production path: a caller's timeout cancels a slow sign-in."""
-    pool = _pool(max_size=2)
+    pool = _pool(max_size=2, connect_timeout=0.2)
     server.signin_mode = "hang"
     for _ in range(5):
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(_use_once(pool), 0.05)
-    # The abandoned half-open clients are closed, not left dangling.
-    assert all(c.closed for c in server.clients)
+    # The abandoned half-open clients are closed once their sign-in is given
+    # up on (``connect_timeout``), not left dangling.
+    await asyncio.wait_for(_until(lambda: all(c.closed for c in server.clients)), GUARD)
 
     server.signin_mode = "ok"
     c = await asyncio.wait_for(_use_once(pool), GUARD)
@@ -234,11 +266,11 @@ async def test_checkout_cancelled_during_reuse_ping_closes_the_candidate(server)
     assert len(server.clients) == 1
 
 
-async def test_sdk_cancelled_ping_is_a_dead_candidate_not_an_abort(server):
+async def test_idle_connection_with_a_lost_socket_is_replaced(server):
     pool = _pool(max_size=2)
     first = await asyncio.wait_for(_use_once(pool), GUARD)
 
-    first.socket_gone = True
+    first.lose_socket()
     second = await asyncio.wait_for(_use_once(pool), GUARD)
 
     assert second is not first
@@ -246,12 +278,16 @@ async def test_sdk_cancelled_ping_is_a_dead_candidate_not_an_abort(server):
 
 
 async def test_whole_checkout_shares_one_deadline_slow_sign_in(server):
-    pool = _pool(max_size=1, connect_timeout=GUARD * 2, acquire_timeout=0.05)
+    pool = _pool(max_size=1, connect_timeout=0.5, acquire_timeout=0.05)
     server.signin_mode = "hang"
     with pytest.raises(DatabaseUnavailableError):
         await asyncio.wait_for(_use_once(pool), GUARD)
 
+    # The abandoned sign-in keeps the only slot until its connect_timeout.
     server.signin_mode = "ok"
+    with pytest.raises(DatabaseUnavailableError):
+        await asyncio.wait_for(_use_once(pool), GUARD)
+    await asyncio.sleep(0.5)
     await asyncio.wait_for(_use_once(pool), GUARD)
 
 
@@ -284,11 +320,117 @@ async def test_connection_returned_after_close_all_is_closed(server):
     assert pool._pool.empty()
 
 
-async def test_sdk_cancelled_query_in_a_request_is_unavailable_not_cancelled(server):
+async def test_socket_lost_during_a_query_is_unavailable(server):
     pool = _pool(max_size=2)
     with pytest.raises(DatabaseUnavailableError):
         async with pool.acquire() as c:
-            c.socket_gone = True
-            await c.query("SELECT * FROM source")
+            c.lose_socket()
+            await conn_mod._request(c, c.query("SELECT * FROM source"))
     assert c.closed
     await asyncio.wait_for(_use_once(pool), GUARD)
+
+
+async def test_a_sign_in_that_ends_after_its_deadline_is_closed(server, monkeypatch):
+    """A sign-in is shielded, so it goes on after the caller gave up on it; the
+    connection it opens is closed when it ends, not pooled or left open."""
+    gate = asyncio.Event()
+    signin = FakeSurreal.signin
+
+    async def slow_signin(self: FakeSurreal, vars: dict) -> str:
+        await gate.wait()
+        return await signin(self, vars)
+
+    monkeypatch.setattr(FakeSurreal, "signin", slow_signin)
+    pool = _pool(max_size=1, connect_timeout=GUARD)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_use_once(pool), 0.05)
+    abandoned = server.clients[0]
+    assert not abandoned.closed  # still signing in
+    gate.set()
+    await asyncio.wait_for(_until(lambda: abandoned.closed), GUARD)
+    assert abandoned.signed_in and pool._pool.empty()
+
+
+async def test_close_all_closes_a_sign_in_still_running(server):
+    pool = _pool(max_size=1, connect_timeout=GUARD * 10)
+    server.signin_mode = "hang"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_use_once(pool), 0.05)
+
+    await asyncio.wait_for(pool.close_all(), GUARD)
+    assert server.clients[0].closed
+
+
+async def test_request_the_sdk_cancelled_is_unavailable_not_a_cancel(server):
+    """Not what 1.0.6 does (it raises KeyError), but what an SDK that cancels
+    pending requests on a lost socket would: nobody cancelled us."""
+
+    async def cancelled_by_the_sdk() -> None:
+        raise asyncio.CancelledError()
+
+    pool = _pool(max_size=1)
+    with pytest.raises(DatabaseUnavailableError):
+        async with pool.acquire() as c:
+            await conn_mod._request(c, cancelled_by_the_sdk())
+    assert c.closed
+
+
+async def test_client_without_a_receive_task_is_not_pooled(server):
+    pool = _pool(max_size=1)
+    async with pool.acquire() as first:
+        del first.recv_task
+    assert first.closed and pool._pool.empty()
+
+
+async def test_our_cancel_stays_a_cancel_when_the_request_ends_cancelled_too():
+    """Caller and request cancelled in one turn (loop shutdown cancels both):
+    the caller was cancelled, so it gets CancelledError, not unavailable."""
+    request = asyncio.ensure_future(asyncio.Event().wait())
+    caller = asyncio.ensure_future(conn_mod._request(object(), request))
+    await asyncio.sleep(0)
+    request.cancel()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+
+
+async def test_pool_size_comes_from_the_config(server):
+    cfg = SurrealDBConfig(url="ws://fake:1/rpc", pool_size=3)
+    pool = ConnectionPool(config=cfg, acquire_timeout=0.05)
+    async with pool.acquire(), pool.acquire(), pool.acquire():
+        with pytest.raises(DatabaseUnavailableError, match="pool of 3"):
+            await _use_once(pool)
+
+
+async def test_close_all_ends_sign_ins_abandoned_while_it_runs(server):
+    """"Connection pool closed" must be true when it is logged: a sign-in
+    abandoned while close_all waits on the others is ended too."""
+    pool = _pool(max_size=2, connect_timeout=GUARD * 10)
+    pool._close_timeout = 0.3
+    server.signin_mode = "hang"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_use_once(pool), 0.05)
+    server.close_mode = "hang"  # close_all spends 0.3 s closing the first
+    closing = asyncio.ensure_future(pool.close_all())
+    await asyncio.sleep(0)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_use_once(pool), 0.05)
+    await asyncio.wait_for(closing, GUARD)
+
+    current = asyncio.current_task()
+    assert [t for t in asyncio.all_tasks() if t is not current and not t.done()] == []
+
+
+async def test_sign_in_abandoned_after_close_all_ends_at_once(server):
+    """Nothing awaits a closer once close_all has returned, so a sign-in given
+    up on after shutdown is ended then, not after connect_timeout."""
+    pool = _pool(max_size=1, connect_timeout=GUARD * 10)
+    await pool.close_all()
+    server.signin_mode = "hang"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_use_once(pool), 0.05)
+    await asyncio.sleep(0.05)
+
+    assert server.clients[0].closed
+    current = asyncio.current_task()
+    assert [t for t in asyncio.all_tasks() if t is not current and not t.done()] == []

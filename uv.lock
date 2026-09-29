@@ -8013,7 +8013,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "shared", editable = "packages/shared" },
     { name = "streamlit", marker = "extra == 'ui'", specifier = ">=1.30.0" },
-    { name = "surrealdb", specifier = ">=1.0.4" },
+    { name = "surrealdb", specifier = "==1.0.6" },
     { name = "testcontainers", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
 ]
