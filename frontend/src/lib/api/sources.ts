@@ -98,8 +98,13 @@ export const sourcesApi = {
     offset?: number
     sort_by?: 'created' | 'updated'
     sort_order?: 'asc' | 'desc'
+    /** processing_stage filter (any of these); sent as repeated `stage=`. */
+    stage?: string[]
   }) => {
-    const response = await apiClient.get<SourceListResponse[]>('/sources', { params })
+    const response = await apiClient.get<SourceListResponse[]>('/sources', {
+      params,
+      paramsSerializer: { indexes: null },
+    })
     return response.data
   },
 

@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { sourcesApi } from '@/lib/api/sources'
 import { QUERY_KEYS } from '@/lib/api/query-client'
@@ -29,6 +30,9 @@ export default function SourcesPage() {
   })
   const router = useRouter()
   const queryClient = useQueryClient()
+  // WB.1: `?stage=` (repeatable) filters by processing stage; the Werkbak links here.
+  const searchParams = useSearchParams()
+  const stages = searchParams.getAll('stage')
   const tableRef = useRef<HTMLTableElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
@@ -40,13 +44,14 @@ export default function SourcesPage() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: [...QUERY_KEYS.sources(), sortBy, sortOrder] as const,
+    queryKey: [...QUERY_KEYS.sources(), sortBy, sortOrder, stages.join(',')] as const,
     queryFn: ({ pageParam = 0 }) =>
       sourcesApi.list({
         limit: PAGE_SIZE,
         offset: pageParam as number,
         sort_by: sortBy,
         sort_order: sortOrder,
+        stage: stages.length ? stages : undefined,
       }),
     getNextPageParam: (lastPage, allPages) =>
       lastPage.length === PAGE_SIZE
@@ -225,6 +230,23 @@ export default function SourcesPage() {
     )
   }
 
+  if (sources.length === 0 && stages.length > 0) {
+    return (
+      <AppShell>
+        <EmptyState
+          icon={FileText}
+          title="No sources at this stage"
+          description={`Nothing is at ${stages.join(', ')}.`}
+          action={
+            <Button asChild variant="outline">
+              <Link href="/sources">Show all sources</Link>
+            </Button>
+          }
+        />
+      </AppShell>
+    )
+  }
+
   if (sources.length === 0) {
     return (
       <AppShell>
@@ -251,6 +273,15 @@ export default function SourcesPage() {
           <p className="mt-2 text-muted-foreground">
             Browse all sources across your notebooks. Use arrow keys to navigate and Enter to open.
           </p>
+          {stages.length > 0 && (
+            <p className="mt-2 text-sm" data-testid="sources-stage-filter">
+              Stage: <span className="font-medium">{stages.join(', ')}</span>
+              {' · '}
+              <Link href="/sources" className="underline underline-offset-2">
+                Show all
+              </Link>
+            </p>
+          )}
         </div>
 
         <div ref={scrollContainerRef} className="flex-1 rounded-md border overflow-auto">
