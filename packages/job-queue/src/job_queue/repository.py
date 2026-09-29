@@ -13,7 +13,7 @@ from shared.models import Job
 from shared.models.jobs import JobSubmitRequest
 from shared.types.enums import JobPriority, JobStatus, JobType
 from surrealdb_service.config import SurrealDBConfig
-from surrealdb_service.connection import execute_query
+from surrealdb_service.connection import ensure_record_id, execute_query
 from surrealdb_service.repositories.base import BaseRepository
 
 
@@ -138,6 +138,67 @@ class JobRepository(BaseRepository[Job]):
         except Exception as e:
             logger.error(f"Failed to get job stats: {e}")
             return {"total": 0}
+
+    async def list_finished_since(
+        self, since: datetime, statuses: List[JobStatus]
+    ) -> List[Job]:
+        """Jobs that ended in one of ``statuses`` after ``since``, newest first
+        (WB.1: what finished while the owner was away). Raises on a failed
+        read, unlike :meth:`query`, so the Werkbak reports an error rather
+        than an empty list."""
+        rows = await execute_query(
+            "SELECT * FROM job WHERE completed_at > $since AND status IN $statuses "
+            "ORDER BY completed_at DESC;",
+            {"since": since, "statuses": [s.value for s in statuses]},
+            self.config,
+        )
+        return [Job(**r) for r in rows or []]
+
+    async def list_unresolved_failures(self) -> List[Job]:
+        """Failed jobs nothing has resolved since, newest first (WB.1).
+
+        A failure is resolved once a later job of the same type for the same
+        source exists (a re-run, whatever its outcome), or once its source is
+        gone: nothing is left to act on. A job without a source is resolved by
+        a later job of its type without a source. The Werkbak lists what is
+        left, so a retried or deleted failure leaves it. Raises on a failed
+        read, unlike :meth:`query`.
+        """
+        failed = [
+            Job(**r)
+            for r in await execute_query(
+                "SELECT * FROM job WHERE status = $status ORDER BY created DESC;",
+                {"status": JobStatus.FAILED.value},
+                self.config,
+            )
+            or []
+        ]
+        if not failed:
+            return []
+        rows = await execute_query(
+            "SELECT id, job_type, source_id, created FROM job;", config=self.config
+        )
+        latest: Dict[Any, Dict[str, Any]] = {}
+        for r in rows or []:
+            key = (r.get("job_type"), r.get("source_id"))
+            if key not in latest or r["created"] > latest[key]["created"]:
+                latest[key] = r
+        latest_ids = {str(r["id"]) for r in latest.values()}
+        source_ids = sorted({j.source_id for j in failed if j.source_id})
+        existing: set = set()
+        if source_ids:
+            found = await execute_query(
+                "SELECT VALUE id FROM source WHERE id IN $ids;",
+                {"ids": [ensure_record_id(s) for s in source_ids]},
+                self.config,
+            )
+            existing = {str(r) for r in found or []}
+        return [
+            j
+            for j in failed
+            if str(j.id) in latest_ids
+            and (j.source_id is None or j.source_id in existing)
+        ]
 
     async def get_retryable(self) -> List[Job]:
         """Get failed jobs that can be retried."""

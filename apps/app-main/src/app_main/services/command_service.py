@@ -133,16 +133,24 @@ class CommandService:
         command_filter: Optional[str] = None,
         status_filter: Optional[str] = None,
         limit: int = 50,
+        unresolved: bool = False,
     ) -> List[Dict[str, Any]]:
-        """List jobs with optional filtering."""
-        status = None
-        if status_filter:
-            try:
-                status = JobStatus(status_filter)
-            except ValueError:
-                pass
+        """List jobs with optional filtering.
 
-        jobs = await _service.list_jobs(status=status, limit=limit)
+        ``unresolved`` lists the failed jobs no later run has resolved
+        (``JobRepository.list_unresolved_failures``, the Werkbak's failed-jobs
+        group) and ignores ``status_filter``.
+        """
+        if unresolved:
+            jobs = (await _repository.list_unresolved_failures())[:limit]
+        else:
+            status = None
+            if status_filter:
+                try:
+                    status = JobStatus(status_filter)
+                except ValueError:
+                    pass
+            jobs = await _service.list_jobs(status=status, limit=limit)
         return [
             {
                 "job_id": j.id,
@@ -150,6 +158,8 @@ class CommandService:
                 "status": j.status.value,
                 "created": str(j.created) if j.created else None,
                 "updated": str(j.updated) if j.updated else None,
+                "completed_at": str(j.completed_at) if j.completed_at else None,
+                "source_id": j.source_id,
                 "error_message": j.error_message,
             }
             for j in jobs

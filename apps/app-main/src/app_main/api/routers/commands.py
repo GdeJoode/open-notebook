@@ -80,6 +80,13 @@ async def list_command_jobs(
     ),
     status_filter: Optional[str] = Query(None, description="Filter by status"),
     limit: int = Query(50, description="Maximum number of jobs to return"),
+    unresolved: bool = Query(
+        False,
+        description=(
+            "Only failed jobs no later run of the same type and source has "
+            "resolved (the Werkbak's failed jobs); ignores status_filter"
+        ),
+    ),
 ):
     """List command jobs with optional filtering."""
     try:
@@ -87,6 +94,7 @@ async def list_command_jobs(
             command_filter=command_filter,
             status_filter=status_filter,
             limit=limit,
+            unresolved=unresolved,
         )
         return jobs
     except Exception as e:
