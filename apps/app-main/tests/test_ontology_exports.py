@@ -28,11 +28,23 @@ from app_main.api.routers import services_proxy
 from app_main.dependencies import get_notebook_schema_repo, get_notebook_service
 from app_main.services.ontology_edit_service import OntologyEditService
 from fastapi import FastAPI
-from ontology_manager import rdf_owl_shacl
-from ontology_manager.rdf_owl_shacl import DCTERMS, ON, ONR, OWL, SKOS
+from ontology_manager.rdf_owl_shacl import (
+    DCTERMS,
+    DTYPE_MAP,
+    ON,
+    ONP,
+    ONR,
+    OWL,
+    SKOS,
+    XSD,
+    class_iri,
+    property_iri,
+    union_members,
+)
 from ontology_manager.registry import OntologyRegistry, get_ontology_registry
 from ontology_manager.schema import Ontology
-from rdflib import Graph, Literal
+from rdflib import BNode, Graph, Literal, URIRef
+from rdflib.compare import isomorphic
 from rdflib.namespace import RDF, RDFS
 from shared.models.notebook_schema import NotebookSchema
 
@@ -79,11 +91,77 @@ def _todays_ttl(yaml_path: Path) -> Graph:
         g.add((ont_uri, OWL.versionInfo, Literal(meta["version"])))
 
     for etype in data.get("entity_types", []):
-        rdf_owl_shacl._add_entity_type(g, etype)
+        _add_entity_type(g, etype)
 
     for rtype in data.get("relation_types", []):
         raise AssertionError("no shipped ontology has `relation_types`")
     return g
+
+
+def _add_entity_type(g: Graph, etype: Dict[str, Any]) -> None:
+    name = etype.get("name", "")
+    if not name:
+        return
+
+    cls_uri = ON[name]
+    g.add((cls_uri, RDF.type, OWL.Class))
+    g.add((cls_uri, RDFS.label, Literal(name)))
+
+    if "description" in etype:
+        g.add((cls_uri, RDFS.comment, Literal(etype["description"])))
+
+    if "parent_type" in etype:
+        g.add((cls_uri, RDFS.subClassOf, ON[etype["parent_type"]]))
+
+    for hint in etype.get("extraction_hints", []):
+        g.add((cls_uri, SKOS.note, Literal(hint)))
+
+    for prop in etype.get("properties", []):
+        _add_property(g, cls_uri, prop)
+
+
+def _add_property(g: Graph, domain_uri: URIRef, prop: Dict[str, Any]) -> None:
+    name = prop.get("name", "")
+    if not name:
+        return
+
+    prop_uri = ON[name]
+    dtype = prop.get("data_type", "string")
+
+    if dtype == "reference":
+        g.add((prop_uri, RDF.type, OWL.ObjectProperty))
+        g.add((prop_uri, RDFS.domain, domain_uri))
+        ref_type = prop.get("reference_type", "Thing")
+        g.add((prop_uri, RDFS.range, ON[ref_type]))
+    else:
+        g.add((prop_uri, RDF.type, OWL.DatatypeProperty))
+        g.add((prop_uri, RDFS.domain, domain_uri))
+        xsd_type = DTYPE_MAP.get(dtype, XSD.string)
+        if xsd_type:
+            g.add((prop_uri, RDFS.range, xsd_type))
+
+    g.add((prop_uri, RDFS.label, Literal(name)))
+    if "description" in prop:
+        g.add((prop_uri, RDFS.comment, Literal(prop["description"])))
+
+
+def _missing_from(exported: Graph, today: Graph) -> list:
+    """Today's triples the export does not carry, read the way OE.6 review
+    round 1 changed them: a property is in its own namespace (``ONP``), and
+    the types that declare it are one union domain, so a type of today's
+    domain (or a range of today's) must be a MEMBER of the export's one."""
+    properties = set(today.subjects(RDF.type, OWL.DatatypeProperty)) | set(
+        today.subjects(RDF.type, OWL.ObjectProperty))
+    moved = {p: ONP[str(p)[len(str(ON)):]] for p in properties}
+    missing = []
+    for s_, p_, o_ in today:
+        s_ = moved.get(s_, s_)
+        if p_ in (RDFS.domain, RDFS.range) and s_ in moved.values():
+            if not any(o_ in union_members(exported, node) for node in exported.objects(s_, p_)):
+                missing.append((s_, p_, o_))
+        elif (s_, p_, o_) not in exported:
+            missing.append((s_, p_, o_))
+    return missing
 
 
 def _todays_prompt(name: str, load=_raw) -> str:
@@ -325,7 +403,7 @@ async def test_with_no_publish_the_ttl_export_keeps_todays_and_adds_the_chain(sv
         with pytest.raises(AttributeError):
             _todays_ttl(ONTOLOGY_DIR / f"{name}.yaml")
     else:
-        missing = set(_todays_ttl(ONTOLOGY_DIR / f"{name}.yaml")) - set(exported)
+        missing = _missing_from(exported, _todays_ttl(ONTOLOGY_DIR / f"{name}.yaml"))
         assert not missing, sorted(missing)[:5]
 
     # Every type and relationship type of the chain, from the raw YAML (both
@@ -344,14 +422,43 @@ async def test_with_no_publish_the_ttl_export_keeps_todays_and_adds_the_chain(sv
     for rel_name, (member, rt) in winning.items():
         prop = ON[rel_name]
         assert (prop, RDF.type, OWL.ObjectProperty) in exported, (member, rel_name)
-        for d in (rt.get("domain") or []) + (rt.get("source_types") or []):
-            assert (prop, RDFS.domain, _node(d)) in exported, (member, rel_name, d)
-        for r in (rt.get("range") or []) + (rt.get("target_types") or []):
-            assert (prop, RDFS.range, _node(r)) in exported, (member, rel_name, r)
+        for predicate, names in ((RDFS.domain, rt.get("domain") or rt.get("source_types")),
+                                 (RDFS.range, rt.get("range") or rt.get("target_types"))):
+            assert _endpoint(exported, prop, predicate) == _expected_endpoint(names), (
+                member, rel_name, predicate)
 
     # Storing the seeds (what a first publish does) changes nothing.
     await _store_every_seed()
-    assert set(await _ttl(name)) == set(exported)
+    assert isomorphic(await _ttl(name), exported)
+
+
+def _expected_endpoint(names) -> tuple:
+    """(is a union, the classes) a relationship's endpoint list means: one
+    class, ``owl:Thing`` for any, or the UNION of several (OE.6 review M2)."""
+    nodes = set(_node(n) for n in names or [])
+    if OWL.Thing in nodes:
+        return (False, {OWL.Thing})
+    return (len(nodes) > 1, nodes)
+
+
+def _endpoint(exported: Graph, prop, predicate) -> tuple:
+    objects = list(exported.objects(prop, predicate))
+    if not objects:
+        return (False, set())
+    assert len(objects) == 1, f"{prop} has {len(objects)} {predicate}: their intersection"
+    node = objects[0]
+    return (isinstance(node, BNode), set(union_members(exported, node)))
+
+
+@pytest.mark.filterwarnings("ignore:The test <Function")
+def test_many_shipped_relationships_have_several_endpoint_types():
+    """Vacuity guard for the union form above: the space has them."""
+    several = {rt["name"] for n in SHIPPED
+               for rt in (lambda r: r.values() if isinstance(r, dict) else r)(
+                   _raw(n).get("relationship_types") or [])
+               if any(len(rt.get(k) or []) > 1
+                      for k in ("domain", "range", "source_types", "target_types"))}
+    assert len(several) > 30
 
 
 @pytest.mark.parametrize("name", SHIPPED)
@@ -429,6 +536,54 @@ async def test_a_publish_reaches_the_extraction_service(svc, monkeypatch):
     assert "- PREREGISTERED_AS: Article whose study was preregistered as this protocol" in prompt
     assert "- REGISTERS: Protocol registering the study of an article" in prompt
     assert "\n- Dissertation: " in prompt and "\n- Thesis: " not in prompt
+
+
+async def test_names_that_are_not_iri_safe_are_exported_with_their_labels(svc):
+    """OE.6 review B1: a name with a space or a slash (an accepted Pass-1
+    proposal, an editor edit) made the serialiser fail the whole export."""
+    await svc.put_entity_type("scholarly", "Clinical Trial Phase", {
+        "description": "A phase of a clinical trial.", "parent_type": "ScholarlyArticle",
+        "properties": [{"name": "trial phase", "data_type": "string"}]})
+    await svc.put_entity_type("scholarly", "Journal/ Publication", {
+        "description": "A journal publication.", "parent_type": "Clinical Trial Phase"})
+    await svc.put_relationship_type("scholarly", "PUBLISHED IN", {
+        "description": "Trial phase published in a journal",
+        "domain": ["Clinical Trial Phase"], "range": ["Journal/ Publication", "Periodical"]})
+    await svc.publish("scholarly", note="OE.6 review B1")
+
+    exported = await _ttl("scholarly")
+    for name in ("Clinical Trial Phase", "Journal/ Publication"):
+        assert (class_iri(name), RDF.type, OWL.Class) in exported
+        assert (class_iri(name), RDFS.label, Literal(name)) in exported
+    assert (class_iri("Journal/ Publication"), RDFS.subClassOf,
+            class_iri("Clinical Trial Phase")) in exported
+    rel = class_iri("PUBLISHED IN")
+    assert (rel, RDFS.label, Literal("PUBLISHED IN")) in exported
+    assert _endpoint(exported, rel, RDFS.domain) == (False, {class_iri("Clinical Trial Phase")})
+    assert _endpoint(exported, rel, RDFS.range) == (
+        True, {class_iri("Journal/ Publication"), ON["Periodical"]})
+    assert (property_iri("trial phase"), RDFS.label, Literal("trial phase")) in exported
+    assert _endpoint(exported, property_iri("trial phase"), RDFS.domain) == (
+        False, {class_iri("Clinical Trial Phase")})
+
+
+async def test_an_unknown_base_is_a_500(svc):
+    """A notebook whose base the registry does not know: a server-side
+    misconfiguration, said as such (``schemas.py``)."""
+    notebooks = AsyncMock()
+    notebooks.get.return_value = object()
+    schemas = AsyncMock()
+    schemas.get_by_notebook.return_value = NotebookSchema(
+        notebook="notebook:oe6", base_ontology="no_such_ontology")
+    app = FastAPI()
+    app.include_router(schemas_router.router, prefix="/api")
+    app.dependency_overrides[get_notebook_service] = lambda: notebooks
+    app.dependency_overrides[get_notebook_schema_repo] = lambda: schemas
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url="http://t") as client:
+        response = await client.get("/api/notebooks/notebook:oe6/schema.ttl")
+    assert response.status_code == 500
+    assert "no_such_ontology" in response.json()["detail"]
 
 
 async def test_a_publish_in_the_parent_reaches_the_ontologies_that_extend_it(svc, monkeypatch):

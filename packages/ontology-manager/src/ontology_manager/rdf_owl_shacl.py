@@ -58,6 +58,7 @@ try:
         Namespace,
         URIRef,
     )
+    from rdflib.collection import Collection
     from rdflib.namespace import DCTERMS, OWL, RDF, RDFS, SKOS, XSD
 
     RDFLIB_AVAILABLE = True
@@ -97,6 +98,9 @@ if RDFLIB_AVAILABLE:
     # Namespace for our ontology
     ON = Namespace("https://open-notebook.dev/ontology/")
     ONR = Namespace("https://open-notebook.dev/resource/")
+    # OE.6 review m7: entity-type properties get their own namespace, so a
+    # property and a relationship type of the same name are two IRIs.
+    ONP = Namespace("https://open-notebook.dev/ontology/property/")
 
     # Data type mapping from YAML to XSD
     DTYPE_MAP = {
@@ -119,12 +123,74 @@ else:
     # RDFLIB_AVAILABLE) even without rdflib installed.
     ON = None  # type: ignore[assignment]
     ONR = None  # type: ignore[assignment]
+    ONP = None  # type: ignore[assignment]
     DTYPE_MAP = {}  # type: ignore[assignment]
 
 
 # ============================================================================
-# Load YAML ontology → rdflib Graph
+# Ontology model → rdflib Graph
 # ============================================================================
+
+_IRI_SAFE = frozenset("-._~")
+
+
+def iri_fragment(name: str) -> str:
+    """The IRI fragment for a type, relationship or property name.
+
+    A name is kept as it is when every character is a letter, a digit or one
+    of ``-._~`` (every shipped name); any other character is percent-encoded
+    as UTF-8. ``%`` itself is encoded, so two different names never get the
+    same fragment. OE.6 review B1: a name published through the editor or an
+    accepted Pass-1 proposal ("Clinical Trial Phase", "Journal/ Publication")
+    made the Turtle serialiser fail. The name itself stays in ``rdfs:label``.
+    """
+    return "".join(
+        c if c.isalnum() or c in _IRI_SAFE
+        else "".join(f"%{b:02X}" for b in c.encode("utf-8"))
+        for c in name
+    )
+
+
+def class_iri(name: str) -> URIRef:
+    """The IRI of entity type (or relationship type) ``name``."""
+    return ON[iri_fragment(name)]
+
+
+def property_iri(name: str) -> URIRef:
+    """The IRI of entity-type property ``name``."""
+    return ONP[iri_fragment(name)]
+
+
+def _class_expression(g: Graph, names: List[str]) -> Optional[Any]:
+    """One class for one name; the ``owl:unionOf`` of several.
+
+    OE.6 review M2: a relationship with two endpoint types written as two
+    ``rdfs:domain`` triples says its subject is BOTH (the intersection). ``"*"``
+    (any type) is ``owl:Thing``, and a union containing it is ``owl:Thing``.
+    """
+    nodes = list(dict.fromkeys(OWL.Thing if n == "*" else class_iri(n) for n in names))
+    if not nodes:
+        return None
+    if len(nodes) == 1:
+        return nodes[0]
+    if OWL.Thing in nodes:
+        return OWL.Thing
+    return _union(g, nodes, OWL.Class)
+
+
+def _union(g: Graph, nodes: List[Any], kind: Any) -> BNode:
+    union, members = BNode(), BNode()
+    g.add((union, RDF.type, kind))
+    Collection(g, members, nodes)
+    g.add((union, OWL.unionOf, members))
+    return union
+
+
+def union_members(g: Graph, node: Any) -> List[Any]:
+    """The classes (or datatypes) ``node`` stands for: the members of an
+    ``owl:unionOf``, else ``node`` itself."""
+    members = g.value(node, OWL.unionOf) if isinstance(node, BNode) else None
+    return list(Collection(g, members)) if members is not None else [node]
 
 
 def ontology_graph(ontology: Ontology) -> Graph:
@@ -153,15 +219,26 @@ def ontology_graph(ontology: Ontology) -> Graph:
     g.bind("dcterms", DCTERMS)
 
     meta = ontology.metadata
-    ont_uri = ON[meta.name]
+    ont_uri = ON[iri_fragment(meta.name)]
     g.add((ont_uri, RDF.type, OWL.Ontology))
     g.add((ont_uri, RDFS.label, Literal(meta.name)))
     if meta.description is not None:
         g.add((ont_uri, RDFS.comment, Literal(meta.description)))
     g.add((ont_uri, OWL.versionInfo, Literal(meta.version)))
 
+    # A property name used by several types is ONE property; its domain is
+    # the union of those types (as for relationships), its range the union of
+    # what they declare.
+    properties: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
     for etype in ontology.entity_types.values():
-        _add_entity_type(g, etype.model_dump(mode="json", exclude_none=True))
+        dumped = etype.model_dump(mode="json", exclude_none=True)
+        _add_entity_type(g, dumped)
+        for prop in dumped["properties"]:
+            if prop.get("name"):
+                properties.setdefault(prop["name"], []).append((etype.name, prop))
+
+    for name, uses in properties.items():
+        _add_property(g, name, uses)
 
     for rtype in ontology.relationship_types.values():
         _add_relation_type(g, rtype.model_dump(mode="json", exclude_none=True))
@@ -199,12 +276,12 @@ async def registry_ontology_graph(name: str, registry: Any = None) -> Optional[G
 
 
 def _add_entity_type(g: Graph, etype: Dict[str, Any]) -> None:
-    """Add an entity type as an OWL class with properties."""
+    """Add an entity type as an OWL class (its properties: :func:`_add_property`)."""
     name = etype.get("name", "")
     if not name:
         return
 
-    cls_uri = ON[name]
+    cls_uri = class_iri(name)
     g.add((cls_uri, RDF.type, OWL.Class))
     g.add((cls_uri, RDFS.label, Literal(name)))
 
@@ -212,43 +289,42 @@ def _add_entity_type(g: Graph, etype: Dict[str, Any]) -> None:
         g.add((cls_uri, RDFS.comment, Literal(etype["description"])))
 
     if "parent_type" in etype:
-        g.add((cls_uri, RDFS.subClassOf, ON[etype["parent_type"]]))
+        g.add((cls_uri, RDFS.subClassOf, class_iri(etype["parent_type"])))
 
     # Extraction hints as SKOS notes
     for hint in etype.get("extraction_hints", []):
         g.add((cls_uri, SKOS.note, Literal(hint)))
 
-    # Properties
-    for prop in etype.get("properties", []):
-        _add_property(g, cls_uri, prop)
 
-
-def _add_property(g: Graph, domain_uri: URIRef, prop: Dict[str, Any]) -> None:
-    """Add a property to the ontology."""
-    name = prop.get("name", "")
-    if not name:
-        return
-
-    prop_uri = ON[name]
-    dtype = prop.get("data_type", "string")
-
-    if dtype == "reference":
-        # Object property (links to another entity)
-        g.add((prop_uri, RDF.type, OWL.ObjectProperty))
-        g.add((prop_uri, RDFS.domain, domain_uri))
-        ref_type = prop.get("reference_type", "Thing")
-        g.add((prop_uri, RDFS.range, ON[ref_type]))
-    else:
-        # Datatype property
-        g.add((prop_uri, RDF.type, OWL.DatatypeProperty))
-        g.add((prop_uri, RDFS.domain, domain_uri))
-        xsd_type = DTYPE_MAP.get(dtype, XSD.string)
-        if xsd_type:
-            g.add((prop_uri, RDFS.range, xsd_type))
-
+def _add_property(g: Graph, name: str, uses: List[Tuple[str, Dict[str, Any]]]) -> None:
+    """Add property ``name``, declared by the types in ``uses``."""
+    prop_uri = property_iri(name)
     g.add((prop_uri, RDFS.label, Literal(name)))
-    if "description" in prop:
-        g.add((prop_uri, RDFS.comment, Literal(prop["description"])))
+
+    ranges: List[Any] = []
+    for _type_name, prop in uses:
+        dtype = prop.get("data_type", "string")
+        if dtype == "reference":
+            # Object property (links to another entity)
+            g.add((prop_uri, RDF.type, OWL.ObjectProperty))
+            ranges.append(class_iri(prop.get("reference_type", "Thing")))
+        else:
+            # Datatype property
+            g.add((prop_uri, RDF.type, OWL.DatatypeProperty))
+            xsd_type = DTYPE_MAP.get(dtype, XSD.string)
+            if xsd_type:
+                ranges.append(xsd_type)
+        if "description" in prop:
+            g.add((prop_uri, RDFS.comment, Literal(prop["description"])))
+
+    g.add((prop_uri, RDFS.domain, _class_expression(g, [t for t, _ in uses])))
+    ranges = list(dict.fromkeys(ranges))
+    if len(ranges) == 1:
+        g.add((prop_uri, RDFS.range, ranges[0]))
+    elif ranges:
+        datatypes = all(str(r).startswith(str(XSD)) for r in ranges)
+        g.add((prop_uri, RDFS.range,
+               _union(g, ranges, RDFS.Datatype if datatypes else OWL.Class)))
 
 
 def _add_relation_type(g: Graph, rtype: Dict[str, Any]) -> None:
@@ -257,25 +333,27 @@ def _add_relation_type(g: Graph, rtype: Dict[str, Any]) -> None:
     if not name:
         return
 
-    prop_uri = ON[name]
+    prop_uri = class_iri(name)
     g.add((prop_uri, RDF.type, OWL.ObjectProperty))
     g.add((prop_uri, RDFS.label, Literal(name)))
 
     if "description" in rtype:
         g.add((prop_uri, RDFS.comment, Literal(rtype["description"])))
     # The model derives domain / range from the source_types / target_types
-    # spelling most shipped relationships use. "*" (any type) is owl:Thing.
-    for st in rtype.get("domain", []):
-        g.add((prop_uri, RDFS.domain, OWL.Thing if st == "*" else ON[st]))
-    for tt in rtype.get("range", []):
-        g.add((prop_uri, RDFS.range, OWL.Thing if tt == "*" else ON[tt]))
+    # spelling most shipped relationships use.
+    domain = _class_expression(g, rtype.get("domain", []))
+    if domain is not None:
+        g.add((prop_uri, RDFS.domain, domain))
+    range_ = _class_expression(g, rtype.get("range", []))
+    if range_ is not None:
+        g.add((prop_uri, RDFS.range, range_))
 
     for hint in rtype.get("extraction_hints", []):
         g.add((prop_uri, SKOS.note, Literal(hint)))
 
 
 # ============================================================================
-# Load all ontologies from directory
+# All ontologies, from the registry
 # ============================================================================
 
 
@@ -383,16 +461,23 @@ def generate_shacl_shapes(ontology_graph: Graph) -> Graph:
     shapes.bind("on", ON)
     shapes.bind("xsd", XSD)
 
-    # For each OWL class, create a NodeShape
+    # The properties of each class: a domain may be a union of classes.
+    props_of: Dict[Any, List[Any]] = {}
+    for prop_uri, domain in ontology_graph.subject_objects(RDFS.domain):
+        for cls in union_members(ontology_graph, domain):
+            props_of.setdefault(cls, []).append(prop_uri)
+
+    # For each OWL class (not the anonymous unions), create a NodeShape
     for cls_uri in ontology_graph.subjects(RDF.type, OWL.Class):
+        if isinstance(cls_uri, BNode):
+            continue
         cls_name = str(cls_uri).split("/")[-1]
         shape_uri = ON[f"{cls_name}Shape"]
 
         shapes.add((shape_uri, RDF.type, SH.NodeShape))
         shapes.add((shape_uri, SH.targetClass, cls_uri))
 
-        # Find properties with this class as domain
-        for prop_uri in ontology_graph.subjects(RDFS.domain, cls_uri):
+        for prop_uri in props_of.get(cls_uri, []):
             prop_name = str(prop_uri).split("/")[-1]
             prop_shape = BNode()
 
@@ -400,15 +485,23 @@ def generate_shacl_shapes(ontology_graph: Graph) -> Graph:
             shapes.add((prop_shape, SH.path, prop_uri))
             shapes.add((prop_shape, SH.name, Literal(prop_name)))
 
-            # Determine constraint type
-            if (prop_uri, RDF.type, OWL.ObjectProperty) in ontology_graph:
-                # Object property → sh:class
-                for range_cls in ontology_graph.objects(prop_uri, RDFS.range):
-                    shapes.add((prop_shape, SH["class"], range_cls))
-            else:
-                # Datatype property → sh:datatype
-                for range_dt in ontology_graph.objects(prop_uri, RDFS.range):
-                    shapes.add((prop_shape, SH.datatype, range_dt))
+            # Object property -> sh:class; datatype property -> sh:datatype. A
+            # union range allows any one of its members (sh:or), not all.
+            kind = (SH["class"] if (prop_uri, RDF.type, OWL.ObjectProperty) in ontology_graph
+                    else SH.datatype)
+            for range_node in ontology_graph.objects(prop_uri, RDFS.range):
+                members = union_members(ontology_graph, range_node)
+                if len(members) == 1:
+                    shapes.add((prop_shape, kind, members[0]))
+                    continue
+                alternatives = []
+                for member in members:
+                    alternative = BNode()
+                    shapes.add((alternative, kind, member))
+                    alternatives.append(alternative)
+                options = BNode()
+                Collection(shapes, options, alternatives)
+                shapes.add((prop_shape, SH["or"], options))
 
     num_shapes = len(list(shapes.subjects(RDF.type, SH.NodeShape)))
     logger.info(f"Generated {num_shapes} SHACL shapes ({len(shapes)} triples)")
@@ -459,14 +552,14 @@ async def validate_entities(
         eid = str(ent.get("id", "")).replace(":", "_")
         subj = ONR[eid]
         etype = ent.get("entity_type", "Thing")
-        data_graph.add((subj, RDF.type, ON[etype]))
+        data_graph.add((subj, RDF.type, class_iri(etype)))
         data_graph.add((subj, ON["canonical_name"], Literal(ent.get("canonical_name", ""))))
 
         for key, val in ent.get("properties", {}).items():
             if isinstance(val, str):
-                data_graph.add((subj, ON[key], Literal(val)))
+                data_graph.add((subj, property_iri(key), Literal(val)))
             elif isinstance(val, (int, float)):
-                data_graph.add((subj, ON[key], Literal(val)))
+                data_graph.add((subj, property_iri(key), Literal(val)))
 
     # Validate
     conforms, results_graph, results_text = shacl_validate(

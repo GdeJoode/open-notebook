@@ -31,7 +31,8 @@ from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from rdflib import Graph
+from rdflib import Graph, URIRef
+from rdflib.compare import isomorphic
 from rdflib.namespace import OWL, RDF, RDFS
 
 from app_main.api.routers.schemas import router
@@ -71,6 +72,11 @@ def _registry_graph(name: str) -> Graph:
     from ontology_manager.rdf_owl_shacl import registry_ontology_graph
 
     return asyncio.run(registry_ontology_graph(name))
+
+
+def _named_classes(graph: Graph) -> set:
+    """The declared classes, without the anonymous unions (OE.6 review M2)."""
+    return {c for c in graph.subjects(RDF.type, OWL.Class) if isinstance(c, URIRef)}
 
 
 def _make_app(notebook_svc: AsyncMock, schema_repo: AsyncMock) -> TestClient:
@@ -120,7 +126,7 @@ class TestTheOldLayerIsNotExported:
     def test_the_ttl_is_the_base_ontology(self):
         baseline = _registry_graph("scholarly")
         exported = self._graph(_OLD_LAYER, excluded=["Thesis"])
-        assert set(exported) == set(Graph().parse(
+        assert isomorphic(exported, Graph().parse(
             data=baseline.serialize(format="turtle"), format="turtle"))
 
     def test_the_old_layer_would_have_shown(self):
@@ -194,9 +200,7 @@ class TestNotebookWithoutSchemaRow:
         returned.parse(data=body, format="turtle")
         baseline = _registry_graph(_DEFAULT_BASE_ONTOLOGY)
 
-        assert set(returned.subjects(RDF.type, OWL.Class)) == set(
-            baseline.subjects(RDF.type, OWL.Class)
-        )
+        assert _named_classes(returned) == _named_classes(baseline)
 
 
 # ---------------------------------------------------------------------------

@@ -41,11 +41,10 @@ ONTOLOGIES_DIR = Path(__file__).resolve().parent.parent / "ontologies"
 def _roundtrip_triple_sets(yaml_path: Path) -> tuple[set, set]:
     """Helper: load YAML → Turtle → re-parse, return triple sets for comparison.
 
-    Why ``set`` equality and not graph isomorphism? rdflib's
-    ``compare.isomorphic`` matches blank nodes by graph shape, which is
-    correct but ~100x slower. For these ontologies we don't emit blank
-    nodes from the YAML loader, so plain ``(s, p, o)`` set equality is
-    sufficient and gives a clearer diff on failure.
+    Both graphs are canonicalised first (``compare.to_canonical_graph``):
+    since OE.6 review M2 the graph has blank nodes (the ``owl:unionOf`` of a
+    relationship's endpoint types), whose ids differ after a re-parse. Set
+    equality on the canonical triples still gives a clear diff on failure.
     """
     from rdflib import Graph
 
@@ -56,8 +55,10 @@ def _roundtrip_triple_sets(yaml_path: Path) -> tuple[set, set]:
     g2 = Graph()
     g2.parse(data=ttl_text, format="turtle")
 
-    triples_before = set(g1.triples((None, None, None)))
-    triples_after = set(g2.triples((None, None, None)))
+    from rdflib.compare import to_canonical_graph
+
+    triples_before = set(to_canonical_graph(g1))
+    triples_after = set(to_canonical_graph(g2))
     return triples_before, triples_after
 
 
