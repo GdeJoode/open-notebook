@@ -399,6 +399,22 @@ redo it.
   - m3: the stale time follows the same delay, so a navigation reads a
     partial report once its retry delay has passed.
 
+> **Carried from WB.1 review round 5 (approved; minors, not blocking):**
+> 1. Pipeline callers (triage B1 at `triage_pipeline.py:300`, OKF import at
+>    `okf_import_service.py:821`) now join an in-flight candidates run too. A
+>    triage batch that joins a run started before its entities were saved
+>    skips that batch's match-conflict rows for good (low odds: 1–4 s run vs a
+>    90 s poll, one job at a time). The pair still shows as a merge candidate.
+>    First follow-up: let pipeline callers bypass the single-flight.
+> 2. A run whose DB call never returns pins its key until restart (the pool
+>    bounds acquire, not the query); later callers all join it.
+> 3. A run in flight when an apply/"kept apart" commits can show the pair once
+>    more; re-applying is harmless.
+> 4. While `/api/attention` itself fails after a partial report, the client
+>    keeps the last partial delay (e.g. 5 s) instead of backing off.
+> 5. No test for "a run raises, then the next call scores again"; the
+>    `id(loop)` key can outlive a closed test loop.
+
 **WB.2 — Pipeline navigation** (~1.5d)
 - **Nav regrouped in pipeline order:**
   1. Werkbak
