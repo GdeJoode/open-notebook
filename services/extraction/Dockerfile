@@ -5,8 +5,8 @@ WORKDIR /app
 COPY services/extraction/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy ontology YAML files
-COPY packages/ontology-manager/ontologies /app/ontologies
+# No ontology files (OE.6): each /extract request carries the ontologies as
+# app-main's registry holds them, so a publish reaches the next extraction.
 
 # Copy shared modules (model routing) — single canonical source
 COPY packages/shared/src/shared/model_routing.py /app/model_routing.py
@@ -58,7 +58,6 @@ ENV SURREALDB_USER="root"
 ENV SURREALDB_PASS="root"
 
 # Ontology
-ENV ONTOLOGY_DIR="/app/ontologies"
 ENV DEFAULT_ONTOLOGY="regiodeal"
 
 # Model routing

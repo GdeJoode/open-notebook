@@ -35,8 +35,9 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import yaml
 from loguru import logger
+
+from ontology_manager.schema import Ontology
 
 # ---------------------------------------------------------------------------
 # Optional-dependency sentinels
@@ -57,6 +58,7 @@ try:
         Namespace,
         URIRef,
     )
+    from rdflib.collection import Collection
     from rdflib.namespace import DCTERMS, OWL, RDF, RDFS, SKOS, XSD
 
     RDFLIB_AVAILABLE = True
@@ -96,6 +98,9 @@ if RDFLIB_AVAILABLE:
     # Namespace for our ontology
     ON = Namespace("https://open-notebook.dev/ontology/")
     ONR = Namespace("https://open-notebook.dev/resource/")
+    # OE.6 review m7: entity-type properties get their own namespace, so a
+    # property and a relationship type of the same name are two IRIs.
+    ONP = Namespace("https://open-notebook.dev/ontology/property/")
 
     # Data type mapping from YAML to XSD
     DTYPE_MAP = {
@@ -118,35 +123,93 @@ else:
     # RDFLIB_AVAILABLE) even without rdflib installed.
     ON = None  # type: ignore[assignment]
     ONR = None  # type: ignore[assignment]
+    ONP = None  # type: ignore[assignment]
     DTYPE_MAP = {}  # type: ignore[assignment]
 
 
 # ============================================================================
-# Load YAML ontology → rdflib Graph
+# Ontology model → rdflib Graph
 # ============================================================================
 
+_IRI_SAFE = frozenset("-._~")
 
-def load_yaml_ontology(yaml_path: str | Path) -> Graph:
-    """Load a YAML ontology definition and convert to an rdflib OWL graph.
 
-    Reads the YAML format used by packages/ontology-manager/ontologies/*.yaml
-    and produces an OWL ontology with:
-    - owl:Class for each entity_type
-    - rdfs:subClassOf for parent_type
-    - owl:DatatypeProperty / owl:ObjectProperty for properties
-    - rdfs:comment for descriptions and extraction_hints
+def iri_fragment(name: str) -> str:
+    """The IRI fragment for a type, relationship or property name.
 
-    Args:
-        yaml_path: Path to the YAML ontology file.
+    A name is kept as it is when every character is a letter, a digit or one
+    of ``-._~`` (every shipped name); any other character is percent-encoded
+    as UTF-8. ``%`` itself is encoded, so two different names never get the
+    same fragment. OE.6 review B1: a name published through the editor or an
+    accepted Pass-1 proposal ("Clinical Trial Phase", "Journal/ Publication")
+    made the Turtle serialiser fail. The name itself stays in ``rdfs:label``.
+    """
+    return "".join(
+        c if c.isalnum() or c in _IRI_SAFE
+        else "".join(f"%{b:02X}" for b in c.encode("utf-8"))
+        for c in name
+    )
 
-    Returns:
-        rdflib Graph containing the OWL ontology.
+
+def class_iri(name: str) -> URIRef:
+    """The IRI of entity type (or relationship type) ``name``."""
+    return ON[iri_fragment(name)]
+
+
+def property_iri(name: str) -> URIRef:
+    """The IRI of entity-type property ``name``."""
+    return ONP[iri_fragment(name)]
+
+
+def _class_expression(g: Graph, names: List[str]) -> Optional[Any]:
+    """One class for one name; the ``owl:unionOf`` of several.
+
+    OE.6 review M2: a relationship with two endpoint types written as two
+    ``rdfs:domain`` triples says its subject is BOTH (the intersection). ``"*"``
+    (any type) is ``owl:Thing``, and a union containing it is ``owl:Thing``.
+    """
+    nodes = list(dict.fromkeys(OWL.Thing if n == "*" else class_iri(n) for n in names))
+    if not nodes:
+        return None
+    if len(nodes) == 1:
+        return nodes[0]
+    if OWL.Thing in nodes:
+        return OWL.Thing
+    return _union(g, nodes, OWL.Class)
+
+
+def _union(g: Graph, nodes: List[Any], kind: Any) -> BNode:
+    union, members = BNode(), BNode()
+    g.add((union, RDF.type, kind))
+    Collection(g, members, nodes)
+    g.add((union, OWL.unionOf, members))
+    return union
+
+
+def union_members(g: Graph, node: Any) -> List[Any]:
+    """The classes (or datatypes) ``node`` stands for: the members of an
+    ``owl:unionOf``, else ``node`` itself."""
+    members = g.value(node, OWL.unionOf) if isinstance(node, BNode) else None
+    return list(Collection(g, members)) if members is not None else [node]
+
+
+def ontology_graph(ontology: Ontology) -> Graph:
+    """Convert an ontology model to an rdflib OWL graph.
+
+    Produces:
+    - owl:Class for each entity type, rdfs:subClassOf for its parent_type
+    - owl:DatatypeProperty / owl:ObjectProperty for its properties
+    - owl:ObjectProperty for each relationship type, with rdfs:domain /
+      rdfs:range (either spelling: domain/range or source_types/target_types)
+    - rdfs:comment for descriptions, skos:note for extraction_hints
+
+    Track OE.6: every export builds from the MODEL, so it can take what the
+    registry holds (the active version, ``extends`` / ``includes`` resolved)
+    rather than a YAML file. Reading the raw YAML exported no relationship type
+    (it looked for a key ``relation_types`` no ontology uses) and failed on the
+    mapping form of ``entity_types`` (``base``, ``general``).
     """
     _require_rdflib()
-
-    path = Path(yaml_path)
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
 
     g = Graph()
     g.bind("on", ON)
@@ -155,40 +218,70 @@ def load_yaml_ontology(yaml_path: str | Path) -> Graph:
     g.bind("skos", SKOS)
     g.bind("dcterms", DCTERMS)
 
-    # Ontology metadata
-    meta = data.get("metadata", {})
-    ont_name = meta.get("name", path.stem)
-    ont_uri = ON[ont_name]
+    meta = ontology.metadata
+    ont_uri = ON[iri_fragment(meta.name)]
     g.add((ont_uri, RDF.type, OWL.Ontology))
-    g.add((ont_uri, RDFS.label, Literal(ont_name)))
-    if "description" in meta:
-        g.add((ont_uri, RDFS.comment, Literal(meta["description"])))
-    if "version" in meta:
-        g.add((ont_uri, OWL.versionInfo, Literal(meta["version"])))
+    g.add((ont_uri, RDFS.label, Literal(meta.name)))
+    if meta.description is not None:
+        g.add((ont_uri, RDFS.comment, Literal(meta.description)))
+    g.add((ont_uri, OWL.versionInfo, Literal(meta.version)))
 
-    # Entity types → OWL classes
-    for etype in data.get("entity_types", []):
-        _add_entity_type(g, etype)
+    # A property name used by several types is ONE property; its domain is
+    # the union of those types (as for relationships), its range the union of
+    # what they declare.
+    properties: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
+    for etype in ontology.entity_types.values():
+        dumped = etype.model_dump(mode="json", exclude_none=True)
+        _add_entity_type(g, dumped)
+        for prop in dumped["properties"]:
+            if prop.get("name"):
+                properties.setdefault(prop["name"], []).append((etype.name, prop))
 
-    # Relation types → OWL object properties
-    for rtype in data.get("relation_types", []):
-        _add_relation_type(g, rtype)
+    for name, uses in properties.items():
+        _add_property(g, name, uses)
+
+    for rtype in ontology.relationship_types.values():
+        _add_relation_type(g, rtype.model_dump(mode="json", exclude_none=True))
 
     logger.info(
-        f"Loaded ontology '{ont_name}' from {path.name}: "
+        f"Built ontology graph '{meta.name}': "
         f"{len(list(g.subjects(RDF.type, OWL.Class)))} classes, "
         f"{len(g)} triples"
     )
     return g
 
 
+def load_yaml_ontology(yaml_path: str | Path) -> Graph:
+    """Load ONE YAML ontology file, as written (no ``extends`` / ``includes``),
+    and convert it with :func:`ontology_graph`.
+
+    For a named ontology as the app uses it, read it through the registry
+    (:func:`registry_ontology_graph`): a published edit lives in the database,
+    not in the file.
+    """
+    return ontology_graph(Ontology.from_yaml(yaml_path))
+
+
+async def registry_ontology_graph(name: str, registry: Any = None) -> Optional[Graph]:
+    """The graph of ontology ``name`` as the registry holds it: the ACTIVE
+    version, ``extends`` / ``includes`` resolved. ``None`` when it is unknown.
+
+    Track OE.6. Consumers: the notebook TTL export
+    (``GET /api/notebooks/{id}/schema.ttl``) and :func:`load_all_ontologies`.
+    """
+    from ontology_manager.registry import get_ontology_registry
+
+    ontology = await (registry or get_ontology_registry()).get(name)
+    return None if ontology is None else ontology_graph(ontology)
+
+
 def _add_entity_type(g: Graph, etype: Dict[str, Any]) -> None:
-    """Add an entity type as an OWL class with properties."""
+    """Add an entity type as an OWL class (its properties: :func:`_add_property`)."""
     name = etype.get("name", "")
     if not name:
         return
 
-    cls_uri = ON[name]
+    cls_uri = class_iri(name)
     g.add((cls_uri, RDF.type, OWL.Class))
     g.add((cls_uri, RDFS.label, Literal(name)))
 
@@ -196,43 +289,42 @@ def _add_entity_type(g: Graph, etype: Dict[str, Any]) -> None:
         g.add((cls_uri, RDFS.comment, Literal(etype["description"])))
 
     if "parent_type" in etype:
-        g.add((cls_uri, RDFS.subClassOf, ON[etype["parent_type"]]))
+        g.add((cls_uri, RDFS.subClassOf, class_iri(etype["parent_type"])))
 
     # Extraction hints as SKOS notes
     for hint in etype.get("extraction_hints", []):
         g.add((cls_uri, SKOS.note, Literal(hint)))
 
-    # Properties
-    for prop in etype.get("properties", []):
-        _add_property(g, cls_uri, prop)
 
-
-def _add_property(g: Graph, domain_uri: URIRef, prop: Dict[str, Any]) -> None:
-    """Add a property to the ontology."""
-    name = prop.get("name", "")
-    if not name:
-        return
-
-    prop_uri = ON[name]
-    dtype = prop.get("data_type", "string")
-
-    if dtype == "reference":
-        # Object property (links to another entity)
-        g.add((prop_uri, RDF.type, OWL.ObjectProperty))
-        g.add((prop_uri, RDFS.domain, domain_uri))
-        ref_type = prop.get("reference_type", "Thing")
-        g.add((prop_uri, RDFS.range, ON[ref_type]))
-    else:
-        # Datatype property
-        g.add((prop_uri, RDF.type, OWL.DatatypeProperty))
-        g.add((prop_uri, RDFS.domain, domain_uri))
-        xsd_type = DTYPE_MAP.get(dtype, XSD.string)
-        if xsd_type:
-            g.add((prop_uri, RDFS.range, xsd_type))
-
+def _add_property(g: Graph, name: str, uses: List[Tuple[str, Dict[str, Any]]]) -> None:
+    """Add property ``name``, declared by the types in ``uses``."""
+    prop_uri = property_iri(name)
     g.add((prop_uri, RDFS.label, Literal(name)))
-    if "description" in prop:
-        g.add((prop_uri, RDFS.comment, Literal(prop["description"])))
+
+    ranges: List[Any] = []
+    for _type_name, prop in uses:
+        dtype = prop.get("data_type", "string")
+        if dtype == "reference":
+            # Object property (links to another entity)
+            g.add((prop_uri, RDF.type, OWL.ObjectProperty))
+            ranges.append(class_iri(prop.get("reference_type", "Thing")))
+        else:
+            # Datatype property
+            g.add((prop_uri, RDF.type, OWL.DatatypeProperty))
+            xsd_type = DTYPE_MAP.get(dtype, XSD.string)
+            if xsd_type:
+                ranges.append(xsd_type)
+        if "description" in prop:
+            g.add((prop_uri, RDFS.comment, Literal(prop["description"])))
+
+    g.add((prop_uri, RDFS.domain, _class_expression(g, [t for t, _ in uses])))
+    ranges = list(dict.fromkeys(ranges))
+    if len(ranges) == 1:
+        g.add((prop_uri, RDFS.range, ranges[0]))
+    elif ranges:
+        datatypes = all(str(r).startswith(str(XSD)) for r in ranges)
+        g.add((prop_uri, RDFS.range,
+               _union(g, ranges, RDFS.Datatype if datatypes else OWL.Class)))
 
 
 def _add_relation_type(g: Graph, rtype: Dict[str, Any]) -> None:
@@ -241,59 +333,59 @@ def _add_relation_type(g: Graph, rtype: Dict[str, Any]) -> None:
     if not name:
         return
 
-    prop_uri = ON[name]
+    prop_uri = class_iri(name)
     g.add((prop_uri, RDF.type, OWL.ObjectProperty))
     g.add((prop_uri, RDFS.label, Literal(name)))
 
     if "description" in rtype:
         g.add((prop_uri, RDFS.comment, Literal(rtype["description"])))
-    if "source_types" in rtype:
-        for st in rtype["source_types"]:
-            g.add((prop_uri, RDFS.domain, ON[st]))
-    if "target_types" in rtype:
-        for tt in rtype["target_types"]:
-            g.add((prop_uri, RDFS.range, ON[tt]))
+    # The model derives domain / range from the source_types / target_types
+    # spelling most shipped relationships use.
+    domain = _class_expression(g, rtype.get("domain", []))
+    if domain is not None:
+        g.add((prop_uri, RDFS.domain, domain))
+    range_ = _class_expression(g, rtype.get("range", []))
+    if range_ is not None:
+        g.add((prop_uri, RDFS.range, range_))
 
     for hint in rtype.get("extraction_hints", []):
         g.add((prop_uri, SKOS.note, Literal(hint)))
 
 
 # ============================================================================
-# Load all ontologies from directory
+# All ontologies, from the registry
 # ============================================================================
 
 
-def load_all_ontologies(
-    ontology_dir: str | Path = "packages/ontology-manager/ontologies",
-) -> Graph:
-    """Load all YAML ontologies from a directory into a merged graph.
+async def load_all_ontologies(registry: Any = None) -> Graph:
+    """Every ontology the registry lists, as it holds them, in one merged graph.
 
-    Args:
-        ontology_dir: Directory containing .yaml ontology files.
+    Track OE.6: read through the registry (:func:`registry_ontology_graph`), not
+    the YAML directory, so a published edit is in it.
 
     Returns:
         Merged rdflib Graph with all ontologies.
     """
+    from ontology_manager.registry import get_ontology_registry
+
     _require_rdflib()
+    registry = registry or get_ontology_registry()
     merged = Graph()
     merged.bind("on", ON)
     merged.bind("onr", ONR)
     merged.bind("owl", OWL)
     merged.bind("skos", SKOS)
 
-    path = Path(ontology_dir)
-    if not path.exists():
-        logger.warning(f"Ontology directory not found: {path}")
-        return merged
-
-    for yaml_file in sorted(path.glob("*.yaml")):
+    names = await registry.list_ontologies()
+    for name in names:
         try:
-            g = load_yaml_ontology(yaml_file)
-            merged += g
+            g = await registry_ontology_graph(name, registry)
+            if g is not None:
+                merged += g
         except Exception as e:
-            logger.error(f"Failed to load {yaml_file.name}: {e}")
+            logger.error(f"Failed to load {name}: {e}")
 
-    logger.info(f"Merged ontology: {len(merged)} triples from {len(list(path.glob('*.yaml')))} files")
+    logger.info(f"Merged ontology: {len(merged)} triples from {len(names)} ontologies")
     return merged
 
 
@@ -369,16 +461,23 @@ def generate_shacl_shapes(ontology_graph: Graph) -> Graph:
     shapes.bind("on", ON)
     shapes.bind("xsd", XSD)
 
-    # For each OWL class, create a NodeShape
+    # The properties of each class: a domain may be a union of classes.
+    props_of: Dict[Any, List[Any]] = {}
+    for prop_uri, domain in ontology_graph.subject_objects(RDFS.domain):
+        for cls in union_members(ontology_graph, domain):
+            props_of.setdefault(cls, []).append(prop_uri)
+
+    # For each OWL class (not the anonymous unions), create a NodeShape
     for cls_uri in ontology_graph.subjects(RDF.type, OWL.Class):
+        if isinstance(cls_uri, BNode):
+            continue
         cls_name = str(cls_uri).split("/")[-1]
         shape_uri = ON[f"{cls_name}Shape"]
 
         shapes.add((shape_uri, RDF.type, SH.NodeShape))
         shapes.add((shape_uri, SH.targetClass, cls_uri))
 
-        # Find properties with this class as domain
-        for prop_uri in ontology_graph.subjects(RDFS.domain, cls_uri):
+        for prop_uri in props_of.get(cls_uri, []):
             prop_name = str(prop_uri).split("/")[-1]
             prop_shape = BNode()
 
@@ -386,15 +485,23 @@ def generate_shacl_shapes(ontology_graph: Graph) -> Graph:
             shapes.add((prop_shape, SH.path, prop_uri))
             shapes.add((prop_shape, SH.name, Literal(prop_name)))
 
-            # Determine constraint type
-            if (prop_uri, RDF.type, OWL.ObjectProperty) in ontology_graph:
-                # Object property → sh:class
-                for range_cls in ontology_graph.objects(prop_uri, RDFS.range):
-                    shapes.add((prop_shape, SH["class"], range_cls))
-            else:
-                # Datatype property → sh:datatype
-                for range_dt in ontology_graph.objects(prop_uri, RDFS.range):
-                    shapes.add((prop_shape, SH.datatype, range_dt))
+            # Object property -> sh:class; datatype property -> sh:datatype. A
+            # union range allows any one of its members (sh:or), not all.
+            kind = (SH["class"] if (prop_uri, RDF.type, OWL.ObjectProperty) in ontology_graph
+                    else SH.datatype)
+            for range_node in ontology_graph.objects(prop_uri, RDFS.range):
+                members = union_members(ontology_graph, range_node)
+                if len(members) == 1:
+                    shapes.add((prop_shape, kind, members[0]))
+                    continue
+                alternatives = []
+                for member in members:
+                    alternative = BNode()
+                    shapes.add((alternative, kind, member))
+                    alternatives.append(alternative)
+                options = BNode()
+                Collection(shapes, options, alternatives)
+                shapes.add((prop_shape, SH["or"], options))
 
     num_shapes = len(list(shapes.subjects(RDF.type, SH.NodeShape)))
     logger.info(f"Generated {num_shapes} SHACL shapes ({len(shapes)} triples)")
@@ -445,14 +552,14 @@ async def validate_entities(
         eid = str(ent.get("id", "")).replace(":", "_")
         subj = ONR[eid]
         etype = ent.get("entity_type", "Thing")
-        data_graph.add((subj, RDF.type, ON[etype]))
+        data_graph.add((subj, RDF.type, class_iri(etype)))
         data_graph.add((subj, ON["canonical_name"], Literal(ent.get("canonical_name", ""))))
 
         for key, val in ent.get("properties", {}).items():
             if isinstance(val, str):
-                data_graph.add((subj, ON[key], Literal(val)))
+                data_graph.add((subj, property_iri(key), Literal(val)))
             elif isinstance(val, (int, float)):
-                data_graph.add((subj, ON[key], Literal(val)))
+                data_graph.add((subj, property_iri(key), Literal(val)))
 
     # Validate
     conforms, results_graph, results_text = shacl_validate(
@@ -623,29 +730,21 @@ async def _demo():
     """Demo: load ontologies, export, generate SHACL, create SKOS."""
     import os
 
-    # Find ontology directory
-    base = os.getenv("PROJECT_ROOT", "/mnt/e/Repos/Private/open-notebook")
-    ont_dir = Path(base) / "packages" / "ontology-manager" / "ontologies"
+    merged = await load_all_ontologies()
+    logger.info(f"Merged ontology: {len(merged)} triples")
 
-    if ont_dir.exists():
-        # Load all ontologies
-        merged = load_all_ontologies(ont_dir)
-        logger.info(f"Merged ontology: {len(merged)} triples")
+    # Export as Turtle
+    out_dir = Path(os.getenv("SHARED_DATA_DIR", ".")) / "ontologies"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    export_ontology(merged, "turtle", out_dir / "merged_ontology.ttl")
 
-        # Export as Turtle
-        out_dir = Path(os.getenv("SHARED_DATA_DIR", ".")) / "ontologies"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        export_ontology(merged, "turtle", out_dir / "merged_ontology.ttl")
+    # Generate SHACL shapes
+    shapes = generate_shacl_shapes(merged)
+    export_ontology(shapes, "turtle", out_dir / "shapes.ttl")
 
-        # Generate SHACL shapes
-        shapes = generate_shacl_shapes(merged)
-        export_ontology(shapes, "turtle", out_dir / "shapes.ttl")
-
-        # Validate entities (if any exist)
-        report = await validate_entities(shapes, limit=100)
-        logger.info(f"Validation: {report}")
-    else:
-        logger.warning(f"Ontology directory not found: {ont_dir}")
+    # Validate entities (if any exist)
+    report = await validate_entities(shapes, limit=100)
+    logger.info(f"Validation: {report}")
 
     # Create Brede Welvaart SKOS
     bw = create_brede_welvaart_skos()

@@ -48,12 +48,11 @@ from shared.models.base import ObjectModel
 # extraction would have written a base nobody chose, over the read paths'
 # ``"scholarly"``, permanently.
 #
-# ``"general"`` specifically is not a viable value here: ``general.yaml`` uses a
-# dict-of-dicts ``entity_types`` shape that ``load_yaml_ontology`` cannot parse
-# (verified: it raises ``AttributeError: 'str' object has no attribute 'get'``),
-# so a notebook carrying it would 500 the schema-TTL download. Keeping the
-# constant next to the model is what makes that single decision visible in one
-# place instead of implied by a request parameter.
+# Until OE.6 ``"general"`` was also not a viable value: its dict-of-dicts
+# ``entity_types`` made the schema-TTL download 500. The export now reads the
+# registry, which parses that shape. Keeping the constant next to the model is
+# what makes that single decision visible in one place instead of implied by a
+# request parameter.
 DEFAULT_BASE_ONTOLOGY = "scholarly"
 
 

@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-import yaml
 from fastapi import FastAPI, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
@@ -114,51 +113,51 @@ SURREALDB_PASS = os.getenv("SURREALDB_PASS", "root")
 
 EMBED_MODEL = os.getenv("EMBEDDING_MODEL", "mxbai-embed-large")
 
-ONTOLOGY_DIR = Path(os.getenv("ONTOLOGY_DIR", "/app/ontologies"))
 DEFAULT_ONTOLOGY = os.getenv("DEFAULT_ONTOLOGY", "regiodeal")
 CHUNK_SIZE = int(os.getenv("EXTRACTION_CHUNK_SIZE", "4000"))
 
 # ---------------------------------------------------------------------------
 # Ontology loading
 # ---------------------------------------------------------------------------
+#
+# Track OE.6: this service no longer reads ontology files. The caller (app-main's
+# `POST /api/services/extract`, `services_proxy._registry_ontologies`) sends the
+# OWN content of every ontology as app-main's registry holds it — the active
+# version, so a publish in the ontology editor reaches the next extraction. The
+# YAML files baked into this image, and the per-process caches that never
+# expired, would have kept the ontologies of the day the image was built.
 
-_ontology_cache: Dict[str, str] = {}
-_ontology_raw_cache: Dict[str, Dict] = {}
 
-
-def _load_ontology_yaml(name: str, _visited: Optional[set] = None) -> Dict:
-    """Load an ontology YAML and resolve includes/extends recursively.
+def _resolve_ontology(
+    name: str, sources: Dict[str, Dict], _visited: Optional[set] = None
+) -> Dict:
+    """Resolve an ontology's includes/extends recursively from ``sources``.
 
     Merges entity_types, relationship_types, extraction_rules, and
     extraction_patterns from all included ontologies. Prevents circular
     includes.
     """
-    if name in _ontology_raw_cache:
-        return _ontology_raw_cache[name]
-
     if _visited is None:
         _visited = set()
     if name in _visited:
         return {}
     _visited.add(name)
 
-    path = ONTOLOGY_DIR / f"{name}.yaml"
-    if not path.exists():
-        logger.warning(f"Ontology '{name}' not found at {path}")
+    ont = sources.get(name)
+    if ont is None:
+        logger.warning(f"Ontology '{name}' not in the request's ontologies")
         return {}
 
-    with open(path, encoding="utf-8") as f:
-        ont = yaml.safe_load(f) or {}
-
-    # Collect all entity types, relations, rules from this file
-    merged_entity_types = list(ont.get("entity_types", []))
-    merged_relation_types = list(ont.get("relationship_types", []))
+    # Collect all entity types, relations, rules from this ontology (the
+    # registry stores each collection as a mapping keyed by name)
+    merged_entity_types = list((ont.get("entity_types") or {}).values())
+    merged_relation_types = list((ont.get("relationship_types") or {}).values())
     merged_extraction_rules = list(ont.get("extraction_rules", []))
 
     # Resolve 'extends' (single parent)
     extends = ont.get("metadata", {}).get("extends")
     if extends and isinstance(extends, str):
-        parent = _load_ontology_yaml(extends, _visited)
+        parent = _resolve_ontology(extends, sources, _visited)
         merged_entity_types = list(parent.get("entity_types", [])) + merged_entity_types
         merged_relation_types = list(parent.get("relationship_types", [])) + merged_relation_types
         merged_extraction_rules = list(parent.get("extraction_rules", [])) + merged_extraction_rules
@@ -167,7 +166,7 @@ def _load_ontology_yaml(name: str, _visited: Optional[set] = None) -> Dict:
     includes = ont.get("metadata", {}).get("includes", [])
     if isinstance(includes, list):
         for inc_name in includes:
-            inc = _load_ontology_yaml(inc_name, _visited)
+            inc = _resolve_ontology(inc_name, sources, _visited)
             merged_entity_types.extend(inc.get("entity_types", []))
             merged_relation_types.extend(inc.get("relationship_types", []))
             merged_extraction_rules.extend(inc.get("extraction_rules", []))
@@ -189,20 +188,16 @@ def _load_ontology_yaml(name: str, _visited: Optional[set] = None) -> Dict:
         "claim_types": ont.get("claim_types", []),
     }
 
-    _ontology_raw_cache[name] = result
     return result
 
 
-def _load_ontology_prompt(name: str) -> str:
-    """Load an ontology and format as extraction prompt context.
+def _ontology_prompt(name: str, sources: Dict[str, Dict]) -> str:
+    """Format an ontology as extraction prompt context.
 
     Resolves includes/extends to produce a complete prompt with
     all entity types, relation types, and extraction rules.
     """
-    if name in _ontology_cache:
-        return _ontology_cache[name]
-
-    ont = _load_ontology_yaml(name)
+    ont = _resolve_ontology(name, sources)
     if not ont:
         return ""
 
@@ -241,14 +236,7 @@ def _load_ontology_prompt(name: str) -> str:
         f"{len(ont.get('relationship_types', []))} relation types, "
         f"{len(rules)} rules"
     )
-
-    _ontology_cache[name] = prompt
     return prompt
-
-
-def list_ontologies() -> List[str]:
-    """List available ontology names."""
-    return sorted(p.stem for p in ONTOLOGY_DIR.glob("*.yaml"))
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +571,13 @@ class ExtractRequest(BaseModel):
     write_to_db: bool = Field(default=True, description="Write entities/relations to SurrealDB")
     model_override: Optional[ModelOverride] = Field(default=None, description="Override default LLM")
     override: Optional[ExtractionOverride] = None
+    ontologies: Dict[str, Dict[str, Any]] = Field(
+        ...,
+        description=(
+            "Own content of every ontology by name, as app-main's registry holds "
+            "it (OE.6); the chosen ontology is resolved from these"
+        ),
+    )
 
 
 class EntityResult(BaseModel):
@@ -624,7 +619,9 @@ def health():
 
 @app.get("/ontologies")
 def get_ontologies():
-    return {"ontologies": list_ontologies(), "default": DEFAULT_ONTOLOGY}
+    """The ontology used when a request names none. OE.6: the ontologies
+    themselves come with each request; app-main lists them from its registry."""
+    return {"default": DEFAULT_ONTOLOGY}
 
 
 @app.get("/routing")
@@ -651,7 +648,7 @@ async def extract(req: ExtractRequest):
     privacy = req.privacy or "internal"
     model_override_dict = req.model_override.model_dump(exclude_none=True) if req.model_override else None
 
-    ontology_prompt = _load_ontology_prompt(ontology_name)
+    ontology_prompt = _ontology_prompt(ontology_name, req.ontologies)
     if not ontology_prompt:
         raise HTTPException(status_code=400, detail=f"Ontology '{ontology_name}' not found")
 
