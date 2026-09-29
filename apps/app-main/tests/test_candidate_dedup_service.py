@@ -836,3 +836,138 @@ async def test_a_plain_row_never_supplies_the_shape() -> None:
     report = await _service(rows).propose_candidates()
     [c] = [c for c in report.review if c.method == "surface_parts"]
     assert c.evidence == "type_suffix: economische zaken"
+
+
+# --- WB.0: the fuzzy distance pre-check changes speed, not the answer ---------
+
+
+def _edit(rng, text: str, n: int) -> str:
+    """``text`` with ``n`` random substitutions, insertions or deletions."""
+    chars = list(text)
+    for _ in range(n):
+        op = rng.choice("sid") if chars else "i"
+        pos = rng.randrange(len(chars) + (op == "i"))
+        if op == "s":
+            chars[pos] = rng.choice("abcdefghijklmnopqrstuvwxyz ")
+        elif op == "i":
+            chars.insert(pos, rng.choice("abcdefghijklmnopqrstuvwxyz"))
+        else:
+            del chars[pos]
+    return "".join(chars)
+
+
+def _pair_corpus() -> List[tuple]:
+    import random
+
+    rng = random.Random(0)
+    pairs = []
+    for length in (3, 5, 8, 13, 21, 34, 50, 55, 89):
+        for _ in range(12):
+            base = "".join(rng.choice("abcdefghij ") for _ in range(length))
+            base = base.strip() or "x"
+            for n in range(0, 12):
+                pairs.append((base, _edit(rng, base, n)))
+            other = "".join(rng.choice("klmnopqrst") for _ in range(length))
+            pairs.append((base, other))
+    return [(a, b) for a, b in pairs if a and b]
+
+
+@pytest.mark.parametrize("floor", [0.5, 0.86, 0.93])
+def test_distance_precheck_never_drops_a_pair_that_reaches_the_floor(
+    floor: float,
+) -> None:
+    svc = _service([])
+    dropped = 0
+    for a, b in _pair_corpus():
+        score = svc._fuzzy._compute_similarity(a, b)
+        may = CandidateDedupService._may_reach_similarity(a, b, floor)
+        if score >= floor:
+            assert may, (a, b, score)
+        dropped += not may
+    # It must also prune, or it only adds work.
+    assert dropped > 0
+
+
+def _near_floor_rows() -> List[Dict[str, Any]]:
+    import random
+
+    rng = random.Random(1)
+    rows = []
+    for k in range(60):
+        base = "".join(rng.choice("abcdefgh ") for _ in range(rng.randint(8, 40)))
+        base = f"{base.strip()} {k}"
+        rows.append(_entity(f"e:{k}a", base, "topic"))
+        rows.append(_entity(f"e:{k}b", _edit(rng, base, rng.randint(0, 4)), "topic"))
+    return rows
+
+
+@pytest.mark.asyncio
+async def test_distance_precheck_leaves_the_report_unchanged(monkeypatch) -> None:
+    rows = _near_floor_rows()
+
+    def _bands(report) -> set:
+        return {
+            (c.id_a, c.id_b, round(c.score, 12), c.band, c.method)
+            for c in [*report.auto_merge, *report.review]
+        }
+
+    with_check = await _service(rows).propose_candidates()
+    monkeypatch.setattr(
+        CandidateDedupService,
+        "_may_reach_similarity",
+        staticmethod(lambda a, b, floor: True),
+    )
+    without_check = await _service(rows).propose_candidates()
+
+    assert with_check.auto_merge_count + with_check.review_count > 0
+    assert _bands(with_check) == _bands(without_check)
+
+
+@pytest.mark.asyncio
+async def test_fuzzy_scores_only_pairs_that_can_band(monkeypatch) -> None:
+    rows = _near_floor_rows()
+    svc = _service(rows)
+    calls = []
+    real = svc._fuzzy._compute_similarity
+
+    def spy(a: str, b: str) -> float:
+        calls.append((a, b))
+        return real(a, b)
+
+    monkeypatch.setattr(svc._fuzzy, "_compute_similarity", spy)
+    await svc.propose_candidates()
+
+    n = len(rows)
+    assert len(calls) < n * (n - 1) // 2 // 20
+
+
+@pytest.mark.asyncio
+async def test_phonetic_blend_turns_the_precheck_off(monkeypatch) -> None:
+    """A phonetic match lifts a blended score above the string score, so a
+    string-distance bound no longer holds and must not drop the pair."""
+    rows = [
+        _entity("entity:a", "Smith Holding"),
+        _entity("entity:b", "Smyth Holdinq"),
+    ]
+    fuzzy = FuzzyDedupConfig(
+        enabled=True, phonetic_algorithm="soundex", phonetic_weight=0.5
+    )
+    svc = _service(rows, fuzzy=fuzzy)
+    monkeypatch.setattr(svc._fuzzy, "_phonetic_algo", "soundex")
+    monkeypatch.setattr(svc._fuzzy, "_phonetic_weight", 0.5)
+    monkeypatch.setattr(svc._fuzzy, "_phonetic_similarity", lambda a, b: 1.0)
+
+    report = await svc.propose_candidates()
+
+    assert _all_pairs(report) == {frozenset({"Smith Holding", "Smyth Holdinq"})}
+
+
+@pytest.mark.asyncio
+async def test_embedding_scores_each_pair_with_its_own_vectors() -> None:
+    rows = [
+        _entity("entity:a", "Stichting Alfa", embedding=[1.0, 0.0, 0.0]),
+        _entity("entity:b", "Beta Foundation", embedding=[0.999, 0.0447, 0.0]),
+        _entity("entity:c", "Gamma Werken", embedding=[0.0, 0.0, 1.0]),
+    ]
+    report = await _service(rows).propose_candidates()
+    assert _all_pairs(report) == {frozenset({"Stichting Alfa", "Beta Foundation"})}
