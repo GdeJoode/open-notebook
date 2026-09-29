@@ -8,6 +8,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 from loguru import logger
 from surrealdb import AsyncSurreal, RecordID
+from websockets.exceptions import WebSocketException
 
 from surrealdb_service.config import SurrealDBConfig, get_config
 
@@ -60,28 +61,89 @@ async def db_connection(
         await db.close()
 
 
+class DatabaseUnavailableError(RuntimeError):
+    """No usable SurrealDB connection within the pool's time bounds.
+
+    Raised instead of waiting forever, so a request fails (503) and the next
+    one can succeed once the database answers again.
+    """
+
+
+# Errors after which a connection's socket state is unknown. A statement the
+# server rejected arrives as a plain ``Exception`` from the SDK and leaves the
+# socket usable, so it is not listed here.
+_BROKEN_CONNECTION_ERRORS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    OSError,
+    WebSocketException,
+)
+
+
+def _current_task_cancelling() -> bool:
+    """True when the running task itself has been asked to cancel.
+
+    ``Task.cancelling`` exists from Python 3.11; without it every
+    ``CancelledError`` is taken to be ours, which is the old behaviour.
+    """
+    task = asyncio.current_task()
+    cancelling = getattr(task, "cancelling", None)
+    return cancelling is None or cancelling() > 0
+
+
 class ConnectionPool:
     """
     Async connection pool for SurrealDB using asyncio.Queue.
 
     Reuses connections across requests to avoid the overhead of
     opening and closing a connection per query.
+
+    A semaphore holds one permit per connection that exists or is being
+    created, so a failed or cancelled sign-in hands its permit back instead of
+    leaking a slot. Every wait is bounded: sign-in (``connect_timeout``), the
+    liveness ping on reuse (``ping_timeout``), and the whole checkout,
+    including the wait for a free slot (``acquire_timeout``).
     """
 
     def __init__(
         self,
         config: Optional[SurrealDBConfig] = None,
         max_size: int = 10,
+        connect_timeout: Optional[float] = None,
+        ping_timeout: float = 5.0,
+        acquire_timeout: float = 30.0,
     ):
         self.config = config or get_config()
         self._max_size = max_size
         self._pool: asyncio.Queue[AsyncSurreal] = asyncio.Queue(maxsize=max_size)
-        self._size = 0
-        self._lock = asyncio.Lock()
+        self._slots = asyncio.Semaphore(max_size)
+        self._connect_timeout = (
+            connect_timeout
+            if connect_timeout is not None
+            else float(self.config.connection_timeout)
+        )
+        self._ping_timeout = ping_timeout
+        self._acquire_timeout = acquire_timeout
+        self._close_timeout = 2.0
+        # Set by close_all: connections handed back afterwards are closed.
+        self._closed = False
 
     async def _create_connection(self) -> AsyncSurreal:
         """Create and authenticate a new SurrealDB connection."""
         db = AsyncSurreal(self.config.url)
+        try:
+            await asyncio.wait_for(self._authenticate(db), self._connect_timeout)
+        except asyncio.TimeoutError as e:
+            await self._close_quietly(db)
+            raise DatabaseUnavailableError(
+                f"SurrealDB sign-in did not finish within {self._connect_timeout}s"
+            ) from e
+        except BaseException:
+            await self._close_quietly(db)
+            raise
+        return db
+
+    async def _authenticate(self, db: AsyncSurreal) -> None:
         await db.signin(
             {
                 "username": self.config.username,
@@ -89,85 +151,86 @@ class ConnectionPool:
             }
         )
         await db.use(self.config.namespace, self.config.database)
-        return db
 
     async def _health_check(self, conn: AsyncSurreal) -> bool:
         """Check if a connection is still alive."""
         try:
-            await conn.query("SELECT 1")
+            await asyncio.wait_for(conn.query("SELECT 1"), self._ping_timeout)
             return True
+        except asyncio.CancelledError:
+            if _current_task_cancelling():
+                raise
+            # The SDK cancels pending requests when the server closes the
+            # socket; nobody cancelled us, so the connection is dead.
+            return False
         except Exception:
             return False
+
+    async def _close_quietly(self, conn: AsyncSurreal) -> None:
+        try:
+            await asyncio.wait_for(conn.close(), self._close_timeout)
+        except Exception:
+            pass
+
+    async def _checkout(self) -> AsyncSurreal:
+        """Checkout within one deadline: the slot wait, pings and sign-in."""
+        try:
+            return await asyncio.wait_for(
+                self._checkout_unbounded(), self._acquire_timeout
+            )
+        except asyncio.TimeoutError as e:
+            raise DatabaseUnavailableError(
+                f"No SurrealDB connection within {self._acquire_timeout}s "
+                f"(pool of {self._max_size})"
+            ) from e
+
+    async def _checkout_unbounded(self) -> AsyncSurreal:
+        """Take a slot, then an idle healthy connection or a new one."""
+        await self._slots.acquire()
+        try:
+            while not self._pool.empty():
+                candidate = self._pool.get_nowait()
+                try:
+                    healthy = await self._health_check(candidate)
+                except BaseException:
+                    # Cancelled mid-ping: the candidate is off the queue and
+                    # nobody else will close it.
+                    await self._close_quietly(candidate)
+                    raise
+                if healthy:
+                    return candidate
+                await self._close_quietly(candidate)
+            return await self._create_connection()
+        except BaseException:
+            self._slots.release()
+            raise
 
     @asynccontextmanager
     async def acquire(self) -> AsyncGenerator[AsyncSurreal, None]:
         """Acquire a connection from the pool, creating one if needed."""
-        conn: Optional[AsyncSurreal] = None
-
-        # Try to reuse an existing connection
-        while not self._pool.empty():
-            try:
-                candidate = self._pool.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            if await self._health_check(candidate):
-                conn = candidate
-                break
-            else:
-                # Dead connection — discard and decrement size
-                async with self._lock:
-                    self._size -= 1
-                try:
-                    await candidate.close()
-                except Exception:
-                    pass
-
-        # Create a new connection if none available
-        if conn is None:
-            async with self._lock:
-                if self._size < self._max_size:
-                    self._size += 1
-                    create_new = True
-                else:
-                    create_new = False
-
-            if create_new:
-                conn = await self._create_connection()
-            else:
-                # Pool exhausted — wait for one to be returned
-                conn = await self._pool.get()
-                if not await self._health_check(conn):
-                    try:
-                        await conn.close()
-                    except Exception:
-                        pass
-                    conn = await self._create_connection()
-
+        conn = await self._checkout()
+        broken = False
         try:
             yield conn
+        except _BROKEN_CONNECTION_ERRORS as e:
+            broken = True
+            if isinstance(e, asyncio.CancelledError) and not _current_task_cancelling():
+                # The SDK cancelled the query because the socket closed.
+                raise DatabaseUnavailableError("SurrealDB connection lost") from e
+            raise
         finally:
-            # Return connection to pool
-            try:
+            keep = not broken and not self._closed
+            if keep:
                 self._pool.put_nowait(conn)
-            except asyncio.QueueFull:
-                # Pool is full — close the excess connection
-                async with self._lock:
-                    self._size -= 1
-                try:
-                    await conn.close()
-                except Exception:
-                    pass
+            self._slots.release()
+            if not keep:
+                await self._close_quietly(conn)
 
     async def close_all(self) -> None:
         """Close all pooled connections. Call during app shutdown."""
+        self._closed = True
         while not self._pool.empty():
-            try:
-                conn = self._pool.get_nowait()
-                await conn.close()
-            except Exception:
-                pass
-        async with self._lock:
-            self._size = 0
+            await self._close_quietly(self._pool.get_nowait())
         logger.info("Connection pool closed")
 
 

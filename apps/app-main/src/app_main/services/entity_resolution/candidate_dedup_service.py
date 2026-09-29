@@ -38,6 +38,7 @@ entity has no vector (``embedding=[]``).
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -380,6 +381,20 @@ class CandidateDedupService:
             notebook_id=notebook_id
         )
 
+        # Scoring is pure CPU (~0.7 s on the live graph); a worker thread keeps
+        # the event loop serving other requests meanwhile (WB.0).
+        return await asyncio.to_thread(
+            self._propose_from_rows, rows, split_pairs, merge_rules, notebook_id
+        )
+
+    def _propose_from_rows(
+        self,
+        rows: List[Dict[str, Any]],
+        split_pairs: "set[frozenset[str]]",
+        merge_rules: List[Any],
+        notebook_id: Optional[str],
+    ) -> CandidateReport:
+        """Score and band ``rows``. Synchronous; touches no shared state."""
         # Index entities by id and bucket by entity_type (type-aware guard).
         by_id: Dict[str, Dict[str, Any]] = {}
         buckets: Dict[str, List[Dict[str, Any]]] = {}
@@ -432,16 +447,17 @@ class CandidateDedupService:
         for (id_a, id_b), per_method in best.items():
             rec_a = by_id[id_a]
             rec_b = by_id[id_b]
+            # Band each method against ITS OWN floors and take the strongest
+            # result — see `_record` for why a single cross-scale maximum
+            # demoted auto-merges. Banded before the veto so the name
+            # normalisation runs only for pairs that band at all (WB.0).
+            score, method, band = self._strongest_band(per_method)
+            if band is None:
+                continue
+
             norm_pair = frozenset({rec_a["name"], rec_b["name"]})
             # Hard veto: a force-split pair is never proposed, any score.
             if self._vetoed(norm_pair, rec_a["name"], rec_b["name"], split_pairs):
-                continue
-
-            # Band each method against ITS OWN floors and take the strongest
-            # result — see `_record` for why a single cross-scale maximum
-            # demoted auto-merges.
-            score, method, band = self._strongest_band(per_method)
-            if band is None:
                 continue
 
             # Discriminator guard: a short trailing/embedded discriminator
@@ -659,6 +675,12 @@ class CandidateDedupService:
         best: Dict[Tuple[str, str], Dict[str, float]],
     ) -> None:
         """Score every same-type pair with the fuzzy resolver's similarity."""
+        review_floor, _ = self._fuzzy_bands()
+        # The distance pre-check holds only for a plain Levenshtein score.
+        prefilter = self.fuzzy_config.algorithm == "levenshtein" and (
+            self.fuzzy_config.phonetic_algorithm == "none"
+            or self.fuzzy_config.phonetic_weight <= 0
+        )
         n = len(group)
         for i in range(n):
             norm_i = fold_for_comparison(group[i]["name"])
@@ -671,8 +693,45 @@ class CandidateDedupService:
                 if norm_i == norm_j:
                     # Deterministic-equal — already K.1/K.3 territory, skip.
                     continue
+                if prefilter and not self._may_reach_similarity(
+                    norm_i, norm_j, review_floor
+                ):
+                    # Below the review floor: it would band as nothing.
+                    continue
                 score = self._fuzzy._compute_similarity(norm_i, norm_j)
                 self._record(best, group[i]["id"], group[j]["id"], score, "fuzzy")
+
+    @staticmethod
+    def _may_reach_similarity(a: str, b: str, floor: float) -> bool:
+        """False only when the Levenshtein similarity is surely below ``floor``.
+
+        WB.0: the full distance over every same-type pair (94k pairs, 85M DP
+        cells on the live graph) took ~15 s of the candidates request, almost
+        all of it on pairs nowhere near the review floor. Similarity is
+        ``1 - distance / max_len``, so reaching ``floor`` needs ``distance <=
+        (1 - floor) * max_len``; the distance is at least the length gap, and
+        a DP row's minimum never decreases, so the check stops as soon as the
+        limit is out of reach. The resolver still scores every pair that
+        passes.
+        """
+        m = max(len(a), len(b))
+        # Raise the estimate to the largest distance the resolver's own float
+        # comparison accepts, so rounding never drops a pair on the boundary.
+        limit = int((1.0 - floor) * m)
+        while limit < m and 1 - (limit + 1) / m >= floor:
+            limit += 1
+        if abs(len(a) - len(b)) > limit:
+            return False
+        if len(a) > len(b):
+            a, b = b, a
+        row = list(range(len(a) + 1))
+        for i, cb in enumerate(b, 1):
+            prev, row = row, [i] + [0] * len(a)
+            for j, ca in enumerate(a, 1):
+                row[j] = min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (ca != cb))
+            if min(row) > limit:
+                return False
+        return True
 
     def _score_embedding(
         self,
@@ -693,14 +752,15 @@ class CandidateDedupService:
             return
 
         n = len(with_emb)
+        # Convert each vector once, not once per pair.
+        vecs = [np.asarray(e["embedding"], dtype="float64") for e in with_emb]
+        norms = [float(np.linalg.norm(v)) for v in vecs]
         for i in range(n):
-            vi = np.asarray(with_emb[i]["embedding"], dtype="float64")
-            ni = float(np.linalg.norm(vi))
+            vi, ni = vecs[i], norms[i]
             if ni == 0.0:
                 continue
             for j in range(i + 1, n):
-                vj = np.asarray(with_emb[j]["embedding"], dtype="float64")
-                nj = float(np.linalg.norm(vj))
+                vj, nj = vecs[j], norms[j]
                 if nj == 0.0 or vi.shape != vj.shape:
                     continue
                 score = float(np.dot(vi, vj) / (ni * nj))

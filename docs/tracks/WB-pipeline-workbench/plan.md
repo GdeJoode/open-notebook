@@ -165,6 +165,63 @@ redo it.
     1 s on the live data;
   - the "Database Connection Failed" page no longer appears while the
     database is up.
+- **WB.0 built** (branch `feature/wb0-db-responsiveness`):
+  - The hang was the pool, not SurrealDB. A failed or cancelled sign-in
+    leaked a slot, and the 2 s health check cancels slow sign-ins; after
+    ten leaks every request waited forever. Slots are now semaphore
+    permits handed back on every failure path. Sign-in, the reuse ping and
+    the wait for a slot are bounded, and the pool raises
+    `DatabaseUnavailableError` (a 503 handler exists). A connection whose
+    request was cancelled or hit a transport error is closed.
+  - The 503 reaches the client only where no `except Exception` turns it
+    into a 500. That holds for `/api/notebooks`, `/api/sources/` and
+    `/api/triage/queue` (tested); most other routers still answer 500.
+  - Health check: the probe outlives the 2 s check and is shared, so a
+    slow sign-in finishes into the pool. A timeout reports online unless
+    the last finished probe failed.
+  - Trade-off: a database that accepts connections but never answers
+    reads "online" until a probe fails, i.e. up to the pool's 30 s
+    checkout deadline plus the check interval (about 30–35 s). A refused
+    connection reads offline at once.
+  - Slow sign-in not reproduced: root sign-in now takes 0.02 s (argon2id,
+    m=19 MiB, t=2). SurrealDB's `/health` was 250× slower in the slow
+    phase too, so the whole process was starved by host load, not auth.
+  - `/api/entity-resolution/candidates`: 16 s → 0.7 s on a snapshot of
+    the live graph, same report. It was pure-Python Levenshtein over 94k
+    pairs, on the event loop.
+  - Live: `/api/notebooks` 0.03 s, `/api/sources/` 0.11 s, triage queue
+    0.23–0.35 s.
+- **Review round 1** (REVISIONS_NEEDED, 1 major, 8 minors), all fixed:
+  - M1: a checkout cancelled during the reuse ping left the candidate
+    open and off the queue. It is now closed.
+  - m2: a `CancelledError` from the SDK (server closed the socket) is told
+    apart from our own cancellation with `Task.cancelling()`. During the
+    ping the candidate counts as dead; inside a request it becomes
+    `DatabaseUnavailableError`.
+  - m3: a probe that ended cancelled counts as a failure; `/api/config`
+    answers offline instead of raising.
+  - m4: `/api/sources/` re-raises `DatabaseUnavailableError`; the note
+    above no longer claims a general 503.
+  - m5: `acquire_timeout` now bounds the whole checkout (slot, pings,
+    sign-in).
+  - m6: `close_all` bounds each close; connections returned afterwards
+    are closed.
+  - m7: the online-while-down window is recorded above.
+  - m8: candidate scoring runs in `asyncio.to_thread`.
+  - Live timings are verified after merge and rebuild.
+
+> **Carried from WB.0 review round 2 (approved; minors, not blocking):**
+> 1. An SDK-caused `CancelledError` during `signin`/`use` (socket closed by a
+>    restarting server) still escapes `_create_connection` as a raw cancel;
+>    the m2 handling covers the ping and the body only.
+> 2. `/api/config` decides by `probe.cancelled()` alone: a request cancelled
+>    in the same tick as a cancelled shared probe answers "offline" and
+>    swallows its own cancellation.
+> 3. The SDK's `close()` swallows a cancel while awaiting its receive task, so
+>    a deadline firing during `_close_quietly` can be missed (bounded by the
+>    next wait). Pre-existing.
+> - The `to_thread` test's last assert checks nothing; the thread-id assert is
+>   the guard.
 
 **WB.1 — The Werkbak (attention inbox)** (~2d)
 - **Backend:** one `GET /api/attention` that counts and lists, across all
