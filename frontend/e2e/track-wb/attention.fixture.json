@@ -1,6 +1,7 @@
 {
   "generated_at": "2026-09-29T09:00:00+00:00",
   "since": "2026-09-28T18:00:00+00:00",
+  "since_default": false,
   "total": 1257,
   "groups": [
     {"key": "sources_failed", "title": "Failed sources", "count": 0, "action": "", "link": "/sources?stage=failed", "nav": "/sources", "needs_action": true, "detail": null, "items": [], "error": null, "counted": 0},

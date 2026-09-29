@@ -45,7 +45,11 @@ async function mockBackend(page: Page, lastSeen: string | null) {
     const url = new URL(route.request().url())
     calls.attention.push(url)
     const since = url.searchParams.get('since')
-    return json(route, since ? { ...fixture, since } : { ...fixture, since: null, arrived: [] })
+    // As the server does without a mark: the last 7 days, flagged.
+    const week = new Date(Date.parse(fixture.generated_at) - 7 * 864e5).toISOString()
+    return json(route, since
+      ? { ...fixture, since, since_default: false }
+      : { ...fixture, since: week, since_default: true })
   })
   await page.route(/\/api\/sources(\?.*)?$/, (route) => {
     const url = new URL(route.request().url())
@@ -125,8 +129,9 @@ test.describe('WB.1 — the Werkbak', () => {
   test('first visit: nothing is stored until Mark as seen', async ({ page }) => {
     const calls = await mockBackend(page, null)
     await gotoAndWait(page, '/')
-    await expect(page.getByTestId('werkbak-since-note')).toContainText('Mark as seen to list',
+    await expect(page.getByTestId('werkbak-since-note')).toContainText('The last 7 days',
       { timeout: 45_000 })
+    await expect(page.getByTestId('werkbak-group-new_sources')).toBeVisible()
     expect(calls.attention.every((u) => !u.searchParams.has('since'))).toBe(true)
     expect(await page.evaluate((k) => window.localStorage.getItem(k), LAST_SEEN)).toBeNull()
 

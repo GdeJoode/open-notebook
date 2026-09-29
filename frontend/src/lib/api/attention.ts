@@ -45,11 +45,14 @@ export interface AttentionGroup {
 export interface AttentionReport {
   /** Server time of the read; stored as "last seen" when marked as seen. */
   generated_at: string
-  since?: string | null
+  /** Start of the arrivals window: the client's mark, else 7 days back. */
+  since: string
+  /** True when no mark was sent and `since` is the default window. */
+  since_default: boolean
   /** Sum of the groups' `counted`: each thing to act on once. */
   total: number
   groups: AttentionGroup[]
-  /** What arrived after `since`; empty without it. */
+  /** What arrived after `since`. */
   arrived: AttentionGroup[]
 }
 

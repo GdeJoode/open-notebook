@@ -184,7 +184,8 @@ async function mockSourceDetail(page: Page): Promise<void> {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ generated_at: '2026-09-29T00:00:00+00:00', since: null,
+      body: JSON.stringify({ generated_at: '2026-09-29T00:00:00+00:00',
+        since: '2026-09-22T00:00:00+00:00', since_default: true,
         total: 0, groups: [], arrived: [] }),
     }),
   )

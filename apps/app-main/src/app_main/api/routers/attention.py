@@ -21,7 +21,8 @@ async def get_attention(
         None,
         description=(
             "The client's last visit (the generated_at of the report it marked "
-            "as seen); adds what arrived after it"
+            "as seen). Without it, arrivals cover the last 7 days and the "
+            "report sets since_default"
         ),
     ),
     svc: AttentionService = Depends(get_attention_service),

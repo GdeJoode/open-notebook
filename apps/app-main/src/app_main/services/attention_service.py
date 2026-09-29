@@ -16,7 +16,7 @@ the sidebar badges (``frontend/src/components/layout/AppSidebar.tsx``).
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import quote
 
@@ -44,6 +44,10 @@ ITEM_LIMIT = 5
 GROUP_TIMEOUT_S = 5.0
 
 FINISHED = [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]
+
+# Without a client mark (a browser that never pressed "Mark as seen"), the
+# arrivals cover this window, and the report says it is the default.
+DEFAULT_SINCE_DAYS = 7
 
 # The retype panel lives in the ontology editor; it retypes under every active
 # ontology, whichever one it is opened on.
@@ -95,10 +99,13 @@ class AttentionGroup(BaseModel):
 
 class AttentionReport(BaseModel):
     """``generated_at`` is the server's time of the read: a client that marks
-    the report as seen stores it and sends it back as ``since``."""
+    the report as seen stores it and sends it back as ``since``. Without one,
+    ``since`` is :data:`DEFAULT_SINCE_DAYS` before the read and
+    ``since_default`` is true."""
 
     generated_at: str
-    since: Optional[str] = None
+    since: str
+    since_default: bool = False
     total: int = 0
     groups: List[AttentionGroup] = Field(default_factory=list)
     arrived: List[AttentionGroup] = Field(default_factory=list)
@@ -260,17 +267,16 @@ class AttentionService:
                             needs_action=False),
              lambda g: self._jobs_running(g, unfinished)),
         ]
-        arrived_specs: List[tuple] = []
-        if since is not None:
-            since = _utc(since)
-            arrived_specs = [
-                (AttentionGroup(key="new_sources", title="New sources", nav="/sources",
-                                needs_action=False, link="/sources"),
-                 lambda g: self._new_sources(g, since)),
-                (AttentionGroup(key="finished_jobs", title="Finished jobs",
-                                needs_action=False),
-                 lambda g: self._finished_jobs(g, since)),
-            ]
+        since_default = since is None
+        since = now - timedelta(days=DEFAULT_SINCE_DAYS) if since is None else _utc(since)
+        arrived_specs: List[tuple] = [
+            (AttentionGroup(key="new_sources", title="New sources", nav="/sources",
+                            needs_action=False, link="/sources"),
+             lambda g: self._new_sources(g, since)),
+            (AttentionGroup(key="finished_jobs", title="Finished jobs",
+                            needs_action=False),
+             lambda g: self._finished_jobs(g, since)),
+        ]
 
         try:
             await asyncio.gather(
@@ -287,7 +293,8 @@ class AttentionService:
         _count_once(groups)
         return AttentionReport(
             generated_at=now.isoformat(),
-            since=since.isoformat() if since else None,
+            since=since.isoformat(),
+            since_default=since_default,
             total=sum(g.counted for g in groups),
             groups=groups,
             arrived=[g for g, _ in arrived_specs],

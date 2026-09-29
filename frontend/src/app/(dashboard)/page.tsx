@@ -20,11 +20,12 @@ import { setLastSeen } from '@/lib/werkbak/last-seen'
  * read from `GET /api/attention`. One card per group the endpoint returns,
  * with its count, the top items and one action linking to where it is
  * resolved. "Since your last visit" lists what arrived after the report the
- * owner last marked as seen (stored per browser); it only moves on "Mark as
- * seen", so working through the list and coming back keeps it.
+ * owner last marked as seen (stored per browser), or over the last 7 days
+ * before the first mark; it only moves on "Mark as seen", so working through
+ * the list and coming back keeps it.
  */
 export default function WerkbakPage() {
-  const { data, isLoading, isError, error, refetch, isFetching, since } = useAttention()
+  const { data, isLoading, isError, error, refetch, isFetching } = useAttention()
 
   const shown = (g: AttentionGroup) => g.count > 0 || !!g.error
   const needsYou = data?.groups.filter((g) => g.needs_action && shown(g)) ?? []
@@ -80,9 +81,9 @@ export default function WerkbakPage() {
                       Since your last visit
                     </h2>
                     <p className="text-sm text-muted-foreground" data-testid="werkbak-since-note">
-                      {since
-                        ? `Marked as seen ${formatDistanceToNow(new Date(since), { addSuffix: true })}.`
-                        : 'Mark as seen to list what arrives from now on.'}
+                      {data.since_default
+                        ? 'The last 7 days: nothing marked as seen on this browser yet.'
+                        : `Marked as seen ${formatDistanceToNow(new Date(data.since), { addSuffix: true })}.`}
                     </p>
                   </div>
                   <Button
@@ -95,18 +96,17 @@ export default function WerkbakPage() {
                     Mark as seen
                   </Button>
                 </div>
-                {since &&
-                  (arrived.length > 0 ? (
-                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      {arrived.map((g) => (
-                        <GroupCard key={g.key} group={g} />
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground" data-testid="werkbak-nothing-new">
-                      Nothing new.
-                    </p>
-                  ))}
+                {arrived.length > 0 ? (
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {arrived.map((g) => (
+                      <GroupCard key={g.key} group={g} />
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground" data-testid="werkbak-nothing-new">
+                    Nothing new.
+                  </p>
+                )}
               </section>
 
               <section aria-labelledby="werkbak-needs-you" className="space-y-4">

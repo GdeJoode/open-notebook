@@ -308,7 +308,12 @@ async def test_seeded_values(env) -> None:
     async with _client(_app()) as c:
         body = (await c.get("/api/attention")).json()
     by_key = {g["key"]: g for g in body["groups"]}
-    assert body["arrived"] == []
+    # No mark sent: arrivals over the default window, and the report says so.
+    assert body["since_default"] is True
+    since = datetime.fromisoformat(body["since"])
+    assert datetime.fromisoformat(body["generated_at"]) - since == timedelta(days=7)
+    arrived = {g["key"]: g["count"] for g in body["arrived"]}
+    assert arrived["new_sources"] == 8
     assert by_key["sources_failed"]["count"] == 1
     # "Busy" has a queued job; "Fresh" was written less than 15 minutes ago.
     stalled = by_key["sources_stalled"]
@@ -376,6 +381,7 @@ async def test_api_source_and_failed_job_show_on_next_open(env) -> None:
         await JobRepository().update_status(job.id, JobStatus.FAILED, error_message="parse failed")
 
         body = (await c.get("/api/attention", params={"since": last_visit})).json()
+        assert body["since_default"] is False
         arrived = {g["key"]: g for g in body["arrived"]}
         groups = {g["key"]: g for g in body["groups"]}
         link = f"/sources/{quote(source_id, safe='')}"

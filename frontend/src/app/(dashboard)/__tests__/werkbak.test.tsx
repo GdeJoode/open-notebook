@@ -28,6 +28,8 @@ vi.mock('next/link', () => ({
 import WerkbakPage from '../page'
 
 const REPORT = fixture as AttentionReport
+// What the server answers without a mark: the last 7 days, flagged.
+const DEFAULT_WINDOW = { since: '2026-09-22T09:00:00+00:00', since_default: true }
 const KEY = 'werkbak.lastSeen'
 
 function mount() {
@@ -109,20 +111,19 @@ describe('Werkbak', () => {
     expect(await screen.findByTestId('werkbak-group-triage')).toBeTruthy()
   })
 
-  it('without a last visit: no arrivals, and nothing is stored on render', async () => {
-    get.mockResolvedValue({ ...REPORT, since: null, arrived: [] })
+  it('without a last visit: the default window, labelled, and nothing stored', async () => {
+    get.mockResolvedValue({ ...REPORT, ...DEFAULT_WINDOW })
     mount()
     await screen.findByTestId('werkbak-group-triage')
     expect(get).toHaveBeenCalledWith(null)
     expect(screen.getByTestId('werkbak-since-note').textContent)
-      .toContain('Mark as seen to list')
-    expect(screen.queryByTestId('werkbak-group-new_sources')).toBeNull()
-    expect(screen.queryByTestId('werkbak-nothing-new')).toBeNull()
+      .toBe('The last 7 days: nothing marked as seen on this browser yet.')
+    expect(screen.getByTestId('werkbak-group-new_sources')).toBeTruthy()
     expect(window.localStorage.getItem(KEY)).toBeNull()
   })
 
   it('Mark as seen stores the report time and reads again since it', async () => {
-    get.mockResolvedValueOnce({ ...REPORT, since: null, arrived: [] })
+    get.mockResolvedValueOnce({ ...REPORT, ...DEFAULT_WINDOW })
       .mockResolvedValue({
         ...REPORT,
         arrived: REPORT.arrived.map((g) => ({ ...g, count: 0, items: [] })),
@@ -141,6 +142,7 @@ describe('Werkbak', () => {
     mount()
     const card = await screen.findByTestId('werkbak-group-new_sources')
     expect(get).toHaveBeenCalledWith(REPORT.since)
+    expect(screen.getByTestId('werkbak-since-note').textContent).toMatch(/^Marked as seen /)
     expect(within(card).getByTestId('werkbak-item-source:api1').getAttribute('href'))
       .toBe('/sources/source%3Aapi1')
     const jobs = screen.getByTestId('werkbak-group-finished_jobs')
@@ -155,7 +157,7 @@ describe('Werkbak', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('denied')
     })
-    get.mockResolvedValue({ ...REPORT, since: null, arrived: [] })
+    get.mockResolvedValue({ ...REPORT, ...DEFAULT_WINDOW })
     mount()
     await screen.findByTestId('werkbak-group-triage')
     expect(get).toHaveBeenCalledWith(null)
