@@ -25,6 +25,7 @@ repositories — no DB needed.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock
 
@@ -62,6 +63,14 @@ def _make_notebook(notebook_id: str = "notebook:test1") -> Notebook:
         created=_NOW,
         updated=_NOW,
     )
+
+
+def _registry_graph(name: str) -> Graph:
+    """The ontology as the registry holds it (the conftest keeps the registry on
+    the shipped YAML), converted the way the export converts it (OE.6)."""
+    from ontology_manager.rdf_owl_shacl import registry_ontology_graph
+
+    return asyncio.run(registry_ontology_graph(name))
 
 
 def _make_app(notebook_svc: AsyncMock, schema_repo: AsyncMock) -> TestClient:
@@ -109,10 +118,7 @@ class TestTheOldLayerIsNotExported:
         return Graph().parse(data=resp.text, format="turtle")
 
     def test_the_ttl_is_the_base_ontology(self):
-        from ontology_manager.rdf_owl_shacl import load_yaml_ontology
-        from app_main.api.routers.schemas import _ontologies_dir
-
-        baseline = load_yaml_ontology(_ontologies_dir() / "scholarly.yaml")
+        baseline = _registry_graph("scholarly")
         exported = self._graph(_OLD_LAYER, excluded=["Thesis"])
         assert set(exported) == set(Graph().parse(
             data=baseline.serialize(format="turtle"), format="turtle"))
@@ -182,17 +188,11 @@ class TestNotebookWithoutSchemaRow:
         # whichever ontology the router calls "default". Pulling the
         # name from the router constant keeps this test honest if the
         # default ever changes via config.
-        from ontology_manager.rdf_owl_shacl import load_yaml_ontology
-        from app_main.api.routers.schemas import (
-            _DEFAULT_BASE_ONTOLOGY,
-            _ontologies_dir,
-        )
+        from app_main.api.routers.schemas import _DEFAULT_BASE_ONTOLOGY
 
         returned = Graph()
         returned.parse(data=body, format="turtle")
-        baseline = load_yaml_ontology(
-            _ontologies_dir() / f"{_DEFAULT_BASE_ONTOLOGY}.yaml"
-        )
+        baseline = _registry_graph(_DEFAULT_BASE_ONTOLOGY)
 
         assert set(returned.subjects(RDF.type, OWL.Class)) == set(
             baseline.subjects(RDF.type, OWL.Class)

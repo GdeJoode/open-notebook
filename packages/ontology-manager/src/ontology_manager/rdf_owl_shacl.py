@@ -35,8 +35,9 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import yaml
 from loguru import logger
+
+from ontology_manager.schema import Ontology
 
 # ---------------------------------------------------------------------------
 # Optional-dependency sentinels
@@ -126,27 +127,23 @@ else:
 # ============================================================================
 
 
-def load_yaml_ontology(yaml_path: str | Path) -> Graph:
-    """Load a YAML ontology definition and convert to an rdflib OWL graph.
+def ontology_graph(ontology: Ontology) -> Graph:
+    """Convert an ontology model to an rdflib OWL graph.
 
-    Reads the YAML format used by packages/ontology-manager/ontologies/*.yaml
-    and produces an OWL ontology with:
-    - owl:Class for each entity_type
-    - rdfs:subClassOf for parent_type
-    - owl:DatatypeProperty / owl:ObjectProperty for properties
-    - rdfs:comment for descriptions and extraction_hints
+    Produces:
+    - owl:Class for each entity type, rdfs:subClassOf for its parent_type
+    - owl:DatatypeProperty / owl:ObjectProperty for its properties
+    - owl:ObjectProperty for each relationship type, with rdfs:domain /
+      rdfs:range (either spelling: domain/range or source_types/target_types)
+    - rdfs:comment for descriptions, skos:note for extraction_hints
 
-    Args:
-        yaml_path: Path to the YAML ontology file.
-
-    Returns:
-        rdflib Graph containing the OWL ontology.
+    Track OE.6: every export builds from the MODEL, so it can take what the
+    registry holds (the active version, ``extends`` / ``includes`` resolved)
+    rather than a YAML file. Reading the raw YAML exported no relationship type
+    (it looked for a key ``relation_types`` no ontology uses) and failed on the
+    mapping form of ``entity_types`` (``base``, ``general``).
     """
     _require_rdflib()
-
-    path = Path(yaml_path)
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
 
     g = Graph()
     g.bind("on", ON)
@@ -155,31 +152,50 @@ def load_yaml_ontology(yaml_path: str | Path) -> Graph:
     g.bind("skos", SKOS)
     g.bind("dcterms", DCTERMS)
 
-    # Ontology metadata
-    meta = data.get("metadata", {})
-    ont_name = meta.get("name", path.stem)
-    ont_uri = ON[ont_name]
+    meta = ontology.metadata
+    ont_uri = ON[meta.name]
     g.add((ont_uri, RDF.type, OWL.Ontology))
-    g.add((ont_uri, RDFS.label, Literal(ont_name)))
-    if "description" in meta:
-        g.add((ont_uri, RDFS.comment, Literal(meta["description"])))
-    if "version" in meta:
-        g.add((ont_uri, OWL.versionInfo, Literal(meta["version"])))
+    g.add((ont_uri, RDFS.label, Literal(meta.name)))
+    if meta.description is not None:
+        g.add((ont_uri, RDFS.comment, Literal(meta.description)))
+    g.add((ont_uri, OWL.versionInfo, Literal(meta.version)))
 
-    # Entity types → OWL classes
-    for etype in data.get("entity_types", []):
-        _add_entity_type(g, etype)
+    for etype in ontology.entity_types.values():
+        _add_entity_type(g, etype.model_dump(mode="json", exclude_none=True))
 
-    # Relation types → OWL object properties
-    for rtype in data.get("relation_types", []):
-        _add_relation_type(g, rtype)
+    for rtype in ontology.relationship_types.values():
+        _add_relation_type(g, rtype.model_dump(mode="json", exclude_none=True))
 
     logger.info(
-        f"Loaded ontology '{ont_name}' from {path.name}: "
+        f"Built ontology graph '{meta.name}': "
         f"{len(list(g.subjects(RDF.type, OWL.Class)))} classes, "
         f"{len(g)} triples"
     )
     return g
+
+
+def load_yaml_ontology(yaml_path: str | Path) -> Graph:
+    """Load ONE YAML ontology file, as written (no ``extends`` / ``includes``),
+    and convert it with :func:`ontology_graph`.
+
+    For a named ontology as the app uses it, read it through the registry
+    (:func:`registry_ontology_graph`): a published edit lives in the database,
+    not in the file.
+    """
+    return ontology_graph(Ontology.from_yaml(yaml_path))
+
+
+async def registry_ontology_graph(name: str, registry: Any = None) -> Optional[Graph]:
+    """The graph of ontology ``name`` as the registry holds it: the ACTIVE
+    version, ``extends`` / ``includes`` resolved. ``None`` when it is unknown.
+
+    Track OE.6. Consumers: the notebook TTL export
+    (``GET /api/notebooks/{id}/schema.ttl``) and :func:`load_all_ontologies`.
+    """
+    from ontology_manager.registry import get_ontology_registry
+
+    ontology = await (registry or get_ontology_registry()).get(name)
+    return None if ontology is None else ontology_graph(ontology)
 
 
 def _add_entity_type(g: Graph, etype: Dict[str, Any]) -> None:
@@ -247,12 +263,12 @@ def _add_relation_type(g: Graph, rtype: Dict[str, Any]) -> None:
 
     if "description" in rtype:
         g.add((prop_uri, RDFS.comment, Literal(rtype["description"])))
-    if "source_types" in rtype:
-        for st in rtype["source_types"]:
-            g.add((prop_uri, RDFS.domain, ON[st]))
-    if "target_types" in rtype:
-        for tt in rtype["target_types"]:
-            g.add((prop_uri, RDFS.range, ON[tt]))
+    # The model derives domain / range from the source_types / target_types
+    # spelling most shipped relationships use. "*" (any type) is owl:Thing.
+    for st in rtype.get("domain", []):
+        g.add((prop_uri, RDFS.domain, OWL.Thing if st == "*" else ON[st]))
+    for tt in rtype.get("range", []):
+        g.add((prop_uri, RDFS.range, OWL.Thing if tt == "*" else ON[tt]))
 
     for hint in rtype.get("extraction_hints", []):
         g.add((prop_uri, SKOS.note, Literal(hint)))
@@ -263,37 +279,35 @@ def _add_relation_type(g: Graph, rtype: Dict[str, Any]) -> None:
 # ============================================================================
 
 
-def load_all_ontologies(
-    ontology_dir: str | Path = "packages/ontology-manager/ontologies",
-) -> Graph:
-    """Load all YAML ontologies from a directory into a merged graph.
+async def load_all_ontologies(registry: Any = None) -> Graph:
+    """Every ontology the registry lists, as it holds them, in one merged graph.
 
-    Args:
-        ontology_dir: Directory containing .yaml ontology files.
+    Track OE.6: read through the registry (:func:`registry_ontology_graph`), not
+    the YAML directory, so a published edit is in it.
 
     Returns:
         Merged rdflib Graph with all ontologies.
     """
+    from ontology_manager.registry import get_ontology_registry
+
     _require_rdflib()
+    registry = registry or get_ontology_registry()
     merged = Graph()
     merged.bind("on", ON)
     merged.bind("onr", ONR)
     merged.bind("owl", OWL)
     merged.bind("skos", SKOS)
 
-    path = Path(ontology_dir)
-    if not path.exists():
-        logger.warning(f"Ontology directory not found: {path}")
-        return merged
-
-    for yaml_file in sorted(path.glob("*.yaml")):
+    names = await registry.list_ontologies()
+    for name in names:
         try:
-            g = load_yaml_ontology(yaml_file)
-            merged += g
+            g = await registry_ontology_graph(name, registry)
+            if g is not None:
+                merged += g
         except Exception as e:
-            logger.error(f"Failed to load {yaml_file.name}: {e}")
+            logger.error(f"Failed to load {name}: {e}")
 
-    logger.info(f"Merged ontology: {len(merged)} triples from {len(list(path.glob('*.yaml')))} files")
+    logger.info(f"Merged ontology: {len(merged)} triples from {len(names)} ontologies")
     return merged
 
 
@@ -623,29 +637,21 @@ async def _demo():
     """Demo: load ontologies, export, generate SHACL, create SKOS."""
     import os
 
-    # Find ontology directory
-    base = os.getenv("PROJECT_ROOT", "/mnt/e/Repos/Private/open-notebook")
-    ont_dir = Path(base) / "packages" / "ontology-manager" / "ontologies"
+    merged = await load_all_ontologies()
+    logger.info(f"Merged ontology: {len(merged)} triples")
 
-    if ont_dir.exists():
-        # Load all ontologies
-        merged = load_all_ontologies(ont_dir)
-        logger.info(f"Merged ontology: {len(merged)} triples")
+    # Export as Turtle
+    out_dir = Path(os.getenv("SHARED_DATA_DIR", ".")) / "ontologies"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    export_ontology(merged, "turtle", out_dir / "merged_ontology.ttl")
 
-        # Export as Turtle
-        out_dir = Path(os.getenv("SHARED_DATA_DIR", ".")) / "ontologies"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        export_ontology(merged, "turtle", out_dir / "merged_ontology.ttl")
+    # Generate SHACL shapes
+    shapes = generate_shacl_shapes(merged)
+    export_ontology(shapes, "turtle", out_dir / "shapes.ttl")
 
-        # Generate SHACL shapes
-        shapes = generate_shacl_shapes(merged)
-        export_ontology(shapes, "turtle", out_dir / "shapes.ttl")
-
-        # Validate entities (if any exist)
-        report = await validate_entities(shapes, limit=100)
-        logger.info(f"Validation: {report}")
-    else:
-        logger.warning(f"Ontology directory not found: {ont_dir}")
+    # Validate entities (if any exist)
+    report = await validate_entities(shapes, limit=100)
+    logger.info(f"Validation: {report}")
 
     # Create Brede Welvaart SKOS
     bw = create_brede_welvaart_skos()

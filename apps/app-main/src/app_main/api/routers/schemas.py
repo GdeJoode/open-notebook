@@ -3,7 +3,9 @@
 Exposes ``GET /api/notebooks/{notebook_id}/schema.ttl`` — the download of the
 notebook's declared base ontology. Since OE.5 the ontologies are shared by
 every notebook and nothing per notebook is added to them here: a curator's
-decision reaches them through the ontology editor.
+decision reaches them through the ontology editor. Since OE.6 the export reads
+the ontology through the registry: the active version, ``extends`` /
+``includes`` resolved, relationship types included.
 
 Design notes
 ------------
@@ -33,7 +35,6 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -56,8 +57,7 @@ from app_main.services.schema_edit_service import (
     SchemaEditService,
     UnknownExtensionError,
 )
-from ontology_manager.rdf_owl_shacl import load_yaml_ontology
-from ontology_manager.registry import OntologyRegistry
+from ontology_manager.rdf_owl_shacl import registry_ontology_graph
 from rdflib import Graph
 from shared.models.notebook_schema import (
     DEFAULT_BASE_ONTOLOGY,
@@ -85,12 +85,7 @@ router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["schemas"])
 # ``"general"``): scholarly is the canonical default for notebook schemas
 # in the B-track corpus — it carries the classes (Article, Author,
 # Cohort, PreprintServer, ...) that B.1c/B.1d's LLM pass-1 actually
-# emits against. ``general.yaml`` uses a dict-of-dicts ``entity_types``
-# shape that ``load_yaml_ontology`` does not currently parse, so
-# switching to it would 500 every fresh-notebook download.
-#
-# When B.3a wires the manager config end-to-end (or when ``general.yaml``
-# is normalised to the list-of-dicts shape), revisit this literal.
+# emits against.
 #
 # PC.1 moved the literal to ``shared.models.notebook_schema`` so the extraction
 # service — which now PERSISTS a row on a notebook's first document — writes the
@@ -111,23 +106,6 @@ def _declared_base(base_ontology: Optional[str]) -> Optional[str]:
     the default, as before.
     """
     return base_ontology or None
-
-
-def _ontologies_dir() -> Path:
-    """Resolve the bundled YAML ontology directory.
-
-    Delegates to ``OntologyRegistry._find_ontology_dir`` (via the
-    singleton's cached ``_ontology_dir`` attribute) so the resolution
-    rules (package-relative → cwd → ``ONTOLOGY_DIR`` env → fallback)
-    stay in one place. This avoids the ``parents[N]`` fragility of
-    computing the repo root from this file's location.
-
-    The ``_ontology_dir`` attribute is private by convention but stable
-    across the codebase (set in ``__init__`` and never mutated). When
-    ``_find_ontology_dir`` is exposed as part of a public registry
-    contract in a future phase, replace this with the public helper.
-    """
-    return OntologyRegistry()._ontology_dir  # noqa: SLF001 — see docstring
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +172,11 @@ async def export_notebook_schema_ttl(
     OE.5: the entries in ``accepted_extensions`` are no longer added. They are
     the proposal queue's history; a proposal accepted since OE.5 is part of the
     shared ontology it was published to, and the per-notebook edits recorded
-    before are retired. This export reads the base YAML (not the registry) until
-    OE.6.
+    before are retired.
+
+    OE.6: the ontology is read through the registry — the ACTIVE version, so a
+    publish is in it, with ``extends`` / ``includes`` resolved — and its
+    relationship types are exported as object properties.
 
     Returns 404 when ``notebook_id`` doesn't resolve to a real notebook.
     Returns 200 with the bare base ontology if the notebook exists but
@@ -222,28 +203,24 @@ async def export_notebook_schema_ttl(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    yaml_path = _ontologies_dir() / f"{base_ontology}.yaml"
-    if not yaml_path.exists():
+    exported = await registry_ontology_graph(base_ontology)
+    if exported is None:
         logger.error(
-            "Base ontology YAML missing for notebook {}: {} not found",
+            "Base ontology {!r} of notebook {} not found in the registry",
+            base_ontology,
             notebook_id,
-            yaml_path,
         )
         # 500 — this is a server-side misconfiguration, not a client error.
         raise HTTPException(
             status_code=500,
-            detail=(
-                f"Base ontology '{base_ontology}' YAML not found on server. "
-                "Check the ONTOLOGY_DIR environment variable."
-            ),
+            detail=f"Base ontology '{base_ontology}' not found on server.",
         )
 
-    graph: Graph = load_yaml_ontology(yaml_path)
     logger.info(
         "Exporting schema TTL for {} (base={})", notebook_id, base_ontology
     )
 
-    turtle = graph.serialize(format="turtle")
+    turtle = exported.serialize(format="turtle")
 
     filename = _safe_filename(notebook_id)
     return Response(
