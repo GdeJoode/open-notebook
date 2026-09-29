@@ -682,6 +682,20 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 >   `sh:class` per union member, shapes for the unions, properties in `ON`,
 >   an unknown base answered 200.
 
+> **Carried from OE.6 review round 2 (approved; minors, not blocking):**
+> 1. `policy.jurisdiction` (string on one type, reference on two) becomes a
+>    class/datatype union: invalid OWL DL, and its SHACL `sh:or` of `sh:class`
+>    rejects a valid string value (pyshacl-confirmed). Pre-existing data issue.
+> 2. `load_all_ontologies` merges per-ontology graphs (`merged += g`), so 41
+>    properties/relationships regain several domain/range unions, i.e. an
+>    intersection. Only `_demo` and a dead semantic-intelligence script use it.
+> 3. SHACL `sh:name` shows the encoded fragment (`trial%20phase`).
+> 4. No test runs pyshacl on data against the new `sh:or` shapes.
+> 5. `ONP` is not bound as a prefix; `generate_shacl_shapes` output order
+>    varies between runs.
+> - Outside the diff: `validate_entities` interpolates `entity_type` into its
+>   query.
+
 Rough total ~9–10 days. OE.0 and OE.1 are worth doing first on their own: even
 without a UI they make every YAML change safe (the validator can run in CI),
 and they remove the silent data loss that would otherwise come with the first
