@@ -1,6 +1,6 @@
 # Track OE — Ontology editor
 
-**Status: BUILT (OE.0–OE.6; OE.6 awaits review).** Owner, 2026-09-28: "follow the recommendations,
+**Status: COMPLETE 2026-09-29 (OE.0–OE.6 merged, each after adversarial review).** Owner, 2026-09-28: "follow the recommendations,
 start with OE.0". Every decision below is taken as its recommended option:
 OE-D1 (a) DB versions, OE-D2 (a) retire the per-notebook layer, OE-D3 (a)
 retype only after a confirmed dry run, OE-D4 entity + relationship types in
