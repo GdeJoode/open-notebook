@@ -971,3 +971,29 @@ async def test_embedding_scores_each_pair_with_its_own_vectors() -> None:
     ]
     report = await _service(rows).propose_candidates()
     assert _all_pairs(report) == {frozenset({"Stichting Alfa", "Beta Foundation"})}
+
+
+@pytest.mark.asyncio
+async def test_scoring_runs_off_the_event_loop(monkeypatch) -> None:
+    """The pure-CPU scoring must not block other requests (WB.0)."""
+    import asyncio
+    import threading
+
+    loop_thread = threading.get_ident()
+    seen = []
+    real = CandidateDedupService._score_fuzzy
+
+    def spy(self, group, best):
+        seen.append(threading.get_ident())
+        return real(self, group, best)
+
+    monkeypatch.setattr(CandidateDedupService, "_score_fuzzy", spy)
+    rows = [
+        _entity("entity:a", "Koninkrijksrelaties"),
+        _entity("entity:b", "Koninkrijksreiaties"),
+    ]
+    report = await _service(rows).propose_candidates()
+
+    assert report.auto_merge_count == 1
+    assert seen and all(t != loop_thread for t in seen)
+    assert asyncio.get_running_loop().is_running()

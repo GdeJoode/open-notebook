@@ -38,6 +38,7 @@ entity has no vector (``embedding=[]``).
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -380,6 +381,20 @@ class CandidateDedupService:
             notebook_id=notebook_id
         )
 
+        # Scoring is pure CPU (~0.7 s on the live graph); a worker thread keeps
+        # the event loop serving other requests meanwhile (WB.0).
+        return await asyncio.to_thread(
+            self._propose_from_rows, rows, split_pairs, merge_rules, notebook_id
+        )
+
+    def _propose_from_rows(
+        self,
+        rows: List[Dict[str, Any]],
+        split_pairs: "set[frozenset[str]]",
+        merge_rules: List[Any],
+        notebook_id: Optional[str],
+    ) -> CandidateReport:
+        """Score and band ``rows``. Synchronous; touches no shared state."""
         # Index entities by id and bucket by entity_type (type-aware guard).
         by_id: Dict[str, Dict[str, Any]] = {}
         buckets: Dict[str, List[Dict[str, Any]]] = {}
