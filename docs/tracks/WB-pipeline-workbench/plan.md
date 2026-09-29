@@ -235,12 +235,13 @@ redo it.
     pool took that for a statement error and pooled a connection nobody
     reads any more. The next checkout waited out the 5 s ping on it. A
     socket lost mid-query surfaces as the same `KeyError` (m2 above assumed
-    a `CancelledError`; the fake was wrong). Fix: every SDK call (query,
-    sign-in, use, ping) runs in its own task behind `asyncio.shield`, so only
-    the wait is cancelled. The pool still closes the connection after a
-    cancel, which also stops the statement on the server (measured). A
-    connection goes back only while its receive task runs; checkout drops a
-    dead one without pinging it. A request on a lost socket raises
+    a `CancelledError`; the fake was wrong). Fix: every query and ping runs
+    in its own task behind `asyncio.shield`, and so does each sign-in as a
+    whole (see review rounds 1 and 2), so only the wait is cancelled. The
+    pool still closes the connection after a cancel, which also stops the
+    statement on the server (measured). A connection goes back only while
+    its receive task runs; checkout drops a dead one without pinging it. A
+    request or sign-in on a lost or refused socket raises
     `DatabaseUnavailableError`. This also settles carried minor 1.
   - The reuse ping was `SELECT 1`, a parse error on SurrealDB v2. So every
     checkout closed every idle connection and signed in anew (28 sign-ins
@@ -261,9 +262,9 @@ redo it.
     - M1: the shielded sign-in outlived a `connect_timeout` or a cancelled
       caller while still in its handshake, so the close found no socket and
       the connection stayed open and signed in. Now an abandoned sign-in is
-      closed once it ends (cancelled after `connect_timeout` if it hangs),
-      and `close_all` ends pending sign-ins so their connections close.
-      Live tests with a 0.3 s handshake leave no receive task behind.
+      closed once it ends, and `close_all` ends pending sign-ins so their
+      connections close. Live tests with a 0.3 s handshake leave no receive
+      task behind. (Round 2 bounds its lifetime and its slot.)
     - m2: SDK pinned to `==1.0.6`. A request the SDK cancels while the
       caller was not cancelled raises `DatabaseUnavailableError`, and that
       error never pools its connection. A client without `recv_task` is not
@@ -274,6 +275,25 @@ redo it.
       checks no task is left pending.
     - m5: the pool size comes from `SurrealDBConfig.pool_size` (default 20,
       `SURREAL_POOL_SIZE`).
+  - **Review round 2** (REVISIONS_NEEDED, 1 major, 3 minors), all fixed:
+    - M1: round 1 released the slot when the caller gave up while the
+      sign-in went on for up to another `connect_timeout`: against a server
+      that never answers, 20 callers cut off after 50 ms with a pool of 2
+      left 11 sockets open at once. Now the sign-in task owns the caller's
+      slot until it has ended and its connection is closed, and
+      `connect_timeout` counts from its start: a sign-in lives at most
+      `connect_timeout`, and there are never more sign-ins than slots. New
+      callers wait for a slot within the checkout deadline and get a 503.
+    - m2: round 1 left sign-in errors untranslated (refused:
+      `ConnectionRefusedError`, lost mid-sign-in: `KeyError`, so 500). A
+      sign-in that fails for the connection's sake raises
+      `DatabaseUnavailableError` again; `/api/notebooks` against a refused
+      port answers 503.
+    - m3: `close_all` repeats until no abandoned sign-in is left, and one
+      abandoned on a closed pool is ended at once, so "Connection pool
+      closed" is true when it is logged.
+    - m4: `_current_task_cancelling` documents that a cancel swallowed
+      without `uncancel()` leaves the task "cancelling".
 
 **WB.1 — The Werkbak (attention inbox)** (~2d)
 - **Backend:** one `GET /api/attention` that counts and lists, across all
