@@ -14,6 +14,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from surrealdb_service.connection import DatabaseUnavailableError
 from surrealdb_service.migrations import AsyncMigrationManager
 
 from app_main.api.agent_auth import AgentAuditMiddleware
@@ -436,6 +437,17 @@ def create_app() -> FastAPI:
         logger.error(f"Database error: {exc}")
         return JSONResponse(
             status_code=500, content={"detail": "Database operation failed"}
+        )
+
+    @application.exception_handler(DatabaseUnavailableError)
+    async def db_unavailable_handler(
+        request: Request, exc: DatabaseUnavailableError
+    ):
+        logger.warning(f"Database unavailable: {exc}")
+        return JSONResponse(
+            status_code=503,
+            content={"detail": str(exc)},
+            headers={"Retry-After": "5"},
         )
 
     @application.exception_handler(ExternalServiceError)
