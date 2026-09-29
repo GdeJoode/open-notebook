@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List
@@ -24,6 +25,7 @@ import surrealdb_service.config as surreal_config
 import surrealdb_service.connection as conn
 from fastapi import FastAPI
 from job_queue.repository import JobRepository
+from loguru import logger
 from shared.models.notebook_schema import NotebookSchema
 from shared.types.enums import JobStatus
 from surrealdb_service.repositories.notebook_schema import NotebookSchemaRepository
@@ -606,3 +608,40 @@ async def test_one_notebook_and_a_loose_source_are_two_places(env) -> None:
     assert gated["detail"] == "In 2 places: open each below."
     assert (gated["action"], gated["link"]) == ("", "")
     assert gated["item_total"] == 2 and gated["count"] == 2
+
+
+async def _page_reads(c: httpx.AsyncClient) -> float:
+    """The slowest of the page reads the owner saw degrade after a report."""
+    took = []
+    for url in ("/api/sources/?limit=50", "/api/triage/queue", "/api/notebooks"):
+        started = time.perf_counter()
+        assert (await c.get(url)).status_code == 200, url
+        took.append(time.perf_counter() - started)
+    return max(took)
+
+
+async def test_reports_cut_short_by_deadlines_leave_later_reads_fast(env) -> None:
+    """The live regression (2026-09-29): group deadlines cancelled queries in
+    flight, and the page reads after them waited on connections nobody reads.
+    Deadlines from 1 to 60 ms cut groups off at every point of their reads."""
+    await _seed()
+    logged: List[str] = []
+    sink = logger.add(lambda m: logged.append(str(m)), level="DEBUG")
+    try:
+        async with _client(_app()) as c:
+            await _page_reads(c)  # warm: connections and caches
+            before = max([await _page_reads(c) for _ in range(3)])
+            timed_out = 0
+            for i in range(30):
+                report = await AttentionService(
+                    group_timeout_s=0.001 + 0.002 * i).report()
+                timed_out += sum(1 for g in report.groups if g.error)
+            after = max([await _page_reads(c) for _ in range(3)])
+    finally:
+        logger.remove(sink)
+    assert timed_out, "no deadline fell inside a read"
+    # Within noise: a dead pooled connection costs a 5 s reuse ping.
+    assert after < max(3 * before, before + 0.5), (before, after)
+    assert "KeyError" not in "\n".join(logged)
+    assert all(c.recv_task and not c.recv_task.done() for c in conn._pool._pool._queue)
+
