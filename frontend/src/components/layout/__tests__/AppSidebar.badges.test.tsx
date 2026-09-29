@@ -43,10 +43,10 @@ describe('sidebar badges', () => {
   it('Werkbak shows the total; entries show their groups', () => {
     report.data = REPORT
     render(<AppSidebar />)
-    expect(screen.getByRole('link', { name: /Werkbak/ }).getAttribute('href')).toBe('/')
+    expect(screen.getByRole('link', { name: /The Tray/ }).getAttribute('href')).toBe('/')
     // The fixture's merge candidates timed out: the total and the Knowledge
     // Graph badge miss them, and say so.
-    expect(badge('Werkbak')).toBe('1257+ need you, some groups did not load')
+    expect(badge('The Tray')).toBe('1257+ need you, some groups did not load')
     // gated 1 + stopped 2 (failed is 0; "new sources" asks nothing)
     expect(badge('Sources')).toBe('3 need you')
     // proposals 3; the paused extraction is its gated source's (counted 0)
@@ -64,14 +64,14 @@ describe('sidebar badges', () => {
       groups: REPORT.groups.map((g) => ({ ...g, error: null })),
     }
     render(<AppSidebar />)
-    expect(badge('Werkbak')).toBe('1257 need you')
+    expect(badge('The Tray')).toBe('1257 need you')
     expect(badge('Knowledge Graph')).toBe('1238 need you')
   })
 
   it('no badges before the report arrives', () => {
     report.data = undefined
     render(<AppSidebar />)
-    expect(badge('Werkbak')).toBeNull()
+    expect(badge('The Tray')).toBeNull()
     expect(badge('Sources')).toBeNull()
   })
 })

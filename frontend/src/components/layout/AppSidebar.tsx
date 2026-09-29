@@ -46,7 +46,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 
-const werkbak = { name: 'Werkbak', href: '/', icon: Inbox }
+const werkbak = { name: 'The Tray', href: '/', icon: Inbox }
 
 const navigation = [
   {

@@ -38,7 +38,7 @@ export default function WerkbakPage() {
         <div className="p-6 space-y-8 max-w-6xl">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-bold">Werkbak</h1>
+              <h1 className="text-2xl font-bold">The Tray</h1>
               <p className="text-base text-muted-foreground mt-1">
                 What needs you, across every notebook.
               </p>
@@ -48,7 +48,7 @@ export default function WerkbakPage() {
               size="sm"
               onClick={() => refetch()}
               disabled={isFetching}
-              aria-label="Refresh the Werkbak"
+              aria-label="Refresh The Tray"
             >
               <RefreshCw className={isFetching ? 'animate-spin' : undefined} />
               Refresh
@@ -64,7 +64,7 @@ export default function WerkbakPage() {
           ) : isError || !data ? (
             <Alert variant="destructive" data-testid="werkbak-error">
               <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>Could not load the Werkbak</AlertTitle>
+              <AlertTitle>Could not load The Tray</AlertTitle>
               <AlertDescription>
                 <p>{error instanceof Error ? error.message : 'The request failed.'}</p>
                 <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>
