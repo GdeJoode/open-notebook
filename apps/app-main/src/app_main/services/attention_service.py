@@ -190,8 +190,7 @@ def _count_once(groups: List[AttentionGroup]) -> None:
     """Set each group's ``counted``: its count less what a source group owns."""
     owned: set = set()
     for g in groups:
-        if not g.error:
-            owned |= g._owns
+        owned |= g._owns
     for g in groups:
         if g.error or not g.needs_action:
             g.counted = 0
@@ -317,6 +316,10 @@ class AttentionService:
         group.count = 0
         group.items = []
         group.detail = None
+        # A group that failed lists nothing, so it owns nothing: what it had
+        # read before failing counts in the groups that list it.
+        group._owns = set()
+        group._unit_sources = []
 
     @staticmethod
     def _finish(group: AttentionGroup, action: str) -> None:

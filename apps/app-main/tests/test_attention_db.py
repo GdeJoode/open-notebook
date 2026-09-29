@@ -518,19 +518,17 @@ async def test_a_sourceless_failure_is_resolved_per_notebook(env) -> None:
 
 
 async def test_a_failed_source_group_owns_nothing(env, monkeypatch) -> None:
-    """When the failed-sources read fails, its sources' failed jobs count in the
-    total again: nothing else lists them."""
+    """The gated group reads its sources, then fails looking up their
+    notebooks. It lists nothing, so the gated source's paused extraction
+    counts in the total again."""
     await _seed()
-    original = SourceRepository.list_by_stage
 
-    async def failing(self, stages, updated_before=None):
-        if stages == ["failed"]:
-            raise RuntimeError("source table unreadable")
-        return await original(self, stages, updated_before=updated_before)
+    async def failing(self, source_id):
+        raise RuntimeError("reference table unreadable")
 
-    monkeypatch.setattr(SourceRepository, "list_by_stage", failing)
+    monkeypatch.setattr(SourceRepository, "get_notebook_id", failing)
     async with _client(_app()) as c:
         body = (await c.get("/api/attention")).json()
     by_key = {g["key"]: g for g in body["groups"]}
-    assert by_key["sources_failed"]["error"] == "source table unreadable"
-    assert by_key["jobs_failed"]["counted"] == 2
+    assert by_key["sources_awaiting_review"]["error"] == "reference table unreadable"
+    assert by_key["extraction_paused"]["counted"] == 1
