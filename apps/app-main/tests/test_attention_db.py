@@ -587,3 +587,22 @@ async def test_batched_notebook_lookup_matches_the_single_one(env) -> None:
     many = await repo.get_notebook_id_many([none, one, two, "source:missing"])
     assert many == {s: await repo.get_notebook_id(s) for s in (none, one, two)}
     assert many[none] is None and many[one] == nb1
+
+
+async def test_one_notebook_and_a_loose_source_are_two_places(env) -> None:
+    """A gated source in no notebook has no Schema tab: it is an item of its own,
+    so one notebook plus that source is two places, and the card has no action."""
+    nb = await _notebook("Inbox")
+    in_nb = await _source("Filed", "awaiting_schema_review", nb)
+    loose = await _source("Loose", "awaiting_schema_review")
+    async with _client(_app()) as c:
+        body = (await c.get("/api/attention")).json()
+    gated = next(g for g in body["groups"] if g["key"] == "sources_awaiting_review")
+    assert {i["id"]: i["link"] for i in gated["items"]} == {
+        nb: f"/notebooks/{quote(nb, safe='')}/schema",
+        loose: f"/sources/{quote(loose, safe='')}",
+    }
+    assert in_nb not in {i["id"] for i in gated["items"]}
+    assert gated["detail"] == "In 2 places: open each below."
+    assert (gated["action"], gated["link"]) == ("", "")
+    assert gated["item_total"] == 2 and gated["count"] == 2
