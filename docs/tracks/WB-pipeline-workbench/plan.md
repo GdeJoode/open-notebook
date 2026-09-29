@@ -170,12 +170,19 @@ redo it.
     leaked a slot, and the 2 s health check cancels slow sign-ins; after
     ten leaks every request waited forever. Slots are now semaphore
     permits handed back on every failure path. Sign-in, the reuse ping and
-    the wait for a slot are bounded, and a full pool answers 503. A
-    connection whose request was cancelled or hit a transport error is
-    closed.
+    the wait for a slot are bounded, and the pool raises
+    `DatabaseUnavailableError` (a 503 handler exists). A connection whose
+    request was cancelled or hit a transport error is closed.
+  - The 503 reaches the client only where no `except Exception` turns it
+    into a 500. That holds for `/api/notebooks`, `/api/sources/` and
+    `/api/triage/queue` (tested); most other routers still answer 500.
   - Health check: the probe outlives the 2 s check and is shared, so a
     slow sign-in finishes into the pool. A timeout reports online unless
     the last finished probe failed.
+  - Trade-off: a database that accepts connections but never answers
+    reads "online" until a probe fails, i.e. up to the pool's 30 s
+    checkout deadline plus the check interval (about 30–35 s). A refused
+    connection reads offline at once.
   - Slow sign-in not reproduced: root sign-in now takes 0.02 s (argon2id,
     m=19 MiB, t=2). SurrealDB's `/health` was 250× slower in the slow
     phase too, so the whole process was starved by host load, not auth.
@@ -184,6 +191,24 @@ redo it.
     pairs, on the event loop.
   - Live: `/api/notebooks` 0.03 s, `/api/sources/` 0.11 s, triage queue
     0.23–0.35 s.
+- **Review round 1** (REVISIONS_NEEDED, 1 major, 8 minors), all fixed:
+  - M1: a checkout cancelled during the reuse ping left the candidate
+    open and off the queue. It is now closed.
+  - m2: a `CancelledError` from the SDK (server closed the socket) is told
+    apart from our own cancellation with `Task.cancelling()`. During the
+    ping the candidate counts as dead; inside a request it becomes
+    `DatabaseUnavailableError`.
+  - m3: a probe that ended cancelled counts as a failure; `/api/config`
+    answers offline instead of raising.
+  - m4: `/api/sources/` re-raises `DatabaseUnavailableError`; the note
+    above no longer claims a general 503.
+  - m5: `acquire_timeout` now bounds the whole checkout (slot, pings,
+    sign-in).
+  - m6: `close_all` bounds each close; connections returned afterwards
+    are closed.
+  - m7: the online-while-down window is recorded above.
+  - m8: candidate scoring runs in `asyncio.to_thread`.
+  - Live timings are verified after merge and rebuild.
 
 **WB.1 — The Werkbak (attention inbox)** (~2d)
 - **Backend:** one `GET /api/attention` that counts and lists, across all
