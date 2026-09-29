@@ -165,6 +165,25 @@ redo it.
     1 s on the live data;
   - the "Database Connection Failed" page no longer appears while the
     database is up.
+- **WB.0 built** (branch `feature/wb0-db-responsiveness`):
+  - The hang was the pool, not SurrealDB. A failed or cancelled sign-in
+    leaked a slot, and the 2 s health check cancels slow sign-ins; after
+    ten leaks every request waited forever. Slots are now semaphore
+    permits handed back on every failure path. Sign-in, the reuse ping and
+    the wait for a slot are bounded, and a full pool answers 503. A
+    connection whose request was cancelled or hit a transport error is
+    closed.
+  - Health check: the probe outlives the 2 s check and is shared, so a
+    slow sign-in finishes into the pool. A timeout reports online unless
+    the last finished probe failed.
+  - Slow sign-in not reproduced: root sign-in now takes 0.02 s (argon2id,
+    m=19 MiB, t=2). SurrealDB's `/health` was 250× slower in the slow
+    phase too, so the whole process was starved by host load, not auth.
+  - `/api/entity-resolution/candidates`: 16 s → 0.7 s on a snapshot of
+    the live graph, same report. It was pure-Python Levenshtein over 94k
+    pairs, on the event loop.
+  - Live: `/api/notebooks` 0.03 s, `/api/sources/` 0.11 s, triage queue
+    0.23–0.35 s.
 
 **WB.1 — The Werkbak (attention inbox)** (~2d)
 - **Backend:** one `GET /api/attention` that counts and lists, across all
