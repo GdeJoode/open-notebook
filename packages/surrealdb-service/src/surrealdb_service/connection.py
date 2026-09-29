@@ -80,6 +80,17 @@ _BROKEN_CONNECTION_ERRORS = (
 )
 
 
+def _current_task_cancelling() -> bool:
+    """True when the running task itself has been asked to cancel.
+
+    ``Task.cancelling`` exists from Python 3.11; without it every
+    ``CancelledError`` is taken to be ours, which is the old behaviour.
+    """
+    task = asyncio.current_task()
+    cancelling = getattr(task, "cancelling", None)
+    return cancelling is None or cancelling() > 0
+
+
 class ConnectionPool:
     """
     Async connection pool for SurrealDB using asyncio.Queue.
@@ -143,6 +154,12 @@ class ConnectionPool:
         try:
             await asyncio.wait_for(conn.query("SELECT 1"), self._ping_timeout)
             return True
+        except asyncio.CancelledError:
+            if _current_task_cancelling():
+                raise
+            # The SDK cancels pending requests when the server closes the
+            # socket; nobody cancelled us, so the connection is dead.
+            return False
         except Exception:
             return False
 

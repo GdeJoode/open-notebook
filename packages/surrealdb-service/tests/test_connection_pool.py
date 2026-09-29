@@ -38,6 +38,10 @@ class FakeSurreal:
         self.url = url
         self.closed = False
         self.signed_in = False
+        # The SDK's receive task ended (server closed the socket): it cancels
+        # every pending request future, so ``query`` raises CancelledError in
+        # a task nobody cancelled.
+        self.socket_gone = False
         server.clients.append(self)
 
     async def signin(self, vars: dict) -> str:
@@ -54,6 +58,8 @@ class FakeSurreal:
     async def query(self, query: str, vars: Optional[dict] = None) -> Any:
         if self.closed:
             raise OSError("socket closed")
+        if self.socket_gone:
+            raise asyncio.CancelledError()
         if self.server.query_mode == "hang":
             await asyncio.Event().wait()
         return [{"result": 1}]
@@ -217,7 +223,20 @@ async def test_checkout_cancelled_during_reuse_ping_closes_the_candidate(server)
 
     server.query_mode = "hang"
     with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(_use_once(pool), 0.05)
+        await asyncio.wait_for(asyncio.wait_for(_use_once(pool), 0.05), GUARD)
 
     assert first.closed
     assert pool._pool.empty()
+    # The cancellation stopped the checkout; it did not go on to sign in.
+    assert len(server.clients) == 1
+
+
+async def test_sdk_cancelled_ping_is_a_dead_candidate_not_an_abort(server):
+    pool = _pool(max_size=2)
+    first = await asyncio.wait_for(_use_once(pool), GUARD)
+
+    first.socket_gone = True
+    second = await asyncio.wait_for(_use_once(pool), GUARD)
+
+    assert second is not first
+    assert first.closed
