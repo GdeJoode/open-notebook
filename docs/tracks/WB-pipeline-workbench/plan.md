@@ -381,6 +381,23 @@ redo it.
   - m6: the local e2e scripts (gitignored) now warm the specs' routes
     before the run and pass `--retries=1`. The committed Playwright config
     is unchanged.
+- **Review round 4** (REVISIONS_NEEDED, 1 major, 2 minors), all addressed:
+  - M1a: the quick re-read of a partial report backs off: 5 s, 15 s,
+    45 s, then 90 s. It resets on a complete report. A report that stays
+    partial for 10 minutes is read 9 times; the old fixed 5 s re-read read
+    it 120 times.
+  - M1b: one candidate scoring run per scope at a time
+    (`CandidateDedupService.propose_candidates`). A caller that arrives
+    while a run is in progress joins it. Callers await the run shielded,
+    so a caller that gives up (the group deadline) leaves the run for the
+    next one instead of stacking another uncancellable thread. A finished
+    run is forgotten, so the next read scores again.
+    `/entity-resolution/candidates` goes through the same path.
+  - m2: the group deadline is 8 s. The cold first read takes 2.7–4.3 s, so
+    8 s is about twice the slowest measured read; a hung group still gives
+    up within seconds.
+  - m3: the stale time follows the same delay, so a navigation reads a
+    partial report once its retry delay has passed.
 
 **WB.2 — Pipeline navigation** (~1.5d)
 - **Nav regrouped in pipeline order:**
