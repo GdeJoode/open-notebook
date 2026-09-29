@@ -254,7 +254,26 @@ redo it.
     up to 14.7 s and a count over `entity` 7.6 s (0.4 s and 0.02 s warm).
   - Tests: `test_connection_cancel_live.py` (real SDK), two new tests in
     `test_attention_db.py`, the fake in `test_connection_pool.py` now
-    follows the 1.0.6 contract. Each guard is mutation-checked.
+    follows the 1.0.6 contract. Each guard is mutation-checked, except
+    `test_many_mid_flight_cancels_then_normal_queries`: a smoke test that
+    hits the race only sometimes. The race test is the guard.
+  - **Review round 1** (REVISIONS_NEEDED, 1 major, 5 minors), all fixed:
+    - M1: the shielded sign-in outlived a `connect_timeout` or a cancelled
+      caller while still in its handshake, so the close found no socket and
+      the connection stayed open and signed in. Now an abandoned sign-in is
+      closed once it ends (cancelled after `connect_timeout` if it hangs),
+      and `close_all` ends pending sign-ins so their connections close.
+      Live tests with a 0.3 s handshake leave no receive task behind.
+    - m2: SDK pinned to `==1.0.6`. A request the SDK cancels while the
+      caller was not cancelled raises `DatabaseUnavailableError`, and that
+      error never pools its connection. A client without `recv_task` is not
+      reused.
+    - m3: the `/api/config` probe comment no longer says the SDK cancels it.
+    - m4: the smoke test is labelled; the pool-demand test counts through
+      an `acquire` wrapper; the fake's hangs end on close and the fixture
+      checks no task is left pending.
+    - m5: the pool size comes from `SurrealDBConfig.pool_size` (default 20,
+      `SURREAL_POOL_SIZE`).
 
 **WB.1 — The Werkbak (attention inbox)** (~2d)
 - **Backend:** one `GET /api/attention` that counts and lists, across all
