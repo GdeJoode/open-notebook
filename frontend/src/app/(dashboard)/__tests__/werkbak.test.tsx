@@ -66,9 +66,12 @@ describe('Werkbak', () => {
     const action = within(triage).getByTestId('werkbak-action-triage')
     expect(action.getAttribute('href')).toBe('/knowledge-graph/triage')
     expect(action.textContent).toContain('Triage 1238 entities')
-    // The gated source links to the Schema tab where its proposal is accepted.
-    expect(screen.getByTestId('werkbak-item-source:gated1').getAttribute('href'))
+    // Gated sources, per notebook, link to the Schema tab where review happens.
+    const gated = screen.getByTestId('werkbak-group-sources_awaiting_review')
+    expect(within(gated).getByTestId('werkbak-item-notebook:live').getAttribute('href'))
       .toBe('/notebooks/notebook%3Alive/schema')
+    expect(within(gated).getByTestId('werkbak-action-sources_awaiting_review')
+      .getAttribute('href')).toBe('/notebooks/notebook%3Alive/schema')
     expect(screen.getByRole('heading', { name: /Needs you/ }).textContent).toContain('(1257)')
     // Its source is listed as waiting for review: shown, not counted again.
     expect(screen.getByTestId('werkbak-elsewhere-extraction_paused').textContent)

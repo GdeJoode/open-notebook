@@ -147,6 +147,7 @@ async def _seed() -> Dict[str, str]:
     ids = {"nb1": nb1, "nb2": nb2}
     ids["failed"] = await _source("Broken", "failed", nb1)
     ids["gated"] = await _source("Gated", "awaiting_schema_review", nb1)
+    ids["gated2"] = await _source("Gated too", "awaiting_schema_review", nb2)
     # Stopped: short of complete, no live job, last write over 15 minutes ago.
     ids["stalled"] = await _source("Stopped", "embedded", nb2)
     await _chunk(ids["stalled"])
@@ -190,6 +191,9 @@ async def _seed() -> Dict[str, str]:
     # An OCR-mangled pair: a merge candidate.
     await _entity("Koninkrijksrelaties", "organization", "Organization")
     await _entity("Koninkrijksreiaties", "organization", "Organization")
+    # One name twice under the current normalization: a plan cluster.
+    await _entity("Waterschap Rivierenland.", "organization", "Organization")
+    await _entity("Waterschap  Rivierenland", "organization", "Organization")
     # A row typed off its label: the retype moves it.
     await _entity("Jan Jansen", "concept", "Person")
     return ids
@@ -239,7 +243,8 @@ def _endpoint_counts(c: httpx.AsyncClient, since: datetime) -> Dict[str, Callabl
 
     async def merges() -> int:
         body = (await c.get("/api/entity-resolution/candidates")).json()
-        return body["auto_merge_count"] + body["review_count"]
+        plan = (await c.post("/api/entity-resolution/plan", json={})).json()
+        return plan["cluster_count"] + body["auto_merge_count"] + body["review_count"]
 
     async def retype() -> int:
         counts = (await c.get("/api/ontologies/retype/dry-run")).json()["counts"]
@@ -315,8 +320,6 @@ async def test_seeded_values(env) -> None:
     }
     assert by_key["extraction_paused"]["count"] == 1
     assert by_key["schema_proposals"]["count"] == 3
-    assert by_key["schema_proposals"]["items"][0]["link"] == (
-        f"/notebooks/{quote(ids['nb1'], safe='')}/schema")
     assert by_key["triage"]["count"] == 1
     assert by_key["retype"]["count"] == 1
     # The re-run and the deleted source left.
@@ -332,10 +335,17 @@ async def test_seeded_values(env) -> None:
     assert counted["jobs_failed"] == 1
     assert counted["schema_proposals"] == 3
     assert counted["jobs_running"] == 0
-    assert body["total"] == sum(counted.values()) == 1 + 1 + 2 + 0 + 3 + 1 + by_key[
+    assert body["total"] == sum(counted.values()) == 1 + 2 + 2 + 0 + 3 + 1 + by_key[
         "merge_candidates"]["count"] + 1 + 1
-    gated = by_key["sources_awaiting_review"]["items"][0]
-    assert gated["link"] == f"/notebooks/{quote(ids['nb1'], safe='')}/schema"
+    # One item per notebook, each linked to its Schema tab; the action to the first.
+    gated = by_key["sources_awaiting_review"]
+    schema = {nb: f"/notebooks/{quote(ids[nb], safe='')}/schema" for nb in ("nb1", "nb2")}
+    assert {i["id"]: i["link"] for i in gated["items"]} == {
+        ids["nb1"]: schema["nb1"], ids["nb2"]: schema["nb2"]}
+    assert gated["link"] in schema.values()
+    assert gated["action"] == "Review 2 gated sources in 2 notebooks"
+    assert {i["link"] for i in by_key["schema_proposals"]["items"]} == set(schema.values())
+    assert by_key["merge_candidates"]["detail"].startswith("1 cluster, ")
 
 
 async def test_stalled_filter_on_sources(env) -> None:
@@ -434,7 +444,7 @@ async def test_sources_stage_filter(env) -> None:
     assert [s["id"] for s in one] == [ids["failed"]]
     assert {s["id"] for s in many} == {ids["failed"], ids["done"]}
     assert {s["id"] for s in in_nb} == {ids["stalled"], ids["busy"], ids["fresh"]}
-    assert len(everything) == 7
+    assert len(everything) == 8
     assert bad.status_code == 400
 
 

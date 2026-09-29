@@ -194,6 +194,12 @@ def _count_once(groups: List[AttentionGroup]) -> None:
             g.counted = g.count
 
 
+def _in_notebooks(group: AttentionGroup) -> str:
+    """ " in N notebooks" when the group's items are several notebooks."""
+    n = sum(1 for i in group.items if i.id.startswith("notebook:"))
+    return f" in {n} notebooks" if n > 1 else ""
+
+
 def _utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
@@ -230,7 +236,7 @@ class AttentionService:
              self._sources_failed),
             (AttentionGroup(key="sources_awaiting_review",
                             title="Sources waiting for a schema review", nav="/sources"),
-             self._sources_awaiting_review),
+             lambda g: self._sources_awaiting_review(g, notebooks)),
             (AttentionGroup(key="sources_stalled", title="Sources that stopped",
                             nav="/sources"),
              lambda g: self._sources_stalled(g, now, unfinished)),
@@ -336,30 +342,43 @@ class AttentionService:
         ]
         self._finish(group, f"Review {group.count} failed {_plural(group.count, 'source')}")
 
-    async def _sources_awaiting_review(self, group: AttentionGroup) -> None:
+    async def _sources_awaiting_review(
+        self, group: AttentionGroup, notebooks: "asyncio.Future[List[Dict[str, Any]]]"
+    ) -> None:
         stage = ProcessingStage.AWAITING_SCHEMA_REVIEW.value
         rows = await self.source_repo.list_by_stage([stage])
         group.count = len(rows)
         group._owns = {str(r["id"]) for r in rows}
-        group.link = f"/sources?stage={stage}"
-        top = rows[:ITEM_LIMIT]
-        # The proposal that gates a source is accepted on the Schema tab of the
-        # notebook its extraction anchored on (``get_notebook_id``).
+        if not rows:
+            return
+        # A gated source is released on the Schema tab of the notebook its
+        # extraction anchored on (``get_notebook_id``): one item per notebook.
         notebook_ids = await asyncio.gather(
-            *(self.source_repo.get_notebook_id(str(r["id"])) for r in top)
+            *(self.source_repo.get_notebook_id(str(r["id"])) for r in rows)
         )
-        group.items = [
-            _source_item(
-                r,
-                "Waiting for a schema review",
-                f"/notebooks/{_q(nb)}/schema" if nb else source_link(r["id"]),
-                r.get("updated"),
-            )
-            for r, nb in zip(top, notebook_ids)
-        ]
-        self._finish(
-            group, f"Review {group.count} gated {_plural(group.count, 'source')}"
-        )
+        names = {str(nb["id"]): nb.get("name") for nb in await _shared(notebooks)}
+        by_notebook: Dict[Optional[str], List[Dict[str, Any]]] = {}
+        for r, nb in zip(rows, notebook_ids):
+            by_notebook.setdefault(nb, []).append(r)
+        for nb, members in sorted(by_notebook.items(), key=lambda x: -len(x[1])):
+            titles = [m.get("title") or str(m["id"]) for m in members]
+            shown = ", ".join(titles[:3]) + (", ..." if len(titles) > 3 else "")
+            if nb is None:
+                # No notebook, so no Schema tab: each source on its own page.
+                group.items += [
+                    _source_item(m, "Waiting for a schema review; in no notebook",
+                                 source_link(m["id"]), m.get("updated"))
+                    for m in members
+                ]
+                continue
+            group.items.append(AttentionItem(
+                id=nb,
+                label=names.get(nb) or nb,
+                link=f"/notebooks/{_q(nb)}/schema",
+                detail=f"{len(members)} {_plural(len(members), 'source')} waiting: {shown}",
+            ))
+        self._finish(group, f"Review {group.count} gated {_plural(group.count, 'source')}"
+                     + _in_notebooks(group))
 
     async def _sources_stalled(
         self, group: AttentionGroup, now: datetime, unfinished: "asyncio.Future[List[Job]]"
@@ -401,6 +420,7 @@ class AttentionService:
             group._unit_sources = [j.source_id for jobs in per_notebook for j in jobs]
         items.sort(key=lambda x: -x[1])
         group.count = sum(n for _, n in items)
+        # Every notebook, not the first few: each is resumed on its own page.
         group.items = [
             AttentionItem(
                 id=str(nb["id"]),
@@ -408,10 +428,11 @@ class AttentionService:
                 link=f"/notebooks/{_q(nb['id'])}",
                 detail=f"{n} paused {_plural(n, 'extraction')}",
             )
-            for nb, n in items[:ITEM_LIMIT]
+            for nb, n in items
         ]
         self._finish(
             group, f"Resume {group.count} paused {_plural(group.count, 'extraction')}"
+            + _in_notebooks(group)
         )
 
     async def _schema_proposals(
@@ -429,7 +450,7 @@ class AttentionService:
         items.sort(key=lambda x: -len(x[1]))
         group.count = sum(len(p) for _, p in items)
         group.items = []
-        for nb, pending in items[:ITEM_LIMIT]:
+        for nb, pending in items:  # every notebook: each has its own queue
             names = [str(p.get("type_name") or "(unknown)") for p in pending]
             shown = ", ".join(names[:3]) + (", ..." if len(names) > 3 else "")
             group.items.append(
@@ -440,7 +461,8 @@ class AttentionService:
                     detail=f"{len(pending)} {_plural(len(pending), 'proposal')}: {shown}",
                 )
             )
-        self._finish(group, f"Review {group.count} {_plural(group.count, 'proposal')}")
+        self._finish(group, f"Review {group.count} {_plural(group.count, 'proposal')}"
+                     + _in_notebooks(group))
 
     # --- the knowledge graph ------------------------------------------------
 
@@ -463,9 +485,19 @@ class AttentionService:
     async def _merge_candidates(self, group: AttentionGroup) -> None:
         from app_main.services.entity_resolution import CandidateDedupService
 
-        report = await CandidateDedupService().propose_candidates()
-        group.count = report.auto_merge_count + report.review_count
-        group.detail = f"{report.auto_merge_count} auto, {report.review_count} to review"
+        from app_main.services.entity_resolution import RecanonicalizationService
+
+        # The Resolution page shows both: the deterministic plan's clusters
+        # and the fuzzy/embedding candidates in two bands.
+        plan, report = await asyncio.gather(
+            RecanonicalizationService().plan_merges(),
+            CandidateDedupService().propose_candidates(),
+        )
+        group.count = plan.cluster_count + report.auto_merge_count + report.review_count
+        group.detail = (
+            f"{plan.cluster_count} {_plural(plan.cluster_count, 'cluster')}, "
+            f"{report.auto_merge_count} auto, {report.review_count} to review"
+        )
         group.items = [
             AttentionItem(
                 id=f"{c.id_a}|{c.id_b}",
@@ -509,7 +541,10 @@ class AttentionService:
         jobs = await self.job_repo.list_unresolved_failures()
         group.count = len(jobs)
         group._unit_sources = [j.source_id for j in jobs]
-        group.detail = "Not re-run since"
+        group.detail = (
+            "Not re-run since. There is no jobs page: each opens its source "
+            "or notebook, where it is re-run."
+        )
         group.items = [
             _job_item(j, (j.error_message or "Failed")[:160], j.completed_at or j.created)
             for j in jobs[:ITEM_LIMIT]
