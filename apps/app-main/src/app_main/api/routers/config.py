@@ -88,19 +88,60 @@ def get_latest_version_cached(
         return None, False
 
 
+# How long /api/config waits for the database probe before answering.
+HEALTH_CHECK_TIMEOUT = 2.0
+
+# The probe in flight or last finished. A probe outlives a timed-out check, so
+# a slow sign-in still finishes and leaves a pooled connection behind, and
+# checks that arrive meanwhile wait on it instead of starting more sign-ins.
+_probe: Optional[asyncio.Task] = None
+# Error of the last probe that finished, None if it succeeded.
+_last_probe_error: Optional[str] = None
+
+
+def _record_probe_outcome(task: asyncio.Task) -> None:
+    global _last_probe_error
+    if task.cancelled():
+        return
+    exc = task.exception()
+    _last_probe_error = None if exc is None else (str(exc) or type(exc).__name__)
+
+
 async def check_database_health() -> dict:
-    """Check if database is reachable using a lightweight query."""
+    """Check if database is reachable using a lightweight query.
+
+    Slow is not offline: a probe still running after ``HEALTH_CHECK_TIMEOUT``
+    reports ``online`` unless the last probe that finished failed. "Offline"
+    therefore needs a failure (refused, rejected, or the pool's own sign-in or
+    acquire timeout), not one slow new connection.
+    """
+    global _probe
+    if (
+        _probe is None
+        or _probe.done()
+        or _probe.get_loop() is not asyncio.get_running_loop()
+    ):
+        _probe = asyncio.ensure_future(execute_query("RETURN 1"))
+        _probe.add_done_callback(_record_probe_outcome)
     try:
         result = await asyncio.wait_for(
-            execute_query("RETURN 1"),
-            timeout=2.0,
+            asyncio.shield(_probe), timeout=HEALTH_CHECK_TIMEOUT
         )
         if result:
             return {"status": "online"}
         return {"status": "offline", "error": "Empty result"}
     except asyncio.TimeoutError:
-        logger.warning("Database health check timed out after 2 seconds")
-        return {"status": "offline", "error": "Health check timeout"}
+        if _last_probe_error is not None:
+            logger.warning(
+                f"Database health check slow, last probe failed: "
+                f"{_last_probe_error}"
+            )
+            return {"status": "offline", "error": _last_probe_error}
+        logger.warning(
+            f"Database health check still waiting after "
+            f"{HEALTH_CHECK_TIMEOUT} seconds; not reporting offline"
+        )
+        return {"status": "online"}
     except Exception as e:
         logger.warning(f"Database health check failed: {e}")
         return {"status": "offline", "error": str(e)}
