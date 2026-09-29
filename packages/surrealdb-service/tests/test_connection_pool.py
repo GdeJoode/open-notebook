@@ -401,3 +401,36 @@ async def test_pool_size_comes_from_the_config(server):
         with pytest.raises(DatabaseUnavailableError, match="pool of 3"):
             await _use_once(pool)
 
+
+async def test_close_all_ends_sign_ins_abandoned_while_it_runs(server):
+    """"Connection pool closed" must be true when it is logged: a sign-in
+    abandoned while close_all waits on the others is ended too."""
+    pool = _pool(max_size=2, connect_timeout=GUARD * 10)
+    pool._close_timeout = 0.3
+    server.signin_mode = "hang"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_use_once(pool), 0.05)
+    server.close_mode = "hang"  # close_all spends 0.3 s closing the first
+    closing = asyncio.ensure_future(pool.close_all())
+    await asyncio.sleep(0)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_use_once(pool), 0.05)
+    await asyncio.wait_for(closing, GUARD)
+
+    current = asyncio.current_task()
+    assert [t for t in asyncio.all_tasks() if t is not current and not t.done()] == []
+
+
+async def test_sign_in_abandoned_after_close_all_ends_at_once(server):
+    """Nothing awaits a closer once close_all has returned, so a sign-in given
+    up on after shutdown is ended then, not after connect_timeout."""
+    pool = _pool(max_size=1, connect_timeout=GUARD * 10)
+    await pool.close_all()
+    server.signin_mode = "hang"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_use_once(pool), 0.05)
+    await asyncio.sleep(0.05)
+
+    assert server.clients[0].closed
+    current = asyncio.current_task()
+    assert [t for t in asyncio.all_tasks() if t is not current and not t.done()] == []

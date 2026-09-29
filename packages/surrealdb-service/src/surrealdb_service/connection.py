@@ -241,6 +241,9 @@ class ConnectionPool:
         await db.use(self.config.namespace, self.config.database)
 
     def _abandon(self, sign_in: "asyncio.Future[AsyncSurreal]") -> None:
+        if self._closed:
+            # close_all may already have ended the sign-ins it knew of.
+            sign_in.cancel()
         closer = asyncio.ensure_future(self._close_when_done(sign_in))
         self._closers[closer] = sign_in
         closer.add_done_callback(lambda done: self._closers.pop(done, None))
@@ -335,10 +338,12 @@ class ConnectionPool:
             await self._close_quietly(self._pool.get_nowait())
         # Ending the sign-ins lets their closers close the connections now. (A
         # closer cancelled before its first step would never run its close.)
-        closers = list(self._closers.items())
-        for _, sign_in in closers:
-            sign_in.cancel()
-        await asyncio.gather(*(c for c, _ in closers), return_exceptions=True)
+        # Sign-ins abandoned from here on are ended at once (``_abandon``).
+        while self._closers:
+            closers = list(self._closers.items())
+            for _, sign_in in closers:
+                sign_in.cancel()
+            await asyncio.gather(*(c for c, _ in closers), return_exceptions=True)
         logger.info("Connection pool closed")
 
 
