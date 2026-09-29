@@ -112,16 +112,43 @@ class ExtractRequest(BaseModel):
     override: Optional[Dict[str, Any]] = None
 
 
+async def _registry_ontologies() -> Dict[str, Dict[str, Any]]:
+    """The OWN content of every ontology, as the registry holds it (Track OE.6).
+
+    Consumer: the extraction service's ``_resolve_ontology``
+    (``services/extraction/api.py``), which resolves ``extends`` / ``includes``
+    over these as it resolved its YAML files. The active version is what makes
+    a publish reach it.
+    """
+    from ontology_manager.registry import get_ontology_registry
+
+    registry = get_ontology_registry()
+    ontologies: Dict[str, Dict[str, Any]] = {}
+    for name in await registry.list_ontologies():
+        ontology = await registry.get(name, resolve_inheritance=False)
+        if ontology is not None:
+            ontologies[name] = ontology.to_storage_dict()
+    return ontologies
+
+
 @router.post("/extract")
 async def extract(req: ExtractRequest):
     """Extract entities and relations from a document."""
-    return await _proxy_post(EXTRACTION_URL, "/extract", req)
+    body = {**req.model_dump(), "ontologies": await _registry_ontologies()}
+    return await _proxy_post(EXTRACTION_URL, "/extract", body)
 
 
 @router.get("/ontologies")
 async def list_ontologies():
-    """List available ontologies."""
-    return await _proxy_get(EXTRACTION_URL, "/ontologies")
+    """List available ontologies: the registry's, and the extraction service's
+    default (OE.6: that service holds no ontologies of its own)."""
+    from ontology_manager.registry import get_ontology_registry
+
+    service = await _proxy_get(EXTRACTION_URL, "/ontologies")
+    return {
+        "ontologies": await get_ontology_registry().list_ontologies(),
+        "default": service["default"],
+    }
 
 
 @router.get("/entities")
