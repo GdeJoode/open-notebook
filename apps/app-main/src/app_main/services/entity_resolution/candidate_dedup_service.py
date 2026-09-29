@@ -159,6 +159,18 @@ class CandidateReport:
         return len(self.review)
 
 
+# The scoring runs in flight, by (loop, scope, configuration); see
+# ``CandidateDedupService.propose_candidates``.
+_IN_FLIGHT: Dict[tuple, "asyncio.Future[CandidateReport]"] = {}
+
+
+def _finish_run(key: tuple, run: "asyncio.Future[CandidateReport]") -> None:
+    if _IN_FLIGHT.get(key) is run:
+        del _IN_FLIGHT[key]
+    if not run.cancelled():
+        run.exception()  # retrieved: every caller may have given up
+
+
 class CandidateDedupService:
     """Propose fuzzy/embedding merges with strong over-merge guards (K.5)."""
 
@@ -351,6 +363,14 @@ class CandidateDedupService:
     ) -> CandidateReport:
         """Propose merges over the active KG. **Read-only — zero writes.**
 
+        One run per scope at a time (WB.1 review r4): a caller that arrives
+        while a run for the same scope and configuration is in progress joins
+        it instead of starting another. Callers await the run shielded, so a
+        caller that gives up (the Werkbak's group deadline) does not cancel
+        it; the scoring thread could not be stopped anyway, and the next
+        caller joins it rather than stacking a second thread. A joined result
+        reflects the database as of that run's start.
+
         Args:
             notebook_id: scope the proposals to one notebook's entities; the
                 overlay rules resolved are global + that notebook's. ``None`` =
@@ -361,6 +381,20 @@ class CandidateDedupService:
             Force-split pairs appear in NEITHER band (hard veto). Force-merge
             pairs always land in ``auto_merge``.
         """
+        key = (
+            id(asyncio.get_running_loop()),
+            notebook_id,
+            repr(self.fuzzy_config),
+            repr(self.embedding_config),
+        )
+        run = _IN_FLIGHT.get(key)
+        if run is None:
+            run = asyncio.ensure_future(self._propose(notebook_id))
+            _IN_FLIGHT[key] = run
+            run.add_done_callback(lambda done: _finish_run(key, done))
+        return await asyncio.shield(run)
+
+    async def _propose(self, notebook_id: Optional[str]) -> CandidateReport:
         source_ids: Optional[List[str]] = None
         if notebook_id is not None:
             source_ids = await self._sources_for_notebook(notebook_id)
