@@ -91,7 +91,7 @@ describe('Werkbak', () => {
     get.mockResolvedValue(REPORT)
     mount()
     const card = await screen.findByTestId('werkbak-group-merge_candidates')
-    expect(within(card).getByRole('alert').textContent).toContain('timed out after 5 s')
+    expect(within(card).getByRole('alert').textContent).toContain('timed out after 8 s')
     expect(within(card).queryByTestId('werkbak-count-merge_candidates')).toBeNull()
     expect(screen.getByTestId('werkbak-group-retype')).toBeTruthy()
   })

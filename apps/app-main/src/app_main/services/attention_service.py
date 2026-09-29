@@ -40,9 +40,12 @@ from app_main.services.stopped_sources import (
 # Items listed per group; the count covers them all.
 ITEM_LIMIT = 5
 
-# Per-group deadline. The slowest group, merge candidates, takes ~0.7 s on the
-# live graph (WB.0); a group past this is reported as timed out.
-GROUP_TIMEOUT_S = 5.0
+# Per-group deadline. Measured on the live graph: a warm report takes
+# 1.2-2.7 s, the first after a server start 2.7-4.3 s, both set by merge
+# candidates. 8 s leaves about twice the slowest measured read, so a cold
+# first read after a restart does not time out, while a group that truly hangs
+# still gives up (and the page shows it) within seconds.
+GROUP_TIMEOUT_S = 8.0
 
 FINISHED = [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]
 
