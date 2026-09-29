@@ -6,6 +6,10 @@
  * dialog says the proposals wait on this page. This page rendered only the
  * review band, so the auto band was proposed to nobody. These tests mount the
  * page with both bands and check a curator sees, and can act on, each.
+ *
+ * WB.2: the page is the one Resolution entry. It holds the resolution log (the
+ * Knowledge Graph tab is gone), links on to The Tray, and says so plainly once
+ * nothing is left to merge.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
@@ -14,9 +18,15 @@ import type { ReactNode } from 'react'
 import type { MergeCandidate } from '@/lib/api/entity-resolution'
 
 const apply = vi.fn()
+const queue = vi.hoisted(() => ({ empty: false }))
 
 vi.mock('next/link', () => ({
-  default: ({ children, href }: { children: ReactNode; href: string }) => <a href={href}>{children}</a>,
+  default: ({ children, href, ...rest }: { children: ReactNode; href: string }) => (
+    <a href={href} {...rest}>{children}</a>
+  ),
+}))
+vi.mock('@/components/resolution/ResolutionLog', () => ({
+  ResolutionLog: () => <div data-testid="resolution-log" />,
 }))
 
 const CAND: MergeCandidate = {
@@ -45,7 +55,9 @@ const REVIEW: MergeCandidate = {
 vi.mock('@/lib/hooks/use-entity-resolution', () => ({
   useMergePlan: () => ({ data: { clusters: [] }, isLoading: false, isError: false }),
   useMergeCandidates: () => ({
-    data: { auto_merge: [CAND], review: [REVIEW], auto_merge_count: 1, review_count: 1 },
+    data: queue.empty
+      ? { auto_merge: [], review: [], auto_merge_count: 0, review_count: 0 }
+      : { auto_merge: [CAND], review: [REVIEW], auto_merge_count: 1, review_count: 1 },
     isLoading: false,
     isError: false,
   }),
@@ -58,6 +70,7 @@ import EntityResolutionPage from '../page'
 afterEach(() => {
   cleanup()
   apply.mockReset()
+  queue.empty = false
 })
 
 describe('Entity Resolution page — both candidate bands', () => {
@@ -77,5 +90,23 @@ describe('Entity Resolution page — both candidate bands', () => {
     expect(apply).toHaveBeenCalledTimes(1)
     const [[clusters]] = apply.mock.calls
     expect(clusters[0]).toMatchObject({ origin: 'curator_approved', winner_id: 'entity:a', loser_ids: ['entity:b'] })
+  })
+})
+
+describe('Entity Resolution page — the one Resolution entry', () => {
+  it('holds the resolution log and links on to The Tray', () => {
+    render(<EntityResolutionPage />)
+    expect(screen.getByRole('heading', { name: 'Resolution log' })).toBeTruthy()
+    expect(screen.getByTestId('resolution-log')).toBeTruthy()
+    expect(screen.getByTestId('resolution-next').getAttribute('href')).toBe('/')
+    // Candidates are waiting: the empty state offers no way out yet.
+    expect(screen.queryByTestId('resolution-empty-next')).toBeNull()
+  })
+
+  it('with nothing left to merge, the next step is The Tray', () => {
+    queue.empty = true
+    render(<EntityResolutionPage />)
+    expect(screen.getByText('No duplicates pending')).toBeTruthy()
+    expect(screen.getByTestId('resolution-empty-next').getAttribute('href')).toBe('/')
   })
 })

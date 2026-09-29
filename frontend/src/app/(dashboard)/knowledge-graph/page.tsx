@@ -22,7 +22,6 @@ import {
 import { Share2, Search, X, ChevronLeft, ChevronRight, GitMerge, ClipboardList, FileText } from 'lucide-react'
 import type { Entity, EntityDetail } from '@/lib/api/knowledge-graph'
 import type { TriageStatus } from '@/lib/api/triage'
-import { ResolutionLogTab } from './components/ResolutionLogTab'
 import { ConfidenceBar } from '@/components/knowledge-graph/ConfidenceBar'
 import { ConfidenceFilter } from '@/components/knowledge-graph/ConfidenceFilter'
 import { StatusFilter } from '@/components/knowledge-graph/StatusFilter'
@@ -173,10 +172,6 @@ export default function KnowledgeGraphPage() {
                 <FileText className="h-3.5 w-3.5 mr-1.5" />
                 Document Graph
               </TabsTrigger>
-              <TabsTrigger value="resolution">
-                <GitMerge className="h-3.5 w-3.5 mr-1.5" />
-                Resolution Log
-              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="table" className="flex-1 overflow-auto mt-4">
@@ -290,9 +285,6 @@ export default function KnowledgeGraphPage() {
               <DocumentGraphView onNodeClick={handleEntityClick} />
             </TabsContent>
 
-            <TabsContent value="resolution" className="flex-1 overflow-auto mt-4">
-              <ResolutionLogTab />
-            </TabsContent>
           </Tabs>
         </div>
       </div>

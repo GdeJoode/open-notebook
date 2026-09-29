@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { AlertTriangle, ArrowLeft, CheckCircle2, ClipboardList } from 'lucide-react'
 
 import { EmptyState } from '@/components/common/EmptyState'
+import { NextStepLink } from '@/components/common/NextStepLink'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -68,13 +69,18 @@ export default function TriageQueuePage() {
     <div className="flex-1 overflow-y-auto">
       <div className="p-6 space-y-6 max-w-5xl">
         <div>
-          <Link
-            href="/knowledge-graph"
-            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Knowledge Graph
-          </Link>
+          <div className="flex items-center justify-between gap-4">
+            <Link
+              href="/knowledge-graph"
+              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Knowledge Graph
+            </Link>
+            <NextStepLink href="/knowledge-graph/resolution" data-testid="triage-next">
+              Next: Duplicates
+            </NextStepLink>
+          </div>
           <h1 className="text-2xl font-bold mt-2">Triage queue</h1>
           <p className="text-muted-foreground mt-1">
             Edge cases the after-extraction triage flagged for a human:
@@ -115,6 +121,11 @@ export default function TriageQueuePage() {
             icon={CheckCircle2}
             title="Nothing to triage"
             description="The review queue is empty. New edge cases appear here after the next extraction runs."
+            action={
+              <NextStepLink href="/knowledge-graph/resolution" primary data-testid="triage-empty-next">
+                Review duplicates
+              </NextStepLink>
+            }
           />
         ) : (
           <div className="space-y-8" data-testid="triage-queue">

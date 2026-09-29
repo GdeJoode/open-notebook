@@ -51,7 +51,7 @@ function ConfidenceBar({ confidence }: { confidence: number }) {
   )
 }
 
-export function ResolutionLogTab() {
+export function ResolutionLog() {
   const [page, setPage] = useState(0)
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [methodFilter, setMethodFilter] = useState<string | undefined>(undefined)

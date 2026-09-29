@@ -4,9 +4,11 @@ import { useMemo, useState } from 'react'
 import Link from 'next/link'
 
 import { EmptyState } from '@/components/common/EmptyState'
+import { NextStepLink } from '@/components/common/NextStepLink'
 import { CandidateMergeCard } from '@/components/resolution/CandidateMergeCard'
 import { MergeClusterCard } from '@/components/resolution/MergeClusterCard'
 import { OverlayEditor } from '@/components/resolution/OverlayEditor'
+import { ResolutionLog } from '@/components/resolution/ResolutionLog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -78,6 +80,8 @@ export default function EntityResolutionPage() {
 
   const isLoading = planQuery.isLoading || candidatesQuery.isLoading
   const isError = planQuery.isError && candidatesQuery.isError
+  const queueEmpty =
+    clusters.length === 0 && autoCandidates.length === 0 && reviewCandidates.length === 0
 
   const totalPages = Math.ceil(clusters.length / PAGE_SIZE)
   const pageClusters = clusters.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE)
@@ -110,13 +114,18 @@ export default function EntityResolutionPage() {
     <div className="flex-1 overflow-y-auto">
       <div className="p-6 space-y-6 max-w-5xl">
         <div>
-          <Link
-            href="/knowledge-graph"
-            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Knowledge Graph
-          </Link>
+          <div className="flex items-center justify-between gap-4">
+            <Link
+              href="/knowledge-graph"
+              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Knowledge Graph
+            </Link>
+            <NextStepLink href="/" data-testid="resolution-next">
+              Next: The Tray
+            </NextStepLink>
+          </div>
           <h1 className="text-2xl font-bold mt-2">Entity Resolution</h1>
           <p className="text-muted-foreground mt-1">
             Review proposed merges of duplicate entities, manage manual
@@ -165,6 +174,13 @@ export default function EntityResolutionPage() {
                   icon={CheckCircle2}
                   title="No duplicates pending"
                   description="There are no proposed merges to review. New duplicates appear here after the next resolution scan."
+                  action={
+                    queueEmpty ? (
+                      <NextStepLink href="/" primary data-testid="resolution-empty-next">
+                        Back to The Tray
+                      </NextStepLink>
+                    ) : undefined
+                  }
                 />
               ) : (
                 <>
@@ -264,6 +280,17 @@ export default function EntityResolutionPage() {
             />
           </>
         )}
+
+        <section aria-labelledby="resolution-log-heading" className="space-y-3">
+          <h2 id="resolution-log-heading" className="text-lg font-semibold">
+            Resolution log
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Match decisions from extraction, with the applied merges: accept or
+            reject the pending ones.
+          </p>
+          <ResolutionLog />
+        </section>
       </div>
     </div>
   )
