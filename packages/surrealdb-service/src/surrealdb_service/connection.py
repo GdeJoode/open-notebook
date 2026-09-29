@@ -171,8 +171,8 @@ class ConnectionPool:
         self._close_timeout = 2.0
         # Set by close_all: connections handed back afterwards are closed.
         self._closed = False
-        # Closers of abandoned sign-ins (see ``_close_when_done``).
-        self._closers: "set[asyncio.Task[None]]" = set()
+        # Closer of each abandoned sign-in -> that sign-in (``_close_when_done``).
+        self._closers: "Dict[asyncio.Task[None], asyncio.Future[None]]" = {}
 
     async def _create_connection(self) -> AsyncSurreal:
         """Create and authenticate a new SurrealDB connection."""
@@ -204,8 +204,8 @@ class ConnectionPool:
 
     def _abandon(self, auth: "asyncio.Future[None]", db: AsyncSurreal) -> None:
         closer = asyncio.ensure_future(self._close_when_done(auth, db))
-        self._closers.add(closer)
-        closer.add_done_callback(self._closers.discard)
+        self._closers[closer] = auth
+        closer.add_done_callback(lambda done: self._closers.pop(done, None))
 
     async def _close_when_done(
         self, auth: "asyncio.Future[None]", db: AsyncSurreal
@@ -298,11 +298,12 @@ class ConnectionPool:
         self._closed = True
         while not self._pool.empty():
             await self._close_quietly(self._pool.get_nowait())
-        # Cancelling a closer stops its wait; it still closes its connection.
-        closers = list(self._closers)
-        for closer in closers:
-            closer.cancel()
-        await asyncio.gather(*closers, return_exceptions=True)
+        # Ending the sign-ins lets their closers close the connections now. (A
+        # closer cancelled before its first step would never run its close.)
+        closers = list(self._closers.items())
+        for _, auth in closers:
+            auth.cancel()
+        await asyncio.gather(*(c for c, _ in closers), return_exceptions=True)
         logger.info("Connection pool closed")
 
 
