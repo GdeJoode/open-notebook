@@ -5,7 +5,7 @@ Extends BaseRepository with job-specific query methods.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger
 
@@ -154,7 +154,7 @@ class JobRepository(BaseRepository[Job]):
         )
         return [Job(**r) for r in rows or []]
 
-    async def unfinished_source_ids(self, statuses: List[str]) -> set:
+    async def unfinished_source_ids(self, statuses: List[str]) -> Set[str]:
         """The sources with a job in one of ``statuses``, in one query (WB.1:
         a source with a live job has not stopped). Raises on a failed read."""
         rows = await execute_query(
