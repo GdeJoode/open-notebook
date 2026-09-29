@@ -552,6 +552,23 @@ re-parents. **Decision OE-D2** settles what happens to the layer.
 - **AC:** the same label types identically in every notebook (extends PC.4's
   test from "every selection" to "every notebook").
 
+> **Carried from OE.5 review round 2 (approved; minors, not blocking):**
+> 1. `mark_covered` applies the default-ontology rule to the defining
+>    ontologies only, so `published_to` in the history can name `base` where
+>    the full rule gives `schema_core`.
+> 2. `mark_covered` runs outside the publish lock and `_dequeue` does not
+>    check the proposal is still pending: an accept plus a concurrent
+>    covered/reject can leave duplicate or contradictory history (the queue
+>    itself stays right).
+> 3. The Accept dialog's retype offer counts `changes + flag_only` / all
+>    changes, not `caused_by_this_edit`, and its text shows only `changes`.
+> 4. A 409 `defined_in` on publish (another tab published meanwhile) does not
+>    refetch the target, so "Mark as already covered" appears only on reopen.
+> 5. `/ontologies`: after Back, a different ontology still gets the URL's
+>    `tab`/`type`/`retype=1`; following the same link again does nothing.
+> - Seen, outside OE.5: `OntologyEditor` logs "final argument passed to
+>   useMemo changed size between renders" in the OE.4 retype test.
+
 **OE.6 — Exports and the extraction service** (~0.5–1d, OE-D5)
 - The TTL export goes through the registry (with `extends`) and exports
   relationship types.
