@@ -355,6 +355,32 @@ redo it.
     - 79 proposals in one notebook show 1 item and no "more";
     - a cold process can pass the 5 s group deadline on its first read, and
       those groups then report a timeout.
+- **Review round 3** (REVISIONS_NEEDED, 2 majors, 4 minors), all addressed:
+  - M1: each page renders its own sidebar, so a navigation restarted the
+    90 s interval, and `refetchOnMount: false` blocked the read on remount.
+    The report is now stale after 90 s (`staleTime: REFRESH_MS`), and a
+    remount or focus reads it once it is. Navigating every 60 s for 10
+    minutes reads 6 times; before the fix it read once. AppShell stays in
+    the pages (WB.2/WB.4).
+  - M2a: the report carries `partial` (an action group failed or timed
+    out). The heading shows "(1257+)", and the Werkbak badge and each badge
+    over a failed group show "N+", each with sr-only "some groups did not
+    load". A partial report is read again after 5 s instead of 90 s, still
+    paused while hidden; the marker goes once the groups load.
+  - M2b, measured instead of built. The round-2 "6.02 s cold, total 89"
+    came from my probe script: its groups import `app_main.dependencies`
+    and `entity_resolution` lazily (42 s + 6 s cold), which blocks the event
+    loop. The server has imported both at startup through its routers.
+    After the app import, the cold first report takes 2.7–4.3 s with no
+    timeouts, and 8 warm sign-ins take 0.1–0.2 s. A pool warm-up would save
+    at most that, so it is not built.
+  - m3: `REFRESH_MS` sits below the imports.
+  - m4: `unfinished_source_ids` returns `Set[str]`.
+  - m5: a test covers one notebook plus a gated source in no notebook: two
+    places, no card action.
+  - m6: the local e2e scripts (gitignored) now warm the specs' routes
+    before the run and pass `--retries=1`. The committed Playwright config
+    is unchanged.
 
 **WB.2 — Pipeline navigation** (~1.5d)
 - **Nav regrouped in pipeline order:**
