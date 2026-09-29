@@ -164,6 +164,24 @@ class TestAcceptTargetAndPreview:
         )
 
 
+class TestCoveredEndpoint:
+    def test_marks_it_covered_and_publishes_nothing(self):
+        edit_service = AsyncMock(spec=SchemaEditService)
+        edit_service.mark_covered.return_value = _make_schema(
+            accepted=[{"type_name": "Gemeente", "published_to": "government", "covered": True}])
+        resp = _client(edit_service).post(f"{BASE}/extensions/Gemeente/covered")
+        assert resp.status_code == 200
+        assert resp.json()["published"] is None
+        edit_service.mark_covered.assert_awaited_once_with(NOTEBOOK_ID, "Gemeente")
+        edit_service.accept_extension.assert_not_awaited()
+
+    def test_a_name_nothing_defines_is_a_409(self):
+        edit_service = AsyncMock(spec=SchemaEditService)
+        edit_service.mark_covered.side_effect = OntologyEditError(409, "not defined")
+        resp = _client(edit_service).post(f"{BASE}/extensions/Streekfonds/covered")
+        assert resp.status_code == 409
+
+
 class TestRejectEndpoint:
     def test_returns_200_with_updated_schema(self):
         edit_service = AsyncMock(spec=SchemaEditService)
