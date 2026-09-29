@@ -57,6 +57,12 @@ DEFAULT_SINCE_DAYS = 7
 # ontology, whichever one it is opened on.
 RETYPE_LINK = "/ontologies?name=schema_core&tab=edit&retype=1"
 
+# A group's ``nav`` is the href of the sidebar entry that shows its badge
+# (``NAV_SECTIONS`` in the frontend's ``components/layout/nav-items.ts``).
+# Schema proposals have no page across notebooks: their entry opens The
+# Tray's proposals card, which links each notebook's queue.
+SCHEMA_PROPOSALS_NAV = "/#schema_proposals"
+
 
 class AttentionItem(BaseModel):
     id: str
@@ -257,15 +263,16 @@ class AttentionService:
                             nav="/notebooks"),
              lambda g: self._extraction_paused(g, notebooks)),
             (AttentionGroup(key="schema_proposals", title="Schema proposals",
-                            nav="/notebooks"),
+                            nav=SCHEMA_PROPOSALS_NAV),
              lambda g: self._schema_proposals(g, notebooks)),
-            (AttentionGroup(key="triage", title="Triage queue", nav="/knowledge-graph",
+            (AttentionGroup(key="triage", title="Triage queue", nav="/knowledge-graph/triage",
                             link="/knowledge-graph/triage"),
              self._triage),
             (AttentionGroup(key="merge_candidates", title="Merge candidates",
-                            nav="/knowledge-graph", link="/knowledge-graph/resolution"),
+                            nav="/knowledge-graph/resolution",
+                            link="/knowledge-graph/resolution"),
              self._merge_candidates),
-            (AttentionGroup(key="retype", title="Retype pending", nav="/ontologies",
+            (AttentionGroup(key="retype", title="Retype pending", nav=RETYPE_LINK,
                             link=RETYPE_LINK),
              self._retype),
             (AttentionGroup(key="jobs_failed", title="Failed jobs"), self._jobs_failed),

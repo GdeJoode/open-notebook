@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-import { AppShell } from '@/components/layout/AppShell'
 import { PrivacyModeToggle } from '@/components/routing/PrivacyModeToggle'
 import { ProviderChainEditor } from '@/components/routing/ProviderChainEditor'
 import { ProviderHealthChip } from '@/components/routing/ProviderHealthChip'
@@ -47,39 +46,35 @@ export default function ModelRoutingPage() {
 
   if (routesQuery.isLoading) {
     return (
-      <AppShell>
-        <div className="p-6 space-y-6" aria-busy="true">
-          <Skeleton className="h-8 w-64" />
-          <Skeleton className="h-40 w-full" />
-          <Skeleton className="h-40 w-full" />
-        </div>
-      </AppShell>
+      <div className="p-6 space-y-6" aria-busy="true">
+        <Skeleton className="h-8 w-64" />
+        <Skeleton className="h-40 w-full" />
+        <Skeleton className="h-40 w-full" />
+      </div>
     )
   }
 
   if (routesQuery.isError || !routesQuery.data) {
     return (
-      <AppShell>
-        <div className="p-6">
-          <Alert variant="destructive">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertTitle>Failed to load model routing</AlertTitle>
-            <AlertDescription>
-              Could not fetch the provider chains. Check that the API is
-              reachable and try again.
-              <div className="mt-3">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => routesQuery.refetch()}
-                >
-                  Retry
-                </Button>
-              </div>
-            </AlertDescription>
-          </Alert>
-        </div>
-      </AppShell>
+      <div className="p-6">
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Failed to load model routing</AlertTitle>
+          <AlertDescription>
+            Could not fetch the provider chains. Check that the API is
+            reachable and try again.
+            <div className="mt-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => routesQuery.refetch()}
+              >
+                Retry
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      </div>
     )
   }
 
@@ -87,85 +82,83 @@ export default function ModelRoutingPage() {
     settingsQuery.data?.default_privacy_mode ?? 'cloud'
 
   return (
-    <AppShell>
-      <div className="flex-1 overflow-y-auto">
-        <div className="p-6 space-y-6">
-          <div>
-            <h1 className="text-2xl font-bold">Model Routing</h1>
-            <p className="text-muted-foreground mt-1">
-              Order the provider chain each LLM stage tries, set the global
-              privacy default, and watch per-provider health.
-            </p>
-          </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Global Privacy Default</CardTitle>
-              <CardDescription>
-                Cloud routes through cloud providers with a local fallback.
-                Private keeps every LLM call local. Notebooks and documents can
-                override this.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <PrivacyModeToggle
-                scope="global"
-                scopeLabel="Global default"
-                value={globalPrivacy}
-                disabled={updateSettings.isPending}
-                onChange={(value: PrivacyValue) => {
-                  const wire = toWire(value)
-                  if (wire) {
-                    updateSettings.mutate({ default_privacy_mode: wire })
-                  }
-                }}
-              />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Provider Health</CardTitle>
-              <CardDescription>
-                Configured providers (API key present) and their circuit-breaker
-                state. Unconfigured cloud providers are skipped at routing time.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {healthQuery.isLoading ? (
-                <Skeleton className="h-8 w-full" />
-              ) : healthQuery.data ? (
-                <div className="flex flex-wrap gap-2">
-                  {healthQuery.data.providers.map((h) => (
-                    <ProviderHealthChip key={h.provider} health={h} />
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Health unavailable.
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          <RoutingSummaryCard />
-
-          {routesQuery.data.map((route) => (
-            <TaskRouteCard
-              key={route.task}
-              route={route}
-              saving={updateRoute.isPending}
-              onSave={(provider_chain, private_chain) =>
-                updateRoute.mutate({
-                  task: route.task,
-                  update: { provider_chain, private_chain },
-                })
-              }
-            />
-          ))}
+    <div className="flex-1 overflow-y-auto">
+      <div className="p-6 space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Model Routing</h1>
+          <p className="text-muted-foreground mt-1">
+            Order the provider chain each LLM stage tries, set the global
+            privacy default, and watch per-provider health.
+          </p>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Global Privacy Default</CardTitle>
+            <CardDescription>
+              Cloud routes through cloud providers with a local fallback.
+              Private keeps every LLM call local. Notebooks and documents can
+              override this.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <PrivacyModeToggle
+              scope="global"
+              scopeLabel="Global default"
+              value={globalPrivacy}
+              disabled={updateSettings.isPending}
+              onChange={(value: PrivacyValue) => {
+                const wire = toWire(value)
+                if (wire) {
+                  updateSettings.mutate({ default_privacy_mode: wire })
+                }
+              }}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Provider Health</CardTitle>
+            <CardDescription>
+              Configured providers (API key present) and their circuit-breaker
+              state. Unconfigured cloud providers are skipped at routing time.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {healthQuery.isLoading ? (
+              <Skeleton className="h-8 w-full" />
+            ) : healthQuery.data ? (
+              <div className="flex flex-wrap gap-2">
+                {healthQuery.data.providers.map((h) => (
+                  <ProviderHealthChip key={h.provider} health={h} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Health unavailable.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <RoutingSummaryCard />
+
+        {routesQuery.data.map((route) => (
+          <TaskRouteCard
+            key={route.task}
+            route={route}
+            saving={updateRoute.isPending}
+            onSave={(provider_chain, private_chain) =>
+              updateRoute.mutate({
+                task: route.task,
+                update: { provider_chain, private_chain },
+              })
+            }
+          />
+        ))}
       </div>
-    </AppShell>
+    </div>
   )
 }
 

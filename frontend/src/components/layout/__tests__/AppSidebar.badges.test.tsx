@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * WB.1: the sidebar's Werkbak entry carries the report's total, and each entry
- * the sum of `counted` of the groups whose `nav` it is.
+ * WB.1/WB.2: the sidebar's The Tray entry carries the report's total, and each
+ * entry the sum of `counted` of the groups whose `nav` it is.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
@@ -32,6 +32,7 @@ vi.mock('@/components/podcasts/GeneratePodcastDialog', () => ({
 }))
 
 import { AppSidebar } from '../AppSidebar'
+import { NAV_SECTIONS } from '../nav-items'
 
 const REPORT = fixture as AttentionReport
 
@@ -40,21 +41,31 @@ afterEach(() => cleanup())
 const badge = (name: string) => screen.queryByTestId(`nav-badge-${name}`)?.textContent ?? null
 
 describe('sidebar badges', () => {
-  it('Werkbak shows the total; entries show their groups', () => {
+  it('The Tray shows the total; each entry shows its groups', () => {
     report.data = REPORT
     render(<AppSidebar />)
     expect(screen.getByRole('link', { name: /The Tray/ }).getAttribute('href')).toBe('/')
-    // The fixture's merge candidates timed out: the total and the Knowledge
-    // Graph badge miss them, and say so.
+    // The fixture's merge candidates timed out: the total and the Duplicates
+    // badge miss them, and say so.
     expect(badge('The Tray')).toBe('1257+ need you, some groups did not load')
     // gated 1 + stopped 2 (failed is 0; "new sources" asks nothing)
     expect(badge('Sources')).toBe('3 need you')
-    // proposals 3; the paused extraction is its gated source's (counted 0)
-    expect(badge('Notebooks')).toBe('3 need you')
-    // triage 1238; merge candidates failed (count 0), so partial
-    expect(badge('Knowledge Graph')).toBe('1238+ need you, some groups did not load')
-    expect(badge('Ontologies')).toBe('12 need you')
-    expect(badge('Podcasts')).toBeNull()
+    expect(badge('Schema proposals')).toBe('3 need you')
+    expect(badge('Triage')).toBe('1238 need you')
+    expect(badge('Duplicates')).toBe('0+ need you, some groups did not load')
+    expect(badge('Retype')).toBe('12 need you')
+    // The paused extraction is its gated source's (counted 0).
+    expect(badge('Notebooks')).toBeNull()
+    expect(badge('Graph')).toBeNull()
+    expect(badge('Ontologies')).toBeNull()
+  })
+
+  it('every group that names an entry finds it, and adds to no other', () => {
+    // A producer names its consumer: each `nav` the report carries is an
+    // entry's href, so no badge is lost to a stale name.
+    const hrefs = NAV_SECTIONS.flatMap((s) => s.items.map((i) => i.href))
+    const navs = [...REPORT.groups, ...REPORT.arrived].map((g) => g.nav).filter(Boolean)
+    for (const nav of navs) expect(hrefs).toContain(nav)
   })
 
   it('no partial marker when every group loaded', () => {
@@ -65,7 +76,7 @@ describe('sidebar badges', () => {
     }
     render(<AppSidebar />)
     expect(badge('The Tray')).toBe('1257 need you')
-    expect(badge('Knowledge Graph')).toBe('1238 need you')
+    expect(badge('Duplicates')).toBeNull()
   })
 
   it('no badges before the report arrives', () => {

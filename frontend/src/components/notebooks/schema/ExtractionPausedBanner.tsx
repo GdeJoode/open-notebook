@@ -12,6 +12,8 @@ import {
 
 interface ExtractionPausedBannerProps {
   notebookId: string
+  /** Off on the Schema tab itself, where the link would point at the page. */
+  showSchemaLink?: boolean
 }
 
 /**
@@ -36,6 +38,7 @@ interface ExtractionPausedBannerProps {
  */
 export function ExtractionPausedBanner({
   notebookId,
+  showSchemaLink = true,
 }: ExtractionPausedBannerProps) {
   const pausedQuery = usePausedExtraction(notebookId)
   const resume = useResumeExtraction(notebookId)
@@ -75,14 +78,16 @@ export function ExtractionPausedBanner({
         >
           {resume.isPending ? 'Resuming…' : 'Resume with current schema'}
         </Button>
-        <Button asChild size="sm" variant="outline">
-          <Link
-            href={`/notebooks/${encodeURIComponent(notebookId)}/schema`}
-            data-testid="extraction-paused-open-schema"
-          >
-            Open schema editor
-          </Link>
-        </Button>
+        {showSchemaLink && (
+          <Button asChild size="sm" variant="outline">
+            <Link
+              href={`/notebooks/${encodeURIComponent(notebookId)}/schema`}
+              data-testid="extraction-paused-open-schema"
+            >
+              Open schema editor
+            </Link>
+          </Button>
+        )}
       </div>
     </Alert>
   )

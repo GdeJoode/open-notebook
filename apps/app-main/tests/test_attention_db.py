@@ -592,6 +592,26 @@ async def test_batched_notebook_lookup_matches_the_single_one(env) -> None:
     assert many[none] is None and many[one] == nb1
 
 
+async def test_the_source_pages_first_notebook_is_the_gates_anchor(env) -> None:
+    """WB.2: the frontend sends a gated source to the Schema tab of the first
+    of ``GET /sources/{id}``'s ``notebooks`` (``schemaReviewHref``). That is
+    the notebook its extraction anchored on (the same edge read, without
+    the LIMIT), for sources in two notebooks linked in either order."""
+    nb1, nb2 = await _notebook("One"), await _notebook("Two")
+    a = await _source("A", "awaiting_schema_review", nb2)
+    await _q(f"RELATE {a}->reference->{nb1};")
+    b = await _source("B", "awaiting_schema_review", nb1)
+    await _q(f"RELATE {b}->reference->{nb2};")
+    repo = SourceRepository()
+    async with _client(_app()) as c:
+        for sid in (a, b):
+            r = await c.get(f"/api/sources/{quote(sid, safe='')}")
+            assert r.status_code == 200, r.text
+            notebooks = r.json()["notebooks"]
+            assert len(notebooks) == 2
+            assert notebooks[0] == await repo.get_notebook_id(sid)
+
+
 async def test_one_notebook_and_a_loose_source_are_two_places(env) -> None:
     """A gated source in no notebook has no Schema tab: it is an item of its own,
     so one notebook plus that source is two places, and the card has no action."""

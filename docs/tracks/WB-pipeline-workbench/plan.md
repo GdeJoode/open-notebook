@@ -531,6 +531,56 @@ redo it.
   - from the Werkbak, each group reaches its resolution page in one click and
     returns in one click;
   - an e2e test walks upload → gated → accept → complete without typing a URL.
+- **WB.2 built** (branch `feature/wb2-pipeline-nav`):
+  - Nav (`components/layout/nav-items.ts`): The Tray, Sources; Review
+    (Schema proposals, Triage, Duplicates, Retype); Knowledge (Graph,
+    Ontologies, Search); Collections (Notebooks); Settings (Models, Model
+    routing, Settings); More, folded, open state per browser (Podcasts,
+    Transformations, Summaries). One entry is highlighted: the most specific
+    path. The attention groups' `nav` names the new entries, so Triage,
+    Duplicates, Retype and Schema proposals carry their own badges.
+  - Schema proposals opens The Tray's proposals card (`/#schema_proposals`).
+    There is no cross-notebook page, and the card already lists every
+    notebook's queue with a link to its Schema tab; a page would repeat it.
+    Retype opens the retype panel on `schema_core` (it ships with the app,
+    and the panel retypes under every active ontology): the Tray card's link.
+  - Resolution: the Resolution Log tab is gone from `/knowledge-graph`; the
+    log is a section of the Resolution page.
+  - `AppShell` lives in `(dashboard)/layout.tsx`: the sidebar stays mounted
+    and the source page has it. The attention report is read every 90 s as
+    the owner navigates (was: on remount after 90 s); focus reads a stale
+    report as before.
+  - Next steps: Triage → Duplicates → The Tray (header link; the primary
+    action once a queue is empty). A gated source (create flow, source page)
+    goes to the Schema tab of its anchor notebook, the first of
+    `GET /sources/{id}`'s `notebooks` (a DB test pins that it is
+    `get_notebook_id`'s). Accepting a proposal resumes nothing, so the Schema
+    tab shows the paused-extraction banner with Resume. Create flow: View in
+    Background opens the source page; Done's primary action is The Tray.
+  - Limits:
+    - a page that throws takes the sidebar with it: the layout's
+      `ErrorBoundary` wraps the shell (unchanged);
+    - with no proposals the Schema proposals entry lands on The Tray's top;
+    - `SourceRepository.get_notebook_id` says the first link is the first
+      inserted; measured, it is not (edge-id order). The Schema tab link is
+      right either way, as both reads take the same first edge.
+
+> **Carried from WB.2 review round 1 (approved; minors, not blocking):**
+> 1. The Schema tab shows "Resume with current schema" above the proposals as
+>    the primary button. One click with nothing accepted adds the sentinel and
+>    turns the notebook's review gate off for good (as accepting any proposal
+>    already did). WB.2 makes it prominent on the gated walk.
+> 2. On `/ontologies?…&retype=1` the highlighted entry is Ontologies, never
+>    Review › Retype; the sidebar's Ontologies from there keeps
+>    `selectedOntology` (pre-existing page state).
+> 3. `/#schema_proposals` from `/` itself relies on Next's hash scroll (no
+>    focus move); with 0 proposals it lands at the top.
+> 4. Duplicates shows "No duplicates pending" + "Back to The Tray" when only
+>    the candidates query failed.
+> 5. The Schema tab's "Next: The Tray" shows while extraction is still paused.
+> 6. The sidebar is 946–1054 px tall: on 1366×768 the whole document scrolls
+>    to reach Sign out (WB.4/WB.5).
+> 7. Create-flow Done goes to The Tray rather than "the source's next stage".
 
 **WB.3 — Sources as the pipeline board** (~1.5d)
 - **Sources list:**

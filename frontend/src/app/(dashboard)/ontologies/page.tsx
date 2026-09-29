@@ -2,7 +2,6 @@
 
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { AppShell } from '@/components/layout/AppShell'
 import { EmptyState } from '@/components/common/EmptyState'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { useOntologies, useOntology } from '@/lib/hooks/use-ontologies'
@@ -37,26 +36,24 @@ export default function OntologiesPage() {
   const tab = searchParams.get('tab')
 
   return (
-    <AppShell>
-      <div className="flex-1 overflow-y-auto">
-        <div className="p-6">
-          <div className="max-w-6xl">
-            {selectedOntology ? (
-              <OntologyDetail
-                key={searchParams.toString()}
-                name={selectedOntology}
-                initialTab={tab && TABS.includes(tab) ? tab : undefined}
-                initialType={searchParams.get('type') ?? undefined}
-                initialRetypeOpen={searchParams.get('retype') === '1'}
-                onBack={() => setSelectedOntology(null)}
-              />
-            ) : (
-              <OntologyList onSelect={setSelectedOntology} />
-            )}
-          </div>
+    <div className="flex-1 overflow-y-auto">
+      <div className="p-6">
+        <div className="max-w-6xl">
+          {selectedOntology ? (
+            <OntologyDetail
+              key={searchParams.toString()}
+              name={selectedOntology}
+              initialTab={tab && TABS.includes(tab) ? tab : undefined}
+              initialType={searchParams.get('type') ?? undefined}
+              initialRetypeOpen={searchParams.get('retype') === '1'}
+              onBack={() => setSelectedOntology(null)}
+            />
+          ) : (
+            <OntologyList onSelect={setSelectedOntology} />
+          )}
         </div>
       </div>
-    </AppShell>
+    </div>
   )
 }
 

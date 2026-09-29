@@ -25,7 +25,7 @@ export default function SourceDetailPage() {
   }, [navigation, router])
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-1 flex-col min-h-0">
       {/* Back button */}
       <div className="pt-6 pb-4 px-6">
         <Button

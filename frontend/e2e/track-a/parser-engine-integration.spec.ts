@@ -253,7 +253,8 @@ test.describe('A.3: parser-engine integration', () => {
     await expect(tooltip).toContainText(/heading_rate/)
 
     // ---- Reprocess modal: per-source override flow ----
-    const moreButtons = page.locator('button[aria-haspopup="menu"]')
+    // The page's own menu, not the sidebar's Create menu (WB.2: one shell).
+    const moreButtons = page.getByRole('main').locator('button[aria-haspopup="menu"]')
     await moreButtons.first().click()
     await page
       .getByRole('menuitem', { name: /Reprocess Document/i })

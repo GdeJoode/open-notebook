@@ -16,9 +16,6 @@ import type { AttentionReport } from '@/lib/api/attention'
 
 const get = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/api/attention', () => ({ attentionApi: { get } }))
-vi.mock('@/components/layout/AppShell', () => ({
-  AppShell: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-}))
 vi.mock('next/link', () => ({
   default: ({ children, href, ...rest }: { children: ReactNode; href: string }) => (
     <a href={href} {...rest}>{children}</a>
@@ -85,6 +82,24 @@ describe('Werkbak', () => {
     expect(screen.getByTestId('werkbak-elsewhere-extraction_paused').textContent)
       .toBe('1 already counted with their source')
     expect(screen.queryByTestId('werkbak-elsewhere-schema_proposals')).toBeNull()
+  })
+
+  it('a link to one card (the sidebar\'s Schema proposals) lands on it once the report is in', async () => {
+    const scrolled: Element[] = []
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this)
+    }
+    window.history.replaceState(null, '', '/#schema_proposals')
+    try {
+      get.mockResolvedValue(REPORT)
+      mount()
+      const card = await screen.findByTestId('werkbak-group-schema_proposals')
+      await waitFor(() => expect(document.activeElement).toBe(card))
+      expect(scrolled).toEqual([card])
+    } finally {
+      window.history.replaceState(null, '', '/')
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
   })
 
   it('a failed group shows its error and no count; the others still render', async () => {

@@ -23,6 +23,9 @@ const H = vi.hoisted(() => {
     jobStatus: 'running' as string,
     // Per-id stage for the multi-file poll.
     stageById: {} as Record<string, ProcessingStage>,
+    // GET /sources/{id} `notebooks`: the first is the gate's anchor.
+    notebooks: [] as string[],
+    notebooksById: {} as Record<string, string[]>,
   }
   let createCalls = 0
   return {
@@ -39,6 +42,7 @@ const H = vi.hoisted(() => {
     sourcesGet: vi.fn(async (id: string) => ({
       id,
       processing_stage: H.state.stageById[id],
+      notebooks: H.state.notebooksById[id] ?? [],
     })),
     toast: vi.fn(),
     push: vi.fn(),
@@ -60,6 +64,7 @@ vi.mock('@/lib/hooks/use-sources', () => ({
       entity_count: 0,
       insights_count: 0,
       relation_count: 0,
+      notebooks: H.state.notebooks,
     },
   }),
   useSourceStatus: () => ({ data: { status: H.state.jobStatus } }),
@@ -94,6 +99,8 @@ beforeEach(() => {
   H.state.stage = 'ingested'
   H.state.jobStatus = 'running'
   H.state.stageById = {}
+  H.state.notebooks = []
+  H.state.notebooksById = {}
 })
 afterEach(cleanup)
 
@@ -162,6 +169,9 @@ describe('AC3 — transitions to Done on complete', () => {
     await waitFor(() =>
       expect(screen.getByText('Source Created Successfully')).toBeTruthy()
     )
+    // WB.2: the source's own pipeline is done; the next step is The Tray.
+    await user.click(screen.getByTestId('pipeline-next-tray'))
+    expect(H.push).toHaveBeenCalledWith('/')
   })
 })
 
@@ -181,6 +191,35 @@ describe('AC3 — parks on the gated node at awaiting_schema_review (no false Do
     // The Extract node is parked (gated), not done.
     const extract = container.querySelector('[data-variant="live"] [data-node-key="extract"]')
     expect(extract?.getAttribute('data-node-state')).toBe('gated')
+  })
+
+  it('leads to the Schema tab where the proposal is accepted (WB.2)', async () => {
+    H.state.stage = 'awaiting_schema_review'
+    H.state.jobStatus = 'paused_for_review'
+    H.state.notebooks = ['notebook:nb1', 'notebook:nb2']
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    render(<CreateSourcePipeline />)
+
+    await submitTextSource(user)
+
+    await user.click(await screen.findByTestId('pipeline-review-proposal'))
+    expect(H.push).toHaveBeenLastCalledWith('/notebooks/notebook%3Anb1/schema')
+    await user.click(screen.getByRole('button', { name: /Review schema/i }))
+    expect(H.push).toHaveBeenLastCalledWith('/notebooks/notebook%3Anb1/schema')
+  })
+})
+
+describe('Processing — View in Background (WB.2)', () => {
+  it('opens the source page, where the pipeline shows live; no proposal to review', async () => {
+    H.state.stage = 'embedded'
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    render(<CreateSourcePipeline />)
+
+    await submitTextSource(user)
+
+    await user.click(await screen.findByRole('button', { name: 'View in Background' }))
+    expect(H.push).toHaveBeenCalledWith('/sources/source%3Aa')
+    expect(screen.queryByTestId('pipeline-review-proposal')).toBeNull()
   })
 })
 
@@ -274,6 +313,7 @@ describe('multi-file batch — schema gate settles the batch (no infinite poll, 
       'source:a': 'awaiting_schema_review',
       'source:b': 'complete',
     }
+    H.state.notebooksById = { 'source:a': ['notebook:nb1'] }
 
     const { container } = render(<CreateSourcePipeline />)
     await submitTwoFileBatch(user, container)
@@ -296,9 +336,9 @@ describe('multi-file batch — schema gate settles the batch (no infinite poll, 
     await new Promise((r) => setTimeout(r, 3500))
     expect(H.sourcesGet.mock.calls.length).toBe(settledCount)
 
-    // The per-entry Review schema action deep-links to THAT entry's source.
+    // The per-entry Review schema action opens THAT entry's notebook Schema tab.
     await user.click(reviewButton)
-    expect(H.push).toHaveBeenCalledWith('/sources/source:a')
+    expect(H.push).toHaveBeenCalledWith('/notebooks/notebook%3Anb1/schema')
   }, 15000)
 
   it('resumes polling a re-armed entry after Retry once the batch has fully settled', async () => {

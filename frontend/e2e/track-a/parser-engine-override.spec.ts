@@ -113,10 +113,11 @@ test.describe('A.2: per-source parser-engine override', () => {
 
     // Open the dropdown menu via the MoreVertical button and pick
     // "Reprocess Document…".
-    await page.getByRole('button', { name: '' }).nth(1).click().catch(() => {})
+    await page.getByRole('main').getByRole('button', { name: '' }).nth(1).click().catch(() => {})
     // More reliable: locate by the visible menu-item label after opening.
     // Use the lucide MoreVertical button via aria-haspopup.
-    const moreButtons = page.locator('button[aria-haspopup="menu"]')
+    // The page's own menu, not the sidebar's Create menu (WB.2: one shell).
+    const moreButtons = page.getByRole('main').locator('button[aria-haspopup="menu"]')
     await moreButtons.first().click()
     await page.getByRole('menuitem', { name: /Reprocess Document/i }).click()
 

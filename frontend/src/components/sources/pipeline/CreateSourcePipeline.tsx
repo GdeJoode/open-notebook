@@ -19,6 +19,7 @@ import { CreateSourceRequest, SettingsResponse } from '@/lib/types/api'
 import type { ProcessingStage } from '@/lib/pipeline/processing-stage'
 import { toPipelineCounts } from '@/lib/pipeline/source-counts'
 import type { PipelineNodeAction } from '@/lib/pipeline/pipeline-stages'
+import { schemaReviewHref } from '@/lib/pipeline/schema-review'
 import { SourceTypeStep } from '../steps/SourceTypeStep'
 import { NotebooksStep } from '../steps/NotebooksStep'
 import {
@@ -90,6 +91,8 @@ interface MultiSourceEntry {
   status: 'pending' | 'creating' | 'processing' | 'completed' | 'gated' | 'failed'
   stage?: ProcessingStage
   fileName?: string
+  /** From the poll: the first is where a gated entry's proposal is accepted. */
+  notebooks?: string[]
 }
 
 /**
@@ -248,7 +251,11 @@ export function CreateSourcePipeline() {
           const stage = source.processing_stage
           const nextStatus = stageToEntryStatus(stage)
           setMultiSources((prev) =>
-            prev.map((s) => (s.id === entry.id ? { ...s, stage, status: nextStatus } : s))
+            prev.map((s) =>
+              s.id === entry.id
+                ? { ...s, stage, status: nextStatus, notebooks: source.notebooks }
+                : s
+            )
           )
         } catch {
           // Ignore transient polling errors — the next tick retries.
@@ -403,14 +410,15 @@ export function CreateSourcePipeline() {
       if (action === 'retry') {
         retrySource.mutate(sourceId)
       } else if (action === 'review-schema') {
-        router.push(`/sources/${sourceId}`)
+        router.push(schemaReviewHref(pipelineData?.notebooks))
       }
     },
-    [sourceId, retrySource, router]
+    [sourceId, retrySource, router, pipelineData?.notebooks]
   )
 
   // Per-entry recovery for the multi-file batch: mirrors `handleNodeAction` but
-  // scoped to a single entry. `review-schema` deep-links to that source; `retry`
+  // scoped to a single entry. `review-schema` opens the Schema tab of that
+  // entry's notebook; `retry`
   // re-arms the pipeline AND flips the entry back to `processing` so the poller
   // (which stopped once the entry settled as `failed`) resumes for it.
   const handleMultiNodeAction = useCallback(
@@ -424,7 +432,8 @@ export function CreateSourcePipeline() {
           )
         )
       } else if (action === 'review-schema') {
-        router.push(`/sources/${entryId}`)
+        const entry = multiSourcesRef.current.find((s) => s.id === entryId)
+        router.push(schemaReviewHref(entry?.notebooks))
       }
     },
     [retrySource, router]
@@ -743,6 +752,11 @@ export function CreateSourcePipeline() {
         isStepValid={isStepValid(activeTab)}
         isSubmitting={createSource.isPending}
         sourceId={sourceIds.length === 1 ? sourceIds[0] : sourceId}
+        reviewHref={
+          !isMulti && singleStage === 'awaiting_schema_review'
+            ? schemaReviewHref(pipelineData?.notebooks)
+            : undefined
+        }
         onBack={handleBack}
         onNext={handleNext}
         onSubmit={handleSubmit(onSubmit)}

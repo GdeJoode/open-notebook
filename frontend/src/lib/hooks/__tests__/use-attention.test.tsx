@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 /**
- * WB.1 review: the sidebar (on every page) reads the cached report instead of
- * refetching per page, refreshes every 90 s while the tab is visible (not
- * while hidden); the Werkbak page reads it anew; a mutation that resolves an
- * item (here a triage decision) makes it read again.
+ * WB.1 review, WB.2: the sidebar (in the dashboard layout, mounted once)
+ * refreshes the report every 90 s while the tab is visible (not while hidden)
+ * as pages come and go; a remount within that window reuses the cached
+ * report; The Tray page reads it anew; a mutation that resolves an item (here
+ * a triage decision) makes it read again.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react'
@@ -52,7 +53,7 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('useAttention', () => {
-  it('the sidebar reuses the cached report across pages', async () => {
+  it('a remount within the refresh interval reuses the cached report', async () => {
     const first = render(<Badge />, { wrapper })
     await waitFor(() => expect(get).toHaveBeenCalledTimes(1))
     first.unmount()
@@ -89,21 +90,26 @@ describe('useAttention', () => {
     }
   })
 
-  it('an owner who keeps navigating still gets a read about every 90 s', async () => {
-    // Every page renders its own sidebar: a navigation remounts it, and that
-    // restarts the refresh interval. Navigate every 60 s for 10 minutes.
+  it('an owner who keeps navigating gets a read every 90 s', async () => {
+    // As the dashboard layout does: the sidebar stays, the page changes.
+    // Navigate every 60 s for 10 minutes.
+    const Shell = ({ page }: { page: number }) => (
+      <>
+        <Badge />
+        <p>page {page}</p>
+      </>
+    )
     vi.useFakeTimers()
     try {
-      let view = render(<Badge />, { wrapper })
+      const view = render(<Shell page={0} />, { wrapper })
       await act(() => vi.advanceTimersByTimeAsync(0))
       for (let minute = 1; minute <= 10; minute++) {
         await act(() => vi.advanceTimersByTimeAsync(60 * 1000))
-        view.unmount()
-        view = render(<Badge />, { wrapper })
+        view.rerender(<Shell page={minute} />)
         await act(() => vi.advanceTimersByTimeAsync(0))
       }
-      // A read once the report is past 90 s: at 0, 2, 4, 6, 8 and 10 min.
-      expect(get).toHaveBeenCalledTimes(6)
+      // At 0, 90, 180, 270, 360, 450 and 540 s.
+      expect(get).toHaveBeenCalledTimes(7)
     } finally {
       vi.useRealTimers()
     }
@@ -134,18 +140,20 @@ describe('useAttention', () => {
     }
   })
 
-  it('a navigation reads a partial report once its retry delay has passed', async () => {
+  it('a focus reads a partial report once its retry delay has passed', async () => {
     vi.useFakeTimers()
     try {
       get.mockResolvedValue(fixture)
-      const first = render(<Badge />, { wrapper })
-      await act(() => vi.advanceTimersByTimeAsync(1000))
-      first.unmount() // navigated away before the 5 s retry fired
-      await act(() => vi.advanceTimersByTimeAsync(5000))
       render(<Badge />, { wrapper })
+      await act(() => vi.advanceTimersByTimeAsync(1000))
+      act(() => focusManager.setFocused(false)) // hidden before the 5 s retry fired
+      await act(() => vi.advanceTimersByTimeAsync(5000))
+      expect(get).toHaveBeenCalledTimes(1)
+      act(() => focusManager.setFocused(true))
       await act(() => vi.advanceTimersByTimeAsync(0))
       expect(get).toHaveBeenCalledTimes(2)
     } finally {
+      focusManager.setFocused(undefined)
       vi.useRealTimers()
     }
   })

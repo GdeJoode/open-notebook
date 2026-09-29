@@ -57,8 +57,9 @@ vi.mock('@/lib/hooks/use-zotero', () => ({
   useZoteroPush: () => ({ mutate: vi.fn(), isPending: false }),
 }))
 
+const push = vi.hoisted(() => vi.fn())
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push }),
 }))
 
 vi.mock('sonner', () => ({
@@ -214,15 +215,21 @@ describe('AC2 — Graph node membership + node-click deep-links', () => {
 })
 
 describe('AC3 — gated + failed actions', () => {
-  it('awaiting_schema_review renders a Review schema action that opens the Entities tab', async () => {
-    await renderDetail(makeSource({ processing_stage: 'awaiting_schema_review' }))
-    const btn = screen.getByRole('button', { name: /Review schema/i })
-    await userEvent.click(btn)
-    await waitFor(() =>
-      expect(
-        screen.getByRole('tab', { name: /Entities/i }).getAttribute('aria-selected')
-      ).toBe('true')
-    )
+  it('awaiting_schema_review: Review schema opens the Schema tab of the anchor notebook', async () => {
+    // WB.2: the proposal is accepted (and the extraction resumed) on the Schema
+    // tab of the first notebook, the one the extraction anchored on.
+    await renderDetail(makeSource({
+      processing_stage: 'awaiting_schema_review',
+      notebooks: ['notebook:nb1', 'notebook:nb2'],
+    }))
+    await userEvent.click(screen.getByRole('button', { name: /Review schema/i }))
+    expect(push).toHaveBeenCalledWith('/notebooks/notebook%3Anb1/schema')
+  })
+
+  it('awaiting_schema_review in no notebook: Review schema opens The Tray', async () => {
+    await renderDetail(makeSource({ processing_stage: 'awaiting_schema_review', notebooks: [] }))
+    await userEvent.click(screen.getByRole('button', { name: /Review schema/i }))
+    expect(push).toHaveBeenCalledWith('/')
   })
 
   it('failed source renders a Retry action wired to sourcesApi.retry', async () => {

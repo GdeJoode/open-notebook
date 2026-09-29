@@ -29,62 +29,35 @@ import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
 import {
   Book,
-  Search,
   Mic,
-  Bot,
-  Shuffle,
-  Settings,
   LogOut,
+  ChevronDown,
   ChevronLeft,
+  ChevronRight,
+  Ellipsis,
   Menu,
   FileText,
   Plus,
-  Network,
-  Share2,
-  AlignLeft,
-  Inbox,
-  type LucideIcon,
 } from 'lucide-react'
+import { NAV_SECTIONS, TRAY_HREF, activeNavHref, type NavItem, type NavSection } from './nav-items'
 
-const werkbak = { name: 'The Tray', href: '/', icon: Inbox }
+const MORE_OPEN_KEY = 'sidebar.moreOpen'
 
-const navigation = [
-  {
-    title: 'Collect',
-    items: [
-      { name: 'Sources', href: '/sources', icon: FileText },
-    ],
-  },
-  {
-    title: 'Process',
-    items: [
-      { name: 'Notebooks', href: '/notebooks', icon: Book },
-      { name: 'Ask and Search', href: '/search', icon: Search },
-    ],
-  },
-  {
-    title: 'Analyze',
-    items: [
-      { name: 'Ontologies', href: '/ontologies', icon: Network },
-      { name: 'Knowledge Graph', href: '/knowledge-graph', icon: Share2 },
-      { name: 'Summaries', href: '/summaries', icon: AlignLeft },
-    ],
-  },
-  {
-    title: 'Create',
-    items: [
-      { name: 'Podcasts', href: '/podcasts', icon: Mic },
-    ],
-  },
-  {
-    title: 'Configure',
-    items: [
-      { name: 'Models', href: '/models', icon: Bot },
-      { name: 'Transformations', href: '/transformations', icon: Shuffle },
-      { name: 'Settings', href: '/settings', icon: Settings },
-    ],
-  },
-] as const
+function readMoreOpen(): boolean {
+  try {
+    return window.localStorage.getItem(MORE_OPEN_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function writeMoreOpen(open: boolean): void {
+  try {
+    window.localStorage.setItem(MORE_OPEN_KEY, String(open))
+  } catch {
+    // Storage unavailable: the group still toggles for this page's life.
+  }
+}
 
 type CreateTarget = 'source' | 'notebook' | 'podcast'
 
@@ -97,14 +70,23 @@ export function AppSidebar() {
   const [createMenuOpen, setCreateMenuOpen] = useState(false)
   const [notebookDialogOpen, setNotebookDialogOpen] = useState(false)
   const [podcastDialogOpen, setPodcastDialogOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(readMoreOpen)
+  const activeHref = activeNavHref(pathname)
 
-  // WB.1: the Werkbak's total, and per entry the `counted` of the groups
+  const toggleMore = () => {
+    setMoreOpen((open) => {
+      writeMoreOpen(!open)
+      return !open
+    })
+  }
+
+  // WB.1: The Tray's total, and per entry the `counted` of the groups
   // whose `nav` it is (each thing to act on once). Partial ("12+") when a
   // group behind the number failed or timed out.
   const { data: attention } = useAttention()
   const badgeFor = (href: string): { count: number; partial: boolean } => {
     if (!attention) return { count: 0, partial: false }
-    if (href === werkbak.href) return { count: attention.total, partial: attention.partial }
+    if (href === TRAY_HREF) return { count: attention.total, partial: attention.partial }
     const groups = attention.groups.filter((g) => g.nav === href)
     return {
       count: groups.reduce((sum, g) => sum + g.counted, 0),
@@ -112,8 +94,8 @@ export function AppSidebar() {
     }
   }
 
-  const renderItem = (item: { name: string; href: string; icon: LucideIcon }) => {
-    const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)
+  const renderItem = (item: NavItem) => {
+    const isActive = item.href === activeHref
     const { count, partial } = badgeFor(item.href)
     const button = (
       <Button
@@ -149,7 +131,7 @@ export function AppSidebar() {
       return (
         <Tooltip key={item.name}>
           <TooltipTrigger asChild>
-            <Link href={item.href}>
+            <Link href={item.href} aria-current={isActive ? 'page' : undefined}>
               {button}
             </Link>
           </TooltipTrigger>
@@ -161,9 +143,52 @@ export function AppSidebar() {
     }
 
     return (
-      <Link key={item.name} href={item.href}>
+      <Link key={item.name} href={item.href} aria-current={isActive ? 'page' : undefined}>
         {button}
       </Link>
+    )
+  }
+
+  // WB-D4: features outside the product scope, folded away by default.
+  const renderCollapsible = (section: NavSection) => {
+    const listId = `nav-section-${section.title}`
+    const toggle = (
+      <Button
+        variant="ghost"
+        onClick={toggleMore}
+        aria-expanded={moreOpen}
+        aria-controls={listId}
+        aria-label={isCollapsed ? section.title : undefined}
+        className={cn(
+          'w-full gap-3 text-sidebar-foreground/80',
+          isCollapsed ? 'justify-center px-2' : 'justify-start'
+        )}
+        data-testid="nav-more-toggle"
+      >
+        {isCollapsed ? (
+          <Ellipsis className="h-4 w-4" />
+        ) : (
+          <>
+            {moreOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            <span>{section.title}</span>
+          </>
+        )}
+      </Button>
+    )
+    return (
+      <>
+        {isCollapsed ? (
+          <Tooltip>
+            <TooltipTrigger asChild>{toggle}</TooltipTrigger>
+            <TooltipContent side="right">{section.title}</TooltipContent>
+          </Tooltip>
+        ) : (
+          toggle
+        )}
+        <div id={listId} className="space-y-1" hidden={!moreOpen}>
+          {moreOpen && section.items.map(renderItem)}
+        </div>
+      </>
     )
   }
 
@@ -314,19 +339,22 @@ export function AppSidebar() {
             </DropdownMenu>
           </div>
 
-          <div className="space-y-1">{renderItem(werkbak)}</div>
-
-          {navigation.map((section) => (
-            <div key={section.title}>
-              <Separator className="my-3" />
+          {NAV_SECTIONS.map((section, index) => (
+            <div key={section.title ?? index}>
+              {index > 0 && <Separator className="my-3" />}
               <div className="space-y-1">
-                {!isCollapsed && (
-                  <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/60">
-                    {section.title}
-                  </h3>
-                )}
-
-                {section.items.map(renderItem)}
+                {section.collapsible
+                  ? renderCollapsible(section)
+                  : (
+                    <>
+                      {section.title && !isCollapsed && (
+                        <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/60">
+                          {section.title}
+                        </h3>
+                      )}
+                      {section.items.map(renderItem)}
+                    </>
+                  )}
               </div>
             </div>
           ))}

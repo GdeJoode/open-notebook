@@ -13,6 +13,11 @@ interface PipelineFooterProps {
   isStepValid: boolean
   isSubmitting: boolean
   sourceId?: string
+  /**
+   * Set while the source waits at the schema-review gate: where its proposal
+   * is accepted (`schemaReviewHref`).
+   */
+  reviewHref?: string
   onBack: () => void
   onNext: () => void
   onSubmit: () => void
@@ -26,6 +31,7 @@ export function PipelineFooter({
   isStepValid,
   isSubmitting,
   sourceId,
+  reviewHref,
   onBack,
   onNext,
   onSubmit,
@@ -43,10 +49,15 @@ export function PipelineFooter({
             Create Another
           </Button>
           {sourceId && (
-            <Button onClick={() => router.push(`/sources/${sourceId}`)}>
+            <Button variant="outline" onClick={() => router.push(`/sources/${sourceId}`)}>
               View Source
             </Button>
           )}
+          {/* The source's own pipeline is done; what follows (triage,
+              duplicates, retype) is listed on The Tray. */}
+          <Button onClick={() => router.push('/')} data-testid="pipeline-next-tray">
+            Next: The Tray
+          </Button>
         </div>
       </div>
     )
@@ -57,12 +68,22 @@ export function PipelineFooter({
     return (
       <div className="flex justify-between items-center px-6 py-4 border-t border-border bg-muted/30">
         <div />
-        <Button
-          variant="outline"
-          onClick={() => router.push('/sources')}
-        >
-          View in Background
-        </Button>
+        <div className="flex gap-2">
+          {/* A single source's page shows its pipeline live; a batch has none. */}
+          <Button
+            variant="outline"
+            onClick={() =>
+              router.push(sourceId ? `/sources/${encodeURIComponent(sourceId)}` : '/sources')
+            }
+          >
+            View in Background
+          </Button>
+          {reviewHref && (
+            <Button onClick={() => router.push(reviewHref)} data-testid="pipeline-review-proposal">
+              Review the proposal
+            </Button>
+          )}
+        </div>
       </div>
     )
   }
