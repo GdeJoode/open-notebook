@@ -154,7 +154,7 @@ export default function WerkbakPage() {
 }
 
 function GroupCard({ group }: { group: AttentionGroup }) {
-  const more = group.count - group.items.length
+  const more = group.item_total - group.items.length
   const elsewhere = group.needs_action && !group.error ? group.count - group.counted : 0
   return (
     <Card className="gap-3 py-4" data-testid={`werkbak-group-${group.key}`}>

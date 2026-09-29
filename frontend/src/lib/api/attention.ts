@@ -40,6 +40,11 @@ export interface AttentionGroup {
    * not counted twice. 0 for a failed group or one that needs no action.
    */
   counted: number
+  /**
+   * How many items the group has; `items` holds the first few (per-notebook
+   * groups: all). "N more" is `item_total - items.length`, never `count`.
+   */
+  item_total: number
 }
 
 export interface AttentionReport {

@@ -65,6 +65,11 @@ describe('Werkbak', () => {
     const triage = screen.getByTestId('werkbak-group-triage')
     expect(within(triage).getByTestId('werkbak-count-triage').textContent).toBe('1238')
     expect(within(triage).getByText('and 1237 more')).toBeTruthy()
+    // Per notebook: 3 proposals in one notebook is one item, nothing more.
+    const proposals = screen.getByTestId('werkbak-group-schema_proposals')
+    expect(within(proposals).getByTestId('werkbak-count-schema_proposals').textContent).toBe('3')
+    expect(within(proposals).queryByText(/more$/)).toBeNull()
+    expect(within(proposals).getByText(/^3 proposals: /)).toBeTruthy()
     const action = within(triage).getByTestId('werkbak-action-triage')
     expect(action.getAttribute('href')).toBe('/knowledge-graph/triage')
     expect(action.textContent).toContain('Triage 1238 entities')

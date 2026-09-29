@@ -91,6 +91,11 @@ class AttentionGroup(BaseModel):
     items: List[AttentionItem] = Field(default_factory=list)
     error: Optional[str] = None
     counted: int = 0
+    # How many items the group has; ``items`` holds the first ITEM_LIMIT, so
+    # a card says "N more" as item_total - len(items). Not ``count``: the
+    # per-notebook groups count sources, jobs or proposals and list one item
+    # per notebook (all of them), each with its own count in ``detail``.
+    item_total: int = 0
 
     # The sources a source group lists (it owns them), and for the groups a
     # source group can own, the source of each counted unit.
@@ -308,6 +313,7 @@ class AttentionService:
         group.error = error
         group.count = 0
         group.items = []
+        group.item_total = 0
         group.detail = None
         # A group that failed lists nothing, so it owns nothing: what it had
         # read before failing counts in the groups that list it.
@@ -317,6 +323,7 @@ class AttentionService:
     @staticmethod
     def _finish(group: AttentionGroup, action: str) -> None:
         """Set the action; a group without a page of its own links to its top item."""
+        group.item_total = group.count
         group.action = action if group.count else ""
         if not group.link and group.items:
             group.link = group.items[0].link
@@ -327,6 +334,7 @@ class AttentionService:
         the set only when one notebook is involved: then the card's action
         goes there. With several, the items are the way in, and the card has
         no action of its own (a first notebook's page would not cover it)."""
+        group.item_total = len(group.items)
         if len(group.items) == 1:
             group.action = action if group.count else ""
             group.link = group.items[0].link

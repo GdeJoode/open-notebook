@@ -361,6 +361,14 @@ async def test_seeded_values(env) -> None:
     paused = by_key["extraction_paused"]
     assert paused["link"] == f"/notebooks/{quote(ids['nb1'], safe='')}"
     assert paused["action"] == "Resume 1 paused extraction"
+    # "N more" counts items: per notebook, all listed; elsewhere the count.
+    assert (proposals["count"], proposals["item_total"], len(proposals["items"])) == (3, 2, 2)
+    assert {i["detail"].split(":")[0] for i in proposals["items"]} == {
+        "2 proposals", "1 proposal"}
+    assert gated["item_total"] == len(gated["items"]) == 2
+    assert by_key["triage"]["item_total"] == by_key["triage"]["count"]
+    for g in body["groups"] + body["arrived"]:
+        assert g["item_total"] >= len(g["items"]), g["key"]
     assert by_key["merge_candidates"]["detail"].startswith("1 cluster, ")
 
 
