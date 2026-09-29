@@ -73,6 +73,7 @@ class DatabaseUnavailableError(RuntimeError):
 # server rejected arrives as a plain ``Exception`` from the SDK and leaves the
 # socket usable, so it is not listed here.
 _BROKEN_CONNECTION_ERRORS = (
+    DatabaseUnavailableError,
     asyncio.CancelledError,
     asyncio.TimeoutError,
     OSError,
@@ -87,12 +88,23 @@ def _receiving(conn: AsyncSurreal) -> bool:
 
     That one task answers every request; once it has ended (the socket closed,
     or it died of an error) nothing sent on the connection is answered again,
-    though the socket may still be open. The HTTP client has no such task.
+    though the socket may still be open. ``recv_task`` is the SDK's private
+    attribute: a client without it (the HTTP one, another SDK version) counts
+    as not receiving, so it is closed after use rather than pooled blind.
     """
-    if not hasattr(conn, "recv_task"):
-        return True
-    task = conn.recv_task
+    task = getattr(conn, "recv_task", None)
     return task is not None and not task.done()
+
+
+def _current_task_cancelling() -> bool:
+    """True when the running task itself has been asked to cancel.
+
+    ``Task.cancelling`` exists from Python 3.11; without it every
+    ``CancelledError`` is taken to be ours.
+    """
+    task = asyncio.current_task()
+    cancelling = getattr(task, "cancelling", None)
+    return cancelling is None or cancelling() > 0
 
 
 def _discard_outcome(request: "asyncio.Future[Any]") -> None:
@@ -112,12 +124,16 @@ async def _request(conn: AsyncSurreal, call: Awaitable[T]) -> T:
     the request and stops the statement on the server.
 
     A request that fails because the receive task ended (the socket was lost)
-    raises :class:`DatabaseUnavailableError`.
+    raises :class:`DatabaseUnavailableError`. So does a request the SDK
+    cancelled itself while our task was not cancelled (1.0.6 raises
+    ``KeyError`` there; an SDK that cancels pending requests would not).
     """
     request = asyncio.ensure_future(call)
     try:
         return await asyncio.shield(request)
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as e:
+        if request.cancelled() and not _current_task_cancelling():
+            raise DatabaseUnavailableError("SurrealDB connection lost") from e
         request.add_done_callback(_discard_outcome)
         raise
     except Exception as e:

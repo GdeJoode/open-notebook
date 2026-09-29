@@ -336,3 +336,36 @@ async def test_close_all_closes_a_sign_in_still_running(server):
 
     await asyncio.wait_for(pool.close_all(), GUARD)
     assert server.clients[0].closed
+
+
+async def test_request_the_sdk_cancelled_is_unavailable_not_a_cancel(server):
+    """Not what 1.0.6 does (it raises KeyError), but what an SDK that cancels
+    pending requests on a lost socket would: nobody cancelled us."""
+
+    async def cancelled_by_the_sdk() -> None:
+        raise asyncio.CancelledError()
+
+    pool = _pool(max_size=1)
+    with pytest.raises(DatabaseUnavailableError):
+        async with pool.acquire() as c:
+            await conn_mod._request(c, cancelled_by_the_sdk())
+    assert c.closed
+
+
+async def test_client_without_a_receive_task_is_not_pooled(server):
+    pool = _pool(max_size=1)
+    async with pool.acquire() as first:
+        del first.recv_task
+    assert first.closed and pool._pool.empty()
+
+
+async def test_our_cancel_stays_a_cancel_when_the_request_ends_cancelled_too():
+    """Caller and request cancelled in one turn (loop shutdown cancels both):
+    the caller was cancelled, so it gets CancelledError, not unavailable."""
+    request = asyncio.ensure_future(asyncio.Event().wait())
+    caller = asyncio.ensure_future(conn_mod._request(object(), request))
+    await asyncio.sleep(0)
+    request.cancel()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
