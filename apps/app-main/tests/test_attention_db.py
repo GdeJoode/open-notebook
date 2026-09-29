@@ -314,6 +314,7 @@ async def test_seeded_values(env) -> None:
     async with _client(_app()) as c:
         body = (await c.get("/api/attention")).json()
     by_key = {g["key"]: g for g in body["groups"]}
+    assert body["partial"] is False
     # No mark sent: arrivals over the default window, and the report says so.
     assert body["since_default"] is True
     since = datetime.fromisoformat(body["since"])
@@ -454,6 +455,8 @@ async def test_a_failing_group_degrades_alone(env, monkeypatch) -> None:
     assert by_key["sources_failed"]["count"] == 1 and by_key["sources_failed"]["error"] is None
     assert by_key["triage"]["counted"] == 0
     assert r.json()["total"] == sum(g["counted"] for g in by_key.values())
+    # The total misses the triage count, and the report says so.
+    assert r.json()["partial"] is True
 
 
 async def test_a_slow_group_times_out_alone(env, monkeypatch) -> None:
@@ -534,6 +537,7 @@ async def test_e2e_fixture_follows_the_contract(env) -> None:
             if r["link"]:
                 assert f["link"] == r["link"], f["key"]
     assert fixture["total"] == sum(g["counted"] for g in fixture["groups"])
+    assert fixture["partial"] == any(g["error"] for g in fixture["groups"] if g["needs_action"])
 
 
 async def test_a_sourceless_failure_is_resolved_per_notebook(env) -> None:

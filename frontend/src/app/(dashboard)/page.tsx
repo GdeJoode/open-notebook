@@ -112,8 +112,12 @@ export default function WerkbakPage() {
               <section aria-labelledby="werkbak-needs-you" className="space-y-4">
                 <h2 id="werkbak-needs-you" className="text-lg font-semibold">
                   Needs you
-                  {data.total > 0 && (
-                    <span className="ml-2 font-normal text-muted-foreground">({data.total})</span>
+                  {(data.total > 0 || data.partial) && (
+                    <span className="ml-2 font-normal text-muted-foreground" data-testid="werkbak-total">
+                      ({data.total}
+                      {data.partial && '+'})
+                      {data.partial && <span className="sr-only"> some groups did not load</span>}
+                    </span>
                   )}
                 </h2>
                 {needsYou.length === 0 ? (

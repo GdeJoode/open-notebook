@@ -44,15 +44,28 @@ describe('sidebar badges', () => {
     report.data = REPORT
     render(<AppSidebar />)
     expect(screen.getByRole('link', { name: /Werkbak/ }).getAttribute('href')).toBe('/')
-    expect(badge('Werkbak')).toBe('1257 need you')
+    // The fixture's merge candidates timed out: the total and the Knowledge
+    // Graph badge miss them, and say so.
+    expect(badge('Werkbak')).toBe('1257+ need you, some groups did not load')
     // gated 1 + stopped 2 (failed is 0; "new sources" asks nothing)
     expect(badge('Sources')).toBe('3 need you')
     // proposals 3; the paused extraction is its gated source's (counted 0)
     expect(badge('Notebooks')).toBe('3 need you')
-    // triage 1238; merge candidates failed (count 0)
-    expect(badge('Knowledge Graph')).toBe('1238 need you')
+    // triage 1238; merge candidates failed (count 0), so partial
+    expect(badge('Knowledge Graph')).toBe('1238+ need you, some groups did not load')
     expect(badge('Ontologies')).toBe('12 need you')
     expect(badge('Podcasts')).toBeNull()
+  })
+
+  it('no partial marker when every group loaded', () => {
+    report.data = {
+      ...REPORT,
+      partial: false,
+      groups: REPORT.groups.map((g) => ({ ...g, error: null })),
+    }
+    render(<AppSidebar />)
+    expect(badge('Werkbak')).toBe('1257 need you')
+    expect(badge('Knowledge Graph')).toBe('1238 need you')
   })
 
   it('no badges before the report arrives', () => {

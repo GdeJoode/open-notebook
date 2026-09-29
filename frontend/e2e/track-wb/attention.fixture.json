@@ -3,6 +3,7 @@
   "since": "2026-09-28T18:00:00+00:00",
   "since_default": false,
   "total": 1257,
+  "partial": true,
   "groups": [
     {"key": "sources_failed", "title": "Failed sources", "count": 0, "action": "", "link": "/sources?stage=failed", "nav": "/sources", "needs_action": true, "detail": null, "items": [], "error": null, "counted": 0, "item_total": 0},
     {"key": "sources_awaiting_review", "title": "Sources waiting for a schema review", "count": 1, "action": "Review 1 gated source", "link": "/notebooks/notebook%3Alive/schema", "nav": "/sources", "needs_action": true, "detail": null, "items": [{"id": "notebook:live", "label": "live-test", "link": "/notebooks/notebook%3Alive/schema", "detail": "1 source waiting: Convenant Regio Deal Twente", "at": null}], "error": null, "counted": 1, "item_total": 1},

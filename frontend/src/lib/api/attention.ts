@@ -56,6 +56,8 @@ export interface AttentionReport {
   since_default: boolean
   /** Sum of the groups' `counted`: each thing to act on once. */
   total: number
+  /** A group that needs action failed or timed out: `total` misses its count. */
+  partial: boolean
   groups: AttentionGroup[]
   /** What arrived after `since`. */
   arrived: AttentionGroup[]

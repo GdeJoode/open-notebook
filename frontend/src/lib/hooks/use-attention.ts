@@ -16,6 +16,10 @@
  * owner who keeps navigating still gets a read about every REFRESH_MS, while
  * navigating within that window reads nothing. The interval covers a page
  * left open; it is paused while the tab is hidden.
+ *
+ * A report with a group that failed or timed out (`partial`) is read again
+ * after RETRY_MS, so a slow first read after a restart is corrected within
+ * seconds rather than a minute and a half.
  */
 
 import { useSyncExternalStore } from 'react'
@@ -25,6 +29,7 @@ import { attentionApi } from '@/lib/api/attention'
 import { getLastSeen, subscribeLastSeen } from '@/lib/werkbak/last-seen'
 
 export const REFRESH_MS = 90 * 1000
+export const RETRY_MS = 5 * 1000
 
 export const ATTENTION_QUERY_KEY = ['attention'] as const
 
@@ -40,7 +45,7 @@ export function useAttention({ fresh = false }: { fresh?: boolean } = {}) {
     staleTime: REFRESH_MS,
     refetchOnMount: fresh ? 'always' : true,
     refetchOnWindowFocus: true,
-    refetchInterval: REFRESH_MS,
+    refetchInterval: (q) => (q.state.data?.partial ? RETRY_MS : REFRESH_MS),
     refetchIntervalInBackground: false,
   })
   return { ...query, since }

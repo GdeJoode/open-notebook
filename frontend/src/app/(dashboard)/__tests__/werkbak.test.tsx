@@ -7,7 +7,7 @@
  * storage throws.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 
@@ -79,7 +79,8 @@ describe('Werkbak', () => {
       .toBe('/notebooks/notebook%3Alive/schema')
     expect(within(gated).getByTestId('werkbak-action-sources_awaiting_review')
       .getAttribute('href')).toBe('/notebooks/notebook%3Alive/schema')
-    expect(screen.getByRole('heading', { name: /Needs you/ }).textContent).toContain('(1257)')
+    expect(screen.getByTestId('werkbak-total').textContent)
+      .toBe('(1257+) some groups did not load')
     // Its source is listed as waiting for review: shown, not counted again.
     expect(screen.getByTestId('werkbak-elsewhere-extraction_paused').textContent)
       .toBe('1 already counted with their source')
@@ -153,6 +154,31 @@ describe('Werkbak', () => {
     const jobs = screen.getByTestId('werkbak-group-finished_jobs')
     expect(within(jobs).getByTestId('werkbak-item-job:f1').getAttribute('href'))
       .toBe('/sources/source%3Aapi1')
+  })
+
+  it('a partial report is read again after 5 s; the marker goes once all loaded', async () => {
+    vi.useFakeTimers()
+    try {
+      const loaded = {
+        ...REPORT,
+        partial: false,
+        groups: REPORT.groups.map((g) => ({ ...g, error: null })),
+      }
+      get.mockResolvedValueOnce(REPORT).mockResolvedValue(loaded)
+      mount()
+      await act(() => vi.advanceTimersByTimeAsync(0))
+      expect(get).toHaveBeenCalledTimes(1)
+      expect(screen.getByTestId('werkbak-total').textContent)
+        .toBe('(1257+) some groups did not load')
+      await act(() => vi.advanceTimersByTimeAsync(5500))
+      expect(get).toHaveBeenCalledTimes(2)
+      expect(screen.getByTestId('werkbak-total').textContent).toBe('(1257)')
+      // Complete: back to the 90 s refresh.
+      await act(() => vi.advanceTimersByTimeAsync(60 * 1000))
+      expect(get).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('works when storage throws', async () => {

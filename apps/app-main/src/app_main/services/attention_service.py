@@ -107,12 +107,17 @@ class AttentionReport(BaseModel):
     """``generated_at`` is the server's time of the read: a client that marks
     the report as seen stores it and sends it back as ``since``. Without one,
     ``since`` is :data:`DEFAULT_SINCE_DAYS` before the read and
-    ``since_default`` is true."""
+    ``since_default`` is true.
+
+    ``partial`` is true when a group that needs action failed or timed out:
+    ``total`` and the badges then miss its count, and a client says so and
+    reads again soon."""
 
     generated_at: str
     since: str
     since_default: bool = False
     total: int = 0
+    partial: bool = False
     groups: List[AttentionGroup] = Field(default_factory=list)
     arrived: List[AttentionGroup] = Field(default_factory=list)
 
@@ -293,6 +298,7 @@ class AttentionService:
             since=since.isoformat(),
             since_default=since_default,
             total=sum(g.counted for g in groups),
+            partial=any(g.error for g in groups if g.needs_action),
             groups=groups,
             arrived=[g for g, _ in arrived_specs],
         )

@@ -21,6 +21,14 @@ vi.mock('@/lib/hooks/use-toast', () => ({ useToast: () => ({ toast: vi.fn() }) }
 import { REFRESH_MS, useAttention } from '../use-attention'
 import { useDecideQueueRow } from '../use-triage'
 
+// The fixture has a group that timed out (partial); these cadence tests use a
+// report where every group loaded. The retry is in werkbak.test.tsx.
+const LOADED = {
+  ...fixture,
+  partial: false,
+  groups: fixture.groups.map((g) => ({ ...g, error: null })),
+}
+
 let client: QueryClient
 const wrapper = ({ children }: { children: ReactNode }) => (
   <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -37,7 +45,7 @@ function Page() {
 
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  get.mockReset().mockResolvedValue(fixture)
+  get.mockReset().mockResolvedValue(LOADED)
   decide.mockReset().mockResolvedValue({ queue_id: 'q', entity: 'e', status: 'active',
     manual_override: true, decision: 'active' })
 })

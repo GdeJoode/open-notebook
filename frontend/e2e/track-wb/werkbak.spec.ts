@@ -101,8 +101,11 @@ test.describe('WB.1 — the Werkbak', () => {
     await mockBackend(page, null)
     await gotoAndWait(page, '/')
     await expect(page.getByTestId('werkbak-group-triage')).toBeVisible({ timeout: 45_000 })
-    await expect(page.getByTestId('nav-badge-Werkbak')).toHaveText(`${fixture.total} need you`)
-    await expect(page.getByTestId('nav-badge-Knowledge Graph')).toHaveText('1238 need you')
+    // The fixture's merge candidates timed out: partial.
+    await expect(page.getByTestId('nav-badge-Werkbak'))
+      .toHaveText(`${fixture.total}+ need you, some groups did not load`)
+    await expect(page.getByTestId('nav-badge-Knowledge Graph'))
+      .toHaveText('1238+ need you, some groups did not load')
 
     await page.getByTestId('werkbak-action-triage').click()
     await expect(page).toHaveURL(/\/knowledge-graph\/triage$/, { timeout: 45_000 })

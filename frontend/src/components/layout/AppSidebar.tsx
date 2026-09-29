@@ -99,19 +99,22 @@ export function AppSidebar() {
   const [podcastDialogOpen, setPodcastDialogOpen] = useState(false)
 
   // WB.1: the Werkbak's total, and per entry the `counted` of the groups
-  // whose `nav` it is (each thing to act on once).
+  // whose `nav` it is (each thing to act on once). Partial ("12+") when a
+  // group behind the number failed or timed out.
   const { data: attention } = useAttention()
-  const badgeFor = (href: string): number => {
-    if (!attention) return 0
-    if (href === werkbak.href) return attention.total
-    return attention.groups
-      .filter((g) => g.nav === href)
-      .reduce((sum, g) => sum + g.counted, 0)
+  const badgeFor = (href: string): { count: number; partial: boolean } => {
+    if (!attention) return { count: 0, partial: false }
+    if (href === werkbak.href) return { count: attention.total, partial: attention.partial }
+    const groups = attention.groups.filter((g) => g.nav === href)
+    return {
+      count: groups.reduce((sum, g) => sum + g.counted, 0),
+      partial: groups.some((g) => g.needs_action && !!g.error),
+    }
   }
 
   const renderItem = (item: { name: string; href: string; icon: LucideIcon }) => {
     const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)
-    const count = badgeFor(item.href)
+    const { count, partial } = badgeFor(item.href)
     const button = (
       <Button
         variant={isActive ? 'secondary' : 'ghost'}
@@ -123,7 +126,7 @@ export function AppSidebar() {
       >
         <item.icon className="h-4 w-4" />
         {!isCollapsed && <span>{item.name}</span>}
-        {count > 0 && (
+        {(count > 0 || partial) && (
           <Badge
             className={cn(
               'tabular-nums',
@@ -132,7 +135,11 @@ export function AppSidebar() {
             data-testid={`nav-badge-${item.name}`}
           >
             {count}
-            <span className="sr-only"> need you</span>
+            {partial && '+'}
+            <span className="sr-only">
+              {' need you'}
+              {partial && ', some groups did not load'}
+            </span>
           </Badge>
         )}
       </Button>
@@ -147,7 +154,7 @@ export function AppSidebar() {
             </Link>
           </TooltipTrigger>
           <TooltipContent side="right">
-            {count > 0 ? `${item.name} (${count})` : item.name}
+            {count > 0 || partial ? `${item.name} (${count}${partial ? '+' : ''})` : item.name}
           </TooltipContent>
         </Tooltip>
       )
