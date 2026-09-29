@@ -151,6 +151,7 @@ async def _seed() -> Dict[str, str]:
     ids["gated"] = await _source("Gated", "awaiting_schema_review", nb1)
     ids["gated2"] = await _source("Gated too", "awaiting_schema_review", nb2)
     # Stopped: short of complete, no live job, last write over 15 minutes ago.
+    # Its parse job completed: a finished job does not make a source busy.
     ids["stalled"] = await _source("Stopped", "embedded", nb2)
     await _chunk(ids["stalled"])
     ids["empty"] = await _source("Empty", "ingested", nb2)  # parsed, no text
@@ -161,6 +162,7 @@ async def _seed() -> Dict[str, str]:
     ids["done"] = await _source("Done", "complete", nb2)
 
     await _job("document_parse", "queued", ids["busy"])
+    await _job("document_parse", "completed", ids["stalled"], completed=True)
     await _job("entity_extract", "processing", None)
     await _job("entity_extract", "paused_for_review", ids["gated"], completed=True)
     ids["failed_job"] = await _job("document_parse", "failed", ids["failed"], "boom",
@@ -490,9 +492,9 @@ async def test_sources_stage_filter(env) -> None:
 
 
 async def test_a_slow_shared_read_times_out_its_groups(env, monkeypatch) -> None:
-    """Three groups wait on the shared notebooks read; the first deadline must
-    not cancel it under the others (that would escape as a raw cancel and fail
-    the read)."""
+    """Three groups wait on a slow shared notebooks read: each times out on its
+    own and the rest of the report answers. (The shield on the shared read is
+    pinned in test_attention_service.py.)"""
     await _seed()
 
     async def slow(self, **kwargs):
