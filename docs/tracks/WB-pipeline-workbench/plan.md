@@ -247,6 +247,45 @@ redo it.
     closed, both appear on the Werkbak on the next open, each with a link
     that lands on the page where it is resolved;
   - every count equals its source endpoint (a test compares them).
+- **WB.1 built** (branch `feature/wb1-werkbak`):
+  - `GET /api/attention` (`AttentionService`) returns ten groups: failed,
+    gated and stopped sources, paused extraction, Pass-1 proposals, triage,
+    merge candidates, retype, failed jobs, jobs in progress. With `?since=`
+    it adds new sources and finished jobs. Each group reads through its
+    page's own service. Each group and item carries the route where it is
+    resolved, and a `nav` for the sidebar badge.
+  - Groups run concurrently with a 5 s deadline each. A failing or slow
+    group returns `error`; the others still answer.
+  - "Stopped" means: short of `complete`, no queued or running job for the
+    source, and the last write more than 15 minutes old. With the job check
+    in place, the only normal quiet gap is between a stage write and the
+    next enqueue.
+  - A failed job counts until a later job of the same type for the same
+    source exists, or until its source is deleted (live: 3 of 22). Exposed as
+    `GET /commands/jobs?unresolved=true`.
+  - Retype counts changes + flag-only, as the retype panel does; collisions
+    show as detail.
+  - `?stage=` (repeatable) on `GET /sources/`; the Sources page reads it.
+  - `/` is the Werkbak; `app/page.tsx` and the middleware redirect are gone.
+    The sidebar has a Werkbak entry with the total, and badges on Sources,
+    Notebooks, Knowledge Graph and Ontologies. "Last visit" is the
+    `generated_at` of the report marked as seen (localStorage). It moves
+    only on "Mark as seen".
+  - Live, read-only: warm 1.15–1.2 s, bounded by merge candidates (1.05 s
+    on their own at the time). Every other group takes 0.06–0.56 s. A cold
+    process needs 5.8 s for the pool sign-ins. Live counts: 8 stopped
+    sources, 79 proposals, 1,238 triage rows, 48 merge candidates, 3 failed
+    jobs.
+  - Limits:
+    - the < 1 s target is missed by the merge-candidates read;
+    - `JobRepository.list_jobs` and `NotebookSchemaRepository.get_by_notebook`
+      swallow read errors, so those groups read 0 instead of reporting an
+      error;
+    - no jobs page exists; a job without a source or notebook links to
+      `/podcasts`, `/settings` or `/notebooks` by type;
+    - `design-tokens.spec.ts` fails without a backend: 32 console errors
+      from endpoints it does not mock. `/api/attention` is now mocked, so
+      none of them come from WB.1.
 
 **WB.2 — Pipeline navigation** (~1.5d)
 - **Nav regrouped in pipeline order:**
