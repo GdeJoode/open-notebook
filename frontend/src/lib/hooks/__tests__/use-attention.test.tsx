@@ -18,7 +18,7 @@ vi.mock('@/lib/api/attention', () => ({ attentionApi: { get } }))
 vi.mock('@/lib/api/triage', () => ({ triageApi: { decide } }))
 vi.mock('@/lib/hooks/use-toast', () => ({ useToast: () => ({ toast: vi.fn() }) }))
 
-import { REFRESH_MS, useAttention } from '../use-attention'
+import { REFRESH_MS, RETRY_BACKOFF_MS, useAttention } from '../use-attention'
 import { useDecideQueueRow } from '../use-triage'
 
 // The fixture has a group that timed out (partial); these cadence tests use a
@@ -104,6 +104,47 @@ describe('useAttention', () => {
       }
       // A read once the report is past 90 s: at 0, 2, 4, 6, 8 and 10 min.
       expect(get).toHaveBeenCalledTimes(6)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a report that stays partial backs off 5, 15, 45 s, then 90 s; a complete one resets', async () => {
+    vi.useFakeTimers()
+    try {
+      get.mockResolvedValue(fixture) // merge candidates time out, every time
+      render(<Badge />, { wrapper })
+      await act(() => vi.advanceTimersByTimeAsync(0))
+      await act(() => vi.advanceTimersByTimeAsync(10 * 60 * 1000))
+      // Reads at 0, 5, 20, 65 s, then every 90 s: 155 ... 515 s.
+      expect(get).toHaveBeenCalledTimes(9)
+
+      // The next read (605 s) is complete: the streak resets, next at 695 s.
+      get.mockResolvedValue(LOADED)
+      await act(() => vi.advanceTimersByTimeAsync(10 * 1000)) // 610 s
+      expect(get).toHaveBeenCalledTimes(10)
+      // Partial again at 695 s: the backoff starts over at 5 s (700 s).
+      get.mockResolvedValue(fixture)
+      await act(() => vi.advanceTimersByTimeAsync(86 * 1000)) // 696 s
+      expect(get).toHaveBeenCalledTimes(11)
+      await act(() => vi.advanceTimersByTimeAsync(RETRY_BACKOFF_MS[0])) // 701 s
+      expect(get).toHaveBeenCalledTimes(12)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a navigation reads a partial report once its retry delay has passed', async () => {
+    vi.useFakeTimers()
+    try {
+      get.mockResolvedValue(fixture)
+      const first = render(<Badge />, { wrapper })
+      await act(() => vi.advanceTimersByTimeAsync(1000))
+      first.unmount() // navigated away before the 5 s retry fired
+      await act(() => vi.advanceTimersByTimeAsync(5000))
+      render(<Badge />, { wrapper })
+      await act(() => vi.advanceTimersByTimeAsync(0))
+      expect(get).toHaveBeenCalledTimes(2)
     } finally {
       vi.useRealTimers()
     }

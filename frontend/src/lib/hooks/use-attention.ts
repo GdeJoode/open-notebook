@@ -18,18 +18,32 @@
  * left open; it is paused while the tab is hidden.
  *
  * A report with a group that failed or timed out (`partial`) is read again
- * after RETRY_MS, so a slow first read after a restart is corrected within
- * seconds rather than a minute and a half.
+ * sooner, backing off over consecutive partial reports (RETRY_BACKOFF_MS:
+ * 5 s, 15 s, 45 s, then REFRESH_MS again) and resetting on a complete
+ * report. A slow first read after a restart is corrected within seconds, and
+ * a group that keeps failing costs a read every 90 s, not every 5 s. The
+ * stale time follows the same delay, so a remount (every navigation) reads a
+ * partial report once its delay has passed.
  */
 
 import { useSyncExternalStore } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { attentionApi } from '@/lib/api/attention'
+import { attentionApi, type AttentionReport } from '@/lib/api/attention'
 import { getLastSeen, subscribeLastSeen } from '@/lib/werkbak/last-seen'
 
 export const REFRESH_MS = 90 * 1000
-export const RETRY_MS = 5 * 1000
+/** Delays after the 1st, 2nd and 3rd partial report in a row; then REFRESH_MS. */
+export const RETRY_BACKOFF_MS = [5 * 1000, 15 * 1000, 45 * 1000]
+
+/** The report plus how many partial reports in a row led to it (0 when complete). */
+export type AttentionData = AttentionReport & { partialStreak: number }
+
+/** When the report should be read again (and counts as stale). */
+export function nextReadMs(report?: AttentionData): number {
+  if (!report?.partial) return REFRESH_MS
+  return RETRY_BACKOFF_MS[report.partialStreak - 1] ?? REFRESH_MS
+}
 
 export const ATTENTION_QUERY_KEY = ['attention'] as const
 
@@ -39,13 +53,21 @@ export function useLastSeen(): string | null {
 
 export function useAttention({ fresh = false }: { fresh?: boolean } = {}) {
   const since = useLastSeen()
+  const client = useQueryClient()
+  const queryKey = [...ATTENTION_QUERY_KEY, since]
   const query = useQuery({
-    queryKey: [...ATTENTION_QUERY_KEY, since],
-    queryFn: () => attentionApi.get(since),
-    staleTime: REFRESH_MS,
+    queryKey,
+    queryFn: async (): Promise<AttentionData> => {
+      const report = await attentionApi.get(since)
+      const previous = client.getQueryData<AttentionData>(queryKey)
+      // A complete report stores 0, so a partial one after it starts over.
+      const streak = previous?.partialStreak ?? 0
+      return { ...report, partialStreak: report.partial ? streak + 1 : 0 }
+    },
+    staleTime: (q) => nextReadMs(q.state.data),
     refetchOnMount: fresh ? 'always' : true,
     refetchOnWindowFocus: true,
-    refetchInterval: (q) => (q.state.data?.partial ? RETRY_MS : REFRESH_MS),
+    refetchInterval: (q) => nextReadMs(q.state.data),
     refetchIntervalInBackground: false,
   })
   return { ...query, since }
