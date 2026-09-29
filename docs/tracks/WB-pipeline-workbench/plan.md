@@ -223,6 +223,39 @@ redo it.
 > - The `to_thread` test's last assert checks nothing; the thread-id assert is
 >   the guard.
 
+- **Post-merge regression fix** (branch `fix/db-cancel-safety`, 2026-09-29).
+  After the WB.1 rebuild, one `/api/attention` read timed out three groups,
+  logged `CancelledError` + `KeyError` from the SDK, and later page reads
+  got slower each time (sources 30 s, SurrealDB idle). Reproduced with the
+  real SDK on a testcontainers SurrealDB. Three causes:
+  - SDK 1.0.6 cannot take a cancel. When a deadline lands in the loop turn
+    that reads the response, the receive task sets the result on the
+    cancelled future and dies of the `InvalidStateError` (logged at debug
+    only). The caller gets `KeyError` instead of `CancelledError`, and the
+    pool took that for a statement error and pooled a connection nobody
+    reads any more. The next checkout waited out the 5 s ping on it. A
+    socket lost mid-query surfaces as the same `KeyError` (m2 above assumed
+    a `CancelledError`; the fake was wrong). Fix: every SDK call (query,
+    sign-in, use, ping) runs in its own task behind `asyncio.shield`, so only
+    the wait is cancelled. The pool still closes the connection after a
+    cancel, which also stops the statement on the server (measured). A
+    connection goes back only while its receive task runs; checkout drops a
+    dead one without pinging it. A request on a lost socket raises
+    `DatabaseUnavailableError`. This also settles carried minor 1.
+  - The reuse ping was `SELECT 1`, a parse error on SurrealDB v2. So every
+    checkout closed every idle connection and signed in anew (28 sign-ins
+    per report). The pool never reused a connection. Now `RETURN true`.
+  - One report checks out 13–14 connections at once (two notebooks); the
+    pool had 10. The heavy groups (schema proposals, merge candidates,
+    retype: the most sequential reads) queued for slots behind the other
+    groups' reads, each read paying a sign-in, and hit the 8 s deadline on
+    a cold database. The pool is now 20. Cold reads remain slow on their
+    own: after an idle hour the first full read of entity embeddings took
+    up to 14.7 s and a count over `entity` 7.6 s (0.4 s and 0.02 s warm).
+  - Tests: `test_connection_cancel_live.py` (real SDK), two new tests in
+    `test_attention_db.py`, the fake in `test_connection_pool.py` now
+    follows the 1.0.6 contract. Each guard is mutation-checked.
+
 **WB.1 — The Werkbak (attention inbox)** (~2d)
 - **Backend:** one `GET /api/attention` that counts and lists, across all
   notebooks:
