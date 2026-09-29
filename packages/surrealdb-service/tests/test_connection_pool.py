@@ -29,6 +29,7 @@ class FakeServer:
     def __init__(self) -> None:
         self.signin_mode = "ok"  # "ok" | "raise" | "hang"
         self.query_mode = "ok"  # "ok" | "hang"
+        self.close_mode = "ok"  # "ok" | "hang"
         self.clients: List["FakeSurreal"] = []
 
 
@@ -65,6 +66,8 @@ class FakeSurreal:
         return [{"result": 1}]
 
     async def close(self) -> None:
+        if self.server.close_mode == "hang":
+            await asyncio.Event().wait()
         self.closed = True
 
 
@@ -260,3 +263,22 @@ async def test_whole_checkout_shares_one_deadline_slow_ping(server):
     with pytest.raises(DatabaseUnavailableError):
         await asyncio.wait_for(_use_once(pool), GUARD)
     assert first.closed
+
+
+async def test_close_all_bounds_each_close(server):
+    pool = _pool(max_size=2)
+    pool._close_timeout = 0.05
+    async with pool.acquire(), pool.acquire():
+        pass
+    server.close_mode = "hang"
+
+    await asyncio.wait_for(pool.close_all(), GUARD)
+    assert pool._pool.empty()
+
+
+async def test_connection_returned_after_close_all_is_closed(server):
+    pool = _pool(max_size=2)
+    async with pool.acquire() as held:
+        await pool.close_all()
+    assert held.closed
+    assert pool._pool.empty()

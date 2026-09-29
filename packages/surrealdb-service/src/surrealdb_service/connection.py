@@ -124,6 +124,9 @@ class ConnectionPool:
         )
         self._ping_timeout = ping_timeout
         self._acquire_timeout = acquire_timeout
+        self._close_timeout = 2.0
+        # Set by close_all: connections handed back afterwards are closed.
+        self._closed = False
 
     async def _create_connection(self) -> AsyncSurreal:
         """Create and authenticate a new SurrealDB connection."""
@@ -163,10 +166,9 @@ class ConnectionPool:
         except Exception:
             return False
 
-    @staticmethod
-    async def _close_quietly(conn: AsyncSurreal) -> None:
+    async def _close_quietly(self, conn: AsyncSurreal) -> None:
         try:
-            await asyncio.wait_for(conn.close(), 2.0)
+            await asyncio.wait_for(conn.close(), self._close_timeout)
         except Exception:
             pass
 
@@ -214,20 +216,18 @@ class ConnectionPool:
             broken = True
             raise
         finally:
-            if not broken:
+            keep = not broken and not self._closed
+            if keep:
                 self._pool.put_nowait(conn)
             self._slots.release()
-            if broken:
+            if not keep:
                 await self._close_quietly(conn)
 
     async def close_all(self) -> None:
         """Close all pooled connections. Call during app shutdown."""
+        self._closed = True
         while not self._pool.empty():
-            try:
-                conn = self._pool.get_nowait()
-                await conn.close()
-            except Exception:
-                pass
+            await self._close_quietly(self._pool.get_nowait())
         logger.info("Connection pool closed")
 
 
