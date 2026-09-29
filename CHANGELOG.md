@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased] — Track OE — Ontology editor
+
+### Migration notes for operators
+
+- OE.6: rebuild the `extraction` image together with the app-main deploy. `POST /extract` now requires the `ontologies` app-main sends with each request (from its ontology registry, so a publish reaches extraction); an old app-main against the new image gets a 422, and an old image against the new app-main keeps extracting with the ontologies baked into it. No compose change.
+
 ## [Unreleased] — Track B — KG Quality
 
 ### Migrations
