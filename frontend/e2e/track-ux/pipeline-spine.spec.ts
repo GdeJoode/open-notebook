@@ -24,6 +24,7 @@ import { expect, test, type Route, type Page } from '@playwright/test'
 
 import { gotoAndWait } from '../_helpers'
 import { mockDashboardChrome } from '../track-a/_track-a-helpers'
+import attention from '../track-wb/attention.fixture.json'
 
 const SOURCE_ID = 'source:uxsix'
 
@@ -68,6 +69,8 @@ async function mockDetail(page: Page): Promise<void> {
   await mockDashboardChrome(page)
 
   await page.route('**/api/transformations*', (route) => json(route, []))
+  // WB.2: the source page has the sidebar now, which reads The Tray's report.
+  await page.route('**/api/attention**', (route) => json(route, attention))
   await page.route(`**/api/sources/${SOURCE_ID}/insights`, (route) => json(route, []))
   await page.route(`**/api/sources/${SOURCE_ID}/chunks`, (route) =>
     json(route, { total_chunks: 0, chunks: [] }),
