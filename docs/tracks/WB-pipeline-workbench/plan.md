@@ -321,6 +321,40 @@ redo it.
     - the scoring runs in `asyncio.to_thread`, so a merge-candidates timeout
       does not stop it: the thread runs to the end;
     - `list_jobs` and `get_by_notebook` still swallow read errors.
+- **Review round 2** (REVISIONS_NEEDED, 2 majors, 5 minors), all addressed:
+  - M1: "and N more" counted the group's count, not its items: 79
+    proposals in one notebook read "and 78 more". Each group now returns
+    `item_total`, the items it has. Per-notebook groups list all of theirs,
+    so no "more" appears, and each notebook item keeps its own count ("12
+    proposals: ..."). The fixture carries `item_total`.
+  - M2: the report refreshes every 90 s while the tab is visible, paused
+    while it is hidden. A return to a report past its 5 min stale time
+    reads it once on focus. 90 s keeps the badges within a minute and a
+    half, at about 1 % of one server core per open tab.
+  - m3: the notebook-scoped `?stalled=true` test also asserts nb2's exact
+    set.
+  - m4: the per-notebook groups (gated, paused, proposals) have a card
+    action only when one notebook is involved. With several, the card says
+    "In N places: open each below" and each item links to its notebook.
+  - m5: the gated sources' notebooks come from one query
+    (`get_notebook_id_many`). It uses the same subquery as `get_notebook_id`,
+    and a test pins that both give the same answer.
+  - m6: `stopped_sources` is the predicate only. The busy sources are one
+    query (`unfinished_source_ids`). The chunk counts behind the reason text
+    are read by the Werkbak for the rows it shows (`add_chunk_counts`), so
+    `?stalled=true` reads none. The unfinished-jobs read had one user left
+    and is no longer shared.
+  - m7: `chunk` is cleaned up between tests.
+  - Two guards no test held, found by mutation checks and now pinned:
+    - the shield on the shared notebooks read: the DB test times all
+      waiters out in one tick, so a unit test now cancels one waiter;
+    - the unfinished-status filter behind "busy": the stopped seed source
+      now has a completed parse job.
+  - Live, read-only after the round:
+    - warm reads take 1.34–2.65 s under the current host load;
+    - 79 proposals in one notebook show 1 item and no "more";
+    - a cold process can pass the 5 s group deadline on its first read, and
+      those groups then report a timeout.
 
 **WB.2 — Pipeline navigation** (~1.5d)
 - **Nav regrouped in pipeline order:**
