@@ -1,6 +1,10 @@
 # Track WB — Pipeline workbench (frontend review)
 
-**Status: PROPOSED 2026-09-29.** A UI-design review of the frontend. It
+**Status: APPROVED 2026-09-29.** Owner accepted every recommended option
+(WB-D1 (a) Werkbak home, WB-D2 (a) sources primary, WB-D3 (a) desktop first,
+WB-D4 (a) a collapsed "More" group, WB-D5 (a) English).
+
+Originally proposed 2026-09-29. A UI-design review of the frontend. It
 answers the owner's request: "more pipeline focused … a logical way to proceed
 through the steps … when I add files via API endpoints it should be clear where
 I need to be when I open the app again … layout, font sizes, responsiveness
