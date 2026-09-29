@@ -2,6 +2,8 @@
 
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { queryClient } from '@/lib/api/query-client'
+import { ATTENTION_QUERY_KEY } from '@/lib/hooks/use-attention'
 import { PipelineConfigPanel } from '@/components/sources/pipeline/PipelineConfigPanel'
 import {
   DEFAULT_PIPELINE_CONFIG,
@@ -31,6 +33,7 @@ export function ConfigTab({ sourceId }: ConfigTabProps) {
       setReprocessing(true)
       await sourcesApi.reprocess(sourceId, reprocessConfig)
       toast.success('Reprocessing started — document will be re-ingested')
+      void queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
     } catch {
       toast.error('Failed to start reprocessing')
     } finally {

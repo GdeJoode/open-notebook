@@ -14,6 +14,7 @@ import {
   OverlayCreateInput,
 } from '@/lib/api/entity-resolution'
 import { useToast } from '@/lib/hooks/use-toast'
+import { ATTENTION_QUERY_KEY } from '@/lib/hooks/use-attention'
 
 export const RESOLUTION_QUERY_KEYS = {
   plan: (notebookId?: string) =>
@@ -45,6 +46,7 @@ export function useApplyMerge(notebookId?: string) {
     mutationFn: (clusters: ApplyClusterInput[]) =>
       entityResolutionApi.apply(clusters),
     onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       queryClient.invalidateQueries({
         queryKey: RESOLUTION_QUERY_KEYS.plan(notebookId),
       })
@@ -81,6 +83,7 @@ export function useAddOverlay(notebookId?: string) {
     mutationFn: (rule: OverlayCreateInput) =>
       entityResolutionApi.addOverlay(rule),
     onSuccess: (_data, rule) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       queryClient.invalidateQueries({
         queryKey: RESOLUTION_QUERY_KEYS.plan(notebookId),
       })
@@ -112,6 +115,7 @@ export function useRemoveOverlay(notebookId?: string) {
   return useMutation({
     mutationFn: (id: string) => entityResolutionApi.removeOverlay(id),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       queryClient.invalidateQueries({
         queryKey: RESOLUTION_QUERY_KEYS.candidates(notebookId),
       })

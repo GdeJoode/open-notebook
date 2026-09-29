@@ -25,7 +25,7 @@ import { setLastSeen } from '@/lib/werkbak/last-seen'
  * the list and coming back keeps it.
  */
 export default function WerkbakPage() {
-  const { data, isLoading, isError, error, refetch, isFetching } = useAttention()
+  const { data, isLoading, isError, error, refetch, isFetching } = useAttention({ fresh: true })
 
   const shown = (g: AttentionGroup) => g.count > 0 || !!g.error
   const needsYou = data?.groups.filter((g) => g.needs_action && shown(g)) ?? []

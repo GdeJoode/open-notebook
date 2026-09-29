@@ -21,7 +21,7 @@ export function setLastSeen(value: string): void {
   try {
     window.localStorage.setItem(KEY, value)
   } catch {
-    // Not stored: the next visit shows no "since" section, nothing breaks.
+    // Not stored: the next visit shows the default window, nothing breaks.
   }
   try {
     window.dispatchEvent(new Event(EVENT))

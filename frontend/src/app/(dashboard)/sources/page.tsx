@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { sourcesApi } from '@/lib/api/sources'
 import { QUERY_KEYS } from '@/lib/api/query-client'
+import { ATTENTION_QUERY_KEY } from '@/lib/hooks/use-attention'
 import { SourceListResponse } from '@/lib/types/api'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { EmptyState } from '@/components/common/EmptyState'
@@ -210,6 +211,7 @@ export default function SourcesPage() {
       await sourcesApi.delete(deleteDialog.source.id)
       toast.success('Source deleted successfully')
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources() })
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       setDeleteDialog({ open: false, source: null })
     } catch (err) {
       console.error('Failed to delete source:', err)

@@ -16,6 +16,7 @@ import {
   triageApi,
 } from '@/lib/api/triage'
 import { useToast } from '@/lib/hooks/use-toast'
+import { ATTENTION_QUERY_KEY } from '@/lib/hooks/use-attention'
 
 export const TRIAGE_QUERY_KEYS = {
   queue: (all = false) => ['triage', 'queue', all] as const,
@@ -53,6 +54,7 @@ export function useDecideQueueRow() {
       body: DecisionInput
     }) => triageApi.decide(queueId, body),
     onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       queryClient.invalidateQueries({ queryKey: ['triage', 'queue'] })
       queryClient.invalidateQueries({ queryKey: ['knowledge-graph'] })
       toast({
@@ -79,6 +81,7 @@ export function useDecideTooiRow() {
     mutationFn: ({ queueId, body }: { queueId: string; body: TooiDecisionInput }) =>
       triageApi.decideTooi(queueId, body),
     onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       queryClient.invalidateQueries({ queryKey: ['triage', 'queue'] })
       queryClient.invalidateQueries({ queryKey: ['knowledge-graph'] })
       toast({
@@ -110,6 +113,7 @@ export function useSetEntityOverride() {
       body: EntityPinInput
     }) => triageApi.setEntityOverride(entityId, body),
     onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ATTENTION_QUERY_KEY })
       queryClient.invalidateQueries({ queryKey: ['triage', 'queue'] })
       queryClient.invalidateQueries({ queryKey: ['knowledge-graph'] })
       toast({
