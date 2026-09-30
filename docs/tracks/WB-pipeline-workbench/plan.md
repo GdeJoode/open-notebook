@@ -698,6 +698,37 @@ redo it.
   - every dashboard page uses `PageHeader` / `PageBody`;
   - a visual snapshot per page at 1440 and 1024 px;
   - no `text-[10px]` left in `src/`.
+- **WB.4 built** (branch `feature/wb4-layout-type`):
+  - `components/layout/PageHeader` (the page's one h1, subtitle, a back
+    row, actions on the right, rare actions behind "⋯" with destructive ones
+    last) and `PageBody` (`p-6`, left-aligned, `max-w-7xl` or `max-w-3xl`
+    for forms: Settings, Model routing, Search, the create flow; `fill` for
+    pages that own their scroll regions). All 19 dashboard pages use them.
+    The notebook header's six buttons are Export ▾ (Obsidian, OKF, JSONL)
+    and ⋯ (Import OKF, Archive, Delete, which still confirms). The source
+    page's header comes from `SourceDetailContent` when it is given `back`.
+  - Type: the theme raises `text-xs` to 13 px and `text-sm` to 15 px; body
+    is `text-base` (16 px). The 37 `text-[10px]` are `text-xs`; eslint
+    (`no-restricted-syntax`) refuses arbitrary sizes below 13 px and passes
+    colours. `.tsx` counts: `text-xs` 390 → 427 (13 px), `text-sm` 440
+    (15 px), `text-base` 21 → 20, `text-[10px]` 37 → 0.
+  - The sidebar's nav scrolls on its own; Theme and Sign Out stay on
+    screen at 1366×768. A page wider than the room left scrolls or clips in
+    its body instead of squeezing the sidebar.
+  - `tailwind.config.ts` and `/advanced` are gone; System Info and Rebuild
+    Embeddings live in `components/settings`, and the embedding-model dialog
+    opens `/settings?tab=advanced`. WB.3 m8: the chip count is named on the
+    link, and the Stage and Created headers carry `aria-sort`.
+  - Tests: a vitest derives the pages and holds each to PageBody and
+    PageHeader; `track-wb/layout.spec.ts` checks the rendered frame and the
+    sidebar at 1440 and 1024 px, takes a screenshot of each page (the repo
+    keeps no baselines: artifacts only), checks the 1366×768 sidebar and the
+    notebook menus. e2e: the same 16 specs fail as on main.
+  - Limits:
+    - the `prose` classes do nothing: the typography plugin was only named
+      in the removed config (pre-existing);
+    - at 1024 px the notebook's three columns clip their header buttons and
+      the KG search box shrinks to its icon (WB.5).
 
 **WB.5 — Responsive** (~1.5d, per WB-D3)
 - **Sidebar:**
