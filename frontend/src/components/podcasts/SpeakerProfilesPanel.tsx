@@ -18,9 +18,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
+import { useMenuAction } from '@/components/layout/use-menu-action'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -50,6 +50,11 @@ export function SpeakerProfilesPanel({
 }: SpeakerProfilesPanelProps) {
   const [createOpen, setCreateOpen] = useState(false)
   const [editProfile, setEditProfile] = useState<SpeakerProfile | null>(null)
+  // Delete confirms in a dialog opened once the menu has closed, so focus
+  // returns to the menu's trigger (an AlertDialogTrigger around the item
+  // gave it back to the removed item, i.e. to nothing).
+  const [deleteId, setDeleteId] = useState<string | null>(null)
+  const menuAction = useMenuAction()
 
   const deleteProfile = useDeleteSpeakerProfile()
   const duplicateProfile = useDuplicateSpeakerProfile()
@@ -146,13 +151,17 @@ export function SpeakerProfilesPanel({
                     >
                       <Edit3 className="mr-2 h-4 w-4" /> Edit
                     </Button>
-                    <AlertDialog>
+                    <AlertDialog
+                      open={deleteId === profile.id}
+                      onOpenChange={(open) => setDeleteId(open ? profile.id : null)}
+                    >
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
+                            aria-label={`Actions for ${profile.name}`}
                             onClick={(e) => e.stopPropagation()}
                           >
                             <MoreVertical className="h-4 w-4" />
@@ -162,6 +171,7 @@ export function SpeakerProfilesPanel({
                           align="end"
                           className="w-48"
                           onClick={(e) => e.stopPropagation()}
+                          onCloseAutoFocus={menuAction.onCloseAutoFocus}
                         >
                           <DropdownMenuItem
                             onClick={() => duplicateProfile.mutate(profile.id)}
@@ -171,15 +181,14 @@ export function SpeakerProfilesPanel({
                             Duplicate
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <AlertDialogTrigger asChild>
-                            <DropdownMenuItem
-                              className="text-destructive focus:text-destructive"
-                              disabled={deleteDisabled}
-                            >
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              Delete
-                            </DropdownMenuItem>
-                          </AlertDialogTrigger>
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            disabled={deleteDisabled}
+                            onSelect={menuAction.defer(() => setDeleteId(profile.id))}
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete
+                          </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
                       <AlertDialogContent>

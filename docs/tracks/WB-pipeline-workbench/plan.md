@@ -1,6 +1,7 @@
 # Track WB — Pipeline workbench (frontend review)
 
-**Status: APPROVED 2026-09-29.** Owner accepted every recommended option
+**Status: COMPLETE 2026-09-30** (WB.0–WB.5 merged, each after adversarial
+review). **Approved 2026-09-29.** Owner accepted every recommended option
 (WB-D1 (a) Werkbak home, WB-D2 (a) sources primary, WB-D3 (a) desktop first,
 WB-D4 (a) a collapsed "More" group, WB-D5 (a) English).
 
@@ -782,6 +783,90 @@ redo it.
     source detail, triage and the notebook page (checked by Playwright:
     `scrollWidth <= innerWidth`);
   - tap targets are at least 40 px at 390 px.
+- **WB.5 built** (branch `feature/wb5-responsive`):
+  - Sidebar: icons below xl whatever the stored choice (the toggle shows
+    from xl up only); an entry that needs you keeps a dot on its icon, the
+    count in its tooltip and for screen readers. Below md a top bar (menu
+    button, section title) opens the sidebar in a Sheet: focus trapped,
+    closed by any navigation, focus back on the button.
+  - Cards: Sources below lg (WB.4 m1: the table keeps Title, Stage,
+    Created and the delete button below xl; the title is ~410 px at 1024),
+    Triage below lg (its table scrolled sideways at 768), the KG table
+    below md. Same data, links and actions; the sorts sit above the cards;
+    the Sources list keeps its arrow keys and Enter. The KG detail panel is
+    a Sheet below lg; the KG filter bar wraps.
+  - Dialogs: every fixed width wider than a phone leaves (358 px) is
+    `min(N px, 100vw-2rem)`; a vitest reads the widths from the source.
+  - Notebook page: Sources beside a Notes | Chat tab set from lg, Sources,
+    Notes and Chat as tabs below lg; hidden tabs stay mounted. Source page:
+    the chat column from xl, a Sheet from "Chat with source" below it.
+  - Menus (WB.4 carried note): the notebook's Add Source, the notebook
+    card's Merge and Delete, the source page's Reprocess and the sidebar's
+    Create open their dialogs through `useMenuAction`. Before, the e2e
+    close-then-click check failed on all four; the source card's and the
+    podcast profiles' menus passed it (moved too in review round 1).
+  - 390 px: primitives (button, tabs, input, select, slider) are 40 px to
+    tap below md, as are the chips, links and pipeline segments on the
+    checked pages; hover-only menus show on touch.
+  - Tests: vitest for the shell, each page by width (a `matchMedia` stub)
+    and the width guard; `track-wb/responsive.spec.ts` checks seven pages
+    (The Tray, Sources, a source, Triage, a notebook, the KG, Ontologies)
+    at 1024, 768 and 390: no page scroll, no control cut off, drawn over
+    or hover-only, 40 px targets at 390; `menu-dialogs.spec.ts`. Each guard
+    was mutation-checked. Screenshots: `data/wb5-screenshots/` (gitignored).
+  - Limits:
+    - at 390 Sources and the KG keep their own scroll box under the header
+      and filters (~350 px of list on 390×844);
+    - below xl the sidebar cannot be expanded; names are in the tooltips;
+    - Notes and Chat are no longer side by side at any width;
+    - the 40 px check counts a control's label as its target, a slider's
+      track as the thumb's, and leaves out links inside running text;
+    - `components/common/AddButton.tsx` is unused and still opens its
+      dialog from the item; the KG page ignores `?entity=` (the triage
+      links), pre-existing.
+- **Review round 1** (REVISIONS_NEEDED, 1 major, 8 minors), all addressed:
+  - M1: Sources loaded no more rows once the width crossed lg: the scroll
+    listener and the focus-on-load effect read refs and stayed on the
+    removed table or list. Both elements are state now (callback refs) and
+    the effects follow them; a vitest resizes both ways and scrolls.
+  - m2: closing the KG details while they load wins: each read carries a
+    request number, and closing or a newer click drops an older answer.
+  - m3: named sizes on dialog content (`max-w-2xl`, `sm:max-w-3xl`, …) are
+    clamped too. The width vitest reads the DialogContent,
+    AlertDialogContent and SheetContent classes: an unprefixed named size
+    must fit a phone, a prefixed one its breakpoint less 2rem. It found
+    eleven. SourceDialog now keeps its 64rem cap from sm up (the base class
+    used to override it).
+  - m4: the notebook page is one Tabs tree whose layout changes at lg, so
+    Notes and Chat stay mounted across the breakpoint; the picked tab
+    carries over.
+  - m5: crossing the breakpoint closes the drawer (md), the source chat
+    (xl) and the KG details (lg), adjusted during render so nothing
+    flashes; a KG read in flight at the crossing is dropped.
+  - m6: the Sources card sort buttons carry `aria-pressed`; Created names
+    its direction.
+  - m7: a relation's other end is a button; the 40 px check covers the
+    chat and KG sheets at 390 (the override switch row and the sources
+    links were raised).
+  - m8: the stuck drawer was not reproduced (it closes in under a second),
+    but the path showed focus left on `<body>` after the Create dialog
+    closed. Dialog, AlertDialog and Sheet content now give focus back to
+    what had it when they opened (read while rendering, before an
+    `autoFocus` field takes it). The menu spec checks it for every menu;
+    that moved the source card's and the podcast profiles' menus to
+    `useMenuAction` too (their dialogs gave focus to the removed item).
+  - Limits kept: ~350 px lists at 390; Notes and Chat never side by side.
+
+> **Carried from WB.5 review round 2 (approved; minors, not blocking):**
+> 1. The KG details also close when the window widens past lg
+>    (`knowledge-graph/page.tsx:69-74`, :90-92); only narrowing needs to.
+> 2. At lg the notebook's Sources column is still a `TabsContent`
+>    (`role=tabpanel`, `data-state=inactive`, `tabIndex=0`) labelled by a
+>    trigger that isn't rendered: a nameless inactive panel and an extra tab
+>    stop.
+> 3. Reopening a dialog during its close animation makes `use-return-focus`
+>    capture an element inside the dialog; the next close falls back to
+>    Radix's default (`<body>` for trigger-less dialogs).
 
 Rough total: ~9 days. WB.0 comes first, because a slow database makes every
 page look broken. WB.1 and WB.2 deliver most of what the owner asked for.

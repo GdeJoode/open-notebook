@@ -33,6 +33,7 @@ import { cn } from '@/lib/utils'
 import { ContextToggle } from '@/components/common/ContextToggle'
 import { ContextMode } from '@/app/(dashboard)/notebooks/[id]/page'
 import { displaySourceTitle } from '@/lib/utils/source-title'
+import { useMenuAction } from '@/components/layout/use-menu-action'
 
 interface SourceCardProps {
   source: SourceListResponse
@@ -78,6 +79,9 @@ export function SourceCard({
   // Retained to fall back to the job axis for legacy/list-only rows that carry
   // no `processing_stage` yet (pre-backfill) but were recently created.
   const [wasProcessing, setWasProcessing] = useState(false)
+  // Remove and Delete open the parent's confirm dialog once the menu has
+  // closed, so focus returns to the menu's trigger.
+  const menuAction = useMenuAction()
 
   // The spine is fed from the card's OWN `processing_stage` (list payload). We
   // only fan out a per-card GET /sources/{id} while that stage can still advance
@@ -170,7 +174,9 @@ export function SourceCard({
     >
       <CardContent className="px-3 py-2">
         {/* Header with the pipeline mini-bar */}
-        <div className="flex items-start justify-between gap-3 mb-1">
+        {/* Below md the actions go under the content: the spine needs the
+            card's width for 40 px segments. */}
+        <div className="flex items-start justify-between gap-3 mb-1 max-md:flex-col max-md:items-stretch">
           <div className="flex-1 min-w-0">
             {/* Pipeline spine (5-segment mini-bar + current-stage label). Fed
                 from the card's own processing_stage; degrades to an all-pending
@@ -226,7 +232,7 @@ export function SourceCard({
           </div>
 
           {/* Context toggle and actions */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 max-md:justify-end">
             {/* Context toggle - only show if handler provided */}
             {onContextModeChange && contextMode && (
               <ContextToggle
@@ -242,21 +248,23 @@ export function SourceCard({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100 transition-opacity"
                   onClick={(e) => e.stopPropagation()}
                   aria-label="Source actions"
                 >
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuContent
+              align="end"
+              className="w-48"
+              onCloseAutoFocus={menuAction.onCloseAutoFocus}
+            >
               {showRemoveFromNotebook && (
                 <>
                   <DropdownMenuItem
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleRemoveFromNotebook()
-                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    onSelect={menuAction.defer(handleRemoveFromNotebook)}
                     disabled={!onRemoveFromNotebook}
                   >
                     <Unlink className="h-4 w-4 mr-2" />
@@ -283,10 +291,8 @@ export function SourceCard({
               )}
 
               <DropdownMenuItem
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleDelete()
-                }}
+                onClick={(e) => e.stopPropagation()}
+                onSelect={menuAction.defer(handleDelete)}
                 disabled={!onDelete}
                 className="text-red-600 focus:text-red-600"
               >

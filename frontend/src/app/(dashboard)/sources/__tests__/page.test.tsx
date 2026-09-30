@@ -5,7 +5,7 @@
  * see `sources-board.fake.ts`).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 
@@ -46,6 +46,7 @@ function asQuery(params: ListParams = {}): URLSearchParams {
   return out
 }
 
+import { installViewport, removeViewport, setViewport } from '@/lib/hooks/__tests__/viewport'
 import SourcesPage from '../page'
 
 function mount() {
@@ -205,5 +206,130 @@ describe('Sources board', () => {
     mount()
     expect(screen.getByRole('status')).toBeTruthy()
     await screen.findByText('Failed to load sources')
+  })
+})
+
+describe('Sources board below lg (WB.5)', () => {
+  beforeEach(() => installViewport(768))
+  afterEach(() => removeViewport())
+
+  const cardIds = () =>
+    screen.getAllByTestId(/^source-card-/).map((r) => r.getAttribute('data-testid')!.slice(12))
+
+  it('shows cards, not the table: the same rows, order and marks', async () => {
+    mount()
+    await screen.findByTestId(`source-card-${sourceId('gated')}`)
+    expect(screen.queryByRole('table')).toBeNull()
+    expect(cardIds()).toEqual(EXPECTED.attention_order.all.map(sourceId))
+    const marked = screen
+      .getAllByTestId(/^source-card-/)
+      .filter((r) => r.getAttribute('data-needs-you') === 'true').length
+    expect(marked).toBe(EXPECTED.counts.all.needs_you)
+  })
+
+  it('a card carries the same data and actions as a row: title link, stage, type, created, delete', async () => {
+    mount()
+    const card = await screen.findByTestId(`source-card-${sourceId('stopped')}`)
+    const link = within(card).getAllByRole('link')[0]
+    expect(link.getAttribute('href')).toBe(`/sources/${sourceId('stopped')}`)
+    expect(within(card).getByTestId('pipeline-stage-label').textContent).toBe('Embed done')
+    expect(within(card).getByTestId('source-stopped-badge').textContent).toBe('Stopped')
+    expect(card.textContent).toMatch(/Text/)
+    expect(card.textContent).toMatch(/Created /)
+    expect(card.textContent).toMatch(/0 insights/)
+    fireEvent.click(within(card).getByRole('button', { name: /^Delete / }))
+    expect(await screen.findByRole('alertdialog')).toBeTruthy()
+  })
+
+  it('keeps the sort: Stage and Created above the cards', async () => {
+    mount()
+    await screen.findByTestId(`source-card-${sourceId('gated')}`)
+    // The sort in force is announced (the table says it with aria-sort).
+    expect(screen.getByTestId('sources-sort-attention').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('sources-sort-created').getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(screen.getByTestId('sources-sort-created'))
+    const created = await screen.findByRole('button', { name: 'Sort by created, newest first' })
+    expect(created.getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('sources-sort-attention').getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(created)
+    await screen.findByRole('button', { name: 'Sort by created, oldest first' })
+    await waitFor(() => expect(api.list.mock.calls.at(-1)![0]).toMatchObject({ sort_by: 'created' }))
+    fireEvent.click(await screen.findByTestId('sources-sort-attention'))
+    await waitFor(() => expect(api.list.mock.calls.at(-1)![0]).toMatchObject({ sort_by: 'attention' }))
+  })
+
+  it('keeps arrow keys and Enter on the list', async () => {
+    mount()
+    await screen.findByTestId(`source-card-${sourceId('gated')}`)
+    const list = screen.getByRole('list', { name: 'Sources' })
+    list.focus()
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+    fireEvent.keyDown(list, { key: 'Enter' })
+    expect(nav.push).toHaveBeenCalledWith(`/sources/${sourceId('failed')}`)
+  })
+
+  it('from lg up it is the table again', async () => {
+    installViewport(1024)
+    mount()
+    await screen.findByTestId(`source-row-${sourceId('gated')}`)
+    expect(screen.queryByTestId(/^source-card-/)).toBeNull()
+  })
+})
+
+describe('Sources board: more rows after a resize across lg (WB.5 review M1)', () => {
+  // jsdom lays nothing out: every box is 2000 px of content in a 500 px window.
+  const saved = {
+    scrollHeight: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight'),
+    clientHeight: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight'),
+  }
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 2000 })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 500 })
+    // A full first page, so there is a next one.
+    const row = fakeList(new URLSearchParams())[0]
+    api.list.mockReset().mockImplementation(async (p: ListParams) =>
+      p.offset === 0
+        ? Array.from({ length: 30 }, (_, i) => ({ ...row, id: `source:p${i}`, title: `Page one ${i}` }))
+        : [])
+  })
+  afterEach(() => {
+    removeViewport()
+    for (const [key, desc] of Object.entries(saved)) {
+      if (desc) Object.defineProperty(HTMLElement.prototype, key, desc)
+    }
+  })
+
+  const scrollToBottom = () => {
+    const box = screen.getByTestId('sources-scroll')
+    Object.defineProperty(box, 'scrollTop', { configurable: true, value: 1450 })
+    fireEvent.scroll(box)
+  }
+  const offsets = () => api.list.mock.calls.map((c) => (c[0] as ListParams).offset)
+
+  it.each([
+    ['table to cards', 1440, 800, 'source-card-source:p0'],
+    ['cards to table', 800, 1440, 'source-row-source:p0'],
+  ])('%s: the new list loads the next page on scroll', async (_, from, to, testId) => {
+    installViewport(from)
+    mount()
+    await screen.findByText('Page one 0')
+    await new Promise((r) => setTimeout(r, 150))
+    expect(offsets()).toEqual([0])
+
+    act(() => setViewport(to))
+    await screen.findByTestId(testId)
+    await new Promise((r) => setTimeout(r, 150))
+    expect(offsets()).toEqual([0])
+    scrollToBottom()
+    await waitFor(() => expect(offsets()).toEqual([0, 30]))
+  })
+
+  it('focuses the list that is shown, after the swap too', async () => {
+    installViewport(1440)
+    mount()
+    await screen.findByText('Page one 0')
+    await waitFor(() => expect(document.activeElement?.tagName).toBe('TABLE'))
+    act(() => setViewport(800))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('list', { name: 'Sources' })))
   })
 })

@@ -55,7 +55,7 @@ export function AdvancedModelsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[min(500px,100vw-2rem)]">
         <DialogHeader>
           <DialogTitle>Advanced Model Selection</DialogTitle>
           <DialogDescription>

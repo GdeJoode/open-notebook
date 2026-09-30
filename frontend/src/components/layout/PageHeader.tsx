@@ -59,7 +59,8 @@ export function PageHeader({
           {subtitle && <p className="text-muted-foreground">{subtitle}</p>}
         </div>
         {(actions || hasOverflow) && (
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
+          // max-w-full: on a phone the actions wrap within the row.
+          <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">
             {actions}
             {hasOverflow && (
               <DropdownMenu>

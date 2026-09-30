@@ -19,6 +19,7 @@ import { SourceCard } from '@/components/sources/SourceCard'
 import { useDeleteSource, useRetrySource, useRemoveSourceFromNotebook } from '@/lib/hooks/use-sources'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { useModalManager } from '@/lib/hooks/use-modal-manager'
+import { useMenuAction } from '@/components/layout/use-menu-action'
 import { ContextMode } from '../[id]/page'
 
 interface SourcesColumnProps {
@@ -48,6 +49,9 @@ export function SourcesColumn({
   const [sourceToRemove, setSourceToRemove] = useState<string | null>(null)
 
   const { openModal } = useModalManager()
+  // The dialogs open once the menu has closed (a dialog opened from the item
+  // left the page unclickable).
+  const addMenu = useMenuAction()
   const deleteSource = useDeleteSource()
   const retrySource = useRetrySource()
   const removeFromNotebook = useRemoveSourceFromNotebook()
@@ -115,12 +119,12 @@ export function SourcesColumn({
                 <ChevronDown className="h-4 w-4 ml-2" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => { setDropdownOpen(false); setAddDialogOpen(true); }}>
+            <DropdownMenuContent align="end" onCloseAutoFocus={addMenu.onCloseAutoFocus}>
+              <DropdownMenuItem onSelect={addMenu.defer(() => setAddDialogOpen(true))}>
                 <Plus className="h-4 w-4 mr-2" />
                 Add New Source
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => { setDropdownOpen(false); setAddExistingDialogOpen(true); }}>
+              <DropdownMenuItem onSelect={addMenu.defer(() => setAddExistingDialogOpen(true))}>
                 <Link2 className="h-4 w-4 mr-2" />
                 Add Existing Source
               </DropdownMenuItem>

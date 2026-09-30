@@ -272,7 +272,7 @@ function NotebookTabLink({
       aria-current={active ? 'page' : undefined}
       data-testid={`notebook-tab-${label.toLowerCase()}`}
       className={cn(
-        'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+        'inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium transition-colors max-md:min-h-10',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         active
           ? 'bg-accent text-accent-foreground'

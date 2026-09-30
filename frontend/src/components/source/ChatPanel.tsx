@@ -141,7 +141,7 @@ export function ChatPanel({
                 <Clock className="h-4 w-4" />
                 <span className="text-xs">Sessions</span>
               </Button>
-              <DialogContent className="sm:max-w-[420px] p-0 overflow-hidden">
+              <DialogContent className="sm:max-w-[min(420px,100vw-2rem)] p-0 overflow-hidden">
                 <SessionManager
                   sessions={sessions}
                   currentSessionId={currentSessionId ?? null}

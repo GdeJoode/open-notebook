@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/lib/hooks/use-auth'
 import { useAttention } from '@/lib/hooks/use-attention'
 import { useSidebarStore } from '@/lib/stores/sidebar-store'
+import { useMinWidth } from '@/lib/hooks/use-media-query'
 import {
   Tooltip,
   TooltipContent,
@@ -39,6 +40,7 @@ import {
   FileText,
   Plus,
 } from 'lucide-react'
+import { useMenuAction } from './use-menu-action'
 import { NAV_SECTIONS, TRAY_HREF, activeNavHref, type NavItem, type NavSection } from './nav-items'
 
 const MORE_OPEN_KEY = 'sidebar.moreOpen'
@@ -61,13 +63,30 @@ function writeMoreOpen(open: boolean): void {
 
 type CreateTarget = 'source' | 'notebook' | 'podcast'
 
-export function AppSidebar() {
+interface AppSidebarProps {
+  /**
+   * WB.5: rendered inside the phone drawer: always expanded, full width, no
+   * collapse toggle.
+   */
+  drawer?: boolean
+  /** Called when an entry is followed (the drawer closes on it). */
+  onNavigate?: () => void
+}
+
+export function AppSidebar({ drawer = false, onNavigate }: AppSidebarProps = {}) {
   const pathname = usePathname()
   const router = useRouter()
   const { logout } = useAuth()
-  const { isCollapsed, toggleCollapse } = useSidebarStore()
+  const { isCollapsed: collapsedByOwner, toggleCollapse } = useSidebarStore()
+  // WB.5: icons only below xl, whatever the stored choice; from xl up the
+  // owner's toggle decides.
+  const isXl = useMinWidth('xl')
+  const isCollapsed = !drawer && (collapsedByOwner || !isXl)
+  const canToggle = !drawer && isXl
 
   const [createMenuOpen, setCreateMenuOpen] = useState(false)
+  // Notebook and Podcast open their dialogs once the menu has closed.
+  const createMenu = useMenuAction()
   const [notebookDialogOpen, setNotebookDialogOpen] = useState(false)
   const [podcastDialogOpen, setPodcastDialogOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(readMoreOpen)
@@ -108,14 +127,23 @@ export function AppSidebar() {
       >
         <item.icon className="h-4 w-4" />
         {!isCollapsed && <span>{item.name}</span>}
-        {(count > 0 || partial) && (
-          <Badge
-            className={cn(
-              'tabular-nums',
-              isCollapsed ? 'absolute -right-1 -top-1 px-1' : 'ml-auto'
-            )}
+        {(count > 0 || partial) && (isCollapsed ? (
+          // WB.5: icons leave no room for a number; a dot on the icon, the
+          // count in the tooltip and for screen readers.
+          <span
+            className="absolute right-2 top-1.5 size-2.5 rounded-full bg-primary ring-2 ring-sidebar"
             data-testid={`nav-badge-${item.name}`}
+            data-badge="dot"
           >
+            <span className="sr-only">
+              {count}
+              {partial && '+'}
+              {' need you'}
+              {partial && ', some groups did not load'}
+            </span>
+          </span>
+        ) : (
+          <Badge className="ml-auto tabular-nums" data-testid={`nav-badge-${item.name}`}>
             {count}
             {partial && '+'}
             <span className="sr-only">
@@ -123,7 +151,7 @@ export function AppSidebar() {
               {partial && ', some groups did not load'}
             </span>
           </Badge>
-        )}
+        ))}
       </Button>
     )
 
@@ -131,7 +159,7 @@ export function AppSidebar() {
       return (
         <Tooltip key={item.name}>
           <TooltipTrigger asChild>
-            <Link href={item.href} aria-current={isActive ? 'page' : undefined}>
+            <Link href={item.href} aria-current={isActive ? 'page' : undefined} onClick={onNavigate}>
               {button}
             </Link>
           </TooltipTrigger>
@@ -143,7 +171,12 @@ export function AppSidebar() {
     }
 
     return (
-      <Link key={item.name} href={item.href} aria-current={isActive ? 'page' : undefined}>
+      <Link
+        key={item.name}
+        href={item.href}
+        aria-current={isActive ? 'page' : undefined}
+        onClick={onNavigate}
+      >
         {button}
       </Link>
     )
@@ -208,8 +241,9 @@ export function AppSidebar() {
     <TooltipProvider delayDuration={0}>
       <div
         className={cn(
-          'app-sidebar flex h-full flex-col bg-sidebar border-sidebar-border border-r transition-all duration-300',
-          isCollapsed ? 'w-16' : 'w-64'
+          'app-sidebar flex h-full shrink-0 flex-col bg-sidebar transition-all duration-300',
+          drawer ? 'w-full' : 'border-sidebar-border border-r',
+          !drawer && (isCollapsed ? 'w-16' : 'w-64')
         )}
       >
         <div
@@ -225,16 +259,19 @@ export function AppSidebar() {
                 alt="Noesis"
                 width={32}
                 height={32}
-                className="transition-opacity group-hover:opacity-0"
+                className={cn(canToggle && 'transition-opacity group-hover:opacity-0')}
               />
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={toggleCollapse}
-                className="absolute text-sidebar-foreground hover:bg-sidebar-accent opacity-0 group-hover:opacity-100 transition-opacity"
-              >
-                <Menu className="h-4 w-4" />
-              </Button>
+              {canToggle && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleCollapse}
+                  aria-label="Expand sidebar"
+                  className="absolute text-sidebar-foreground hover:bg-sidebar-accent opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                >
+                  <Menu className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           ) : (
             <>
@@ -244,14 +281,17 @@ export function AppSidebar() {
                   Noesis
                 </span>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={toggleCollapse}
-                className="text-sidebar-foreground hover:bg-sidebar-accent"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
+              {canToggle && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleCollapse}
+                  aria-label="Collapse sidebar"
+                  className="text-sidebar-foreground hover:bg-sidebar-accent"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+              )}
             </>
           )}
         </div>
@@ -306,32 +346,24 @@ export function AppSidebar() {
                 align={isCollapsed ? 'end' : 'start'}
                 side={isCollapsed ? 'right' : 'bottom'}
                 className="w-48"
+                onCloseAutoFocus={createMenu.onCloseAutoFocus}
               >
                 <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault()
-                    handleCreateSelection('source')
-                  }}
+                  onSelect={createMenu.defer(() => handleCreateSelection('source'))}
                   className="gap-2"
                 >
                   <FileText className="h-4 w-4" />
                   Source
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault()
-                    handleCreateSelection('notebook')
-                  }}
+                  onSelect={createMenu.defer(() => handleCreateSelection('notebook'))}
                   className="gap-2"
                 >
                   <Book className="h-4 w-4" />
                   Notebook
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault()
-                    handleCreateSelection('podcast')
-                  }}
+                  onSelect={createMenu.defer(() => handleCreateSelection('podcast'))}
                   className="gap-2"
                 >
                   <Mic className="h-4 w-4" />

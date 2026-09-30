@@ -20,6 +20,7 @@ import {
   useTriageQueue,
 } from '@/lib/hooks/use-triage'
 import type { QueueItem, TooiDecisionInput } from '@/lib/api/triage'
+import { useMinWidth } from '@/lib/hooks/use-media-query'
 import {
   buildDecision,
   docsTooltipLines,
@@ -53,6 +54,9 @@ export default function TriageQueuePage() {
     [queueQuery.data, dismissed],
   )
   const groups = useMemo(() => groupByReason(openItems), [openItems])
+  // WB.5: a table from lg up, a card per row below it (at 768 the table's
+  // decisions scrolled out of its box).
+  const isLg = useMinWidth('lg')
 
   const onDecide = (item: QueueItem, action: 'promote' | 'keep' | 'override') => {
     decide.mutate({
@@ -68,6 +72,106 @@ export default function TriageQueuePage() {
     setDismissed((prev) => new Set(prev).add(item.id))
   }
 
+  // The pieces a row and a card share: the same data, links and decisions.
+  const nameLink = (item: QueueItem) => (
+    <Link
+      href={`/knowledge-graph?entity=${encodeURIComponent(item.entity)}`}
+      className="text-primary hover:underline max-md:inline-flex max-md:min-h-10 max-md:items-center"
+    >
+      {item.name || item.entity}
+    </Link>
+  )
+
+  const docsCount = (item: QueueItem) => (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          className="cursor-help underline decoration-dotted underline-offset-4"
+          data-testid={`triage-docs-${item.id}`}
+          aria-label={`${item.doc_count} documents: ${docsTooltipLines(item).join('; ')}`}
+        >
+          {item.doc_count}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="max-w-sm">
+        <ul className="space-y-0.5 text-xs">
+          {docsTooltipLines(item).map((line, idx) => (
+            // Two uploads of one file share a display title.
+            <li key={`${idx}-${line}`}>{line}</li>
+          ))}
+        </ul>
+      </TooltipContent>
+    </Tooltip>
+  )
+
+  const reasonCell = (item: QueueItem) =>
+    isTooiRow(item) ? (
+      <ul className="space-y-1" data-testid={`tooi-candidates-${item.id}`}>
+        {(item.candidates ?? []).map((c) => (
+          <li key={c.uri} className="flex items-center justify-between gap-2">
+            <span>{tooiCandidateLabel(c)}</span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={decideTooi.isPending}
+              aria-label={`Link ${item.name || item.entity} to ${c.label}`}
+              onClick={() => onDecideTooi(item, { action: 'link', uri: c.uri })}
+            >
+              Link
+            </Button>
+          </li>
+        ))}
+      </ul>
+    ) : (
+      item.reason
+    )
+
+  const decisionButtons = (item: QueueItem, className: string) =>
+    isTooiRow(item) ? (
+      <div className={className}>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={decideTooi.isPending}
+          aria-label={`Dismiss the TOOI candidates for ${item.name || item.entity}`}
+          onClick={() => onDecideTooi(item, { action: 'dismiss' })}
+        >
+          Dismiss
+        </Button>
+      </div>
+    ) : (
+      <div className={className}>
+        <Button
+          size="sm"
+          variant="default"
+          disabled={decide.isPending}
+          aria-label={`Promote ${item.name || item.entity} to active`}
+          onClick={() => onDecide(item, 'promote')}
+        >
+          Promote
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={decide.isPending}
+          aria-label={`Keep ${item.name || item.entity} as reference`}
+          onClick={() => onDecide(item, 'keep')}
+        >
+          Keep reference
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={decide.isPending}
+          aria-label={`Pin ${item.name || item.entity} by hand`}
+          onClick={() => onDecide(item, 'override')}
+        >
+          Override
+        </Button>
+      </div>
+    )
+
   return (
     <PageBody>
       <PageHeader
@@ -75,7 +179,7 @@ export default function TriageQueuePage() {
           <>
             <Link
               href="/knowledge-graph"
-              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground max-md:min-h-10"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               Knowledge Graph
@@ -149,6 +253,7 @@ export default function TriageQueuePage() {
                 <Badge variant="secondary">{group.items.length}</Badge>
               </div>
 
+              {isLg ? (
               <div className="border rounded-md overflow-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50">
@@ -168,14 +273,7 @@ export default function TriageQueuePage() {
                         data-testid={`triage-row-${item.id}`}
                         className="border-b last:border-b-0"
                       >
-                        <td className="p-3 font-medium">
-                          <Link
-                            href={`/knowledge-graph?entity=${encodeURIComponent(item.entity)}`}
-                            className="text-primary hover:underline"
-                          >
-                            {item.name || item.entity}
-                          </Link>
-                        </td>
+                        <td className="p-3 font-medium">{nameLink(item)}</td>
                         <td className="p-3">
                           <EntityTypeLabel canonical={item.entity_type} display={item.type} />
                         </td>
@@ -183,99 +281,41 @@ export default function TriageQueuePage() {
                           {item.structural_degree}
                         </td>
                         <td className="p-3 text-muted-foreground tabular-nums">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span
-                                tabIndex={0}
-                                className="cursor-help underline decoration-dotted underline-offset-4"
-                                data-testid={`triage-docs-${item.id}`}
-                                aria-label={`${item.doc_count} documents: ${docsTooltipLines(item).join('; ')}`}
-                              >
-                                {item.doc_count}
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent side="right" className="max-w-sm">
-                              <ul className="space-y-0.5 text-xs">
-                                {docsTooltipLines(item).map((line, idx) => (
-                                  // Two uploads of one file share a display title.
-                                  <li key={`${idx}-${line}`}>{line}</li>
-                                ))}
-                              </ul>
-                            </TooltipContent>
-                          </Tooltip>
+                          {docsCount(item)}
                         </td>
                         <td className="p-3 text-xs text-muted-foreground max-w-xs">
-                          {isTooiRow(item) ? (
-                            <ul className="space-y-1" data-testid={`tooi-candidates-${item.id}`}>
-                              {(item.candidates ?? []).map((c) => (
-                                <li key={c.uri} className="flex items-center justify-between gap-2">
-                                  <span>{tooiCandidateLabel(c)}</span>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={decideTooi.isPending}
-                                    aria-label={`Link ${item.name || item.entity} to ${c.label}`}
-                                    onClick={() => onDecideTooi(item, { action: 'link', uri: c.uri })}
-                                  >
-                                    Link
-                                  </Button>
-                                </li>
-                              ))}
-                            </ul>
-                          ) : (
-                            item.reason
-                          )}
+                          {reasonCell(item)}
                         </td>
                         <td className="p-3">
-                          {isTooiRow(item) ? (
-                            <div className="flex justify-end gap-1.5">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                disabled={decideTooi.isPending}
-                                aria-label={`Dismiss the TOOI candidates for ${item.name || item.entity}`}
-                                onClick={() => onDecideTooi(item, { action: 'dismiss' })}
-                              >
-                                Dismiss
-                              </Button>
-                            </div>
-                          ) : (
-                          <div className="flex justify-end gap-1.5">
-                            <Button
-                              size="sm"
-                              variant="default"
-                              disabled={decide.isPending}
-                              aria-label={`Promote ${item.name || item.entity} to active`}
-                              onClick={() => onDecide(item, 'promote')}
-                            >
-                              Promote
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={decide.isPending}
-                              aria-label={`Keep ${item.name || item.entity} as reference`}
-                              onClick={() => onDecide(item, 'keep')}
-                            >
-                              Keep reference
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              disabled={decide.isPending}
-                              aria-label={`Pin ${item.name || item.entity} by hand`}
-                              onClick={() => onDecide(item, 'override')}
-                            >
-                              Override
-                            </Button>
-                          </div>
-                          )}
+                          {decisionButtons(item, 'flex justify-end gap-1.5')}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              ) : (
+              <ul className="space-y-2">
+                {group.items.map((item) => (
+                  <li
+                    key={item.id}
+                    data-testid={`triage-card-${item.id}`}
+                    className="space-y-2 rounded-md border p-3 text-sm"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium">{nameLink(item)}</span>
+                      <EntityTypeLabel canonical={item.entity_type} display={item.type} />
+                    </div>
+                    <div className="flex gap-4 text-muted-foreground tabular-nums">
+                      <span>Degree {item.structural_degree}</span>
+                      <span>Docs {docsCount(item)}</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground">{reasonCell(item)}</div>
+                    {decisionButtons(item, 'flex flex-wrap gap-1.5')}
+                  </li>
+                ))}
+              </ul>
+              )}
             </section>
           ))}
         </div>

@@ -89,7 +89,7 @@ export function OkfImportDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="sm:max-w-[560px]"
+        className="sm:max-w-[min(560px,100vw-2rem)]"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         data-testid="okf-import-dialog"

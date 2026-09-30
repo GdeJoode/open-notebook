@@ -275,7 +275,7 @@ export function AddSourceDialog({
   if (processing) {
     return (
       <Dialog open={open} onOpenChange={handleClose}>
-        <DialogContent className="sm:max-w-[500px]" showCloseButton={true}>
+        <DialogContent className="sm:max-w-[min(500px,100vw-2rem)]" showCloseButton={true}>
           <DialogHeader>
             <DialogTitle>Processing Source</DialogTitle>
             <DialogDescription>
@@ -309,7 +309,7 @@ export function AddSourceDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[700px] p-0">
+      <DialogContent className="sm:max-w-[min(700px,100vw-2rem)] p-0">
         <DialogHeader className="px-6 pt-6 pb-0">
           <DialogTitle>Add New Source</DialogTitle>
           <DialogDescription>
