@@ -27,7 +27,9 @@ export function PageBody({ width = 'wide', fill = false, className, children }: 
   return (
     <div
       data-page-body={width}
-      className={cn('flex min-h-0 flex-1 flex-col', !fill && 'overflow-y-auto')}
+      // min-w-0 and the overflow keep a wide page from pushing the sidebar
+      // aside: it scrolls or clips inside the body instead.
+      className={cn('flex min-h-0 min-w-0 flex-1 flex-col', fill ? 'overflow-hidden' : 'overflow-y-auto')}
     >
       <div
         className={cn(

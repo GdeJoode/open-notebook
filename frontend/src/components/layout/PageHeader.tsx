@@ -51,7 +51,8 @@ export function PageHeader({
     <header data-page-header className="flex shrink-0 flex-col gap-2">
       {back && <div className="flex flex-wrap items-center justify-between gap-2">{back}</div>}
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-        <div className="min-w-0 flex-1 space-y-1">
+        {/* At least 16rem for the title: narrower, the actions wrap below it. */}
+        <div className="min-w-0 grow basis-64 space-y-1">
           <h1 className="text-2xl font-bold">{title}</h1>
           {subtitle && <p className="text-muted-foreground">{subtitle}</p>}
         </div>
