@@ -31,6 +31,7 @@ import { StageChips } from '@/components/sources/StageChips'
 import { useNotebooks } from '@/lib/hooks/use-notebooks'
 import { activeChipKey } from '@/lib/sources/board'
 import { displaySourceTitle } from '@/lib/utils/source-title'
+import { useMinWidth } from '@/lib/hooks/use-media-query'
 
 const PAGE_SIZE = 30
 
@@ -66,7 +67,10 @@ export default function SourcesPage() {
     queryKey: [...QUERY_KEYS.sources(), 'counts', notebookId ?? null] as const,
     queryFn: () => sourcesApi.counts(notebookId ? { notebook_id: notebookId } : undefined),
   })
-  const tableRef = useRef<HTMLTableElement>(null)
+  // WB.5: the table from lg up; below it, where its columns squeeze the
+  // title, cards. Either one is focusable and takes the arrow keys.
+  const isLg = useMinWidth('lg')
+  const tableRef = useRef<HTMLElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
   const {
@@ -160,7 +164,7 @@ export default function SourcesPage() {
     const scrollContainer = scrollContainerRef.current
     if (!scrollContainer) return
 
-    const rows = scrollContainer.querySelectorAll('tbody tr')
+    const rows = scrollContainer.querySelectorAll('[data-source-row]')
     const selectedRow = rows[index] as HTMLElement
     if (!selectedRow) return
 
@@ -309,6 +313,91 @@ export default function SourcesPage() {
     )
   }
 
+  // The pieces a row and a card share: the same data and actions either way.
+  const typeCell = (source: SourceListResponse) => (
+    <div className="flex items-center gap-2">
+      {getSourceIcon(source)}
+      <Badge variant="secondary" className="text-xs">
+        {getSourceType(source)}
+      </Badge>
+      {source.needs_you && <span className="sr-only">Needs you</span>}
+    </div>
+  )
+
+  const stageCell = (source: SourceListResponse) => (
+    <div className="flex items-center gap-2">
+      <PipelineStatus
+        variant="card"
+        readOnly
+        processingStage={source.processing_stage}
+        jobStatus={source.status}
+        className="w-40 shrink-0"
+      />
+      {source.stalled && (
+        <Badge
+          variant="outline"
+          className="border-amber-500 text-xs text-amber-800 dark:text-amber-300"
+          data-testid="source-stopped-badge"
+        >
+          Stopped
+        </Badge>
+      )}
+    </div>
+  )
+
+  const deleteButton = (source: SourceListResponse) => (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={(e) => handleDeleteClick(e, source)}
+      className="text-destructive hover:text-destructive"
+      aria-label={`Delete ${displaySourceTitle(source.title) || 'source'}`}
+    >
+      <Trash2 className="h-4 w-4" />
+    </Button>
+  )
+
+  const stageSort = (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => {
+        setSortBy('attention')
+        setSortOrder('desc')
+      }}
+      className="h-8 px-2 hover:bg-muted"
+      aria-label="Sort by stage: needs you first"
+      data-testid="sources-sort-attention"
+    >
+      Stage
+      <ArrowUpDown className={cn(
+        "ml-2 h-3 w-3",
+        sortBy === 'attention' ? 'opacity-100' : 'opacity-30'
+      )} />
+    </Button>
+  )
+
+  const createdSort = (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => toggleSort('created')}
+      className="h-8 px-2 hover:bg-muted"
+      data-testid="sources-sort-created"
+    >
+      Created
+      <ArrowUpDown className={cn(
+        "ml-2 h-3 w-3",
+        sortBy === 'created' ? 'opacity-100' : 'opacity-30'
+      )} />
+      {sortBy === 'created' && (
+        <span className="ml-1 text-xs">
+          {sortOrder === 'asc' ? '↑' : '↓'}
+        </span>
+      )}
+    </Button>
+  )
+
   let body: React.ReactNode
   if (isLoading) {
     body = (
@@ -335,86 +424,109 @@ export default function SourcesPage() {
         }
       />
     )
+  } else if (!isLg) {
+    body = (
+      <div ref={scrollContainerRef} className="flex-1 overflow-auto">
+        <div className="mb-2 flex flex-wrap items-center gap-2" data-testid="sources-card-sort">
+          <span className="text-sm text-muted-foreground">Sort by</span>
+          {stageSort}
+          {createdSort}
+        </div>
+        <ul
+          ref={tableRef as React.RefObject<HTMLUListElement>}
+          tabIndex={0}
+          aria-label="Sources"
+          className="space-y-2 outline-none"
+        >
+          {sources.map((source, index) => (
+            <li
+              key={source.id}
+              data-source-row
+              data-testid={`source-card-${source.id}`}
+              data-needs-you={source.needs_you ? 'true' : 'false'}
+              onMouseEnter={() => setSelectedIndex(index)}
+              className={cn(
+                'rounded-md border border-l-4 p-3',
+                source.needs_you ? 'border-l-amber-500' : 'border-l-transparent',
+                selectedIndex === index && 'bg-accent'
+              )}
+            >
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1 space-y-2">
+                  <Link
+                    href={`/sources/${source.id}`}
+                    onClick={() => setSelectedIndex(index)}
+                    className="flex min-h-10 items-center font-medium break-words hover:underline"
+                  >
+                    {displaySourceTitle(source.title) || 'Untitled Source'}
+                  </Link>
+                  {source.asset?.url && (
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {source.asset.url}
+                    </span>
+                  )}
+                  {stageCell(source)}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    {typeCell(source)}
+                    <span>Created {formatDistanceToNow(new Date(source.created), { addSuffix: true })}</span>
+                    <span>{source.insights_count || 0} insights</span>
+                    <span>Embedded: {source.embedded ? 'Yes' : 'No'}</span>
+                  </div>
+                </div>
+                {deleteButton(source)}
+              </div>
+            </li>
+          ))}
+        </ul>
+        {isFetchingNextPage && (
+          <div className="flex h-16 items-center justify-center">
+            <LoadingSpinner />
+            <span className="ml-2 text-muted-foreground">Loading more sources...</span>
+          </div>
+        )}
+      </div>
+    )
   } else {
     body = (
       <div ref={scrollContainerRef} className="flex-1 rounded-md border overflow-auto">
         <table
-          ref={tableRef}
+          ref={tableRef as React.RefObject<HTMLTableElement>}
           tabIndex={0}
           aria-label="Sources"
-          className="w-full min-w-[960px] outline-none table-fixed"
+          className="w-full outline-none table-fixed"
         >
-          <colgroup>
-            {/* WB.4: Stage and Created fit their common values on one line at
-                1366 px ("Awaiting schema review", "in about 8 hours"). */}
-            <col className="w-[110px]" />
-            <col className="w-auto" />
-            <col className="w-[260px]" />
-            <col className="w-[170px]" />
-            <col className="w-[100px]" />
-            <col className="w-[100px]" />
-            <col className="w-[100px]" />
-          </colgroup>
+          {/* WB.4: Stage and Created fit their common values on one line at
+              1366 px ("Awaiting schema review", "in about 8 hours"). WB.5:
+              below xl, Type, Insights and Embedded give their room to the
+              title; the cards below lg show them all. */}
           <thead className="sticky top-0 bg-background z-10">
             <tr className="border-b bg-muted/50">
-              <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+              <th className="hidden w-[110px] h-12 px-4 text-left align-middle font-medium text-muted-foreground xl:table-cell">
                 Type
               </th>
               <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
                 Title
               </th>
               <th
-                className="h-12 px-4 text-left align-middle font-medium text-muted-foreground"
+                className="w-[260px] h-12 px-4 text-left align-middle font-medium text-muted-foreground"
                 aria-sort={sortBy === 'attention' ? 'descending' : undefined}
               >
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setSortBy('attention')
-                    setSortOrder('desc')
-                  }}
-                  className="h-8 px-2 hover:bg-muted"
-                  aria-label="Sort by stage: needs you first"
-                  data-testid="sources-sort-attention"
-                >
-                  Stage
-                  <ArrowUpDown className={cn(
-                    "ml-2 h-3 w-3",
-                    sortBy === 'attention' ? 'opacity-100' : 'opacity-30'
-                  )} />
-                </Button>
+                {stageSort}
               </th>
               <th
-                className="h-12 px-4 text-left align-middle font-medium text-muted-foreground hidden sm:table-cell"
+                className="w-[170px] h-12 px-4 text-left align-middle font-medium text-muted-foreground"
                 aria-sort={sortBy === 'created' ? (sortOrder === 'asc' ? 'ascending' : 'descending') : undefined}
               >
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => toggleSort('created')}
-                  className="h-8 px-2 hover:bg-muted"
-                >
-                  Created
-                  <ArrowUpDown className={cn(
-                    "ml-2 h-3 w-3",
-                    sortBy === 'created' ? 'opacity-100' : 'opacity-30'
-                  )} />
-                  {sortBy === 'created' && (
-                    <span className="ml-1 text-xs">
-                      {sortOrder === 'asc' ? '↑' : '↓'}
-                    </span>
-                  )}
-                </Button>
+                {createdSort}
               </th>
-              <th className="h-12 px-4 text-center align-middle font-medium text-muted-foreground hidden md:table-cell">
+              <th className="w-[100px] h-12 px-4 text-center align-middle font-medium text-muted-foreground hidden xl:table-cell">
                 Insights
               </th>
-              <th className="h-12 px-4 text-center align-middle font-medium text-muted-foreground hidden lg:table-cell">
+              <th className="w-[100px] h-12 px-4 text-center align-middle font-medium text-muted-foreground hidden xl:table-cell">
                 Embedded
               </th>
-              <th className="h-12 px-4 text-right align-middle font-medium text-muted-foreground">
-                Actions
+              <th className="w-[72px] h-12 px-4 text-right align-middle font-medium text-muted-foreground">
+                <span className="sr-only">Actions</span>
               </th>
             </tr>
           </thead>
@@ -424,6 +536,7 @@ export default function SourcesPage() {
                 key={source.id}
                 onClick={() => handleRowClick(index, source.id)}
                 onMouseEnter={() => setSelectedIndex(index)}
+                data-source-row
                 data-testid={`source-row-${source.id}`}
                 data-needs-you={source.needs_you ? 'true' : 'false'}
                 className={cn(
@@ -433,23 +546,24 @@ export default function SourcesPage() {
                     : "hover:bg-muted/50"
                 )}
               >
+                {/* The needs-you edge sits on the first cell shown: Type from
+                    xl up, Title below. */}
                 <td
                   className={cn(
-                    "h-12 px-4 border-l-4",
+                    "hidden h-12 px-4 border-l-4 xl:table-cell",
                     source.needs_you ? "border-l-amber-500" : "border-l-transparent"
                   )}
                 >
-                  <div className="flex items-center gap-2">
-                    {getSourceIcon(source)}
-                    <Badge variant="secondary" className="text-xs">
-                      {getSourceType(source)}
-                    </Badge>
-                    {source.needs_you && <span className="sr-only">Needs you</span>}
-                  </div>
+                  {typeCell(source)}
                 </td>
-                <td className="h-12 px-4">
+                <td
+                  className={cn(
+                    "h-12 px-4 border-l-4 xl:border-l-0",
+                    source.needs_you ? "border-l-amber-500" : "border-l-transparent"
+                  )}
+                >
                   <div className="flex flex-col overflow-hidden">
-                    <span className="font-medium truncate">
+                    <span className="font-medium truncate" data-testid="source-title">
                       {displaySourceTitle(source.title) || 'Untitled Source'}
                     </span>
                     {source.asset?.url && (
@@ -460,46 +574,21 @@ export default function SourcesPage() {
                   </div>
                 </td>
                 <td className="h-12 px-4" data-testid="source-stage">
-                  <div className="flex items-center gap-2">
-                    <PipelineStatus
-                      variant="card"
-                      readOnly
-                      processingStage={source.processing_stage}
-                      jobStatus={source.status}
-                      className="w-40 shrink-0"
-                    />
-                    {source.stalled && (
-                      <Badge
-                        variant="outline"
-                        className="border-amber-500 text-xs text-amber-800 dark:text-amber-300"
-                        data-testid="source-stopped-badge"
-                      >
-                        Stopped
-                      </Badge>
-                    )}
-                  </div>
+                  {stageCell(source)}
                 </td>
-                <td className="h-12 px-4 text-muted-foreground text-sm hidden sm:table-cell">
+                <td className="h-12 px-4 text-muted-foreground text-sm" data-testid="source-created">
                   {formatDistanceToNow(new Date(source.created), { addSuffix: true })}
                 </td>
-                <td className="h-12 px-4 text-center hidden md:table-cell">
+                <td className="h-12 px-4 text-center hidden xl:table-cell">
                   <span className="text-sm font-medium">{source.insights_count || 0}</span>
                 </td>
-                <td className="h-12 px-4 text-center hidden lg:table-cell">
+                <td className="h-12 px-4 text-center hidden xl:table-cell">
                   <Badge variant={source.embedded ? "default" : "secondary"} className="text-xs">
                     {source.embedded ? "Yes" : "No"}
                   </Badge>
                 </td>
                 <td className="h-12 px-4 text-right">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={(e) => handleDeleteClick(e, source)}
-                    className="text-destructive hover:text-destructive"
-                    aria-label={`Delete ${displaySourceTitle(source.title) || 'source'}`}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  {deleteButton(source)}
                 </td>
               </tr>
             ))}

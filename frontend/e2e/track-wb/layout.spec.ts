@@ -144,7 +144,8 @@ test.describe('WB.4 — one page frame, one type scale', () => {
       return [...document.querySelectorAll('[data-testid^="source-row-"]')].flatMap((row) => [
         { what: 'stage', text: row.querySelector('[data-testid="pipeline-stage-label"]')!.textContent,
           lines: lines(row.querySelector('[data-testid="pipeline-stage-label"]')!) },
-        { what: 'created', text: row.children[3].textContent, lines: lines(row.children[3]) },
+        { what: 'created', text: row.querySelector('[data-testid="source-created"]')!.textContent,
+          lines: lines(row.querySelector('[data-testid="source-created"]')!) },
       ])
     })
     expect(cells.map((c) => c.text)).toContain('Awaiting schema review')
