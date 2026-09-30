@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -70,8 +70,11 @@ export default function SourcesPage() {
   // WB.5: the table from lg up; below it, where its columns squeeze the
   // title, cards. Either one is focusable and takes the arrow keys.
   const isLg = useMinWidth('lg')
-  const tableRef = useRef<HTMLElement>(null)
-  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  // Held as state through callback refs: the table/cards swap at lg replaces
+  // both elements, and the effects below must follow the current ones (a
+  // ref's `.current` changing does not re-run them).
+  const [listEl, setListEl] = useState<HTMLElement | null>(null)
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null)
 
   const {
     data,
@@ -107,17 +110,17 @@ export default function SourcesPage() {
   )
 
   useEffect(() => {
-    if (sources.length > 0 && tableRef.current) {
-      tableRef.current.focus()
+    if (sources.length > 0 && listEl) {
+      listEl.focus()
     }
-  }, [sources])
+  }, [sources, listEl])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (sources.length === 0) return
       // The chips, the notebook filter and the row's delete button keep their
       // own keys; the table (focused on load) and the page body navigate rows.
-      if (e.target !== document.body && e.target !== tableRef.current) return
+      if (e.target !== document.body && e.target !== listEl) return
 
       switch (e.key) {
         case 'ArrowDown':
@@ -158,10 +161,10 @@ export default function SourcesPage() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [sources, selectedIndex, router])
+  }, [sources, selectedIndex, router, listEl])
 
   const scrollToSelectedRow = (index: number) => {
-    const scrollContainer = scrollContainerRef.current
+    const scrollContainer = scrollEl
     if (!scrollContainer) return
 
     const rows = scrollContainer.querySelectorAll('[data-source-row]')
@@ -180,7 +183,7 @@ export default function SourcesPage() {
 
   // Infinite scroll trigger
   useEffect(() => {
-    const scrollContainer = scrollContainerRef.current
+    const scrollContainer = scrollEl
     if (!scrollContainer) return
 
     let scrollTimeout: NodeJS.Timeout | null = null
@@ -189,9 +192,7 @@ export default function SourcesPage() {
       if (scrollTimeout) clearTimeout(scrollTimeout)
 
       scrollTimeout = setTimeout(() => {
-        if (!scrollContainerRef.current) return
-
-        const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current
+        const { scrollTop, scrollHeight, clientHeight } = scrollContainer
         const distanceFromBottom = scrollHeight - scrollTop - clientHeight
 
         if (distanceFromBottom < 200 && hasNextPage && !isFetchingNextPage) {
@@ -207,7 +208,7 @@ export default function SourcesPage() {
       scrollContainer.removeEventListener('scroll', handleScroll)
       if (scrollTimeout) clearTimeout(scrollTimeout)
     }
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage])
+  }, [scrollEl, fetchNextPage, hasNextPage, isFetchingNextPage])
 
   const setNotebook = (value: string) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -433,9 +434,9 @@ export default function SourcesPage() {
           {stageSort}
           {createdSort}
         </div>
-        <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-auto">
+        <div ref={setScrollEl} className="min-h-0 flex-1 overflow-auto" data-testid="sources-scroll">
         <ul
-          ref={tableRef as React.RefObject<HTMLUListElement>}
+          ref={setListEl}
           tabIndex={0}
           aria-label="Sources"
           className="space-y-2 outline-none"
@@ -491,9 +492,9 @@ export default function SourcesPage() {
     )
   } else {
     body = (
-      <div ref={scrollContainerRef} className="flex-1 rounded-md border overflow-auto">
+      <div ref={setScrollEl} className="flex-1 rounded-md border overflow-auto" data-testid="sources-scroll">
         <table
-          ref={tableRef as React.RefObject<HTMLTableElement>}
+          ref={setListEl}
           tabIndex={0}
           aria-label="Sources"
           className="w-full outline-none table-fixed"

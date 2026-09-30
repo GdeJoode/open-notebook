@@ -5,7 +5,7 @@
  * see `sources-board.fake.ts`).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 
@@ -46,7 +46,7 @@ function asQuery(params: ListParams = {}): URLSearchParams {
   return out
 }
 
-import { installViewport, removeViewport } from '@/lib/hooks/__tests__/viewport'
+import { installViewport, removeViewport, setViewport } from '@/lib/hooks/__tests__/viewport'
 import SourcesPage from '../page'
 
 function mount() {
@@ -265,5 +265,63 @@ describe('Sources board below lg (WB.5)', () => {
     mount()
     await screen.findByTestId(`source-row-${sourceId('gated')}`)
     expect(screen.queryByTestId(/^source-card-/)).toBeNull()
+  })
+})
+
+describe('Sources board: more rows after a resize across lg (WB.5 review M1)', () => {
+  // jsdom lays nothing out: every box is 2000 px of content in a 500 px window.
+  const saved = {
+    scrollHeight: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight'),
+    clientHeight: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight'),
+  }
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 2000 })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 500 })
+    // A full first page, so there is a next one.
+    const row = fakeList(new URLSearchParams())[0]
+    api.list.mockReset().mockImplementation(async (p: ListParams) =>
+      p.offset === 0
+        ? Array.from({ length: 30 }, (_, i) => ({ ...row, id: `source:p${i}`, title: `Page one ${i}` }))
+        : [])
+  })
+  afterEach(() => {
+    removeViewport()
+    for (const [key, desc] of Object.entries(saved)) {
+      if (desc) Object.defineProperty(HTMLElement.prototype, key, desc)
+    }
+  })
+
+  const scrollToBottom = () => {
+    const box = screen.getByTestId('sources-scroll')
+    Object.defineProperty(box, 'scrollTop', { configurable: true, value: 1450 })
+    fireEvent.scroll(box)
+  }
+  const offsets = () => api.list.mock.calls.map((c) => (c[0] as ListParams).offset)
+
+  it.each([
+    ['table to cards', 1440, 800, 'source-card-source:p0'],
+    ['cards to table', 800, 1440, 'source-row-source:p0'],
+  ])('%s: the new list loads the next page on scroll', async (_, from, to, testId) => {
+    installViewport(from)
+    mount()
+    await screen.findByText('Page one 0')
+    await new Promise((r) => setTimeout(r, 150))
+    expect(offsets()).toEqual([0])
+
+    act(() => setViewport(to))
+    await screen.findByTestId(testId)
+    await new Promise((r) => setTimeout(r, 150))
+    expect(offsets()).toEqual([0])
+    scrollToBottom()
+    await waitFor(() => expect(offsets()).toEqual([0, 30]))
+  })
+
+  it('focuses the list that is shown, after the swap too', async () => {
+    installViewport(1440)
+    mount()
+    await screen.findByText('Page one 0')
+    await waitFor(() => expect(document.activeElement?.tagName).toBe('TABLE'))
+    act(() => setViewport(800))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('list', { name: 'Sources' })))
   })
 })
