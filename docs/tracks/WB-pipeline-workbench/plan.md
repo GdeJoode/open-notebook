@@ -1,6 +1,7 @@
 # Track WB — Pipeline workbench (frontend review)
 
-**Status: APPROVED 2026-09-29.** Owner accepted every recommended option
+**Status: ALL PHASES BUILT 2026-09-30** (WB.5 on `feature/wb5-responsive`,
+awaiting review). **Approved 2026-09-29.** Owner accepted every recommended option
 (WB-D1 (a) Werkbak home, WB-D2 (a) sources primary, WB-D3 (a) desktop first,
 WB-D4 (a) a collapsed "More" group, WB-D5 (a) English).
 
@@ -782,6 +783,47 @@ redo it.
     source detail, triage and the notebook page (checked by Playwright:
     `scrollWidth <= innerWidth`);
   - tap targets are at least 40 px at 390 px.
+- **WB.5 built** (branch `feature/wb5-responsive`):
+  - Sidebar: icons below xl whatever the stored choice (the toggle shows
+    from xl up only); an entry that needs you keeps a dot on its icon, the
+    count in its tooltip and for screen readers. Below md a top bar (menu
+    button, section title) opens the sidebar in a Sheet: focus trapped,
+    closed by any navigation, focus back on the button.
+  - Cards: Sources below lg (WB.4 m1: the table keeps Title, Stage,
+    Created and the delete button below xl; the title is ~410 px at 1024),
+    Triage below lg (its table scrolled sideways at 768), the KG table
+    below md. Same data, links and actions; the sorts sit above the cards;
+    the Sources list keeps its arrow keys and Enter. The KG detail panel is
+    a Sheet below lg; the KG filter bar wraps.
+  - Dialogs: every fixed width wider than a phone leaves (358 px) is
+    `min(N px, 100vw-2rem)`; a vitest reads the widths from the source.
+  - Notebook page: Sources beside a Notes | Chat tab set from lg, Sources,
+    Notes and Chat as tabs below lg; hidden tabs stay mounted. Source page:
+    the chat column from xl, a Sheet from "Chat with source" below it.
+  - Menus (WB.4 carried note): the notebook's Add Source, the notebook
+    card's Merge and Delete, the source page's Reprocess and the sidebar's
+    Create open their dialogs through `useMenuAction`. Before, the e2e
+    close-then-click check failed on all four; the source card's and the
+    podcast profiles' menus passed as they were and are held by it.
+  - 390 px: primitives (button, tabs, input, select, slider) are 40 px to
+    tap below md, as are the chips, links and pipeline segments on the
+    checked pages; hover-only menus show on touch.
+  - Tests: vitest for the shell, each page by width (a `matchMedia` stub)
+    and the width guard; `track-wb/responsive.spec.ts` checks seven pages
+    (The Tray, Sources, a source, Triage, a notebook, the KG, Ontologies)
+    at 1024, 768 and 390: no page scroll, no control cut off, drawn over
+    or hover-only, 40 px targets at 390; `menu-dialogs.spec.ts`. Each guard
+    was mutation-checked. Screenshots: `data/wb5-screenshots/` (gitignored).
+  - Limits:
+    - at 390 Sources and the KG keep their own scroll box under the header
+      and filters (~350 px of list on 390×844);
+    - below xl the sidebar cannot be expanded; names are in the tooltips;
+    - Notes and Chat are no longer side by side at any width;
+    - the 40 px check counts a control's label as its target, a slider's
+      track as the thumb's, and leaves out links inside running text;
+    - `components/common/AddButton.tsx` is unused and still opens its
+      dialog from the item; the KG page ignores `?entity=` (the triage
+      links), pre-existing.
 
 Rough total: ~9 days. WB.0 comes first, because a slow database makes every
 page look broken. WB.1 and WB.2 deliver most of what the owner asked for.
