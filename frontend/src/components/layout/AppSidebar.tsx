@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/lib/hooks/use-auth'
 import { useAttention } from '@/lib/hooks/use-attention'
 import { useSidebarStore } from '@/lib/stores/sidebar-store'
+import { useMinWidth } from '@/lib/hooks/use-media-query'
 import {
   Tooltip,
   TooltipContent,
@@ -61,11 +62,29 @@ function writeMoreOpen(open: boolean): void {
 
 type CreateTarget = 'source' | 'notebook' | 'podcast'
 
-export function AppSidebar() {
+/** A badge in icon mode sits on a 48 px button: three characters at most. */
+const iconBadgeText = (count: number) => (count > 99 ? '99+' : String(count))
+
+interface AppSidebarProps {
+  /**
+   * WB.5: rendered inside the phone drawer: always expanded, full width, no
+   * collapse toggle.
+   */
+  drawer?: boolean
+  /** Called when an entry is followed (the drawer closes on it). */
+  onNavigate?: () => void
+}
+
+export function AppSidebar({ drawer = false, onNavigate }: AppSidebarProps = {}) {
   const pathname = usePathname()
   const router = useRouter()
   const { logout } = useAuth()
-  const { isCollapsed, toggleCollapse } = useSidebarStore()
+  const { isCollapsed: collapsedByOwner, toggleCollapse } = useSidebarStore()
+  // WB.5: icons only below xl, whatever the stored choice; from xl up the
+  // owner's toggle decides.
+  const isXl = useMinWidth('xl')
+  const isCollapsed = !drawer && (collapsedByOwner || !isXl)
+  const canToggle = !drawer && isXl
 
   const [createMenuOpen, setCreateMenuOpen] = useState(false)
   const [notebookDialogOpen, setNotebookDialogOpen] = useState(false)
@@ -116,8 +135,20 @@ export function AppSidebar() {
             )}
             data-testid={`nav-badge-${item.name}`}
           >
-            {count}
-            {partial && '+'}
+            {isCollapsed ? (
+              <>
+                <span aria-hidden="true">{iconBadgeText(count)}</span>
+                <span className="sr-only">
+                  {count}
+                  {partial && '+'}
+                </span>
+              </>
+            ) : (
+              <>
+                {count}
+                {partial && '+'}
+              </>
+            )}
             <span className="sr-only">
               {' need you'}
               {partial && ', some groups did not load'}
@@ -131,7 +162,7 @@ export function AppSidebar() {
       return (
         <Tooltip key={item.name}>
           <TooltipTrigger asChild>
-            <Link href={item.href} aria-current={isActive ? 'page' : undefined}>
+            <Link href={item.href} aria-current={isActive ? 'page' : undefined} onClick={onNavigate}>
               {button}
             </Link>
           </TooltipTrigger>
@@ -143,7 +174,12 @@ export function AppSidebar() {
     }
 
     return (
-      <Link key={item.name} href={item.href} aria-current={isActive ? 'page' : undefined}>
+      <Link
+        key={item.name}
+        href={item.href}
+        aria-current={isActive ? 'page' : undefined}
+        onClick={onNavigate}
+      >
         {button}
       </Link>
     )
@@ -208,8 +244,9 @@ export function AppSidebar() {
     <TooltipProvider delayDuration={0}>
       <div
         className={cn(
-          'app-sidebar flex h-full flex-col bg-sidebar border-sidebar-border border-r transition-all duration-300',
-          isCollapsed ? 'w-16' : 'w-64'
+          'app-sidebar flex h-full shrink-0 flex-col bg-sidebar transition-all duration-300',
+          drawer ? 'w-full' : 'border-sidebar-border border-r',
+          !drawer && (isCollapsed ? 'w-16' : 'w-64')
         )}
       >
         <div
@@ -225,16 +262,19 @@ export function AppSidebar() {
                 alt="Noesis"
                 width={32}
                 height={32}
-                className="transition-opacity group-hover:opacity-0"
+                className={cn(canToggle && 'transition-opacity group-hover:opacity-0')}
               />
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={toggleCollapse}
-                className="absolute text-sidebar-foreground hover:bg-sidebar-accent opacity-0 group-hover:opacity-100 transition-opacity"
-              >
-                <Menu className="h-4 w-4" />
-              </Button>
+              {canToggle && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleCollapse}
+                  aria-label="Expand sidebar"
+                  className="absolute text-sidebar-foreground hover:bg-sidebar-accent opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                >
+                  <Menu className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           ) : (
             <>
@@ -244,14 +284,17 @@ export function AppSidebar() {
                   Noesis
                 </span>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={toggleCollapse}
-                className="text-sidebar-foreground hover:bg-sidebar-accent"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
+              {canToggle && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleCollapse}
+                  aria-label="Collapse sidebar"
+                  className="text-sidebar-foreground hover:bg-sidebar-accent"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+              )}
             </>
           )}
         </div>
