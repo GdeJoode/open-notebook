@@ -82,13 +82,8 @@ export default function EntityResolutionPage() {
   const planFailed = planQuery.isError
   const candidatesFailed = candidatesQuery.isError
   const isError = planFailed && candidatesFailed
-  // WB.3 (review minor m4): empty only when both reads answered.
   const queueEmpty =
-    !planFailed &&
-    !candidatesFailed &&
-    clusters.length === 0 &&
-    autoCandidates.length === 0 &&
-    reviewCandidates.length === 0
+    clusters.length === 0 && autoCandidates.length === 0 && reviewCandidates.length === 0
 
   const totalPages = Math.ceil(clusters.length / PAGE_SIZE)
   const pageClusters = clusters.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE)

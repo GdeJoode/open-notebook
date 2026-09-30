@@ -92,7 +92,7 @@ test.describe('WB.3 — the Sources board', () => {
 
     await page.getByTestId('sources-chip-embedded').click()
     await expect(page).toHaveURL(/\/sources\?stage=embedded$/)
-    await expect.poll(() => rowIds(page)).toEqual(['stopped', 'fresh'].map(sourceId))
+    await expect.poll(() => rowIds(page)).toEqual(['stopped', 'fresh', 'fresh2'].map(sourceId))
     await expect(page.getByTestId(`source-row-${sourceId('fresh')}`).getByTestId('source-stopped-badge'))
       .toHaveCount(0)
   })

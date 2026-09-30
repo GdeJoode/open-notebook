@@ -101,7 +101,7 @@ describe('Sources board', () => {
   it('shows every chip count as the server counts it', async () => {
     mount()
     await waitFor(() =>
-      expect(screen.getByTestId('sources-chip-all').getAttribute('data-count')).toBe('10'))
+      expect(screen.getByTestId('sources-chip-all').getAttribute('data-count')).toBe(String(EXPECTED.counts.all.total)))
     const counts = EXPECTED.counts.all
     const want: Record<string, number> = {
       all: counts.total, stalled: counts.stalled, ...counts.stages,

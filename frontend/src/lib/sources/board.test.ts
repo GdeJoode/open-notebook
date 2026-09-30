@@ -55,8 +55,8 @@ describe('board chips', () => {
   it('reads every chip count from the server counts, none from rows', () => {
     const byKey = Object.fromEntries(BOARD_CHIPS.map((c) => [c.key, chipCount(c, counts)]))
     expect(byKey).toEqual({
-      all: 10, failed: 2, awaiting_schema_review: 1, stalled: 2,
-      ingested: 1, embedded: 2, extracted: 1, graphed: 1, complete: 2,
+      all: 11, failed: 2, awaiting_schema_review: 1, stalled: 2,
+      ingested: 1, embedded: 3, extracted: 1, graphed: 1, complete: 2,
     })
     // Every stage has a chip.
     expect(STAGES.every((s) => BOARD_CHIPS.some((c) => c.key === s))).toBe(true)
