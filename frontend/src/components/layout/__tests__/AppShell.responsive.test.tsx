@@ -134,3 +134,17 @@ describe('phone drawer', () => {
     expect(screen.getByTestId('mobile-top-bar-title').textContent).toBe('Triage')
   })
 })
+
+describe('drawer across md (WB.5 review m5)', () => {
+  it('open, widened past md and narrowed again: it stays closed', async () => {
+    installViewport(390)
+    render(shell())
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }))
+    await screen.findByRole('dialog')
+    act(() => setViewport(800))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    act(() => setViewport(390))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open navigation' }).getAttribute('aria-expanded')).toBe('false')
+  })
+})

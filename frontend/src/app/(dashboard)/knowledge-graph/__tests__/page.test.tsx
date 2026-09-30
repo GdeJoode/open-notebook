@@ -34,7 +34,7 @@ globalThis.ResizeObserver ??= class {
   disconnect() {}
 } as unknown as typeof ResizeObserver
 
-import { installViewport, removeViewport } from '@/lib/hooks/__tests__/viewport'
+import { installViewport, removeViewport, setViewport } from '@/lib/hooks/__tests__/viewport'
 import KnowledgeGraphPage from '../page'
 
 const ROWS = [
@@ -159,5 +159,35 @@ describe('Knowledge Graph details: closing wins (WB.5 review m2)', () => {
     await waitFor(() => expect(within(panel).getByText('Rijk')).toBeTruthy())
     await act(async () => { first({ ...ROWS[0], relations: [] }) })
     expect(within(screen.getByTestId('entity-detail-panel')).queryByText('Regio Zwolle')).toBeNull()
+  })
+})
+
+describe('Knowledge Graph details across lg (WB.5 review m5)', () => {
+  afterEach(() => removeViewport())
+
+  it('an entity picked in the side panel does not open a sheet on a narrower window', async () => {
+    installViewport(1024)
+    hooks.useEntities.mockReturnValue({ data: { items: ROWS, total: 2 }, isLoading: false })
+    hooks.getEntity.mockResolvedValue({ ...ROWS[0], relations: [] })
+    render(<KnowledgeGraphPage />)
+    fireEvent.click(screen.getByTestId('entity-row-entity:a'))
+    await screen.findByTestId('entity-detail-panel')
+    act(() => setViewport(768))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    // A selection made below lg does open it.
+    fireEvent.click(screen.getByTestId('entity-row-entity:a'))
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+  })
+
+  it('a read in flight when lg is crossed does not open the sheet', async () => {
+    installViewport(1024)
+    hooks.useEntities.mockReturnValue({ data: { items: ROWS, total: 2 }, isLoading: false })
+    let answer!: (d: unknown) => void
+    hooks.getEntity.mockReturnValue(new Promise((r) => { answer = r }))
+    render(<KnowledgeGraphPage />)
+    fireEvent.click(screen.getByTestId('entity-row-entity:a'))
+    act(() => setViewport(768))
+    await act(async () => { answer({ ...ROWS[0], relations: [] }) })
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 })

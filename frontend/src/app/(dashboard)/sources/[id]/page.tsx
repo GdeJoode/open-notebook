@@ -22,6 +22,12 @@ export default function SourceDetailPage() {
   // it opens in a sheet from "Chat with source" in the header.
   const isXl = useMinWidth('xl')
   const [chatOpen, setChatOpen] = useState(false)
+  // Crossing xl closes the sheet, so it never reopens by itself on a resize.
+  const [chatAtXl, setChatAtXl] = useState(isXl)
+  if (chatAtXl !== isXl) {
+    setChatAtXl(isXl)
+    setChatOpen(false)
+  }
 
   // Initialize source chat
   const chat = useSourceChat(sourceId)

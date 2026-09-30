@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { EmptyState } from '@/components/common/EmptyState'
@@ -63,6 +63,15 @@ export default function KnowledgeGraphPage() {
   // WB.5: cards below md; the detail panel is a sheet below lg.
   const isMd = useMinWidth('md')
   const isLg = useMinWidth('lg')
+  // Crossing lg closes the details: an entity picked in the side panel must
+  // not come back as a modal sheet on a narrower window. Only a selection
+  // made below lg opens the sheet.
+  const [detailAtLg, setDetailAtLg] = useState(isLg)
+  if (detailAtLg !== isLg) {
+    setDetailAtLg(isLg)
+    setSelectedEntity(null)
+    setLoadingDetail(false)
+  }
 
   const { data: entityTypes } = useEntityTypes()
   const { data: paginatedEntities, isLoading } = useEntities({
@@ -77,6 +86,10 @@ export default function KnowledgeGraphPage() {
   // The latest detail read; closing (or a newer click) moves it on, so an
   // answer that arrives later is dropped instead of reopening the details.
   const detailRequest = useRef(0)
+  // ... and a read still in flight when lg is crossed is dropped too.
+  useEffect(() => {
+    detailRequest.current += 1
+  }, [isLg])
 
   const handleEntityClick = useCallback(async (entityId: string) => {
     const request = ++detailRequest.current

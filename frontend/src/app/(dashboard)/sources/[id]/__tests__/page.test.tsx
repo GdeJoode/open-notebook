@@ -4,9 +4,9 @@
  * "Chat with source" opens it in a sheet, and closing gives focus back.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
-import { installViewport, removeViewport } from '@/lib/hooks/__tests__/viewport'
+import { installViewport, removeViewport, setViewport } from '@/lib/hooks/__tests__/viewport'
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -66,5 +66,18 @@ describe('source page chat by width', () => {
     fireEvent.keyDown(sheet, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
     await vi.waitFor(() => expect(document.activeElement).toBe(open))
+  })
+})
+
+describe('source chat across xl (WB.5 review m5)', () => {
+  it('an open chat sheet does not come back after a wider window', async () => {
+    installViewport(1024)
+    render(<SourceDetailPage />)
+    fireEvent.click(screen.getByRole('button', { name: 'Chat with source' }))
+    await screen.findByRole('dialog', { name: 'Chat with source' })
+    act(() => setViewport(1440))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    act(() => setViewport(1024))
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 })

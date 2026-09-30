@@ -25,6 +25,13 @@ export function AppShell({ children }: AppShellProps) {
   const isMd = useMinWidth('md')
   const pathname = usePathname()
   const [drawerOpen, setDrawerOpen] = useState(false)
+  // Crossing md closes it: widened past md and narrowed again, the drawer
+  // must not pop open by itself. Adjusted during render, so it never shows.
+  const [drawerAtMd, setDrawerAtMd] = useState(isMd)
+  if (drawerAtMd !== isMd) {
+    setDrawerAtMd(isMd)
+    setDrawerOpen(false)
+  }
 
   // Any navigation closes the drawer (Create › Source, a link on the page).
   useEffect(() => {
