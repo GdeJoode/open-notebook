@@ -138,8 +138,10 @@ export default function NotebookPage() {
     )
   }
 
+  // Below lg the page scrolls as a whole: the header and banners can take
+  // most of a phone's height, and the tabs must stay reachable.
   return (
-    <PageBody fill>
+    <PageBody fill={isLg}>
       <NotebookHeader notebook={notebook} />
 
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">

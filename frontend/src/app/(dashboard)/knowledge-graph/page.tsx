@@ -395,12 +395,14 @@ export default function KnowledgeGraphPage() {
             }}
           />
 
-          <ConfidenceFilter onChange={setConfidenceThreshold} />
+          {/* max-w-full: on a phone the slider narrows to the row. */}
+          <ConfidenceFilter onChange={setConfidenceThreshold} className="max-w-full" />
         </div>
 
         <div className="min-h-0 flex-1 overflow-hidden">
           <Tabs defaultValue="table" className="h-full flex flex-col">
-            <TabsList>
+            {/* Scrolls sideways when the three tabs do not fit (a phone). */}
+            <TabsList className="max-w-full justify-start overflow-x-auto">
               <TabsTrigger value="table">Table</TabsTrigger>
               <TabsTrigger value="graph">Graph</TabsTrigger>
               <TabsTrigger value="documents">

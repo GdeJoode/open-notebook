@@ -67,7 +67,7 @@ export default function WerkbakPage() {
       />
 
       {isLoading ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" data-testid="werkbak-loading">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" data-testid="werkbak-loading">
           {[0, 1, 2].map((i) => (
             <Skeleton key={i} className="h-40 w-full" />
           ))}
@@ -108,7 +108,7 @@ export default function WerkbakPage() {
               </Button>
             </div>
             {arrived.length > 0 ? (
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {arrived.map((g) => (
                   <GroupCard key={g.key} group={g} />
                 ))}
@@ -140,7 +140,7 @@ export default function WerkbakPage() {
                 />
               </div>
             ) : (
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {needsYou.map((g) => (
                   <GroupCard key={g.key} group={g} />
                 ))}
@@ -153,7 +153,7 @@ export default function WerkbakPage() {
               <h2 id="werkbak-in-progress" className="text-lg font-semibold">
                 In progress
               </h2>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {inProgress.map((g) => (
                   <GroupCard key={g.key} group={g} />
                 ))}

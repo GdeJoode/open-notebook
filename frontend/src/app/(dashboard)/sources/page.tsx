@@ -426,12 +426,14 @@ export default function SourcesPage() {
     )
   } else if (!isLg) {
     body = (
-      <div ref={scrollContainerRef} className="flex-1 overflow-auto">
-        <div className="mb-2 flex flex-wrap items-center gap-2" data-testid="sources-card-sort">
+      <div className="flex min-h-0 flex-1 flex-col gap-2">
+        {/* Outside the scroll box, so it stays in view as the table header does. */}
+        <div className="flex shrink-0 flex-wrap items-center gap-2" data-testid="sources-card-sort">
           <span className="text-sm text-muted-foreground">Sort by</span>
           {stageSort}
           {createdSort}
         </div>
+        <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-auto">
         <ul
           ref={tableRef as React.RefObject<HTMLUListElement>}
           tabIndex={0}
@@ -484,6 +486,7 @@ export default function SourcesPage() {
             <span className="ml-2 text-muted-foreground">Loading more sources...</span>
           </div>
         )}
+        </div>
       </div>
     )
   } else {
