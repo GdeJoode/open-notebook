@@ -54,7 +54,9 @@ async function backend(page: Page) {
   await page.route('**/api/triage/queue**', (r) => json(r, { items: [TRIAGE_ROW], total: 1 }))
   await page.route(/\/api\/knowledge-graph\/entities\/entity(?::|%3A)1(\?.*)?$/, (r) => json(r, {
     id: 'entity:1', name: 'Regio Deal Achterhoek', entity_type: 'programme', weight: 1,
-    confidence: 0.96, status: 'active', structural_degree: 14, doc_count: 2, relations: [],
+    confidence: 0.96, status: 'active', structural_degree: 14, doc_count: 2,
+    relations: [{ id: 'relation:1', source: 'entity:1', target: 'entity:2', relation_type: 'part_of',
+      confidence: 0.9 }],
     source_ids: [SOURCE] }))
 }
 
@@ -201,6 +203,50 @@ test.describe('WB.5 — responsive', () => {
         expect(problems).toEqual([])
       })
   }
+
+  test('at 390 px the source chat sheet and the KG details sheet have 40 px targets', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await backend(page)
+    const problems: string[] = []
+    // With a sheet open the page behind is aria-hidden: controls() reads the sheet.
+    const check = async (what: string, sheet: ReturnType<typeof page.getByTestId>) => {
+      // Measure once it has slid in.
+      await expect.poll(async () => {
+        const box = (await sheet.boundingBox())!
+        return box.x >= 0 && box.x + box.width <= 390
+      }).toBe(true)
+      await page.waitForTimeout(600)
+      const found = await controls(page)
+      expect(found.length, what).toBeGreaterThan(2)
+      for (const c of found) {
+        if (c.invisible) problems.push(`${what}: ${c.what} shows only on hover`)
+        else if (c.cutOff) problems.push(`${what}: cut off ${c.what}`)
+        else if (c.coveredBy) problems.push(`${what}: ${c.what} covered by ${c.coveredBy}`)
+        else if (!c.inlineText && (c.height < 40 || c.width < 40)) {
+          problems.push(`${what}: small ${c.what} ${Math.round(c.width)}x${Math.round(c.height)}`)
+        }
+      }
+    }
+
+    await gotoAndWait(page, `/sources/${enc(SOURCE)}`)
+    await page.getByRole('button', { name: 'Chat with source' }).click({ timeout: 60_000 })
+    const chat = page.getByTestId('source-chat-sheet')
+    await expect(chat).toBeVisible()
+    await settle(page)
+    await check('chat sheet', chat)
+    await page.keyboard.press('Escape')
+    await expect(chat).toBeHidden()
+
+    await gotoAndWait(page, '/knowledge-graph')
+    await page.getByTestId('entity-card-entity:1').click({ timeout: 60_000 })
+    const sheet = page.getByTestId('entity-detail-sheet')
+    await expect(sheet.getByTestId('relation-open-relation:1')).toBeVisible()
+    await settle(page)
+    await check('KG sheet', sheet)
+    const shotDir = process.env.WB5_SCREENSHOT_DIR
+    if (shotDir) await page.screenshot({ path: path.join(shotDir, '390-kg-sheet.png') })
+    expect(problems).toEqual([])
+  })
 
   test('below xl the sidebar is icons, and the badges stay on them', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 900 })

@@ -191,3 +191,22 @@ describe('Knowledge Graph details across lg (WB.5 review m5)', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 })
+
+describe('Knowledge Graph relations (WB.5 review m7)', () => {
+  afterEach(() => removeViewport())
+
+  it('the other end of a relation is a button that opens it', async () => {
+    installViewport(1024)
+    hooks.useEntities.mockReturnValue({ data: { items: ROWS, total: 2 }, isLoading: false })
+    hooks.getEntity.mockResolvedValueOnce({ ...ROWS[0], relations: [
+      { id: 'relation:1', source: 'entity:a', target: 'entity:b', relation_type: 'part_of' },
+      { id: 'relation:2', source: 'entity:c', target: 'entity:a', relation_type: 'funds' },
+    ] }).mockResolvedValueOnce({ ...ROWS[1], relations: [] })
+    render(<KnowledgeGraphPage />)
+    fireEvent.click(screen.getByTestId('entity-row-entity:a'))
+    const panel = await screen.findByTestId('entity-detail-panel')
+    expect(within(panel).getByRole('button', { name: 'entity:c' })).toBeTruthy()
+    fireEvent.click(within(panel).getByRole('button', { name: 'entity:b' }))
+    expect(hooks.getEntity).toHaveBeenLastCalledWith('entity:b')
+  })
+})

@@ -187,7 +187,7 @@ export default function KnowledgeGraphPage() {
                 )}
               </div>
             </div>
-            <label className="flex items-center justify-between gap-3 text-sm">
+            <label className="flex items-center justify-between gap-3 text-sm max-md:min-h-10">
               <span id={`override-label-${selectedEntity.id}`}>
                 Pin status (manual override)
               </span>
@@ -270,7 +270,7 @@ export default function KnowledgeGraphPage() {
               <a
                 key={sid}
                 href={`/sources/${sid}`}
-                className="block text-xs text-primary hover:underline truncate"
+                className="block text-xs text-primary hover:underline truncate max-md:flex max-md:min-h-10 max-md:items-center"
               >
                 {sid}
               </a>
@@ -314,21 +314,15 @@ export default function KnowledgeGraphPage() {
                   {rel.relation_type}
                 </div>
                 <div className="text-sm">
-                  {rel.source === selectedEntity.id ? (
-                    <span
-                      className="text-primary cursor-pointer hover:underline"
-                      onClick={() => handleEntityClick(rel.target)}
-                    >
-                      {rel.target}
-                    </span>
-                  ) : (
-                    <span
-                      className="text-primary cursor-pointer hover:underline"
-                      onClick={() => handleEntityClick(rel.source)}
-                    >
-                      {rel.source}
-                    </span>
-                  )}
+                  {/* A button: the other end opens by keyboard as by click. */}
+                  <button
+                    type="button"
+                    className="rounded-sm text-left text-primary break-all hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-10"
+                    onClick={() => handleEntityClick(rel.source === selectedEntity.id ? rel.target : rel.source)}
+                    data-testid={`relation-open-${rel.id}`}
+                  >
+                    {rel.source === selectedEntity.id ? rel.target : rel.source}
+                  </button>
                 </div>
                 {typeof rel.confidence === 'number' && (
                   <div className="mt-2">
