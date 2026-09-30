@@ -54,6 +54,11 @@ export interface NotebookSchemaResponse {
   coverage_pct: number
   review_required: boolean
   soft_nudge_dismissed: boolean
+  /**
+   * WB.3: the review gate holds extraction (`review_required` and nothing
+   * accepted). A resume now turns the gate off for this notebook.
+   */
+  review_gate_active: boolean
 }
 
 /** `GET /schema/extensions/{type}/accept`: where a proposal goes by default. */

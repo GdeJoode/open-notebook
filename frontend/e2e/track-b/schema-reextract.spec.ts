@@ -130,6 +130,7 @@ test.describe('B.3d: schema-change re-extract prompt', () => {
             // Dismiss the SchemaSoftNudge so its banner doesn't
             // compete with the B.3d banner under test.
             soft_nudge_dismissed: true,
+            review_gate_active: false,
           }),
         }),
     )

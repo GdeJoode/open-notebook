@@ -53,6 +53,8 @@ const FIX_SCHEMA_BASE = {
   coverage_pct: 0.82,
   review_required: false,
   soft_nudge_dismissed: false,
+  // review_required AND nothing accepted (schemas.py `_review_gate_active`).
+  review_gate_active: false,
 }
 
 const FIX_EVENT_EXTENSION_SUGGESTED = {
@@ -401,6 +403,7 @@ test.describe('B.3c: schema soft-nudge + pause toggle', () => {
           body: JSON.stringify({
             ...FIX_SCHEMA_BASE,
             review_required: currentReviewRequired,
+            review_gate_active: currentReviewRequired,
           }),
         }),
     )
@@ -492,6 +495,8 @@ test.describe('B.3c: schema soft-nudge + pause toggle', () => {
             ...FIX_SCHEMA_BASE,
             review_required: true,
             soft_nudge_dismissed: true,
+            // Nothing accepted: resuming turns the gate off (WB.3).
+            review_gate_active: !resumeCalled,
           }),
         }),
     )
@@ -546,10 +551,13 @@ test.describe('B.3c: schema soft-nudge + pause toggle', () => {
     await expect(pausedBanner).toBeVisible({ timeout: 10_000 })
     await expect(pausedBanner).toContainText('2 sources')
 
-    const resumeBtn = page.getByTestId('extraction-paused-resume')
+    // WB.3: with nothing accepted, Resume asks first and says what it turns off.
+    await page.getByTestId('extraction-paused-resume').click()
+    await expect(page.getByRole('alertdialog')).toContainText(
+      'turns off the review gate for this notebook')
     const [request] = await Promise.all([
       page.waitForRequest((req) => resumeUrlRe.test(req.url())),
-      resumeBtn.click(),
+      page.getByRole('button', { name: 'Turn off review and resume' }).click(),
     ])
     expect(request.method()).toBe('POST')
 
