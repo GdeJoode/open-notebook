@@ -361,7 +361,10 @@ export default function SourcesPage() {
               <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
                 Title
               </th>
-              <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+              <th
+                className="h-12 px-4 text-left align-middle font-medium text-muted-foreground"
+                aria-sort={sortBy === 'attention' ? 'descending' : undefined}
+              >
                 <Button
                   variant="ghost"
                   size="sm"
@@ -380,7 +383,10 @@ export default function SourcesPage() {
                   )} />
                 </Button>
               </th>
-              <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground hidden sm:table-cell">
+              <th
+                className="h-12 px-4 text-left align-middle font-medium text-muted-foreground hidden sm:table-cell"
+                aria-sort={sortBy === 'created' ? (sortOrder === 'asc' ? 'ascending' : 'descending') : undefined}
+              >
                 <Button
                   variant="ghost"
                   size="sm"
