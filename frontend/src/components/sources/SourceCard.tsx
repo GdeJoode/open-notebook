@@ -33,6 +33,7 @@ import { cn } from '@/lib/utils'
 import { ContextToggle } from '@/components/common/ContextToggle'
 import { ContextMode } from '@/app/(dashboard)/notebooks/[id]/page'
 import { displaySourceTitle } from '@/lib/utils/source-title'
+import { useMenuAction } from '@/components/layout/use-menu-action'
 
 interface SourceCardProps {
   source: SourceListResponse
@@ -78,6 +79,9 @@ export function SourceCard({
   // Retained to fall back to the job axis for legacy/list-only rows that carry
   // no `processing_stage` yet (pre-backfill) but were recently created.
   const [wasProcessing, setWasProcessing] = useState(false)
+  // Remove and Delete open the parent's confirm dialog once the menu has
+  // closed, so focus returns to the menu's trigger.
+  const menuAction = useMenuAction()
 
   // The spine is fed from the card's OWN `processing_stage` (list payload). We
   // only fan out a per-card GET /sources/{id} while that stage can still advance
@@ -251,14 +255,16 @@ export function SourceCard({
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuContent
+              align="end"
+              className="w-48"
+              onCloseAutoFocus={menuAction.onCloseAutoFocus}
+            >
               {showRemoveFromNotebook && (
                 <>
                   <DropdownMenuItem
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleRemoveFromNotebook()
-                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    onSelect={menuAction.defer(handleRemoveFromNotebook)}
                     disabled={!onRemoveFromNotebook}
                   >
                     <Unlink className="h-4 w-4 mr-2" />
@@ -285,10 +291,8 @@ export function SourceCard({
               )}
 
               <DropdownMenuItem
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleDelete()
-                }}
+                onClick={(e) => e.stopPropagation()}
+                onSelect={menuAction.defer(handleDelete)}
                 disabled={!onDelete}
                 className="text-red-600 focus:text-red-600"
               >
