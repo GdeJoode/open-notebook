@@ -54,8 +54,9 @@ export default function TriageQueuePage() {
     [queueQuery.data, dismissed],
   )
   const groups = useMemo(() => groupByReason(openItems), [openItems])
-  // WB.5: a table from md up, a card per row below it.
-  const isMd = useMinWidth('md')
+  // WB.5: a table from lg up, a card per row below it (at 768 the table's
+  // decisions scrolled out of its box).
+  const isLg = useMinWidth('lg')
 
   const onDecide = (item: QueueItem, action: 'promote' | 'keep' | 'override') => {
     decide.mutate({
@@ -252,7 +253,7 @@ export default function TriageQueuePage() {
                 <Badge variant="secondary">{group.items.length}</Badge>
               </div>
 
-              {isMd ? (
+              {isLg ? (
               <div className="border rounded-md overflow-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50">

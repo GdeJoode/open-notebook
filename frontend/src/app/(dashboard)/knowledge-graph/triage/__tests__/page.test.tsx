@@ -78,7 +78,7 @@ describe('Triage page — types (WB.3)', () => {
   })
 })
 
-describe('Triage page below md (WB.5)', () => {
+describe('Triage page below lg (WB.5)', () => {
   afterEach(() => removeViewport())
 
   it('shows a card per row with the same data, link and decisions', () => {
@@ -100,8 +100,16 @@ describe('Triage page below md (WB.5)', () => {
     expect(within(card).getByRole('button', { name: 'Pin Provincie Utrecht by hand' })).toBeTruthy()
   })
 
-  it('from md up it is the table', () => {
+  it('a tablet gets the cards too', () => {
     installViewport(768)
+    queue.items = [ROW]
+    mount()
+    expect(screen.getByTestId('triage-card-triage_queue:t1')).toBeTruthy()
+    expect(screen.queryByRole('table')).toBeNull()
+  })
+
+  it('from lg up it is the table', () => {
+    installViewport(1024)
     queue.items = [ROW]
     mount()
     expect(screen.getByTestId('triage-row-triage_queue:t1').tagName).toBe('TR')

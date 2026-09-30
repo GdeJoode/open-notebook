@@ -6,8 +6,8 @@
  * - no horizontal page scroll at 1024, 768 and 390 px on The Tray, Sources,
  *   a source, Triage, a notebook, the Knowledge Graph and Ontologies
  *   (`document.documentElement.scrollWidth <= innerWidth`);
- * - nothing interactive is cut off: every control is inside the viewport, or
- *   inside a box that scrolls sideways to it;
+ * - nothing interactive is cut off: every control is inside the viewport and
+ *   its boxes (a tab strip may scroll sideways to it);
  * - nothing is drawn over a control: a tap on it reaches it;
  * - at 390 px every control is at least 40 px tall and wide (inline links in
  *   running text excepted, as WCAG 2.5.8 excepts them);
@@ -109,11 +109,10 @@ function controls(page: Page): Promise<Control[]> {
         const pr = p.getBoundingClientRect()
         if (ps.overflowX !== 'visible') {
           if (vis.left < pr.left - 1 || vis.right > pr.right + 1) {
-            // A tab strip or a table may scroll sideways; any other box that
-            // does hides part of the page behind a sideways scroll.
+            // A tab strip may scroll sideways; any other box that does hides
+            // part of the page (a table's last columns) behind a scroll.
             const sideways = (ps.overflowX === 'auto' || ps.overflowX === 'scroll')
-              && p.scrollWidth > p.clientWidth
-              && (p.getAttribute('role') === 'tablist' || !!p.querySelector('table'))
+              && p.scrollWidth > p.clientWidth && p.getAttribute('role') === 'tablist'
             if (sideways) scrollsX = true
             else clippedX = true
           }
