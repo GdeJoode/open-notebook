@@ -17,6 +17,7 @@ import { PageBody } from '@/components/layout/PageBody'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useMinWidth } from '@/lib/hooks/use-media-query'
+import { cn } from '@/lib/utils'
 
 export type ContextMode = 'off' | 'insights' | 'full'
 
@@ -88,34 +89,19 @@ export default function NotebookPage() {
     }))
   }
 
-  const sourcesColumn = (
-    <SourcesColumn
-      sources={sources}
-      isLoading={sourcesLoading}
-      notebookId={notebookId}
-      notebookName={notebook?.name}
-      onRefresh={refetchSources}
-      contextSelections={contextSelections.sources}
-      onContextModeChange={(sourceId, mode) => handleContextModeChange(sourceId, mode, 'source')}
-    />
-  )
-  // Mounted while hidden, so a switch of tab keeps a draft note or a chat.
-  const notesTab = (
-    <TabsContent value="notes" forceMount className="flex min-h-0 flex-col data-[state=inactive]:hidden">
-      <NotesColumn
-        notes={notes}
-        isLoading={notesLoading}
-        notebookId={notebookId}
-        contextSelections={contextSelections.notes}
-        onContextModeChange={(noteId, mode) => handleContextModeChange(noteId, mode, 'note')}
-      />
-    </TabsContent>
-  )
-  const chatTab = (
-    <TabsContent value="chat" forceMount className="flex min-h-0 flex-col data-[state=inactive]:hidden">
-      <ChatColumn notebookId={notebookId} contextSelections={contextSelections} />
-    </TabsContent>
-  )
+  // One Tabs tree at every width, so Notes and Chat stay mounted across lg
+  // (a draft note, the chat input, a streaming answer). Below lg `tab` is
+  // shown; from lg Sources is always shown and the right column shows the
+  // last of Notes and Chat that was picked.
+  const [tab, setTab] = useState<'sources' | 'notes' | 'chat'>('sources')
+  const [side, setSide] = useState<'notes' | 'chat'>('notes')
+  const pickTab = (value: string) => {
+    const next = value as 'sources' | 'notes' | 'chat'
+    setTab(next)
+    if (next !== 'sources') setSide(next)
+  }
+  // Hidden panels stay mounted: forceMount, hidden by CSS while inactive.
+  const panel = 'flex min-h-0 flex-col data-[state=inactive]:hidden'
 
   if (notebookLoading) {
     return (
@@ -160,36 +146,53 @@ export default function NotebookPage() {
           <ExtractionPausedBanner notebookId={notebookId} />
           <ReextractPromptBanner notebookId={notebookId} />
         </div>
-        {isLg ? (
-          <div className="grid grid-cols-2 gap-6 flex-1 min-h-0" data-testid="notebook-columns">
-            <div className="flex flex-col h-full min-h-0 overflow-hidden">{sourcesColumn}</div>
-            <Tabs defaultValue="notes" className="min-h-0">
-              <TabsList aria-label="Notes and chat">
-                <TabsTrigger value="notes">Notes</TabsTrigger>
-                <TabsTrigger value="chat">Chat</TabsTrigger>
-              </TabsList>
-              {notesTab}
-              {chatTab}
-            </Tabs>
-          </div>
-        ) : (
-          <Tabs defaultValue="sources" className="flex-1 min-h-0" data-testid="notebook-tabs">
-            <TabsList aria-label="Notebook sections">
-              <TabsTrigger value="sources">Sources</TabsTrigger>
-              <TabsTrigger value="notes">Notes</TabsTrigger>
-              <TabsTrigger value="chat">Chat</TabsTrigger>
-            </TabsList>
-            <TabsContent
-              value="sources"
-              forceMount
-              className="flex min-h-0 flex-col data-[state=inactive]:hidden"
-            >
-              {sourcesColumn}
-            </TabsContent>
-            {notesTab}
-            {chatTab}
-          </Tabs>
-        )}
+        <Tabs
+          value={isLg ? side : tab}
+          onValueChange={pickTab}
+          className={cn(
+            'flex-1 min-h-0',
+            isLg && 'grid grid-cols-2 grid-rows-[auto_minmax(0,1fr)] gap-x-6 gap-y-2'
+          )}
+          data-testid={isLg ? 'notebook-columns' : 'notebook-tabs'}
+        >
+          <TabsList
+            aria-label={isLg ? 'Notes and chat' : 'Notebook sections'}
+            className={cn(isLg && 'col-start-2 row-start-1')}
+          >
+            {!isLg && <TabsTrigger value="sources">Sources</TabsTrigger>}
+            <TabsTrigger value="notes">Notes</TabsTrigger>
+            <TabsTrigger value="chat">Chat</TabsTrigger>
+          </TabsList>
+          <TabsContent
+            value="sources"
+            forceMount
+            className={isLg
+              ? 'col-start-1 row-start-1 row-span-2 flex min-h-0 flex-col overflow-hidden'
+              : panel}
+          >
+            <SourcesColumn
+              sources={sources}
+              isLoading={sourcesLoading}
+              notebookId={notebookId}
+              notebookName={notebook?.name}
+              onRefresh={refetchSources}
+              contextSelections={contextSelections.sources}
+              onContextModeChange={(sourceId, mode) => handleContextModeChange(sourceId, mode, 'source')}
+            />
+          </TabsContent>
+          <TabsContent value="notes" forceMount className={cn(panel, isLg && 'col-start-2 row-start-2')}>
+            <NotesColumn
+              notes={notes}
+              isLoading={notesLoading}
+              notebookId={notebookId}
+              contextSelections={contextSelections.notes}
+              onContextModeChange={(noteId, mode) => handleContextModeChange(noteId, mode, 'note')}
+            />
+          </TabsContent>
+          <TabsContent value="chat" forceMount className={cn(panel, isLg && 'col-start-2 row-start-2')}>
+            <ChatColumn notebookId={notebookId} contextSelections={contextSelections} />
+          </TabsContent>
+        </Tabs>
       </div>
     </PageBody>
   )
