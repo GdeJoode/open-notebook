@@ -5,6 +5,7 @@ import { CheckCircle2, FileText, Network, Database, AlignLeft, Clock, AlertCircl
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 interface SourceSummary {
   id: string
@@ -71,7 +72,7 @@ export function CompletionTab({
             >
               <div className="flex items-center gap-3 min-w-0">
                 <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="text-sm truncate">{source.title}</span>
+                <span className="text-sm truncate">{displaySourceTitle(source.title)}</span>
               </div>
               <SourceStatusBadge status={source.status} />
             </div>
@@ -101,7 +102,7 @@ export function CompletionTab({
         <div>
           <h3 className="text-lg font-semibold">Source Created Successfully</h3>
           <p className="text-sm text-muted-foreground">
-            {sourceTitle || 'Your source'} has been processed.
+            {displaySourceTitle(sourceTitle) || 'Your source'} has been processed.
           </p>
         </div>
       </div>

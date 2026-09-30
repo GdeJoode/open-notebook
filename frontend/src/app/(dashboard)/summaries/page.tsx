@@ -34,6 +34,7 @@ import { sourcesApi } from '@/lib/api/sources'
 import type { SourceListResponse } from '@/lib/types/api'
 import { formatDistanceToNow } from 'date-fns'
 import { useEffect } from 'react'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 export default function SummariesPage() {
   const [selectedSummaryId, setSelectedSummaryId] = useState<string | null>(null)
@@ -122,7 +123,7 @@ function SummaryListView({ onSelect }: { onSelect: (id: string) => void }) {
                   <SelectContent>
                     {sources.map((s) => (
                       <SelectItem key={s.id} value={s.id}>
-                        {s.title || s.id}
+                        {displaySourceTitle(s.title) || s.id}
                       </SelectItem>
                     ))}
                   </SelectContent>

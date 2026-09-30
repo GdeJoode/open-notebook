@@ -32,6 +32,7 @@ import { PipelineStatus } from '@/components/sources/pipeline'
 import { cn } from '@/lib/utils'
 import { ContextToggle } from '@/components/common/ContextToggle'
 import { ContextMode } from '@/app/(dashboard)/notebooks/[id]/page'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 interface SourceCardProps {
   source: SourceListResponse
@@ -123,7 +124,7 @@ export function SourceCard({
   const sourceType = getSourceType(source)
   const SourceTypeIcon = SOURCE_TYPE_ICONS[sourceType]
 
-  const title = source.title || 'Untitled Source'
+  const title = displaySourceTitle(source.title) || 'Untitled Source'
 
   const isFailedStage = effectiveStage === 'failed'
   // "Settled" cards (successfully complete, or legacy rows with no stage signal)

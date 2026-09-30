@@ -19,6 +19,7 @@ import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 // Document nodes are indigo, concept nodes amber. Colour is NOT the only cue:
 // document labels are prefixed with a ◆ glyph (a shape cue that survives
@@ -61,7 +62,7 @@ export default function DocumentGraphView({ onNodeClick }: DocumentGraphViewProp
   const titleMap: SourceTitleMap = useMemo(() => {
     const map = new Map<string, string>()
     for (const s of sources ?? []) {
-      if (s.title) map.set(s.id, s.title)
+      if (s.title) map.set(s.id, displaySourceTitle(s.title))
     }
     return map
   }, [sources])

@@ -20,6 +20,7 @@ import { searchApi } from '@/lib/api/search'
 import { sourcesApi } from '@/lib/api/sources'
 import { useSources, useAddSourcesToNotebook } from '@/lib/hooks/use-sources'
 import { SourceListResponse } from '@/lib/types/api'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 interface AddExistingSourceDialogProps {
   open: boolean
@@ -247,7 +248,7 @@ export function AddExistingSourceDialog({
                             {getSourceIcon(source)}
                           </div>
                           <h4 className="font-medium text-sm break-words line-clamp-2 flex-1 min-w-0">
-                            {source.title}
+                            {displaySourceTitle(source.title)}
                           </h4>
                           {isAlreadyLinked && (
                             <Badge variant="secondary" className="text-xs shrink-0">

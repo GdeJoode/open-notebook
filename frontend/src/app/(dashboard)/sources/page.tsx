@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 const PAGE_SIZE = 30
 
@@ -360,7 +361,7 @@ export default function SourcesPage() {
                   <td className="h-12 px-4">
                     <div className="flex flex-col overflow-hidden">
                       <span className="font-medium truncate">
-                        {source.title || 'Untitled Source'}
+                        {displaySourceTitle(source.title) || 'Untitled Source'}
                       </span>
                       {source.asset?.url && (
                         <span className="text-xs text-muted-foreground truncate">
@@ -411,7 +412,7 @@ export default function SourcesPage() {
         open={deleteDialog.open}
         onOpenChange={(open) => setDeleteDialog({ open, source: deleteDialog.source })}
         title="Delete Source"
-        description={`Are you sure you want to delete "${deleteDialog.source?.title || 'this source'}"? This action cannot be undone.`}
+        description={`Are you sure you want to delete "${displaySourceTitle(deleteDialog.source?.title) || 'this source'}"? This action cannot be undone.`}
         confirmText="Delete"
         confirmVariant="destructive"
         onConfirm={handleDeleteConfirm}

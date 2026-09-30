@@ -8,6 +8,7 @@ import type { RelatedSourceHybrid, KGSharedEntity } from '@/lib/types/api'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 interface RelatedSourcesProps {
   sourceId: string
@@ -151,7 +152,7 @@ function RelatedSourceRow({
   item: RelatedSourceHybrid
   rank: number
 }) {
-  const title = item.title?.trim() || 'Untitled source'
+  const title = displaySourceTitle(item.title).trim() || 'Untitled source'
   const why = buildWhyMatched(item)
   const sourceHref = `/sources/${encodeURIComponent(item.id)}`
   const sharedEntities: KGSharedEntity[] = item.kg.present ? item.kg_entities : []

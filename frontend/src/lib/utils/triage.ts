@@ -13,6 +13,7 @@ import type {
   QueueItem,
   TriageStatus,
 } from '@/lib/api/triage'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 /** The status values the KG status filter offers (plus an "all" sentinel). */
 export const TRIAGE_STATUSES: readonly TriageStatus[] = [
@@ -134,7 +135,7 @@ export function tooiCandidateLabel(c: {
  * curator. An untitled source shows its id.
  */
 export function sourceDisplayTitle(source: { id: string; title: string }): string {
-  const title = (source.title || '').replace(/^[0-9a-f]{12}__/, '').trim()
+  const title = displaySourceTitle(source.title).trim()
   return title || source.id
 }
 
