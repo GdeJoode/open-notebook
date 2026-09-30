@@ -109,7 +109,7 @@ export function TransformationEditorDialog({ open, onOpenChange, transformation 
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-4xl w-full max-h-[90vh] overflow-hidden p-0">
+      <DialogContent className="sm:max-w-[min(56rem,100vw-2rem)] w-full max-h-[90vh] overflow-hidden p-0">
         <DialogTitle className="sr-only">
           {isEditing ? 'Edit transformation' : 'Create transformation'}
         </DialogTitle>

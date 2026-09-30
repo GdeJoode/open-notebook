@@ -104,7 +104,7 @@ export function NoteEditorDialog({ open, onOpenChange, notebookId, note }: NoteE
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-3xl w-full max-h-[90vh] overflow-hidden p-0">
+      <DialogContent className="sm:max-w-[min(48rem,100vw-2rem)] w-full max-h-[90vh] overflow-hidden p-0">
         <DialogTitle className="sr-only">
           {isEditing ? 'Edit note' : 'Create note'}
         </DialogTitle>

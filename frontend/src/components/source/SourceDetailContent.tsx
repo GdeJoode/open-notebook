@@ -1162,7 +1162,7 @@ export function SourceDetailContent({
 
       {/* Reprocess Dialog */}
       <Dialog open={showReprocessDialog} onOpenChange={setShowReprocessDialog}>
-        <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-md max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Reprocess Document</DialogTitle>
             <DialogDescription>

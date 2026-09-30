@@ -181,7 +181,7 @@ export function SpeakerProfileFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[min(42rem,100vw-2rem)]">
         <DialogHeader>
           <DialogTitle>
             {isEdit ? 'Edit Speaker Profile' : 'Create Speaker Profile'}

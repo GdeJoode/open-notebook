@@ -38,7 +38,7 @@ export function SourceDialog({ open, onOpenChange, sourceId }: SourceDialogProps
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent className="sm:max-w-[min(64rem,100vw-2rem)] max-h-[90vh] overflow-hidden flex flex-col">
         {/* Accessibility title (hidden visually but read by screen readers) */}
         <DialogTitle className="sr-only">Source Details</DialogTitle>
 

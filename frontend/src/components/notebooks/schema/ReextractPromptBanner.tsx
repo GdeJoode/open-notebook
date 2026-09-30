@@ -215,7 +215,7 @@ export function ReextractPromptBanner({ notebookId }: ReextractPromptBannerProps
 
       <Dialog open={selectOpen} onOpenChange={setSelectOpen}>
         <DialogContent
-          className="max-w-md"
+          className="sm:max-w-md"
           data-testid="reextract-select-dialog"
         >
           <DialogHeader>
