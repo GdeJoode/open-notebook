@@ -18,6 +18,8 @@ import {
 import { Network, ArrowLeft, ArrowRight } from 'lucide-react'
 import type { OntologySummary } from '@/lib/api/ontologies'
 import { OntologyEditor } from '@/components/ontologies/OntologyEditor'
+import { PageBody } from '@/components/layout/PageBody'
+import { PageHeader } from '@/components/layout/PageHeader'
 
 const TABS = ['entity-types', 'relationships', 'edit', 'concepts']
 
@@ -36,24 +38,23 @@ export default function OntologiesPage() {
   const tab = searchParams.get('tab')
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-6">
-        <div className="max-w-6xl">
-          {selectedOntology ? (
-            <OntologyDetail
-              key={searchParams.toString()}
-              name={selectedOntology}
-              initialTab={tab && TABS.includes(tab) ? tab : undefined}
-              initialType={searchParams.get('type') ?? undefined}
-              initialRetypeOpen={searchParams.get('retype') === '1'}
-              onBack={() => setSelectedOntology(null)}
-            />
-          ) : (
-            <OntologyList onSelect={setSelectedOntology} />
-          )}
-        </div>
-      </div>
-    </div>
+    <PageBody>
+      {selectedOntology ? (
+        <OntologyDetail
+          key={searchParams.toString()}
+          name={selectedOntology}
+          initialTab={tab && TABS.includes(tab) ? tab : undefined}
+          initialType={searchParams.get('type') ?? undefined}
+          initialRetypeOpen={searchParams.get('retype') === '1'}
+          onBack={() => setSelectedOntology(null)}
+        />
+      ) : (
+        <>
+          <PageHeader title="Ontologies" />
+          <OntologyList onSelect={setSelectedOntology} />
+        </>
+      )}
+    </PageBody>
   )
 }
 
@@ -74,20 +75,16 @@ function OntologyList({ onSelect }: { onSelect: (name: string) => void }) {
 
   if (!ontologies || ontologies.length === 0) {
     return (
-      <>
-        <h1 className="text-2xl font-bold mb-6">Ontologies</h1>
-        <EmptyState
-          icon={Network}
-          title="No ontologies found"
-          description="No ontology definitions are available yet."
-        />
-      </>
+      <EmptyState
+        icon={Network}
+        title="No ontologies found"
+        description="No ontology definitions are available yet."
+      />
     )
   }
 
   return (
     <>
-      <h1 className="text-2xl font-bold mb-6">Ontologies</h1>
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {ontologies.map((o: OntologySummary) => (
           <Card
@@ -131,32 +128,48 @@ function OntologyDetail({
 }) {
   const { data: ontology, isLoading, error } = useOntology(name)
 
+  const header = (
+    <PageHeader
+      back={
+        <Button variant="ghost" size="sm" className="-ml-2" onClick={onBack}>
+          <ArrowLeft className="h-4 w-4 mr-1" />
+          Back
+        </Button>
+      }
+      title={ontology?.name ?? name}
+      subtitle={ontology?.description}
+    >
+      {ontology && (
+        <div>
+          <Badge variant="outline">{ontology.version}</Badge>
+        </div>
+      )}
+    </PageHeader>
+  )
+
   if (isLoading) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <LoadingSpinner />
-      </div>
+      <>
+        {header}
+        <div className="flex h-64 items-center justify-center">
+          <LoadingSpinner />
+        </div>
+      </>
     )
   }
 
   if (error || !ontology) {
-    return <p className="text-red-500">Failed to load ontology</p>
+    return (
+      <>
+        {header}
+        <p className="text-red-500">Failed to load ontology</p>
+      </>
+    )
   }
 
   return (
     <>
-      <div className="flex items-center gap-3 mb-6">
-        <Button variant="ghost" size="sm" onClick={onBack}>
-          <ArrowLeft className="h-4 w-4 mr-1" />
-          Back
-        </Button>
-        <h1 className="text-2xl font-bold">{ontology.name}</h1>
-        <Badge variant="outline">{ontology.version}</Badge>
-      </div>
-
-      {ontology.description && (
-        <p className="text-muted-foreground mb-6">{ontology.description}</p>
-      )}
+      {header}
 
       <Tabs defaultValue={initialTab ?? 'entity-types'}>
         <TabsList>

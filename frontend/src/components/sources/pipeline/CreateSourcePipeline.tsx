@@ -28,7 +28,6 @@ import {
   type OcrEngineChoice,
   type TableModeChoice,
 } from '../steps/AdvancedIngestionSettings'
-import { PipelineHeader } from './PipelineHeader'
 import { PipelineStepper, type PipelineStep, type StepStatus } from './PipelineStepper'
 import { PipelineFooter, type PipelinePhase } from './PipelineFooter'
 import { PipelineStatus } from './PipelineStatus'
@@ -620,8 +619,7 @@ export function CreateSourcePipeline() {
   const isProcessingTab = activeTab === STEP_PROCESSING
 
   return (
-    <div className="flex flex-col h-full">
-      <PipelineHeader />
+    <div className="flex min-h-0 flex-1 flex-col">
       <PipelineStepper
         steps={steps}
         activeTab={activeTab}
@@ -630,8 +628,8 @@ export function CreateSourcePipeline() {
 
       <div className="flex-1 overflow-hidden flex flex-col">
         <div className={isProcessingTab
-          ? "flex-1 flex flex-col min-h-0 px-6 py-6"
-          : "flex-1 overflow-y-auto max-w-3xl mx-auto w-full px-6 py-6"
+          ? "flex-1 flex flex-col min-h-0 pt-6"
+          : "flex-1 overflow-y-auto pt-6"
         }>
           <form
             onSubmit={handleSubmit(onSubmit)}

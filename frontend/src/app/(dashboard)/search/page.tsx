@@ -13,6 +13,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Search, ChevronDown, AlertCircle, Settings, Save, MessageCircleQuestion } from 'lucide-react'
+import { PageBody } from '@/components/layout/PageBody'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { useSearch } from '@/lib/hooks/use-search'
 import { useAsk } from '@/lib/hooks/use-ask'
 import { useModelDefaults, useModels } from '@/lib/hooks/use-models'
@@ -99,8 +101,8 @@ export default function SearchPage() {
   }
 
   return (
-    <div className="p-4 md:p-6">
-      <h1 className="text-xl md:text-2xl font-bold mb-4 md:mb-6">Ask and Search</h1>
+    <PageBody width="form">
+      <PageHeader title="Ask and Search" />
 
       <Tabs defaultValue="ask" className="w-full space-y-6">
         <div className="space-y-2">
@@ -443,6 +445,6 @@ export default function SearchPage() {
           </Card>
         </TabsContent>
       </Tabs>
-    </div>
+    </PageBody>
   )
 }

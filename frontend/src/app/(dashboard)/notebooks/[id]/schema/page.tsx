@@ -3,6 +3,8 @@
 import { useParams } from 'next/navigation'
 
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
+import { PageBody } from '@/components/layout/PageBody'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { NotebookHeader } from '../../components/NotebookHeader'
 import { SchemaBrowser } from '@/components/notebooks/schema/SchemaBrowser'
 import { CoverageStatsTable } from '@/components/notebooks/schema/CoverageStatsTable'
@@ -46,124 +48,122 @@ export default function NotebookSchemaPage() {
 
   if (notebookLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <LoadingSpinner size="lg" />
-      </div>
+      <PageBody fill>
+        <div className="flex flex-1 items-center justify-center">
+          <LoadingSpinner size="lg" />
+        </div>
+      </PageBody>
     )
   }
 
   if (!notebook) {
     return (
-      <div className="p-6">
-        <h1 className="mb-4 text-2xl font-bold">Notebook Not Found</h1>
-        <p className="text-muted-foreground">
-          The requested notebook could not be found.
-        </p>
-      </div>
+      <PageBody>
+        <PageHeader
+          title="Notebook Not Found"
+          subtitle="The requested notebook could not be found."
+        />
+      </PageBody>
     )
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex-shrink-0 p-6 pb-0">
-        <NotebookHeader notebook={notebook} activeTab="schema" />
-      </div>
+    <PageBody>
+      <NotebookHeader notebook={notebook} activeTab="schema" />
 
-      <div className="flex-1 overflow-y-auto p-6 pt-6">
-        <div
-          className="mx-auto flex max-w-5xl flex-col gap-8"
-          data-testid="schema-tab-content"
-        >
-          <section aria-labelledby="schema-heading">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h2 id="schema-heading" className="text-lg font-semibold">
-                Schema
-              </h2>
-              <div className="flex items-center gap-2">
-                <TtlDownloadButton notebookId={notebookId} />
-                <NetworkxExportMenu notebookId={notebookId} />
-              </div>
+      <div
+        className="flex flex-col gap-8"
+        data-testid="schema-tab-content"
+      >
+        <section aria-labelledby="schema-heading">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 id="schema-heading" className="text-lg font-semibold">
+              Schema
+            </h2>
+            <div className="flex items-center gap-2">
+              <TtlDownloadButton notebookId={notebookId} />
+              <NetworkxExportMenu notebookId={notebookId} />
             </div>
-            {schemaLoading ? (
-              <div
-                role="status"
-                aria-live="polite"
-                className="flex items-center justify-center py-12"
-              >
-                <LoadingSpinner />
-              </div>
-            ) : schemaError || !schema ? (
-              <div
-                role="alert"
-                className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
-              >
-                Failed to load the notebook schema. Reload to retry.
-              </div>
-            ) : (
-              <SchemaBrowser schema={schema} />
-            )}
-          </section>
-
-          <section aria-labelledby="coverage-heading">
-            <h2
-              id="coverage-heading"
-              className="mb-3 text-lg font-semibold"
+          </div>
+          {schemaLoading ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-center justify-center py-12"
             >
-              Source coverage
-            </h2>
-            <CoverageStatsTable notebookId={notebookId} />
-          </section>
-
-          <section aria-labelledby="pending-heading">
-            <h2
-              id="pending-heading"
-              className="mb-3 text-lg font-semibold"
+              <LoadingSpinner />
+            </div>
+          ) : schemaError || !schema ? (
+            <div
+              role="alert"
+              className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
             >
-              Pending extensions
-            </h2>
-            {schema && (
-              <PendingExtensionsPanel
-                extensions={schema.pending_extensions}
-                notebookId={notebookId}
-              />
-            )}
-            {/* WB.2: a gated source waits here. Accepting a proposal does not
-                resume its extraction; this banner does. WB.3: below the
-                proposals, so they come first and Resume is secondary. */}
+              Failed to load the notebook schema. Reload to retry.
+            </div>
+          ) : (
+            <SchemaBrowser schema={schema} />
+          )}
+        </section>
+
+        <section aria-labelledby="coverage-heading">
+          <h2
+            id="coverage-heading"
+            className="mb-3 text-lg font-semibold"
+          >
+            Source coverage
+          </h2>
+          <CoverageStatsTable notebookId={notebookId} />
+        </section>
+
+        <section aria-labelledby="pending-heading">
+          <h2
+            id="pending-heading"
+            className="mb-3 text-lg font-semibold"
+          >
+            Pending extensions
+          </h2>
+          {schema && (
+            <PendingExtensionsPanel
+              extensions={schema.pending_extensions}
+              notebookId={notebookId}
+            />
+          )}
+          {/* WB.2: a gated source waits here. Accepting a proposal does not
+              resume its extraction; this banner does. WB.3: below the
+              proposals, so they come first and Resume is secondary. */}
+          <div className="mt-3">
+            <ExtractionPausedBanner notebookId={notebookId} showSchemaLink={false} />
+          </div>
+          {/* WB.3: The Tray is next only once nothing here waits. */}
+          {schema && schema.pending_extensions.length === 0 && nothingPaused && (
             <div className="mt-3">
-              <ExtractionPausedBanner notebookId={notebookId} showSchemaLink={false} />
+              <NextStepLink href="/" data-testid="schema-next">
+                Next: The Tray
+              </NextStepLink>
             </div>
-            {/* WB.3: The Tray is next only once nothing here waits. */}
-            {schema && schema.pending_extensions.length === 0 && nothingPaused && (
-              <div className="mt-3">
-                <NextStepLink href="/" data-testid="schema-next">
-                  Next: The Tray
-                </NextStepLink>
-              </div>
-            )}
-          </section>
+          )}
+        </section>
 
-          <section aria-labelledby="orphans-heading">
-            <h2
-              id="orphans-heading"
-              className="mb-3 text-lg font-semibold"
-            >
-              Orphans
-            </h2>
-            <OrphansDashboard notebookId={notebookId} />
-          </section>
+        <section aria-labelledby="orphans-heading">
+          <h2
+            id="orphans-heading"
+            className="mb-3 text-lg font-semibold"
+          >
+            Orphans
+          </h2>
+          <OrphansDashboard notebookId={notebookId} />
+        </section>
 
-          <section aria-labelledby="audit-heading">
-            <h2 id="audit-heading" className="mb-3 text-lg font-semibold">
-              Quality audit
-            </h2>
-            <AuditWidget notebookId={notebookId} />
-            <div className="mt-3">
-              <LibrarianSettings notebookId={notebookId} />
-            </div>
-          </section>
-        </div>
+        <section aria-labelledby="audit-heading">
+          <h2 id="audit-heading" className="mb-3 text-lg font-semibold">
+            Quality audit
+          </h2>
+          <AuditWidget notebookId={notebookId} />
+          <div className="mt-3">
+            <LibrarianSettings notebookId={notebookId} />
+          </div>
+        </section>
       </div>
-    </div>
+    </PageBody>
   )
 }

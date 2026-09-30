@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Group, Panel, Separator, type Layout } from 'react-resizable-panels'
-import { ArrowLeft } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { PdfChunkViewer } from '@/components/source/PdfChunkViewer'
@@ -26,7 +24,6 @@ import {
 
 interface DocumentInspectWorkspaceProps {
   sourceId: string
-  onBack?: () => void
 }
 
 /**
@@ -41,7 +38,6 @@ interface DocumentInspectWorkspaceProps {
  */
 export function DocumentInspectWorkspace({
   sourceId,
-  onBack,
 }: DocumentInspectWorkspaceProps) {
   const { data: chunksData, isLoading } = useSourceChunks(sourceId)
   const { data: source } = useSource(sourceId)
@@ -110,18 +106,7 @@ export function DocumentInspectWorkspace({
   )
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex flex-shrink-0 items-center gap-2 border-b px-4 py-2">
-        {onBack && (
-          <Button variant="ghost" size="sm" onClick={onBack}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back
-          </Button>
-        )}
-        <h1 className="text-sm font-semibold">Inspect document</h1>
-      </div>
-
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border">
       {isLoading ? (
         <div className="flex flex-1 items-center justify-center">
           <LoadingSpinner />
