@@ -174,7 +174,7 @@ export function LoginForm() {
             {configInfo && (
               <div className="text-xs text-center text-muted-foreground pt-2 border-t">
                 <div>Version {configInfo.version}</div>
-                <div className="font-mono text-[10px]">{configInfo.apiUrl}</div>
+                <div className="font-mono text-xs">{configInfo.apiUrl}</div>
               </div>
             )}
           </form>

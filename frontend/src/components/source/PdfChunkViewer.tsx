@@ -727,7 +727,7 @@ export function PdfChunkViewer({
                     {ELEMENT_TYPES.map(t => <SelectItem key={t} value={t} className="text-xs">{t}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                <p className="text-[10px] text-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                   {drawnRect ? `Bbox: ${drawnRect.x.toFixed(0)},${drawnRect.y.toFixed(0)} ${drawnRect.w.toFixed(0)}x${drawnRect.h.toFixed(0)}` : 'Draw a bounding box on the PDF (optional)'}
                 </p>
                 <div className="flex gap-1.5">
@@ -782,7 +782,7 @@ export function PdfChunkViewer({
                             onClick={() => { setDrawingMode(!drawingMode); if (!drawingMode) setDrawnRect(null) }}>
                             <Square className="h-3 w-3" /> {drawingMode ? 'Drawing...' : 'Edit bbox'}
                           </Button>
-                          {drawnRect && <span className="text-[10px] text-muted-foreground">New bbox set</span>}
+                          {drawnRect && <span className="text-xs text-muted-foreground">New bbox set</span>}
                         </div>
                         <div className="flex gap-1.5">
                           <Button type="button" size="sm" className="h-7 flex-1 gap-1 text-xs" onClick={() => saveEdit(chunk)} disabled={updateChunk.isPending}>
@@ -798,9 +798,9 @@ export function PdfChunkViewer({
                       <>
                         <div className="flex items-center gap-1.5 mb-1">
                           <span className="inline-block w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">{chunk.element_type}</Badge>
+                          <Badge variant="outline" className="text-xs px-1.5 py-0">{chunk.element_type}</Badge>
                           {chunk.chapter && (
-                            <span className="text-[10px] text-muted-foreground truncate ml-auto max-w-[80px]" title={chunk.chapter}>{chunk.chapter}</span>
+                            <span className="text-xs text-muted-foreground truncate ml-auto max-w-[80px]" title={chunk.chapter}>{chunk.chapter}</span>
                           )}
                           {/* Action buttons — visible when selected */}
                           {isSelected && (

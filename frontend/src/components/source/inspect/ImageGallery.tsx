@@ -125,7 +125,7 @@ export function ImageGallery({ sourceId }: ImageGalleryProps) {
                   <LoadingSpinner />
                 </div>
               )}
-              <figcaption className="truncate px-2 py-1 text-[10px] text-muted-foreground mono-num">
+              <figcaption className="truncate px-2 py-1 text-xs text-muted-foreground mono-num">
                 {filename}
               </figcaption>
             </figure>

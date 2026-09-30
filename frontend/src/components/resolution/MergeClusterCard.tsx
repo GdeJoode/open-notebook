@@ -67,7 +67,7 @@ export function MergeClusterCard({
               <span className="font-medium truncate">
                 {cluster.new_canonical}
               </span>
-              <Badge variant="secondary" className="text-[10px] shrink-0">
+              <Badge variant="secondary" className="text-xs shrink-0">
                 {cluster.entity_type}
               </Badge>
             </div>
@@ -80,7 +80,7 @@ export function MergeClusterCard({
       </CardHeader>
       <CardContent className="space-y-3">
         <div>
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
             Members (click to pick the surviving entity)
           </p>
           <div className="flex flex-wrap gap-1.5">

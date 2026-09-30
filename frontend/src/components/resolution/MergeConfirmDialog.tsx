@@ -78,7 +78,7 @@ export function MergeConfirmDialog({
                     <Badge
                       key={`${label}:${index}`}
                       variant="outline"
-                      className="gap-1 text-[10px]"
+                      className="gap-1 text-xs"
                     >
                       <X className="h-2.5 w-2.5" aria-hidden="true" />
                       {label}

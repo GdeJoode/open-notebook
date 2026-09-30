@@ -185,7 +185,7 @@ export function AuditWidget({ notebookId }: AuditWidgetProps) {
                       {DEEP_CHECK_IDS.has(f.check_id) && (
                         <Badge
                           variant="outline"
-                          className="ml-1.5 align-middle text-[10px] font-normal"
+                          className="ml-1.5 align-middle text-xs font-normal"
                           data-testid="audit-llm-badge"
                         >
                           LLM

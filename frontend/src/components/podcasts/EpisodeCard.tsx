@@ -330,7 +330,7 @@ export function EpisodeCard({ episode, onDelete, deleting }: EpisodeCardProps) {
                                 <div className="flex items-center justify-between gap-2">
                                   <p className="font-semibold text-foreground">{segment.name ?? `Segment ${index + 1}`}</p>
                                   {segment.size ? (
-                                    <Badge variant="outline" className="text-[10px] uppercase tracking-wide">{segment.size}</Badge>
+                                    <Badge variant="outline" className="text-xs uppercase tracking-wide">{segment.size}</Badge>
                                   ) : null}
                                 </div>
                                 <p className="text-muted-foreground whitespace-pre-wrap">{segment.description ?? 'No description provided.'}</p>

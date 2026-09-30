@@ -278,10 +278,10 @@ export function EntityGraphView({ entities, relations, mergeGroups }: EntityGrap
           <div className="flex flex-col gap-1 pt-1 border-t">
             {hasCommunity && (
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px]">Color:</span>
+                <span className="text-xs">Color:</span>
                 <button
                   onClick={() => setColorBy(colorBy === 'type' ? 'community' : 'type')}
-                  className="text-[10px] underline hover:text-foreground"
+                  className="text-xs underline hover:text-foreground"
                 >
                   {colorBy === 'type' ? 'by type' : 'by community'}
                 </button>
@@ -289,10 +289,10 @@ export function EntityGraphView({ entities, relations, mergeGroups }: EntityGrap
             )}
             {hasPagerank && (
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px]">Size:</span>
+                <span className="text-xs">Size:</span>
                 <button
                   onClick={() => setSizeBy(sizeBy === 'confidence' ? 'pagerank' : 'confidence')}
-                  className="text-[10px] underline hover:text-foreground"
+                  className="text-xs underline hover:text-foreground"
                 >
                   {sizeBy === 'confidence' ? 'by confidence' : 'by PageRank'}
                 </button>

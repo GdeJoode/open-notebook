@@ -244,7 +244,7 @@ export function StructureGraphView({
             <div className="text-muted-foreground">Page {selected.page + 1}</div>
           )}
           {selected.hasChunk && (
-            <div className="text-[10px] text-primary">
+            <div className="text-xs text-primary">
               Highlighted in the PDF pane
             </div>
           )}
