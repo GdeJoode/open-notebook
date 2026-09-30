@@ -5,10 +5,10 @@
  * display label second.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 
-const hooks = vi.hoisted(() => ({ useEntities: vi.fn() }))
+const hooks = vi.hoisted(() => ({ useEntities: vi.fn(), getEntity: vi.fn() }))
 vi.mock('next/link', () => ({
   default: ({ children, href, ...rest }: { children: ReactNode; href: string }) => (
     <a href={href} {...rest}>{children}</a>
@@ -19,6 +19,9 @@ vi.mock('@/lib/hooks/use-knowledge-graph', () => ({
   useEntities: hooks.useEntities,
   useEntityTypes: () => ({ data: [] }),
   useSearchEntities: () => ({ data: undefined }),
+}))
+vi.mock('@/lib/api/knowledge-graph', () => ({
+  knowledgeGraphApi: { getEntity: hooks.getEntity },
 }))
 vi.mock('@/lib/hooks/use-triage', () => ({
   useSetEntityOverride: () => ({ mutate: vi.fn(), isPending: false }),
@@ -31,6 +34,7 @@ globalThis.ResizeObserver ??= class {
   disconnect() {}
 } as unknown as typeof ResizeObserver
 
+import { installViewport, removeViewport } from '@/lib/hooks/__tests__/viewport'
 import KnowledgeGraphPage from '../page'
 
 const ROWS = [
@@ -68,5 +72,57 @@ describe('Knowledge Graph table defaults', () => {
     // A label that only restates the canonical type is not repeated.
     const b = screen.getByTestId('entity-row-entity:b')
     expect(b.querySelector('[data-testid="entity-type-label"]')).toBeNull()
+  })
+})
+
+describe('Knowledge Graph by width (WB.5)', () => {
+  afterEach(() => removeViewport())
+  const DETAIL = { ...ROWS[0], relations: [], source_ids: ['source:s1'] }
+
+  it('below md: a card per entity that opens its details in a sheet', async () => {
+    installViewport(390)
+    hooks.useEntities.mockReturnValue({ data: { items: ROWS, total: 2 }, isLoading: false })
+    hooks.getEntity.mockResolvedValue(DETAIL)
+    render(<KnowledgeGraphPage />)
+    expect(screen.queryByRole('table')).toBeNull()
+    const card = screen.getByTestId('entity-card-entity:a')
+    expect(card.tagName).toBe('BUTTON')
+    expect(card.querySelector('[data-testid="entity-type-canonical"]')?.textContent)
+      .toBe('administrative_area')
+    expect(card.textContent).toContain('Degree 9')
+    expect(card.textContent).toContain('Docs 3')
+    // The sorts are there too.
+    fireEvent.click(screen.getByTestId('kg-sort-name'))
+    expect(hooks.useEntities.mock.calls.at(-1)?.[0]).toMatchObject({ sort: 'name' })
+
+    fireEvent.click(card)
+    const sheet = await screen.findByRole('dialog')
+    expect(within(sheet).getByText('Regio Zwolle')).toBeTruthy()
+    expect(within(sheet).getByTestId('triage-panel')).toBeTruthy()
+    expect(screen.queryByTestId('entity-detail-panel')).toBeNull()
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('from md the table; below lg the details are still a sheet', async () => {
+    installViewport(768)
+    hooks.useEntities.mockReturnValue({ data: { items: ROWS, total: 2 }, isLoading: false })
+    hooks.getEntity.mockResolvedValue(DETAIL)
+    render(<KnowledgeGraphPage />)
+    fireEvent.click(screen.getByTestId('entity-row-entity:a'))
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+  })
+
+  it('from lg the details are a side panel, not a modal', async () => {
+    installViewport(1024)
+    hooks.useEntities.mockReturnValue({ data: { items: ROWS, total: 2 }, isLoading: false })
+    hooks.getEntity.mockResolvedValue(DETAIL)
+    render(<KnowledgeGraphPage />)
+    fireEvent.click(screen.getByTestId('entity-row-entity:a'))
+    const panel = await screen.findByTestId('entity-detail-panel')
+    expect(within(panel).getByText('Regio Zwolle')).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(within(panel).getByRole('button', { name: 'Close details' }))
+    expect(screen.queryByTestId('entity-detail-panel')).toBeNull()
   })
 })

@@ -32,6 +32,8 @@ import { EntityTypeLabel } from '@/components/knowledge-graph/EntityTypeLabel'
 import { ExternalIdBadges } from '@/components/resolution/ExternalIdBadges'
 import { Switch } from '@/components/ui/switch'
 import { useSetEntityOverride } from '@/lib/hooks/use-triage'
+import { useMinWidth } from '@/lib/hooks/use-media-query'
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 
 const SigmaGraphView = dynamic(
   () => import('./components/SigmaGraphView'),
@@ -58,6 +60,9 @@ export default function KnowledgeGraphPage() {
   // back here on mount.
   const [confidenceThreshold, setConfidenceThreshold] = useState(0)
   const pageSize = 50
+  // WB.5: cards below md; the detail panel is a sheet below lg.
+  const isMd = useMinWidth('md')
+  const isLg = useMinWidth('lg')
 
   const { data: entityTypes } = useEntityTypes()
   const { data: paginatedEntities, isLoading } = useEntities({
@@ -94,6 +99,229 @@ export default function KnowledgeGraphPage() {
   const totalEntities = paginatedEntities?.total ?? 0
   const totalPages = Math.ceil(totalEntities / pageSize)
 
+  const nameSort = (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="-ml-2 h-8 px-2"
+      onClick={() => { setSort('name'); setPage(0) }}
+      aria-pressed={isMd ? undefined : sort === 'name'}
+      data-testid="kg-sort-name"
+    >
+      Name
+      <ArrowUpDown className={`ml-2 h-3 w-3 ${sort === 'name' ? 'opacity-100' : 'opacity-30'}`} />
+    </Button>
+  )
+  const degreeSort = (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="-ml-2 h-8 px-2"
+      onClick={() => { setSort('degree'); setPage(0) }}
+      aria-pressed={isMd ? undefined : sort === 'degree'}
+      data-testid="kg-sort-degree"
+    >
+      Degree
+      <ArrowUpDown className={`ml-2 h-3 w-3 ${sort === 'degree' ? 'opacity-100' : 'opacity-30'}`} />
+    </Button>
+  )
+
+  const closeDetail = () => setSelectedEntity(null)
+
+  // The panel's body, shown in the aside (lg and up) or the sheet (below).
+  const detailBody = (selectedEntity: EntityDetail) => (
+    <>
+      <div className="mb-4">
+        <EntityTypeLabel
+          canonical={selectedEntity.entity_type}
+          display={selectedEntity.primary_type}
+        />
+      </div>
+
+      {/* Triage: status + degree/doc-count + manual_override toggle (Q.5) */}
+      {(() => {
+        const detail = selectedEntity as Record<string, unknown>
+        const status = detail.status as string | undefined
+        const manualOverride = Boolean(detail.manual_override)
+        const degree = detail.structural_degree as number | undefined
+        const docCount = detail.doc_count as number | undefined
+        if (!status && degree === undefined && docCount === undefined) {
+          return null
+        }
+        return (
+          <div className="mb-4 rounded-md border p-3 space-y-3" data-testid="triage-panel">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                {status && (
+                  <StatusBadge status={status} manualOverride={manualOverride} />
+                )}
+              </div>
+              <div className="flex flex-col gap-3 text-xs text-muted-foreground">
+                {typeof degree === 'number' && (
+                  <span>Degree: {degree}</span>
+                )}
+                {typeof docCount === 'number' && (
+                  <span>Docs: {docCount}</span>
+                )}
+              </div>
+            </div>
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span id={`override-label-${selectedEntity.id}`}>
+                Pin status (manual override)
+              </span>
+              <Switch
+                checked={manualOverride}
+                disabled={setOverride.isPending}
+                aria-labelledby={`override-label-${selectedEntity.id}`}
+                data-testid="override-toggle"
+                onCheckedChange={(checked) => {
+                  setOverride.mutate(
+                    {
+                      entityId: selectedEntity.id,
+                      body: checked
+                        ? {
+                            manual_override: true,
+                            status:
+                              status === 'active' ? 'active' : 'reference',
+                          }
+                        : { manual_override: false },
+                    },
+                    {
+                      onSuccess: () => {
+                        // Optimistically reflect the toggle in the open panel.
+                        setSelectedEntity((prev) =>
+                          prev
+                            ? ({
+                                ...prev,
+                                manual_override: checked,
+                              } as EntityDetail)
+                            : prev,
+                        )
+                      },
+                    },
+                  )
+                }}
+              />
+            </label>
+          </div>
+        )
+      })()}
+
+      {/* External IDs (TOOI/DOI) from K.4 vocabulary reconciliation */}
+      {(() => {
+        const externalIds = (selectedEntity as Record<string, unknown>)
+          .external_ids as string[] | undefined
+        return <ExternalIdBadges externalIds={externalIds} className="mb-3" />
+      })()}
+
+      {/* Alias count — full management on the resolution hub */}
+      {(() => {
+        const aliases = (selectedEntity as Record<string, unknown>)
+          .aliases as string[] | undefined
+        if (!aliases || aliases.length === 0) return null
+        return (
+          <p className="text-xs text-muted-foreground mb-3">
+            {aliases.length} alias{aliases.length === 1 ? '' : 'es'}:{' '}
+            {aliases.slice(0, 3).join(', ')}
+            {aliases.length > 3 ? '…' : ''}
+          </p>
+        )
+      })()}
+
+      {/* Properties: weight, confidence */}
+      <div className="mt-3 flex gap-3 text-xs text-muted-foreground">
+        {selectedEntity.weight > 0 && (
+          <span>Weight: {selectedEntity.weight}</span>
+        )}
+        {typeof (selectedEntity as Record<string, unknown>).confidence === 'number' && (
+          <span>Confidence: {((selectedEntity as Record<string, unknown>).confidence as number * 100).toFixed(0)}%</span>
+        )}
+      </div>
+
+      {/* Provenance: which sources contributed this entity */}
+      {Array.isArray((selectedEntity as Record<string, unknown>).source_ids) &&
+        ((selectedEntity as Record<string, unknown>).source_ids as string[]).length > 0 && (
+        <div className="mt-4">
+          <h3 className="text-sm font-medium mb-2">Sources</h3>
+          <div className="space-y-1">
+            {((selectedEntity as Record<string, unknown>).source_ids as string[]).map((sid) => (
+              <a
+                key={sid}
+                href={`/sources/${sid}`}
+                className="block text-xs text-primary hover:underline truncate"
+              >
+                {sid}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Merge history: surface forms that were merged into this entity */}
+      {(() => {
+        const props = (selectedEntity as Record<string, unknown>).properties as Record<string, unknown> | undefined
+        const mergedFrom = props?.merged_from as string[] | undefined
+        if (!mergedFrom || mergedFrom.length === 0) return null
+        return (
+          <div className="mt-4">
+            <h3 className="text-sm font-medium mb-2">Merged From</h3>
+            <div className="flex flex-wrap gap-1">
+              {mergedFrom.map((variant) => (
+                <Badge key={variant} variant="outline" className="text-xs">
+                  {variant}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )
+      })()}
+
+      {selectedEntity.relations && selectedEntity.relations.length > 0 && (
+        <div className="mt-4">
+          <h3 className="text-sm font-medium mb-2">
+            Relations ({selectedEntity.relations.length})
+          </h3>
+          <div className="space-y-2">
+            {selectedEntity.relations.map((rel) => (
+              <Card
+                key={rel.id}
+                data-testid={`relation-row-${rel.id}`}
+                className="p-3"
+              >
+                <div className="text-xs text-muted-foreground mb-1">
+                  {rel.relation_type}
+                </div>
+                <div className="text-sm">
+                  {rel.source === selectedEntity.id ? (
+                    <span
+                      className="text-primary cursor-pointer hover:underline"
+                      onClick={() => handleEntityClick(rel.target)}
+                    >
+                      {rel.target}
+                    </span>
+                  ) : (
+                    <span
+                      className="text-primary cursor-pointer hover:underline"
+                      onClick={() => handleEntityClick(rel.source)}
+                    >
+                      {rel.source}
+                    </span>
+                  )}
+                </div>
+                {typeof rel.confidence === 'number' && (
+                  <div className="mt-2">
+                    <ConfidenceBar value={rel.confidence} />
+                  </div>
+                )}
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  )
+
+
   return (
     <div className="flex min-h-0 flex-1">
       <PageBody fill>
@@ -117,8 +345,8 @@ export default function KnowledgeGraphPage() {
           }
         />
 
-        <div className="flex items-center gap-3">
-          <div className="relative flex-1 max-w-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative min-w-56 flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search entities..."
@@ -132,6 +360,7 @@ export default function KnowledgeGraphPage() {
                 size="sm"
                 className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 p-0"
                 onClick={() => setSearchQuery('')}
+                aria-label="Clear search"
               >
                 <X className="h-3 w-3" />
               </Button>
@@ -193,6 +422,7 @@ export default function KnowledgeGraphPage() {
                 />
               ) : (
                 <>
+                  {isMd ? (
                   <div className="border rounded-md overflow-auto">
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 bg-background">
@@ -201,16 +431,7 @@ export default function KnowledgeGraphPage() {
                             className="text-left p-3 font-medium"
                             aria-sort={sort === 'name' ? 'ascending' : undefined}
                           >
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="-ml-2 h-8 px-2"
-                              onClick={() => { setSort('name'); setPage(0) }}
-                              data-testid="kg-sort-name"
-                            >
-                              Name
-                              <ArrowUpDown className={`ml-2 h-3 w-3 ${sort === 'name' ? 'opacity-100' : 'opacity-30'}`} />
-                            </Button>
+                            {nameSort}
                           </th>
                           <th className="text-left p-3 font-medium">Type</th>
                           <th className="text-left p-3 font-medium">Status</th>
@@ -218,16 +439,7 @@ export default function KnowledgeGraphPage() {
                             className="text-left p-3 font-medium"
                             aria-sort={sort === 'degree' ? 'descending' : undefined}
                           >
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="-ml-2 h-8 px-2"
-                              onClick={() => { setSort('degree'); setPage(0) }}
-                              data-testid="kg-sort-degree"
-                            >
-                              Degree
-                              <ArrowUpDown className={`ml-2 h-3 w-3 ${sort === 'degree' ? 'opacity-100' : 'opacity-30'}`} />
-                            </Button>
+                            {degreeSort}
                           </th>
                           <th className="text-left p-3 font-medium">Docs</th>
                           <th className="text-left p-3 font-medium">Confidence</th>
@@ -278,6 +490,52 @@ export default function KnowledgeGraphPage() {
                       </tbody>
                     </table>
                   </div>
+                  ) : (
+                  <div>
+                    <div className="mb-2 flex flex-wrap items-center gap-2 pl-2">
+                      <span className="text-sm text-muted-foreground">Sort by</span>
+                      {nameSort}
+                      {degreeSort}
+                    </div>
+                    <ul className="space-y-2" aria-label="Entities">
+                      {displayEntities.map((entity: Entity) => (
+                        <li key={entity.id}>
+                          {/* A button: the card opens the details as a row does,
+                              and by keyboard too. */}
+                          <button
+                            type="button"
+                            data-testid={`entity-card-${entity.id}`}
+                            data-entity-name={entity.name}
+                            className="w-full space-y-2 rounded-md border p-3 text-left text-sm transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            onClick={() => handleEntityClick(entity.id)}
+                          >
+                            <span className="block font-medium break-words">{entity.name}</span>
+                            <span className="flex flex-wrap items-center gap-2">
+                              <EntityTypeLabel canonical={entity.entity_type} display={entity.primary_type} />
+                              {entity.status && (
+                                <StatusBadge
+                                  status={entity.status}
+                                  manualOverride={entity.manual_override}
+                                />
+                              )}
+                            </span>
+                            <span className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground tabular-nums">
+                              <span>
+                                Degree {typeof entity.structural_degree === 'number' ? entity.structural_degree : '—'}
+                              </span>
+                              <span>
+                                Docs {typeof entity.doc_count === 'number' ? entity.doc_count : '—'}
+                              </span>
+                              {typeof entity.confidence === 'number' && (
+                                <ConfidenceBar value={entity.confidence} />
+                              )}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  )}
 
                   {!searchQuery && totalPages > 1 && (
                     <div className="flex items-center justify-between mt-4">
@@ -290,6 +548,7 @@ export default function KnowledgeGraphPage() {
                           size="sm"
                           disabled={page === 0}
                           onClick={() => setPage((p) => p - 1)}
+                          aria-label="Previous page"
                         >
                           <ChevronLeft className="h-4 w-4" />
                         </Button>
@@ -298,6 +557,7 @@ export default function KnowledgeGraphPage() {
                           size="sm"
                           disabled={page >= totalPages - 1}
                           onClick={() => setPage((p) => p + 1)}
+                          aria-label="Next page"
                         >
                           <ChevronRight className="h-4 w-4" />
                         </Button>
@@ -323,216 +583,61 @@ export default function KnowledgeGraphPage() {
         </div>
       </PageBody>
 
-      {/* Entity Detail Side Panel */}
-      {selectedEntity && (
-        <div className="w-96 border-l overflow-y-auto bg-background">
-          <div className="p-4">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold truncate">{selectedEntity.name}</h2>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setSelectedEntity(null)}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-
-            <div className="mb-4">
-              <EntityTypeLabel
-                canonical={selectedEntity.entity_type}
-                display={selectedEntity.primary_type}
-              />
-            </div>
-
-            {/* Triage: status + degree/doc-count + manual_override toggle (Q.5) */}
-            {(() => {
-              const detail = selectedEntity as Record<string, unknown>
-              const status = detail.status as string | undefined
-              const manualOverride = Boolean(detail.manual_override)
-              const degree = detail.structural_degree as number | undefined
-              const docCount = detail.doc_count as number | undefined
-              if (!status && degree === undefined && docCount === undefined) {
-                return null
-              }
-              return (
-                <div className="mb-4 rounded-md border p-3 space-y-3" data-testid="triage-panel">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      {status && (
-                        <StatusBadge status={status} manualOverride={manualOverride} />
-                      )}
-                    </div>
-                    <div className="flex flex-col gap-3 text-xs text-muted-foreground">
-                      {typeof degree === 'number' && (
-                        <span>Degree: {degree}</span>
-                      )}
-                      {typeof docCount === 'number' && (
-                        <span>Docs: {docCount}</span>
-                      )}
-                    </div>
-                  </div>
-                  <label className="flex items-center justify-between gap-3 text-sm">
-                    <span id={`override-label-${selectedEntity.id}`}>
-                      Pin status (manual override)
-                    </span>
-                    <Switch
-                      checked={manualOverride}
-                      disabled={setOverride.isPending}
-                      aria-labelledby={`override-label-${selectedEntity.id}`}
-                      data-testid="override-toggle"
-                      onCheckedChange={(checked) => {
-                        setOverride.mutate(
-                          {
-                            entityId: selectedEntity.id,
-                            body: checked
-                              ? {
-                                  manual_override: true,
-                                  status:
-                                    status === 'active' ? 'active' : 'reference',
-                                }
-                              : { manual_override: false },
-                          },
-                          {
-                            onSuccess: () => {
-                              // Optimistically reflect the toggle in the open panel.
-                              setSelectedEntity((prev) =>
-                                prev
-                                  ? ({
-                                      ...prev,
-                                      manual_override: checked,
-                                    } as EntityDetail)
-                                  : prev,
-                              )
-                            },
-                          },
-                        )
-                      }}
-                    />
-                  </label>
+      {/* Entity details: a side panel from lg up, a sheet below it (WB.5). */}
+      {isLg ? (
+        <>
+          {selectedEntity && (
+            <aside
+              className="w-96 shrink-0 border-l overflow-y-auto bg-background"
+              aria-label="Entity details"
+              data-testid="entity-detail-panel"
+            >
+              <div className="p-4">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold truncate">{selectedEntity.name}</h2>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={closeDetail}
+                    aria-label="Close details"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
                 </div>
-              )
-            })()}
+                {detailBody(selectedEntity)}
+              </div>
+            </aside>
+          )}
 
-            {/* External IDs (TOOI/DOI) from K.4 vocabulary reconciliation */}
-            {(() => {
-              const externalIds = (selectedEntity as Record<string, unknown>)
-                .external_ids as string[] | undefined
-              return <ExternalIdBadges externalIds={externalIds} className="mb-3" />
-            })()}
-
-            {/* Alias count — full management on the resolution hub */}
-            {(() => {
-              const aliases = (selectedEntity as Record<string, unknown>)
-                .aliases as string[] | undefined
-              if (!aliases || aliases.length === 0) return null
-              return (
-                <p className="text-xs text-muted-foreground mb-3">
-                  {aliases.length} alias{aliases.length === 1 ? '' : 'es'}:{' '}
-                  {aliases.slice(0, 3).join(', ')}
-                  {aliases.length > 3 ? '…' : ''}
-                </p>
-              )
-            })()}
-
-            {/* Properties: weight, confidence */}
-            <div className="mt-3 flex gap-3 text-xs text-muted-foreground">
-              {selectedEntity.weight > 0 && (
-                <span>Weight: {selectedEntity.weight}</span>
-              )}
-              {typeof (selectedEntity as Record<string, unknown>).confidence === 'number' && (
-                <span>Confidence: {((selectedEntity as Record<string, unknown>).confidence as number * 100).toFixed(0)}%</span>
-              )}
+          {loadingDetail && (
+            <div className="w-96 shrink-0 border-l flex items-center justify-center">
+              <LoadingSpinner />
             </div>
-
-            {/* Provenance: which sources contributed this entity */}
-            {Array.isArray((selectedEntity as Record<string, unknown>).source_ids) &&
-              ((selectedEntity as Record<string, unknown>).source_ids as string[]).length > 0 && (
-              <div className="mt-4">
-                <h3 className="text-sm font-medium mb-2">Sources</h3>
-                <div className="space-y-1">
-                  {((selectedEntity as Record<string, unknown>).source_ids as string[]).map((sid) => (
-                    <a
-                      key={sid}
-                      href={`/sources/${sid}`}
-                      className="block text-xs text-primary hover:underline truncate"
-                    >
-                      {sid}
-                    </a>
-                  ))}
-                </div>
+          )}
+        </>
+      ) : (
+        <Sheet
+          open={!!selectedEntity || loadingDetail}
+          onOpenChange={(open) => { if (!open) closeDetail() }}
+        >
+          <SheetContent
+            side="right"
+            className="w-full gap-0 overflow-y-auto p-4 sm:max-w-md"
+            data-testid="entity-detail-sheet"
+          >
+            <SheetTitle className="mb-4 pr-10 text-lg break-words">
+              {selectedEntity?.name ?? 'Loading entity'}
+            </SheetTitle>
+            <SheetDescription className="sr-only">Entity details</SheetDescription>
+            {selectedEntity ? (
+              detailBody(selectedEntity)
+            ) : (
+              <div className="flex flex-1 items-center justify-center">
+                <LoadingSpinner />
               </div>
             )}
-
-            {/* Merge history: surface forms that were merged into this entity */}
-            {(() => {
-              const props = (selectedEntity as Record<string, unknown>).properties as Record<string, unknown> | undefined
-              const mergedFrom = props?.merged_from as string[] | undefined
-              if (!mergedFrom || mergedFrom.length === 0) return null
-              return (
-                <div className="mt-4">
-                  <h3 className="text-sm font-medium mb-2">Merged From</h3>
-                  <div className="flex flex-wrap gap-1">
-                    {mergedFrom.map((variant) => (
-                      <Badge key={variant} variant="outline" className="text-xs">
-                        {variant}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              )
-            })()}
-
-            {selectedEntity.relations && selectedEntity.relations.length > 0 && (
-              <div className="mt-4">
-                <h3 className="text-sm font-medium mb-2">
-                  Relations ({selectedEntity.relations.length})
-                </h3>
-                <div className="space-y-2">
-                  {selectedEntity.relations.map((rel) => (
-                    <Card
-                      key={rel.id}
-                      data-testid={`relation-row-${rel.id}`}
-                      className="p-3"
-                    >
-                      <div className="text-xs text-muted-foreground mb-1">
-                        {rel.relation_type}
-                      </div>
-                      <div className="text-sm">
-                        {rel.source === selectedEntity.id ? (
-                          <span
-                            className="text-primary cursor-pointer hover:underline"
-                            onClick={() => handleEntityClick(rel.target)}
-                          >
-                            {rel.target}
-                          </span>
-                        ) : (
-                          <span
-                            className="text-primary cursor-pointer hover:underline"
-                            onClick={() => handleEntityClick(rel.source)}
-                          >
-                            {rel.source}
-                          </span>
-                        )}
-                      </div>
-                      {typeof rel.confidence === 'number' && (
-                        <div className="mt-2">
-                          <ConfidenceBar value={rel.confidence} />
-                        </div>
-                      )}
-                    </Card>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {loadingDetail && (
-        <div className="w-96 border-l flex items-center justify-center">
-          <LoadingSpinner />
-        </div>
+          </SheetContent>
+        </Sheet>
       )}
     </div>
   )
