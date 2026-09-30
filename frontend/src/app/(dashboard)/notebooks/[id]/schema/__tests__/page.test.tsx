@@ -32,7 +32,12 @@ vi.mock('@/lib/hooks/use-notebook-schema', () => ({
   }),
   usePausedExtraction: () => state.paused,
 }))
-const stub = vi.hoisted(() => (id: string) => () => <div data-testid={id} />)
+const stub = vi.hoisted(() => (id: string) => {
+  function Stub() {
+    return <div data-testid={id} />
+  }
+  return Stub
+})
 vi.mock('../../../components/NotebookHeader', () => ({ NotebookHeader: stub('header') }))
 vi.mock('@/components/notebooks/schema/SchemaBrowser', () => ({ SchemaBrowser: stub('browser') }))
 vi.mock('@/components/notebooks/schema/CoverageStatsTable', () => ({ CoverageStatsTable: stub('coverage') }))

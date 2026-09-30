@@ -80,8 +80,12 @@ function scoped(notebookId: string | null) {
   return notebookId ? ROWS.filter((r) => r.notebook === notebookId) : ROWS
 }
 
-const strip = ({ notebook: _notebook, ...row }: FakeRow & { notebook: string | null }): FakeRow =>
-  row
+/** The list row as the API sends it (the notebook is not a field of it). */
+function strip(row: FakeRow & { notebook: string | null }): FakeRow {
+  const { notebook, ...listed } = row
+  void notebook
+  return listed
+}
 
 /** `GET /api/sources/?…` for these query parameters. */
 export function fakeList(params: URLSearchParams): FakeRow[] {
