@@ -1,8 +1,8 @@
 'use client'
 
 import { SettingsForm } from './components/SettingsForm'
-import { SystemInfo } from '../advanced/components/SystemInfo'
-import { RebuildEmbeddings } from '../advanced/components/RebuildEmbeddings'
+import { SystemInfo } from '@/components/settings/SystemInfo'
+import { RebuildEmbeddings } from '@/components/settings/RebuildEmbeddings'
 import { VaultSync } from '@/components/settings/VaultSync'
 import { ZoteroSettings } from '@/components/settings/ZoteroSettings'
 import { ApiKeys } from '@/components/settings/ApiKeys'
@@ -11,9 +11,15 @@ import { useSettings } from '@/lib/hooks/use-settings'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RefreshCw } from 'lucide-react'
+import { useSearchParams } from 'next/navigation'
+
+const TABS = ['general', 'vault', 'zotero', 'api-keys', 'watcher', 'advanced']
 
 export default function SettingsPage() {
   const { refetch } = useSettings()
+  // `?tab=advanced`: the embedding-model change dialog sends the owner to
+  // Rebuild Embeddings.
+  const tab = useSearchParams().get('tab')
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -25,7 +31,7 @@ export default function SettingsPage() {
               <RefreshCw className="h-4 w-4" />
             </Button>
           </div>
-          <Tabs defaultValue="general">
+          <Tabs defaultValue={tab && TABS.includes(tab) ? tab : 'general'}>
             <TabsList>
               <TabsTrigger value="general">General</TabsTrigger>
               <TabsTrigger value="vault">Vault</TabsTrigger>
