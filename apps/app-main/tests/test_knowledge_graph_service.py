@@ -91,6 +91,31 @@ class TestListEntities:
 class TestCountEntities:
 
     @pytest.mark.asyncio
+    async def test_degree_sort_orders_the_whole_set_then_pages(self, entity_repo):
+        """WB.3: the degree is not stored, so the service reads every entity the
+        filters match, scores them all and cuts the page; ties stay by name."""
+        names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
+        entity_repo.list_entities.return_value = [
+            {"id": f"entity:{n.lower()}", "name": n, "source_documents": []}
+            for n in names
+        ]
+        entity_repo.effective_degree_for_entities.return_value = {
+            "entity:charlie": 7, "entity:echo": 3, "entity:bravo": 3,
+        }
+        svc = KnowledgeGraphService(entity_repo=entity_repo)
+
+        first = await svc.list_entities(limit=2, offset=0, status="active", sort="degree")
+        second = await svc.list_entities(limit=2, offset=2, status="active", sort="degree")
+
+        assert [r["name"] for r in first + second] == ["Charlie", "Bravo", "Echo", "Alpha"]
+        assert [r["structural_degree"] for r in first] == [7, 3]
+        kwargs = entity_repo.list_entities.call_args.kwargs
+        assert kwargs["offset"] == 0 and kwargs["limit"] >= 1_000_000
+        assert kwargs["status"] == "active"
+        scored = entity_repo.effective_degree_for_entities.call_args.args[0]
+        assert sorted(scored) == sorted(f"entity:{n.lower()}" for n in names)
+
+    @pytest.mark.asyncio
     async def test_count(self, entity_repo):
         entity_repo.count_entities.return_value = 42
         svc = KnowledgeGraphService(entity_repo=entity_repo)

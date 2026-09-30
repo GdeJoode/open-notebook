@@ -10,6 +10,9 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from surrealdb_service.repositories.entity import EntityRepository
 
+# "No page limit" for the degree sort's full read.
+_ALL = 1_000_000
+
 
 class KnowledgeGraphService:
     """Service for knowledge graph browsing and visualization."""
@@ -24,8 +27,14 @@ class KnowledgeGraphService:
         entity_type: Optional[str] = None,
         status: Optional[str] = None,
         source_id: Optional[str] = None,
+        sort: str = "name",
     ) -> List[Dict[str, Any]]:
         """List entities with pagination + optional type/status/source filters.
+
+        ``sort="degree"`` (WB.3, the KG table's default) orders by
+        ``structural_degree`` descending, then name. The degree is not stored,
+        so every entity the filters match is read and scored, then the page is
+        cut: cheap for the active set (hundreds), seconds for all statuses.
 
         Joins the Q.2 triage signals onto each page row so the KG table can show
         per-entity ``structural_degree`` and ``doc_count`` (Q.5 AC2):
@@ -39,6 +48,18 @@ class KnowledgeGraphService:
         table in a fresh DB) degrades to omitting the two fields, never breaking
         the listing.
         """
+        if sort == "degree":
+            rows = await self.entity_repo.list_entities(
+                limit=_ALL,
+                offset=0,
+                entity_type=entity_type,
+                status=status,
+                source_id=source_id,
+            )
+            rows = await self._attach_signals(rows)
+            # The rows come by name, and the sort is stable.
+            rows.sort(key=lambda r: -int(r.get("structural_degree") or 0))
+            return rows[offset : offset + limit]
         rows = await self.entity_repo.list_entities(
             limit=limit,
             offset=offset,

@@ -1,6 +1,6 @@
 """Knowledge graph router - entity browsing and graph visualization."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -32,6 +32,10 @@ async def list_entities(
             "contains this source record id (e.g. 'source:abc')."
         ),
     ),
+    sort: Literal["name", "degree"] = Query(
+        "name",
+        description="'degree': structural degree, highest first (the KG table).",
+    ),
     svc: KnowledgeGraphService = Depends(get_knowledge_graph_service),
 ):
     """List entities with pagination and optional type/status/source filters.
@@ -47,6 +51,7 @@ async def list_entities(
         entity_type=entity_type,
         status=status,
         source_id=source_id,
+        sort=sort,
     )
     total = await svc.count_entities(
         entity_type=entity_type, status=status, source_id=source_id
