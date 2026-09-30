@@ -31,7 +31,7 @@ describe('PageHeader', () => {
       <PageHeader
         title="Sources"
         subtitle="The pipeline board"
-        back={<a href="/">Back</a>}
+        back={<button type="button">Back</button>}
         actions={<button type="button">Add source</button>}
       >
         <p>Showing only: failed</p>
@@ -39,7 +39,7 @@ describe('PageHeader', () => {
     )
     expect(screen.getAllByRole('heading', { level: 1 }).map((h) => h.textContent)).toEqual(['Sources'])
     expect(screen.getByText('The pipeline board')).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Back' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Back' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Add source' })).toBeTruthy()
     expect(screen.getByText('Showing only: failed')).toBeTruthy()
     expect(screen.queryByTestId('page-overflow-trigger')).toBeNull()
