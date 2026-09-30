@@ -458,10 +458,19 @@ export function SourceDetailContent({
     }
   }
 
+  // On the source page the header stays while the source loads or fails.
+  const fallbackHeader = back !== undefined && (
+    <div className="pb-4 px-2">
+      <PageHeader back={back} title="Source">
+        <p className="text-sm text-muted-foreground">Source ID: {sourceId}</p>
+      </PageHeader>
+    </div>
+  )
+
   if (loading) {
     return (
       <>
-        {back}
+        {fallbackHeader}
         <div className="flex h-full items-center justify-center p-8">
           <LoadingSpinner />
         </div>
@@ -472,7 +481,7 @@ export function SourceDetailContent({
   if (error || !source) {
     return (
       <>
-        {back}
+        {fallbackHeader}
         <div className="flex h-full flex-col items-center justify-center gap-4 p-8">
           <p className="text-red-500">{error || 'Source not found'}</p>
         </div>
