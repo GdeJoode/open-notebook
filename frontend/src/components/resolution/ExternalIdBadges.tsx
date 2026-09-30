@@ -41,7 +41,7 @@ export function ExternalIdBadges({
             >
               <Badge
                 variant="outline"
-                className="gap-1 text-[10px] hover:bg-muted cursor-pointer"
+                className="gap-1 text-xs hover:bg-muted cursor-pointer"
               >
                 {label}
                 <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />

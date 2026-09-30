@@ -1,10 +1,11 @@
 'use client'
 
 /**
- * JsonlExportButton — Track D Phase D.2.
+ * JsonlExportPopover — Track D Phase D.2.
  *
- * Single button + lightweight Popover (NOT a Dialog) exposing the JSONL
- * export surface. The popover stays in the page flow rather than
+ * A lightweight Popover (NOT a Dialog) exposing the JSONL export surface.
+ * Since WB.4 it opens from the notebook header's Export menu and sits on
+ * that menu's button (its anchor). The popover stays in the page flow rather than
  * trapping focus, matching the plan's "minimal popover" directive: the
  * filter set is the SAME three sliders + two switches as the Obsidian
  * dialog (D.1c), so users get a consistent knob layout while keeping
@@ -22,15 +23,15 @@
  * truth for the preview rendering.
  */
 
-import { useEffect, useId, useMemo, useState } from 'react'
-import { AlertTriangle, Download, Loader2 } from 'lucide-react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, Loader2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import {
   Popover,
+  PopoverAnchor,
   PopoverContent,
-  PopoverTrigger,
 } from '@/components/ui/popover'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
@@ -41,8 +42,12 @@ import type { ExportFilter } from '@/lib/types/exports'
 import { ExportPreviewCounts } from './ExportPreviewCounts'
 import { LastExportLine } from './LastExportLine'
 
-interface JsonlExportButtonProps {
+interface JsonlExportPopoverProps {
   notebookId: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** The element the popover sits on; focus returns to it on close. */
+  children: React.ReactElement
 }
 
 /** Match the Pydantic ExportFilter defaults exactly (mirrors D.1c). */
@@ -61,8 +66,13 @@ const SLIDER_RANGES = {
   min_relation_confidence: { min: 0, max: 1, step: 0.05 },
 } as const
 
-export function JsonlExportButton({ notebookId }: JsonlExportButtonProps) {
-  const [open, setOpen] = useState(false)
+export function JsonlExportPopover({
+  notebookId,
+  open,
+  onOpenChange: setOpen,
+  children,
+}: JsonlExportPopoverProps) {
+  const anchorRef = useRef<HTMLElement>(null)
   const [filter, setFilter] = useState<ExportFilter>(DEFAULT_FILTER)
 
   const { mutate, isPending, error } = useJsonlExport(notebookId)
@@ -105,21 +115,19 @@ export function JsonlExportButton({ notebookId }: JsonlExportButtonProps) {
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          data-testid="open-jsonl-export-popover"
-          aria-label="Export this notebook as JSONL"
-        >
-          <Download className="h-4 w-4 mr-2" aria-hidden="true" />
-          Export JSONL
-        </Button>
-      </PopoverTrigger>
+      <PopoverAnchor asChild ref={anchorRef as React.RefObject<HTMLDivElement>}>
+        {children}
+      </PopoverAnchor>
       <PopoverContent
         align="end"
         className="w-96"
         data-testid="jsonl-export-popover"
+        aria-label="Export to JSONL"
+        // An anchor is not a trigger: Radix would drop focus on close.
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          anchorRef.current?.focus()
+        }}
       >
         <div className="space-y-4">
           <div className="space-y-1">

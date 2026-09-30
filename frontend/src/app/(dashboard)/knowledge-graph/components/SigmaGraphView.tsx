@@ -115,7 +115,7 @@ export default function SigmaGraphView({
       defaultEdgeColor: '#94a3b8',
       defaultEdgeType: 'line',
       labelColor: { color: '#1e293b' },
-      labelSize: 12,
+      labelSize: 13,
       labelFont: 'system-ui, sans-serif',
     })
 

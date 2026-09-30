@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { NotebookResponse } from '@/lib/types/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Archive, ArchiveRestore, Download, Trash2, Upload } from 'lucide-react'
+import { Archive, ArchiveRestore, ChevronDown, Download, Trash2, Upload } from 'lucide-react'
 import { useUpdateNotebook, useDeleteNotebook } from '@/lib/hooks/use-notebooks'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { PrivacyModeToggle } from '@/components/routing/PrivacyModeToggle'
@@ -14,10 +14,18 @@ import { PrivacyValue } from '@/lib/types/model-routing'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { formatDistanceToNow } from 'date-fns'
 import { InlineEdit } from '@/components/common/InlineEdit'
-import { JsonlExportButton } from '@/components/notebooks/exports/JsonlExportButton'
+import { JsonlExportPopover } from '@/components/notebooks/exports/JsonlExportPopover'
 import { ObsidianExportDialog } from '@/components/notebooks/exports/ObsidianExportDialog'
 import { OkfExportDialog } from '@/components/notebooks/exports/OkfExportDialog'
 import { OkfImportDialog } from '@/components/notebooks/exports/OkfImportDialog'
+import { PageHeader } from '@/components/layout/PageHeader'
+import { useMenuAction } from '@/components/layout/use-menu-action'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 
 interface NotebookHeaderProps {
@@ -42,6 +50,9 @@ export function NotebookHeader({
   const [okfDialogOpen, setOkfDialogOpen] = useState(false)
   // OKF import dialog open-state.
   const [okfImportDialogOpen, setOkfImportDialogOpen] = useState(false)
+  const [jsonlOpen, setJsonlOpen] = useState(false)
+  // Each dialog and the JSONL popover open once the Export menu has closed.
+  const exportMenu = useMenuAction()
 
   const updateNotebook = useUpdateNotebook()
   const deleteNotebook = useDeleteNotebook()
@@ -86,133 +97,135 @@ export function NotebookHeader({
 
   return (
     <>
-      <div className="border-b pb-6">
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3 flex-1">
-              <InlineEdit
-                value={notebook.name}
-                onSave={handleUpdateName}
-                className="text-2xl font-bold"
-                inputClassName="text-2xl font-bold"
-                placeholder="Notebook name"
-              />
-              {notebook.archived && (
-                <Badge variant="secondary">Archived</Badge>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setObsidianDialogOpen(true)}
+      <PageHeader
+        title={
+          <span className="flex items-center gap-3">
+            <InlineEdit
+              value={notebook.name}
+              onSave={handleUpdateName}
+              className="text-2xl font-bold"
+              inputClassName="text-2xl font-bold"
+              placeholder="Notebook name"
+            />
+            {notebook.archived && (
+              <Badge variant="secondary">Archived</Badge>
+            )}
+          </span>
+        }
+        actions={
+          <DropdownMenu>
+            <JsonlExportPopover
+              notebookId={notebook.id}
+              open={jsonlOpen}
+              onOpenChange={setJsonlOpen}
+            >
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" data-testid="notebook-export-menu">
+                  <Download className="h-4 w-4" />
+                  Export
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+            </JsonlExportPopover>
+            <DropdownMenuContent
+              align="end"
+              className="w-56"
+              onCloseAutoFocus={exportMenu.onCloseAutoFocus}
+            >
+              <DropdownMenuItem
+                onSelect={exportMenu.defer(() => setObsidianDialogOpen(true))}
                 data-testid="open-obsidian-export-dialog"
-                aria-label="Export this notebook to Obsidian"
               >
-                <Download className="h-4 w-4 mr-2" />
-                Export Obsidian
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setOkfDialogOpen(true)}
+                To Obsidian…
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={exportMenu.defer(() => setOkfDialogOpen(true))}
                 data-testid="open-okf-export-dialog"
-                aria-label="Export this notebook to Open Knowledge Format"
               >
-                <Download className="h-4 w-4 mr-2" />
-                Export OKF
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setOkfImportDialogOpen(true)}
-                data-testid="open-okf-import-dialog"
-                aria-label="Import an Open Knowledge Format bundle into this notebook"
+                To Open Knowledge Format…
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={exportMenu.defer(() => setJsonlOpen(true))}
+                data-testid="open-jsonl-export-popover"
               >
-                <Upload className="h-4 w-4 mr-2" />
-                Import OKF
-              </Button>
-              <JsonlExportButton notebookId={notebook.id} />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleArchiveToggle}
-              >
-                {notebook.archived ? (
-                  <>
-                    <ArchiveRestore className="h-4 w-4 mr-2" />
-                    Unarchive
-                  </>
-                ) : (
-                  <>
-                    <Archive className="h-4 w-4 mr-2" />
-                    Archive
-                  </>
-                )}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowDeleteDialog(true)}
-                className="text-red-600 hover:text-red-700"
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-              </Button>
-            </div>
-          </div>
-          
-          <InlineEdit
-            value={notebook.description || ''}
-            onSave={handleUpdateDescription}
-            className="text-muted-foreground"
-            inputClassName="text-muted-foreground"
-            placeholder="Add a description..."
-            multiline
-            emptyText="Add a description..."
-          />
-          
-          <div className="text-sm text-muted-foreground">
-            Created {formatDistanceToNow(new Date(notebook.created), { addSuffix: true })} •
-            Updated {formatDistanceToNow(new Date(notebook.updated), { addSuffix: true })}
-          </div>
+                As JSONL…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        }
+        overflowLabel="More notebook actions"
+        overflow={[
+          {
+            label: 'Import OKF…',
+            icon: Upload,
+            onSelect: () => setOkfImportDialogOpen(true),
+            testId: 'open-okf-import-dialog',
+          },
+          {
+            label: notebook.archived ? 'Unarchive' : 'Archive',
+            icon: notebook.archived ? ArchiveRestore : Archive,
+            onSelect: handleArchiveToggle,
+            testId: 'notebook-archive-toggle',
+          },
+          {
+            label: 'Delete…',
+            icon: Trash2,
+            destructive: true,
+            onSelect: () => setShowDeleteDialog(true),
+            testId: 'notebook-delete',
+          },
+        ]}
+      >
+        <InlineEdit
+          value={notebook.description || ''}
+          onSave={handleUpdateDescription}
+          className="text-muted-foreground"
+          inputClassName="text-muted-foreground"
+          placeholder="Add a description..."
+          multiline
+          emptyText="Add a description..."
+        />
 
-          {/* Track J.3/J.5: per-notebook privacy override (inherits the global default). */}
-          <div className="pt-2 max-w-md">
-            <PrivacyModeToggle
-              scope="notebook"
-              scopeLabel="Privacy mode"
-              value={fromWire(notebook.privacy_mode)}
-              onChange={handlePrivacyChange}
-              globalDefault={settings?.default_privacy_mode ?? 'cloud'}
-              disabled={updateNotebook.isPending}
-            />
-          </div>
-
-          {/*
-            Secondary nav between the 3-column workspace view and the
-            B.3a Schema sub-route. Implemented as <Link>s rather than
-            tabs so the underlying routes own their data fetching and
-            page state — no shared state to coordinate between views.
-          */}
-          <nav
-            aria-label="Notebook sections"
-            className="flex gap-1 pt-2"
-            data-testid="notebook-section-nav"
-          >
-            <NotebookTabLink
-              href={`/notebooks/${notebook.id}`}
-              label="Workspace"
-              active={activeTab === 'workspace'}
-            />
-            <NotebookTabLink
-              href={`/notebooks/${notebook.id}/schema`}
-              label="Schema"
-              active={activeTab === 'schema'}
-            />
-          </nav>
+        <div className="text-sm text-muted-foreground">
+          Created {formatDistanceToNow(new Date(notebook.created), { addSuffix: true })} •
+          Updated {formatDistanceToNow(new Date(notebook.updated), { addSuffix: true })}
         </div>
-      </div>
+
+        {/* Track J.3/J.5: per-notebook privacy override (inherits the global default). */}
+        <div className="pt-2 max-w-md">
+          <PrivacyModeToggle
+            scope="notebook"
+            scopeLabel="Privacy mode"
+            value={fromWire(notebook.privacy_mode)}
+            onChange={handlePrivacyChange}
+            globalDefault={settings?.default_privacy_mode ?? 'cloud'}
+            disabled={updateNotebook.isPending}
+          />
+        </div>
+
+        {/*
+          Secondary nav between the 3-column workspace view and the
+          B.3a Schema sub-route. Implemented as <Link>s rather than
+          tabs so the underlying routes own their data fetching and
+          page state — no shared state to coordinate between views.
+        */}
+        <nav
+          aria-label="Notebook sections"
+          className="flex gap-1 border-b pt-2 pb-3"
+          data-testid="notebook-section-nav"
+        >
+          <NotebookTabLink
+            href={`/notebooks/${notebook.id}`}
+            label="Workspace"
+            active={activeTab === 'workspace'}
+          />
+          <NotebookTabLink
+            href={`/notebooks/${notebook.id}/schema`}
+            label="Schema"
+            active={activeTab === 'schema'}
+          />
+        </nav>
+      </PageHeader>
 
       <ConfirmDialog
         open={showDeleteDialog}

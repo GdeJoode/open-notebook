@@ -9,6 +9,8 @@ import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import { RefreshCw, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useSearchParams } from 'next/navigation'
+import { PageBody } from '@/components/layout/PageBody'
+import { PageHeader } from '@/components/layout/PageHeader'
 
 export default function ModelsPage() {
   const searchParams = useSearchParams()
@@ -25,38 +27,43 @@ export default function ModelsPage() {
     refetchProviders()
   }
 
+  const header = (
+    <PageHeader
+      title="Model Management"
+      subtitle="Configure AI models for different purposes across Noesis"
+      actions={
+        <Button variant="outline" size="sm" onClick={handleRefresh} aria-label="Refresh models">
+          <RefreshCw className="h-4 w-4" />
+        </Button>
+      }
+    />
+  )
+
   if (modelsLoading || defaultsLoading || providersLoading) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <LoadingSpinner size="lg" />
-      </div>
+      <PageBody>
+        {header}
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <LoadingSpinner size="lg" />
+        </div>
+      </PageBody>
     )
   }
 
   if (!models || !defaults || !providers) {
     return (
-      <div className="p-6">
+      <PageBody>
+        {header}
         <div className="text-center py-12">
           <p className="text-muted-foreground">Failed to load models data</p>
         </div>
-      </div>
+      </PageBody>
     )
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-6 space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Model Management</h1>
-            <p className="text-muted-foreground mt-1">
-              Configure AI models for different purposes across Noesis
-            </p>
-          </div>
-          <Button variant="outline" size="sm" onClick={handleRefresh}>
-            <RefreshCw className="h-4 w-4" />
-          </Button>
-      </div>
+    <PageBody>
+      {header}
 
       {setupRequired && modelStatus && !modelStatus.valid && (
         <Alert variant="destructive">
@@ -110,7 +117,6 @@ export default function ModelsPage() {
           />
         </div>
       </div>
-      </div>
-    </div>
+    </PageBody>
   )
 }

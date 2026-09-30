@@ -8,6 +8,8 @@ import { Plus, RefreshCw } from 'lucide-react'
 import { useNotebooks } from '@/lib/hooks/use-notebooks'
 import { CreateNotebookDialog } from '@/components/notebooks/CreateNotebookDialog'
 import { Input } from '@/components/ui/input'
+import { PageBody } from '@/components/layout/PageBody'
+import { PageHeader } from '@/components/layout/PageHeader'
 
 export default function NotebooksPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
@@ -46,28 +48,29 @@ export default function NotebooksPage() {
 
   return (
     <>
-      <div className="p-6 space-y-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <h1 className="text-2xl font-bold">Notebooks</h1>
-            <Button variant="outline" size="sm" onClick={() => refetch()}>
-              <RefreshCw className="h-4 w-4" />
-            </Button>
-          </div>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-            <Input
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search notebooks..."
-              className="w-full sm:w-64"
-            />
-            <Button onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              New Notebook
-            </Button>
-          </div>
-        </div>
-        
+      <PageBody>
+        <PageHeader
+          title="Notebooks"
+          actions={
+            <>
+              <Button variant="outline" size="sm" onClick={() => refetch()} aria-label="Refresh notebooks">
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+              <Input
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                placeholder="Search notebooks..."
+                aria-label="Search notebooks"
+                className="w-64"
+              />
+              <Button onClick={() => setCreateDialogOpen(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                New Notebook
+              </Button>
+            </>
+          }
+        />
+
         <div className="space-y-8">
           <NotebookList 
             notebooks={filteredActive} 
@@ -88,7 +91,7 @@ export default function NotebooksPage() {
             />
           )}
         </div>
-      </div>
+      </PageBody>
 
       <CreateNotebookDialog
         open={createDialogOpen}

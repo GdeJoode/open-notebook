@@ -167,6 +167,30 @@ describe('Sources board', () => {
     expect(nav.push).not.toHaveBeenCalled()
   })
 
+  it('names each chip by its label and count on the link itself (WB.3 m8)', async () => {
+    mount()
+    const total = EXPECTED.counts.all.total
+    const chip = await screen.findByRole('link', { name: `All ${total} sources` })
+    expect(chip.getAttribute('data-testid')).toBe('sources-chip-all')
+    // aria-label on a generic span is ignored by assistive tech.
+    expect(screen.getByRole('navigation', { name: 'Filter by stage' }).querySelector('span[aria-label]')).toBeNull()
+  })
+
+  it('marks the sorted column with aria-sort (WB.3 m8)', async () => {
+    mount()
+    await screen.findByTestId(`source-row-${sourceId('gated')}`)
+    const header = (name: RegExp) =>
+      screen.getAllByRole('columnheader').find((th) => name.test(th.textContent ?? ''))!
+    expect(header(/^Stage/).getAttribute('aria-sort')).toBe('descending')
+    expect(header(/^Created/).getAttribute('aria-sort')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Created/ }))
+    await waitFor(() => expect(header(/^Created/).getAttribute('aria-sort')).toBe('descending'))
+    expect(header(/^Stage/).getAttribute('aria-sort')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^Created/ }))
+    await waitFor(() => expect(header(/^Created/).getAttribute('aria-sort')).toBe('ascending'))
+  })
+
   it('says so when the counts cannot be read, and shows no numbers', async () => {
     api.counts.mockReset().mockRejectedValue(new Error('down'))
     mount()

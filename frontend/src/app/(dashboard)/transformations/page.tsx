@@ -9,6 +9,8 @@ import { TransformationPlayground } from './components/TransformationPlayground'
 import { useTransformations } from '@/lib/hooks/use-transformations'
 import { Transformation } from '@/lib/types/transformations'
 import { Wand2, Play, RefreshCw } from 'lucide-react'
+import { PageBody } from '@/components/layout/PageBody'
+import { PageHeader } from '@/components/layout/PageHeader'
 
 export default function TransformationsPage() {
   const [activeTab, setActiveTab] = useState('transformations')
@@ -21,22 +23,16 @@ export default function TransformationsPage() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-6 space-y-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <h1 className="text-2xl font-bold">Transformations</h1>
-            <Button variant="outline" size="sm" onClick={() => refetch()}>
-              <RefreshCw className="h-4 w-4" />
+    <PageBody>
+      <PageHeader
+        title="Transformations"
+        subtitle="Transformations are prompts that will be used by the LLM to process a source and extract insights, summaries, etc."
+        actions={
+          <Button variant="outline" size="sm" onClick={() => refetch()} aria-label="Refresh transformations">
+            <RefreshCw className="h-4 w-4" />
           </Button>
-        </div>
-      </div>
-
-      <div className="max-w-5xl">
-        <p className="text-muted-foreground">
-          Transformations are prompts that will be used by the LLM to process a source and extract insights, summaries, etc.
-        </p>
-      </div>
+        }
+      />
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
         <div className="space-y-2">
@@ -69,7 +65,6 @@ export default function TransformationsPage() {
           />
         </TabsContent>
       </Tabs>
-      </div>
-    </div>
+    </PageBody>
   )
 }

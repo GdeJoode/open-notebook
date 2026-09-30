@@ -34,7 +34,7 @@ export function ProviderHealthChip({ health }: ProviderHealthChipProps) {
           >
             <X className="h-3 w-3" aria-hidden="true" />
             <span className="capitalize">{provider}</span>
-            <span className="text-[10px]">not configured</span>
+            <span className="text-xs">not configured</span>
           </Badge>
         </TooltipTrigger>
         <TooltipContent>
@@ -67,7 +67,7 @@ export function ProviderHealthChip({ health }: ProviderHealthChipProps) {
         >
           <Icon className="h-3 w-3" aria-hidden="true" />
           <span className="capitalize">{provider}</span>
-          <span className="text-[10px]">{stateLabel}</span>
+          <span className="text-xs">{stateLabel}</span>
         </Badge>
       </TooltipTrigger>
       <TooltipContent>

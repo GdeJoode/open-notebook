@@ -4,6 +4,8 @@ import { useState, useCallback } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { EmptyState } from '@/components/common/EmptyState'
+import { PageBody } from '@/components/layout/PageBody'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { useEntities, useEntityTypes, useSearchEntities } from '@/lib/hooks/use-knowledge-graph'
 import { knowledgeGraphApi } from '@/lib/api/knowledge-graph'
@@ -93,12 +95,12 @@ export default function KnowledgeGraphPage() {
   const totalPages = Math.ceil(totalEntities / pageSize)
 
   return (
-    <div className="flex h-full">
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="p-6 pb-0">
-          <div className="flex items-center justify-between mb-4">
-            <h1 className="text-2xl font-bold">Knowledge Graph</h1>
-            <div className="flex items-center gap-2">
+    <div className="flex min-h-0 flex-1">
+      <PageBody fill>
+        <PageHeader
+          title="Knowledge Graph"
+          actions={
+            <>
               <Link href="/knowledge-graph/triage">
                 <Button variant="outline" size="sm" className="gap-1.5">
                   <ClipboardList className="h-3.5 w-3.5" />
@@ -111,63 +113,63 @@ export default function KnowledgeGraphPage() {
                   Review duplicates
                 </Button>
               </Link>
-            </div>
-          </div>
+            </>
+          }
+        />
 
-          <div className="flex items-center gap-3 mb-4">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search entities..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-              />
-              {searchQuery && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 p-0"
-                  onClick={() => setSearchQuery('')}
-                >
-                  <X className="h-3 w-3" />
-                </Button>
-              )}
-            </div>
-
-            <Select
-              value={entityTypeFilter ?? 'all'}
-              onValueChange={(v) => {
-                setEntityTypeFilter(v === 'all' ? undefined : v)
-                setPage(0)
-              }}
-            >
-              <SelectTrigger className="w-48">
-                <SelectValue placeholder="All types" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All types</SelectItem>
-                {entityTypes?.map((t) => (
-                  <SelectItem key={t.entity_type} value={t.entity_type}>
-                    {t.entity_type} ({t.count})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <StatusFilter
-              value={statusFilter}
-              onChange={(v) => {
-                setStatusFilter(v)
-                setPage(0)
-              }}
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1 max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search entities..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
             />
-
-            <ConfidenceFilter onChange={setConfidenceThreshold} />
+            {searchQuery && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 p-0"
+                onClick={() => setSearchQuery('')}
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            )}
           </div>
+
+          <Select
+            value={entityTypeFilter ?? 'all'}
+            onValueChange={(v) => {
+              setEntityTypeFilter(v === 'all' ? undefined : v)
+              setPage(0)
+            }}
+          >
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder="All types" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All types</SelectItem>
+              {entityTypes?.map((t) => (
+                <SelectItem key={t.entity_type} value={t.entity_type}>
+                  {t.entity_type} ({t.count})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <StatusFilter
+            value={statusFilter}
+            onChange={(v) => {
+              setStatusFilter(v)
+              setPage(0)
+            }}
+          />
+
+          <ConfidenceFilter onChange={setConfidenceThreshold} />
         </div>
 
-        <div className="flex-1 overflow-hidden px-6 pb-6">
+        <div className="min-h-0 flex-1 overflow-hidden">
           <Tabs defaultValue="table" className="h-full flex flex-col">
             <TabsList>
               <TabsTrigger value="table">Table</TabsTrigger>
@@ -319,7 +321,7 @@ export default function KnowledgeGraphPage() {
 
           </Tabs>
         </div>
-      </div>
+      </PageBody>
 
       {/* Entity Detail Side Panel */}
       {selectedEntity && (

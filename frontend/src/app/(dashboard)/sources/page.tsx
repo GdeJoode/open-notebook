@@ -11,6 +11,8 @@ import { SourceListResponse } from '@/lib/types/api'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { EmptyState } from '@/components/common/EmptyState'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { PageBody } from '@/components/layout/PageBody'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { FileText, Link as LinkIcon, Upload, AlignLeft, Trash2, ArrowUpDown, Plus } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { Badge } from '@/components/ui/badge'
@@ -260,19 +262,50 @@ export default function SourcesPage() {
   const activeKey = activeChipKey(stages, stalled)
   const notebookName = notebooks?.find((n) => n.id === notebookId)?.name
 
+  const header = (
+    <PageHeader
+      title="All Sources"
+      subtitle="The pipeline board: sources that need you come first. Use arrow keys to navigate and Enter to open."
+      actions={
+        <Button asChild>
+          <Link href="/sources/new" data-testid="sources-add">
+            <Plus className="h-4 w-4 mr-2" />
+            Add source
+          </Link>
+        </Button>
+      }
+    >
+      {filtered && (
+        <p className="text-sm" data-testid="sources-stage-filter">
+          Showing only: <span className="font-medium">{filterLabel}</span>
+          {' · '}
+          <Link
+            href={notebookId ? `/sources?notebook=${encodeURIComponent(notebookId)}` : '/sources'}
+            className="underline underline-offset-2"
+          >
+            Show all
+          </Link>
+        </p>
+      )}
+    </PageHeader>
+  )
+
   if (!isLoading && !error && sources.length === 0 && !filtered && !notebookId) {
     return (
-      <EmptyState
-        icon={FileText}
-        title="No sources yet"
-        description="Upload a document, paste a link, or enter text to get started. Sources are the foundation of your knowledge base."
-        action={
-          <Button onClick={() => router.push('/sources/new')}>
-            <Upload className="h-4 w-4 mr-2" />
-            Create your first source
-          </Button>
-        }
-      />
+      <PageBody>
+        {header}
+        <EmptyState
+          icon={FileText}
+          title="No sources yet"
+          description="Upload a document, paste a link, or enter text to get started. Sources are the foundation of your knowledge base."
+          action={
+            <Button onClick={() => router.push('/sources/new')}>
+              <Upload className="h-4 w-4 mr-2" />
+              Create your first source
+            </Button>
+          }
+        />
+      </PageBody>
     )
   }
 
@@ -312,10 +345,12 @@ export default function SourcesPage() {
           className="w-full min-w-[960px] outline-none table-fixed"
         >
           <colgroup>
-            <col className="w-[120px]" />
+            {/* WB.4: Stage and Created fit their common values on one line at
+                1366 px ("Awaiting schema review", "in about 8 hours"). */}
+            <col className="w-[110px]" />
             <col className="w-auto" />
-            <col className="w-[210px]" />
-            <col className="w-[140px]" />
+            <col className="w-[260px]" />
+            <col className="w-[170px]" />
             <col className="w-[100px]" />
             <col className="w-[100px]" />
             <col className="w-[100px]" />
@@ -328,7 +363,10 @@ export default function SourcesPage() {
               <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
                 Title
               </th>
-              <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+              <th
+                className="h-12 px-4 text-left align-middle font-medium text-muted-foreground"
+                aria-sort={sortBy === 'attention' ? 'descending' : undefined}
+              >
                 <Button
                   variant="ghost"
                   size="sm"
@@ -347,7 +385,10 @@ export default function SourcesPage() {
                   )} />
                 </Button>
               </th>
-              <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground hidden sm:table-cell">
+              <th
+                className="h-12 px-4 text-left align-middle font-medium text-muted-foreground hidden sm:table-cell"
+                aria-sort={sortBy === 'created' ? (sortOrder === 'asc' ? 'ascending' : 'descending') : undefined}
+              >
                 <Button
                   variant="ghost"
                   size="sm"
@@ -425,7 +466,7 @@ export default function SourcesPage() {
                       readOnly
                       processingStage={source.processing_stage}
                       jobStatus={source.status}
-                      className="w-28 shrink-0"
+                      className="w-40 shrink-0"
                     />
                     {source.stalled && (
                       <Badge
@@ -480,37 +521,10 @@ export default function SourcesPage() {
 
   return (
     <>
-      <div className="flex flex-col h-full w-full max-w-none px-6 py-6">
-        <div className="mb-4 flex-shrink-0">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-bold">All Sources</h1>
-              <p className="mt-2 text-muted-foreground">
-                The pipeline board: sources that need you come first. Use arrow keys to navigate and Enter to open.
-              </p>
-            </div>
-            <Button asChild className="shrink-0">
-              <Link href="/sources/new" data-testid="sources-add">
-                <Plus className="h-4 w-4 mr-2" />
-                Add source
-              </Link>
-            </Button>
-          </div>
-          {filtered && (
-            <p className="mt-2 text-sm" data-testid="sources-stage-filter">
-              Showing only: <span className="font-medium">{filterLabel}</span>
-              {' · '}
-              <Link
-                href={notebookId ? `/sources?notebook=${encodeURIComponent(notebookId)}` : '/sources'}
-                className="underline underline-offset-2"
-              >
-                Show all
-              </Link>
-            </p>
-          )}
-        </div>
+      <PageBody fill>
+        {header}
 
-        <div className="mb-4 flex flex-shrink-0 flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-3">
           <StageChips
             counts={counts.data}
             countsLoading={counts.isLoading}
@@ -541,7 +555,7 @@ export default function SourcesPage() {
         </div>
 
         {body}
-      </div>
+      </PageBody>
 
       <ConfirmDialog
         open={deleteDialog.open}

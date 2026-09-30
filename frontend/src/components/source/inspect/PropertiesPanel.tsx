@@ -41,7 +41,7 @@ export function PropertiesPanel({
               <div className="flex items-center justify-between gap-2">
                 <dt className="text-muted-foreground">Type</dt>
                 <dd>
-                  <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                  <Badge variant="outline" className="px-1.5 py-0 text-xs">
                     {activeChunk.element_type}
                   </Badge>
                 </dd>

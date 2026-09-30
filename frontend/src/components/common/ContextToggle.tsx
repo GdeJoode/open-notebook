@@ -76,7 +76,7 @@ export function ContextToggle({ mode, hasInsights = false, onChange, className }
         </TooltipTrigger>
         <TooltipContent>
           <p className="text-xs">{config.label}</p>
-          <p className="text-[10px] text-muted-foreground mt-1">
+          <p className="text-xs text-muted-foreground mt-1">
             Click to cycle
           </p>
         </TooltipContent>

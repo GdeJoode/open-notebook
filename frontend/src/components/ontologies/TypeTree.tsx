@@ -199,16 +199,16 @@ function Node(props: NodeProps) {
           {name}
         </button>
         {node.definedIn && (
-          <span className="text-[10px] text-muted-foreground">from {node.definedIn}</span>
+          <span className="text-xs text-muted-foreground">from {node.definedIn}</span>
         )}
-        {node.placeholder && <span className="text-[10px] text-muted-foreground">not defined</span>}
+        {node.placeholder && <span className="text-xs text-muted-foreground">not defined</span>}
         {node.inCycle && (
-          <span className="text-[10px] text-destructive" data-testid={`ontology-cycle-${name}`}>
+          <span className="text-xs text-destructive" data-testid={`ontology-cycle-${name}`}>
             parent cycle
           </span>
         )}
         {blocking > 0 && (
-          <span className="rounded bg-destructive/10 px-1 text-[10px] text-destructive"
+          <span className="rounded bg-destructive/10 px-1 text-xs text-destructive"
             data-testid={`ontology-type-findings-${name}`}>
             {blocking} blocking
           </span>

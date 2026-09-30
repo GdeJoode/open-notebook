@@ -104,7 +104,7 @@ export function OrphansDashboard({ notebookId }: OrphansDashboardProps) {
           }`}
         >
           Pending
-          <Badge variant="secondary" className="ml-2 text-[10px]">
+          <Badge variant="secondary" className="ml-2 text-xs">
             {data.pending_count}
           </Badge>
         </button>
@@ -122,7 +122,7 @@ export function OrphansDashboard({ notebookId }: OrphansDashboardProps) {
           }`}
         >
           Archived
-          <Badge variant="secondary" className="ml-2 text-[10px]">
+          <Badge variant="secondary" className="ml-2 text-xs">
             {data.archived_count}
           </Badge>
         </button>

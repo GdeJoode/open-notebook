@@ -160,7 +160,7 @@ export function ChunkListPanel({
                       className="inline-block h-2 w-2 flex-shrink-0 rounded-full"
                       style={{ backgroundColor: getElementColor(chunk.element_type) }}
                     />
-                    <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                    <Badge variant="outline" className="px-1.5 py-0 text-xs">
                       {chunk.element_type}
                     </Badge>
                   </div>

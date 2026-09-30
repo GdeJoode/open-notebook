@@ -152,7 +152,7 @@ export function PipelineConfigPanel({
             </Label>
           </div>
         </RadioGroup>
-        <div className="text-[10px] text-muted-foreground mt-1 pl-5">
+        <div className="text-xs text-muted-foreground mt-1 pl-5">
           {privacyLevel === 'public' && 'Extractie en samenvatting via NVIDIA Mistral Medium. Parsing altijd lokaal.'}
           {privacyLevel === 'internal' && 'Alles lokaal via Ollama. Data verlaat de machine niet.'}
           {privacyLevel === 'confidential' && 'Lokaal met minimale logging. Voor vertrouwelijke documenten.'}
@@ -228,7 +228,7 @@ export function PipelineConfigPanel({
             className="scale-75"
           />
           <span className="text-xs">Enable VLM pipeline</span>
-          {isVlm && <Badge variant="secondary" className="text-[10px]">Picture classification + description</Badge>}
+          {isVlm && <Badge variant="secondary" className="text-xs">Picture classification + description</Badge>}
         </div>
         {isVlm && (
           <div className="space-y-1">
@@ -393,7 +393,7 @@ export function PipelineConfigPanel({
       <CollapsibleTrigger className="flex items-center gap-2 w-full px-3 py-2 border rounded-md bg-muted/50 hover:bg-muted/80 transition-colors text-left">
         <Settings2 className="h-4 w-4 text-muted-foreground" />
         <span className="text-xs font-medium flex-1">Docling Pipeline Configuration</span>
-        <Badge variant="secondary" className="text-[10px]">
+        <Badge variant="secondary" className="text-xs">
           {isVlm ? 'VLM' : 'Standard'} · {config.docling_table_mode ?? 'accurate'}
         </Badge>
         {open ? (

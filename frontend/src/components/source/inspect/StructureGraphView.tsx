@@ -126,7 +126,7 @@ export function StructureGraphView({
       labelRenderedSizeThreshold: 7,
       defaultEdgeColor: '#94a3b8',
       labelColor: { color: '#e2e8f0' },
-      labelSize: 11,
+      labelSize: 13,
       labelFont: 'system-ui, sans-serif',
       renderEdgeLabels: false,
     })
@@ -244,7 +244,7 @@ export function StructureGraphView({
             <div className="text-muted-foreground">Page {selected.page + 1}</div>
           )}
           {selected.hasChunk && (
-            <div className="text-[10px] text-primary">
+            <div className="text-xs text-primary">
               Highlighted in the PDF pane
             </div>
           )}

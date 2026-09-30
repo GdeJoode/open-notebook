@@ -189,7 +189,7 @@ export function EntityGraphView({ entities, relations, mergeGroups }: EntityGrap
       defaultEdgeColor: '#94a3b8',
       defaultEdgeType: 'line',
       labelColor: { color: '#e2e8f0' },
-      labelSize: 11,
+      labelSize: 13,
       labelFont: 'system-ui, sans-serif',
       renderEdgeLabels: graph.order < 100,
     })
@@ -278,10 +278,10 @@ export function EntityGraphView({ entities, relations, mergeGroups }: EntityGrap
           <div className="flex flex-col gap-1 pt-1 border-t">
             {hasCommunity && (
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px]">Color:</span>
+                <span className="text-xs">Color:</span>
                 <button
                   onClick={() => setColorBy(colorBy === 'type' ? 'community' : 'type')}
-                  className="text-[10px] underline hover:text-foreground"
+                  className="text-xs underline hover:text-foreground"
                 >
                   {colorBy === 'type' ? 'by type' : 'by community'}
                 </button>
@@ -289,10 +289,10 @@ export function EntityGraphView({ entities, relations, mergeGroups }: EntityGrap
             )}
             {hasPagerank && (
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px]">Size:</span>
+                <span className="text-xs">Size:</span>
                 <button
                   onClick={() => setSizeBy(sizeBy === 'confidence' ? 'pagerank' : 'confidence')}
-                  className="text-[10px] underline hover:text-foreground"
+                  className="text-xs underline hover:text-foreground"
                 >
                   {sizeBy === 'confidence' ? 'by confidence' : 'by PageRank'}
                 </button>

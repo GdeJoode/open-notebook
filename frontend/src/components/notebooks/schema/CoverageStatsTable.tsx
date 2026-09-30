@@ -120,7 +120,7 @@ export function CoverageStatsTable({ notebookId }: CoverageStatsTableProps) {
                   <span className="inline-flex items-center gap-1.5">
                     {coveragePct}%
                     {isLow && (
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-xs">
                         low
                       </Badge>
                     )}

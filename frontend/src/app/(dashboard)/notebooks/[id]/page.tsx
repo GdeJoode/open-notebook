@@ -13,6 +13,8 @@ import { useNotebook } from '@/lib/hooks/use-notebooks'
 import { useSources } from '@/lib/hooks/use-sources'
 import { useNotes } from '@/lib/hooks/use-notes'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
+import { PageBody } from '@/components/layout/PageBody'
+import { PageHeader } from '@/components/layout/PageHeader'
 
 export type ContextMode = 'off' | 'insights' | 'full'
 
@@ -83,28 +85,30 @@ export default function NotebookPage() {
 
   if (notebookLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <LoadingSpinner size="lg" />
-      </div>
+      <PageBody fill>
+        <div className="flex flex-1 items-center justify-center">
+          <LoadingSpinner size="lg" />
+        </div>
+      </PageBody>
     )
   }
 
   if (!notebook) {
     return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold mb-4">Notebook Not Found</h1>
-        <p className="text-muted-foreground">The requested notebook could not be found.</p>
-      </div>
+      <PageBody>
+        <PageHeader
+          title="Notebook Not Found"
+          subtitle="The requested notebook could not be found."
+        />
+      </PageBody>
     )
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
-      <div className="flex-shrink-0 p-6 pb-0">
-        <NotebookHeader notebook={notebook} />
-      </div>
+    <PageBody fill>
+      <NotebookHeader notebook={notebook} />
 
-      <div className="flex-1 p-6 pt-6 overflow-hidden flex flex-col min-h-0">
+      <div className="flex-1 overflow-hidden flex flex-col min-h-0">
         {/*
           Banner stack — all three self-hide when there's nothing to
           surface, so the column grid takes the full height in the
@@ -152,6 +156,6 @@ export default function NotebookPage() {
           </div>
         </div>
       </div>
-    </div>
+    </PageBody>
   )
 }

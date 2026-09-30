@@ -332,7 +332,7 @@ function SelectedTypePanel({ item }: { item: TreeItem }) {
                   {p.data_type}
                 </span>
                 {p.required && (
-                  <Badge variant="outline" className="text-[10px]">
+                  <Badge variant="outline" className="text-xs">
                     required
                   </Badge>
                 )}

@@ -8,6 +8,7 @@ import { useSourceChat } from '@/lib/hooks/useSourceChat'
 import { ChatPanel } from '@/components/source/ChatPanel'
 import { useNavigation } from '@/lib/hooks/use-navigation'
 import { SourceDetailContent } from '@/components/source/SourceDetailContent'
+import { PageBody } from '@/components/layout/PageBody'
 
 export default function SourceDetailPage() {
   const router = useRouter()
@@ -25,28 +26,21 @@ export default function SourceDetailPage() {
   }, [navigation, router])
 
   return (
-    <div className="flex flex-1 flex-col min-h-0">
-      {/* Back button */}
-      <div className="pt-6 pb-4 px-6">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleBack}
-          className="mb-4"
-        >
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          {navigation.getReturnLabel()}
-        </Button>
-      </div>
-
+    <PageBody fill>
       {/* Main content: Source detail + Chat */}
-      <div className="flex-1 grid gap-6 lg:grid-cols-[2fr_1fr] overflow-hidden px-6">
-        {/* Left column - Source detail */}
+      <div className="flex-1 grid gap-6 lg:grid-cols-[2fr_1fr] overflow-hidden min-h-0">
+        {/* Left column - Source detail, with the page header */}
         <div className="overflow-y-auto px-4 pb-6">
           <SourceDetailContent
             sourceId={sourceId}
             showChatButton={false}
             onClose={handleBack}
+            back={
+              <Button variant="ghost" size="sm" className="-ml-3" onClick={handleBack}>
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                {navigation.getReturnLabel()}
+              </Button>
+            }
           />
         </div>
 
@@ -73,6 +67,6 @@ export default function SourceDetailPage() {
           />
         </div>
       </div>
-    </div>
+    </PageBody>
   )
 }

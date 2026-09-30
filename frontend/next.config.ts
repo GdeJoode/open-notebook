@@ -4,6 +4,11 @@ const nextConfig: NextConfig = {
   // Enable standalone output for optimized Docker deployment
   output: "standalone",
 
+  // WB.4: the old /advanced page is the Settings page's Advanced tab.
+  async redirects() {
+    return [{ source: "/advanced", destination: "/settings?tab=advanced", permanent: false }];
+  },
+
   // Exclude pdfjs-dist from server-side bundling (it's browser-only)
   serverExternalPackages: ["pdfjs-dist", "canvas"],
 

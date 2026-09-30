@@ -1,7 +1,7 @@
 /**
  * Track-D Phase D.1c acceptance:
  *
- * 1. Clicking "Export Obsidian" on the notebook header opens the
+ * 1. Export ▾ → "To Obsidian…" on the notebook header opens the
  *    ObsidianExportDialog.
  * 2. The preview-counts widget renders "{N} entities, {M} relations"
  *    from the mocked GET /export-preview endpoint.
@@ -177,7 +177,8 @@ test.describe('D.1c: Obsidian export dialog', () => {
 
     await page.goto(`/notebooks/${NOTEBOOK_ID}`)
 
-    // The header button opens the dialog.
+    // The header's Export menu opens the dialog.
+    await page.getByTestId('notebook-export-menu').click()
     const openButton = page.getByTestId('open-obsidian-export-dialog')
     await expect(openButton).toBeVisible()
     await openButton.click()
@@ -290,6 +291,7 @@ test.describe('D.1c: Obsidian export dialog', () => {
     )
 
     await page.goto(`/notebooks/${NOTEBOOK_ID}`)
+    await page.getByTestId('notebook-export-menu').click()
     await page.getByTestId('open-obsidian-export-dialog').click()
 
     // The vault_path tab renders but is disabled because

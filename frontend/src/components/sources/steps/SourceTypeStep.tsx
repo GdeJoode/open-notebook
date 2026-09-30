@@ -97,7 +97,7 @@ export function SourceTypeStep({ control, register, errors }: SourceTypeStepProp
                       <Icon className="h-4 w-4" />
                       {type.label}
                       {type.disabled && (
-                        <Badge variant="secondary" className="ml-1 text-[10px] px-1 py-0 leading-tight">
+                        <Badge variant="secondary" className="ml-1 text-xs px-1 py-0 leading-tight">
                           Soon
                         </Badge>
                       )}

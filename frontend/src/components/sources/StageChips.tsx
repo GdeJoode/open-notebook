@@ -51,10 +51,11 @@ export function StageChips({
               !active && waiting && 'border-amber-500 text-amber-800 dark:text-amber-300'
             )}
           >
-            <span>{chip.label}</span>
+            <span>{chip.label}</span>{' '}
             {count !== undefined && (
-              <span className="tabular-nums font-medium" aria-label={`${count} sources`}>
+              <span className="tabular-nums font-medium">
                 {count}
+                <span className="sr-only"> sources</span>
               </span>
             )}
             {count === undefined && countsLoading && (

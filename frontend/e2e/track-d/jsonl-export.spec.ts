@@ -1,8 +1,8 @@
 /**
  * Track-D Phase D.2 acceptance:
  *
- * 1. Clicking "Export JSONL" on the notebook header opens the
- *    JsonlExportButton popover.
+ * 1. Export ▾ → "As JSONL…" on the notebook header opens the
+ *    JSONL popover (WB.4: the export buttons are one menu).
  * 2. The preview-counts widget renders "{N} entities, {M} relations"
  *    from the mocked GET /export-preview endpoint.
  * 3. Adjusting the min_confidence slider triggers a debounced refetch
@@ -167,7 +167,8 @@ test.describe('D.2: JSONL export popover', () => {
 
     await page.goto(`/notebooks/${NOTEBOOK_ID}`)
 
-    // The header button opens the popover.
+    // The header's Export menu opens the popover.
+    await page.getByTestId('notebook-export-menu').click()
     const openButton = page.getByTestId('open-jsonl-export-popover')
     await expect(openButton).toBeVisible()
     await openButton.click()

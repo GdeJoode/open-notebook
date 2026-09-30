@@ -31,7 +31,7 @@ export function MineruServiceHealthChip() {
     return (
       <Badge
         variant="secondary"
-        className="gap-1 text-[10px]"
+        className="gap-1 text-xs"
         role="status"
         aria-live="polite"
         aria-label="MinerU service status: checking"
@@ -55,7 +55,7 @@ export function MineruServiceHealthChip() {
         <TooltipTrigger asChild>
           <Badge
             variant="destructive"
-            className="gap-1 text-[10px] cursor-help"
+            className="gap-1 text-xs cursor-help"
             role="status"
             aria-live="polite"
             aria-label={`MinerU service status: offline${errorText ? `, ${errorText}` : ''}`}
@@ -77,7 +77,7 @@ export function MineruServiceHealthChip() {
   return (
     <Badge
       variant="default"
-      className="gap-1 text-[10px] bg-green-700 hover:bg-green-700"
+      className="gap-1 text-xs bg-green-700 hover:bg-green-700"
       role="status"
       aria-live="polite"
       aria-label={`MinerU service status: online${versionSuffix}`}

@@ -85,19 +85,23 @@ import { schemaReviewHref } from '@/lib/pipeline/schema-review'
 import type { PipelineDeepLinkTab, PipelineNodeAction } from '@/lib/pipeline/pipeline-stages'
 import { useZoteroStatus, useZoteroPush } from '@/lib/hooks/use-zotero'
 import { displaySourceTitle } from '@/lib/utils/source-title'
+import { PageHeader } from '@/components/layout/PageHeader'
 
 interface SourceDetailContentProps {
   sourceId: string
   showChatButton?: boolean
   onChatClick?: () => void
   onClose?: () => void
+  /** Set on the source page: the header becomes the page's `PageHeader`, with this above the title. */
+  back?: React.ReactNode
 }
 
 export function SourceDetailContent({
   sourceId,
   showChatButton = false,
   onChatClick,
-  onClose
+  onClose,
+  back,
 }: SourceDetailContentProps) {
   const router = useRouter()
   const [source, setSource] = useState<SourceDetailResponse | null>(null)
@@ -454,19 +458,34 @@ export function SourceDetailContent({
     }
   }
 
+  // On the source page the header stays while the source loads or fails.
+  const fallbackHeader = back !== undefined && (
+    <div className="pb-4 px-2">
+      <PageHeader back={back} title="Source">
+        <p className="text-sm text-muted-foreground">Source ID: {sourceId}</p>
+      </PageHeader>
+    </div>
+  )
+
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center p-8">
-        <LoadingSpinner />
-      </div>
+      <>
+        {fallbackHeader}
+        <div className="flex h-full items-center justify-center p-8">
+          <LoadingSpinner />
+        </div>
+      </>
     )
   }
 
   if (error || !source) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 p-8">
-        <p className="text-red-500">{error || 'Source not found'}</p>
-      </div>
+      <>
+        {fallbackHeader}
+        <div className="flex h-full flex-col items-center justify-center gap-4 p-8">
+          <p className="text-red-500">{error || 'Source not found'}</p>
+        </div>
+      </>
     )
   }
 
@@ -527,156 +546,173 @@ export function SourceDetailContent({
     )
   }
 
+  const titleNode = (
+    <InlineEdit
+      value={displaySourceTitle(source.title)}
+      onSave={handleUpdateTitle}
+      className="text-2xl font-bold"
+      inputClassName="text-2xl font-bold"
+      placeholder="Source title"
+      emptyText="Untitled Source"
+    />
+  )
+
+  const actionsNode = (
+    <div className="flex items-center gap-2">
+      {getSourceIcon()}
+      <Badge variant="secondary" className="text-sm">
+        {getSourceType()}
+      </Badge>
+
+      {/* Track J.3/J.5: read-only badge for documents processed privately. */}
+      {source.private && (
+        <Badge
+          variant="outline"
+          className="text-sm"
+          data-testid="private-source-badge"
+          aria-label="This source is processed privately"
+        >
+          <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+          Private
+        </Badge>
+      )}
+
+      {/* Promoted actions */}
+      {(source.entity_count ?? 0) > 0 && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => router.push('/knowledge-graph')}
+        >
+          <GitGraph className="h-4 w-4 mr-2" />
+          Knowledge Graph
+        </Button>
+      )}
+
+      {/* Chat with source button - only in modal */}
+      {showChatButton && onChatClick && (
+        <Button variant="outline" size="sm" onClick={onChatClick}>
+          <MessageSquare className="h-4 w-4 mr-2" />
+          Chat with source
+        </Button>
+      )}
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" aria-label="Source actions">
+            <MoreVertical className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {source.asset?.file_path && (
+            <>
+              <DropdownMenuItem
+                onClick={handleDownloadFile}
+                disabled={isDownloadingFile || fileAvailable === false}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                {fileAvailable === false
+                  ? 'File unavailable'
+                  : isDownloadingFile
+                    ? 'Preparing download…'
+                    : 'Download File'}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
+          <DropdownMenuItem
+            onClick={() => setShowReprocessDialog(true)}
+            disabled={!source.asset?.file_path}
+          >
+            <Settings2 className="mr-2 h-4 w-4" />
+            Reprocess Document...
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-xs text-muted-foreground">
+            Re-run / recovery
+          </DropdownMenuLabel>
+          {renderRecoveryRunner({
+            runningKey: 'preprocessing',
+            enabled: recovery.preprocessing,
+            label: 'Run Preprocessing',
+            runningLabel: 'Preprocessing...',
+            icon: <ScanSearch className="mr-2 h-4 w-4" />,
+            onClick: handleRunPreprocessing,
+          })}
+          {renderRecoveryRunner({
+            runningKey: 'summaries',
+            enabled: recovery.summaries,
+            label: 'Generate Summaries',
+            runningLabel: 'Generating...',
+            icon: <Sparkles className="mr-2 h-4 w-4" />,
+            onClick: handleRunSummaries,
+          })}
+          {renderRecoveryRunner({
+            runningKey: 'entities',
+            enabled: recovery.entities,
+            label: 'Extract Entities',
+            runningLabel: 'Extracting...',
+            icon: <BrainCircuit className="mr-2 h-4 w-4" />,
+            onClick: handleRunEntities,
+          })}
+          {renderRecoveryRunner({
+            runningKey: 'embed',
+            enabled: recovery.embed,
+            label: 'Embed Content',
+            runningLabel: 'Embedding...',
+            icon: <Database className="mr-2 h-4 w-4" />,
+            onClick: handleEmbedContent,
+            running: isEmbedding,
+          })}
+          {zoteroStatus?.connected && (
+            <DropdownMenuItem
+              onClick={() => zoteroPush.mutate({ sourceId })}
+              disabled={zoteroPush.isPending || !!(source as unknown as Record<string, unknown>).zotero_key}
+            >
+              <BookMarked className="mr-2 h-4 w-4" />
+              {zoteroPush.isPending
+                ? 'Pushing...'
+                : (source as unknown as Record<string, unknown>).zotero_key
+                  ? 'In Zotero'
+                  : 'Push to Zotero'}
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="text-destructive"
+            onClick={handleDelete}
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            Delete Source
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
+
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="pb-4 px-2">
-        <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <InlineEdit
-              value={displaySourceTitle(source.title)}
-              onSave={handleUpdateTitle}
-              className="text-2xl font-bold"
-              inputClassName="text-2xl font-bold"
-              placeholder="Source title"
-              emptyText="Untitled Source"
-            />
-            <p className="mt-1 text-sm text-muted-foreground">
-              Source ID: {source.id}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {getSourceIcon()}
-            <Badge variant="secondary" className="text-sm">
-              {getSourceType()}
-            </Badge>
-
-            {/* Track J.3/J.5: read-only badge for documents processed privately. */}
-            {source.private && (
-              <Badge
-                variant="outline"
-                className="text-sm"
-                data-testid="private-source-badge"
-                aria-label="This source is processed privately"
-              >
-                <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                Private
-              </Badge>
-            )}
-
-            {/* Promoted actions */}
-            {(source.entity_count ?? 0) > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => router.push('/knowledge-graph')}
-              >
-                <GitGraph className="h-4 w-4 mr-2" />
-                Knowledge Graph
-              </Button>
-            )}
-
-            {/* Chat with source button - only in modal */}
-            {showChatButton && onChatClick && (
-              <Button variant="outline" size="sm" onClick={onChatClick}>
-                <MessageSquare className="h-4 w-4 mr-2" />
-                Chat with source
-              </Button>
-            )}
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label="Source actions">
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {source.asset?.file_path && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={handleDownloadFile}
-                      disabled={isDownloadingFile || fileAvailable === false}
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      {fileAvailable === false
-                        ? 'File unavailable'
-                        : isDownloadingFile
-                          ? 'Preparing download…'
-                          : 'Download File'}
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                <DropdownMenuItem
-                  onClick={() => setShowReprocessDialog(true)}
-                  disabled={!source.asset?.file_path}
-                >
-                  <Settings2 className="mr-2 h-4 w-4" />
-                  Reprocess Document...
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel className="text-xs text-muted-foreground">
-                  Re-run / recovery
-                </DropdownMenuLabel>
-                {renderRecoveryRunner({
-                  runningKey: 'preprocessing',
-                  enabled: recovery.preprocessing,
-                  label: 'Run Preprocessing',
-                  runningLabel: 'Preprocessing...',
-                  icon: <ScanSearch className="mr-2 h-4 w-4" />,
-                  onClick: handleRunPreprocessing,
-                })}
-                {renderRecoveryRunner({
-                  runningKey: 'summaries',
-                  enabled: recovery.summaries,
-                  label: 'Generate Summaries',
-                  runningLabel: 'Generating...',
-                  icon: <Sparkles className="mr-2 h-4 w-4" />,
-                  onClick: handleRunSummaries,
-                })}
-                {renderRecoveryRunner({
-                  runningKey: 'entities',
-                  enabled: recovery.entities,
-                  label: 'Extract Entities',
-                  runningLabel: 'Extracting...',
-                  icon: <BrainCircuit className="mr-2 h-4 w-4" />,
-                  onClick: handleRunEntities,
-                })}
-                {renderRecoveryRunner({
-                  runningKey: 'embed',
-                  enabled: recovery.embed,
-                  label: 'Embed Content',
-                  runningLabel: 'Embedding...',
-                  icon: <Database className="mr-2 h-4 w-4" />,
-                  onClick: handleEmbedContent,
-                  running: isEmbedding,
-                })}
-                {zoteroStatus?.connected && (
-                  <DropdownMenuItem
-                    onClick={() => zoteroPush.mutate({ sourceId })}
-                    disabled={zoteroPush.isPending || !!(source as unknown as Record<string, unknown>).zotero_key}
-                  >
-                    <BookMarked className="mr-2 h-4 w-4" />
-                    {zoteroPush.isPending
-                      ? 'Pushing...'
-                      : (source as unknown as Record<string, unknown>).zotero_key
-                        ? 'In Zotero'
-                        : 'Push to Zotero'}
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-destructive"
-                  onClick={handleDelete}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete Source
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+      {/* Header: the page's own header on the source page (WB.4), a plain
+          block in the dialog, which has its own title. */}
+      {back !== undefined ? (
+        <div className="pb-4 px-2">
+          <PageHeader back={back} title={titleNode} actions={actionsNode}>
+            <p className="text-sm text-muted-foreground">Source ID: {source.id}</p>
+          </PageHeader>
+        </div>
+      ) : (
+        <div className="pb-4 px-2">
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              {titleNode}
+              <p className="mt-1 text-sm text-muted-foreground">
+                Source ID: {source.id}
+              </p>
+            </div>
+            {actionsNode}
           </div>
         </div>
-      </div>
+      )}
 
       {/* Pipeline spine (Track UX.4) — the collapsed `processing_stage` spine
           replaces the four independent output badges. Fed from the freshest
@@ -711,7 +747,7 @@ export function SourceDetailContent({
       {/* Tabs Content */}
       <div className="flex-1 px-2 min-h-0">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
-          <TabsList className="grid w-full grid-cols-6 flex-shrink-0">
+          <TabsList className="w-full flex-shrink-0 justify-start overflow-x-auto">
             <TabsTrigger value="content">Content</TabsTrigger>
             <TabsTrigger value="insights">
               Insights {insights.length > 0 && `(${insights.length})`}
