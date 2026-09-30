@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { EmptyState } from '@/components/common/EmptyState'
@@ -74,15 +74,20 @@ export default function KnowledgeGraphPage() {
   })
   const { data: searchResults } = useSearchEntities(searchQuery)
 
+  // The latest detail read; closing (or a newer click) moves it on, so an
+  // answer that arrives later is dropped instead of reopening the details.
+  const detailRequest = useRef(0)
+
   const handleEntityClick = useCallback(async (entityId: string) => {
+    const request = ++detailRequest.current
     setLoadingDetail(true)
     try {
       const detail = await knowledgeGraphApi.getEntity(entityId)
-      setSelectedEntity(detail)
+      if (request === detailRequest.current) setSelectedEntity(detail)
     } catch {
-      setSelectedEntity(null)
+      if (request === detailRequest.current) setSelectedEntity(null)
     } finally {
-      setLoadingDetail(false)
+      if (request === detailRequest.current) setLoadingDetail(false)
     }
   }, [])
 
@@ -126,7 +131,11 @@ export default function KnowledgeGraphPage() {
     </Button>
   )
 
-  const closeDetail = () => setSelectedEntity(null)
+  const closeDetail = () => {
+    detailRequest.current += 1
+    setSelectedEntity(null)
+    setLoadingDetail(false)
+  }
 
   // The panel's body, shown in the aside (lg and up) or the sheet (below).
   const detailBody = (selectedEntity: EntityDetail) => (

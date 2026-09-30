@@ -5,7 +5,7 @@
  * display label second.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 
 const hooks = vi.hoisted(() => ({ useEntities: vi.fn(), getEntity: vi.fn() }))
@@ -124,5 +124,40 @@ describe('Knowledge Graph by width (WB.5)', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
     fireEvent.click(within(panel).getByRole('button', { name: 'Close details' }))
     expect(screen.queryByTestId('entity-detail-panel')).toBeNull()
+  })
+})
+
+describe('Knowledge Graph details: closing wins (WB.5 review m2)', () => {
+  afterEach(() => removeViewport())
+
+  it('a sheet closed while it loads stays closed when the answer arrives', async () => {
+    installViewport(768)
+    hooks.useEntities.mockReturnValue({ data: { items: ROWS, total: 2 }, isLoading: false })
+    let answer!: (d: unknown) => void
+    hooks.getEntity.mockReturnValue(new Promise((r) => { answer = r }))
+    render(<KnowledgeGraphPage />)
+    fireEvent.click(screen.getByTestId('entity-row-entity:a'))
+    const sheet = await screen.findByRole('dialog')
+    expect(within(sheet).getByText('Loading entity')).toBeTruthy()
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await act(async () => { answer({ ...ROWS[0], relations: [] }) })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('a later click wins over an earlier one still loading', async () => {
+    installViewport(1024)
+    hooks.useEntities.mockReturnValue({ data: { items: ROWS, total: 2 }, isLoading: false })
+    let first!: (d: unknown) => void
+    hooks.getEntity
+      .mockReturnValueOnce(new Promise((r) => { first = r }))
+      .mockResolvedValueOnce({ ...ROWS[1], relations: [] })
+    render(<KnowledgeGraphPage />)
+    fireEvent.click(screen.getByTestId('entity-row-entity:a'))
+    fireEvent.click(screen.getByTestId('entity-row-entity:b'))
+    const panel = await screen.findByTestId('entity-detail-panel')
+    await waitFor(() => expect(within(panel).getByText('Rijk')).toBeTruthy())
+    await act(async () => { first({ ...ROWS[0], relations: [] }) })
+    expect(within(screen.getByTestId('entity-detail-panel')).queryByText('Regio Zwolle')).toBeNull()
   })
 })
