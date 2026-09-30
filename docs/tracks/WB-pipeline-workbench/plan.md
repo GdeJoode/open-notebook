@@ -599,6 +599,64 @@ redo it.
   - a source stopped at `embedded` is visibly different from a `complete` one,
     and is filterable;
   - no displayed title starts with a 12-hex prefix.
+- **WB.3 built** (branch `feature/wb3-sources-board`):
+  - Sources board (`/sources`):
+    - a Stage column (the `PipelineStatus` card, `readOnly` in a row, so no
+      extra Tab stops) with a Stopped badge; a needs-you row has an amber
+      edge. Stopped at `embedded` reads "Embed done" + Stopped, complete
+      reads "Complete";
+    - chips (All, Failed, Awaiting review, Stopped, then each stage), links
+      to `?stage=` / `?stalled=true`, with counts from the new
+      `GET /sources/counts` (the same rows the list reads; never counted
+      client-side). "Add source" in the header; the notebook is a filter
+      (`?notebook=`, scoping list and counts);
+    - default sort `GET /sources/?sort_by=attention`: failed, awaiting
+      schema review and stopped first (`NEEDS_YOU_STAGES` +
+      `stopped_sources`, The Tray's groups; a DB test pins that the count
+      equals the three Tray groups), each part by updated. Every row carries
+      `stalled` and `needs_you` from the server;
+    - arrow keys and Enter act only while the table (or the page) has focus,
+      so chips, the notebook filter and a row's delete button keep their
+      keys.
+  - Titles: `displaySourceTitle` on every rendered source title (list,
+    detail header, cards, Tray items, coverage, document graph, triage docs,
+    dialogs, a toast). `source-title.test.ts` scans every `.title`,
+    `.source_title`, `sourceTitle` and attention `item.label` in `src/` and
+    fails on one that neither strips nor is listed as not a shown source
+    title. The server's twin (`services/source_title.py`) strips titles it
+    joins into sentences (Tray gated items, the stale-source audit finding).
+    Details keeps the uploaded file name (`asset.file_path`).
+    `scripts/wb3_backfill_source_titles.py` (dry run by default, `--apply`
+    writes a rollback file, `--rollback`) is not run; read from the live
+    API, 14 of 14 titles carry the prefix and no two clean titles collide.
+  - Knowledge Graph table: opens on Active, `?sort=degree` (the service
+    scores every entity the filters match, then pages; Name/Degree headers
+    switch). `EntityTypeLabel`: the canonical `entity_type` as the badge,
+    the display label (`primary_type`; a triage row's stored `type`) as
+    muted text only when it adds something, in the KG table, its detail
+    panel, the triage table (rows now carry the entity's `entity_type`, read
+    with the queue) and a source's Entities tab.
+  - WB.2 minors: m1, the Schema tab lists the proposals first; Resume is
+    secondary (the editor link is primary where shown) and, while
+    `review_gate_active` (new on `GET /schema`, the resume's own predicate)
+    or unknown, confirms that it turns off the notebook's review gate for
+    good. m4, a failed plan or candidates read shows its error, never
+    "No duplicates pending" + The Tray. m5, "Next: The Tray" waits until
+    nothing is pending or paused.
+  - Tests: DB tests (`test_sources_board_db.py`: counts equal the lists
+    per stage, stopped and scope; attention order across pages; the e2e
+    fixture seeded into SurrealDB answers what the fake answers), vitest for
+    the page, chips, banner, Schema tab, KG and triage, and
+    `track-wb/sources-board.spec.ts` against `sources-board.fake.ts`. Each
+    new guard was mutation-checked.
+  - Limits:
+    - the degree sort reads and scores every matching entity per page: fine
+      for Active (531 live), seconds for all 5,500;
+    - a title backfill moves `updated` to now: for 15 minutes the written
+      sources do not read as stopped;
+    - the KG detail panel's Sources list shows record ids, not titles;
+    - Zotero pushes send the stored title until the backfill runs, and audit
+      findings stored before this change keep the prefix.
 
 **WB.4 — Layout system and typography** (~2d)
 - **One `PageHeader`:**
