@@ -76,7 +76,7 @@ export function NotebookCard({ notebook }: NotebookCardProps) {
                     size="sm"
                     data-testid={`notebook-card-menu-${notebook.id}`}
                     aria-label={`Actions for ${notebook.name}`}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100 transition-opacity"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <MoreHorizontal className="h-4 w-4" />

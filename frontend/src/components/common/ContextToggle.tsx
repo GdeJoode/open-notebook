@@ -70,6 +70,7 @@ export function ContextToggle({ mode, hasInsights = false, onChange, className }
               className
             )}
             onClick={handleClick}
+            aria-label={config.label}
           >
             <Icon className={cn('h-4 w-4', config.color)} />
           </Button>

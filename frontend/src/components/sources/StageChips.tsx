@@ -43,7 +43,7 @@ export function StageChips({
             data-testid={`sources-chip-${chip.key}`}
             data-count={count ?? ''}
             className={cn(
-              'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm transition-colors',
+              'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm transition-colors max-md:min-h-10',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               active
                 ? 'border-primary bg-primary text-primary-foreground'

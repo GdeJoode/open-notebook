@@ -80,7 +80,7 @@ export function PrivacyModeToggle({
               />
               <Label
                 htmlFor={itemId}
-                className="flex items-center gap-1 text-sm font-normal cursor-pointer"
+                className="flex items-center gap-1 text-sm font-normal cursor-pointer max-md:min-h-10"
               >
                 <Icon className="h-3.5 w-3.5" aria-hidden="true" />
                 {opt.label}

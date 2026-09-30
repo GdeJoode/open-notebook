@@ -236,11 +236,11 @@ export function PipelineStatus({
               onClick={() => onNodeClick?.(node.deepLinkTab)}
               data-node-key={node.key}
               data-node-state={node.state}
-              className={cn(
-                'h-1.5 flex-1 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                SEGMENT_STATE_CLASS[node.state]
-              )}
-            />
+              // WB.5: a 40 px tall target below md; the bar is drawn inside.
+              className="flex h-1.5 flex-1 items-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-10 max-md:min-w-10"
+            >
+              <span className={cn('h-1.5 w-full rounded-full', SEGMENT_STATE_CLASS[node.state])} />
+            </button>
           ))}
         </div>
         <div className="flex items-center justify-between gap-2">
@@ -252,7 +252,7 @@ export function PipelineStatus({
               onClick={() => onNodeClick?.(insights.deepLinkTab)}
               data-node-key="insights"
               data-node-state={insights.state}
-              className="text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+              className="text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring rounded max-md:min-h-10"
             >
               {insights.countLabel}
             </button>
@@ -275,7 +275,7 @@ export function PipelineStatus({
       <Collapsible defaultOpen={defaultOpen} className="w-full">
         <CollapsibleTrigger
           className={cn(
-            'group flex w-full items-center gap-2 rounded-md px-2 py-1',
+            'group flex w-full items-center gap-2 rounded-md px-2 py-1 max-md:min-h-10',
             'outline-none focus-visible:ring-2 focus-visible:ring-ring'
           )}
           aria-label="Toggle pipeline detail"

@@ -170,7 +170,9 @@ export function SourceCard({
     >
       <CardContent className="px-3 py-2">
         {/* Header with the pipeline mini-bar */}
-        <div className="flex items-start justify-between gap-3 mb-1">
+        {/* Below md the actions go under the content: the spine needs the
+            card's width for 40 px segments. */}
+        <div className="flex items-start justify-between gap-3 mb-1 max-md:flex-col max-md:items-stretch">
           <div className="flex-1 min-w-0">
             {/* Pipeline spine (5-segment mini-bar + current-stage label). Fed
                 from the card's own processing_stage; degrades to an all-pending
@@ -226,7 +228,7 @@ export function SourceCard({
           </div>
 
           {/* Context toggle and actions */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 max-md:justify-end">
             {/* Context toggle - only show if handler provided */}
             {onContextModeChange && contextMode && (
               <ContextToggle
@@ -242,7 +244,7 @@ export function SourceCard({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100 transition-opacity"
                   onClick={(e) => e.stopPropagation()}
                   aria-label="Source actions"
                 >

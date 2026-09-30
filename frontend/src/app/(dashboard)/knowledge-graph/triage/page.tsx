@@ -75,7 +75,7 @@ export default function TriageQueuePage() {
   const nameLink = (item: QueueItem) => (
     <Link
       href={`/knowledge-graph?entity=${encodeURIComponent(item.entity)}`}
-      className="text-primary hover:underline"
+      className="text-primary hover:underline max-md:inline-flex max-md:min-h-10 max-md:items-center"
     >
       {item.name || item.entity}
     </Link>
@@ -178,7 +178,7 @@ export default function TriageQueuePage() {
           <>
             <Link
               href="/knowledge-graph"
-              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground max-md:min-h-10"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               Knowledge Graph

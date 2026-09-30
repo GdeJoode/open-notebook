@@ -76,7 +76,7 @@ export function InlineEdit({
       <button
         type="button"
         className={cn(
-          "cursor-pointer hover:bg-muted/50 rounded px-2 py-1 -mx-2 -my-1 transition-colors text-left w-full",
+          "cursor-pointer hover:bg-muted/50 rounded px-2 py-1 -mx-2 -my-1 transition-colors text-left w-full max-md:min-h-10",
           className
         )}
         onClick={(e) => {
