@@ -115,6 +115,24 @@ export default function SourcesPage() {
     }
   }, [sources, listEl])
 
+  const scrollToSelectedRow = useCallback((index: number) => {
+    const scrollContainer = scrollEl
+    if (!scrollContainer) return
+
+    const rows = scrollContainer.querySelectorAll('[data-source-row]')
+    const selectedRow = rows[index] as HTMLElement
+    if (!selectedRow) return
+
+    const containerRect = scrollContainer.getBoundingClientRect()
+    const rowRect = selectedRow.getBoundingClientRect()
+
+    if (rowRect.top < containerRect.top) {
+      selectedRow.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } else if (rowRect.bottom > containerRect.bottom) {
+      selectedRow.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    }
+  }, [scrollEl])
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (sources.length === 0) return
@@ -161,25 +179,7 @@ export default function SourcesPage() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [sources, selectedIndex, router, listEl])
-
-  const scrollToSelectedRow = (index: number) => {
-    const scrollContainer = scrollEl
-    if (!scrollContainer) return
-
-    const rows = scrollContainer.querySelectorAll('[data-source-row]')
-    const selectedRow = rows[index] as HTMLElement
-    if (!selectedRow) return
-
-    const containerRect = scrollContainer.getBoundingClientRect()
-    const rowRect = selectedRow.getBoundingClientRect()
-
-    if (rowRect.top < containerRect.top) {
-      selectedRow.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    } else if (rowRect.bottom > containerRect.bottom) {
-      selectedRow.scrollIntoView({ behavior: 'smooth', block: 'end' })
-    }
-  }
+  }, [sources, selectedIndex, router, listEl, scrollToSelectedRow])
 
   // Infinite scroll trigger
   useEffect(() => {
