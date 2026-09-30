@@ -30,6 +30,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 const SOURCE_MODES = [
   { value: 'insights', label: 'Summary' },
@@ -640,7 +641,7 @@ export function GeneratePodcastDialog({ open, onOpenChange }: GeneratePodcastDia
                                           />
                                           <div className="flex flex-1 flex-col gap-1">
                                             <span className="text-sm font-medium text-foreground">
-                                              {source.title || 'Untitled source'}
+                                              {displaySourceTitle(source.title) || 'Untitled source'}
                                             </span>
                                             <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                               <span>{source.asset?.url ? 'Link' : 'File'}</span>

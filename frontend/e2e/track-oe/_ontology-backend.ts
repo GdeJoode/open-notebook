@@ -207,6 +207,8 @@ export function backend() {
       name: t.name, description: null, parent_type: t.parent_type ?? null, properties: [] })),
     pending_extensions: state.pending, coverage_pct: 0.8, review_required: false,
     soft_nudge_dismissed: false,
+    // review_required AND nothing accepted (schemas.py `_review_gate_active`).
+    review_gate_active: false,
   })
 
   /** `/api/notebooks/{NOTEBOOK}/...`: the Schema tab and the proposal queue (OE.5). */

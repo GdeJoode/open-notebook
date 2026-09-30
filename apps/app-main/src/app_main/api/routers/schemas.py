@@ -319,6 +319,10 @@ class NotebookSchemaResponse(BaseModel):
     coverage_pct: float = 0.0
     review_required: bool = False
     soft_nudge_dismissed: bool = False
+    #: WB.3: the review gate holds extraction (``review_required`` and nothing
+    #: accepted). Resuming now adds the sentinel and turns the gate off for
+    #: this notebook; the Schema tab's Resume confirmation says so.
+    review_gate_active: bool = False
 
 
 class Pass1ResultView(BaseModel):
@@ -565,6 +569,7 @@ async def _schema_to_response(
         coverage_pct=float(schema.coverage_pct),
         review_required=bool(schema.review_required),
         soft_nudge_dismissed=bool(schema.soft_nudge_dismissed),
+        review_gate_active=_review_gate_active(schema),
     )
 
 
@@ -648,6 +653,11 @@ async def _ensure_notebook_exists(
 # must stay out of any consumer that someday renders that list again.
 
 _RESUME_SENTINEL_TYPE_NAME = "_resumed_without_extensions"
+
+
+def _review_gate_active(schema: NotebookSchema) -> bool:
+    """The gate predicate above: resume adds the sentinel exactly when true."""
+    return bool(schema.review_required and not schema.accepted_extensions)
 
 
 class ReviewRequiredRequest(BaseModel):
@@ -1002,7 +1012,7 @@ async def resume_extraction(
     schema = await _ensure_schema_row(schema_repo, notebook_id)
 
     sentinel_added = False
-    if schema.review_required and not schema.accepted_extensions:
+    if _review_gate_active(schema):
         # Predicate would still raise — append a sentinel.
         # ``isoformat()`` on a tz-aware datetime renders ``+00:00`` for
         # UTC; we normalise to ``Z`` for consistency with the rest of

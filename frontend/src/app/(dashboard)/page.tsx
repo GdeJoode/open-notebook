@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import type { AttentionGroup } from '@/lib/api/attention'
 import { useAttention } from '@/lib/hooks/use-attention'
 import { setLastSeen } from '@/lib/werkbak/last-seen'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 /**
  * `/` — the Werkbak (Track WB.1): what needs the owner, across every notebook,
@@ -211,7 +212,8 @@ function GroupCard({ group }: { group: AttentionGroup }) {
                 className="-mx-2 block rounded-md px-2 py-1.5 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 data-testid={`werkbak-item-${item.id}`}
               >
-                <span className="block truncate font-medium">{item.label}</span>
+                {/* A source item's label is its title; job and notebook labels carry no prefix. */}
+                <span className="block truncate font-medium">{displaySourceTitle(item.label)}</span>
                 {(item.detail || item.at) && (
                   <span className="block truncate text-muted-foreground">
                     {item.detail}

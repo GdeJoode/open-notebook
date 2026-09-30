@@ -35,6 +35,7 @@ import { PipelineStatus } from './PipelineStatus'
 import { ProcessingLogConsole } from './ProcessingLogConsole'
 import { CompletionTab } from './tabs/CompletionTab'
 import { BatchModeDialog, type BatchMode } from './BatchModeDialog'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 // Same schema as AddSourceDialog
 const createSourceSchema = z.object({
@@ -683,8 +684,8 @@ export function CreateSourcePipeline() {
                   {multiSources.map((entry, i) => (
                     <div key={entry.id || i} className="rounded-md border p-3">
                       <div className="mb-2 flex items-center gap-2">
-                        <span className="truncate text-sm font-medium" title={entry.title}>
-                          {entry.title}
+                        <span className="truncate text-sm font-medium" title={displaySourceTitle(entry.title)}>
+                          {displaySourceTitle(entry.title)}
                         </span>
                       </div>
                       <PipelineStatus

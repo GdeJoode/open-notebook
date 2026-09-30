@@ -6,6 +6,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, ClipboardList } from 'lucide-re
 
 import { EmptyState } from '@/components/common/EmptyState'
 import { NextStepLink } from '@/components/common/NextStepLink'
+import { EntityTypeLabel } from '@/components/knowledge-graph/EntityTypeLabel'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -171,7 +172,7 @@ export default function TriageQueuePage() {
                             </Link>
                           </td>
                           <td className="p-3">
-                            <Badge variant="outline">{item.type || '—'}</Badge>
+                            <EntityTypeLabel canonical={item.entity_type} display={item.type} />
                           </td>
                           <td className="p-3 text-muted-foreground tabular-nums">
                             {item.structural_degree}

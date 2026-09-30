@@ -9,6 +9,7 @@ export function useEntities(filters?: {
   entity_type?: string
   status?: string
   source_id?: string
+  sort?: 'name' | 'degree'
 }) {
   return useQuery({
     queryKey: QUERY_KEYS.entities(filters),

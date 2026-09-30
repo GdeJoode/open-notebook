@@ -1,0 +1,171 @@
+{
+  "_comment": "WB.3 Sources board. The rows a test double serves (sources-board.fake.ts) and what GET /api/sources/ and /api/sources/counts answer for them. The backend test test_sources_board_db.py::test_the_e2e_fixture_is_the_real_contract seeds these rows into a real SurrealDB and checks the real endpoints give 'expected'; the fake's own test checks it gives the same. age_minutes sets 'updated' (now minus age); a 'stalled' row is short of complete, has no job and is older than 15 minutes, every other short-of-complete row is younger.",
+  "generated_at": "2026-09-30T12:00:00+00:00",
+  "notebooks": [
+    {
+      "id": "notebook:alpha",
+      "name": "Alpha"
+    },
+    {
+      "id": "notebook:beta",
+      "name": "Beta"
+    }
+  ],
+  "sources": [
+    {
+      "key": "fresh",
+      "title": "Streekagenda Achterhoek",
+      "stage": "embedded",
+      "notebook": "notebook:beta",
+      "stalled": false,
+      "age_minutes": 2
+    },
+    {
+      "key": "extracted",
+      "title": "Regio Deal evaluatie",
+      "stage": "extracted",
+      "notebook": "notebook:alpha",
+      "stalled": false,
+      "age_minutes": 3
+    },
+    {
+      "key": "graphed",
+      "title": "Kamerbrief Regio Deals",
+      "stage": "graphed",
+      "notebook": null,
+      "stalled": false,
+      "age_minutes": 4
+    },
+    {
+      "key": "fresh2",
+      "title": "Streekfonds Alpha",
+      "stage": "embedded",
+      "notebook": "notebook:alpha",
+      "stalled": false,
+      "age_minutes": 5
+    },
+    {
+      "key": "done1",
+      "title": "6553882c54e5__Convenant Regio Deal Regio Zwolle II",
+      "stage": "complete",
+      "notebook": "notebook:alpha",
+      "stalled": false,
+      "age_minutes": 10
+    },
+    {
+      "key": "gated",
+      "title": "Convenant Regio Deal Midden-Limburg",
+      "stage": "awaiting_schema_review",
+      "notebook": "notebook:alpha",
+      "stalled": false,
+      "age_minutes": 20
+    },
+    {
+      "key": "failed",
+      "title": "Broken scan",
+      "stage": "failed",
+      "notebook": "notebook:alpha",
+      "stalled": false,
+      "age_minutes": 30
+    },
+    {
+      "key": "done2",
+      "title": "Convenant Regio Deal Het Hogeland",
+      "stage": "complete",
+      "notebook": "notebook:beta",
+      "stalled": false,
+      "age_minutes": 40
+    },
+    {
+      "key": "stopped",
+      "title": "410a65bba3f8__Convenant Regio Deal Waterwegregio",
+      "stage": "embedded",
+      "notebook": "notebook:beta",
+      "stalled": true,
+      "age_minutes": 60
+    },
+    {
+      "key": "stopped2",
+      "title": "Empty upload",
+      "stage": "ingested",
+      "notebook": "notebook:beta",
+      "stalled": true,
+      "age_minutes": 90
+    },
+    {
+      "key": "loose",
+      "title": "Loose failure",
+      "stage": "failed",
+      "notebook": null,
+      "stalled": false,
+      "age_minutes": 100
+    }
+  ],
+  "expected": {
+    "counts": {
+      "all": {
+        "total": 11,
+        "stages": {
+          "ingested": 1,
+          "embedded": 3,
+          "extracted": 1,
+          "awaiting_schema_review": 1,
+          "graphed": 1,
+          "complete": 2,
+          "failed": 2
+        },
+        "stalled": 2,
+        "needs_you": 5
+      },
+      "notebook:alpha": {
+        "total": 5,
+        "stages": {
+          "ingested": 0,
+          "embedded": 1,
+          "extracted": 1,
+          "awaiting_schema_review": 1,
+          "graphed": 0,
+          "complete": 1,
+          "failed": 1
+        },
+        "stalled": 0,
+        "needs_you": 2
+      },
+      "notebook:beta": {
+        "total": 4,
+        "stages": {
+          "ingested": 1,
+          "embedded": 2,
+          "extracted": 0,
+          "awaiting_schema_review": 0,
+          "graphed": 0,
+          "complete": 1,
+          "failed": 0
+        },
+        "stalled": 2,
+        "needs_you": 2
+      }
+    },
+    "attention_order": {
+      "all": [
+        "gated",
+        "failed",
+        "stopped",
+        "stopped2",
+        "loose",
+        "fresh",
+        "extracted",
+        "graphed",
+        "fresh2",
+        "done1",
+        "done2"
+      ],
+      "notebook:beta": [
+        "stopped",
+        "stopped2",
+        "fresh",
+        "done2"
+      ]
+    }
+  }
+}

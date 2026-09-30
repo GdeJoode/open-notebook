@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { zoteroApi, ZoteroConnectConfig } from '@/lib/api/zotero'
 import { toast } from 'sonner'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 const ZOTERO_KEYS = {
   status: ['zotero', 'status'] as const,
@@ -61,9 +62,9 @@ export function useZoteroPush() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['zotero'] })
       if (data.action === 'duplicate_found') {
-        toast.info(`Already in Zotero: ${data.title || data.zotero_key}`)
+        toast.info(`Already in Zotero: ${displaySourceTitle(data.title) || data.zotero_key}`)
       } else {
-        toast.success(`Pushed to Zotero: ${data.title || data.zotero_key}`)
+        toast.success(`Pushed to Zotero: ${displaySourceTitle(data.title) || data.zotero_key}`)
       }
     },
     onError: () => {

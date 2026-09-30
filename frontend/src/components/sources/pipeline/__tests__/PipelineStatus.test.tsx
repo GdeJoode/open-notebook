@@ -243,3 +243,24 @@ describe('live variant renders its streaming-log slot', () => {
     expect(within(container.parentElement as HTMLElement).getByTestId('log-console')).toBeTruthy()
   })
 })
+
+describe('readOnly card (WB.3, a Sources board row)', () => {
+  it('shows the same segments and label with no controls', () => {
+    const { container } = render(
+      <PipelineStatus variant="card" readOnly processingStage="awaiting_schema_review" />
+    )
+    expect(container.querySelectorAll('button')).toHaveLength(0)
+    const states = [...container.querySelectorAll('[data-node-state]')].map((n) =>
+      n.getAttribute('data-node-state'))
+    expect(states).toEqual(['done', 'done', 'gated', 'pending', 'pending'])
+    expect(screen.getByTestId('pipeline-stage-label').textContent).toBe('Awaiting schema review')
+  })
+
+  it('tells embedded apart from complete', () => {
+    render(<PipelineStatus variant="card" readOnly processingStage="embedded" />)
+    render(<PipelineStatus variant="card" readOnly processingStage="complete" />)
+    expect(screen.getAllByTestId('pipeline-stage-label').map((l) => l.textContent)).toEqual([
+      'Embed done', 'Complete',
+    ])
+  })
+})

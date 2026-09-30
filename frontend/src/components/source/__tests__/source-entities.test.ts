@@ -29,16 +29,18 @@ describe('toSourceEntityRow', () => {
     expect(row.name).toBe('BZK')
   })
 
-  it('prefers primary_type over the raw entity_type label', () => {
+  it('shows the canonical type first and primary_type as its label (WB.3)', () => {
     const row = toSourceEntityRow(
-      entity({ entity_type: 'org', primary_type: 'Organization' }),
+      entity({ entity_type: 'administrative_area', primary_type: 'Gemeente' }),
     )
-    expect(row.type).toBe('Organization')
+    expect(row.type).toBe('administrative_area')
+    expect(row.typeLabel).toBe('Gemeente')
   })
 
-  it('falls back to entity_type when primary_type is absent', () => {
+  it('has no label when primary_type is absent', () => {
     const row = toSourceEntityRow(entity({ entity_type: 'org' }))
     expect(row.type).toBe('org')
+    expect(row.typeLabel).toBeUndefined()
   })
 
   it('carries status + manual_override through', () => {

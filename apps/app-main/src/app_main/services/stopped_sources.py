@@ -35,6 +35,15 @@ SHORT_OF_COMPLETE = [
 ]
 UNFINISHED = [JobStatus.QUEUED, JobStatus.PROCESSING, JobStatus.RETRYING]
 
+#: The stages of The Tray's "failed" and "gated" source groups. With the
+#: stopped sources (disjoint: those are short of complete) they are what the
+#: Sources board sorts first and counts as "needs you"
+#: (``GET /api/sources/?sort_by=attention`` and ``GET /api/sources/counts``).
+NEEDS_YOU_STAGES = [
+    ProcessingStage.FAILED.value,
+    ProcessingStage.AWAITING_SCHEMA_REVIEW.value,
+]
+
 
 async def unfinished_jobs(job_repo: JobRepository) -> List[Job]:
     """Queued, processing and retrying jobs, newest first."""

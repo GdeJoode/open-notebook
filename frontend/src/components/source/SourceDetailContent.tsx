@@ -84,6 +84,7 @@ import { toPipelineCounts } from '@/lib/pipeline/source-counts'
 import { schemaReviewHref } from '@/lib/pipeline/schema-review'
 import type { PipelineDeepLinkTab, PipelineNodeAction } from '@/lib/pipeline/pipeline-stages'
 import { useZoteroStatus, useZoteroPush } from '@/lib/hooks/use-zotero'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 interface SourceDetailContentProps {
   sourceId: string
@@ -533,7 +534,7 @@ export function SourceDetailContent({
         <div className="flex items-start justify-between">
           <div className="flex-1">
             <InlineEdit
-              value={source.title || ''}
+              value={displaySourceTitle(source.title)}
               onSave={handleUpdateTitle}
               className="text-2xl font-bold"
               inputClassName="text-2xl font-bold"

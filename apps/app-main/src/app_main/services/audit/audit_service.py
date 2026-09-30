@@ -33,6 +33,7 @@ from surrealdb_service.connection import ensure_record_id, execute_query
 from surrealdb_service.repositories import EntityRepository, SourceRepository
 
 from app_main.config import AuditThresholds, get_audit_thresholds
+from app_main.services.source_title import display_source_title
 
 #: check_id of the per-run marker row (anchors a run; filtered from findings).
 _RUN_MARKER = "_run"
@@ -89,7 +90,8 @@ def check_stale_sources(
                 AuditFinding(
                     check_id="stale_sources",
                     severity="info",
-                    title=f"Source '{s.get('title') or s.get('id')}' is stale "
+                    title=f"Source '{display_source_title(s.get('title')) or s.get('id')}' "
+                    f"is stale "
                     f"(> {t.stale_days}d)",
                     subject=str(s.get("id")),
                 )

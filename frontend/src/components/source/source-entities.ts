@@ -5,8 +5,10 @@ export interface SourceEntityRow {
   id: string
   /** Resolved display name: canonical form preferred over raw surface name. */
   name: string
-  /** Display type: rich ontology type preferred over the raw label. */
+  /** The canonical type (`entity_type`), shown first (WB.3). */
   type: string
+  /** The ontology's display label (`primary_type`), shown second. */
+  typeLabel?: string
   status?: string
   manualOverride?: boolean
   /** Effective structural degree, or null when un-triaged / absent. */
@@ -20,14 +22,15 @@ export type SourceEntitiesView = 'loading' | 'error' | 'empty' | 'list'
 
 /**
  * Project a KG `Entity` into the source-tab display row. Pure so the
- * field-selection logic (canonical-over-surface name, rich-over-raw type,
+ * field-selection logic (canonical-over-surface name, canonical type first,
  * numeric-or-null) is unit-testable without rendering.
  */
 export function toSourceEntityRow(entity: Entity): SourceEntityRow {
   return {
     id: entity.id,
     name: entity.canonical_name || entity.name,
-    type: entity.primary_type || entity.entity_type,
+    type: entity.entity_type,
+    typeLabel: entity.primary_type,
     status: entity.status,
     manualOverride: entity.manual_override,
     degree:

@@ -22,6 +22,7 @@ import { StreamingResponse } from '@/components/search/StreamingResponse'
 import { AdvancedModelsDialog } from '@/components/search/AdvancedModelsDialog'
 import { SaveToNotebooksDialog } from '@/components/search/SaveToNotebooksDialog'
 import { ErrorBanner } from '@/components/common/ErrorBanner'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 export default function SearchPage() {
   const router = useRouter()
@@ -408,7 +409,7 @@ export default function SearchPage() {
                                   onClick={() => openModal(modalType, id)}
                                   className="text-primary hover:underline font-medium"
                                 >
-                                  {result.title}
+                                  {displaySourceTitle(result.title)}
                                 </button>
                                 <Badge variant="secondary" className="ml-2">
                                   {result.final_score.toFixed(2)}

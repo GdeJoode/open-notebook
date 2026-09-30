@@ -1,11 +1,14 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
 import { PauseCircle } from 'lucide-react'
 
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
+  useNotebookSchema,
   usePausedExtraction,
   useResumeExtraction,
 } from '@/lib/hooks/use-notebook-schema'
@@ -35,6 +38,11 @@ interface ExtractionPausedBannerProps {
  * The banner polls `GET /extraction/paused` every 30s. We only render
  * when `paused_count > 0` so the workspace stays uncluttered for the
  * common case.
+ *
+ * WB.3: Resume is the secondary action; accepting the proposals is the way
+ * through. While nothing is accepted (`review_gate_active`, or the schema is
+ * not read) Resume asks first and says it turns the review gate off for this
+ * notebook for good.
  */
 export function ExtractionPausedBanner({
   notebookId,
@@ -42,10 +50,14 @@ export function ExtractionPausedBanner({
 }: ExtractionPausedBannerProps) {
   const pausedQuery = usePausedExtraction(notebookId)
   const resume = useResumeExtraction(notebookId)
+  const schema = useNotebookSchema(notebookId)
+  const [confirming, setConfirming] = useState(false)
 
   if (pausedQuery.isError) return null
   const pausedCount = pausedQuery.data?.paused_count ?? 0
   if (pausedCount === 0) return null
+  // Unknown (not read, or a server without the field) counts as "may turn off".
+  const gateTurnsOff = schema.data?.review_gate_active !== false
 
   return (
     <Alert
@@ -68,18 +80,8 @@ export function ExtractionPausedBanner({
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
-        <Button
-          type="button"
-          size="sm"
-          variant="default"
-          disabled={resume.isPending}
-          data-testid="extraction-paused-resume"
-          onClick={() => resume.mutate()}
-        >
-          {resume.isPending ? 'Resuming…' : 'Resume with current schema'}
-        </Button>
         {showSchemaLink && (
-          <Button asChild size="sm" variant="outline">
+          <Button asChild size="sm" variant="default">
             <Link
               href={`/notebooks/${encodeURIComponent(notebookId)}/schema`}
               data-testid="extraction-paused-open-schema"
@@ -88,7 +90,34 @@ export function ExtractionPausedBanner({
             </Link>
           </Button>
         )}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={resume.isPending}
+          data-testid="extraction-paused-resume"
+          onClick={() => (gateTurnsOff ? setConfirming(true) : resume.mutate())}
+        >
+          {resume.isPending ? 'Resuming…' : 'Resume with current schema'}
+        </Button>
       </div>
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title="Turn off schema review for this notebook?"
+        description={
+          'Nothing is accepted yet. Resuming now extracts the waiting sources with ' +
+          'the current schema and turns off the review gate for this notebook for ' +
+          'good: later sources are extracted without waiting for a schema review. ' +
+          'Accept the proposals you want first, then resume.'
+        }
+        confirmText="Turn off review and resume"
+        confirmVariant="destructive"
+        onConfirm={() => {
+          setConfirming(false)
+          resume.mutate()
+        }}
+      />
     </Alert>
   )
 }

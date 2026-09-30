@@ -23,7 +23,10 @@ export interface QueueItem {
   /** The entity record id this row is about. */
   entity: string
   name: string
+  /** The display label the triage run stored (`primary_type`). */
   type: string
+  /** WB.3: the entity's canonical type, read with the queue; '' when gone. */
+  entity_type?: string
   structural_degree: number
   doc_count: number
   /** The queue-flag reason(s) — `"; "`-joined when an entity tripped several. */

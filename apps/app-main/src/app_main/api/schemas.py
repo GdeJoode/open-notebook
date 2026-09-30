@@ -657,6 +657,28 @@ class SourceListResponse(BaseModel):
     # (mirrors SourceResponse.processing_stage) so list-derived cards read the
     # spine directly without an N-per-card fan-out. Defaults "ingested".
     processing_stage: str = "ingested"
+    # WB.3: stopped short of complete (services/stopped_sources.py), so the
+    # Sources board can mark it; the same predicate as ``?stalled=true``.
+    stalled: bool = False
+    # WB.3: failed, awaiting schema review or stopped (NEEDS_YOU_STAGES plus
+    # ``stalled``): the rows ``?sort_by=attention`` lists first.
+    needs_you: bool = False
+
+
+class SourceCountsResponse(BaseModel):
+    """``GET /sources/counts``: the Sources board's filter chips (WB.3).
+
+    Each count is the length of the list the chip's filter returns:
+    ``stages[s]`` for ``?stage=s``, ``stalled`` for ``?stalled=true``, both
+    within ``notebook_id`` when given. ``needs_you`` is what
+    ``?sort_by=attention`` puts first: failed, awaiting schema review and
+    stopped sources.
+    """
+
+    total: int
+    stages: Dict[str, int]
+    stalled: int
+    needs_you: int
 
 
 class RelatedSourceResponse(BaseModel):

@@ -19,13 +19,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Share2, Search, X, ChevronLeft, ChevronRight, GitMerge, ClipboardList, FileText } from 'lucide-react'
+import { Share2, Search, X, ChevronLeft, ChevronRight, GitMerge, ClipboardList, FileText, ArrowUpDown } from 'lucide-react'
 import type { Entity, EntityDetail } from '@/lib/api/knowledge-graph'
 import type { TriageStatus } from '@/lib/api/triage'
 import { ConfidenceBar } from '@/components/knowledge-graph/ConfidenceBar'
 import { ConfidenceFilter } from '@/components/knowledge-graph/ConfidenceFilter'
 import { StatusFilter } from '@/components/knowledge-graph/StatusFilter'
 import { StatusBadge } from '@/components/knowledge-graph/StatusBadge'
+import { EntityTypeLabel } from '@/components/knowledge-graph/EntityTypeLabel'
 import { ExternalIdBadges } from '@/components/resolution/ExternalIdBadges'
 import { Switch } from '@/components/ui/switch'
 import { useSetEntityOverride } from '@/lib/hooks/use-triage'
@@ -42,7 +43,9 @@ const DocumentGraphView = dynamic(
 
 export default function KnowledgeGraphPage() {
   const [entityTypeFilter, setEntityTypeFilter] = useState<string | undefined>(undefined)
-  const [statusFilter, setStatusFilter] = useState<TriageStatus | undefined>(undefined)
+  // WB.3: open on the active graph, best connected first, not on the archive.
+  const [statusFilter, setStatusFilter] = useState<TriageStatus | undefined>('active')
+  const [sort, setSort] = useState<'name' | 'degree'>('degree')
   const [searchQuery, setSearchQuery] = useState('')
   const [page, setPage] = useState(0)
   const [selectedEntity, setSelectedEntity] = useState<EntityDetail | null>(null)
@@ -60,6 +63,7 @@ export default function KnowledgeGraphPage() {
     offset: page * pageSize,
     entity_type: entityTypeFilter,
     status: statusFilter,
+    sort,
   })
   const { data: searchResults } = useSearchEntities(searchQuery)
 
@@ -191,10 +195,38 @@ export default function KnowledgeGraphPage() {
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 bg-background">
                         <tr className="border-b bg-muted/50">
-                          <th className="text-left p-3 font-medium">Name</th>
+                          <th
+                            className="text-left p-3 font-medium"
+                            aria-sort={sort === 'name' ? 'ascending' : undefined}
+                          >
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="-ml-2 h-8 px-2"
+                              onClick={() => { setSort('name'); setPage(0) }}
+                              data-testid="kg-sort-name"
+                            >
+                              Name
+                              <ArrowUpDown className={`ml-2 h-3 w-3 ${sort === 'name' ? 'opacity-100' : 'opacity-30'}`} />
+                            </Button>
+                          </th>
                           <th className="text-left p-3 font-medium">Type</th>
                           <th className="text-left p-3 font-medium">Status</th>
-                          <th className="text-left p-3 font-medium">Degree</th>
+                          <th
+                            className="text-left p-3 font-medium"
+                            aria-sort={sort === 'degree' ? 'descending' : undefined}
+                          >
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="-ml-2 h-8 px-2"
+                              onClick={() => { setSort('degree'); setPage(0) }}
+                              data-testid="kg-sort-degree"
+                            >
+                              Degree
+                              <ArrowUpDown className={`ml-2 h-3 w-3 ${sort === 'degree' ? 'opacity-100' : 'opacity-30'}`} />
+                            </Button>
+                          </th>
                           <th className="text-left p-3 font-medium">Docs</th>
                           <th className="text-left p-3 font-medium">Confidence</th>
                         </tr>
@@ -210,7 +242,7 @@ export default function KnowledgeGraphPage() {
                           >
                             <td className="p-3 font-medium">{entity.name}</td>
                             <td className="p-3">
-                              <Badge variant="secondary">{entity.entity_type}</Badge>
+                              <EntityTypeLabel canonical={entity.entity_type} display={entity.primary_type} />
                             </td>
                             <td className="p-3">
                               {entity.status ? (
@@ -304,9 +336,12 @@ export default function KnowledgeGraphPage() {
               </Button>
             </div>
 
-            <Badge variant="secondary" className="mb-4">
-              {selectedEntity.entity_type}
-            </Badge>
+            <div className="mb-4">
+              <EntityTypeLabel
+                canonical={selectedEntity.entity_type}
+                display={selectedEntity.primary_type}
+              />
+            </div>
 
             {/* Triage: status + degree/doc-count + manual_override toggle (Q.5) */}
             {(() => {

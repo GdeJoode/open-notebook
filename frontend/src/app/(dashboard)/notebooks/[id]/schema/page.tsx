@@ -15,7 +15,7 @@ import { NextStepLink } from '@/components/common/NextStepLink'
 import { TtlDownloadButton } from '@/components/notebooks/schema/TtlDownloadButton'
 import { NetworkxExportMenu } from '@/components/notebooks/exports/NetworkxExportMenu'
 import { useNotebook } from '@/lib/hooks/use-notebooks'
-import { useNotebookSchema } from '@/lib/hooks/use-notebook-schema'
+import { useNotebookSchema, usePausedExtraction } from '@/lib/hooks/use-notebook-schema'
 
 /**
  * `/notebooks/[id]/schema` — Phase B.3a Schema tab.
@@ -41,6 +41,8 @@ export default function NotebookSchemaPage() {
     isLoading: schemaLoading,
     isError: schemaError,
   } = useNotebookSchema(notebookId)
+  const paused = usePausedExtraction(notebookId)
+  const nothingPaused = paused.isSuccess && paused.data.paused_count === 0
 
   if (notebookLoading) {
     return (
@@ -119,16 +121,20 @@ export default function NotebookSchemaPage() {
             >
               Pending extensions
             </h2>
-            {/* WB.2: a gated source waits here. Accepting a proposal does not
-                resume its extraction; this banner does. */}
-            <ExtractionPausedBanner notebookId={notebookId} showSchemaLink={false} />
             {schema && (
               <PendingExtensionsPanel
                 extensions={schema.pending_extensions}
                 notebookId={notebookId}
               />
             )}
-            {schema && schema.pending_extensions.length === 0 && (
+            {/* WB.2: a gated source waits here. Accepting a proposal does not
+                resume its extraction; this banner does. WB.3: below the
+                proposals, so they come first and Resume is secondary. */}
+            <div className="mt-3">
+              <ExtractionPausedBanner notebookId={notebookId} showSchemaLink={false} />
+            </div>
+            {/* WB.3: The Tray is next only once nothing here waits. */}
+            {schema && schema.pending_extensions.length === 0 && nothingPaused && (
               <div className="mt-3">
                 <NextStepLink href="/" data-testid="schema-next">
                   Next: The Tray

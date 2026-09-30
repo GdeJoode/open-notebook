@@ -63,7 +63,7 @@ class TestListEntities:
         assert resp.status_code == 200
         svc.list_entities.assert_called_once_with(
             limit=50, offset=0, entity_type="Person", status=None,
-            source_id=None,
+            source_id=None, sort="name",
         )
 
     def test_list_with_pagination(self):
@@ -77,7 +77,7 @@ class TestListEntities:
         assert resp.status_code == 200
         svc.list_entities.assert_called_once_with(
             limit=10, offset=20, entity_type=None, status=None,
-            source_id=None,
+            source_id=None, sort="name",
         )
 
     def test_list_with_status_filter(self):
@@ -92,7 +92,7 @@ class TestListEntities:
         assert resp.status_code == 200
         svc.list_entities.assert_called_once_with(
             limit=50, offset=0, entity_type=None, status="reference",
-            source_id=None,
+            source_id=None, sort="name",
         )
         svc.count_entities.assert_called_once_with(
             entity_type=None, status="reference", source_id=None
@@ -112,7 +112,7 @@ class TestListEntities:
         assert resp.status_code == 200
         svc.list_entities.assert_called_once_with(
             limit=50, offset=0, entity_type=None, status=None,
-            source_id="source:abc",
+            source_id="source:abc", sort="name",
         )
         svc.count_entities.assert_called_once_with(
             entity_type=None, status=None, source_id="source:abc"
@@ -130,6 +130,21 @@ class TestListEntities:
         assert resp.status_code == 200
         _, kwargs = svc.list_entities.call_args
         assert kwargs["source_id"] is None
+
+
+    def test_list_sorted_by_degree(self):
+        """WB.3: the KG table asks for ?sort=degree; anything else is refused."""
+        svc = AsyncMock(spec=KnowledgeGraphService)
+        svc.list_entities.return_value = []
+        svc.count_entities.return_value = 0
+        client = _make_app(svc)
+
+        resp = client.get("/api/knowledge-graph/entities?status=active&sort=degree")
+        bad = client.get("/api/knowledge-graph/entities?sort=weight")
+
+        assert resp.status_code == 200
+        assert svc.list_entities.call_args.kwargs["sort"] == "degree"
+        assert bad.status_code == 422
 
 
 class TestGetEntity:

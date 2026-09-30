@@ -77,6 +77,17 @@ def test_stale_sources_flags_old_source():
     assert len(findings) == 1 and findings[0].check_id == "stale_sources"
 
 
+def test_stale_sources_names_the_title_without_the_upload_prefix():
+    """WB.3: the finding's sentence shows the title as the frontend does."""
+    old = (_NOW - timedelta(days=_T.stale_days + 10)).isoformat()
+    [f] = check_stale_sources(
+        [{"id": "source:s1", "updated": old,
+          "title": "410a65bba3f8__Convenant Regio Deal Waterwegregio"}],
+        _T, now=_NOW,
+    )
+    assert f.title.startswith("Source 'Convenant Regio Deal Waterwegregio' is stale")
+
+
 def test_stale_sources_ignores_fresh_source():
     fresh = (_NOW - timedelta(days=1)).isoformat()
     findings = check_stale_sources(

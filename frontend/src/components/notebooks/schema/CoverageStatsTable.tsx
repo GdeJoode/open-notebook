@@ -5,6 +5,7 @@ import { useMemo } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { usePass1Results } from '@/lib/hooks/use-notebook-schema'
+import { displaySourceTitle } from '@/lib/utils/source-title'
 
 interface CoverageStatsTableProps {
   notebookId: string
@@ -109,7 +110,7 @@ export function CoverageStatsTable({ notebookId }: CoverageStatsTableProps) {
                 data-testid={`coverage-row-${row.source_id}`}
               >
                 <td className="px-3 py-2">
-                  {row.source_title ?? (
+                  {row.source_title != null ? displaySourceTitle(row.source_title) : (
                     <span className="italic text-muted-foreground">
                       (deleted source)
                     </span>

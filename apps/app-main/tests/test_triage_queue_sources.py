@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from app_main.services.triage.queue_sources import sources_for_entities
+from app_main.services.triage.queue_sources import entity_types, sources_for_entities
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import execute_query
 
@@ -53,3 +53,13 @@ async def test_titles_in_the_entitys_order_distinct(live_surrealdb: SurrealDBCon
 
 async def test_no_entities_no_query(live_surrealdb: SurrealDBConfig):
     assert await sources_for_entities([], config=live_surrealdb) == {}
+
+
+async def test_entity_types_are_the_canonical_types(live_surrealdb: SurrealDBConfig):
+    """WB.3: the triage table's type is the entity's ``entity_type``, not the
+    label the row stored; a deleted entity is absent."""
+    e1 = await _entity(live_surrealdb, [])
+    gone = "entity:gone" + uuid.uuid4().hex[:6]
+    out = await entity_types([e1, gone, e1], config=live_surrealdb)
+    assert out == {e1: "organization"}
+    assert await entity_types([], config=live_surrealdb) == {}

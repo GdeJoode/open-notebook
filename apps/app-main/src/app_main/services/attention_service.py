@@ -30,6 +30,7 @@ from surrealdb_service.repositories.source import SourceRepository
 
 from app_main.services.notebook_service import NotebookService
 from app_main.services.paused_extraction import list_paused_jobs_for_notebook
+from app_main.services.source_title import display_source_title
 from app_main.services.stopped_sources import (
     STALLED_AFTER_MINUTES,
     add_chunk_counts,
@@ -398,7 +399,7 @@ class AttentionService:
         for r, nb in zip(rows, notebook_ids):
             by_notebook.setdefault(nb, []).append(r)
         for nb, members in sorted(by_notebook.items(), key=lambda x: -len(x[1])):
-            titles = [m.get("title") or str(m["id"]) for m in members]
+            titles = [display_source_title(m.get("title")) or str(m["id"]) for m in members]
             shown = ", ".join(titles[:3]) + (", ..." if len(titles) > 3 else "")
             if nb is None:
                 # No notebook, so no Schema tab: each source on its own page.

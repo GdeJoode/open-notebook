@@ -373,6 +373,41 @@ class TestResumeExtractionEndpoint:
 # ---------------------------------------------------------------------------
 
 
+class TestReviewGateActive:
+    """WB.3: ``review_gate_active`` on GET /schema is true exactly when a
+    resume would add the sentinel, i.e. turn the notebook's gate off. The
+    Schema tab's Resume confirmation says so when it is true."""
+
+    @pytest.mark.parametrize("review_required", [True, False])
+    @pytest.mark.parametrize(
+        "accepted", [[], [{"extension_id": "e1", "type_name": "ClinicalTrial"}]]
+    )
+    def test_flag_matches_what_resume_does(self, review_required, accepted):
+        def schema() -> NotebookSchema:
+            return NotebookSchema(
+                notebook="notebook:b3c",
+                base_ontology="scholarly",
+                review_required=review_required,
+                accepted_extensions=list(accepted),
+            )
+
+        notebook_svc = AsyncMock(spec=NotebookService)
+        notebook_svc.get.return_value = _make_notebook()
+        schema_repo = AsyncMock(spec=NotebookSchemaRepository)
+        schema_repo.get_by_notebook.side_effect = lambda *_a, **_k: schema()
+        schema_repo.upsert.return_value = "notebook_schema:abc"
+        source_repo = AsyncMock(spec=SourceRepository)
+        source_repo.list_with_metadata.return_value = []
+
+        client = _make_app(notebook_svc, schema_repo, source_repo)
+        flag = client.get("/api/notebooks/notebook:b3c/schema").json()[
+            "review_gate_active"
+        ]
+        resumed = client.post("/api/notebooks/notebook:b3c/extraction/resume")
+        assert flag is resumed.json()["sentinel_added"]
+        assert flag is (review_required and not accepted)
+
+
 class TestSentinelFiltering:
     """Resume sentinels must not leak into the schema browse / TTL outputs."""
 

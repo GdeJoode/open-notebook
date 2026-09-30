@@ -25,6 +25,7 @@ function schema(overrides: Partial<NotebookSchemaResponse> = {}): NotebookSchema
     coverage_pct: 0,
     review_required: false,
     soft_nudge_dismissed: false,
+    review_gate_active: false,
     ...overrides,
   }
 }
