@@ -345,10 +345,12 @@ export default function SourcesPage() {
           className="w-full min-w-[960px] outline-none table-fixed"
         >
           <colgroup>
-            <col className="w-[120px]" />
+            {/* WB.4: Stage and Created fit their common values on one line at
+                1366 px ("Awaiting schema review", "in about 8 hours"). */}
+            <col className="w-[110px]" />
             <col className="w-auto" />
-            <col className="w-[210px]" />
-            <col className="w-[140px]" />
+            <col className="w-[260px]" />
+            <col className="w-[170px]" />
             <col className="w-[100px]" />
             <col className="w-[100px]" />
             <col className="w-[100px]" />
@@ -464,7 +466,7 @@ export default function SourcesPage() {
                       readOnly
                       processingStage={source.processing_stage}
                       jobStatus={source.status}
-                      className="w-28 shrink-0"
+                      className="w-40 shrink-0"
                     />
                     {source.stalled && (
                       <Badge

@@ -26,6 +26,7 @@ import { gotoAndWait } from '../_helpers'
 import { DEFAULT_SETTINGS, mockDashboardChrome } from '../track-a/_track-a-helpers'
 import { NOTEBOOK, backend } from '../track-oe/_ontology-backend'
 import attention from './attention.fixture.json'
+import board from './sources-board.fixture.json'
 import { NOTEBOOKS, fakeCounts, fakeList } from './sources-board.fake'
 
 const DASHBOARD = path.resolve(__dirname, '../../src/app/(dashboard)')
@@ -189,6 +190,31 @@ test.describe('WB.4 — one page frame, one type scale', () => {
     await page.getByRole('navigation').getByRole('link', { name: /^Summaries/ }).scrollIntoViewIfNeeded()
     await expect(page.getByRole('navigation').getByRole('link', { name: /^Summaries/ })).toBeInViewport()
     await expect(signOut).toBeInViewport({ ratio: 1 })
+  })
+
+  test('at 1366 px the Sources Stage and Created cells keep to one line', async ({ page }) => {
+    await page.setViewportSize({ width: 1366, height: 768 })
+    // The fixture's rows then read "in about 8 hours", the longest the reviewer saw.
+    await page.clock.setFixedTime(Date.parse(board.generated_at) - 8 * 3600_000)
+    await mockBackend(page)
+    await gotoAndWait(page, '/sources')
+    await expectFramed(page, '/sources')
+    await expect(page.locator('[data-testid^="source-row-"]').first()).toBeVisible()
+    const cells = await page.evaluate(() => {
+      const lines = (el: Element) => {
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size
+      }
+      return [...document.querySelectorAll('[data-testid^="source-row-"]')].flatMap((row) => [
+        { what: 'stage', text: row.querySelector('[data-testid="pipeline-stage-label"]')!.textContent,
+          lines: lines(row.querySelector('[data-testid="pipeline-stage-label"]')!) },
+        { what: 'created', text: row.children[3].textContent, lines: lines(row.children[3]) },
+      ])
+    })
+    expect(cells.map((c) => c.text)).toContain('Awaiting schema review')
+    expect(cells.some((c) => /^in about \d+ hours$|^about \d+ hours ago$/.test(c.text ?? ''))).toBe(true)
+    expect(cells.filter((c) => c.lines > 1)).toEqual([])
   })
 
   test('the old /advanced address opens Settings on its Advanced tab', async ({ page }) => {
