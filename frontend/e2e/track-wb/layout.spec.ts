@@ -191,6 +191,13 @@ test.describe('WB.4 — one page frame, one type scale', () => {
     await expect(signOut).toBeInViewport({ ratio: 1 })
   })
 
+  test('the old /advanced address opens Settings on its Advanced tab', async ({ page }) => {
+    await mockBackend(page)
+    await gotoAndWait(page, '/advanced')
+    await expect(page).toHaveURL(/\/settings\?tab=advanced$/, { timeout: 45_000 })
+    await expect(page.getByRole('tab', { name: 'Advanced' })).toHaveAttribute('aria-selected', 'true')
+  })
+
   test('at 1024 px the source page tabs keep each label whole and apart', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 900 })
     await mockBackend(page)

@@ -88,7 +88,7 @@ export function EmbeddingModelChangeDialog({
               </div>
 
               <p className="text-sm font-medium text-foreground">
-                Would you like to proceed to the Advanced page to start the rebuild now?
+                Would you like to go to Settings › Advanced to start the rebuild now?
               </p>
             </div>
           </AlertDialogDescription>
