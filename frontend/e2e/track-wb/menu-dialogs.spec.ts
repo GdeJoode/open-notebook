@@ -82,6 +82,8 @@ async function roundTrip(page: Page, t: Target) {
 
       await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).pointerEvents),
         { message: what }).toBe('auto')
+      // Review round 1: focus comes back to the menu's trigger, not <body>.
+      await expect(t.menu(), what).toBeFocused()
       // A real click lands: the menu opens again.
       await t.menu().click({ timeout: 5_000 })
       await expect(page.getByRole('menu'), what).toBeVisible()
@@ -150,5 +152,33 @@ test.describe('WB.5 — menus that open dialogs leave a working page', () => {
     await roundTrip(page, { item: 'Delete', menu: episode, layer: alert(page) })
     const speaker = () => page.getByRole('button', { name: 'Actions for Solo' })
     await roundTrip(page, { item: 'Delete', menu: speaker, layer: alert(page) })
+  })
+
+  test('in the phone drawer: Create › Notebook, cancel, Escape closes the drawer', async ({ page }) => {
+    // Review round 1 saw the drawer stay up once after this path. Found:
+    // the closed dialog left focus on <body>, outside the open drawer. Focus
+    // now returns to Create, and Escape then closes the drawer promptly.
+    await page.setViewportSize({ width: 390, height: 844 })
+    await backendWithMenus(page)
+    await gotoAndWait(page, '/sources')
+    const trigger = page.getByRole('button', { name: 'Open navigation' })
+    await expect(trigger).toBeVisible({ timeout: 60_000 })
+    const drawer = page.getByTestId('mobile-nav-drawer')
+    for (const close of ['button', 'Escape'] as const) {
+      await trigger.click()
+      const create = drawer.getByRole('button', { name: 'Create' })
+      await create.click()
+      await page.getByRole('menuitem', { name: 'Notebook' }).click()
+      const dialog = page.getByRole('dialog', { name: /Create New Notebook/ })
+      await expect(dialog).toBeVisible()
+      if (close === 'button') await dialog.getByRole('button', { name: 'Cancel' }).click()
+      else await page.keyboard.press('Escape')
+      await expect(dialog).toBeHidden()
+      await expect(create, close).toBeFocused()
+      await page.keyboard.press('Escape')
+      await expect(drawer, close).toHaveCount(0, { timeout: 2_000 })
+      await expect(trigger, close).toBeFocused()
+      await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).pointerEvents)).toBe('auto')
+    }
   })
 })
