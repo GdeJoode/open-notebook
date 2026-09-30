@@ -757,6 +757,18 @@ redo it.
   - Limit added: at 1024 px the source page's chat column is about 200 px
     wide and wraps its header and input (WB.5).
 
+> **Carried from WB.4 review round 2 (approved; minors, not blocking):**
+> 1. Sources: fixed columns total 840 of the table's 960 px minimum, so at
+>    1024 px Title is ~120 px (titles cut after ~12 characters). WB.5.
+> 2. Sigma `labelSize` 13 with an unchanged `labelRenderedSizeThreshold` shows
+>    fewer labels on dense graphs; not checked on a live graph.
+> 3. The source tabs are now left-aligned and sized to their labels at every
+>    width, not only 1024.
+> 4. The small-text lint rule sees class strings only: inline
+>    `style={{ fontSize: 11 }}` and `text-[length:11px]` get through.
+> - Outside WB.4: other menus that open dialogs (`SourcesColumn.tsx:119`,
+>   `NotebookCard`) still open them from `onSelect` (the freeze pattern).
+
 **WB.5 — Responsive** (~1.5d, per WB-D3)
 - **Sidebar:**
   - collapses to icons below `xl`;
