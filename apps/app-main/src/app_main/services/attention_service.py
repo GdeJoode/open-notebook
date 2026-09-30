@@ -16,6 +16,7 @@ the sidebar badges (``frontend/src/components/layout/AppSidebar.tsx``).
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import quote
@@ -179,6 +180,16 @@ def _source_item(row: Dict[str, Any], detail: str, link: str, at: Any) -> Attent
         detail=detail,
         at=_iso(at),
     )
+
+
+# The 12-hex upload prefix of stored titles (``410a65bba3f8__Convenant ...``).
+# Item labels go to the frontend raw and are stripped there
+# (``displaySourceTitle``); this is for titles joined into server-written text.
+_UPLOAD_PREFIX = re.compile(r"^[0-9a-f]{12}__")
+
+
+def _display_title(row: Dict[str, Any]) -> str:
+    return _UPLOAD_PREFIX.sub("", row.get("title") or "") or str(row["id"])
 
 
 def _iso(value: Any) -> Optional[str]:
@@ -398,7 +409,7 @@ class AttentionService:
         for r, nb in zip(rows, notebook_ids):
             by_notebook.setdefault(nb, []).append(r)
         for nb, members in sorted(by_notebook.items(), key=lambda x: -len(x[1])):
-            titles = [m.get("title") or str(m["id"]) for m in members]
+            titles = [_display_title(m) for m in members]
             shown = ", ".join(titles[:3]) + (", ..." if len(titles) > 3 else "")
             if nb is None:
                 # No notebook, so no Schema tab: each source on its own page.

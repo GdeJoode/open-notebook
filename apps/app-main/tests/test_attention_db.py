@@ -691,3 +691,17 @@ async def test_a_report_leaves_pool_slots_for_the_pages(env, monkeypatch) -> Non
     monkeypatch.setattr(pool, "acquire", counted)
     await AttentionService().report()
     assert peak + 3 <= pool.config.pool_size, peak
+
+
+async def test_gated_detail_shows_titles_without_the_upload_prefix(env) -> None:
+    """WB.3: the per-notebook item joins its sources' titles into its detail;
+    the 12-hex upload prefix is not shown there (labels are stripped by the
+    frontend's ``displaySourceTitle``)."""
+    nb = await _notebook("Inbox")
+    await _source("410a65bba3f8__Convenant Regio Deal Waterwegregio",
+                  "awaiting_schema_review", nb)
+    async with _client(_app()) as c:
+        body = (await c.get("/api/attention")).json()
+    gated = next(g for g in body["groups"] if g["key"] == "sources_awaiting_review")
+    [item] = gated["items"]
+    assert item["detail"] == "1 source waiting: Convenant Regio Deal Waterwegregio"
