@@ -88,6 +88,9 @@ class TestListEndpointPopulatesStage:
         with patch(
             "surrealdb_service.repositories.SourceRepository",
             return_value=fake_repo,
+        ), patch(
+            "app_main.api.routers.sources_crud.stopped_sources",
+            AsyncMock(return_value=[]),
         ):
             resp = client.get("/sources/")
 
@@ -107,6 +110,9 @@ class TestListEndpointPopulatesStage:
         with patch(
             "surrealdb_service.repositories.SourceRepository",
             return_value=fake_repo,
+        ), patch(
+            "app_main.api.routers.sources_crud.stopped_sources",
+            AsyncMock(return_value=[]),
         ):
             resp = client.get("/sources/")
 

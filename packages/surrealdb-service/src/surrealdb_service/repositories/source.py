@@ -559,6 +559,8 @@ class SourceRepository(BaseRepository[Source]):
         offset: int = 0,
         stages: Optional[List[str]] = None,
         ids: Optional[List[str]] = None,
+        first_stages: Optional[List[str]] = None,
+        first_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         List sources with insight counts and embedding status.
@@ -571,11 +573,28 @@ class SourceRepository(BaseRepository[Source]):
             offset: Skip count.
             stages: Optional ``processing_stage`` filter (any of these).
             ids: Optional id filter (only these sources).
+            first_stages: Sources at one of these stages, or with one of
+                ``first_ids``, sort before the rest; each part by ``order_by``
+                (WB.3: the Sources board puts "needs you" first).
+            first_ids: See ``first_stages``.
 
         Returns:
             List of source dicts with metadata fields.
         """
         order_clause = f"ORDER BY {order_by} {order_dir}"
+        first_field = ""
+        if first_stages is not None or first_ids is not None:
+            # SurrealDB orders by projected fields only; ``true`` sorts after
+            # ``false``, so DESC puts the "needs you" rows first.
+            first_field = (
+                ", (processing_stage IN $first_stages OR id IN $first_ids) "
+                "AS needs_you"
+            )
+            order_clause = f"ORDER BY needs_you DESC, {order_by} {order_dir}"
+        first_params: Dict[str, Any] = {
+            "first_stages": first_stages or [],
+            "first_ids": [ensure_record_id(i) for i in first_ids or []],
+        }
         conditions = []
         if stages:
             conditions.append(STAGE_IN)
@@ -593,6 +612,7 @@ class SourceRepository(BaseRepository[Source]):
                  AS insights_count,
                 ((SELECT VALUE id FROM source_embedding
                   WHERE source = $parent.id LIMIT 1)) != NONE AS embedded
+                {first_field}
                 FROM (select value in from reference where out=$notebook_id)
                 {where_clause}
                 {order_clause}
@@ -606,6 +626,7 @@ class SourceRepository(BaseRepository[Source]):
                     "offset": offset,
                     "stages": stages,
                     "ids": record_ids,
+                    **first_params,
                 },
                 self.config,
             )
@@ -618,6 +639,7 @@ class SourceRepository(BaseRepository[Source]):
                  AS insights_count,
                 ((SELECT VALUE id FROM source_embedding
                   WHERE source = $parent.id LIMIT 1)) != NONE AS embedded
+                {first_field}
                 FROM source
                 {where_clause}
                 {order_clause}
@@ -626,7 +648,7 @@ class SourceRepository(BaseRepository[Source]):
             return await execute_query(
                 query,
                 {"limit": limit, "offset": offset, "stages": stages,
-                 "ids": record_ids},
+                 "ids": record_ids, **first_params},
                 self.config,
             )
 
@@ -655,6 +677,34 @@ class SourceRepository(BaseRepository[Source]):
             params,
             self.config,
         ) or []
+
+    async def stage_counts(
+        self,
+        notebook_id: Optional[str] = None,
+        ids: Optional[List[str]] = None,
+    ) -> Dict[str, int]:
+        """Sources per ``processing_stage`` (WB.3, the Sources board's chips).
+
+        Reads the same rows :meth:`list_with_metadata` lists for the same
+        ``notebook_id`` and ``ids``, so a chip's count is the length of the
+        list its ``?stage=`` filter returns. Stages without sources are absent.
+        """
+        source = (
+            "(select value in from reference where out=$notebook_id)"
+            if notebook_id
+            else "source"
+        )
+        where = "WHERE id IN $ids" if ids is not None else ""
+        rows = await execute_query(
+            f"SELECT processing_stage, count() AS n FROM {source} {where} "
+            "GROUP BY processing_stage;",
+            {
+                "notebook_id": ensure_record_id(notebook_id) if notebook_id else None,
+                "ids": [ensure_record_id(i) for i in ids] if ids is not None else None,
+            },
+            self.config,
+        )
+        return {str(r["processing_stage"]): int(r["n"]) for r in rows or []}
 
     async def chunk_counts(self, source_ids: List[str]) -> Dict[str, int]:
         """Chunks per source for ``source_ids`` (absent = 0)."""

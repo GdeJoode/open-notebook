@@ -23,6 +23,7 @@ from app_main.api.schemas import (
     RelatedSourceResponse,
     SignalProvenanceResponse,
     SourceInsightResponse,
+    SourceCountsResponse,
     SourceListResponse,
     SourceResponse,
     SourceStatusResponse,
@@ -49,7 +50,7 @@ from app_main.services.chunking.chunk_mutator import (
 )
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
-from app_main.services.stopped_sources import stopped_sources
+from app_main.services.stopped_sources import NEEDS_YOU_STAGES, stopped_sources
 from app_main.services.transformation_service import TransformationService
 
 router = APIRouter()
@@ -72,7 +73,12 @@ async def get_sources(
     ),
     offset: int = Query(0, ge=0, description="Number of sources to skip"),
     sort_by: str = Query(
-        "updated", description="Field to sort by (created or updated)"
+        "updated",
+        description=(
+            "Field to sort by (created or updated), or 'attention': the "
+            "sources that need you first (failed, awaiting schema review, "
+            "stopped), then the rest, each part by updated"
+        ),
     ),
     sort_order: str = Query("desc", description="Sort order (asc or desc)"),
     stage: Optional[List[str]] = Query(
@@ -100,10 +106,10 @@ async def get_sources(
                 status_code=400,
                 detail=f"unknown stage(s) {unknown}; one of {sorted(_STAGES)}",
             )
-        if sort_by not in ["created", "updated"]:
+        if sort_by not in ["created", "updated", "attention"]:
             raise HTTPException(
                 status_code=400,
-                detail="sort_by must be 'created' or 'updated'",
+                detail="sort_by must be 'created', 'updated' or 'attention'",
             )
         if sort_order.lower() not in ["asc", "desc"]:
             raise HTTPException(
@@ -121,18 +127,21 @@ async def get_sources(
         from surrealdb_service.repositories import SourceRepository
 
         source_repo = SourceRepository()
-        ids = None
-        if stalled:
-            ids = [str(r["id"]) for r in await stopped_sources(source_repo)]
+        # Read on every page: each row says whether it stopped (WB.3).
+        stopped = [str(r["id"]) for r in await stopped_sources(source_repo)]
+        attention = sort_by == "attention"
         result = await source_repo.list_with_metadata(
             notebook_id=notebook_id,
-            order_by=sort_by,
+            order_by="updated" if attention else sort_by,
             order_dir=sort_order.upper(),
             limit=limit,
             offset=offset,
             stages=stage or None,
-            ids=ids,
+            ids=stopped if stalled else None,
+            first_stages=NEEDS_YOU_STAGES if attention else None,
+            first_ids=stopped if attention else None,
         )
+        stopped_set = set(stopped)
 
         # Batch fetch command statuses in a single query
         command_ids = []
@@ -203,6 +212,7 @@ async def get_sources(
                     processing_stage=str(
                         row.get("processing_stage", "ingested") or "ingested"
                     ),
+                    stalled=str(row["id"]) in stopped_set,
                 )
             )
 
@@ -213,6 +223,47 @@ async def get_sources(
         logger.error(f"Error fetching sources: {e}")
         raise HTTPException(
             status_code=500, detail=f"Error fetching sources: {str(e)}"
+        )
+
+
+@router.get("/counts", response_model=SourceCountsResponse)
+async def get_source_counts(
+    notebook_id: Optional[str] = Query(
+        None, description="Count within this notebook only"
+    ),
+    notebook_svc: NotebookService = Depends(get_notebook_service),
+):
+    """Sources per stage, stopped and "needs you" (WB.3, the board's chips).
+
+    Counted over the same rows ``GET /sources/`` lists with the same filters,
+    so a chip shows the length of the list it opens.
+    """
+    try:
+        if notebook_id and not await notebook_svc.get(notebook_id):
+            raise HTTPException(status_code=404, detail="Notebook not found")
+
+        from surrealdb_service.repositories import SourceRepository
+
+        source_repo = SourceRepository()
+        by_stage = await source_repo.stage_counts(notebook_id=notebook_id)
+        stopped = [str(r["id"]) for r in await stopped_sources(source_repo)]
+        stalled = (
+            sum((await source_repo.stage_counts(
+                notebook_id=notebook_id, ids=stopped)).values())
+            if stopped else 0
+        )
+        return SourceCountsResponse(
+            total=sum(by_stage.values()),
+            stages={s: by_stage.get(s, 0) for s in sorted(_STAGES)},
+            stalled=stalled,
+            needs_you=stalled + sum(by_stage.get(s, 0) for s in NEEDS_YOU_STAGES),
+        )
+    except (HTTPException, DatabaseUnavailableError):
+        raise
+    except Exception as e:
+        logger.error(f"Error counting sources: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error counting sources: {str(e)}"
         )
 
 
