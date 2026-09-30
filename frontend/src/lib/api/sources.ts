@@ -2,6 +2,7 @@ import type { AxiosResponse } from 'axios'
 
 import apiClient from './client'
 import {
+  SourceCounts,
   SourceListResponse,
   SourceDetailResponse,
   SourceResponse,
@@ -96,7 +97,8 @@ export const sourcesApi = {
     notebook_id?: string
     limit?: number
     offset?: number
-    sort_by?: 'created' | 'updated'
+    /** `attention`: failed, gated and stopped sources first, then by updated. */
+    sort_by?: 'created' | 'updated' | 'attention'
     sort_order?: 'asc' | 'desc'
     /** processing_stage filter (any of these); sent as repeated `stage=`. */
     stage?: string[]
@@ -107,6 +109,12 @@ export const sourcesApi = {
       params,
       paramsSerializer: { indexes: null },
     })
+    return response.data
+  },
+
+  /** The Sources board's chip counts (WB.3), over the rows `list` returns. */
+  counts: async (params?: { notebook_id?: string }) => {
+    const response = await apiClient.get<SourceCounts>('/sources/counts', { params })
     return response.data
   },
 

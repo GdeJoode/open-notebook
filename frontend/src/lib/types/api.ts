@@ -48,6 +48,22 @@ export interface SourceListResponse {
   // list endpoint too (backend Part B); optional so list-derived cards degrade
   // to an all-`pending` spine when absent (legacy/pre-backfill data).
   processing_stage?: ProcessingStage
+  // WB.3: stopped short of complete (the server's `?stalled=true` predicate).
+  stalled?: boolean
+  /** Failed, awaiting schema review or stopped: the server's "needs you". */
+  needs_you?: boolean
+}
+
+/**
+ * `GET /sources/counts` (WB.3): the Sources board's chip counts. Each is the
+ * length of the list its filter returns, within `notebook_id` when given.
+ */
+export interface SourceCounts {
+  total: number
+  stages: Record<ProcessingStage, number>
+  stalled: number
+  /** Failed, awaiting schema review and stopped: what `sort_by=attention` lists first. */
+  needs_you: number
 }
 
 export interface ProcessingInfo {

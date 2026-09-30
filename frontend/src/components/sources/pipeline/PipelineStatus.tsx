@@ -47,6 +47,12 @@ export interface PipelineStatusProps {
   children?: React.ReactNode
   /** Initial open state of the `detail` collapsible (default collapsed). */
   defaultOpen?: boolean
+  /**
+   * `card` only: no controls (WB.3, a Sources board row). The row itself opens
+   * the source, so segments, counts and recovery actions are not buttons and
+   * add no Tab stops.
+   */
+  readOnly?: boolean
   className?: string
 }
 
@@ -188,6 +194,7 @@ export function PipelineStatus({
   onNodeAction,
   children,
   defaultOpen = false,
+  readOnly = false,
   className,
 }: PipelineStatusProps) {
   const nodes = React.useMemo(
@@ -196,6 +203,26 @@ export function PipelineStatus({
   )
   const spine = nodes.filter((n) => !n.parallel)
   const insights = nodes.find((n) => n.parallel)
+
+  if (variant === 'card' && readOnly) {
+    return (
+      <div className={cn('flex flex-col gap-1', className)} data-variant="card">
+        <div className="flex items-center gap-1" aria-hidden>
+          {spine.map((node) => (
+            <span
+              key={node.key}
+              data-node-key={node.key}
+              data-node-state={node.state}
+              className={cn('h-1.5 flex-1 rounded-full', SEGMENT_STATE_CLASS[node.state])}
+            />
+          ))}
+        </div>
+        <span className="text-xs text-muted-foreground" data-testid="pipeline-stage-label">
+          {currentStageLabel(spine)}
+        </span>
+      </div>
+    )
+  }
 
   if (variant === 'card') {
     return (
