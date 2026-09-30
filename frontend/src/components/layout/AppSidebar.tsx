@@ -63,9 +63,6 @@ function writeMoreOpen(open: boolean): void {
 
 type CreateTarget = 'source' | 'notebook' | 'podcast'
 
-/** A badge in icon mode sits on a 48 px button: three characters at most. */
-const iconBadgeText = (count: number) => (count > 99 ? '99+' : String(count))
-
 interface AppSidebarProps {
   /**
    * WB.5: rendered inside the phone drawer: always expanded, full width, no
@@ -130,34 +127,31 @@ export function AppSidebar({ drawer = false, onNavigate }: AppSidebarProps = {})
       >
         <item.icon className="h-4 w-4" />
         {!isCollapsed && <span>{item.name}</span>}
-        {(count > 0 || partial) && (
-          <Badge
-            className={cn(
-              'tabular-nums',
-              isCollapsed ? 'absolute -right-1 -top-1 px-1' : 'ml-auto'
-            )}
+        {(count > 0 || partial) && (isCollapsed ? (
+          // WB.5: icons leave no room for a number; a dot on the icon, the
+          // count in the tooltip and for screen readers.
+          <span
+            className="absolute right-2 top-1.5 size-2.5 rounded-full bg-primary ring-2 ring-sidebar"
             data-testid={`nav-badge-${item.name}`}
+            data-badge="dot"
           >
-            {isCollapsed ? (
-              <>
-                <span aria-hidden="true">{iconBadgeText(count)}</span>
-                <span className="sr-only">
-                  {count}
-                  {partial && '+'}
-                </span>
-              </>
-            ) : (
-              <>
-                {count}
-                {partial && '+'}
-              </>
-            )}
+            <span className="sr-only">
+              {count}
+              {partial && '+'}
+              {' need you'}
+              {partial && ', some groups did not load'}
+            </span>
+          </span>
+        ) : (
+          <Badge className="ml-auto tabular-nums" data-testid={`nav-badge-${item.name}`}>
+            {count}
+            {partial && '+'}
             <span className="sr-only">
               {' need you'}
               {partial && ', some groups did not load'}
             </span>
           </Badge>
-        )}
+        ))}
       </Button>
     )
 

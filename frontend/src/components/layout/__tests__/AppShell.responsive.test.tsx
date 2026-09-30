@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * WB.5: the sidebar is icons below xl (badges still shown), a drawer below md
+ * WB.5: the sidebar is icons below xl (a badge becomes a dot), a drawer below md
  * opened from a top bar. The drawer traps focus, closes on navigation, and
  * gives focus back to its button.
  */
@@ -71,13 +71,15 @@ describe('sidebar by width', () => {
     render(shell())
     expect(sidebar()!.className).toContain('w-16')
     expect(screen.queryByRole('button', { name: /(Collapse|Expand) sidebar/ })).toBeNull()
-    // Icon mode: no labels, but each badge is still on its icon.
+    // Icon mode: no labels, but each entry that needs you keeps a dot on its
+    // icon, with the count for screen readers (and in the tooltip).
     const triage = screen.getByTestId('nav-badge-Triage')
-    expect(triage.querySelector('[aria-hidden="true"]')!.textContent).toBe('99+')
-    expect(triage.textContent).toContain('1238 need you')
-    expect(screen.getByTestId('nav-badge-Sources').querySelector('[aria-hidden="true"]')!.textContent)
-      .toBe('3')
-    expect(screen.getByTestId('nav-badge-The Tray').textContent).toContain('1257+ need you')
+    expect(triage.getAttribute('data-badge')).toBe('dot')
+    expect(triage.textContent).toBe('1238 need you')
+    expect(screen.getByTestId('nav-badge-Sources').textContent).toBe('3 need you')
+    expect(screen.getByTestId('nav-badge-The Tray').textContent)
+      .toBe('1257+ need you, some groups did not load')
+    expect(screen.queryByTestId('nav-badge-Graph')).toBeNull()
     // Wider again: the stored choice (expanded) is back.
     act(() => setViewport(1280))
     expect(sidebar()!.className).toContain('w-64')
