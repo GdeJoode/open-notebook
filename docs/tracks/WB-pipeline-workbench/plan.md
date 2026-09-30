@@ -1,7 +1,7 @@
 # Track WB — Pipeline workbench (frontend review)
 
-**Status: ALL PHASES BUILT 2026-09-30** (WB.5 on `feature/wb5-responsive`,
-awaiting review). **Approved 2026-09-29.** Owner accepted every recommended option
+**Status: COMPLETE 2026-09-30** (WB.0–WB.5 merged, each after adversarial
+review). **Approved 2026-09-29.** Owner accepted every recommended option
 (WB-D1 (a) Werkbak home, WB-D2 (a) sources primary, WB-D3 (a) desktop first,
 WB-D4 (a) a collapsed "More" group, WB-D5 (a) English).
 
@@ -856,6 +856,17 @@ redo it.
     that moved the source card's and the podcast profiles' menus to
     `useMenuAction` too (their dialogs gave focus to the removed item).
   - Limits kept: ~350 px lists at 390; Notes and Chat never side by side.
+
+> **Carried from WB.5 review round 2 (approved; minors, not blocking):**
+> 1. The KG details also close when the window widens past lg
+>    (`knowledge-graph/page.tsx:69-74`, :90-92); only narrowing needs to.
+> 2. At lg the notebook's Sources column is still a `TabsContent`
+>    (`role=tabpanel`, `data-state=inactive`, `tabIndex=0`) labelled by a
+>    trigger that isn't rendered: a nameless inactive panel and an extra tab
+>    stop.
+> 3. Reopening a dialog during its close animation makes `use-return-focus`
+>    capture an element inside the dialog; the next close falls back to
+>    Radix's default (`<body>` for trigger-less dialogs).
 
 Rough total: ~9 days. WB.0 comes first, because a slow database makes every
 page look broken. WB.1 and WB.2 deliver most of what the owner asked for.
