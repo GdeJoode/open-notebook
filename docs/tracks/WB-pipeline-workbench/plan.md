@@ -658,6 +658,27 @@ redo it.
     - Zotero pushes send the stored title until the backfill runs, and audit
       findings stored before this change keep the prefix.
 
+> **Carried from WB.3 review round 1 (approved; minors, not blocking):**
+> 1. `review_gate_active` (`schemas.py:658`) uses `review_required and not
+>    accepted_extensions`; the extraction gate ignores `op == "reparent"`
+>    entries. A legacy notebook with only reparent rows is held while the flag
+>    says false (resume then re-pauses). Follow-up: one shared gate predicate
+>    for extraction, run-entities, resume and the flag. Live exposure: none.
+> 2. Every `GET /sources/` page now reads the jobs table (`stopped_sources`); a
+>    failing jobs read turns every source list into a 500.
+> 3. Offset paging on the attention sort can repeat or skip a row when a
+>    source crosses the 15-minute mark between pages.
+> 4. A source with `processing_stage` NONE counts in "All" but in no chip.
+> 5. The degree sort scores all matches per page (3.1 s for 5,500) and falls
+>    back to name order silently if the signals join fails.
+> 6. OKF export (file names, index, headings) and MCP/agent reads still use the
+>    stored, prefixed titles; the title backfill fixes them.
+> 7. `sources-board.fake.ts` cites a contract test that doesn't exist; the
+>    per-notebook fake counts aren't checked against the fixture (the DB test
+>    pins the fixture to the real endpoints).
+> 8. `aria-label` on a span in `StageChips`; no `aria-sort` on the Stage
+>    header; a failed paused read hides "Next: The Tray" with no retry.
+
 **WB.4 — Layout system and typography** (~2d)
 - **One `PageHeader`:**
   - title, optional subtitle, and actions on the right;
