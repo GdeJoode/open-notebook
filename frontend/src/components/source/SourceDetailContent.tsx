@@ -86,6 +86,7 @@ import type { PipelineDeepLinkTab, PipelineNodeAction } from '@/lib/pipeline/pip
 import { useZoteroStatus, useZoteroPush } from '@/lib/hooks/use-zotero'
 import { displaySourceTitle } from '@/lib/utils/source-title'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { useMenuAction } from '@/components/layout/use-menu-action'
 
 interface SourceDetailContentProps {
   sourceId: string
@@ -119,6 +120,8 @@ export function SourceDetailContent({
   const [fileAvailable, setFileAvailable] = useState<boolean | null>(null)
   const [selectedInsight, setSelectedInsight] = useState<SourceInsightResponse | null>(null)
   const [showReprocessDialog, setShowReprocessDialog] = useState(false)
+  // Reprocess opens its dialog once the actions menu has closed.
+  const menuAction = useMenuAction()
   const [reprocessConfig, setReprocessConfig] = useState<DoclingPipelineConfig>({ ...DEFAULT_PIPELINE_CONFIG })
   const [isReprocessing, setIsReprocessing] = useState(false)
   // Controlled tab state so the pipeline spine can deep-link into a tab.
@@ -603,7 +606,7 @@ export function SourceDetailContent({
             <MoreVertical className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent align="end" onCloseAutoFocus={menuAction.onCloseAutoFocus}>
           {source.asset?.file_path && (
             <>
               <DropdownMenuItem
@@ -621,7 +624,7 @@ export function SourceDetailContent({
             </>
           )}
           <DropdownMenuItem
-            onClick={() => setShowReprocessDialog(true)}
+            onSelect={menuAction.defer(() => setShowReprocessDialog(true))}
             disabled={!source.asset?.file_path}
           >
             <Settings2 className="mr-2 h-4 w-4" />

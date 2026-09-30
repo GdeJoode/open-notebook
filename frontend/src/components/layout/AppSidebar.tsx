@@ -40,6 +40,7 @@ import {
   FileText,
   Plus,
 } from 'lucide-react'
+import { useMenuAction } from './use-menu-action'
 import { NAV_SECTIONS, TRAY_HREF, activeNavHref, type NavItem, type NavSection } from './nav-items'
 
 const MORE_OPEN_KEY = 'sidebar.moreOpen'
@@ -87,6 +88,8 @@ export function AppSidebar({ drawer = false, onNavigate }: AppSidebarProps = {})
   const canToggle = !drawer && isXl
 
   const [createMenuOpen, setCreateMenuOpen] = useState(false)
+  // Notebook and Podcast open their dialogs once the menu has closed.
+  const createMenu = useMenuAction()
   const [notebookDialogOpen, setNotebookDialogOpen] = useState(false)
   const [podcastDialogOpen, setPodcastDialogOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(readMoreOpen)
@@ -349,32 +352,24 @@ export function AppSidebar({ drawer = false, onNavigate }: AppSidebarProps = {})
                 align={isCollapsed ? 'end' : 'start'}
                 side={isCollapsed ? 'right' : 'bottom'}
                 className="w-48"
+                onCloseAutoFocus={createMenu.onCloseAutoFocus}
               >
                 <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault()
-                    handleCreateSelection('source')
-                  }}
+                  onSelect={createMenu.defer(() => handleCreateSelection('source'))}
                   className="gap-2"
                 >
                   <FileText className="h-4 w-4" />
                   Source
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault()
-                    handleCreateSelection('notebook')
-                  }}
+                  onSelect={createMenu.defer(() => handleCreateSelection('notebook'))}
                   className="gap-2"
                 >
                   <Book className="h-4 w-4" />
                   Notebook
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault()
-                    handleCreateSelection('podcast')
-                  }}
+                  onSelect={createMenu.defer(() => handleCreateSelection('podcast'))}
                   className="gap-2"
                 >
                   <Mic className="h-4 w-4" />

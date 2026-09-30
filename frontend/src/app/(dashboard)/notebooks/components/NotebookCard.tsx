@@ -17,6 +17,7 @@ import { useUpdateNotebook, useDeleteNotebook } from '@/lib/hooks/use-notebooks'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { MergeNotebookDialog } from '@/components/notebooks/MergeNotebookDialog'
 import { useState } from 'react'
+import { useMenuAction } from '@/components/layout/use-menu-action'
 
 interface NotebookCardProps {
   notebook: NotebookResponse
@@ -25,6 +26,8 @@ interface NotebookCardProps {
 export function NotebookCard({ notebook }: NotebookCardProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showMergeDialog, setShowMergeDialog] = useState(false)
+  // Merge and Delete open their dialogs once the menu has closed.
+  const menuAction = useMenuAction()
   const router = useRouter()
   const updateNotebook = useUpdateNotebook()
   const deleteNotebook = useDeleteNotebook()
@@ -79,7 +82,11 @@ export function NotebookCard({ notebook }: NotebookCardProps) {
                     <MoreHorizontal className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                <DropdownMenuContent
+                  align="end"
+                  onClick={(e) => e.stopPropagation()}
+                  onCloseAutoFocus={menuAction.onCloseAutoFocus}
+                >
                   <DropdownMenuItem onClick={handleArchiveToggle}>
                     {notebook.archived ? (
                       <>
@@ -95,19 +102,15 @@ export function NotebookCard({ notebook }: NotebookCardProps) {
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     data-testid={`notebook-card-merge-${notebook.id}`}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setShowMergeDialog(true)
-                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    onSelect={menuAction.defer(() => setShowMergeDialog(true))}
                   >
                     <GitMerge className="h-4 w-4 mr-2" />
                     Merge into…
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setShowDeleteDialog(true)
-                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    onSelect={menuAction.defer(() => setShowDeleteDialog(true))}
                     className="text-red-600"
                   >
                     <Trash2 className="h-4 w-4 mr-2" />

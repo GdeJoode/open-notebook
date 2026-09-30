@@ -153,6 +153,7 @@ export function SpeakerProfilesPanel({
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
+                            aria-label={`Actions for ${profile.name}`}
                             onClick={(e) => e.stopPropagation()}
                           >
                             <MoreVertical className="h-4 w-4" />
