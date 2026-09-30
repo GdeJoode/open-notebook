@@ -50,8 +50,9 @@ export function NotebookHeader({
   // OKF import dialog open-state.
   const [okfImportDialogOpen, setOkfImportDialogOpen] = useState(false)
   const [jsonlOpen, setJsonlOpen] = useState(false)
-  // The JSONL popover opens as the Export menu closes; the menu must not
-  // take focus back to its button then, or the popover closes at once.
+  // The JSONL popover opens once the Export menu has closed: while the menu
+  // is still closing it holds focus, and the popover would take that as a
+  // move outside and close at once.
   const jsonlFromMenu = useRef(false)
 
   const updateNotebook = useUpdateNotebook()
@@ -134,6 +135,7 @@ export function NotebookHeader({
                 if (jsonlFromMenu.current) {
                   jsonlFromMenu.current = false
                   event.preventDefault()
+                  setJsonlOpen(true)
                 }
               }}
             >
@@ -152,7 +154,6 @@ export function NotebookHeader({
               <DropdownMenuItem
                 onSelect={() => {
                   jsonlFromMenu.current = true
-                  setJsonlOpen(true)
                 }}
                 data-testid="open-jsonl-export-popover"
               >
