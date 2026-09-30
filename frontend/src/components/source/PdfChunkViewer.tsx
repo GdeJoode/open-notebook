@@ -865,7 +865,7 @@ export function PdfChunkViewer({
                 onLoad={() => setImgLoaded(true)} onError={() => setError(`Failed to render page ${currentPage}`)} />
             )}
             {!imgLoaded && previewUrl && (
-              <div className="flex items-center justify-center w-[595px] h-[842px]"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
+              <div className="flex items-center justify-center w-[min(595px,100vw-2rem)] h-[842px]"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
             )}
             {imgLoaded && showOverlay && !controlledLayers && <LegendBar typeCounts={typeCounts} hiddenTypes={hiddenTypes} onToggle={toggleType} />}
             {imgLoaded && (
