@@ -87,9 +87,6 @@ class TestListEntities:
         # Distinct docs: source:a + source:b == 2 (the duplicate collapses).
         assert result[0]["doc_count"] == 2
 
-
-class TestCountEntities:
-
     @pytest.mark.asyncio
     async def test_degree_sort_orders_the_whole_set_then_pages(self, entity_repo):
         """WB.3: the degree is not stored, so the service reads every entity the
@@ -114,6 +111,9 @@ class TestCountEntities:
         assert kwargs["status"] == "active"
         scored = entity_repo.effective_degree_for_entities.call_args.args[0]
         assert sorted(scored) == sorted(f"entity:{n.lower()}" for n in names)
+
+
+class TestCountEntities:
 
     @pytest.mark.asyncio
     async def test_count(self, entity_repo):
