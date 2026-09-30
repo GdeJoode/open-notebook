@@ -33,6 +33,7 @@ def _no_source_lookup(monkeypatch):
         return {}
 
     monkeypatch.setattr(queue_sources, "sources_for_entities", none)
+    monkeypatch.setattr(queue_sources, "entity_types", none)
 
 
 def _queue_item(**over) -> QueueItem:
@@ -357,3 +358,31 @@ def test_a_failing_document_lookup_does_not_fail_the_queue(monkeypatch):
     resp = _make_app(queue=queue).get("/api/triage/queue")
     assert resp.status_code == 200
     assert resp.json()["items"][0]["sources"] == []
+
+
+# --- WB.3: the canonical type next to the stored label -------------------------
+
+
+def test_each_row_carries_its_canonical_type(monkeypatch):
+    async def types(entity_ids, config=None):
+        return {"entity:a": "organization"}
+
+    monkeypatch.setattr(queue_sources, "entity_types", types)
+    queue = AsyncMock()
+    queue.list_open = AsyncMock(return_value=[
+        _queue_item(), _queue_item(id="triage_queue:2", entity="entity:gone")])
+    items = _make_app(queue=queue).get("/api/triage/queue").json()["items"]
+    assert [(i["entity_type"], i["type"]) for i in items] == [
+        ("organization", "Organisatie"), ("", "Organisatie")]
+
+
+def test_a_failing_type_lookup_does_not_fail_the_queue(monkeypatch):
+    async def boom(entity_ids, config=None):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(queue_sources, "entity_types", boom)
+    queue = AsyncMock()
+    queue.list_open = AsyncMock(return_value=[_queue_item()])
+    resp = _make_app(queue=queue).get("/api/triage/queue")
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["entity_type"] == ""

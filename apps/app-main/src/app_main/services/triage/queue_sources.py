@@ -59,4 +59,29 @@ async def sources_for_entities(
     return out
 
 
-__all__ = ["sources_for_entities"]
+async def entity_types(
+    entity_ids: Iterable[str], config: Optional[SurrealDBConfig] = None
+) -> Dict[str, str]:
+    """``{entity_id: entity_type}``: each row's canonical type, read now (WB.3).
+
+    A queue row's own ``type`` is the display label (``primary_type``) the
+    triage run stored; the triage table shows this canonical type first, as
+    the Knowledge Graph table does, and the label second. An entity that no
+    longer exists is absent.
+    """
+    ids = list(dict.fromkeys(str(e) for e in entity_ids if e))
+    if not ids:
+        return {}
+    rows = await execute_query(
+        "SELECT id, entity_type FROM $ids;",
+        {"ids": [ensure_record_id(i) for i in ids]},
+        config,
+    )
+    return {
+        str(r["id"]): str(r["entity_type"])
+        for r in rows or []
+        if r.get("entity_type")
+    }
+
+
+__all__ = ["entity_types", "sources_for_entities"]

@@ -70,6 +70,9 @@ class QueueItemOut(BaseModel):
     #: Q-B1: the documents behind *Docs* — ``{id, title}``, read NOW, while
     #: ``doc_count`` is the triage run's snapshot (the two can differ).
     sources: List[Dict[str, str]] = Field(default_factory=list)
+    #: WB.3: the entity's canonical type, read now. ``type`` is the display
+    #: label the triage run stored; the triage table shows it second.
+    entity_type: str = ""
 
     @classmethod
     def from_item(cls, item: QueueItem) -> "QueueItemOut":
@@ -204,10 +207,16 @@ async def get_queue(
     except Exception as exc:
         logger.warning("triage queue: document lookup failed, serving without: {e}", e=exc)
         sources = {}
+    try:
+        types = await queue_sources.entity_types([i.entity for i in items])
+    except Exception as exc:
+        logger.warning("triage queue: type lookup failed, serving without: {e}", e=exc)
+        types = {}
     out = []
     for i in items:
         row = QueueItemOut.from_item(i)
         row.sources = sources.get(i.entity, [])
+        row.entity_type = types.get(i.entity, "")
         out.append(row)
     return QueueResponse(count=len(out), items=out)
 
