@@ -126,7 +126,7 @@ export function StructureGraphView({
       labelRenderedSizeThreshold: 7,
       defaultEdgeColor: '#94a3b8',
       labelColor: { color: '#e2e8f0' },
-      labelSize: 11,
+      labelSize: 13,
       labelFont: 'system-ui, sans-serif',
       renderEdgeLabels: false,
     })

@@ -5,6 +5,8 @@
  * JSX, `cn()` strings and template literals.
  */
 /* eslint-disable no-restricted-syntax -- the probes below are what the rule must flag */
+import { readdirSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import { Linter } from 'eslint'
 import tsParser from '@typescript-eslint/parser'
 import { describe, expect, it } from 'vitest'
@@ -71,5 +73,22 @@ describe('the eslint rule', () => {
       'export const b = <span className="text-[#10a0ff] focus-visible:ring-[3px]" />',
     ].join('\n')
     expect(lint(code)).toEqual([])
+  })
+})
+
+describe('canvas graph labels', () => {
+  // Sigma draws labels on a canvas, out of Tailwind's reach: its labelSize
+  // (px) keeps the same 13 px floor.
+  const SRC = path.resolve(__dirname, '../..')
+  const files = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? files(path.join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(dir, e.name)] : [])
+
+  it('are 13 px or larger', () => {
+    const sizes = files(SRC).flatMap((file) =>
+      [...readFileSync(file, 'utf8').matchAll(/labelSize:\s*(\d+(?:\.\d+)?)/g)]
+        .map((m) => [path.relative(SRC, file), Number(m[1])] as const))
+    expect(sizes.length).toBeGreaterThanOrEqual(4)
+    expect(sizes.filter(([, size]) => size < 13)).toEqual([])
   })
 })

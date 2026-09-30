@@ -149,7 +149,7 @@ export default function DocumentGraphView({ onNodeClick }: DocumentGraphViewProp
       renderEdgeLabels: true,
       labelColor: { color: '#1e293b' },
       edgeLabelColor: { color: '#64748b' },
-      labelSize: 12,
+      labelSize: 13,
       edgeLabelSize: 10,
       labelFont: 'system-ui, sans-serif',
     })
