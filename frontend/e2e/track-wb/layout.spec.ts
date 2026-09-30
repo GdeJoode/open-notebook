@@ -191,6 +191,59 @@ test.describe('WB.4 — one page frame, one type scale', () => {
     await expect(signOut).toBeInViewport({ ratio: 1 })
   })
 
+  test('every dialog and popover the notebook menus open closes back to a working page', async ({ page }) => {
+    // Review round 1: a Dialog opened from a modal menu's onSelect left
+    // `pointer-events: none` on <body> once it closed; nothing responded.
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await mockBackend(page)
+    await gotoAndWait(page, `/notebooks/${encodeURIComponent(NOTEBOOK)}`)
+    await expectFramed(page, 'notebook')
+    const header = page.locator('[data-page-header]')
+    const exportMenu = header.getByTestId('notebook-export-menu')
+    const moreMenu = header.getByRole('button', { name: 'More notebook actions' })
+
+    const targets = [
+      { menu: exportMenu, item: 'To Obsidian…', layer: page.getByTestId('obsidian-export-dialog'),
+        cancel: page.getByTestId('obsidian-export-cancel') },
+      { menu: exportMenu, item: 'To Open Knowledge Format…', layer: page.getByTestId('okf-export-dialog'),
+        cancel: page.getByTestId('okf-export-cancel') },
+      { menu: exportMenu, item: 'As JSONL…', layer: page.getByTestId('jsonl-export-popover'),
+        cancel: page.getByTestId('jsonl-export-cancel') },
+      { menu: moreMenu, item: 'Import OKF…', layer: page.getByTestId('okf-import-dialog'),
+        cancel: page.getByTestId('okf-import-cancel') },
+      { menu: moreMenu, item: 'Delete…', layer: page.getByRole('alertdialog'),
+        cancel: page.getByRole('alertdialog').getByRole('button', { name: 'Cancel' }) },
+    ]
+    for (const t of targets) {
+      for (const open of ['mouse', 'keyboard'] as const) {
+        for (const close of ['Escape', 'button'] as const) {
+          const what = `${t.item} (${open}, ${close})`
+          if (open === 'mouse') {
+            await t.menu.click()
+            await page.getByRole('menuitem', { name: t.item }).click()
+          } else {
+            await t.menu.focus()
+            await page.keyboard.press('Enter')
+            await page.getByRole('menuitem', { name: t.item }).focus()
+            await page.keyboard.press('Enter')
+          }
+          await expect(t.layer, what).toBeVisible()
+          if (close === 'Escape') await page.keyboard.press('Escape')
+          else await t.cancel.click()
+          await expect(t.layer, what).toBeHidden()
+
+          await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).pointerEvents),
+            { message: what }).toBe('auto')
+          // The page still takes a click: the description turns into its editor.
+          await header.getByRole('button', { name: 'Add a description...' }).click({ timeout: 5_000 })
+          await expect(header.getByRole('textbox'), what).toBeVisible()
+          await page.keyboard.press('Escape')
+          await expect(header.getByRole('textbox'), what).toBeHidden()
+        }
+      }
+    }
+  })
+
   test('the notebook header: Export ▾ and ⋯, Delete confirms before anything is deleted', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 })
     await mockBackend(page)

@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { NotebookResponse } from '@/lib/types/api'
 import { Button } from '@/components/ui/button'
@@ -19,6 +19,7 @@ import { ObsidianExportDialog } from '@/components/notebooks/exports/ObsidianExp
 import { OkfExportDialog } from '@/components/notebooks/exports/OkfExportDialog'
 import { OkfImportDialog } from '@/components/notebooks/exports/OkfImportDialog'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { useMenuAction } from '@/components/layout/use-menu-action'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,10 +51,8 @@ export function NotebookHeader({
   // OKF import dialog open-state.
   const [okfImportDialogOpen, setOkfImportDialogOpen] = useState(false)
   const [jsonlOpen, setJsonlOpen] = useState(false)
-  // The JSONL popover opens once the Export menu has closed: while the menu
-  // is still closing it holds focus, and the popover would take that as a
-  // move outside and close at once.
-  const jsonlFromMenu = useRef(false)
+  // Each dialog and the JSONL popover open once the Export menu has closed.
+  const exportMenu = useMenuAction()
 
   const updateNotebook = useUpdateNotebook()
   const deleteNotebook = useDeleteNotebook()
@@ -131,30 +130,22 @@ export function NotebookHeader({
             <DropdownMenuContent
               align="end"
               className="w-56"
-              onCloseAutoFocus={(event) => {
-                if (jsonlFromMenu.current) {
-                  jsonlFromMenu.current = false
-                  event.preventDefault()
-                  setJsonlOpen(true)
-                }
-              }}
+              onCloseAutoFocus={exportMenu.onCloseAutoFocus}
             >
               <DropdownMenuItem
-                onSelect={() => setObsidianDialogOpen(true)}
+                onSelect={exportMenu.defer(() => setObsidianDialogOpen(true))}
                 data-testid="open-obsidian-export-dialog"
               >
                 To Obsidian…
               </DropdownMenuItem>
               <DropdownMenuItem
-                onSelect={() => setOkfDialogOpen(true)}
+                onSelect={exportMenu.defer(() => setOkfDialogOpen(true))}
                 data-testid="open-okf-export-dialog"
               >
                 To Open Knowledge Format…
               </DropdownMenuItem>
               <DropdownMenuItem
-                onSelect={() => {
-                  jsonlFromMenu.current = true
-                }}
+                onSelect={exportMenu.defer(() => setJsonlOpen(true))}
                 data-testid="open-jsonl-export-popover"
               >
                 As JSONL…

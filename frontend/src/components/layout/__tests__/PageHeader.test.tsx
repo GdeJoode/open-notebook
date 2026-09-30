@@ -5,7 +5,7 @@
  * the destructive ones set apart; the body has one width scale.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Trash2 } from 'lucide-react'
 
 import { PageBody } from '../PageBody'
@@ -64,7 +64,9 @@ describe('PageHeader', () => {
     const del = screen.getByTestId('del')
     expect(del.getAttribute('data-variant')).toBe('destructive')
     fireEvent.click(del)
-    expect(remove).toHaveBeenCalledTimes(1)
+    // The action runs once the menu has closed (see use-menu-action).
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1))
     expect(archive).not.toHaveBeenCalled()
   })
 })

@@ -12,6 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { useMenuAction } from './use-menu-action'
 
 export interface PageOverflowAction {
   label: string
@@ -47,6 +48,7 @@ export function PageHeader({
   children,
 }: PageHeaderProps) {
   const hasOverflow = !!overflow && overflow.length > 0
+  const menuAction = useMenuAction()
   return (
     <header data-page-header className="flex shrink-0 flex-col gap-2">
       {back && <div className="flex flex-wrap items-center justify-between gap-2">{back}</div>}
@@ -72,7 +74,11 @@ export function PageHeader({
                     <Ellipsis />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuContent
+                  align="end"
+                  className="w-44"
+                  onCloseAutoFocus={menuAction.onCloseAutoFocus}
+                >
                   {overflow.map((action, i) => (
                     <Fragment key={action.label}>
                       {/* Destructive actions sit apart, last. */}
@@ -82,7 +88,7 @@ export function PageHeader({
                       <DropdownMenuItem
                         variant={action.destructive ? 'destructive' : 'default'}
                         disabled={action.disabled}
-                        onSelect={action.onSelect}
+                        onSelect={menuAction.defer(action.onSelect)}
                         data-testid={action.testId}
                       >
                         {action.icon && <action.icon />}
