@@ -244,7 +244,15 @@ describe('Sources board below lg (WB.5)', () => {
   it('keeps the sort: Stage and Created above the cards', async () => {
     mount()
     await screen.findByTestId(`source-card-${sourceId('gated')}`)
+    // The sort in force is announced (the table says it with aria-sort).
+    expect(screen.getByTestId('sources-sort-attention').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('sources-sort-created').getAttribute('aria-pressed')).toBe('false')
     fireEvent.click(screen.getByTestId('sources-sort-created'))
+    const created = await screen.findByRole('button', { name: 'Sort by created, newest first' })
+    expect(created.getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('sources-sort-attention').getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(created)
+    await screen.findByRole('button', { name: 'Sort by created, oldest first' })
     await waitFor(() => expect(api.list.mock.calls.at(-1)![0]).toMatchObject({ sort_by: 'created' }))
     fireEvent.click(await screen.findByTestId('sources-sort-attention'))
     await waitFor(() => expect(api.list.mock.calls.at(-1)![0]).toMatchObject({ sort_by: 'attention' }))

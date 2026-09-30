@@ -368,6 +368,8 @@ export default function SourcesPage() {
       }}
       className="h-8 px-2 hover:bg-muted"
       aria-label="Sort by stage: needs you first"
+      // The table header says it with aria-sort; above the cards, the button.
+      aria-pressed={isLg ? undefined : sortBy === 'attention'}
       data-testid="sources-sort-attention"
     >
       Stage
@@ -384,6 +386,10 @@ export default function SourcesPage() {
       size="sm"
       onClick={() => toggleSort('created')}
       className="h-8 px-2 hover:bg-muted"
+      aria-pressed={isLg ? undefined : sortBy === 'created'}
+      aria-label={isLg || sortBy !== 'created'
+        ? undefined
+        : `Sort by created, ${sortOrder === 'asc' ? 'oldest' : 'newest'} first`}
       data-testid="sources-sort-created"
     >
       Created
