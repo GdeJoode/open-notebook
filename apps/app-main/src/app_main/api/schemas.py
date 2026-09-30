@@ -660,6 +660,9 @@ class SourceListResponse(BaseModel):
     # WB.3: stopped short of complete (services/stopped_sources.py), so the
     # Sources board can mark it; the same predicate as ``?stalled=true``.
     stalled: bool = False
+    # WB.3: failed, awaiting schema review or stopped (NEEDS_YOU_STAGES plus
+    # ``stalled``): the rows ``?sort_by=attention`` lists first.
+    needs_you: bool = False
 
 
 class SourceCountsResponse(BaseModel):

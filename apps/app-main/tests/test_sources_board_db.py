@@ -10,18 +10,26 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
 from shared.types.enums import ProcessingStage
 
 from tests.test_attention_db import (  # noqa: F401  (``env`` is a fixture)
+    _age,
     _app,
     _client,
+    _notebook,
     _paged_sources,
     _seed,
+    _source,
     env,
 )
+
+_FIXTURE = (Path(__file__).resolve().parents[3]
+            / "frontend" / "e2e" / "track-wb" / "sources-board.fixture.json")
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.requires_docker]
 
@@ -59,8 +67,7 @@ async def test_needs_you_is_the_trays_source_groups(env) -> None:
 
 
 def _needs_you(row: Dict[str, Any]) -> bool:
-    return row["stalled"] or row["processing_stage"] in (
-        "failed", "awaiting_schema_review")
+    return row["needs_you"]
 
 
 async def _attention_pages(c, scope: List[tuple], page: int) -> List[Dict[str, Any]]:
@@ -85,6 +92,7 @@ async def test_attention_sort_puts_needs_you_first(env) -> None:
         by_updated = await _paged_sources(c, [])
     head = rows[: counts["needs_you"]]
     assert {r["id"] for r in head} == needs
+    assert {r["id"] for r in rows if r["needs_you"]} == needs
     assert not any(_needs_you(r) for r in rows[len(head):])
     assert len(rows) == len(by_updated)
     # Each part keeps the default order (updated, newest first).
@@ -113,3 +121,30 @@ async def test_counts_for_an_unknown_notebook(env) -> None:
         bad = await c.get("/api/sources/", params={"sort_by": "title"})
     assert r.status_code == 404
     assert bad.status_code == 400
+
+
+async def test_the_e2e_fixture_is_the_real_contract(env) -> None:
+    """The e2e fake (``sources-board.fake.ts``) serves the fixture's rows and
+    its own test checks it answers ``expected``. Seeded into a real database,
+    the real endpoints answer the same: the counts in every scope, the
+    attention order, and which rows stopped."""
+    fixture = json.loads(_FIXTURE.read_text(encoding="utf-8"))
+    notebooks = {nb["id"]: await _notebook(nb["name"]) for nb in fixture["notebooks"]}
+    keys: Dict[str, str] = {}
+    for row in fixture["sources"]:
+        nb = notebooks[row["notebook"]] if row["notebook"] else None
+        sid = await _source(row["title"], row["stage"], nb)
+        await _age(sid, row["age_minutes"])
+        keys[sid] = row["key"]
+    expected = fixture["expected"]
+    async with _client(_app()) as c:
+        for scope, want in expected["counts"].items():
+            params = {} if scope == "all" else {"notebook_id": notebooks[scope]}
+            assert await _counts(c, **params) == want, scope
+        for scope, order in expected["attention_order"].items():
+            params = [] if scope == "all" else [("notebook_id", notebooks[scope])]
+            rows = await _attention_pages(c, params, page=3)
+            assert [keys[r["id"]] for r in rows] == order, scope
+        rows = await _paged_sources(c, [])
+    stalled = {r["key"] for r in fixture["sources"] if r["stalled"]}
+    assert {keys[r["id"]] for r in rows if r["stalled"]} == stalled

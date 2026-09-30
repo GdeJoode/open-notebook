@@ -180,6 +180,8 @@ async def get_sources(
             elif command_id:
                 status = "unknown"
 
+            stage_value = str(row.get("processing_stage", "ingested") or "ingested")
+            row_stalled = str(row["id"]) in stopped_set
             response_list.append(
                 SourceListResponse(
                     id=row["id"],
@@ -209,10 +211,9 @@ async def get_sources(
                     processing_info=processing_info,
                     # UX.1: populate the spine from the source row (matches the
                     # single-source handler pattern above).
-                    processing_stage=str(
-                        row.get("processing_stage", "ingested") or "ingested"
-                    ),
-                    stalled=str(row["id"]) in stopped_set,
+                    processing_stage=stage_value,
+                    stalled=row_stalled,
+                    needs_you=row_stalled or stage_value in NEEDS_YOU_STAGES,
                 )
             )
 
