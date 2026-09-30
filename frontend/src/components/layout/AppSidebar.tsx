@@ -214,7 +214,7 @@ export function AppSidebar() {
       >
         <div
           className={cn(
-            'flex h-16 items-center group',
+            'flex h-16 shrink-0 items-center group',
             isCollapsed ? 'justify-center px-2' : 'justify-between px-4'
           )}
         >
@@ -256,15 +256,17 @@ export function AppSidebar() {
           )}
         </div>
 
+        {/* WB.4: the nav scrolls inside the sidebar, so Theme and Sign Out stay
+            on screen on a 768 px tall laptop. */}
         <nav
           className={cn(
-            'flex-1 space-y-1 py-4',
+            'min-h-0 flex-1 space-y-1 overflow-y-auto py-3',
             isCollapsed ? 'px-2' : 'px-3'
           )}
         >
           <div
             className={cn(
-              'mb-4',
+              'mb-3',
               isCollapsed ? 'px-0' : 'px-3'
             )}
           >
@@ -341,14 +343,14 @@ export function AppSidebar() {
 
           {NAV_SECTIONS.map((section, index) => (
             <div key={section.title ?? index}>
-              {index > 0 && <Separator className="my-3" />}
+              {index > 0 && <Separator className="my-2" />}
               <div className="space-y-1">
                 {section.collapsible
                   ? renderCollapsible(section)
                   : (
                     <>
                       {section.title && !isCollapsed && (
-                        <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/60">
+                        <h3 className="mb-1 px-3 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/60">
                           {section.title}
                         </h3>
                       )}
@@ -362,7 +364,7 @@ export function AppSidebar() {
 
         <div
           className={cn(
-            'border-t border-sidebar-border p-3 space-y-2',
+            'shrink-0 border-t border-sidebar-border p-3 space-y-2',
             isCollapsed && 'px-2'
           )}
         >
