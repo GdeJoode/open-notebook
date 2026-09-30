@@ -79,9 +79,16 @@ export default function EntityResolutionPage() {
   )
 
   const isLoading = planQuery.isLoading || candidatesQuery.isLoading
-  const isError = planQuery.isError && candidatesQuery.isError
+  const planFailed = planQuery.isError
+  const candidatesFailed = candidatesQuery.isError
+  const isError = planFailed && candidatesFailed
+  // WB.3 (review minor m4): empty only when both reads answered.
   const queueEmpty =
-    clusters.length === 0 && autoCandidates.length === 0 && reviewCandidates.length === 0
+    !planFailed &&
+    !candidatesFailed &&
+    clusters.length === 0 &&
+    autoCandidates.length === 0 &&
+    reviewCandidates.length === 0
 
   const totalPages = Math.ceil(clusters.length / PAGE_SIZE)
   const pageClusters = clusters.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE)
@@ -169,7 +176,24 @@ export default function EntityResolutionPage() {
                 <Badge variant="secondary">{clusters.length}</Badge>
               </div>
 
-              {clusters.length === 0 ? (
+              {planFailed ? (
+                <Alert variant="destructive" data-testid="resolution-plan-error">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>Failed to load the proposed merges</AlertTitle>
+                  <AlertDescription>
+                    <div className="mt-3">
+                      <Button variant="outline" size="sm" onClick={() => planQuery.refetch()}>
+                        Retry
+                      </Button>
+                    </div>
+                  </AlertDescription>
+                </Alert>
+              ) : clusters.length === 0 && candidatesFailed ? (
+                // The candidates are unknown, so "no duplicates" would be a guess.
+                <p className="text-sm text-muted-foreground" data-testid="resolution-no-merges">
+                  No proposed merges.
+                </p>
+              ) : clusters.length === 0 ? (
                 <EmptyState
                   icon={CheckCircle2}
                   title="No duplicates pending"
@@ -224,6 +248,22 @@ export default function EntityResolutionPage() {
                 </>
               )}
             </section>
+
+            {candidatesFailed && (
+              <Alert variant="destructive" data-testid="resolution-candidates-error">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>Failed to load the duplicate candidates</AlertTitle>
+                <AlertDescription>
+                  Near-duplicate pairs could not be read, so there may be more
+                  to review than shown here.
+                  <div className="mt-3">
+                    <Button variant="outline" size="sm" onClick={() => candidatesQuery.refetch()}>
+                      Retry
+                    </Button>
+                  </div>
+                </AlertDescription>
+              </Alert>
+            )}
 
             {autoCandidates.length > 0 && (
               <section className="space-y-3" data-testid="resolution-auto-band">

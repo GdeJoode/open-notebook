@@ -18,7 +18,7 @@ import type { ReactNode } from 'react'
 import type { MergeCandidate } from '@/lib/api/entity-resolution'
 
 const apply = vi.fn()
-const queue = vi.hoisted(() => ({ empty: false }))
+const queue = vi.hoisted(() => ({ empty: false, planFails: false, candidatesFail: false }))
 
 vi.mock('next/link', () => ({
   default: ({ children, href, ...rest }: { children: ReactNode; href: string }) => (
@@ -53,14 +53,19 @@ const REVIEW: MergeCandidate = {
 }
 
 vi.mock('@/lib/hooks/use-entity-resolution', () => ({
-  useMergePlan: () => ({ data: { clusters: [] }, isLoading: false, isError: false }),
-  useMergeCandidates: () => ({
-    data: queue.empty
-      ? { auto_merge: [], review: [], auto_merge_count: 0, review_count: 0 }
-      : { auto_merge: [CAND], review: [REVIEW], auto_merge_count: 1, review_count: 1 },
-    isLoading: false,
-    isError: false,
-  }),
+  useMergePlan: () => (queue.planFails
+    ? { data: undefined, isLoading: false, isError: true, refetch: vi.fn() }
+    : { data: { clusters: [] }, isLoading: false, isError: false, refetch: vi.fn() }),
+  useMergeCandidates: () => (queue.candidatesFail
+    ? { data: undefined, isLoading: false, isError: true, refetch: vi.fn() }
+    : {
+      data: queue.empty
+        ? { auto_merge: [], review: [], auto_merge_count: 0, review_count: 0 }
+        : { auto_merge: [CAND], review: [REVIEW], auto_merge_count: 1, review_count: 1 },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    }),
   useApplyMerge: () => ({ mutate: apply, isPending: false }),
   useAddOverlay: () => ({ mutate: vi.fn(), isPending: false }),
 }))
@@ -71,6 +76,8 @@ afterEach(() => {
   cleanup()
   apply.mockReset()
   queue.empty = false
+  queue.planFails = false
+  queue.candidatesFail = false
 })
 
 describe('Entity Resolution page — both candidate bands', () => {
@@ -108,5 +115,33 @@ describe('Entity Resolution page — the one Resolution entry', () => {
     render(<EntityResolutionPage />)
     expect(screen.getByText('No duplicates pending')).toBeTruthy()
     expect(screen.getByTestId('resolution-empty-next').getAttribute('href')).toBe('/')
+  })
+})
+
+describe('Entity Resolution page — a read that failed (WB.3, m4)', () => {
+  it('when only the candidates failed: the error, not "no duplicates" and The Tray', () => {
+    queue.candidatesFail = true
+    render(<EntityResolutionPage />)
+    expect(screen.getByTestId('resolution-candidates-error')).toBeTruthy()
+    expect(screen.queryByText('No duplicates pending')).toBeNull()
+    expect(screen.queryByTestId('resolution-empty-next')).toBeNull()
+    expect(screen.getByTestId('resolution-no-merges')).toBeTruthy()
+  })
+
+  it('when only the plan failed: its error, and still no way out', () => {
+    queue.planFails = true
+    queue.empty = true
+    render(<EntityResolutionPage />)
+    expect(screen.getByTestId('resolution-plan-error')).toBeTruthy()
+    expect(screen.queryByText('No duplicates pending')).toBeNull()
+    expect(screen.queryByTestId('resolution-empty-next')).toBeNull()
+  })
+
+  it('when both failed: one error for the page', () => {
+    queue.planFails = true
+    queue.candidatesFail = true
+    render(<EntityResolutionPage />)
+    expect(screen.getByTestId('resolution-error')).toBeTruthy()
+    expect(screen.queryByTestId('resolution-candidates-error')).toBeNull()
   })
 })
