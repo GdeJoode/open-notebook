@@ -64,3 +64,15 @@ describe('Triage page — next step', () => {
       .toBe('/knowledge-graph/resolution')
   })
 })
+
+describe('Triage page — types (WB.3)', () => {
+  it('shows the canonical type first and the stored label second', () => {
+    queue.items = [{ ...ROW, entity_type: 'creative_work', type: 'Journal/ Publication' }]
+    mount()
+    const row = screen.getByTestId('triage-row-triage_queue:t1')
+    expect(row.querySelector('[data-testid="entity-type-canonical"]')?.textContent)
+      .toBe('creative_work')
+    expect(row.querySelector('[data-testid="entity-type-label"]')?.textContent)
+      .toBe('Journal/ Publication')
+  })
+})

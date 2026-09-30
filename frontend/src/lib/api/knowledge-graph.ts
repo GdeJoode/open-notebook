@@ -136,6 +136,8 @@ export const knowledgeGraphApi = {
      * source-detail Entities tab.
      */
     source_id?: string
+    /** `degree`: structural degree, highest first (WB.3, the KG table). */
+    sort?: 'name' | 'degree'
   }) => {
     const response = await apiClient.get<PaginatedEntities>('/knowledge-graph/entities', { params })
     return response.data

@@ -4,9 +4,9 @@ import { AlertCircle } from 'lucide-react'
 
 import { useSourceEntities } from '@/lib/hooks/use-knowledge-graph'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { StatusBadge } from '@/components/knowledge-graph/StatusBadge'
+import { EntityTypeLabel } from '@/components/knowledge-graph/EntityTypeLabel'
 import {
   sourceEntitiesView,
   toSourceEntityRow,
@@ -110,7 +110,7 @@ export function SourceEntitiesTab({ sourceId }: SourceEntitiesTabProps) {
               <td className="p-3 font-medium">{row.name}</td>
               <td className="p-3">
                 {row.type ? (
-                  <Badge variant="secondary">{row.type}</Badge>
+                  <EntityTypeLabel canonical={row.type} display={row.typeLabel} />
                 ) : (
                   <span className="text-xs text-muted-foreground">—</span>
                 )}
