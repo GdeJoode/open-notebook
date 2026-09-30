@@ -191,6 +191,23 @@ test.describe('WB.4 — one page frame, one type scale', () => {
     await expect(signOut).toBeInViewport({ ratio: 1 })
   })
 
+  test('at 1024 px the source page tabs keep each label whole and apart', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 900 })
+    await mockBackend(page)
+    await gotoAndWait(page, `/sources/${encodeURIComponent(SOURCE)}`)
+    await expectFramed(page, 'source')
+    const tabs = page.locator('[data-page-body] [role="tablist"]').first().getByRole('tab')
+    await expect(tabs).toHaveCount(6)
+    const boxes = await tabs.evaluateAll((els) => els.map((el) => {
+      const r = el.getBoundingClientRect()
+      return { left: r.left, right: r.right, clipped: el.scrollWidth > el.clientWidth + 1 }
+    }))
+    for (let i = 0; i < boxes.length; i++) {
+      expect(boxes[i].clipped, `tab ${i} clipped`).toBe(false)
+      if (i > 0) expect(boxes[i].left, `tab ${i} overlaps`).toBeGreaterThanOrEqual(boxes[i - 1].right)
+    }
+  })
+
   test('every dialog and popover the notebook menus open closes back to a working page', async ({ page }) => {
     // Review round 1: a Dialog opened from a modal menu's onSelect left
     // `pointer-events: none` on <body> once it closed; nothing responded.

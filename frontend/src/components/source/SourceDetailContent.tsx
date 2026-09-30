@@ -738,7 +738,7 @@ export function SourceDetailContent({
       {/* Tabs Content */}
       <div className="flex-1 px-2 min-h-0">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
-          <TabsList className="grid w-full grid-cols-6 flex-shrink-0">
+          <TabsList className="w-full flex-shrink-0 justify-start overflow-x-auto">
             <TabsTrigger value="content">Content</TabsTrigger>
             <TabsTrigger value="insights">
               Insights {insights.length > 0 && `(${insights.length})`}
