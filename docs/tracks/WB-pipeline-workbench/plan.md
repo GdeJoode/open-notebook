@@ -729,6 +729,33 @@ redo it.
       in the removed config (pre-existing);
     - at 1024 px the notebook's three columns clip their header buttons and
       the KG search box shrinks to its icon (WB.5).
+- **Review round 1** (REVISIONS_NEEDED, 1 blocker, 6 minors), all fixed:
+  - B1: a Dialog opened from a modal menu's `onSelect` left
+    `pointer-events: none` on `<body>` after it closed; the page froze.
+    Every dialog and popover opened from a menu (Export ▾, ⋯, any
+    PageHeader overflow action) now opens from the menu's
+    `onCloseAutoFocus` (`useMenuAction`), once focus is back on the
+    trigger. The e2e opens Obsidian, OKF export, Import OKF, Delete and JSONL
+    by mouse and keyboard, closes each by Escape and by Cancel, and checks
+    that body pointer-events is `auto` and the page takes a click.
+  - m2: the source page's tabs size to their labels and scroll sideways
+    (were six equal columns that overlapped at 1024 px).
+  - m3: the source page shows its PageHeader ("Source" and the id) while
+    loading and when the source cannot be read; a rendered vitest covers
+    those states.
+  - m4: the small-text rule lives in `eslint-rules/small-text.mjs`: px < 13,
+    rem/em < 0.8125, pt < 9.75. A vitest checks the pattern against the
+    numbers over a grid of values and runs it through ESLint.
+  - m5: `/advanced` redirects to `/settings?tab=advanced`; the dialog copy
+    names Settings › Advanced.
+  - m6: the Sigma graph labels are 13 px (were 11 and 12), held by a test.
+    Not checked on a live, dense graph: larger labels leave Sigma room for
+    fewer of them.
+  - m7: Sources columns: Stage 260 px (160 px bar), Created 170 px, Type
+    110 px; common values fit on one line at 1366 px. Long titles truncate
+    sooner.
+  - Limit added: at 1024 px the source page's chat column is about 200 px
+    wide and wraps its header and input (WB.5).
 
 **WB.5 — Responsive** (~1.5d, per WB-D3)
 - **Sidebar:**
