@@ -1,6 +1,6 @@
 # ADR 0005: Handmatige fragmentbewerking
 
-- **Status:** voorgesteld
+- **Status:** besloten (optie 2, Geert, 2026-10-29)
 - **Datum:** 2026-10-29
 - **Raakt FO-paragraaf:** 2 (principe 6), 8 (versiebeheer)
 - **Lost op:** verschilanalyse open vraag 11
@@ -27,6 +27,10 @@ De functie zo laten is geen optie: ze overschrijft fragmenten en breekt harde ei
 Optie 1. Het FO kiest voor een pipeline die herhaalbaar is en voor één inname. Correcties per document horen daarom in de pipelinedefinitie, bijvoorbeeld als selectie of als parameter in de bronkaartregel. Komt er later behoefte aan correcties per document, dan kan optie 2 alsnog, als eigen bouwsteen die via het importeindpunt schrijft.
 
 Geert beslist.
+
+## Besluit
+
+Optie 2, besloten door Geert op 2026-10-29: handmatig samenvoegen en splitsen blijft mogelijk als handmatige run met nieuwe fragmenten. De regel die handmatige runs beschermt, komt in ADR 0003.
 
 ## Gevolgen
 

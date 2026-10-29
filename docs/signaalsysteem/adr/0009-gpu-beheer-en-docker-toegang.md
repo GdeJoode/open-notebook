@@ -1,6 +1,6 @@
 # ADR 0009: GPU-beheer: docling-serve, WhisperX en Kev onder llama-swap, en Docker-toegang
 
-- **Status:** voorgesteld
+- **Status:** voorgesteld; Kev-4B besloten (Geert, 2026-10-29), Docker-toegang volgt uit proef 1
 - **Datum:** 2026-10-29
 - **Raakt FO-paragraaf:** 6 (keuzemodel), 12.1, 12.2, 13.1 (proeven), 14 (implementatie GPU-beheerder)
 - **Lost op:** verschilanalyse conflict 11, open vraag 12

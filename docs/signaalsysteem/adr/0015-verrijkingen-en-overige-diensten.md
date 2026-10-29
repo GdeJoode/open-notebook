@@ -1,6 +1,6 @@
 # ADR 0015: Eigen verrijkingen en overige diensten in de signaalsysteemomgeving
 
-- **Status:** voorgesteld
+- **Status:** besloten (voorstel per onderdeel, Geert, 2026-10-29)
 - **Datum:** 2026-10-29
 - **Raakt FO-paragraaf:** 2 (principe 7 en 8), 7, 11 (bouwsteen Docker-container), 12.1, 12.2
 - **Lost op:** verschilanalyse open vraag 4

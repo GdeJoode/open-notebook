@@ -93,6 +93,7 @@ Optie 2, met velden die op PROV-O passen.
 - Een hulpfunctie in de basisrepository van `packages/surrealdb-service` doet dit voor alle tabellen.
 - Runs schrijven via dezelfde functie. Een record met `manual_override = true` (hergebruik van `migrations/59.surrealql`) laat een run niet wijzigen; de run legt het conflict vast in zijn logboek.
 - `resolution_log` krijgt `author`.
+- Handmatige runs (`trigger = handmatig`, ADR 0005) zijn beschermd. Een automatische run op dezelfde bronversie maakt wel nieuwe fragmenten, maar verzet `source_version.current_run` niet zolang die naar een handmatige run wijst. De run legt dit vast in zijn logboek en zet een melding in de wachtrij van de beheerder. Alleen de beheerder kiest welke run de huidige wordt.
 
 **Bestaande gegevens**
 
