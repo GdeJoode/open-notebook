@@ -13,7 +13,7 @@ NA_HERSTART_S="${P2_NA_HERSTART_S:-120}"
 LOOPTIJD_S="${P2_LOOPTIJD_S:-240}"
 
 geheim_maken SP_LANGFLOW_PASSWORD
-geheim_maken SP_LANGFLOW_SECRET_KEY
+geheim_maken SP_LANGFLOW_SECRET_KEY fernet
 export SP_LANGFLOW_API_KEY="nog-niet-gezet" SP_PLANNER_FLOW_ID="" SP_ENABLE_TRIGGERS="" SP_LANGFLOW_ENABLE_TRIGGERS=""
 
 # Elke run begint met een lege Langflow-database en lege tickbestanden: het
@@ -161,6 +161,8 @@ fi
 
 bewaar logs_langflow dc --profile p2 logs langflow || true
 bewaar logs_planner dc --profile p2 logs planner || true
+# Uitgaande verbindingspogingen vanaf "verwerking" (geblokkeerd), voor ADR 0017.
+meet langflow_uitgaande_pogingen "$(grep -ciE 'Name or service not known|ConnectError' "$RUNMAP/logs_langflow.log" || true) logregels; voorbeelden: $(grep -oiE 'fetching https?://[^ :]+' "$RUNMAP/logs_langflow.log" | sort -u | head -n 3 | tr '\n' ' ')"
 
 # Beslisregel ADR 0017 C (vastlegging).
 if [[ "$(grep -cE $'^K[234]	geslaagd' "$RUNMAP/.criteria")" == "3" ]]; then

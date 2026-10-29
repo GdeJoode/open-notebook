@@ -70,9 +70,14 @@ drun() {
 }
 
 # Maak een geheim voor deze run; het staat alleen in het geheugen van het script.
+# Met "fernet" als tweede argument: 32 bytes url-veilig base64 (Langflow-sleutel).
 geheim_maken() {
   local naam=$1 waarde
-  waarde="$(openssl rand -hex 24)"
+  if [[ "${2:-}" == "fernet" ]]; then
+    waarde="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '\r\n')"
+  else
+    waarde="$(openssl rand -hex 24)"
+  fi
   PROEF_GEHEIMEN+=("$waarde")
   printf -v "$naam" '%s' "$waarde"
   export "${naam?}"
@@ -80,12 +85,14 @@ geheim_maken() {
 
 # Maskeer geheimen en regels met token, key of password.
 masker() {
-  local expr=() g
-  for g in "${PROEF_GEHEIMEN[@]:-}"; do
-    [[ -n "$g" ]] && expr+=(-e "s/$g/***/g")
-  done
-  expr+=(-E -e 's/((token|api[_-]?key|key|password|passwd|secret)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?)[^"'"'"' ,&}]+/\1***/Ig')
-  sed "${expr[@]}"
+  local regel g
+  # Geheimen letterlijk vervangen (geen reguliere expressie: base64 bevat - en _).
+  while IFS= read -r regel || [[ -n "$regel" ]]; do
+    for g in "${PROEF_GEHEIMEN[@]:-}"; do
+      [[ -n "$g" ]] && regel=${regel//"$g"/***}
+    done
+    printf '%s\n' "$regel"
+  done | sed -E 's/((token|api[_-]?key|key|password|passwd|secret)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?)[^"'"'"' ,&}]+/\1***/Ig'
 }
 
 # Voer een opdracht uit en bewaar de gemaskeerde uitvoer in de runmap.
@@ -228,6 +235,8 @@ proef_einde_met() {
 
 proef_scriptfout() {
   local regel=$1 opdracht=$2
+  # In een subshell alleen die subshell beëindigen; de hoofdshell handelt de fout af.
+  [[ "$BASH_SUBSHELL" -gt 0 ]] && exit "$EXIT_SCRIPT"
   [[ "$PROEF_AFGEROND" == "1" ]] && exit "$EXIT_SCRIPT"
   trap - ERR
   log "scriptfout op regel $regel: $opdracht"

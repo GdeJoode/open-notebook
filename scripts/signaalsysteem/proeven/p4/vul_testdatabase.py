@@ -67,7 +67,7 @@ def een(query: str):
 def inhoud(d: dict) -> str:
     """JSON voor CONTENT; waarden "rec:<tabel>:<id>" worden een recordverwijzing."""
     tekst = json.dumps(d)
-    return re.sub(r'"rec:([a-z_]+):([A-Za-z0-9_]+)"', r'type::thing("", "")', tekst)
+    return re.sub(r'"rec:([a-z_]+):([A-Za-z0-9_]+)"', r'type::thing("\1", "\2")', tekst)
 
 
 def rec(ident: str) -> str:
