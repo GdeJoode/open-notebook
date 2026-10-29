@@ -131,7 +131,10 @@ docs/custom_gpt
 doc_exports/
 
 specs/
-.claude
+# Claude Code: local settings stay out of git; shared agents and skills are versioned
+.claude/*
+!.claude/agents/
+!.claude/skills/
 
 .playwright-mcp/
 
