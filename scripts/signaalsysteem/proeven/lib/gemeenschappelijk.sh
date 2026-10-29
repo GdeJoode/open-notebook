@@ -38,7 +38,7 @@ readonly IMG_CURL="curlimages/curl:8.23.0"
 readonly IMG_SURREAL="surrealdb/surrealdb:v2.7.0"
 readonly IMG_PY="python:3.12.16-slim-bookworm"
 readonly IMG_PY_KEV="python:3.13.18-slim-bookworm"
-readonly IMG_UV="ghcr.io/astral-sh/uv:0.9.5"
+readonly IMG_UV="ghcr.io/astral-sh/uv:0.11.13"
 
 # Images die de proeven mogen toevoegen. Een ander nieuw image, of een gewijzigd of
 # verdwenen image, telt als wijziging buiten het project (exitcode 3).

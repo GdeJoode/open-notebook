@@ -1,0 +1,72 @@
+# llama-swap-configuratie voor P1 en P3 (docs/signaalsysteem/proeven.md, P1 stap 2).
+#
+# - werkmodel, embed en rerank: llama-server-processen in de llama-swap-container;
+# - docling, whisperx en kev-4b: aparte containers (aangemaakt, niet gestart), die
+#   llama-swap via de socket-proxy start (wacht_op_dienst.sh) en stopt (cmdStop).
+# Geen gepubliceerde poorten; de testclient draait op het netwerk "verwerking".
+healthCheckTimeout: 600
+logLevel: info
+
+models:
+  werkmodel:
+    cmd: >
+      /app/llama-server --host 127.0.0.1 --port ${PORT}
+      -m /models/werkmodel-qwen3.5-9b-q4_k_m.gguf -ngl 99 -c 8192
+    ttl: 60
+
+  # Alleen voor P3 (context 32 768).
+  werkmodel-32k:
+    cmd: >
+      /app/llama-server --host 127.0.0.1 --port ${PORT}
+      -m /models/werkmodel-qwen3.5-9b-q4_k_m.gguf -ngl 99 -c 32768
+    ttl: 60
+
+  embed:
+    cmd: >
+      /app/llama-server --host 127.0.0.1 --port ${PORT}
+      -m /models/embed-mxbai-q8_0.gguf --embeddings -ngl 99 -c 512 -b 512 -ub 512
+
+  embed-bge-m3:
+    cmd: >
+      /app/llama-server --host 127.0.0.1 --port ${PORT}
+      -m /models/embed-bge-m3-q8_0.gguf --embeddings -ngl 99 -c 8192 -b 8192 -ub 8192
+
+  rerank:
+    cmd: >
+      /app/llama-server --host 127.0.0.1 --port ${PORT}
+      -m /models/rerank-bge-reranker-v2-m3-q8_0.gguf --reranking -ngl 99 -c 8192 -b 8192 -ub 8192
+
+  docling:
+    cmd: /bin/sh /app/wacht_op_dienst.sh signaal-proef-docling-1 http://docling:5001/health - 600
+    cmdStop: docker stop signaal-proef-docling-1
+    proxy: http://docling:5001
+    checkEndpoint: /health
+    ttl: 60
+
+  whisperx:
+    cmd: /bin/sh /app/wacht_op_dienst.sh signaal-proef-whisperx-1 http://whisperx:8000/ping - 900
+    cmdStop: docker stop signaal-proef-whisperx-1
+    proxy: http://whisperx:8000
+    checkEndpoint: /ping
+    ttl: 60
+
+  kev-4b:
+    # Kev vraagt met KEV_API_KEY een sleutel op /v1/* en heeft geen apart
+    # gezondheidseindpunt (deelstap 1d). checkEndpoint kan geen header meesturen;
+    # daarom "none" en een gereedheidscontrole met sleutel in wacht_op_dienst.sh.
+    cmd: /bin/sh /app/wacht_op_dienst.sh signaal-proef-kev-1 http://kev:8009/v1/models /run/secrets/kev_api_sleutel 900
+    cmdStop: docker stop signaal-proef-kev-1
+    proxy: http://kev:8009
+    checkEndpoint: none
+    ttl: 60
+
+groups:
+  zwaar:
+    swap: true
+    exclusive: true
+    members: [werkmodel, werkmodel-32k, kev-4b, docling, whisperx]
+  licht:
+    swap: false
+    exclusive: false
+    persistent: true
+    members: [embed, embed-bge-m3, rerank]
