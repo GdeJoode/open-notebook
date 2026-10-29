@@ -1,0 +1,460 @@
+# Compose-bestand voor de proeven van het signaalsysteem (docs/signaalsysteem/proeven.md).
+#
+# Alleen aanroepen via lib/gemeenschappelijk.sh (functie dc), die het project vastzet:
+#   docker compose -p signaal-proef -f scripts/signaalsysteem/proeven/compose.proef.yml --profile <pN> ...
+#
+# Regels (proeven.md 1.2):
+# - één profiel per proef; geen dienst zonder profiel;
+# - geen bind mounts naar mappen in de repository (scripts en configuratie zitten in
+#   lokaal gebouwde images signaal-proef/*); alleen benoemde volumes;
+# - gepubliceerde poorten alleen op 127.0.0.1 in de reeks 18000-18999 (alleen P8);
+# - geheimen per run gegenereerd, als Compose-secret met bron "environment";
+# - vaste imageversies, nooit een zwevende tag.
+
+name: signaal-proef
+
+networks:
+  # Verwerking zonder internet (ADR 0002 F, FO 12.1).
+  verwerking:
+    internal: true
+  # Beheer: alleen llama-swap en de socket-proxy (P1, P7).
+  beheer:
+    internal: true
+  # Gewoon netwerk, alleen P8 (positieve controle en container "dubbel").
+  toegang: {}
+  # Uitgaand internet voor voorbereiden (downloads) en P6.
+  uitgaand: {}
+
+volumes:
+  modellen: {}            # GGUF-bestanden (P1, P3)
+  kev_hf: {}              # Kev-4B en basismodel (P1, P3)
+  whisperx_hf: {}         # Whisper en uitlijnmodel nl (HF_HOME van variant A)
+  whisperx_torch: {}      # uitlijnmodel en (torchaudio) (TORCH_HOME van variant A)
+  docling_artifacts: {}   # Docling-modellen (P1, P3, P5)
+  p1_audio: {}            # testaudio voor P1/P3 (D4, D7, D8)
+  langflow_data: {}       # SQLite van Langflow (P2)
+  p2_ticks: {}            # ticks.jsonl van TickLogger en de terugval (P2)
+  p2_planner: {}          # SQLite-jobstore van APScheduler (P2)
+
+secrets:
+  surreal_wachtwoord:
+    environment: SP_SURREAL_PASS
+  notebook_wachtwoord:
+    environment: SP_NOTEBOOK_PASSWORD
+  langflow_wachtwoord:
+    environment: SP_LANGFLOW_PASSWORD
+  langflow_geheime_sleutel:
+    environment: SP_LANGFLOW_SECRET_KEY
+  langflow_api_sleutel:
+    environment: SP_LANGFLOW_API_KEY
+  kev_api_sleutel:
+    environment: SP_KEV_API_KEY
+  docling_api_sleutel:
+    environment: SP_DOCLING_API_KEY
+
+x-geen-herstart: &geen-herstart
+  restart: "no"
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+
+  # ---------------------------------------------------------------- P8
+  alleen_intern:
+    profiles: [p8]
+    image: python:3.12.16-slim-bookworm
+    <<: *geen-herstart
+    command: ["python", "-m", "http.server", "8000"]
+    networks: [verwerking]
+    ports: ["127.0.0.1:18081:8000"]
+
+  dubbel:
+    profiles: [p8]
+    image: python:3.12.16-slim-bookworm
+    <<: *geen-herstart
+    command: ["python", "-m", "http.server", "8000"]
+    networks: [verwerking, toegang]
+    ports: ["127.0.0.1:18082:8000"]
+
+  controle:
+    profiles: [p8]
+    image: python:3.12.16-slim-bookworm
+    <<: *geen-herstart
+    command: ["python", "-m", "http.server", "8000"]
+    networks: [toegang]
+    ports: ["127.0.0.1:18083:8000"]
+
+  # ---------------------------------------------------------------- P6
+  feedcontrole:
+    profiles: [p6]
+    build:
+      context: .
+      dockerfile: p6/feedcontrole.Dockerfile
+    image: signaal-proef/p6-feedcontrole:local
+    <<: *geen-herstart
+    networks: [uitgaand]
+    environment:
+      # Optionele sleutels (proeven.md 1.3); alleen doorgegeven als Geert ze zet.
+      PODCASTINDEX_KEY: ${PODCASTINDEX_KEY:-}
+      PODCASTINDEX_SECRET: ${PODCASTINDEX_SECRET:-}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+
+  # ---------------------------------------------------------------- P2
+  langflow:
+    profiles: [p2]
+    build:
+      context: .
+      dockerfile: p2/langflow.Dockerfile
+    image: signaal-proef/p2-langflow:1.13.0
+    <<: *geen-herstart
+    networks: [verwerking]
+    secrets: [langflow_wachtwoord, langflow_geheime_sleutel]
+    environment:
+      DO_NOT_TRACK: "true"
+      LANGFLOW_DO_NOT_TRACK: "true"
+      LANGFLOW_MCP_SERVER_ENABLED: "false"
+      LANGFLOW_ADD_PROJECTS_TO_MCP_SERVERS: "false"
+      LANGFLOW_AUTO_LOGIN: "false"
+      LANGFLOW_SUPERUSER: proefbeheer
+      LANGFLOW_COMPONENTS_PATH: /proef/components
+      LANGFLOW_CONFIG_DIR: /app/langflow
+      LANGFLOW_DATABASE_URL: sqlite:////app/langflow/langflow.db
+      LANGFLOW_HOST: 0.0.0.0
+      LANGFLOW_PORT: "7860"
+      TZ: Europe/Amsterdam
+      PROEF_TICKS: /proef/ticks/ticks.jsonl
+      # Stap 2b: zonder vlag (leeg), met ENABLE_TRIGGERS of met LANGFLOW_ENABLE_TRIGGERS.
+      ENABLE_TRIGGERS: ${SP_ENABLE_TRIGGERS:-}
+      LANGFLOW_ENABLE_TRIGGERS: ${SP_LANGFLOW_ENABLE_TRIGGERS:-}
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        export LANGFLOW_SUPERUSER_PASSWORD="$$(cat /run/secrets/langflow_wachtwoord)"
+        LANGFLOW_SECRET_KEY="$$(cat /run/secrets/langflow_geheime_sleutel)";
+        [ -z "$$ENABLE_TRIGGERS" ] && unset ENABLE_TRIGGERS;
+        [ -z "$$LANGFLOW_ENABLE_TRIGGERS" ] && unset LANGFLOW_ENABLE_TRIGGERS;
+        exec langflow run --host 0.0.0.0 --port 7860
+    volumes:
+      - langflow_data:/app/langflow
+      - p2_ticks:/proef/ticks
+
+  p2-hulp:
+    profiles: [p2]
+    build:
+      context: .
+      dockerfile: p2/hulp.Dockerfile
+    image: signaal-proef/p2-hulp:local
+    <<: *geen-herstart
+    networks: [verwerking]
+    secrets: [langflow_wachtwoord, langflow_api_sleutel]
+    environment:
+      LANGFLOW_URL: http://langflow:7860
+      LANGFLOW_SUPERUSER: proefbeheer
+      PROEF_TICKS: /proef/ticks/ticks.jsonl
+      TZ: Europe/Amsterdam
+    command: ["sleep", "infinity"]
+    volumes:
+      - p2_ticks:/proef/ticks
+
+  planner:
+    profiles: [p2]
+    image: signaal-proef/p2-hulp:local
+    <<: *geen-herstart
+    networks: [verwerking]
+    secrets: [langflow_api_sleutel]
+    environment:
+      LANGFLOW_URL: http://langflow:7860
+      PLANNER_FLOW_ID: ${SP_PLANNER_FLOW_ID:-}
+      PLANNER_LOG: /proef/ticks/planner.jsonl
+      PLANNER_JOBSTORE: sqlite:////proef/planner/jobs.sqlite
+      TZ: Europe/Amsterdam
+    command: ["python", "/proef/apscheduler_terugval.py"]
+    volumes:
+      - p2_ticks:/proef/ticks
+      - p2_planner:/proef/planner
+
+  # ---------------------------------------------------------------- P4
+  surrealdb:
+    profiles: [p4]
+    image: surrealdb/surrealdb:v2.7.0
+    <<: *geen-herstart
+    networks: [verwerking]
+    # Geheugenmodus, geen volume: los van surreal_data (proeven.md P4, stap 1).
+    # Het image heeft geen shell; het wachtwoord gaat daarom als omgevingsvariabele
+    # (per run gegenereerd, alleen in het geheugen van het script).
+    command: ["start", "--log", "info", "memory"]
+    environment:
+      SURREAL_USER: root
+      SURREAL_PASS: ${SP_SURREAL_PASS:-}
+
+  api:
+    profiles: [p4]
+    image: signaal-proef/open-notebook:${SP_COMMIT:-onbekend}
+    <<: *geen-herstart
+    networks: [verwerking]
+    secrets: [surreal_wachtwoord, notebook_wachtwoord]
+    depends_on: [surrealdb]
+    environment:
+      SURREAL_URL: ws://surrealdb:8000/rpc
+      SURREAL_USER: root
+      SURREAL_NAMESPACE: signaal_proef
+      SURREAL_DATABASE: signaal_proef
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        export SURREAL_PASSWORD="$$(cat /run/secrets/surreal_wachtwoord)"
+        OPEN_NOTEBOOK_PASSWORD="$$(cat /run/secrets/notebook_wachtwoord)";
+        cd /app && exec /app/.venv/bin/uvicorn app_main.api.app:app --host 0.0.0.0 --port 5055
+
+  mcp:
+    profiles: [p4]
+    build:
+      context: .
+      dockerfile: p4/mcp.Dockerfile
+    image: signaal-proef/p4-mcp:0.3.0
+    <<: *geen-herstart
+    networks: [verwerking]
+    secrets: [notebook_wachtwoord]
+    depends_on: [api]
+    environment:
+      MCP_TRANSPORT: streamable-http
+      HOST: 0.0.0.0
+      PORT: "8000"
+      OPEN_NOTEBOOK_URL: http://api:5055
+    command: ["python", "/proef/start_mcp.py"]
+
+  p4-hulp:
+    profiles: [p4]
+    image: signaal-proef/p4-mcp:0.3.0
+    <<: *geen-herstart
+    networks: [verwerking]
+    secrets: [surreal_wachtwoord, notebook_wachtwoord]
+    environment:
+      SURREAL_HTTP: http://surrealdb:8000
+      SURREAL_NAMESPACE: signaal_proef
+      SURREAL_DATABASE: signaal_proef
+      API_URL: http://api:5055
+      MCP_URL: http://mcp:8000/mcp
+    command: ["sleep", "infinity"]
+
+  # ---------------------------------------------------------------- P1, P3, P7
+  socket-proxy:
+    profiles: [p1, p7]
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    <<: *geen-herstart
+    networks: [beheer]
+    # Configuratie B (proeven.md P7) als standaard; P7 wisselt met SP_PROXY_*.
+    environment:
+      POST: ${SP_PROXY_POST:-1}
+      ALLOW_START: ${SP_PROXY_ALLOW_START:-1}
+      ALLOW_STOP: ${SP_PROXY_ALLOW_STOP:-1}
+      CONTAINERS: ${SP_PROXY_CONTAINERS:-0}
+    # Enige plek waar een proef de Docker-socket gebruikt; alleen-lezen gekoppeld.
+    # Alleen na akkoord van Geert (proeven.md 6).
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  dummy:
+    profiles: [p7]
+    image: python:3.12.16-slim-bookworm
+    <<: *geen-herstart
+    command: ["python", "-m", "http.server", "8000"]
+    networks: [verwerking]
+
+  dummy2:
+    profiles: [p7]
+    image: python:3.12.16-slim-bookworm
+    <<: *geen-herstart
+    command: ["python", "-m", "http.server", "8000"]
+    networks: [verwerking]
+
+  p7-docker-client:
+    profiles: [p7]
+    image: docker:29.9.2-cli
+    <<: *geen-herstart
+    networks: [beheer]
+    environment:
+      DOCKER_HOST: tcp://socket-proxy:2375
+    command: ["sleep", "infinity"]
+
+  p7-curl:
+    profiles: [p7]
+    image: curlimages/curl:8.23.0
+    <<: *geen-herstart
+    networks: [beheer, verwerking]
+    command: ["sleep", "infinity"]
+
+  llama-swap-p7:
+    profiles: [p7]
+    build:
+      context: .
+      dockerfile: p1/llama-swap-dockercli.Dockerfile
+      args:
+        CONFIG: p7/llama-swap.yaml
+    image: signaal-proef/llama-swap-p7:v268-cuda13-b11977-dockercli
+    <<: *geen-herstart
+    networks: [verwerking, beheer]
+    environment:
+      DOCKER_HOST: tcp://socket-proxy:2375
+
+  llama-swap:
+    profiles: [p1]
+    build:
+      context: .
+      dockerfile: p1/llama-swap-dockercli.Dockerfile
+      args:
+        CONFIG: p1/llama-swap.yaml
+    image: signaal-proef/llama-swap:v268-cuda13-b11977-dockercli
+    <<: [*geen-herstart, *gpu]
+    networks: [verwerking, beheer]
+    secrets: [kev_api_sleutel, docling_api_sleutel]
+    environment:
+      DOCKER_HOST: tcp://socket-proxy:2375
+    volumes:
+      - modellen:/models:ro
+
+  docling:
+    profiles: [p1]
+    image: quay.io/docling-project/docling-serve-cu128:v1.38.2
+    <<: [*geen-herstart, *gpu]
+    networks: [verwerking]
+    secrets: [docling_api_sleutel]
+    environment:
+      DOCLING_SERVE_ARTIFACTS_PATH: /artifacts
+      DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "false"
+      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "1"
+      DOCLING_SERVE_LOAD_MODELS_AT_BOOT: ${SP_DOCLING_LOAD_AT_BOOT:-true}
+      DOCLING_SERVE_OPTIONS_CACHE_SIZE: ${SP_DOCLING_CACHE_SIZE:-2}
+      HF_HUB_OFFLINE: "1"
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        export DOCLING_SERVE_API_KEY="$$(cat /run/secrets/docling_api_sleutel)";
+        exec docling-serve run --host 0.0.0.0 --port 5001
+    volumes:
+      - docling_artifacts:/artifacts:ro
+
+  whisperx:
+    profiles: [p1]
+    image: public.ecr.aws/deep-learning-containers/whisperx:3.8.6-cu128-amzn2023
+    <<: [*geen-herstart, *gpu]
+    shm_size: 2g
+    networks: [verwerking]
+    environment:
+      OPT_OUT_TRACKING: "true"
+      WHISPERX_DEFAULT_MODEL: large-v3
+      WHISPERX_BATCH_SIZE: "16"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - whisperx_hf:/opt/models/hf
+      - whisperx_torch:/opt/models/torch
+
+  kev:
+    profiles: [p1]
+    build:
+      context: .
+      dockerfile: p1/kev.Dockerfile
+    image: signaal-proef/kev:kev-1.0
+    <<: [*geen-herstart, *gpu]
+    networks: [verwerking]
+    secrets: [kev_api_sleutel]
+    environment:
+      HF_HOME: /hf
+      HF_HUB_OFFLINE: "1"
+      KEV_DTYPE: bf16
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        export KEV_API_KEY="$$(cat /run/secrets/kev_api_sleutel)";
+        exec python -m kev.serve --run /hf/kev-4b --host 0.0.0.0 --port 8009
+    volumes:
+      - kev_hf:/hf
+
+  p1-client:
+    profiles: [p1]
+    image: curlimages/curl:8.23.0
+    <<: *geen-herstart
+    networks: [verwerking]
+    secrets: [kev_api_sleutel, docling_api_sleutel]
+    command: ["sleep", "infinity"]
+    volumes:
+      - p1_audio:/audio:ro
+
+  # Voorbereiden met internet (proeven.md 1.7): alleen voor downloads, netwerk "uitgaand".
+  p1-modellen-voorbereiden:
+    profiles: [p1-voorbereiden]
+    build:
+      context: .
+      dockerfile: p1/modellen.Dockerfile
+    image: signaal-proef/p1-modellen:local
+    <<: *geen-herstart
+    networks: [uitgaand]
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - modellen:/models
+      - kev_hf:/hf
+      - p1_audio:/audio
+
+  docling-voorbereiden:
+    profiles: [p1-voorbereiden]
+    image: quay.io/docling-project/docling-serve-cu128:v1.38.2
+    <<: *geen-herstart
+    networks: [uitgaand]
+    entrypoint: ["docling-tools", "models", "download", "--output-dir", "/artifacts"]
+    volumes:
+      - docling_artifacts:/artifacts
+
+  whisperx-voorbereiden:
+    profiles: [p1-voorbereiden]
+    image: public.ecr.aws/deep-learning-containers/whisperx:3.8.6-cu128-amzn2023
+    <<: [*geen-herstart, *gpu]
+    shm_size: 2g
+    networks: [uitgaand]
+    environment:
+      OPT_OUT_TRACKING: "true"
+      WHISPERX_DEFAULT_MODEL: large-v3
+    volumes:
+      - whisperx_hf:/opt/models/hf
+      - whisperx_torch:/opt/models/torch
+      - p1_audio:/audio:ro
+
+  # ---------------------------------------------------------------- P5
+  docling-p5:
+    profiles: [p5]
+    image: quay.io/docling-project/docling-serve-cu128:v1.38.2
+    <<: [*geen-herstart, *gpu]
+    networks: [verwerking]
+    secrets: [docling_api_sleutel]
+    environment:
+      DOCLING_SERVE_ARTIFACTS_PATH: /artifacts
+      DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "false"
+      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "1"
+      DOCLING_SERVE_LOAD_MODELS_AT_BOOT: ${SP_DOCLING_LOAD_AT_BOOT:-true}
+      DOCLING_SERVE_OPTIONS_CACHE_SIZE: ${SP_DOCLING_CACHE_SIZE:-2}
+      HF_HUB_OFFLINE: "1"
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        export DOCLING_SERVE_API_KEY="$$(cat /run/secrets/docling_api_sleutel)";
+        exec docling-serve run --host 0.0.0.0 --port 5001
+    volumes:
+      - docling_artifacts:/artifacts:ro
+
+  p5-client:
+    profiles: [p5]
+    image: curlimages/curl:8.23.0
+    <<: *geen-herstart
+    networks: [verwerking]
+    secrets: [docling_api_sleutel]
+    command: ["sleep", "infinity"]
+    volumes:
+      - p1_audio:/audio:ro
