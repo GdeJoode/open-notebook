@@ -4,7 +4,9 @@ Shared test fixtures for app-main.
 All repositories are AsyncMock — no database required.
 """
 
+import inspect
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock
@@ -55,8 +57,26 @@ def _testsleutel_beheerder(request: pytest.FixtureRequest, monkeypatch: pytest.M
     sleutel ``beheerder``. Tests van de sleutelcontrole zelf dragen de markering
     ``echte_sleutels`` en lopen door de echte controle.
     """
+    from app_main.api import auth
+
+    # De drempel voor mislukte sleutels is per IP; alle tests delen "testclient".
+    auth._mislukt.clear()
     if request.node.get_closest_marker("echte_sleutels"):
         return
+    # Een test die 401 of 403 verwacht, toetst de sleutelcontrole en moet die
+    # dus echt doorlopen: zonder markering faalt hij hier, in plaats van stil
+    # met de testsleutel te slagen of om de verkeerde reden te falen. Herkend
+    # aan een vergelijking (`== 401`, `!= 403`) in de testfunctie zelf; een
+    # verwachting in een hulpfunctie ziet deze controle niet.
+    try:
+        bron = inspect.getsource(request.node.function)
+    except (AttributeError, OSError, TypeError):
+        bron = ""
+    if re.search(r"(?:==|!=)\s*40[13](?!\d)", bron):
+        pytest.fail(
+            f"{request.node.nodeid} verwacht 401 of 403 maar draagt de markering "
+            "'echte_sleutels' niet (F2-01)."
+        )
     from app_main.api import agent_auth
     from shared.models.agents import Right
 
