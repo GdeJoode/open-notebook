@@ -308,7 +308,7 @@ done
 if [[ "$k8" != *internet* ]]; then criterium K8 geslaagd "$k8"; else criterium K8 mislukt "$k8"; fi
 
 vram_stop
-kill "$EVENTS_PID" 2>/dev/null || true
+kill_boom "$EVENTS_PID"   # ook docker.exe onder de sh-wrapper van Docker Desktop
 bewaar logs_llama_swap dc --profile p1 logs llama-swap || true
 for c in "${ZWAAR[@]}"; do bewaar "logs_${c#signaal-proef-}" docker logs "$c" || true; done
 criterium K_variant vastgelegd "WhisperX variant A; variant B alleen als A op een criterium van ADR 0014 afvalt (1c)"
