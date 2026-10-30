@@ -27,6 +27,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app_main.services.agents.key_service import AgentKeyService
 
 #: De enige paden zonder sleutelplicht. Geen van beide geeft inhoud terug.
+#: Daarnaast beantwoordt ``CORSMiddleware`` een CORS-preflight zelf, zonder
+#: sleutel en zonder inhoud (``auth.py``; ``allow_origins`` beperken: F2-20).
 ZONDER_SLEUTEL = frozenset({"/health", "/api/auth/status"})
 
 #: Per minimaal recht van een route: de rechten die de route mogen aanroepen.
@@ -167,8 +169,7 @@ class AgentAuditMiddleware(BaseHTTPMiddleware):
                 path=request.url.path,
                 status=response.status_code,
                 latency_ms=latency_ms,
-                # process-url stamps the enqueued job id here so GET /jobs/{id}
-                # can later authorize the caller against its own audit trail.
+                # process-url stamps the enqueued job id here.
                 job_id=getattr(request.state, "job_id", None),
             )
         except Exception:  # noqa: BLE001 — audit must never affect the response

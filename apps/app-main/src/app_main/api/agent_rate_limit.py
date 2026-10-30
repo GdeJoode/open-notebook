@@ -40,15 +40,13 @@ def agent_default_limit() -> str:
     return f"{get_agent_rate_limit_rpm()}/minute"
 
 
-# --- Per-IP PRE-AUTH throttle (fixes the auth-failure-flood gap) -------------
+# --- Per-IP request cap for the agent routes ---------------------------------
 #
-# The per-key slowapi limit is a decorator on the endpoint BODY, so it runs only
-# AFTER `require_agent_key` resolves — an invalid-key request 401s before it, and
-# each such request costs a DB read + an audit write. This dependency runs at the
-# ROUTER level (before the auth dependency) and buckets by client IP, so a flood
-# of bad keys from one host is bounded regardless of auth outcome. In-memory
-# sliding window (same durability as the existing per-IP slowapi limiter);
-# self-pruning so memory stays bounded.
+# A per-IP requests/min cap at the ROUTER level of /api/v1/agents. It runs after
+# ApiKeyMiddleware has authenticated the key (F2-01), so it bounds authenticated
+# use; floods of INVALID keys are bounded earlier, before the database lookup,
+# by the failed-key threshold in ApiKeyMiddleware (auth.py). In-memory sliding
+# window, self-pruning so memory stays bounded.
 
 _WINDOW_SEC = 60.0
 _ip_hits: Dict[str, List[float]] = defaultdict(list)
@@ -56,7 +54,7 @@ _PRUNE_ABOVE = 10_000
 
 
 def agent_ip_throttle():
-    """Router dependency: per-IP requests/min cap that runs BEFORE agent auth."""
+    """Router dependency: per-IP requests/min cap for the agent routes."""
 
     async def _dep(request: Request) -> None:
         limit = get_agent_rate_limit_rpm()

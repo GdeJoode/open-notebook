@@ -16,7 +16,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 import app_main.api.agent_rate_limit as agent_rate_limit
-from app_main.api import agent_auth
+from app_main.api import agent_auth, auth
 from app_main.api.app import create_app
 from app_main.services.agents.audit_service import AgentAuditService
 
@@ -31,6 +31,8 @@ def client():
 @pytest.fixture(autouse=True)
 def _geen_logboek_of_drempel(monkeypatch):
     monkeypatch.setattr(AgentAuditService, "record", AsyncMock())
+    # Honderden mislukte sleutels van één adres: de drempel is hier niet de toets.
+    monkeypatch.setattr(auth, "MAX_MISLUKT_PER_MINUUT", 10**6)
     agent_rate_limit._ip_hits.clear()
 
 
@@ -122,3 +124,25 @@ def test_geldige_sleutel_komt_door_de_middleware(client, monkeypatch) -> None:
     )
     resp = client.get("/", headers={"Authorization": "Bearer ak_e"})
     assert resp.status_code == 200
+
+
+def test_cors_preflight_krijgt_geen_inhoud(client, monkeypatch) -> None:
+    """De CORS-preflight is de andere uitzondering: CORSMiddleware antwoordt
+    zelf, zonder sleutel en zonder inhoud. Het beperken van ``allow_origins``
+    volgt in F2-20."""
+    lookup = AsyncMock()
+    monkeypatch.setattr(agent_auth.AgentKeyService, "authenticate", lookup)
+    resp = client.options(
+        "/api/notebooks",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.text in ("", "OK")
+    lookup.assert_not_awaited()
+
+
+def test_gewone_options_zonder_sleutel_401(client) -> None:
+    assert client.options("/api/notebooks").status_code == 401
