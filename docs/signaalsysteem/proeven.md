@@ -360,6 +360,24 @@ Geeft Kev-4B samen met het embeddingmodel een geheugenfout, dan legt de bouwagen
 | Datum | Commit | Exitcode | Meetwaarden | Conclusie |
 | --- | --- | --- | --- | --- |
 | 29-10-2026 | 013704dd | niet uitgevoerd | — | Niet uitgevoerd: vraagt GPU exclusief en de voorbereiding van P1; Geert beslist nog. Script geschreven, `bash -n` geslaagd. |
+| 30-10-2026 | 3b8f92c9 (scripts e7cbe9ea) | 3 (onderbroken) | Zie de tabel hieronder. Alle belastingsaanvragen HTTP 200 of `success`; geen geheugenfout; na de stop steeds 0 MiB. Fragmenten: mxbai 13 en bge-m3 10 tokens per zin, dus ongeveer 500 tokens per fragment. Na 28 van de 36 metingen stopte Claude Code de proef: het systeem had nog 1,2 GB werkgeheugen vrij (WSL-VM 13,2 GB). Het script is daarna netjes afgebroken. Niet gemeten: embed + docling herhaling 2 en 3, embed + whisperx, docling + whisperx. De eerste run (13:10) is afgebroken op een scriptfout (zie §8, punt 29) | Deels uitgevoerd. K1 geslaagd: per dienst drie herhalingen, spreiding van de piek ≤ 2,6 %. K2 onvolledig: 7 van de 15 combinatiemetingen. K3 (beslisregel, grens 15 279 MiB), uit de losse pieken: embed (mxbai) + werkmodel 8k 6 280, + Kev 15 158, + docling 3 086, + whisperx 10 912, docling + whisperx 12 830 MiB. Alle combinaties vallen dus binnen de grens. Embed + Kev is gemeten op 15 157 MiB, met 121 MiB marge. Met bge-m3 in plaats van mxbai komt embed + Kev op 15 558 MiB, en dat past niet. Nog te meten, bij voldoende werkgeheugen op de host: embed + whisperx en docling + whisperx. |
+
+Videogeheugen per dienst en per combinatie (MiB; nulmeting steeds 0; drie herhalingen, tenzij anders vermeld):
+
+| Dienst of combinatie | Piek | Rust (30 s na de aanvraag) | Na stop |
+| --- | --- | --- | --- |
+| embed mxbai Q8_0 (`-c 512`) | 584 | 584 | 0 |
+| embed bge-m3 Q8_0 (`-c 8192`) | 984 | 984 | 0 |
+| werkmodel Qwen3.5-9B Q4_K_M, 8k | 5 696 | 5 696 | 0 |
+| werkmodel Qwen3.5-9B Q4_K_M, 32k | 6 488 | 6 488 | 0 |
+| Kev-4B bf16 | 14 574 | 14 574 | 0 |
+| docling-serve | 2 438–2 502 | 2 438–2 502 | 0 |
+| WhisperX variant A (D4, `diarize=true`) | 10 200–10 328 | 8 874 | 0 |
+| embed mxbai + werkmodel 8k | 6 279 | 6 279 | 0 |
+| embed mxbai + Kev-4B | 15 157 | 15 157 | 0 |
+| embed mxbai + docling (1 herhaling) | 3 021 | 3 021 | 0 |
+| embed mxbai + whisperx | niet gemeten | — | — |
+| docling + whisperx | niet gemeten | — | — |
 
 ### P4. open-notebook-mcp met het classificatiefilter: geen intern fragment in een antwoord
 
@@ -772,3 +790,4 @@ Aanvullingen bij de GPU-ronde van 30-10-2026:
 26. **Voorbereiden.** `public.ecr.aws` gaf anoniem `toomanyrequests`; het script probeert drie keer met 60 s ertussen. `docling-voorbereiden` draait als root, omdat het image als uid 1001 draait en niet in het nieuwe volume kon schrijven.
 27. **Git Bash.** `curl` is daar een Windows-programma en kreeg door `MSYS2_ARG_CONV_EXCL` een POSIX-pad (curl-fout 23); `testdata` zet het pad nu om. Git Bash kent geen `pkill`: na een scriptfout liepen `nvidia-smi.exe` en `docker events` door. `kill_boom` stopt nu de hele procesboom, en elk einde van een proef stopt alle kindprocessen. Tellingen met `grep` in een pijplijn geven bij nul treffers geen scriptfout meer (`zoek`). De logs van het profiel worden bewaard vóór `compose down`.
 28. **P1, `docker events`.** Onder Git Bash is `docker` van Docker Desktop een sh-wrapper rond `docker.exe`; `kill` op het achtergrondproces stopte alleen de wrapper, en `docker.exe events` bleef na de proef lopen. P1 stopt het nu met `kill_boom`.
+29. **P3, embeddingbelasting.** 32 fragmenten in één `-d`-argument (ongeveer 160 kB) passen niet op de Windows-opdrachtregel (`docker.exe: Argument list too long`). Daardoor faalde elke aanvraag, en telde de meting alleen het laden. De aanvraag gaat nu via stdin (`--data-binary @-`), en de fragmentlengte volgt uit `/tokenize` van het model zelf (ongeveer 500 tokens). Een HTTP-status anders dan 200 telt nu als fout in de CSV.
