@@ -51,12 +51,20 @@ docling_async() { # <pdf> [extra -F ...] -> takenstatus
 belasting() { # <dienst>
   case "$1" in
     embed-mxbai|embed-bge-m3)
-      local tekst; tekst="$(printf 'weerstandsvermogen begroting fietspaden %.0s' $(seq 1 120))"
+      # Fragmenten van ongeveer 500 tokens (gemeten met /tokenize van het model zelf);
+      # de aanvraag (~70 kB) gaat via stdin: de Windows-opdrachtregel is te kort.
+      local url="http://signaal-proef-p3-$1:8080" zin='weerstandsvermogen begroting fietspaden ' per tekst codes=""
+      per="$(client curl -s -H 'Content-Type: application/json' "$url/tokenize" -d "{\"content\":\"$zin\"}" \
+        | zoek -o '[0-9][0-9]*' | wc -l | tr -d ' ')"
+      [[ "$per" -ge 1 ]] || per=1
+      tekst="$(for _ in $(seq 1 $((500 / per))); do printf '%s' "$zin"; done)"
       for _ in $(seq 1 8); do
         local inv="" i; for i in $(seq 1 32); do inv+="\"$tekst $i\","; done
-        client curl -s -o /dev/null -w '%{http_code} ' -H 'Content-Type: application/json' \
-          "http://signaal-proef-p3-$1:8080/v1/embeddings" -d "{\"input\":[${inv%,}]}"
-      done ;;
+        codes+="$(printf '{"input":[%s]}' "${inv%,}" | client curl -s -o /dev/null -w '%{http_code} ' \
+          -H 'Content-Type: application/json' --data-binary @- "$url/v1/embeddings") "
+      done
+      echo -n "tokens_per_zin=$per $codes"
+      [[ -z "$(tr ' ' '\n' <<<"$codes" | zoek -v -e '^200$' -e '^$')" ]] ;;
     werkmodel-8k|werkmodel-32k)
       local prompt; prompt="$(printf 'De gemeente Proefstad bespreekt de begroting en het weerstandsvermogen. %.0s' $(seq 1 150))"
       client curl -s -o /dev/null -w '%{http_code}' -m 900 -H 'Content-Type: application/json' \
