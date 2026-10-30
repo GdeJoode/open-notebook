@@ -464,6 +464,7 @@ Geeft Kev-4B samen met het embeddingmodel een geheugenfout, dan legt de bouwagen
 | Datum | Commit | Exitcode | Meetwaarden | Conclusie |
 | --- | --- | --- | --- | --- |
 | 29-10-2026 | 013704dd | niet uitgevoerd | — | Niet uitgevoerd: vraagt GPU exclusief en de Docling-modellen uit de voorbereiding van P1; Geert beslist nog. Script geschreven, `bash -n` geslaagd. |
+| 30-10-2026 | 7e7bde55 | 0 | Standaard (`LOAD_MODELS_AT_BOOT=true`, `CACHE_SIZE=2`): nul 0, M1 816, M2 2 430, M3 2 430, M4 2 450, M5 2 450, M6 2 450 (na `GET /v1/clear/converters` en `/v1/clear/results`), M7 0 MiB; D1 en D2 `success`, D1 bevat "weerstandsvermogen". Zonder laden bij opstarten, `CACHE_SIZE=1`: nul 0, M1 0, M2 tot en met M6 2 066, M7 0 MiB; D1 en D2 `success`. RapidOCR draait op de CPU (`CUDAExecutionProvider` niet beschikbaar in het image) | Geslaagd. K1 en K2 in beide rondes (M7 − nul = 0 MiB). K3: docling-serve geeft het videogeheugen na een taak niet vrij (M3 − nul 2 430 en 2 066 MiB), ook niet na de `clear`-eindpunten, die wel bestaan. Stoppen van de container is de enige route, zoals ADR 0009 aanneemt. Zonder laden bij opstarten en met cache 1 is het beslag 364 MiB lager en is de container in rust leeg tot de eerste taak. |
 
 ### P6. Feedcontrole voor een YouTube-kanaal en een Spotify-podcast
 
