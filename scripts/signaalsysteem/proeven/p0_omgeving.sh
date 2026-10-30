@@ -130,6 +130,16 @@ if [[ -n "$cuda_versie" ]] && awk -v v="$cuda_versie" 'BEGIN {split(v,a,"."); ex
 else
   criterium K_cuda mislukt "CUDA Version ${cuda_versie:-onbekend}, nodig >= 13.0"
 fi
+# De eis van het llama-swap-image zelf (NVIDIA_REQUIRE_CUDA) kan hoger liggen dan 13.0.
+if docker image inspect "$IMG_LLAMA_SWAP" >/dev/null 2>&1; then
+  eis="$(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$IMG_LLAMA_SWAP" \
+    | grep '^NVIDIA_REQUIRE_CUDA=' | grep -oE 'cuda>=[0-9.]+' | head -n1 | cut -d= -f2)"
+  meet llama_swap_eist_cuda "${eis:-onbekend}"
+  if [[ -n "$eis" && -n "$cuda_versie" ]] && \
+     awk -v h="$cuda_versie" -v e="$eis" 'BEGIN {split(h,a,"."); split(e,b,"."); exit !(a[1]*100+a[2] < b[1]*100+b[2])}'; then
+    criterium K_cuda_image vastgelegd "driver levert CUDA $cuda_versie, image eist $eis: alleen met NVIDIA_DISABLE_REQUIRE=1 en de libcuda van de driver (proeven.md 8)"
+  fi
+fi
 
 # 4. GPU-containers buiten het project en Ollama (alleen lezen)
 gpu_containers=""

@@ -29,6 +29,7 @@ llama_start() { # <naam> <model> <extra args...>
   local naam=$1 model=$2; shift 2
   docker run -d --rm --label "com.docker.compose.project=$PROEF_PROJECT" --name "signaal-proef-p3-$naam" \
     --gpus all --network signaal-proef_verwerking -v signaal-proef_modellen:/models:ro \
+    -e NVIDIA_DISABLE_REQUIRE=1 -e LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64 \
     --entrypoint /app/llama-server "$IMG_LLAMA_SWAP" --host 0.0.0.0 --port 8080 -m "/models/$model" -ngl 99 "$@" >/dev/null
   wacht_tot 600 client curl -sf "http://signaal-proef-p3-$naam:8080/health"
 }

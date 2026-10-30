@@ -317,6 +317,12 @@ services:
     secrets: [kev_api_sleutel, docling_api_sleutel]
     environment:
       DOCKER_HOST: tcp://socket-proxy:2375
+      # Het image eist cuda>=13.4 (NVIDIA_REQUIRE_CUDA); de driver (610.88) levert 13.3.
+      # De compat-libcuda 13.4 in het image werkt niet onder WSL2 met een GeForce-kaart
+      # ("no CUDA-capable device"). Daarom: eis uit en de libcuda van de driver eerst;
+      # de CUDA 13.4-runtime draait dan via minor version compatibility (proeven.md 8).
+      NVIDIA_DISABLE_REQUIRE: "1"
+      LD_LIBRARY_PATH: /usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64
     volumes:
       - modellen:/models:ro
 
