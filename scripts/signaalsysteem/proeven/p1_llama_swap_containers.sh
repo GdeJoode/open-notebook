@@ -157,7 +157,9 @@ for url in ("https://example.org", "https://aws.amazon.com"):
 ' 2>&1 | tr '\n' ' ')" || uitgaand="niet uit te voeren"
 meldingen="$(docker logs signaal-proef-whisperx-1 2>&1 | grep -ciE 'track|telemetry|usage' || true)"
 meet 1h_tracking "$opt; uitgaand: $uitgaand; logregels met track/telemetry/usage: $meldingen"
-if [[ "$opt" == "OPT_OUT_TRACKING=true" && "$uitgaand" != *bereikbaar* ]]; then
+# Beide adressen moeten "geen verbinding" geven; een lege of mislukte controle telt niet.
+n_geen="$(grep -o 'geen verbinding' <<<"$uitgaand" | wc -l | tr -d ' ')"
+if [[ "$opt" == "OPT_OUT_TRACKING=true" && "$n_geen" == "2" && "$uitgaand" != *bereikbaar* ]]; then
   criterium K10 geslaagd "OPT_OUT_TRACKING=true en geen uitgaande verbinding vanaf verwerking"
 else
   criterium K10 mislukt "$opt; $uitgaand"
@@ -244,9 +246,13 @@ for c in "${ZWAAR[@]}"; do na_ttl+="${c#signaal-proef-}=$(container_toestand "$c
 client curl -s -m 900 -o /dev/null -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone" || true
 bewaar externe_stop docker stop signaal-proef-kev-1
 h_herstel="$(client curl -s -m 900 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone")"
-meet 1g "na ttl+15 s: $na_ttl; na externe stop: HTTP $h_herstel"
+# Aanvulling (P7): llama-swap merkt een externe stop pas na de gezondheidslus (5 s);
+# alleen vastgelegd, K7 blijft de directe aanvraag.
+sleep 20
+h_herstel_20="$(client curl -s -m 900 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone")"
+meet 1g "na ttl+15 s: $na_ttl; na externe stop: HTTP $h_herstel; 20 s later: HTTP $h_herstel_20"
 if [[ "$na_ttl" != *running* && "$h_herstel" == "200" ]]; then criterium K7 geslaagd "$na_ttl; herstel HTTP 200"
-else criterium K7 mislukt "$na_ttl; herstel HTTP $h_herstel"; fi
+else criterium K7 mislukt "$na_ttl; herstel HTTP $h_herstel (20 s later: $h_herstel_20)"; fi
 
 # --- K8: geen internet vanaf verwerking (whisperx en kev) ---
 k8=""

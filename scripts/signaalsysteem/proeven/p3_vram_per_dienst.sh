@@ -34,6 +34,19 @@ llama_start() { # <naam> <model> <extra args...>
 }
 llama_stop() { docker stop "signaal-proef-p3-$1" >/dev/null 2>&1 || true; }
 
+docling_async() { # <pdf> [extra -F ...] -> takenstatus
+  local pdf=$1 hdr task status=""; shift
+  hdr="X-Api-Key: $(client cat /run/secrets/docling_api_sleutel)"
+  task="$(client curl -s -m 300 -H "$hdr" -F "files=@$pdf" -F to_formats=json "$@"     http://docling:5001/v1/convert/file/async | grep -o '"task_id": *"[^"]*"' | cut -d'"' -f4)"
+  [[ -z "$task" ]] && { echo -n "geen_task_id"; return 0; }
+  for _ in $(seq 1 360); do
+    status="$(client curl -s -H "$hdr" "http://docling:5001/v1/status/poll/$task" | grep -o '"task_status": *"[^"]*"' | cut -d'"' -f4)"
+    [[ "$status" == "success" || "$status" == "failure" ]] && break
+    sleep 5
+  done
+  echo -n "$status"
+}
+
 belasting() { # <dienst>
   case "$1" in
     embed-mxbai|embed-bge-m3)
@@ -55,9 +68,9 @@ belasting() { # <dienst>
           -d "{\"state\":\"Proefstad vraag $i over fietspaden.\",\"questions\":{\"o\":{\"type\":\"noul\",\"instructions\":\"Gaat dit over verkeer?\"}}}"
       done ;;
     docling)
-      local hdr; hdr="X-Api-Key: $(client cat /run/secrets/docling_api_sleutel)"
-      client curl -s -o /dev/null -w '%{http_code} ' -m 1800 -H "$hdr" -F files=@/tmp/D1.pdf -F to_formats=json http://docling:5001/v1/convert/file
-      client curl -s -o /dev/null -w '%{http_code}' -m 1800 -H "$hdr" -F files=@/tmp/D2.pdf -F to_formats=json -F force_ocr=true http://docling:5001/v1/convert/file ;;
+      # Asynchroon met pollen: het synchrone eindpunt kapt af na DOCLING_SERVE_MAX_SYNC_WAIT.
+      docling_async /tmp/D1.pdf; echo -n ' '
+      docling_async /tmp/D2.pdf -F force_ocr=true ;;
     whisperx)
       client curl -s -o /dev/null -w '%{http_code}' -m 3600 http://whisperx:8000/v1/audio/transcriptions \
         -F file=@/audio/D4-de-dag.mp3 -F language=nl -F diarize=true ;;
