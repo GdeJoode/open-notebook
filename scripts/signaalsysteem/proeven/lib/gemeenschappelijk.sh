@@ -353,7 +353,8 @@ testdata() {
   map="$SIGNAAL_PROEF_DIR/testdata"; mkdir -p "$map"
   doel="$map/$id.${3:-bin}"
   if [[ ! -s "$doel" ]]; then
-    curl -fsSL --retry 3 -o "$doel" "$url"
+    # curl in Git Bash is een Windows-programma; MSYS2_ARG_CONV_EXCL zet het pad niet om.
+    curl -fsSL --retry 3 -o "$(pad_host "$doel")" "$url"
     sha256sum "$doel" | cut -d' ' -f1 >"$doel.sha256"
   elif [[ -s "$doel.sha256" ]] && [[ "$(sha256sum "$doel" | cut -d' ' -f1)" != "$(cat "$doel.sha256")" ]]; then
     log "SHA-256 van $id wijkt af van de eerste download"
