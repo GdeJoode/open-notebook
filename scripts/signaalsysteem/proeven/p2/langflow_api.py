@@ -233,7 +233,10 @@ def analyse(bestand: str, label: str, van: str, tot: str, herstart: str | None =
         if not (van_t <= werkelijk <= tot_t):
             continue
         if "scheduled" in r:  # regel van de terugval
-            gepland, gemist, status = iso(r["scheduled"]), [], r.get("status")
+            # APScheduler meldt bij coalesce het laatst gemiste moment als gepland
+            # moment; een run waarvan dat moment vóór de herstart ligt, is de inhaalrun.
+            gepland, status = iso(r["scheduled"]), r.get("status")
+            gemist = ["voor herstart"] if herstart_t and gepland < herstart_t <= werkelijk else []
         else:
             payload = ((r.get("event") or {}).get("payload") or {})
             gepland = iso(payload["scheduled_at"]) if payload.get("scheduled_at") else None

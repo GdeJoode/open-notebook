@@ -145,8 +145,10 @@ fi
 TS="$(nu)"
 bewaar stop_planner dc --profile p2 stop planner
 sleep "$STOP_S"
-bewaar start_planner dc --profile p2 start planner
+# Herstartmoment vóór het startcommando: een run met een gepland moment daarvóór is
+# een inhaalrun (APScheduler meldt bij coalesce het laatst gemiste moment).
 TH="$(nu)"
+bewaar start_planner dc --profile p2 start planner
 sleep "$NA_HERSTART_S"
 TE="$(nu)"
 api analyse /proef/ticks/planner.jsonl planner "$TS" "$TE" "$TH" >"$RUNMAP/2g_herstart.json"
