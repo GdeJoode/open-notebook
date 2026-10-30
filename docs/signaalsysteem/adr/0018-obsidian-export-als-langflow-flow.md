@@ -1,7 +1,7 @@
 # ADR 0018: Obsidian-export als Langflow-flow met een gegenereerd blok
 
-- **Status:** besloten; onderdeel "Nieuwe notitie" voorgesteld (30-10, na de correctie van de vault)
-- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 (besluit Geert over B8: programma's, latere fase) en 2026-10-30 (correctie: de vault is `D:\# Vault`)
+- **Status:** besloten; nieuwe notities via de Obsidian-CLI (Geert, 30-10)
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 (besluit Geert over B8: programma's, latere fase) en 2026-10-30 (correctie: de vault is `D:\# Vault`; besluit Geert over B16: nieuwe notities via de Obsidian-CLI)
 - **Raakt FO-paragraaf:** 10 (export naar Obsidian), 12.1 (alleen `langflow` schrijft in de vault)
 - **Lost op:** verschilanalyse conflict 14; plan van aanpak §8, besluitpunt B8
 
@@ -63,6 +63,7 @@ Voor nieuwe notities (zie Voorstel):
 
 - a) **De export maakt geen nieuwe notities.** Elke nieuwe entiteit gaat naar review; de beheerder maakt de notitie met het OSK-sjabloon in Obsidian, en de volgende run vult het blok. Volgt OSK-first zonder uitzondering.
 - b) **De export maakt een nieuwe notitie zelf**, met de frontmatter van het sjabloon. Dat is een directe schrijfactie buiten OSK om; de vaultregels moeten die uitzondering dan noemen. Velden die het sjabloon met een keuzevraag vult (`categorie`, `indeling`), moeten uit de exportgegevens komen.
+- c) **Een nieuwe notitie wordt gemaakt via de Obsidian-CLI**, met de OSK-skills en -sjablonen. Dat blijft OSK-first, zonder directe schrijfactie. Gekozen (Geert, 30-10).
 
 ## Voorstel
 
@@ -91,7 +92,7 @@ Optie 2.
 - **Inhoud van het blok:** het id van de entiteit, de classificatie, de herkomst (bron, versie, fragment-id's) en de codeboekkoppelingen. Classificatie, id en herkomst staan in het blok en niet in de frontmatter (akkoord Geert, 30-10). Een wikilink in het blok verwijst alleen naar een bestaande notitie, bijvoorbeeld een thema in `28.04 Thema's` of een gebied; anders staat de naam als platte tekst.
 - **Programma's** landen in `28.06 Programma's` (Geert, 30-10). Een bestaande programmanotitie krijgt het blok.
 - **Personen:** alleen gekoppeld aan een bestaande notitie in `28.01 People`; een nieuwe persoon gaat naar review (wachtrij 6, ADR 0016).
-- **Nieuwe notitie — voorgesteld, Geert beslist:** optie a. Elke nieuwe entiteit (organisatie, gebied, programma, persoon) gaat naar review, met de voorgestelde canonieke naam, aliassen, soort en herkomst. De beheerder maakt de notitie met *TPL Organisation*, *TPL Region* of *TPL Person*, of voor een programma op de manier van de bestaande programmanotities. De volgende run vindt de notitie op titel of alias en vult het blok. Reden: de vaultregels vragen OSK-first, de sjablonen werken alleen in Obsidian, en velden als `categorie` en `indeling` bepalen de map; die volgen niet betrouwbaar uit fragmenten. Kiest Geert optie b, dan schrijft de component eenmalig de frontmatter van het sjabloon (`type`, `title`, `description`, `aliases`, `status: draft`, `tags`, `created`, `updated` en de velden van de soort), in de map waar de bestaande notities met dezelfde soort en dezelfde `categorie` of `indeling` staan; is dat niet precies één map, dan volgt review. Dan moet ook de paragraaf hieronder de uitzondering op OSK-first noemen.
+- **Nieuwe notitie (besluit Geert, 30-10: optie c):** de component maakt zelf geen bestand. Elke nieuwe entiteit (organisatie, gebied, programma, persoon) gaat naar review, met de voorgestelde canonieke naam, aliassen, soort, `categorie` of `indeling`, en herkomst. Na akkoord van de beheerder maakt een stap op de host de notitie via de Obsidian-CLI (`obsidian`), met de OSK-skill of het sjabloon van de soort (*TPL Organisation*, *TPL Region*, *TPL Person*; voor een programma zoals de bestaande programmanotities). De CLI praat met de draaiende Obsidian-app op de host; een container kan hem niet aanroepen, en `langflow` krijgt daarom geen schrijfrecht voor nieuwe bestanden. De volgende run vindt de notitie op titel of alias en vult het blok. Of de keuzevragen van Templater via de CLI te vullen zijn, toetst F5-05 eerst; lukt dat niet, dan maakt de beheerder de notitie in Obsidian.
 - **Logboek:** het logboek van de export is de run (ADR 0003).
 - **Sjabloon:** een sjabloonbestand voor het blok in de repository naast de component, onder versiebeheer.
 
@@ -109,7 +110,7 @@ Optie 2.
 Some entity notes contain a block between `<!-- signaalsysteem:begin -->` and `<!-- signaalsysteem:end -->`. The signaalsysteem export (Langflow) writes it; it holds the entity id, classification (intern/extern), provenance (source, version, fragment ids) and codebook links.
 
 - Do not edit the block by hand; the next export run overwrites it. Corrections go through the signaalsysteem review queue.
-- The export writes only inside this block. It never changes frontmatter or text outside it, and never creates, moves, renames or deletes notes.
+- The export writes only inside this block. It never changes frontmatter or text outside it, and never moves, renames or deletes notes. New entity notes are created after review through the Obsidian CLI with the OSK skills and templates.
 - A block marked `classificatie: intern` contains internal information. Do not copy it to cloud tools or published notes.
 - Text in the block is derived, not a source. Never use a note with this block as a source for the signaalsysteem.
 ```
@@ -126,11 +127,11 @@ Some entity notes contain a block between `<!-- signaalsysteem:begin -->` and `<
   - twee runs na elkaar met dezelfde gegevens geven byte voor byte dezelfde bestanden;
   - frontmatter en tekst buiten het blok van een bestaande notitie blijven byte voor byte gelijk;
   - een interne entiteit krijgt `classificatie: intern` in het blok;
-  - een nieuwe entiteit levert geen bestand op, maar een reviewitem (optie a);
+  - een nieuwe entiteit levert via de component geen bestand op, maar een reviewitem (optie c);
   - een wikilink in het blok verwijst alleen naar een notitie die in de testvault bestaat;
   - geen schrijfactie buiten de koppeling van `20 Atlas/28 Entities/`, en geen nieuw, verplaatst of verwijderd bestand;
   - testvaults bevatten alleen gegevens uit openbare bronnen.
 - **Afgeleide tekst:** een bronkaartregel mag niet naar de vault wijzen, en het importeindpunt weigert inhoud met het blok (ADR 0004, 0020).
 - **FO 10:** bijgewerkt op `D:\# Vault` (30-10).
-- **Open voor Geert:** optie a of b voor nieuwe notities; akkoord op de tekst voor `D:\# Vault\CLAUDE.md` vóór de eerste schrijvende run (F5-05).
+- **Open voor Geert:** akkoord op de tekst voor `D:\# Vault\CLAUDE.md` vóór de eerste schrijvende run (F5-05).
 - **Buiten de fork:** de vault-beheer-agent toetst de export aan de vaultregels (FO 10).
