@@ -32,6 +32,7 @@ volumes:
   whisperx_torch: {}      # uitlijnmodel en (torchaudio) (TORCH_HOME van variant A)
   docling_artifacts: {}   # Docling-modellen (P1, P3, P5)
   p1_audio: {}            # testaudio voor P1/P3 (D4, D7, D8)
+  geheimen: {}            # proefsleutels voor docling en kev (P1, P3); per run overschreven
   langflow_data: {}       # SQLite van Langflow (P2)
   p2_ticks: {}            # ticks.jsonl van TickLogger en de terugval (P2)
   p2_planner: {}          # SQLite-jobstore van APScheduler (P2)
@@ -331,7 +332,8 @@ services:
     image: quay.io/docling-project/docling-serve-cu128:v1.38.2
     <<: [*geen-herstart, *gpu]
     networks: [verwerking]
-    secrets: [docling_api_sleutel]
+    # Gestart met "docker start" door llama-swap: Compose-secrets worden dan niet
+    # aangebracht. De sleutel staat in het volume geheimen (gevuld door het script).
     environment:
       DOCLING_SERVE_ARTIFACTS_PATH: /artifacts
       DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "false"
@@ -346,6 +348,7 @@ services:
         exec docling-serve run --host 0.0.0.0 --port 5001
     volumes:
       - docling_artifacts:/artifacts:ro
+      - geheimen:/run/secrets:ro
 
   whisperx:
     profiles: [p1]
@@ -371,7 +374,8 @@ services:
     image: signaal-proef/kev:kev-1.0
     <<: [*geen-herstart, *gpu]
     networks: [verwerking]
-    secrets: [kev_api_sleutel]
+    # Gestart met "docker start" door llama-swap: Compose-secrets worden dan niet
+    # aangebracht. De sleutel staat in het volume geheimen (gevuld door het script).
     environment:
       HF_HOME: /hf
       HF_HUB_OFFLINE: "1"
@@ -383,6 +387,7 @@ services:
         exec python -m kev.serve --run /hf/kev-4b --host 0.0.0.0 --port 8009
     volumes:
       - kev_hf:/hf
+      - geheimen:/run/secrets:ro
 
   p1-client:
     profiles: [p1]

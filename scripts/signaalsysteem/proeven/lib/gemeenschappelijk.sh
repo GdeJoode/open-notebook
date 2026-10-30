@@ -219,6 +219,9 @@ proef_opruimen_profiel() {
   for v in "${anoniem[@]}"; do
     bewaar "anoniem_volume_rm" docker volume rm "$v" || log "anoniem volume $v niet verwijderd"
   done
+  if docker volume inspect signaal-proef_geheimen >/dev/null 2>&1; then
+    bewaar geheimen_volume_rm docker volume rm signaal-proef_geheimen || log "volume signaal-proef_geheimen niet verwijderd"
+  fi
 }
 
 # Achtergrondprocessen (meting van het videogeheugen, docker events, wachtende
@@ -232,6 +235,13 @@ kill_boom() {
 stop_kindprocessen() {
   local c
   for c in $(ps -ef | awk -v p="$$" '$3==p {print $2}'); do kill_boom "$c"; done
+}
+
+# Containers die llama-swap met "docker start" start (docling, kev), krijgen geen
+# Compose-secrets. Hun sleutels gaan daarom in het volume signaal-proef_geheimen,
+# dat Compose bij "create" aanmaakt; na de proef wordt het verwijderd.
+geheimen_volume_vullen() {
+  drun --network none -v signaal-proef_geheimen:/g -e SP_KEV_API_KEY -e SP_DOCLING_API_KEY "$IMG_PY"     sh -c 'printf %s "$SP_KEV_API_KEY" >/g/kev_api_sleutel && printf %s "$SP_DOCLING_API_KEY" >/g/docling_api_sleutel && chmod 444 /g/kev_api_sleutel /g/docling_api_sleutel'
 }
 
 # Bepaal de exitcode uit de criteria en sluit af.

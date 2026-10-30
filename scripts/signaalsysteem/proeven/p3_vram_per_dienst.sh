@@ -99,6 +99,7 @@ dienst_stop() {
 }
 
 bewaar create dc --profile p1 create docling whisperx kev
+geheimen_volume_vullen
 vram_start "$RUNMAP/vram_ruw.csv"
 DIENSTEN=(embed-mxbai embed-bge-m3 werkmodel-8k werkmodel-32k kev-4b docling whisperx)
 meet_dienst() { # <label> <diensten...>
