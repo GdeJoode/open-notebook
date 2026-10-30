@@ -22,10 +22,12 @@ basis="$(drun --network none --entrypoint sh "$IMG_LLAMA_SWAP" -c \
   'for c in docker curl wget sh; do printf "%s=%s " "$c" "$(command -v $c || echo ontbreekt)"; done')"
 meet 7a_basisimage "$basis"
 bewaar build_llama_swap_p7 dc --profile p7 build llama-swap-p7
+# "docker version" geeft zonder bereikbare daemon (--network none) altijd exitcode 1,
+# ook als de client werkt; de client zelf toetsen we met "docker --version".
 rc=0
 versie="$(drun --network none --entrypoint docker signaal-proef/llama-swap-p7:v268-cuda13-b11977-dockercli \
-  version --format '{{.Client.Version}}' 2>/dev/null)" || rc=$?
-meet 7a_afgeleid_image "docker version exitcode $rc, client $versie"
+  --version 2>/dev/null)" || rc=$?
+meet 7a_afgeleid_image "docker --version exitcode $rc: $versie"
 if [[ $rc -eq 0 && -n "$versie" ]]; then
   criterium K1 geslaagd "werkende docker-client $versie; basisimage: $basis"
 else
@@ -101,13 +103,17 @@ na_ttl="$(container_toestand signaal-proef-dummy-1)"
 ls_status /upstream/dummy/ >/dev/null
 bewaar externe_stop docker stop signaal-proef-dummy-1
 tweede="$(ls_status /upstream/dummy/)"
-meet 7c "voor=$voor eerste=$eerste tijdens=$tijdens na_ttl+15s=$na_ttl na_externe_stop=$tweede"
+# Aanvulling: herstelt llama-swap zich zodra wacht_op_dienst.sh de stop opmerkt
+# (gezondheidscontrole elke 5 s)? Alleen vastgelegd; K4 blijft de directe aanvraag.
+sleep 20
+derde="$(ls_status /upstream/dummy/)"
+meet 7c "voor=$voor eerste=$eerste tijdens=$tijdens na_ttl+15s=$na_ttl na_externe_stop=$tweede na_externe_stop+20s=$derde"
 meet 7c_running "$(tr -d '\n' <<<"$running")"
 bewaar logs_llama_swap dc --profile p7 logs llama-swap-p7 || true
 if [[ "$eerste" == "200" && "$tijdens" == "running" && "$na_ttl" == "exited" && "$tweede" == "200" ]]; then
   criterium K4 geslaagd "eerste aanvraag 200 en running; na ttl+15 s exited; na externe stop weer 200"
 else
-  criterium K4 mislukt "eerste=$eerste tijdens=$tijdens na_ttl=$na_ttl na_externe_stop=$tweede"
+  criterium K4 mislukt "eerste=$eerste tijdens=$tijdens na_ttl=$na_ttl na_externe_stop=$tweede (20 s later: $derde)"
 fi
 
 # K5 is de momentopname in proef_einde.

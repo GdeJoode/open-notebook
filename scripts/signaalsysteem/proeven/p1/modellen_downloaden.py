@@ -26,7 +26,8 @@ from huggingface_hub import hf_hub_download, list_repo_files, snapshot_download
 GGUF = [
     # (lokale naam, repo, revisie, patroon, sha256-begin, sha256-einde)
     ("werkmodel-qwen3.5-9b-q4_k_m.gguf", "unsloth/Qwen3.5-9B-GGUF", None, r"^Qwen3\.5-9B-Q4_K_M\.gguf$", "03b74727", "b7e8"),
-    ("embed-mxbai-q8_0.gguf", "ChristianAzinn/mxbai-embed-large-v1-gguf", "3ec6d46a", r"(?i)q8_0\.gguf$", None, None),
+    ("embed-mxbai-q8_0.gguf", "ChristianAzinn/mxbai-embed-large-v1-gguf",
+     "3ec6d46af11ba2b982d8c6a1e11183c4995f76a7", r"(?i)q8_0\.gguf$", None, None),
     ("embed-bge-m3-q8_0.gguf", "gpustack/bge-m3-GGUF", None, r"^bge-m3-Q8_0\.gguf$", "950f4a8e", "7821167"),
     ("rerank-bge-reranker-v2-m3-q8_0.gguf", "gpustack/bge-reranker-v2-m3-GGUF", None,
      r"^bge-reranker-v2-m3-Q8_0\.gguf$", "a43c7c9b", "aaa1d3"),
@@ -78,9 +79,10 @@ def main() -> int:
                                 "grootte": os.path.getsize(doel), "controle": ok})
     shutil.rmtree("/models/.hf-cache", ignore_errors=True)
 
-    os.environ["HF_HOME"] = "/hf"
+    # HF_HOME wordt bij het importeren van huggingface_hub gelezen; daarom de cachemap
+    # expliciet: /hf/hub is de cache die Kev met HF_HOME=/hf offline gebruikt.
     adapter = snapshot_download(KEV[0], revision=KEV[1], local_dir="/hf/kev-4b")
-    basis = snapshot_download(BASIS[0], revision=BASIS[1])
+    basis = snapshot_download(BASIS[0], revision=BASIS[1], cache_dir="/hf/hub")
     verslag["kev"] = {"adapter": adapter, "basis": basis}
 
     for naam, url in AUDIO.items():
