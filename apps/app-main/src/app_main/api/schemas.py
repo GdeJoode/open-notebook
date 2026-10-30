@@ -6,7 +6,7 @@ Pure Pydantic models for API serialization (DTOs).
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # Chunk schemas
@@ -610,6 +610,30 @@ class SourceCreate(BaseModel):
 class SourceUpdate(BaseModel):
     title: Optional[str] = Field(None, description="Source title")
     topics: Optional[List[str]] = Field(None, description="Source topics")
+
+
+class ClassificationRequest(BaseModel):
+    """Herclassificatie van een bron (F2-03, ADR 0001): alleen ``beheerder``."""
+
+    classification: Literal["intern", "extern"] = Field(
+        ..., description="De nieuwe classificatie"
+    )
+    reason: str = Field(..., description="Verplichte reden, komt in het logboek")
+
+    @field_validator("reason")
+    @classmethod
+    def _reden_niet_leeg(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Een reden is verplicht")
+        return value.strip()
+
+
+class ClassificationResponse(BaseModel):
+    source_id: str
+    from_classification: Literal["intern", "extern"]
+    to_classification: Literal["intern", "extern"]
+    changed: bool
+    log_id: Optional[str] = None
 
 
 class SourceResponse(BaseModel):

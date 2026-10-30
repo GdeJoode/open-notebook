@@ -5,12 +5,17 @@ Pure Pydantic models for documents, chunks, insights, and embeddings.
 Database operations are handled by the surrealdb-service package.
 """
 
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from shared.models.base import ObjectModel
 from shared.types.enums import ElementType, InsightType
+
+#: Classificatie intern/extern (F2-03, ADR 0001). ``None`` bij schrijven laat de
+#: database de standaard kiezen: 'intern' voor een bron, de waarde van de bron
+#: voor een fragment, embedding of inzicht (``migrations/89.surrealql``).
+Classification = Literal["intern", "extern"]
 
 
 class Asset(BaseModel):
@@ -69,6 +74,9 @@ class Chunk(ObjectModel):
     # False for noise elements (page headers/footers, logos, stamps, etc.)
     # Downstream consumers (regrouper, summarizer, embeddings) filter on this.
     is_content: bool = Field(default=True, description="Whether this chunk is relevant content vs noise")
+    classification: Optional[Classification] = Field(
+        None, description="intern of extern; standaard die van de bron (F2-03)"
+    )
 
 
 class SourceInsight(ObjectModel):
@@ -87,6 +95,9 @@ class SourceInsight(ObjectModel):
     content: str = Field(description="The insight content")
     embedding: Optional[List[float]] = Field(None, description="Vector embedding")
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    classification: Optional[Classification] = Field(
+        None, description="intern of extern; standaard die van de bron (F2-03)"
+    )
 
 
 class SourceEmbedding(ObjectModel):
@@ -102,6 +113,9 @@ class SourceEmbedding(ObjectModel):
     order: int = Field(default=0, description="Order in the document")
     embedding: Optional[List[float]] = Field(None, description="Vector embedding")
     chunk: Optional[str] = Field(None, description="Reference to the chunk record")
+    classification: Optional[Classification] = Field(
+        None, description="intern of extern; standaard die van de bron (F2-03)"
+    )
 
 
 class Source(ObjectModel):
@@ -179,6 +193,12 @@ class Source(ObjectModel):
     private: bool = Field(
         default=False,
         description="Force this source's LLM stages local (sticky privacy override)",
+    )
+
+    # Classificatie intern/extern (F2-03, ADR 0001); standaard 'intern'. Van
+    # 'intern' naar 'extern' kan alleen via de ClassificationService.
+    classification: Optional[Classification] = Field(
+        None, description="intern of extern; standaard intern (F2-03)"
     )
 
     @field_validator("topics", mode="before")

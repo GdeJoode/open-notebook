@@ -15,7 +15,10 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from surrealdb_service.connection import DatabaseUnavailableError
+from surrealdb_service.connection import (
+    ClassificationConflictError,
+    DatabaseUnavailableError,
+)
 from surrealdb_service.migrations import AsyncMigrationManager
 
 from app_main.api.agent_auth import AgentAuditMiddleware, require_right
@@ -302,6 +305,7 @@ def create_app() -> FastAPI:
         audit,
         auth,
         chat,
+        classification,
         commands,
         config,
         context,
@@ -364,6 +368,9 @@ def create_app() -> FastAPI:
     application.include_router(settings.router, prefix="/api", tags=["settings"])
     application.include_router(context.router, prefix="/api", tags=["context"])
     application.include_router(sources.router, prefix="/api", tags=["sources"])
+    application.include_router(
+        classification.router, prefix="/api", tags=["classification"]
+    )
     application.include_router(
         structure_graph.router, prefix="/api", tags=["structure-graph"]
     )
@@ -435,6 +442,18 @@ def create_app() -> FastAPI:
         logger.error(f"Database error: {exc}")
         return JSONResponse(
             status_code=500, content={"detail": "Database operation failed"}
+        )
+
+    @application.exception_handler(ClassificationConflictError)
+    async def classification_conflict_handler(
+        request: Request, exc: ClassificationConflictError
+    ):
+        # F2-03: een classificatie die losser is dan toegestaan (fragment
+        # losser dan zijn bron, of intern naar extern buiten de
+        # herclassificatie). Geen databasedetails in het antwoord.
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "Classificatie niet toegestaan"},
         )
 
     @application.exception_handler(DatabaseUnavailableError)

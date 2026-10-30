@@ -1,7 +1,7 @@
 """Wat de sleutel ``pijplijn`` (Langflow) niet mag (F2-01, ADR 0002 B).
 
-Groeit mee met F2-03 (herclassificatie), F2-13 en F2-30. Nu: sleutelbeheer
-(``/api/agent-keys``) en de besluiten in de triage geven 403.
+Groeit mee met F2-13 en F2-30. Nu: sleutelbeheer (``/api/agent-keys``), de
+besluiten in de triage en de herclassificatie (F2-03) geven 403.
 """
 
 from __future__ import annotations
@@ -66,6 +66,12 @@ def test_pijplijn_krijgt_403_op_sleutelbeheer(app) -> None:
 def test_pijplijn_krijgt_403_op_het_triagebesluit(app) -> None:
     verzoeken = _routes_onder(app, "/api/triage", {"POST", "PUT", "PATCH", "DELETE"})
     assert ("POST", "/api/triage/queue/x/decision") in verzoeken
+    _alle_403(app, verzoeken)
+
+
+def test_pijplijn_krijgt_403_op_herclassificatie(app) -> None:
+    verzoeken = _routes_onder(app, "/api/v1/sources", {"POST", "PUT", "PATCH", "DELETE"})
+    assert ("POST", "/api/v1/sources/x/classification") in verzoeken
     _alle_403(app, verzoeken)
 
 

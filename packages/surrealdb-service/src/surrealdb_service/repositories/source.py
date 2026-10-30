@@ -9,7 +9,12 @@ from loguru import logger
 
 from shared.models import Asset, Chunk, Source, SourceEmbedding, SourceInsight
 from surrealdb_service.config import SurrealDBConfig
-from surrealdb_service.connection import ensure_record_id, execute_query
+from surrealdb_service.connection import (
+    ClassificationConflictError,
+    ensure_record_id,
+    execute_query,
+    execute_transaction,
+)
 from surrealdb_service.repositories.base import BaseRepository, _validate_record_id
 
 # The ``processing_stage`` filter shared by the sources list (``?stage=``) and
@@ -17,12 +22,93 @@ from surrealdb_service.repositories.base import BaseRepository, _validate_record
 # defaulting to ``ingested`` (migration 71), so every row has a stage.
 STAGE_IN = "processing_stage IN $stages"
 
+# Herclassificatie van een bron in één transactie (F2-03, ADR 0001). Alleen
+# hier staat ``$herclassificatie = true``: de ASSERT op ``classification``
+# (migratie 89) weigert 'intern' naar 'extern' op elk ander pad. De bron,
+# fragmenten, embeddings en ``doc_node`` krijgen de nieuwe waarde; inzichten
+# alleen naar 'intern' (een afgeleide tekst wordt niet losser). De afgeleide
+# records worden opnieuw berekend (VALUE in migratie 89; een entiteit werkt
+# via een EVENT haar relaties, aliassen en triage-items bij). Daarna precies
+# één logregel. Faalt één stap, dan verandert niets.
+_HERCLASSIFICATIE = """
+BEGIN TRANSACTION;
+LET $herclassificatie = true;
+LET $huidig = (SELECT VALUE classification FROM ONLY $bron);
+IF $huidig != $van { THROW 'classificatie is intussen gewijzigd' };
+UPDATE $bron SET classification = $naar RETURN NONE;
+UPDATE chunk SET classification = $naar WHERE source = $bron RETURN NONE;
+UPDATE source_embedding SET classification = $naar WHERE source = $bron RETURN NONE;
+UPDATE doc_node SET classification = $naar WHERE source = $bron RETURN NONE;
+IF $naar = 'intern' {
+    UPDATE source_insight SET classification = 'intern' WHERE source = $bron RETURN NONE;
+};
+UPDATE entity WHERE source_documents CONTAINS <string> $bron RETURN NONE;
+UPDATE relation WHERE source_documents CONTAINS <string> $bron RETURN NONE;
+UPDATE entity_alias WHERE source_document = <string> $bron RETURN NONE;
+CREATE classification_log CONTENT {
+    source: $bron,
+    from_classification: $van,
+    to_classification: $naar,
+    reason: $reden,
+    agent_key: $sleutel,
+    person: $persoon
+} RETURN id;
+COMMIT TRANSACTION;
+"""
+
 
 class SourceRepository(BaseRepository[Source]):
     """Repository for Source operations."""
 
     def __init__(self, config: Optional[SurrealDBConfig] = None):
         super().__init__(Source, config)
+
+    async def get_classification(self, source_id: str) -> Optional[str]:
+        """De classificatie van de bron, of ``None`` als die niet bestaat."""
+        rows = await execute_query(
+            "SELECT classification FROM ONLY $bron",
+            {"bron": ensure_record_id(source_id)},
+            self.config,
+        )
+        row = rows[0] if isinstance(rows, list) and rows else rows
+        return row.get("classification") if isinstance(row, dict) else None
+
+    async def reclassify(
+        self,
+        source_id: str,
+        *,
+        from_classification: str,
+        to_classification: str,
+        reason: str,
+        agent_key: str,
+        person: str,
+    ) -> str:
+        """Herclassificeer de bron en alles wat erbij hoort; geeft het id van de logregel.
+
+        Alleen voor de ``ClassificationService`` (F2-03). Het logboek kent geen
+        methode om een regel te wijzigen of te verwijderen.
+        """
+        try:
+            results = await execute_transaction(
+                _HERCLASSIFICATIE,
+                {
+                    "bron": ensure_record_id(source_id),
+                    "van": from_classification,
+                    "naar": to_classification,
+                    "reden": reason,
+                    "sleutel": agent_key,
+                    "persoon": person,
+                },
+                self.config,
+            )
+        except ClassificationConflictError:
+            raise
+        except RuntimeError as e:
+            if "intussen gewijzigd" in str(e):
+                raise ClassificationConflictError(str(e)) from e
+            raise
+        regel = next(r for r in reversed(results) if r)
+        return str(regel[0]["id"] if isinstance(regel, list) else regel["id"])
 
     async def add_to_notebook(self, source_id: str, notebook_id: str) -> bool:
         """

@@ -12,6 +12,7 @@ from surrealdb import RecordID
 from shared.models.base import ObjectModel, RecordModel
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import (
+    as_classification_conflict,
     db_connection,
     ensure_record_id,
     execute_query,
@@ -86,6 +87,8 @@ class BaseRepository(Generic[T]):
                 return self.model_class(**result)
         except Exception as e:
             logger.exception(f"Failed to create {self.table_name}: {e}")
+            if (conflict := as_classification_conflict(e)) is not None:
+                raise conflict from e
             raise RuntimeError(f"Failed to create {self.table_name}")
 
     async def get(self, id: str) -> Optional[T]:
@@ -200,6 +203,8 @@ class BaseRepository(Generic[T]):
             raise RuntimeError(f"Update returned no results for {record_id}")
         except Exception as e:
             logger.exception(f"Failed to update {self.table_name}: {e}")
+            if (conflict := as_classification_conflict(e)) is not None:
+                raise conflict from e
             raise RuntimeError(f"Failed to update {self.table_name}")
 
     async def delete(self, id: str) -> bool:
@@ -247,6 +252,8 @@ class BaseRepository(Generic[T]):
             raise RuntimeError(f"Upsert returned no results")
         except Exception as e:
             logger.exception(f"Failed to upsert {self.table_name}: {e}")
+            if (conflict := as_classification_conflict(e)) is not None:
+                raise conflict from e
             raise RuntimeError(f"Failed to upsert {self.table_name}")
 
     async def query(
