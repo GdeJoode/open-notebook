@@ -1,2 +1,2 @@
 
-REMOVE TABLE IF EXISTS transformation SCHEMAFULL;
+REMOVE TABLE IF EXISTS transformation;
