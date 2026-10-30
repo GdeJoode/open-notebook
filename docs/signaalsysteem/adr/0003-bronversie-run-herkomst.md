@@ -62,7 +62,7 @@ Optie 2, met velden die op PROV-O passen.
 
 **Bestaande tabellen uitbreiden**
 
-- `chunk`: `source_version` en `run` (beide verplicht voor nieuwe records), `extractor` (bijvoorbeeld docling-serve met versie) en `classification`.
+- `chunk`: `source_version` en `run` (beide verplicht), `extractor` (bijvoorbeeld docling-serve met versie) en `classification`.
 - `source_embedding`: `run` en `embedding_model` (naam en versie).
 - vermeldingen van entiteiten (de PC.3-herkomst in `entity_persistence_service.py`): `run` erbij.
 - `job`: `run` (optioneel) erbij. De wachtrij blijft de uitvoerder van stappen in de fork. Wie die stappen start, bepaalt ADR 0011.
@@ -97,8 +97,10 @@ Optie 2, met velden die op PROV-O passen.
 
 **Bestaande gegevens**
 
-- De migratie maakt per bestaande bron één `source_version` aan, met `content_hash = NONE` en kenmerk `pre_signaalsysteem`. Ze maakt ook één `processing_run` aan, met status `geslaagd`, `pipeline_version = 'pre-signaalsysteem'` en lege `models`. Daaraan koppelt ze de bestaande fragmenten en embeddings. Zo is elk fragment herleidbaar, en is zichtbaar dat model en pipeline onbekend zijn.
-- FO 14 zegt dat er geen overgang nodig is. De beheerder leest de bronnen daarom opnieuw in via de nieuwe pipeline. Daarna verwijdert een apart script, geen migratie, de runs met `pre-signaalsysteem`. Dat gebeurt pas na een expliciete bevestiging van Geert, omdat het gegevens weggooit.
+- De signaalsysteemomgeving start met een lege database (besluit Geert, 30-10, plan van aanpak §8 B3). Er is geen migratie van bestaande bronnen, fragmenten of embeddings, en dus geen bronversie of run met `pre-signaalsysteem` en geen opruimscript daarvoor.
+- Omdat er geen oude records zijn, zijn `chunk.source_version` en `chunk.run` voor alle records verplicht, niet alleen voor nieuwe.
+- De migraties blijven idempotent en hebben een `_down`-variant.
+- Het oude datavolume blijft onaangeroerd staan als archief; de nieuwe omgeving krijgt een eigen volume. Wie bronnen uit de oude omgeving terug wil, leest de originelen opnieuw in via de nieuwe pipeline.
 
 ## Gevolgen
 
@@ -109,7 +111,7 @@ Optie 2, met velden die op PROV-O passen.
   - de vergrendelingshulp in `packages/surrealdb-service`.
 - **Opslag:** fragmenten en embeddings stapelen zich op bij elke herverwerking. Opschonen van oude runs is een bewuste beheeractie, geen automatisme.
 - **Tests (stopcondities):**
-  - een schemacontrole dat `chunk.source_version` en `chunk.run` verplicht zijn voor nieuwe records;
+  - een schemacontrole dat `chunk.source_version` en `chunk.run` verplicht zijn;
   - een test dat herverwerking het aantal fragmenten van de oude run ongewijzigd laat;
   - een test dat een run zonder nieuwe inhoud een record `niets_nieuws` oplevert;
   - een test dat een wijziging met een verouderde `rev` HTTP 409 geeft;

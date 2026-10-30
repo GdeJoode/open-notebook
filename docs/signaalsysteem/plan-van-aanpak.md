@@ -2,7 +2,7 @@
 
 Stand: 30 oktober 2026 · stap 4 van `opdracht.md` · branch `docs/signaalsysteem-fo`
 
-Dit plan deelt de fasen 2 tot en met 5 uit het functioneel ontwerp (FO, paragraaf 15) op in taken. Het steunt op het FO, de verschilanalyse, de ontwerpbesluiten (Architecture Decision Records, ADR's) 0001–0019 en de proefuitkomsten P0–P9 in `proeven.md`. Er is geen code gewijzigd.
+Dit plan deelt de fasen 2 tot en met 5 uit het functioneel ontwerp (FO, paragraaf 15) op in taken. Het steunt op het FO, de verschilanalyse, de ontwerpbesluiten (Architecture Decision Records, ADR's) 0001–0020 en de proefuitkomsten P0–P9 in `proeven.md`. Er is geen code gewijzigd. De besluiten van Geert van 30-10 over B2–B8 en over Kev-4B gekwantiseerd en de referentieset (§8) zijn verwerkt.
 
 Inhoud: 1 werkwijze · 2 taken per fase · 3 harde eisen naar taken · 4 Compose-opzet · 5 interfaces · 6 risico's · 7 aannames en conflicten · 8 open vragen en besluiten vóór fase 2.
 
@@ -11,7 +11,7 @@ Inhoud: 1 werkwijze · 2 taken per fase · 3 harde eisen naar taken · 4 Compose
 - **Agent.** Elke taak bouwt `signaal-bouwer`, één taak tegelijk; daarna toetst `signaal-reviewer` de taak aan FO, ADR's en harde eisen. Een taak is af als de stopconditie slaagt en de reviewer geen blokkerende bevinding heeft. Daarna volgt één regel in `voortgang.md` en een kleine commit.
 - **Volgorde.** Fase 2 begint met de taken die de harde eisen borgen (F2-01 tot en met F2-06): afscherming, classificatie en bronversie met run en herkomst. Daarna modelpoort en omgeving, en pas dan de inname.
 - **Tests.** Tests staan naast de code (`ARCHITECTURE.md` §5) en draaien met `uv run --project <lid> pytest <lid>/tests/<bestand>`. Op de werkplek van Geert gaat dat via de `.venv` in WSL (Windows Subsystem for Linux). Tests over de hele repository staan in `tests/` in de root, zoals het bestaande `tests/test_compose_env_is_consumed.py`.
-- **Migraties.** Elke migratie is idempotent (`DEFINE … OVERWRITE` of `IF NOT EXISTS`) en heeft een `_down`-variant. De hoogste migratie is nu 87 (`migrations/87.surrealql`); de nummers hieronder zijn een verwachting op volgorde van de taken. Elke migratietaak heeft een test `packages/surrealdb-service/tests/test_migration_<n>_<onderwerp>.py` die heen en terug draait, zoals `test_migrations_roundtrip.py`.
+- **Migraties.** Elke migratie is idempotent (`DEFINE … OVERWRITE` of `IF NOT EXISTS`) en heeft een `_down`-variant. De nieuwe omgeving start met een lege database (B3): migraties definiëren schema's en zetten geen oude gegevens om. De hoogste migratie is nu 87 (`migrations/87.surrealql`); de nummers hieronder zijn een verwachting op volgorde van de taken. Elke migratietaak heeft een test `packages/surrealdb-service/tests/test_migration_<n>_<onderwerp>.py` die heen en terug draait, zoals `test_migrations_roundtrip.py`.
 - **Verwijdertaken.** Een taak die bestaande code verwijdert, staat apart en heeft altijd de **verwijdercontrole (V)**:
   1. de volledige testsuite van elk geraakt workspace-lid slaagt, na het verwijderen van de tests van de verwijderde code;
   2. `python -c "import app_main.api.app"` slaagt, en de API start in de Compose-omgeving met `/health` HTTP 200;
@@ -26,16 +26,16 @@ Inhoud: 1 werkwijze · 2 taken per fase · 3 harde eisen naar taken · 4 Compose
 
 ### Fase 2: minimale keten
 
-Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpunt, opslag met versie, herkomst en classificatie, en de export naar Obsidian, vanaf het begin in Docker met llama-swap. *Toets (F2-24):* elk fragment is herleidbaar tot bronversie en run, en twee gelijktijdige GPU-taken leiden niet tot een geheugenfout.
+Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpunt, opslag met versie, herkomst en classificatie, en de export naar Obsidian (op een tijdelijke testvault, B8), vanaf het begin in Docker met llama-swap. *Toets (F2-24):* elk fragment is herleidbaar tot bronversie en run, en twee gelijktijdige GPU-taken leiden niet tot een geheugenfout.
 
 #### A. Harde eisen borgen
 
 **F2-01 Sleutels en rechten per route, standaard weigeren**
-- *Wat:* `PasswordAuthMiddleware` en `OPEN_NOTEBOOK_PASSWORD` vervallen. Eén sleutelmiddleware voor alles onder `/api`, met `Authorization: Bearer`; `X-API-Key` vervalt. Rechten `lezen_extern` < `lezen_intern` < `beheren`. Elke route declareert haar minimale recht met `require_right(...)`. `AgentAuditMiddleware` geldt voor alle routes. Uitgezonderd zijn alleen `/health` en `/api/auth/status`. Een migratie zet `agent_keys.permission` op de nieuwe waarden en trekt bestaande sleutels in. Een script maakt de eerste sleutel met `beheren` en schrijft die als geheimbestand weg, zonder log.
+- *Wat:* `PasswordAuthMiddleware` en `OPEN_NOTEBOOK_PASSWORD` vervallen. Eén sleutelmiddleware voor alles onder `/api`, met `Authorization: Bearer`; `X-API-Key` vervalt. Rechten `lezen_extern` < `lezen_intern` < `beheren`. Elke route declareert haar minimale recht met `require_right(...)`. `AgentAuditMiddleware` geldt voor alle routes. Uitgezonderd zijn alleen `/health` en `/api/auth/status`. Een migratie definieert `agent_keys.permission` met de nieuwe waarden; er zijn geen bestaande sleutels om in te trekken (lege database, B3). Een script maakt de eerste sleutel met `beheren` en schrijft die als geheimbestand weg, zonder log.
 - *Hangt af van:* —
 - *Bestanden:* `apps/app-main/src/app_main/api/auth.py`, `agent_auth.py`, `app.py`; alle routers in `apps/app-main/src/app_main/api/routers/` (dependency per route); `apps/app-main/src/app_main/services/agents/key_service.py`; `migrations/88.surrealql` en `88_down.surrealql`; nieuw `scripts/signaalsysteem/maak_beheersleutel.py`.
 - *ADR:* 0002 A, B.
-- *Stopconditie:* `apps/app-main/tests/test_route_rechten.py` loopt alle `application.routes` af en faalt bij een route zonder rechtendeclaratie; `apps/app-main/tests/test_sleutel_verplicht.py`: elk verzoek zonder geldige sleutel geeft HTTP 401, behalve de twee uitzonderingen; `packages/surrealdb-service/tests/test_migration_88_agent_key_permission.py`: `read` wordt geweigerd, bestaande sleutels zijn ingetrokken, `_down` laat ze ingetrokken. Bestaand `test_agent_auth.py` aangepast en groen.
+- *Stopconditie:* `apps/app-main/tests/test_route_rechten.py` loopt alle `application.routes` af en faalt bij een route zonder rechtendeclaratie; `apps/app-main/tests/test_sleutel_verplicht.py`: elk verzoek zonder geldige sleutel geeft HTTP 401, behalve de twee uitzonderingen; `packages/surrealdb-service/tests/test_migration_88_agent_key_permission.py`: `read` wordt geweigerd, de drie nieuwe waarden worden aanvaard, `_down` draait terug en de migratie is twee keer na elkaar uit te voeren. Bestaand `test_agent_auth.py` aangepast en groen.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 - *Let op:* de interface kan tot F2-20 niet inloggen.
 
@@ -48,7 +48,7 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F2-03 Classificatie intern/extern, standaard intern, met herclassificatie**
-- *Wat:* veld `classification` (`ASSERT $value IN ['intern','extern']`, `DEFAULT 'intern'`) op `source`, `chunk`, `source_embedding`, `note`, `source_insight` en `notebook`; alle bestaande records worden `intern`. Bij schrijven neemt de repositorylaag de waarde van de bron over; een lossere waarde dan de bovenliggende geeft HTTP 409, een ontbrekende waarde geldt als `intern`. Nieuwe `ClassificationService` met `POST /api/v1/sources/{id}/classification` (recht `beheren`, reden verplicht) en tabel `classification_log` die alleen aanvult. De oude velden `private`, `privacy_mode` en `default_privacy_mode` blijven tot F2-09 staan, zodat de code tussen de taken blijft werken.
+- *Wat:* veld `classification` (`ASSERT $value IN ['intern','extern']`, `DEFAULT 'intern'`) op `source`, `chunk`, `source_embedding`, `note`, `source_insight` en `notebook`. Er zijn geen bestaande records om om te zetten (B3). Bij schrijven neemt de repositorylaag de waarde van de bron over; een lossere waarde dan de bovenliggende geeft HTTP 409, een ontbrekende waarde geldt als `intern`. Nieuwe `ClassificationService` met `POST /api/v1/sources/{id}/classification` (recht `beheren`, reden verplicht) en tabel `classification_log` die alleen aanvult. De oude velden `private`, `privacy_mode` en `default_privacy_mode` blijven tot F2-09 staan, zodat de code tussen de taken blijft werken.
 - *Hangt af van:* F2-01.
 - *Bestanden:* `migrations/89.surrealql` en `_down`; `packages/shared/src/shared/models/source.py`; `apps/app-main/src/app_main/api/schemas.py`; `packages/surrealdb-service/src/surrealdb_service/repositories/source.py`, `notebook.py`; nieuw `apps/app-main/src/app_main/services/classification_service.py`, nieuw `api/routers/classification.py`; `dependencies.py`.
 - *ADR:* 0001, 0019.
@@ -56,11 +56,11 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F2-04 Bronversie, verwerkingsrun en herkomst**
-- *Wat:* nieuwe tabellen `source_version` (met `content_hash`, `original`, `predecessor`, `classification`, `created_by_run`, `current_run`, unieke index op `source` + `content_hash`) en `processing_run` (status `bezig`/`geslaagd`/`mislukt`/`niets_nieuws`, trigger, `pipeline_id`, `pipeline_version`, `models`, `log`, `error`, `attempts`, `notified_at`); `source.current_version`; op `chunk` de velden `source_version`, `run` (verplicht voor nieuwe records), `extractor` en `classification`; op `source_embedding` de velden `run` en `embedding_model`; `run` op `job` en op de entiteitvermeldingen (PC.3). Per bestaande bron één bronversie met `pre_signaalsysteem` en één run met `pipeline_version = 'pre-signaalsysteem'`, gekoppeld aan de bestaande fragmenten. De strengste classificatie wint over alle versies. `SourceVersionRepository`, `ProcessingRunRepository`, `ProcessingRunService` en de run-eindpunten (§5.4). De bouwer inventariseert de lezers van `provenance_chain` (voor F3-08).
+- *Wat:* nieuwe tabellen `source_version` (met `content_hash`, `original`, `predecessor`, `classification`, `created_by_run`, `current_run`, unieke index op `source` + `content_hash`) en `processing_run` (status `bezig`/`geslaagd`/`mislukt`/`niets_nieuws`, trigger, `pipeline_id`, `pipeline_version`, `models`, `log`, `error`, `attempts`, `notified_at`); `source.current_version`; op `chunk` de velden `source_version`, `run` (verplicht voor nieuwe records), `extractor` en `classification`; op `source_embedding` de velden `run` en `embedding_model`; `run` op `job` en op de entiteitvermeldingen (PC.3); `source_map_rule_id` en `source_map_rule_rev` op `processing_run` (ADR 0020; gevuld vanaf F2-13). Vervallen door B3: de bronversie en run `pre-signaalsysteem` voor bestaande bronnen; `source_version` en `run` zijn verplicht voor alle fragmenten. De strengste classificatie wint over alle versies. `SourceVersionRepository`, `ProcessingRunRepository`, `ProcessingRunService` en de run-eindpunten (§5.4). De bouwer inventariseert de lezers van `provenance_chain` (voor F3-08).
 - *Hangt af van:* F2-03.
 - *Bestanden:* `migrations/90.surrealql` en `_down`; nieuw `packages/shared/src/shared/models/source_version.py`, `processing_run.py`; nieuw `packages/surrealdb-service/src/surrealdb_service/repositories/source_version.py`, `processing_run.py`; `repositories/source.py`; `packages/job-queue/src/job_queue/` (model en repository van `job`); `apps/app-main/src/app_main/services/entity_persistence_service.py`; nieuw `apps/app-main/src/app_main/services/processing_run_service.py`, nieuw `api/routers/runs.py`.
-- *ADR:* 0003, 0001.
-- *Stopconditie:* `test_migration_90_source_version_run.py`: een nieuw `chunk` zonder `source_version` of `run` wordt geweigerd; de unieke index weigert een dubbele hash; na de migratie heeft elk bestaand fragment een bronversie en een run met `pre-signaalsysteem`; `_down` draait terug. `apps/app-main/tests/test_processing_run_api.py`: een run zonder nieuwe inhoud eindigt als `niets_nieuws`; `PATCH` op een afgesloten run geeft 409. `apps/app-main/tests/test_classificatie_strengste_wint.py`: een interne versie maakt bron, versies, fragmenten en embeddings intern, in één transactie.
+- *ADR:* 0003, 0001, 0020.
+- *Stopconditie:* `test_migration_90_source_version_run.py`: een `chunk` zonder `source_version` of `run` wordt geweigerd; de unieke index weigert een dubbele hash; `_down` draait terug. `apps/app-main/tests/test_processing_run_api.py`: een run zonder nieuwe inhoud eindigt als `niets_nieuws`; `PATCH` op een afgesloten run geeft 409. `apps/app-main/tests/test_classificatie_strengste_wint.py`: een interne versie maakt bron, versies, fragmenten en embeddings intern, in één transactie.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F2-05 Zoeken en lezen: classificatiefilter, nieuwste versie, alleen fragmenten**
@@ -83,7 +83,7 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 
 **F2-07 Modelregister, `ModelGate` en auditlog**
 - *Wat:* register als YAML-bestand (YAML Ain't Markup Language) in Git met naam, versie, aanroepwijze, locatie, toegestaan voor intern (standaard `nee`) en taken. `llm_manager.gate.ModelGate` zoekt het model op, weigert een niet-toegestaan model bij interne invoer zonder terugval, probeert bij HTTP 502 van llama-swap opnieuw (pauze, maximum) en schrijft een regel in `model_call` (alleen aanvulbaar, nooit prompt- of antwoordtekst). `POST /api/v1/model-calls` voor Langflow; `/api/models` wordt een alleen-lezen weergave van het register.
-- *Hangt af van:* F2-01, F2-04. *Besluit vooraf:* het werkmodel (§8, B4).
+- *Hangt af van:* F2-01, F2-04. Werkmodel volgens B4 (besloten): Qwen3.5-9B Q4_K_M, context 8 192.
 - *Bestanden:* nieuw `config/modelregister.yaml`; nieuw `packages/llm-manager/src/llm_manager/gate.py`, `register.py`; `migrations/93.surrealql` en `_down`; `apps/app-main/src/app_main/services/model_routing/telemetry.py` (schrijver van `model_call`); nieuw `api/routers/model_calls.py`; `api/routers/models.py`.
 - *ADR:* 0006, 0007, 0009 (502).
 - *Stopconditie:* `packages/llm-manager/tests/test_model_gate.py`: cloudmodel geweigerd bij interne invoer, ook als het lokale model faalt; onbekend model geweigerd; 502 leidt tot een nieuwe poging tot het maximum; elke aanroep één auditregel. `packages/llm-manager/tests/test_modelregister_schema.py` valideert het register. `test_migration_93_model_call.py`: de tabel heeft geen tekstveld voor prompt of antwoord.
@@ -98,9 +98,9 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F2-09 Verwijderen: Track J-routering, `model_route` en oude privacyvelden**
-- *Wat:* weg gaan `route_resolver.py` (de weigerlogica zit al in `ModelGate`), `failover_executor.py`, `circuit_breaker.py`, `rate_limiter.py`, `error_mapping.py`, `privacy_resolver.py`, `seed.py`, `seed_chain_models.py`, de router `model_routes`, de tabel `model_route`, `packages/shared/src/shared/model_routing.py` en `.yaml`, de cloudaanbieders met `api_key_env_var` in `registry.py`, de modelrijen in de database na omzetten van hun lezers, en de velden `private`, `privacy_mode` en `default_privacy_mode` met het formulierveld `private`.
+- *Wat:* weg gaan `route_resolver.py` (de weigerlogica zit al in `ModelGate`), `failover_executor.py`, `circuit_breaker.py`, `rate_limiter.py`, `error_mapping.py`, `privacy_resolver.py`, `seed.py`, `seed_chain_models.py`, de router `model_routes`, de tabel `model_route`, `packages/shared/src/shared/model_routing.py` en `.yaml`, de cloudaanbieders met `api_key_env_var` in `registry.py`, de code die modelrijen in de database schrijft of leest (na omzetten van de lezers; in de lege database staan geen rijen om op te ruimen, B3), en de velden `private`, `privacy_mode` en `default_privacy_mode` met het formulierveld `private`.
 - *Hangt af van:* F2-08, F2-03.
-- *Bestanden:* `apps/app-main/src/app_main/services/model_routing/` (genoemde bestanden); `api/routers/model_routes.py`; `packages/surrealdb-service/src/surrealdb_service/repositories/model_route.py`, `model.py`; `packages/shared/src/shared/model_routing.py`, `model_routing.yaml`; `packages/llm-manager/src/llm_manager/providers/registry.py`; `apps/app-main/src/app_main/api/routers/sources_upload.py` (`:199`); `migrations/94.surrealql` en `_down` (de `_down` zet `private = true`); `ARCHITECTURE.md` §8.
+- *Bestanden:* `apps/app-main/src/app_main/services/model_routing/` (genoemde bestanden); `api/routers/model_routes.py`; `packages/surrealdb-service/src/surrealdb_service/repositories/model_route.py`, `model.py`; `packages/shared/src/shared/model_routing.py`, `model_routing.yaml`; `packages/llm-manager/src/llm_manager/providers/registry.py`; `apps/app-main/src/app_main/api/routers/sources_upload.py` (`:199`); `migrations/94.surrealql` en `_down` (verwijdert alleen de velddefinities, zonder gegevens om te zetten; de `_down` zet `private = true`); `ARCHITECTURE.md` §8.
 - *ADR:* 0006, 0001.
 - *Stopconditie:* verwijdercontrole V met `tests/test_geen_verwijzingen_trackj.py` (`PrivacyMode`, `privacy_mode`, `default_privacy_mode`, `model_route`, `shared.model_routing`); `tests/test_geen_ollama_eindpunten.py` zonder uitzondering; `test_migration_94_*.py`.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
@@ -108,11 +108,11 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 #### C. Omgeving
 
 **F2-10 Compose-basis: netwerken, geheimen, SurrealDB, API en werkbak**
-- *Wat:* `docker-compose.signaalsysteem.yml` volgens §4: netwerken `verwerking` en `beheer` (`internal: true`), `toegang` en `uitgaand`; `surrealdb` en `open-notebook` alleen op `verwerking`, zonder poort; `werkbak-toegang` als omgekeerde proxy op `127.0.0.1`; `secrets:` met bestanden in `secrets/`; `secrets/` in `.gitignore` (nu niet aanwezig). De image-build van de fork krijgt vaste basis-tags (`python:3.12.16-slim-bookworm`, `ghcr.io/astral-sh/uv:0.11.13`, zoals in P4). `root`/`root` en `extra_hosts` vervallen.
-- *Hangt af van:* F2-01. *Besluit vooraf:* database en SurrealDB-versie (§8, B3).
+- *Wat:* `docker-compose.signaalsysteem.yml` volgens §4: netwerken `verwerking` en `beheer` (`internal: true`), `toegang` en `uitgaand`; `surrealdb` en `open-notebook` alleen op `verwerking`, zonder poort; `werkbak-toegang` als omgekeerde proxy op `127.0.0.1`; `secrets:` met bestanden in `secrets/`; `secrets/` in `.gitignore` (nu niet aanwezig). De image-build van de fork krijgt vaste basis-tags (`python:3.12.16-slim-bookworm`, `ghcr.io/astral-sh/uv:0.11.13`, zoals in P4). `root`/`root` en `extra_hosts` vervallen. Database volgens B3: `surrealdb/surrealdb:v2.7.0` (als in P4) met een eigen, nieuw volume `signaal_surreal_data`; de bestaande map `./surreal_data` van `docker-compose.yml` blijft onaangeroerd staan als archief en wordt niet gekoppeld. Bij de eerste start draaien alle migraties op de lege database.
+- *Hangt af van:* F2-01. B3 besloten (Geert, 30-10).
 - *Bestanden:* nieuw `docker-compose.signaalsysteem.yml`; `Dockerfile`; `.gitignore`; nieuw `scripts/signaalsysteem/controle/netwerk.sh` (opzet van P8); nieuw `tests/test_compose_signaalsysteem.py`.
 - *ADR:* 0002 F, 0016.
-- *Stopconditie:* `docker compose -f docker-compose.signaalsysteem.yml config --quiet` exitcode 0. `tests/test_compose_signaalsysteem.py`: geen image zonder vaste tag of digest, geen `pull_policy: always`; alleen `werkbak-toegang`, `mcp-toegang` en `langflow` publiceren een poort, en alleen op `127.0.0.1`; geen dienst hangt aan `verwerking` én een gewoon netwerk, behalve de proxy's en `langflow`; geen letterlijke wachtwoorden of sleutels in het bestand. `netwerk.sh` exitcode 0: `open-notebook` en `surrealdb` hebben geen internet en geen bereikbare poort; de werkbakproxy op `127.0.0.1` geeft de interface; een API-aanroep zonder sleutel geeft 401.
+- *Stopconditie:* `docker compose -f docker-compose.signaalsysteem.yml config --quiet` exitcode 0. `tests/test_compose_signaalsysteem.py`: geen image zonder vaste tag of digest, geen `pull_policy: always`; `surrealdb` gebruikt `v2.7.0` en het volume `signaal_surreal_data`, en geen dienst koppelt `./surreal_data`; alleen `werkbak-toegang`, `mcp-toegang` en `langflow` publiceren een poort, en alleen op `127.0.0.1`; geen dienst hangt aan `verwerking` én een gewoon netwerk, behalve de proxy's en `langflow`; geen letterlijke wachtwoorden of sleutels in het bestand. `netwerk.sh` exitcode 0: `open-notebook` en `surrealdb` hebben geen internet en geen bereikbare poort; de API start op een leeg volume en geeft `/health` HTTP 200 (alle migraties gedraaid); de werkbakproxy op `127.0.0.1` geeft de interface; een API-aanroep zonder sleutel geeft 401.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F2-11 llama-swap met socket-proxy, embeddingmodel, werkmodel en docling-serve**
@@ -125,7 +125,7 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 
 **F2-12 Langflow-inrichting**
 - *Wat:* afgeleid Langflow-image met `llm_manager` en de componenten; automatisch aanmelden uit; opstartscript dat flows uit Git laadt (`POST /api/v1/flows/upload/`) en triggers aanzet (`POST /api/v1/triggers/{id}/enable`); exportscript (`POST /api/v1/flows/download/`); waarschuwing `niet_vastgelegd` voor een flow die niet in Git staat. MCP-server van Langflow uit, `DO_NOT_TRACK=true`, `LITELLM_LOCAL_MODEL_COST_MAP=True`, `LANGFLOW_SECRET_KEY` als Fernet-sleutel uit een geheim.
-- *Hangt af van:* F2-10.
+- *Hangt af van:* F2-10. Plaats volgens B7 (besloten): code in `services/langflow/`, configuratie in `config/`.
 - *Bestanden:* nieuw `services/langflow/Dockerfile`, `services/langflow/scripts/flows_laden.py`, `flows_exporteren.py`, map `services/langflow/flows/`, `services/langflow/components/signaalsysteem/`, `services/langflow/tests/`; `docker-compose.signaalsysteem.yml`.
 - *ADR:* 0017, 0002 D.
 - *Stopconditie:* `services/langflow/tests/test_flows_rondgang.py`: laden en daarna exporteren levert dezelfde flow-JSON (JavaScript Object Notation) op, op volgorde van sleutels na. `scripts/signaalsysteem/controle/langflow.sh` exitcode 0: aanmelden zonder wachtwoord faalt; het MCP-eindpunt van Langflow geeft geen 200; het aantal uitgaande verbindingspogingen van LiteLLM is 0, geteld zoals in P2 met Langflow alleen op `verwerking`. Blijven er pogingen over, dan stopt de taak en volgt de terugval uit ADR 0017 (ophalen van bronnen in een eigen container).
@@ -134,11 +134,11 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 #### D. Inname en verwerking
 
 **F2-13 Bronkaart, innamebatch en innamewachtrij in de fork**
-- *Wat:* tabellen en API voor bronkaartregels (schema §5.2), batches van een bulkupload (classificatie en route per batch) en de innamewachtrij (documenten uit een watchfolder en losse uploads ter bevestiging, bronnen zonder regel). Standaardclassificatie per innameroute volgens ADR 0019; zonder keuze `intern`.
-- *Hangt af van:* F2-03, F2-04. *Besluit vooraf:* plaats van de bronkaart (§8, B2).
+- *Wat:* tabellen `source_map_rule`, `intake_batch` en `intake_item` in SurrealDB, beheerd met de migraties van de fork, met API (ADR 0020): bronkaartregels (schema §5.2), batches van een bulkupload (classificatie en route per batch) en de innamewachtrij (documenten uit een watchfolder en losse uploads ter bevestiging, bronnen zonder regel). Standaardclassificatie per innameroute volgens ADR 0019; zonder keuze `intern`. Alleen bereikbaar via de API: lezen met ten minste `lezen_extern` en het classificatiefilter, schrijven met `beheren`. `source_map_rule` krijgt `rev`, `modified_by` en `modified_at`; een nieuwe run neemt id en `rev` van zijn regel over.
+- *Hangt af van:* F2-03, F2-04, F2-06 (vergrendeling). B2 besloten (ADR 0020).
 - *Bestanden:* `migrations/95.surrealql` en `_down`; nieuw `packages/shared/src/shared/models/source_map.py`; nieuw `packages/surrealdb-service/src/surrealdb_service/repositories/source_map.py`, `intake.py`; nieuw `apps/app-main/src/app_main/services/source_map_service.py`, `intake_service.py`; nieuw `api/routers/source_map.py`, `intake.py`.
-- *ADR:* 0019, 0001, 0010; FO 5.
-- *Stopconditie:* `test_migration_95_source_map.py` (schemacontrole, ook op de standaardwaarden); `apps/app-main/tests/test_source_map_service.py`: een regel voor route API, MCP, feed of website stelt `extern` voor en vraagt bevestiging; een batch zonder keuze is `intern`; een watchfolder-item heeft geen standaard en staat op `wacht`.
+- *ADR:* 0020, 0019, 0001, 0010; FO 5.
+- *Stopconditie:* `test_migration_95_source_map.py` (schemacontrole, ook op de standaardwaarden; `_down` draait terug); `apps/app-main/tests/test_source_map_service.py`: een regel voor route API, MCP, feed of website stelt `extern` voor en vraagt bevestiging; een batch zonder keuze is `intern`; een watchfolder-item heeft geen standaard en staat op `wacht`; een wijziging met een verouderde `rev` geeft 409; een run bevat id en `rev` van zijn regel. `apps/app-main/tests/test_source_map_api.py`: een sleutel `lezen_extern` ziet geen interne regel of batch, ook niet op id (404); schrijven zonder `beheren` geeft 403.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F2-14 Importeindpunt**
@@ -198,11 +198,11 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F2-21 Obsidian-export als Langflow-flow**
-- *Wat:* `GET /api/v1/export/obsidian/entities?since=` (recht `lezen_intern`) met id, canonieke naam, aliassen, type, codeboekkoppelingen, herkomst en classificatie. Component met sjabloon: indeling naar FO 10, notitie vinden op `id` in de frontmatter, schrijven alleen in het blok `<!-- signaalsysteem:begin -->` … `<!-- signaalsysteem:end -->`, atomair schrijven en padcontrole hergebruikt uit `obsidian_export_service.py`. Een nieuwe persoon gaat naar de wachtrij in plaats van naar een bestand. Alleen `langflow` koppelt de vault.
-- *Hangt af van:* F2-16, F2-05. *Besluit vooraf:* map voor programma's (§8, B8).
+- *Wat:* `GET /api/v1/export/obsidian/entities?since=` (recht `lezen_intern`) met id, canonieke naam, aliassen, type, `entity_kind`, codeboekkoppelingen, herkomst en classificatie. Component met sjabloon volgens de vaultregels in `D:\# Obsidian\CLAUDE.md` (FO 10, ADR 0018): alleen onder `1000 Atlas (resources)/Werk/`; `type` `person`, `entity` (met `entity_kind`) of `program`; submap opgezocht in een alleen-lezen index van de vault (de map van de bestaande notities met hetzelfde `type` en `entity_kind`, anders review); notitie vinden op het id in het blok, anders op een unieke overeenkomst van titel of `aliases`; schrijven alleen in het blok `<!-- signaalsysteem:begin -->` … `<!-- signaalsysteem:end -->`, met id, classificatie, herkomst en codeboekkoppelingen in het blok; eenmalige frontmatter alleen bij een nieuwe notitie; atomair schrijven en padcontrole hergebruikt uit `obsidian_export_service.py`. Een nieuwe persoon en een nieuw programma gaan naar de wachtrij in plaats van naar een bestand. Geen mapnamen in code of sjabloon. **Alleen op een tijdelijke testvault:** in deze taak koppelt geen container `D:\# Obsidian` en schrijft niets daarin; het aansluiten op de echte vault is een latere fase (F5-05).
+- *Hangt af van:* F2-16, F2-05. B8 besloten (Geert, 30-10).
 - *Bestanden:* nieuw `apps/app-main/src/app_main/api/routers/export_obsidian.py` en dienst; nieuw `services/langflow/components/signaalsysteem/obsidian_export.py`, `services/langflow/templates/obsidian_entiteit.md`, `services/langflow/flows/obsidian_export.json`.
 - *ADR:* 0018, 0001, 0003.
-- *Stopconditie:* `services/langflow/tests/test_obsidian_export.py` op een testvault met alleen openbare gegevens: twee runs na elkaar geven byte voor byte dezelfde bestanden; tekst buiten het blok blijft gelijk; een interne entiteit krijgt `classificatie: intern`; een nieuwe persoon geeft een reviewitem en geen bestand. `apps/app-main/tests/test_export_obsidian_api.py`: classificatie intern zodra één onderliggend fragment intern is.
+- *Stopconditie:* `services/langflow/tests/test_obsidian_export.py` op een tijdelijke testvault (in `tmp_path`, door de test opgebouwd met de map- en veldnamen uit de vaultregels en alleen openbare gegevens): twee runs na elkaar geven byte voor byte dezelfde bestanden; frontmatter en tekst buiten het blok van een bestaande notitie blijven gelijk; een interne entiteit krijgt `classificatie: intern` in het blok; een nieuwe persoon en een nieuw programma geven een reviewitem en geen bestand; een nieuwe organisatie komt in de map van de bestaande notities met hetzelfde `type` en `entity_kind`, en bij nul of meer dan één zulke map volgt een reviewitem; geen schrijfactie buiten `1000 Atlas (resources)/Werk/`. `tests/test_compose_signaalsysteem.py`: geen dienst koppelt `D:\# Obsidian` of een andere vault. `apps/app-main/tests/test_export_obsidian_api.py`: classificatie intern zodra één onderliggend fragment intern is.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 #### E. Opruimen en toets
@@ -216,8 +216,8 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F2-23 Verwijderen: oude GPU-diensten, oude export en `docker-compose.yml`**
-- *Wat:* weg gaan `services/docling/`, `services/whisperx/`, `services/mineru/`, `services/summarization/`; in `pipelines/ingestion` `parsers/docling_parser.py`, `workflow.py`, `cli.py`, `audio/transcriber.py` en de exporters als niets ze meer gebruikt; `obsidian_export_service.py`, `vault_sync_service.py` en de schrijvende routes in `vault.py`. `docker-compose.signaalsysteem.yml` vervangt `docker-compose.yml`; er blijven geen twee Compose-bestanden. Volumes en gegevens blijven staan.
-- *Hangt af van:* F2-21, F2-22, F2-24 geslaagd. *Besluit vooraf:* vervangen van de bestaande omgeving (§8, B6).
+- *Wat:* weg gaan `services/docling/`, `services/whisperx/`, `services/mineru/`, `services/summarization/`; in `pipelines/ingestion` `parsers/docling_parser.py`, `workflow.py`, `cli.py`, `audio/transcriber.py` en de exporters als niets ze meer gebruikt; `obsidian_export_service.py`, `vault_sync_service.py` en de schrijvende routes in `vault.py`. `docker-compose.signaalsysteem.yml` vervangt `docker-compose.yml`; er blijven geen twee Compose-bestanden. Volumes en gegevens blijven staan; `./surreal_data` blijft het archief van de oude database (B3).
+- *Hangt af van:* F2-21, F2-22, F2-24 geslaagd. B6 besloten: de bestaande omgeving stopt na een geslaagde F2-24.
 - *Bestanden:* genoemde mappen en bestanden; `docker-compose.yml`; `ARCHITECTURE.md` §1 en §4.
 - *ADR:* 0014, 0015, 0018, 0002.
 - *Stopconditie:* verwijdercontrole V met `tests/test_geen_verwijzingen_oude_diensten.py`; `tests/test_compose_env_is_consumed.py` aangepast aan het nieuwe Compose-bestand en groen.
@@ -228,12 +228,13 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Hangt af van:* F2-19, F2-20, F2-08, F2-09.
 - *Bestanden:* nieuw `scripts/signaalsysteem/toetsen/fase2.sh`, `fase2_herleidbaarheid.surql`.
 - *ADR:* 0003, 0009.
-- *Stopconditie:* `fase2.sh` exitcode 0: (a) 0 fragmenten van nieuwe runs zonder `source_version`, `run`, `run.pipeline_version` of `extractor`, en 0 embeddings zonder `run` en `embedding_model`; (b) 0 geheugenfouten in de logs van llama-swap en de diensten, 0 tijdvakken met twee zware diensten tegelijk (`docker events`), de docling-taak eindigt in `success`, eventueel na opnieuw indienen; (c) vrij werkgeheugen van de host blijft boven de grens uit risico R1.
+- *Stopconditie:* `fase2.sh` exitcode 0: (a) 0 fragmenten van nieuwe runs zonder `source_version`, `run`, `run.pipeline_version` of `extractor`, en 0 embeddings zonder `run` en `embedding_model`; (b) 0 geheugenfouten in de logs van llama-swap en de diensten, 0 tijdvakken met twee zware diensten tegelijk (`docker events`), de docling-taak eindigt in `success`, eventueel na opnieuw indienen; (c) vrij werkgeheugen van de host blijft boven de grens uit risico R1; (d) zolang F2-25 niet is uitgevoerd: llama-swap start met de CUDA-omweg (`NVIDIA_DISABLE_REQUIRE=1` en `LD_LIBRARY_PATH`, ADR 0006) en laadt werkmodel en embeddingmodel op de GPU; het script meldt de CUDA-versie van de driver.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`. Uit te voeren op de werkplek.
 
-**F2-25 Omweg voor de CUDA-driver laten vervallen**
-- *Wat:* Geert werkt de NVIDIA-driver bij naar CUDA 13.4 of hoger. Daarna gaan `NVIDIA_DISABLE_REQUIRE=1` en `LD_LIBRARY_PATH` (ADR 0006, ADR 0009, `proeven.md` §8 punt 23) uit `docker-compose.signaalsysteem.yml`. Het criterium van P0 wordt aangescherpt van CUDA ≥ 13.0 naar ≥ 13.4, de eis van de vastgezette llama-swap-tag.
-- *Hangt af van:* F2-11; driverupdate door Geert.
+**F2-25 Omweg voor de CUDA-driver laten vervallen** — voorwaardelijk
+- *Voorwaarde:* Geert werkt de driver voorlopig niet bij (30-10). De taak start pas als NVIDIA een driver met CUDA ≥ 13.4 heeft uitgebracht en Geert die heeft geïnstalleerd. Tot dan blijft de omweg uit ADR 0006 staan en toetst F2-24 dat llama-swap met de omweg start.
+- *Wat:* na de driverupdate gaan `NVIDIA_DISABLE_REQUIRE=1` en `LD_LIBRARY_PATH` (ADR 0006, ADR 0009, `proeven.md` §8 punt 23) uit `docker-compose.signaalsysteem.yml`. Het criterium van P0 wordt aangescherpt van CUDA ≥ 13.0 naar ≥ 13.4, de eis van de vastgezette llama-swap-tag.
+- *Hangt af van:* F2-11; een uitgebrachte driver met CUDA ≥ 13.4, geïnstalleerd door Geert.
 - *Bestanden:* `docker-compose.signaalsysteem.yml`; `scripts/signaalsysteem/proeven/p0_omgeving.sh`; `tests/test_compose_signaalsysteem.py`.
 - *ADR:* 0006, 0009.
 - *Stopconditie:* `scripts/signaalsysteem/proeven/p0_omgeving.sh --gpu` exitcode 0 en meldt CUDA ≥ 13.4; `llama-swap` start zonder de twee variabelen en laadt het werkmodel op de GPU (`scripts/signaalsysteem/controle/gpu.sh` exitcode 0); `tests/test_compose_signaalsysteem.py` faalt als een van beide variabelen nog in het Compose-bestand staat.
@@ -251,13 +252,24 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Stopconditie:* `packages/llm-manager/tests/test_kev_client.py` tegen een nagebootste server. Op de werkplek `scripts/signaalsysteem/controle/kev.sh` exitcode 0: HTTP 200 en kansen per `choice`-vraag 1 ± 0,01; 50 vragen zonder geheugenfout met het embeddingmodel geladen; piek-VRAM met nulmeting vastgelegd en ≤ 15 279 MiB. Faalt dat, dan legt de bouwer Kev-0,8B voor aan Geert.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`. Uit te voeren op de werkplek.
 
-**F3-02 Referentieset opbouwen**
-- *Wat:* 200 tot 300 fragmenten uit openbare bronnen (jaarstukken, raadsstukken, Kamerstukken), met per fragment de gouden labels: route en documentsoort, Iv3-taakvelden (Informatie voor derden), entiteiten met referentie-id (CBS-gemeentecode, BWB-id) en, voor de poortwachter, synthetische interne kenmerken op een deel van de fragmenten. Tooling maakt kandidaten uit de pipeline van fase 2; Geert labelt. Kan starten zodra F2-17 werkt.
+**F3-02 Referentieset afleiden uit de vault**
+- *Wat:* 200 tot 300 fragmenten met gouden labels, afgeleid uit de vault (besluit Geert, 30-10). Een script leest `D:\# Obsidian` alleen (geen schrijfactie) en neemt uit de frontmatter van vaultnotities de labels `type`, `entity_kind` en `programs`, en de verwijzingen naar bronnen (link naar het origineel, URL of Zotero-sleutel). Het fragment zelf komt uit de oorspronkelijke bron, verwerkt door de pipeline van fase 2 (docling-serve en fragmentatie), nooit uit de tekst van de vaultnotitie (harde eis 3). Iv3-taakvelden (Informatie voor derden) zijn niet af te leiden en krijgen een handmatige steekproef. Geert controleert een steekproef van ongeveer 50 fragmenten. Voor de poortwachter krijgt een deel van de fragmenten synthetische interne kenmerken.
+  - **Alleen openbare bronnen** (harde eis "geen interne documenten in de repository of in tests"): het script neemt alleen bronnen op met een openbare vindplaats, en slaat de rest over met een telling.
+  - **Buiten Git:** de set bevat labels uit de vault en mogelijk gevoelige inhoud; hij staat lokaal op de werkplek, op een pad uit een instelling, en komt niet in de repository. In de repository staan alleen het script, het schema en een schematest met een synthetisch voorbeeld.
 - *Hangt af van:* F2-17, F3-03.
-- *Bestanden:* nieuw `tests/signaalsysteem/referentieset/bronnen.yaml` (URL, SHA-256, licentie), `fragmenten.jsonl`; nieuw `scripts/signaalsysteem/referentieset/kandidaten.py`; nieuw `tests/signaalsysteem/test_referentieset_schema.py`.
-- *ADR:* FO 7; 0008, 0013.
-- *Stopconditie:* `test_referentieset_schema.py`: 200 ≤ aantal ≤ 300; elk fragment verwijst naar een bron met openbare URL en SHA-256; elk label bestaat in codeboekversie Iv3 2025 of in de referentielijst; geen dubbele fragmenten.
-- *Agent:* `signaal-bouwer` voor de tooling, labels door Geert; daarna `signaal-reviewer`.
+- *Bestanden:* nieuw `scripts/signaalsysteem/referentieset/uit_vault.py`, `steekproef.py`; nieuw `tests/signaalsysteem/referentieset/schema.json`, `voorbeeld_synthetisch.jsonl`; nieuw `tests/signaalsysteem/test_referentieset_schema.py`; `.gitignore` (pad van de lokale set).
+- *ADR:* FO 7; 0008, 0013, 0018 (vaultregels, alleen lezen).
+- *Stopconditie:* `test_referentieset_schema.py` op het synthetische voorbeeld: schema geldig; `uit_vault.py` op een tijdelijke testvault opent geen bestand om te schrijven en neemt geen tekst uit een notitie als fragmenttekst. Op de werkplek: `uit_vault.py --controleer <set>` exitcode 0: 200 ≤ aantal ≤ 300; elk fragment verwijst naar een bron met openbare vindplaats en SHA-256; elk label bestaat in de vaultregels, in codeboekversie Iv3 2025 of in de referentielijst; geen dubbele fragmenten; de steekproef van Geert (ongeveer 50 fragmenten) en de Iv3-steekproef zijn vastgelegd. `git status` toont de set niet.
+- *Agent:* `signaal-bouwer` voor de tooling, steekproeven door Geert; daarna `signaal-reviewer`. Deels uit te voeren op de werkplek.
+
+**F3-13 Proef: Kev-4B gekwantiseerd (8-bit en 4-bit) naast bf16**
+- *Wat:* Kev-4B in 8-bit en in 4-bit naast bf16 (besluit Geert, 30-10). Doel: ruimte naast Kev voor het embeddingmodel en eventueel de reranker op de GPU (ADR 0015 5b). Per variant: piek- en rustgeheugen gemeten zoals in P3 (nulmeting, samen met mxbai), en de kalibratie op de referentieset tegen bf16: ECE (Expected Calibration Error), Brier-score en precisie en recall per label. Er is geen officiële gekwantiseerde Kev-4B; wel een communityconversie in W4A16 ([bowmanslayer/kev-4b-W4A16](https://huggingface.co/bowmanslayer/kev-4b-W4A16), met een eigen regressietest van 6 van 72 gewijzigde keuzes) en GGUF-varianten alleen voor 0,8B ([mys/kev-0.8b-GGUF](https://huggingface.co/mys/kev-0.8b-GGUF)). Kev-4B is een LoRA-adapter met keuzekop op Qwen3.5-4B-Base ([OpenRouter](https://openrouter.ai/jaredpalmer/kev-4b)). De bouwer legt per variant vast hoe die is gemaakt (conversie of eigen kwantisering van het basismodel) en met welke revisie; een variant die niet te maken is, staat als "niet gemeten" in de tabel.
+- *Grens, vooraf vastgelegd:* in `config/kev-kwantisering.yaml`, gecommit vóór de meting. Voorstel: ECE ten hoogste 0,02 slechter dan bf16, en precisie en recall per label ten hoogste 0,02 lager. De kleinste variant binnen de grens wordt gekozen; haalt geen variant de grens, dan blijft bf16.
+- *Hangt af van:* F3-01, F3-02. Gaat vóór F3-04 (drempels van de poortwachter).
+- *Bestanden:* nieuw `scripts/signaalsysteem/toetsen/kev_kwantisering.py`, `scripts/signaalsysteem/controle/kev_kwantisering.sh`; nieuw `config/kev-kwantisering.yaml`; eventueel `services/kev/Dockerfile` en `services/llama-swap/config.yaml` (alleen als een variant wordt gekozen).
+- *ADR:* 0009 (GPU-budget, Kev-4B), 0015 (plek van de reranker, 5b); de uitkomst wordt in beide verwerkt.
+- *Stopconditie:* `kev_kwantisering.sh` exitcode 0 op de werkplek en een tabel in `docs/signaalsysteem/meting-kev-kwantisering.md` met per variant (bf16, 8-bit, 4-bit): piek- en rustgeheugen, met mxbai, ECE, Brier, precisie en recall per label, en het verschil met bf16; plus de keuze volgens de vooraf vastgelegde grens. De tabel bevat geen fragmenttekst (de set staat buiten Git).
+- *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`. Uit te voeren op de werkplek.
 
 **F3-03 Codeboek Iv3 2025 en BWB-woordenlijst**
 - *Wat:* laadscript voor de Iv3-taakvelden 2025 naar een ontologie met versie in `ontology_version`; BWB-leverancier naast `tooi_provider.py` die `reference_entity` vult; eindpunt `GET /api/v1/codeboek/{schema}/{versie}` voor de keuzelijst van de Kev-component. De vindplaats van beide openbare bronnen zoekt de bouwer uit (ADR 0013).
@@ -269,7 +281,7 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 
 **F3-04 Poortwachter, modeldeel met Kev**
 - *Wat:* Kev beoordeelt wat de regels openlaten: documentsoort, route en interne kenmerken, met een gekalibreerde kans per keuze. Onder de drempel gaat de bron naar wachtrij 2. De drempel volgt uit de meting op de referentieset en staat in `config/poortwachter-regels.yaml`.
-- *Hangt af van:* F2-18, F3-01, F3-02.
+- *Hangt af van:* F2-18, F3-01, F3-02, F3-13 (gekozen Kev-variant).
 - *Bestanden:* `services/langflow/components/signaalsysteem/poortwachter.py`; `config/poortwachter-regels.yaml`; nieuw `scripts/signaalsysteem/toetsen/poortwachter_referentieset.py`.
 - *ADR:* 0001, 0019, 0009; FO 6.
 - *Stopconditie:* `services/langflow/tests/test_poortwachter_kev.py` met een nagebootste Kev: kans onder de drempel geeft een wachtrij-item; invoer `intern` geeft nooit `extern`. `poortwachter_referentieset.py` levert precisie en recall per route en het aandeel naar review; de gekozen drempel staat in de configuratie.
@@ -415,21 +427,11 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Stopconditie:* `services/langflow/tests/test_pymupdf_aanvulling.py` met een synthetische PDF met annotatie; `test_grobid.py` met een openbaar wetenschappelijk artikel (open licentie): verwijzingen geparsed en `cites` aangemaakt.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
-**F4-10 Bestaande bronnen opnieuw inlezen**
-- *Wat:* script dat de bronnen met een `pre_signaalsysteem`-versie toont met hun oorspronkelijke locatie; de beheerder leest ze in via de nieuwe flows of sluit ze uitdrukkelijk uit.
-- *Hangt af van:* F4-02 tot en met F4-06, F4-09.
-- *Bestanden:* nieuw `scripts/signaalsysteem/herinname_overzicht.py`.
-- *ADR:* 0003, 0010.
-- *Stopconditie:* het script meldt 0 bronnen waarvan de huidige versie `pre_signaalsysteem` is, op de bronnen na die op de lijst met uitsluitingen van de beheerder staan.
-- *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
+**F4-10 Bestaande bronnen opnieuw inlezen** — vervallen (B3, 30-10)
+- De nieuwe omgeving start met een lege database; er zijn geen bronversies `pre_signaalsysteem`. Wie bronnen uit de oude omgeving terug wil, leest de originelen in via de gewone flows (F2-19, F4-02 tot en met F4-06).
 
-**F4-11 Opruimen van de runs `pre-signaalsysteem`** — vraagt expliciete bevestiging van Geert
-- *Wat:* apart script, geen migratie. Standaard een proefdraai met een lijst van wat verdwijnt; verwijderen alleen met `--bevestig` en na een reservekopie.
-- *Hangt af van:* F4-10.
-- *Bestanden:* nieuw `scripts/signaalsysteem/opruimen_pre_signaalsysteem.py`.
-- *ADR:* 0003.
-- *Stopconditie:* `tests/signaalsysteem/test_opruimen_pre_signaalsysteem.py` op een testdatabase: de proefdraai verandert niets; na verwijderen 0 runs met `pre-signaalsysteem` en geen fragment zonder run. Reservekopie aanwezig vóór de echte uitvoering.
-- *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
+**F4-11 Opruimen van de runs `pre-signaalsysteem`** — vervallen (B3, 30-10)
+- Er zijn geen runs `pre-signaalsysteem` om op te ruimen. Het oude datavolume `./surreal_data` blijft onaangeroerd staan als archief; geen taak raakt het aan.
 
 **F4-12 Toets fase 4**
 - *Wat:* geplande runs op een vaste testfeed en een testwebsite op het testnetwerk: eerste run, tweede run zonder wijziging, derde run met één gewijzigd en één nieuw item.
@@ -478,11 +480,11 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F5-05 Uitbreiding van de Obsidian-export**
-- *Wat:* wiki-pagina's in de export, programma's gekoppeld aan het codeboek, wachtrij 6 voor nieuwe personen in de werkbak. De vault-beheer-agent toetst de export buiten de fork.
-- *Hangt af van:* F2-21, F5-02, F3-03.
-- *Bestanden:* `services/langflow/components/signaalsysteem/obsidian_export.py`, `services/langflow/templates/`; `apps/app-main/src/app_main/api/routers/export_obsidian.py`; `frontend/src/` (wachtrij 6).
+- *Wat:* wiki-pagina's in de export, programma's gekoppeld aan het codeboek, wachtrij 6 voor nieuwe personen en nieuwe programma's in de werkbak. Daarna, als laatste stap en pas na een besluit van Geert, het aansluiten op de echte vault: `langflow` koppelt `D:\# Obsidian`, en de export schrijft alleen in het gegenereerde blok onder `1000 Atlas (resources)/Werk/` (ADR 0018). De vault-beheer-agent toetst de export buiten de fork.
+- *Hangt af van:* F2-21, F5-02, F3-03; voor het aansluiten op de echte vault een besluit van Geert in het gesprek.
+- *Bestanden:* `services/langflow/components/signaalsysteem/obsidian_export.py`, `services/langflow/templates/`; `apps/app-main/src/app_main/api/routers/export_obsidian.py`; `frontend/src/` (wachtrij 6); `docker-compose.signaalsysteem.yml` (koppeling van de vault, pas na het besluit).
 - *ADR:* 0018, 0016.
-- *Stopconditie:* de tests van F2-21 uitgebreid met wiki-pagina's en programma's (byte voor byte gelijk bij herhaling, label intern in de frontmatter); frontendtest voor wachtrij 6.
+- *Stopconditie:* de tests van F2-21 uitgebreid met wiki-pagina's en programma's op de tijdelijke testvault (byte voor byte gelijk bij herhaling, label intern in het blok, frontmatter van bestaande notities ongewijzigd); frontendtest voor wachtrij 6. Voor het aansluiten: een proefdraai op de echte vault die alleen een lijst van voorgenomen wijzigingen geeft en niets schrijft; Geert keurt die lijst goed vóór de eerste schrijvende run.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F5-06 Toets fase 5**
@@ -498,14 +500,14 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 | Fase | Taken | Waarvan verwijdertaken | Werkplek (GPU) |
 | --- | --- | --- | --- |
 | 2 | 25 | 4 (F2-02, F2-09, F2-22, F2-23) | F2-11, F2-17 (deels), F2-24, F2-25 |
-| 3 | 12 | 1 (F3-08, met bevestiging) | F3-01 |
-| 4 | 12 | 1 (F4-11, met bevestiging) | F4-03 |
+| 3 | 13 | 1 (F3-08, met bevestiging) | F3-01, F3-02 (deels), F3-13 |
+| 4 | 10 (F4-10 en F4-11 vervallen, B3) | 0 | F4-03 |
 | 5 | 6 | 0 | — |
 
 Kritiek pad, met de taken die het meeste werk achter zich laten wachten:
 
 - **Fase 2:** F2-01 → F2-03 → F2-04 → F2-13 → F2-14 → F2-16 → F2-17 → F2-19 → F2-24. Een tweede keten loopt parallel en sluit aan bij F2-16: F2-01 → F2-10 → F2-11 en F2-12. F2-07 en F2-08 moeten klaar zijn vóór F2-16 en F2-24.
-- **Fase 3:** F3-01 → F3-04 → F3-12, met de referentieset F3-02 als lange pool: die hangt af van labelwerk door Geert. F3-02 kan starten zodra F2-17 werkt.
+- **Fase 3:** F3-01 → F3-02 → F3-13 → F3-04 → F3-12, met de referentieset F3-02 als lange pool: die hangt af van de steekproeven door Geert. F3-02 kan starten zodra F2-17 werkt.
 - **Fase 4:** F4-01 → F4-02 → F4-12. F4-07 wacht op een ADR.
 - **Fase 5:** het besluit B12 → F5-01 → F5-03 → F5-06.
 
@@ -522,7 +524,7 @@ Elke eis uit `opdracht.md` §1 met de taken waarvan de stopconditie haar toetst.
 | 2. Herkomst: elk fragment herleidbaar tot bronversie, run en model | | F2-04, F2-06, F2-14, F2-15, F3-05, F3-06, F3-09, F2-24 |
 | 3. Afgeleide teksten tellen nooit als bron | | F2-05, F2-22 (INSIGHTS weg), F5-02, F5-03 |
 | 4. Intern altijd lokaal in Docker; GPU via llama-swap; extern mag naar een externe dienst | | F2-08, F2-09 (geen Ollama), F2-11, F2-17 (adres per classificatie), F2-25, F3-01, F4-03, F2-24 |
-| Geen interne documenten in repository of tests | | F2-05, F3-02 (schema met openbare URL), F2-21, F4-09 |
+| Geen interne documenten in repository of tests | | F2-05, F3-02 (alleen openbare bronnen, set buiten Git), F2-21 (tijdelijke testvault), F4-09 |
 | Geen geheimen in code, Compose of commits | | F2-01, F2-10 (Compose-test op letterlijke geheimen), F3-10 |
 
 ## 4. Compose-opzet (schets)
@@ -533,7 +535,7 @@ Dit is een schets voor `docker-compose.signaalsysteem.yml`, nog geen echt bestan
 
 | Dienst | Image of build | Netwerken | Poort op de host | GPU | Fase |
 | --- | --- | --- | --- | --- | --- |
-| `surrealdb` | `surrealdb/surrealdb:<vaste versie, B3>` | verwerking | — | nee | 2 |
+| `surrealdb` | `surrealdb/surrealdb:v2.7.0` (B3) | verwerking | — | nee | 2 |
 | `open-notebook` | build `Dockerfile` (basis-tags vast) | verwerking | — | nee | 2 |
 | `werkbak-toegang` | omgekeerde proxy, vaste tag (keuze bouwtaak) | verwerking, toegang | `127.0.0.1:<werkbak>` | nee | 2 |
 | `langflow` | build `services/langflow` op `langflowai/langflow:1.13.0@sha256:<volledige digest>` | verwerking, uitgaand, toegang | `127.0.0.1:<editor>` | nee | 2 |
@@ -575,7 +577,7 @@ secrets:                             # bestanden in secrets/ (in .gitignore); br
   claude_cli_login:         { file: ./secrets/claude_cli_login }        # fase 5
 
 volumes:
-  surreal_data: {}        # B3: bestaand volume of nieuw
+  signaal_surreal_data: {}  # B3: nieuw, leeg; ./surreal_data van docker-compose.yml blijft archief
   langflow_data: {}       # SQLite van Langflow (ADR 0017 D)
   checkpoints: {}         # LangGraph-checkpoints (SQLite)
   bronarchief: {}         # originelen van bronversies
@@ -588,10 +590,10 @@ volumes:
 
 services:
   surrealdb:
-    image: surrealdb/surrealdb:<vaste versie>
+    image: surrealdb/surrealdb:v2.7.0
     networks: [verwerking]
     secrets: [surreal_gebruiker, surreal_wachtwoord]
-    volumes: [surreal_data:/data]
+    volumes: [signaal_surreal_data:/data]
 
   open-notebook:
     build: { context: ., dockerfile: Dockerfile }
@@ -625,7 +627,7 @@ services:
       - bronarchief:/bronarchief
       - <inbox>:/inbox:ro
       - <watchfolder>:/watchfolder:ro
-      - <vault>:/vault                  # alleen langflow schrijft in de vault
+      # geen vault-koppeling tot F5-05 (B8); daarna D:\# Obsidian:/vault, alleen voor langflow
       - ./config:/config:ro             # modelregister, poortwachterregels
 
   socket-proxy:
@@ -784,7 +786,7 @@ Regels:
 
 ### 5.2 Bronkaartregel
 
-Velden volgens FO 5, met de standaarden uit ADR 0019. De opslag in de fork is een voorstel (§8, B2).
+Velden volgens FO 5, met de standaarden uit ADR 0019. Opslag als tabel `source_map_rule` in de fork, alleen via de API (ADR 0020, B2), met daarnaast `rev`, `modified_by` en `modified_at`.
 
 | Veld | Type | Verplicht | Standaard en regels |
 | --- | --- | --- | --- |
@@ -826,7 +828,7 @@ Langflow gebruikt één sleutel met `beheren` en praat alleen met de API van de 
 
 | Eindpunt | Verzoek | Antwoord |
 | --- | --- | --- |
-| `POST /api/v1/runs` | `trigger` (`schema`, `mapcontrole`, `feed`, `handmatig`, `herverwerking`), `pipeline_id`, `pipeline_version` (`{ git_commit, flow_hash }`), `source_map_rule_id`, `label_schema` | `{ run_id, status: "bezig" }` |
+| `POST /api/v1/runs` | `trigger` (`schema`, `mapcontrole`, `feed`, `handmatig`, `herverwerking`), `pipeline_id`, `pipeline_version` (`{ git_commit, flow_hash }`), `source_map_rule_id`, `label_schema` | `{ run_id, status: "bezig" }`; de fork legt de `rev` van de regel vast (ADR 0020) |
 | `PATCH /api/v1/runs/{id}` | `status`, `ended_at`, `log[]` (tijd, stap, status, melding), `models[]` (naam, versie, aanroepwijze; bij `cli` ook versie en exitcode), `error` | run; 409 als de run al is afgesloten |
 | `POST /api/v1/import` | §5.1 | §5.1 |
 | `POST /api/v1/runs/{run_id}/steps/{stap}` | `stap` ∈ `embed`, `entity_extraction`, `entity_dedup`, `graph` (fase 4 ook `cites`); `{ source_version_id }` | `{ step_id, job_id, status: "wachtrij" }`; dezelfde stap op dezelfde versie in dezelfde run geeft dezelfde `step_id` |
@@ -842,8 +844,8 @@ Gedrag:
 - **Volgorde per bron:** run aanmaken → registratie (hash) → poortwachter → extractie → fragmentatie → (fase 3: labels) → import → stappen → run afsluiten. Ook bij `ongewijzigd` wordt de run afgesloten, als `niets_nieuws`.
 - **Volgen:** de component vraagt de stapstatus op met oplopende pauze (beginnend bij 5 s). Herhaalpogingen van de job doet de worker van de fork; de component start een mislukte stap niet zelf opnieuw.
 - **Herhaalbeleid van de component:** bij 502, 429, 503 en verbindingsfouten opnieuw met pauze, tot een maximum; daarna `mislukt` met een logregel. Bij een geheugenfout van llama-swap zet de component de taak opnieuw in de rij en logt de fout (FO 12.2).
-- **`wacht_op_review` (voorstel, B5):** de component stopt met volgen en sluit de flow af met een logregel; de run blijft `bezig`. Na het triagebesluit hervat de fork de graaf (ADR 0012). Een geplande flow `hervatten` haalt runs op waarvan een stap van `wacht_op_review` naar `geslaagd` ging, en start de resterende stappen. Zo blijft Langflow elke stap starten (ADR 0011).
-- **Innamewachtrij (voorstel):** Langflow meldt nieuwe watchfolder-documenten en losse uploads aan als wachtrij-item, en haalt besloten items op. De fork roept Langflow niet aan.
+- **`wacht_op_review` (besloten, B5):** de component stopt met volgen en sluit de flow af met een logregel; de run blijft `bezig`. Na het triagebesluit hervat de fork de graaf (ADR 0012). Een geplande flow `hervatten` haalt runs op waarvan een stap van `wacht_op_review` naar `geslaagd` ging, en start de resterende stappen. Zo blijft Langflow elke stap starten (ADR 0011).
+- **Innamewachtrij (besloten, B5):** Langflow meldt nieuwe watchfolder-documenten en losse uploads aan als wachtrij-item, en haalt besloten items op. De fork roept Langflow niet aan.
 - **Modelkeuze:** de component leest `config/modelregister.yaml` (alleen-lezen gekoppeld) en weigert een model met `toegestaan voor intern = nee` bij een interne of onbekende bron, zowel bij verbinden als bij uitvoeren.
 
 ## 6. Risico's
@@ -852,14 +854,14 @@ Gedrag:
 | --- | --- | --- | --- | --- |
 | R1 | **Werkgeheugen van de host.** P3 stopte na 28 van 36 metingen bij 1,2 GB vrij (WSL-VM 13,2 GB); per dienst niet gemeten. | Containers of de VM vallen weg bij zware combinaties; metingen onvolledig. | Geheugengrens van de WSL-VM vastleggen; vrij werkgeheugen meten in elke GPU-controle met een ondergrens (voorstel 2 GB); `mem_limit` per dienst; de ontbrekende combinaties alsnog meten. | F2-11, F2-24, F4-03 |
 | R2 | **Marge van 121 MiB naast Kev-4B.** Kev-4B met mxbai 15 157 MiB, grens 15 279 MiB, bij een nulmeting van 0. | Het bureaublad van Windows of een andere toepassing vreet de marge op; geheugenfout. | Nulmeting in elke controle; reranker niet op de GPU (ADR 0015); terugval Kev-0,8B na besluit Geert. | F3-01 |
-| R3 | **CUDA-driver 13.3 tegenover 13.4.** Het llama-swap-image eist `cuda>=13.4`; driver 610.88 levert 13.3. | Werkt alleen met `NVIDIA_DISABLE_REQUIRE=1` en `LD_LIBRARY_PATH`; een driver- of image-update kan dat breken. | Geert werkt de driver bij naar CUDA ≥ 13.4; F2-25 haalt de omweg weg en toetst dat. Tot dan beide variabelen in Compose met commentaar, en een GPU-controle na elke driver- of image-update. | F2-11, F2-25 |
+| R3 | **CUDA-driver 13.3 tegenover 13.4.** Het llama-swap-image eist `cuda>=13.4`; driver 610.88 levert 13.3. | Werkt alleen met `NVIDIA_DISABLE_REQUIRE=1` en `LD_LIBRARY_PATH`; een driver- of image-update kan dat breken. | Geert werkt de driver voorlopig niet bij (30-10); de omweg blijft staan, met beide variabelen in Compose met commentaar. F2-24 toetst dat llama-swap met de omweg start; een GPU-controle volgt na elke driver- of image-update. F2-25 haalt de omweg pas weg als NVIDIA een driver met CUDA ≥ 13.4 uitbrengt en Geert die heeft geïnstalleerd. Een nieuwere llama-swap-tag die nog hogere CUDA eist, wordt niet overgenomen zonder die controle. | F2-11, F2-24, F2-25 |
 | R4 | **`ttl` van docling.** llama-swap telt `ttl` vanaf de laatste aanvraag; een gestopte docling-serve verliest zijn taken (P1). Niet beproefd: een aanvraag voor een andere zware dienst tijdens een lopende docling-taak. | Taken gaan verloren, of docling stopt bij een wissel. | Pollen elke 10 s, `ttl` 300 s, opnieuw indienen bij 404 met maximum; bundelen per dienst; de toets van fase 2 doet precies deze combinatie. | F2-17, F2-24 |
 | R5 | **Langflow belt naar buiten.** LiteLLM deed 21 uitgaande pogingen (P2); Langflow heeft bewust internet en ziet interne inhoud vóór de poortwachter. | Gegevens kunnen het systeem verlaten via een component of bibliotheek. | `LITELLM_LOCAL_MODEL_COST_MAP=True` en `DO_NOT_TRACK=true`; telling 0 als stopconditie; blijven er pogingen, dan ophalen in een eigen container en Langflow zonder internet (FO 12.1). | F2-12 |
 | R6 | **MCP-versiebinding.** open-notebook-mcp 0.3.0 vraagt `mcp>=1.23.2` zonder bovengrens; het officiële startpunt faalt met `mcp==1.30.0`; het pakket is van een derde partij. | Een update breekt de server of verandert tools. | Beide pakketten met `==`; eigen startscript; elke update eerst P4. | F3-10, F3-11 |
-| R7 | **Referentieset van 200–300 fragmenten.** Bestaat nog niet; vraagt labelwerk door Geert; alleen openbare bronnen, terwijl de poortwachter interne kenmerken moet herkennen. | De toets van fase 3 en de drempel van de poortwachter schuiven op. | F3-02 vroeg starten; synthetische interne kenmerken op openbare tekst; schemacontrole als stopconditie. | F3-02, F3-04, F3-12 |
+| R7 | **Referentieset van 200–300 fragmenten.** Bestaat nog niet; wordt afgeleid uit de frontmatter van de vault, maar Iv3-labels vragen een handmatige steekproef; alleen openbare bronnen, terwijl de poortwachter interne kenmerken moet herkennen; te weinig vaultnotities met een openbare bron geeft een te kleine set. | De toets van fase 3, de keuze van de Kev-variant (F3-13) en de drempel van de poortwachter schuiven op. | F3-02 vroeg starten; telling van overgeslagen bronnen; synthetische interne kenmerken op openbare tekst; schemacontrole als stopconditie. | F3-02, F3-13, F3-04, F3-12 |
 | R8 | **Socket-proxy valt later uit.** ADR 0009 optie 2 is besloten (Geert, 30-10); optie 3 (geen Docker-toegang) blijft alleen de terugval. | Bij terugval: docling-serve en WhisperX altijd aan, 2,4 + 8,9 GB in rust; Kev-4B (14,6 GB) past dan niet; gedeelde vergrendeling in de Langflow-componenten nodig. | Alleen bij uitval: F2-11 zonder socket-proxy, een extra taak voor de vergrendeling, Kev-0,8B in F3-01, WhisperX in F4-03 buiten llama-swap; FO 12.2 en het plan aanpassen. | F2-11, F3-01, F4-03 |
 | R9 | **Restrisico socket-proxy.** Elke container is op naam te starten en te stoppen, ook `surrealdb` (P7 K2); 502 na een externe stop. | Verstoring, geen toegang tot gegevens. | Socket-proxy alleen op `beheer`; herhaalpoging bij 502 in `ModelGate` en componenten. | F2-07, F2-11, F2-16 |
-| R10 | **Migraties op bestaande gegevens.** `entity` is mogelijk schemaloos in productie (aanname A6 verschilanalyse); de huidige SurrealDB-versie achter `v2` is onbekend. | Migratie 88 en verder falen of geven andere uitkomsten dan in de test. | Eerst op een kopie draaien; reservekopie (er is een kopie van 25-09-2026); versie vastzetten na B3. | F2-01 t/m F2-06 |
+| R10 | **Lege database en vaste versie (B3).** Gegevens die alleen in de oude database staan en niet uit een migratie of laadscript komen (bijvoorbeeld ontologieën of woordenlijsten), ontbreken in de nieuwe omgeving. Advisories die in SurrealDB 3.3.0 zijn opgelost, noemen alle eerdere versies als getroffen, ook 2.7.0 ([releasebot](https://releasebot.io/updates/surrealdb); niet nagegaan in de advisories zelf). v2.7.0 is op 30-10 de nieuwste v2-uitgave ([GitHub-releases](https://github.com/surrealdb/surrealdb/releases)). | Een functie werkt niet op de lege database; een bekend lek in de databaseversie. | F2-10 start op een leeg volume en toetst `/health`; de bouwer inventariseert welke referentiegegevens een laadscript nodig hebben (F3-03 doet dat voor Iv3 en BWB). SurrealDB alleen op `verwerking`, zonder poort; een overstap naar v3 vraagt een eigen ADR. Het archief `./surreal_data` blijft staan. | F2-10, F3-03 |
 | R11 | **Verborgen afhankelijkheden bij verwijderen.** De interface en tests gebruiken routes die vervallen (bijvoorbeeld `frontend/src/lib/api/services.ts`). | Breuk buiten de taak. | Verwijdercontrole V, inclusief frontendbuild. | F2-02, F2-09, F2-22, F2-23 |
 | R12 | **Volledigheid van vector-zoeken met filter.** Filter en rangschikking in één `WHERE`; met een index op dichtstbijzijnde buren kan het filter na de index komen. | Minder treffers; raakt eis 1 niet. | Meting in F2-05. | F2-05 |
 | R13 | **Fragmenten boven 512 tokens** bij mxbai. | Afgekapte embeddings. | Keuze opdelen of afkappen, met test. | F2-08 |
@@ -874,8 +876,8 @@ Feiten in dit plan komen uit de code van de fork (gecontroleerd op 30-10: bestan
 
 - **A1.** Compose-geheimen met bron `file` blijven aanwezig als llama-swap een container met `docker start` start. P1 gebruikte bron `environment`, die dat niet doet. Te toetsen in F2-11.
 - **A2.** De interface draait in de container `open-notebook` op poort 8502 en is via een omgekeerde proxy bereikbaar.
-- **A3.** Langflow-componenten, flows en scripts staan in `services/langflow/`, en het modelregister en de poortwachterregels in `config/`. ADR 0017 laat de plek aan dit plan.
-- **A4.** De bronkaart, batches en de innamewachtrij staan in de fork (SurrealDB), met API. Geen ADR beslist dit; ADR 0017 C gaat er voor de terugval van uit ("leest de schema's uit de bronkaart via de API van de fork").
+- **A3.** Besloten (B7, 30-10): Langflow-componenten, flows en scripts staan in `services/langflow/`, en het modelregister en de poortwachterregels in `config/`.
+- **A4.** Besloten (B2, 30-10, ADR 0020): de bronkaart, batches en de innamewachtrij staan in de fork (SurrealDB), alleen via de API.
 - **A5.** De triggers-API van Langflow 1.13.0 kan per bronkaartregel een trigger aanmaken (P2 toonde aanzetten via de API, niet aanmaken via de API).
 - **A6.** Het effect van `enable_ip_masquerade: "false"` onder Docker Desktop is onbekend (ADR 0002 F).
 - **A7.** De vindplaats en vorm van de openbare Iv3-lijst 2025 en van de BWB-open data zijn niet nagegaan (ADR 0013).
@@ -898,22 +900,22 @@ Vastgelegd, niet opgelost.
 
 | Nr | Vraag | Voorstel | Blokkeert |
 | --- | --- | --- | --- |
-| B1 | ADR 0009, Docker-toegang optie 2 met configuratie B: **besloten** (Geert, 30-10), met de restrisico's uit R9. Geert werkt de driver bij naar CUDA ≥ 13.4 (F2-25). | — | — |
-| B2 | Waar staat de bronkaart: tabel in de fork met API, of YAML in Git zoals het modelregister? Geen ADR beslist dit. | Tabel in de fork (A4), vast te leggen in een nieuwe ADR. | F2-13, F2-14, F4-01 |
-| B3 | Database: de bestaande gegevens migreren in het bestaande volume (ADR 0001 en 0003 gaan daarvan uit), of een nieuwe lege database? En welke SurrealDB-versie wordt vastgezet (nu zwevend `v2`)? | Bestaand volume, na een kopie; versie gelijk aan wat nu draait. | F2-01, F2-03, F2-10 |
-| B4 | Werkmodel en context voor gebruik, niet alleen voor de proef. | Qwen3.5-9B Q4_K_M, context 8 192 (P1, P3). | F2-07, F2-11 |
-| B5 | Akkoord op het contractvoorstel voor `wacht_op_review` en de richting van de innamewachtrij (§5.4). | Akkoord. | F2-15, F2-16, F3-07 |
-| B6 | Vervangen van `docker-compose.yml` aan het eind van fase 2 (ADR 0002): de bestaande omgeving stopt dan; volumes blijven. | Akkoord, na een geslaagde F2-24. | F2-23 |
-| B7 | Plaats van de Langflow-code en de configuratie (A3). | `services/langflow/` en `config/`. | F2-12 |
-| B8 | Map voor programma's in de vault (ADR 0018 laat dat aan de vault-beheer-agent). | Vóór F2-21 vastleggen. | F2-21 |
+| B1 | ADR 0009, Docker-toegang optie 2 met configuratie B: **besloten** (Geert, 30-10), met de restrisico's uit R9. Geert werkt de driver voorlopig niet bij (30-10); de CUDA-omweg blijft staan en F2-25 is voorwaardelijk (R3). | — | — |
+| B2 | Plaats van de bronkaart: **besloten** (Geert, 30-10). Tabel in SurrealDB, beheerd met de migraties van de fork, alleen via de API van de fork (sleutel en classificatiefilter); niet als YAML in Git, omdat de bronkaart vaak verandert door watchfolder-besluiten en bulkbatches. ADR 0020. | — | — (F2-13, F2-14, F4-01 aangepast) |
+| B3 | Database: **besloten** (Geert, 30-10). Start met een lege database, zonder migratie van bestaande gegevens; het bestaande volume `./surreal_data` blijft onaangeroerd als archief; de nieuwe omgeving krijgt een eigen volume `signaal_surreal_data`; SurrealDB vast op `surrealdb/surrealdb:v2.7.0` (als in P4). Gevolgen in ADR 0001 en 0003; F2-01, F2-03, F2-04, F2-09 en F2-10 vereenvoudigd; F4-10 en F4-11 vervallen. | — | — |
+| B4 | Werkmodel: **besloten** (Geert, 30-10) volgens voorstel: Qwen3.5-9B Q4_K_M, context 8 192 (P1, P3). | — | — (F2-07, F2-11) |
+| B5 | Contract voor `wacht_op_review` en de richting van de innamewachtrij (§5.4): **besloten** (Geert, 30-10) volgens voorstel. | — | — (F2-15, F2-16, F3-07) |
+| B6 | Vervangen van `docker-compose.yml` aan het eind van fase 2: **besloten** (Geert, 30-10) volgens voorstel, na een geslaagde F2-24; volumes blijven. | — | — (F2-23) |
+| B7 | Plaats van de Langflow-code en de configuratie: **besloten** (Geert, 30-10) volgens voorstel: `services/langflow/` en `config/`. | — | — (F2-12) |
+| B8 | Obsidian: **besloten** (Geert, 30-10). De export volgt de vaultregels in `D:\# Obsidian\CLAUDE.md`, zonder vaste paden die daar niet staan; alleen onder `1000 Atlas (resources)/Werk/`; submap opgezocht in de vault (alleen lezen); programmanotities (`type: program`) in de map van de bestaande programmanotities, een nieuw programma via review; schrijven alleen in het gegenereerde blok. Het schrijven naar de echte vault is een latere fase (F5-05); tot dan schrijft niets in `D:\# Obsidian` en gebruiken tests een tijdelijke testvault. FO 10 en ADR 0018 bijgewerkt. | — | — (F2-21, F5-05) |
 
 ### 8.2 Later te beslissen
 
 | Nr | Vraag | Vóór |
 | --- | --- | --- |
-| B9 | Wie labelt de referentieset, uit welke openbare bronnen, en hoe worden interne kenmerken nagebootst? | F3-02 |
-| B10 | Wanneer is een entiteit zichtbaar voor `lezen_extern` (open punt ADR 0002)? | F3-09 |
+| B9 | Referentieset: **besloten** (Geert, 30-10). Labels uit de frontmatter van de vault (alleen lezen), fragmenten uit de oorspronkelijke bron, Iv3 via een handmatige steekproef, controle door Geert op ongeveer 50 fragmenten, set buiten Git (F3-02). Open: hoe interne kenmerken worden nagebootst (voorstel: synthetisch op openbare tekst). | F3-02 || B10 | Wanneer is een entiteit zichtbaar voor `lezen_extern` (open punt ADR 0002)? | F3-09 |
 | B11 | Tool en plek voor de scènedetectie bij video (nieuwe ADR). | F4-07 |
 | B12 | Waar draait de wiki-generatie, gegeven C5? Voorstel: de lus en de controle als LangGraph in de fork met lokale modellen; een generatie met de Claude-API of -CLI voor externe onderwerpen als Langflow-component die de lus van buiten aanroept (nieuwe ADR). | F5-01, F5-03 |
 | B13 | Omvang van de steekproef in de toets van fase 5. Voorstel: 50 beweringen. | F5-06 |
-| B14 | Plek van de reranker onder llama-swap (ADR 0015); tot een meting blijft hij op de processor (CPU). | na F3-10 |
+| B14 | Plek van de reranker onder llama-swap (ADR 0015); tot een meting blijft hij op de processor (CPU). De uitkomst van F3-13 kan ruimte op de GPU geven. | na F3-10 en F3-13 |
+| B15 | Kev-4B gekwantiseerd: **besloten** (Geert, 30-10) als proef F3-13, met een vooraf vastgelegde grens (voorstel: ECE ten hoogste 0,02 slechter dan bf16, precisie en recall per label ten hoogste 0,02 lager). Open: de grens zelf, vóór de meting. | F3-13 |

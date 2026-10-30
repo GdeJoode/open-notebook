@@ -256,7 +256,7 @@ Alle kennisproducten worden uit de SPOT afgeleid en verwijzen per bewering naar 
 | --- | --- | --- |
 | MCP-koppeling met Claude | MCP-server met zoek- en leestools; Claude stelt vragen en citeert fragmenten | uitgesloten |
 | Wiki-generatie | agent stelt per onderwerp pagina's samen, bijvoorbeeld over het NPVR of de Regio Deals | alleen bij lokale generatie; de pagina krijgt dan label intern |
-| Export naar Obsidian | notities volgens de vaultregels, met frontmatter en wikilinks | toegestaan, met label intern in de frontmatter |
+| Export naar Obsidian | notities volgens de vaultregels, met frontmatter en wikilinks | toegestaan, met label intern in het gegenereerde blok |
 
 Omdat Claude een cloudmodel is, zijn interne fragmenten alleen via de export naar Obsidian te raadplegen.
 
@@ -273,14 +273,18 @@ De MCP-server is het bestaande open-notebook-mcp. Het biedt tools voor notebooks
 
 **Export naar Obsidian**
 
-- Entiteiten landen in `20 Atlas/28 Entities`: personen in `28.01 People/Contacts`, organisaties in `28.03 Organisaties`, gebieden in `28.05 Gebieden`.
-- Programma's worden eigen entiteiten, gekoppeld aan het codeboek.
-- Wikilinks gebruiken de canonieke naam; aliassen staan in de frontmatter.
-- De frontmatter bevat herkomst (bron, versie, fragment-id's) en classificatie.
-- Persoonsnamen uit bronnen worden alleen gekoppeld aan bestaande persoonsnotities; nieuwe personen gaan naar review.
-- De export is idempotent: een bestaande notitie wordt bijgewerkt op basis van een id in de frontmatter en niet gedupliceerd.
-- Het systeem schrijft alleen in een gemarkeerd gegenereerd blok; handmatige tekst blijft ongemoeid. De export is een Langflow-flow met een eigen sjabloon.
-- De vault-beheer-agent toetst de export aan de vaultregels.
+- **Vaultregels.** De vault staat op `D:\# Obsidian`. Haar regels staan in `D:\# Obsidian\CLAUDE.md`; dat bestand is de bron voor mappen, notitietypen en frontmattervelden. De export neemt geen paden over die daar niet staan en wijzigt dat bestand niet.
+- **Plaats.** Volgens die regels schrijft de export alleen in het domein werk: onder `1000 Atlas (resources)/Werk/`, met `domain: work`. Nooit in `0500 Bronnen/`. De export verwijdert, verplaatst en hernoemt geen bestanden.
+- **Notitietypen.** Persoon: `type: person`. Organisatie en gebied: `type: entity` met `entity_kind` uit de lijst in de vaultregels. Programma: `type: program`. Is het `entity_kind` niet te bepalen, dan gaat het item naar review.
+- **Submap.** De export zoekt de submap op in de vault, alleen lezend: een nieuwe notitie komt in de map waar de bestaande notities met hetzelfde `type` en `entity_kind` staan. Staan die in meer dan één map, of nergens, dan maakt de export geen bestand en gaat het item naar review.
+- **Programma's** zijn eigen notities, gekoppeld aan het codeboek. Een bestaande programmanotitie krijgt het gegenereerde blok. Een nieuw programma gaat naar review, omdat de vaultregels voor een programma `status` en `lead_organisation` vragen, die niet uit fragmenten volgen. Na goedkeuring komt de notitie in de map van de bestaande programmanotities, volgens de regel hierboven.
+- **Personen.** Persoonsnamen uit bronnen worden alleen gekoppeld aan bestaande persoonsnotities; nieuwe personen gaan naar review.
+- **Gegenereerd blok.** De export schrijft alleen in het blok tussen `<!-- signaalsysteem:begin -->` en `<!-- signaalsysteem:end -->`. Het blok bevat het id van de entiteit, herkomst (bron, versie, fragment-id's), classificatie en codeboekkoppelingen. Frontmatter en tekst buiten het blok van een bestaande notitie blijven ongemoeid. Alleen een nieuwe notitie krijgt eenmalig frontmatter met de verplichte velden uit de vaultregels (`type`, `maturity: seedling`, `domain: work`, `topics`, bij een entiteit `entity_kind`) en `aliases`.
+- **Idempotent.** Een bestaande notitie wordt gevonden op het id in het blok, en anders op een unieke overeenkomst van titel of `aliases` met de canonieke naam of een alias. Ze wordt bijgewerkt en niet gedupliceerd. Meer dan één overeenkomst gaat naar review.
+- **Wikilinks** gebruiken de canonieke naam; aliassen staan in `aliases`.
+- **Logboek.** De export schrijft niet in `log.md` van de vault; zijn logboek is de run.
+- De export is een Langflow-flow met een eigen sjabloon. De vault-beheer-agent toetst de export aan de vaultregels.
+- **Latere fase.** Het schrijven naar de echte vault is een latere fase, na een besluit van Geert. Tot dan schrijft niets in `D:\# Obsidian` en koppelt geen container die map. Bouw en tests gebruiken een tijdelijke testvault met alleen openbare gegevens. De repository bevat geen inhoud uit de vault, alleen map- en veldnamen.
 
 ## 11. Beheeromgeving: visuele workflow-editor
 
@@ -533,7 +537,7 @@ De bouw verloopt in vijf fasen; elke fase eindigt met een toets die bepaalt of d
 **Fasen**
 
 1. **Plan van aanpak en proeven.** De planner- en ontwerpagent zetten dit ontwerp om in interfaces, een Compose-opzet en een takenlijst, en voeren de proeven uit paragraaf 13.1 uit. *Toets:* de proeven zijn uitgevoerd en hun uitkomst is in het ontwerp verwerkt.
-2. **Minimale keten.** PDF en lokale map, docling-serve, fragmentatie, het importeindpunt van de fork, opslag met versie, herkomst en classificatie, en de export naar Obsidian. Alles draait vanaf het begin in Docker, met llama-swap. *Toets:* elk fragment is herleidbaar tot bronversie en run, en twee gelijktijdige GPU-taken leiden niet tot een geheugenfout.
+2. **Minimale keten.** PDF en lokale map, docling-serve, fragmentatie, het importeindpunt van de fork, opslag met versie, herkomst en classificatie, en de export naar Obsidian, gebouwd en getoetst op een testvault (schrijven naar de echte vault is een latere fase, paragraaf 10). Alles draait vanaf het begin in Docker, met llama-swap. *Toets:* elk fragment is herleidbaar tot bronversie en run, en twee gelijktijdige GPU-taken leiden niet tot een geheugenfout.
 3. **Labeling en MCP.** Kev voor poortwachter en labels, entiteitextractie en deduplicatie als LangGraph-modules, en open-notebook-mcp met het filter op intern. *Toets:* precisie en recall zijn gemeten op de referentieset, en geen intern fragment verschijnt in een externe uitvraag.
 4. **Bronnen en planning.** Websites, API's, YouTube-kanalen, podcasts en video, selectieve extractie en planning volgens de bronkaart. *Toets:* een geplande run verwerkt alleen nieuwe of gewijzigde inhoud.
 5. **Kennisproducten.** Wiki-generatie met controle en de uitbreiding van de export naar Obsidian. *Toets:* elke bewering in een wiki-pagina verwijst naar een fragment dat haar draagt.

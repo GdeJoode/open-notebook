@@ -53,12 +53,12 @@ Optie 1.
 - De niveaus in `model_routing.yaml`; het bestand vervalt met ADR 0006 en 0012.
 - Het formulierveld `private` vervalt met de uploadroute (ADR 0010).
 
-**Migratie van bestaande gegevens**
+**Migratie**
 
-- Een nieuwe idempotente migratie (vanaf `migrations/88.surrealql`, met `_down`) definieert de velden met `DEFINE FIELD OVERWRITE` en zet alle bestaande records op `intern`. Ook bronnen met `private = false` worden `intern`: die waarde was een standaard en geen besluit van de beheerder, dus onder FO 9 telt ze als onbekend.
-- Daarna verwijdert de migratie `private`, `privacy_mode` en `default_privacy_mode`.
+- De signaalsysteemomgeving start met een lege database (besluit Geert, 30-10, plan van aanpak §8 B3). Bestaande records worden niet gemigreerd; het oude datavolume blijft onaangeroerd staan als archief.
+- Een nieuwe idempotente migratie (vanaf `migrations/88.surrealql`, met `_down`) definieert de velden met `DEFINE FIELD OVERWRITE`. Ze zet geen bestaande records om.
+- Daarna verwijdert een migratie `private`, `privacy_mode` en `default_privacy_mode`.
 - De `_down`-variant zet de oude velden terug met `private = true` voor alle bronnen. Zo maakt ook een terugdraaiactie niets extern.
-- FO 14 zegt dat de fork niet in productie is. Of de bestaande inhoud daarna opnieuw wordt ingelezen, regelt ADR 0003. Deze migratie maakt de bestaande gegevens in elk geval veilig.
 
 ## Gevolgen
 

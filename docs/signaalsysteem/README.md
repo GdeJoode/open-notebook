@@ -36,6 +36,7 @@ De agentdefinities staan in `.claude/agents/` (`signaal-planner`, `signaal-ontwe
 | [0017](adr/0017-langflow-inrichting.md) | Inrichting van Langflow: flows uit Git, aanmelding, planning en MCP | besloten |
 | [0018](adr/0018-obsidian-export-als-langflow-flow.md) | Obsidian-export als Langflow-flow met een gegenereerd blok | besloten |
 | [0019](adr/0019-classificatie-per-innameroute.md) | Classificatie en pipelinestart per innameroute; externe verwerking voor extern | besloten |
+| [0020](adr/0020-bronkaart-als-tabel-in-de-fork.md) | De bronkaart als tabel in de fork, alleen via de API | besloten |
 
 `adr/0000-sjabloon.md` is het sjabloon.
 

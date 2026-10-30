@@ -84,7 +84,7 @@ Optie 2.
 - `SourceExtractor`, `SourceProcessor`, `services/parsing/`, de jobtypen `DOCUMENT_PARSE` en `AUDIO_TRANSCRIBE` (`packages/shared/src/shared/types/enums.py:144-178`) en de handlers ervoor in `apps/app-main/src/app_main/handlers.py`.
 - `LibrarianService.enqueue_due` (`apps/app-main/src/app_main/services/audit/librarian_service.py`), dat geen aanroeper heeft. De planning ligt bij Langflow of APScheduler (FO 5).
 
-**Bestaande gegevens:** zie ADR 0003. Bestaande bronnen krijgen een bronversie met `pre_signaalsysteem` en worden opnieuw ingelezen via de nieuwe pipeline.
+**Bestaande gegevens:** zie ADR 0003. De nieuwe omgeving start met een lege database (B3, 30-10); bronnen uit de oude omgeving worden zo nodig opnieuw ingelezen via de nieuwe pipeline.
 
 ## Gevolgen
 
