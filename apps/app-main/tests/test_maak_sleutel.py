@@ -22,7 +22,7 @@ SLEUTEL = "ak_" + "s" * 43
 
 def _service():
     svc = AsyncMock()
-    svc.mint.return_value = ({"key_prefix": SLEUTEL[:10]}, SLEUTEL)
+    svc.mint.return_value = ({"id": "agent_keys:n", "key_prefix": SLEUTEL[:10]}, SLEUTEL)
     return svc
 
 
@@ -41,7 +41,7 @@ async def test_dienst_schrijft_alleen_naar_een_nieuw_bestand(tmp_path):
     pad = tmp_path / "secrets" / "sleutel_langflow"
     tekst = await maak_sleutel.maak(
         "dienst", recht="pijplijn", agent="langflow", persoon=None,
-        bestand=pad, service=_service(),
+        bestand=pad, service=_service(), secrets_map=tmp_path / "secrets",
     )
     assert pad.read_text(encoding="utf-8") == SLEUTEL
     assert SLEUTEL not in tekst
@@ -54,7 +54,7 @@ async def test_bestaand_bestand_wordt_niet_overschreven(tmp_path):
     with pytest.raises(FileExistsError):
         await maak_sleutel.maak(
             "dienst", recht="pijplijn", agent="langflow", persoon=None,
-            bestand=pad, service=svc,
+            bestand=pad, service=svc, secrets_map=tmp_path,
         )
     svc.mint.assert_not_awaited()
     assert pad.read_text(encoding="utf-8") == "oud"
@@ -76,10 +76,82 @@ async def test_gemaakte_sleutel_authenticeert(live_surrealdb, tmp_path):
     from app_main.services.agents.key_service import AgentKeyService
 
     svc = AgentKeyService(config=live_surrealdb)
-    pad = tmp_path / "sleutel_mcp"
+    pad = tmp_path / "sleutel_langflow"
     await maak_sleutel.maak(
-        "dienst", recht="lezen_extern", agent="open-notebook-mcp", persoon=None,
-        bestand=pad, service=svc,
+        "dienst", recht="pijplijn", agent="langflow", persoon=None,
+        bestand=pad, service=svc, secrets_map=tmp_path,
     )
     row = await svc.authenticate(pad.read_text(encoding="utf-8"))
-    assert row["permission"] == "lezen_extern"
+    assert row["permission"] == "pijplijn"
+
+
+@pytest.mark.requires_docker
+async def test_mislukt_schrijven_trekt_de_sleutel_in(live_surrealdb, tmp_path, monkeypatch):
+    from app_main.services.agents.key_service import AgentKeyService
+
+    svc = AgentKeyService(config=live_surrealdb)
+    gemaakt = {}
+    echte_mint = svc.mint
+
+    async def mint(**kw):
+        gemaakt["public"], gemaakt["sleutel"] = await echte_mint(**kw)
+        return gemaakt["public"], gemaakt["sleutel"]
+
+    monkeypatch.setattr(svc, "mint", mint)
+
+    def faalt(pad, sleutel):
+        raise PermissionError("schijf vol")
+
+    monkeypatch.setattr(maak_sleutel, "schrijf_geheim", faalt)
+    with pytest.raises(PermissionError):
+        await maak_sleutel.maak(
+            "dienst", recht="pijplijn", agent="langflow", persoon=None,
+            bestand=tmp_path / "sleutel", service=svc, secrets_map=tmp_path,
+        )
+    assert await svc.authenticate(gemaakt["sleutel"]) is None
+
+
+async def test_lezen_extern_wordt_geweigerd_tot_f2_05(tmp_path):
+    svc = _service()
+    with pytest.raises(ValueError, match="F2-05"):
+        await maak_sleutel.maak(
+            "dienst", recht="lezen_extern", agent="open-notebook-mcp", persoon=None,
+            bestand=tmp_path / "sleutel_mcp", service=svc, secrets_map=tmp_path,
+        )
+    svc.mint.assert_not_awaited()
+
+
+async def test_pad_buiten_secrets_wordt_geweigerd(tmp_path):
+    svc = _service()
+    with pytest.raises(ValueError, match="niet onder"):
+        await maak_sleutel.maak(
+            "dienst", recht="pijplijn", agent="langflow", persoon=None,
+            bestand=tmp_path / "elders" / "sleutel", service=svc,
+            secrets_map=tmp_path / "secrets",
+        )
+    with pytest.raises(ValueError, match="niet onder"):
+        await maak_sleutel.maak(
+            "dienst", recht="pijplijn", agent="langflow", persoon=None,
+            bestand=tmp_path / "secrets" / ".." / "sleutel", service=svc,
+            secrets_map=tmp_path / "secrets",
+        )
+    svc.mint.assert_not_awaited()
+
+
+async def test_mislukt_schrijven_trekt_de_sleutel_in_zonder_database(tmp_path, monkeypatch):
+    svc = _service()
+
+    def faalt(pad, sleutel):
+        raise OSError("schijf vol")
+
+    monkeypatch.setattr(maak_sleutel, "schrijf_geheim", faalt)
+    with pytest.raises(OSError):
+        await maak_sleutel.maak(
+            "dienst", recht="pijplijn", agent="langflow", persoon=None,
+            bestand=tmp_path / "sleutel", service=svc, secrets_map=tmp_path,
+        )
+    svc.revoke.assert_awaited_once_with("agent_keys:n")
+
+
+def test_standaard_secrets_map_is_secrets_in_de_repository():
+    assert maak_sleutel.SECRETS_MAP == _SCRIPT.parents[2] / "secrets"

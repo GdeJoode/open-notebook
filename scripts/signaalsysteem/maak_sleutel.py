@@ -8,9 +8,13 @@ Twee vormen:
 
       python scripts/signaalsysteem/maak_sleutel.py beheerder --persoon "Naam"
 
-  dienst     een dienstsleutel (``pijplijn``, ``lezen_extern``, ``lezen_intern``
-             of ``ophalen``) als geheimbestand voor Docker secrets. Op het scherm
-             staat alleen het pad en het niet-geheime voorvoegsel.
+  dienst     een dienstsleutel (``pijplijn``, ``lezen_intern`` of ``ophalen``)
+             als geheimbestand onder ``secrets/`` voor Docker secrets. Op het
+             scherm staat alleen het pad en het niet-geheime voorvoegsel. Mislukt
+             het schrijven, dan wordt de sleutel meteen ingetrokken.
+
+``lezen_extern`` weigert het script tot F2-05: tot dan filtert de API nog niet
+op classificatie, dus zo'n sleutel zou ook interne records zien.
 
       python scripts/signaalsysteem/maak_sleutel.py dienst --recht pijplijn \\
           --agent langflow --bestand secrets/sleutel_langflow
@@ -30,6 +34,17 @@ from typing import Optional
 
 DIENSTRECHTEN = ("pijplijn", "lezen_extern", "lezen_intern", "ophalen")
 
+#: Tot F2-05 (classificatiefilter in de API) geweigerd.
+NOG_NIET = {
+    "lezen_extern": (
+        "het recht lezen_extern kan pas na F2-05: de API filtert nog niet op "
+        "classificatie, dus deze sleutel zou ook interne records zien"
+    ),
+}
+
+#: De map voor geheimbestanden: ``secrets/`` in de root van de repository.
+SECRETS_MAP = Path(__file__).resolve().parents[2] / "secrets"
+
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Maak een sleutel voor de API.")
@@ -45,6 +60,14 @@ def _parser() -> argparse.ArgumentParser:
     d.add_argument("--bestand", required=True, type=Path, help="pad onder secrets/")
     d.add_argument("--persoon", default=None, help="optioneel: verantwoordelijke")
     return p
+
+
+def binnen_secrets(pad: Path, secrets_map: Path = SECRETS_MAP) -> Path:
+    """Het pad, absoluut; een fout als het niet onder ``secrets_map`` ligt."""
+    absoluut = pad.resolve()
+    if not absoluut.is_relative_to(secrets_map.resolve()):
+        raise ValueError(f"{pad} ligt niet onder {secrets_map}")
+    return absoluut
 
 
 def schrijf_geheim(pad: Path, sleutel: str) -> None:
@@ -67,14 +90,21 @@ async def maak(
     persoon: Optional[str],
     bestand: Optional[Path],
     service=None,
+    secrets_map: Path = SECRETS_MAP,
 ) -> str:
     """Maak de sleutel en geef terug wat op het scherm mag."""
+    if recht in NOG_NIET:
+        raise ValueError(NOG_NIET[recht])
+    if vorm == "dienst":
+        if bestand is None:
+            raise ValueError("een dienstsleutel vraagt --bestand")
+        bestand = binnen_secrets(bestand, secrets_map)
+        if bestand.exists():
+            raise FileExistsError(f"{bestand} bestaat al")
     if service is None:
         from app_main.services.agents.key_service import AgentKeyService
 
         service = AgentKeyService()
-    if bestand is not None and bestand.exists():
-        raise FileExistsError(f"{bestand} bestaat al")
     public, sleutel = await service.mint(
         agent_id=agent, permission=recht, person=persoon, label=f"maak_sleutel {vorm}"
     )
@@ -83,7 +113,12 @@ async def maak(
             f"Sleutel voor {persoon} (recht beheerder). Bewaar hem nu; hij wordt "
             f"niet nog eens getoond:\n{sleutel}"
         )
-    schrijf_geheim(bestand, sleutel)
+    try:
+        schrijf_geheim(bestand, sleutel)
+    except OSError:
+        # Geen bestand, dan ook geen geldige sleutel.
+        await service.revoke(public["id"])
+        raise
     return f"Dienstsleutel {public['key_prefix']}… ({recht}) geschreven naar {bestand}"
 
 
@@ -104,7 +139,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 bestand=getattr(args, "bestand", None),
             )
         )
-    except (ValueError, FileExistsError) as exc:
+    except (ValueError, OSError) as exc:
         print(f"Fout: {exc}", file=sys.stderr)
         return 1
     print(tekst)
