@@ -1,0 +1,6 @@
+sleutel,oorzaak,soort,bestanden,herontwerp_tabel,toelichting
+"fout:FLEXIBLE must be specified after TYPE",flexible_volgorde,niet-mechanisch,=,nee,"v3 eist TYPE x FLEXIBLE in plaats van FLEXIBLE TYPE x; staat niet in de migratiegids, dus buiten de mechanische vervangingen van 10d (wel als regex uit te voeren, zie 10g)"
+"fout:FLEXIBLE can only be used with types containing object",flexible_zonder_object,niet-mechanisch,=,nee,"v3 staat FLEXIBLE alleen toe bij een type met object; FLEXIBLE TYPE array vraagt per veld een keuze (array<object> FLEXIBLE, array<any> of zonder FLEXIBLE)"
+"fout:The (table|index|field) '[^']+' does not exist",onbestaande_tabel,niet-mechanisch,=,nee,"v3 geeft een fout bij UPDATE, DELETE, SELECT of REMOVE op een tabel, index of veld dat niet bestaat (migratiegids: strengere schemacontrole); de backfill- en _down-opdrachten vragen een voorwaarde of IF EXISTS"
+"fout:SCHEMAFULL`, expected Eof",bestaande_fout_5_down,niet-mechanisch,=,nee,"REMOVE TABLE ... SCHEMAFULL is ook op v2.7.0 ongeldig; in de proef gecorrigeerd in alle kopieën (nulcorrectie), mag hier niet meer voorkomen"
+"bericht:Failed to apply migrations against P10 SurrealDB",fixture_migraties,niet-mechanisch,,nee,"de testfixture past alle migraties toe en stopt bij de eerste fout; de oorzaak staat bij de migratiefouten, de bestanden tellen daar"

@@ -7,7 +7,7 @@
 # - één profiel per proef; geen dienst zonder profiel;
 # - geen bind mounts naar mappen in de repository (scripts en configuratie zitten in
 #   lokaal gebouwde images signaal-proef/*); alleen benoemde volumes;
-# - gepubliceerde poorten alleen op 127.0.0.1 in de reeks 18000-18999 (alleen P8);
+# - gepubliceerde poorten alleen op 127.0.0.1 in de reeks 18000-18999 (alleen P8 en P10);
 # - geheimen per run gegenereerd, als Compose-secret met bron "environment";
 # - vaste imageversies, nooit een zwevende tag.
 
@@ -24,6 +24,10 @@ networks:
   toegang: {}
   # Uitgaand internet voor voorbereiden (downloads) en P6.
   uitgaand: {}
+  # P10: de tests draaien in de WSL-.venv buiten Docker en hebben een gepubliceerde
+  # poort nodig; op een internal-netwerk publiceert Docker Desktop geen poort (P8).
+  # Alleen de twee SurrealDB-containers in geheugenmodus, zonder gegevens.
+  p10: {}
 
 volumes:
   modellen: {}            # GGUF-bestanden (P1, P3)
@@ -56,6 +60,16 @@ secrets:
 
 x-geen-herstart: &geen-herstart
   restart: "no"
+
+x-p10-surreal: &p10-surreal
+  profiles: [p10]
+  <<: *geen-herstart
+  networks: [p10]
+  # Geheugenmodus, geen volume: los van surreal_data. Wachtwoord per run.
+  command: ["start", "--log", "info", "memory"]
+  environment:
+    SURREAL_USER: root
+    SURREAL_PASS: ${SP_SURREAL_PASS:-}
 
 x-gpu: &gpu
   deploy:
@@ -475,3 +489,14 @@ services:
     command: ["sleep", "infinity"]
     volumes:
       - p1_audio:/audio:ro
+
+  # ---------------------------------------------------------------- P10
+  surrealdb-v2:
+    <<: *p10-surreal
+    image: surrealdb/surrealdb:v2.7.0
+    ports: ["127.0.0.1:18100:8000"]
+
+  surrealdb-v3:
+    <<: *p10-surreal
+    image: surrealdb/surrealdb:v3.3.5
+    ports: ["127.0.0.1:18101:8000"]

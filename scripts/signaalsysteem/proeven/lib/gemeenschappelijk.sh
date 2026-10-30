@@ -36,13 +36,14 @@ readonly IMG_SOCKET_PROXY="tecnativa/docker-socket-proxy:v0.5.0"
 readonly IMG_DOCKER_CLI="docker:29.9.2-cli"
 readonly IMG_CURL="curlimages/curl:8.23.0"
 readonly IMG_SURREAL="surrealdb/surrealdb:v2.7.0"
+readonly IMG_SURREAL3="surrealdb/surrealdb:v3.3.5"
 readonly IMG_PY="python:3.12.16-slim-bookworm"
 readonly IMG_PY_KEV="python:3.13.18-slim-bookworm"
 readonly IMG_UV="ghcr.io/astral-sh/uv:0.11.13"
 
 # Images die de proeven mogen toevoegen. Een ander nieuw image, of een gewijzigd of
 # verdwenen image, telt als wijziging buiten het project (exitcode 3).
-readonly PROEF_IMAGES_TOEGESTAAN="$IMG_LLAMA_SWAP $IMG_DOCLING $IMG_WHISPERX_A $IMG_LANGFLOW $IMG_SOCKET_PROXY $IMG_DOCKER_CLI $IMG_CURL $IMG_SURREAL $IMG_PY $IMG_PY_KEV $IMG_UV"
+readonly PROEF_IMAGES_TOEGESTAAN="$IMG_LLAMA_SWAP $IMG_DOCLING $IMG_WHISPERX_A $IMG_LANGFLOW $IMG_SOCKET_PROXY $IMG_DOCKER_CLI $IMG_CURL $IMG_SURREAL $IMG_SURREAL3 $IMG_PY $IMG_PY_KEV $IMG_UV"
 
 # Proefgeheimen; worden in alle logs gemaskeerd.
 PROEF_GEHEIMEN=()
