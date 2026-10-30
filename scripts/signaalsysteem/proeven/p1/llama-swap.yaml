@@ -52,12 +52,14 @@ models:
 
   kev-4b:
     # Kev vraagt met KEV_API_KEY een sleutel op /v1/* en heeft geen apart
-    # gezondheidseindpunt (deelstap 1d). checkEndpoint kan geen header meesturen;
-    # daarom "none" en een gereedheidscontrole met sleutel in wacht_op_dienst.sh.
+    # gezondheidseindpunt (deelstap 1d). checkEndpoint kan geen header meesturen.
+    # Met "none" stuurde llama-swap de aanvraag door voordat Kev luisterde (502).
+    # Kev laadt het model vóór uvicorn start en vraagt de sleutel alleen op /v1/*;
+    # /openapi.json (FastAPI) geeft dus pas 200 als Kev klaar is.
     cmd: /bin/sh /app/wacht_op_dienst.sh signaal-proef-kev-1 http://kev:8009/v1/models /run/secrets/kev_api_sleutel 900
     cmdStop: docker stop signaal-proef-kev-1
     proxy: http://kev:8009
-    checkEndpoint: none
+    checkEndpoint: /openapi.json
     ttl: 60
 
 groups:

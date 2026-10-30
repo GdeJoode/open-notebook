@@ -67,10 +67,14 @@ bewaar create dc --profile p1 create --force-recreate docling whisperx kev
 geheimen_volume_vullen
 bewaar up dc --profile p1 up -d --no-deps socket-proxy llama-swap p1-client
 client() { dc --profile p1 exec -T p1-client "$@"; }
+# Voor metingen: een curl-fout (time-out, geen verbinding) is een uitkomst, geen scriptfout.
+client_ok() { client "$@" || true; }
 LS=http://llama-swap:8080
 wacht_tot 120 client curl -sf "$LS/health" || omgeving_ongeschikt "llama-swap niet gezond"
 
+# Alleen toestandswijzigingen: exec-events bevatten de opdrachtregel, met sleutel.
 docker events --filter "label=com.docker.compose.project=$PROEF_PROJECT" --filter type=container \
+  --filter event=start --filter event=stop --filter event=die --filter event=kill --filter event=destroy \
   --format '{{.Time}} {{.Action}} {{.Actor.Attributes.name}}' >"$RUNMAP/docker_events.txt" 2>&1 &
 EVENTS_PID=$!
 vram_start "$RUNMAP/vram.csv"
@@ -83,15 +87,15 @@ doc_hdr() { echo "X-Api-Key: $(client cat /run/secrets/docling_api_sleutel)"; }
 docling_taak() { # <pdf> <naam> -> status
   local pdf=$1 naam=$2 task status hdr
   hdr="$(doc_hdr)"
-  task="$(client curl -s -m 900 -H "$hdr" -F "files=@$pdf" -F to_formats=json -F ocr_lang=nl -F ocr_lang=en \
+  task="$(client_ok curl -s -m 900 -H "$hdr" -F "files=@$pdf" -F to_formats=json -F ocr_lang=nl -F ocr_lang=en \
     "$LS/upstream/docling/v1/convert/file/async" | zoek -o '"task_id": *"[^"]*"' | cut -d'"' -f4)"
   [[ -z "$task" ]] && { echo "geen_task_id"; return 0; }
   for _ in $(seq 1 360); do
-    status="$(client curl -s -H "$hdr" "$LS/upstream/docling/v1/status/poll/$task" | zoek -o '"task_status": *"[^"]*"' | cut -d'"' -f4)"
+    status="$(client_ok curl -s -H "$hdr" "$LS/upstream/docling/v1/status/poll/$task" | zoek -o '"task_status": *"[^"]*"' | cut -d'"' -f4)"
     [[ "$status" == "success" || "$status" == "failure" ]] && break
     sleep 5
   done
-  client curl -s -H "$hdr" "$LS/upstream/docling/v1/result/$task" >"$RUNMAP/$naam.json"
+  client_ok curl -s -H "$hdr" "$LS/upstream/docling/v1/result/$task" >"$RUNMAP/$naam.json"
   echo "$status"
 }
 D1="$(testdata D1 'https://ridderkerk.begrotingsapp.nl/Data/416de56b-57da-4d12-8484-3b5fc1ec689e/Public/jaarstukken-2025.pdf' pdf)"
@@ -101,8 +105,10 @@ dc --profile p1 cp "$(pad_host "$D2")" p1-client:/tmp/D2.pdf >/dev/null
 
 k2_voor="docling=$(container_toestand signaal-proef-docling-1)"
 ( sleep 20; container_toestand signaal-proef-docling-1 >"$RUNMAP/docling_tijdens.txt" ) &
+TIJDENS_PID=$!
 s_d2="$(docling_taak /tmp/D2.pdf 1a_D2)"
-k2_tijdens="docling=$(cat "$RUNMAP/docling_tijdens.txt" 2>/dev/null)"
+wait "$TIJDENS_PID" 2>/dev/null || true
+k2_tijdens="docling=$(cat "$RUNMAP/docling_tijdens.txt" 2>/dev/null || echo onbekend)"
 s_d1="$(docling_taak /tmp/D1.pdf 1a_D1)"
 tabellen="$(zoek -o '"tables": *\[ *{' "$RUNMAP/1a_D2.json" | wc -l | tr -d ' ')"
 weerstand="$(grep -ci weerstandsvermogen "$RUNMAP/1a_D2.json" || true)"
@@ -116,14 +122,16 @@ fi
 # --- 1b: WhisperX met D4 ---
 transcribeer() { # <bestand> <naam> [extra -F ...] -> http-status
   local b=$1 n=$2; shift 2
-  client curl -s -m 3600 -o "/tmp/$n.json" -w '%{http_code}' "$LS/v1/audio/transcriptions" \
+  client_ok curl -s -m 3600 -o "/tmp/$n.json" -w '%{http_code}' "$LS/v1/audio/transcriptions" \
     -F "file=@$b" -F model=whisperx -F response_format=verbose_json -F 'timestamp_granularities[]=word' "$@"
-  client cat "/tmp/$n.json" >"$RUNMAP/$n.json"
+  client cat "/tmp/$n.json" >"$RUNMAP/$n.json" || true
 }
 k2_voor+=" whisperx=$(container_toestand signaal-proef-whisperx-1)"
 ( sleep 60; container_toestand signaal-proef-whisperx-1 >"$RUNMAP/whisperx_tijdens.txt" ) &
+TIJDENS_PID=$!
 h_1b="$(transcribeer /audio/D4-de-dag.mp3 1b_D4 -F language=nl -F diarize=true)"
-k2_tijdens+=" whisperx=$(cat "$RUNMAP/whisperx_tijdens.txt" 2>/dev/null)"
+wait "$TIJDENS_PID" 2>/dev/null || true
+k2_tijdens+=" whisperx=$(cat "$RUNMAP/whisperx_tijdens.txt" 2>/dev/null || echo onbekend)"
 sprekers="$(zoek -o '"speaker": *"[^"]*"' "$RUNMAP/1b_D4.json" | sort -u | wc -l | tr -d ' ')"
 woorden="$(zoek -o '"words": *\[ *{' "$RUNMAP/1b_D4.json" | wc -l | tr -d ' ')"
 segmenten="$(zoek -o '"segments": *\[ *{' "$RUNMAP/1b_D4.json" | wc -l | tr -d ' ')"
@@ -175,14 +183,16 @@ fi
 KEV_BODY='{"state":"De gemeente Proefstad legt nieuwe fietspaden aan en verhoogt daarvoor de begroting.","model":"kev-latest","questions":{"onderwerp":{"type":"choice","instructions":"Over welk beleidsterrein gaat dit?","criteria":{"verkeer":"Wegen, fietspaden en openbaar vervoer","zorg":"Zorg en welzijn","onderwijs":null}},"financieel":{"type":"noul","instructions":"Heeft dit financiele gevolgen?"}}}'
 k2_voor+=" kev=$(container_toestand signaal-proef-kev-1)"
 ( sleep 30; container_toestand signaal-proef-kev-1 >"$RUNMAP/kev_tijdens.txt" ) &
-h_kev="$(client curl -s -m 900 -o /tmp/1d.json -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' \
+TIJDENS_PID=$!
+h_kev="$(client_ok curl -s -m 900 -o /tmp/1d.json -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' \
   -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone")"
-client cat /tmp/1d.json >"$RUNMAP/1d_kev.json"
-k2_tijdens+=" kev=$(cat "$RUNMAP/kev_tijdens.txt" 2>/dev/null)"
+client cat /tmp/1d.json >"$RUNMAP/1d_kev.json" || true
+wait "$TIJDENS_PID" 2>/dev/null || true
+k2_tijdens+=" kev=$(cat "$RUNMAP/kev_tijdens.txt" 2>/dev/null || echo onbekend)"
 som="$(tr -d '\n ' <"$RUNMAP/1d_kev.json" | zoek -o '"probabilities":{[^}]*}' | head -n1 | zoek -o ':[0-9.eE-]*' | tr -d ':' | awk '{s+=$1} END {print s+0}')"
 zonder_sleutel=""
 for pad in / /docs /openapi.json /v1/models /health; do
-  zonder_sleutel+="$pad=$(client curl -s -o /dev/null -w '%{http_code}' -m 30 "http://kev:8009$pad") "
+  zonder_sleutel+="$pad=$(client_ok curl -s -o /dev/null -w '%{http_code}' -m 30 "http://kev:8009$pad") "
 done
 meet 1d "HTTP $h_kev, som kansen $som; zonder sleutel: $zonder_sleutel"
 if [[ "$h_kev" == "200" ]] && awk -v s="$som" 'BEGIN {exit !(s >= 0.99 && s <= 1.01)}'; then
@@ -199,17 +209,17 @@ fi
 # --- 1e: wisselen en wachtrij ---
 T_1E="$(date +%s)"
 werkmodel() {
-  client curl -s -m 900 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' "$LS/v1/chat/completions" \
+  client_ok curl -s -m 900 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' "$LS/v1/chat/completions" \
     -d '{"model":"werkmodel","messages":[{"role":"user","content":"Noem drie voordelen van fietspaden."}],"max_tokens":64}'
 }
 reeks=""
 for ronde in 1 2; do
   reeks+="docling=$(docling_taak /tmp/D1.pdf "1e_D1_$ronde") "
-  reeks+="kev=$(client curl -s -m 900 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone") "
+  reeks+="kev=$(client_ok curl -s -m 900 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone") "
   reeks+="whisperx=$(transcribeer /audio/D7-nl.ogg "1e_wx_$ronde" -F language=nl) "
   reeks+="werkmodel=$(werkmodel) "
   # Twee gelijktijdige aanvragen voor verschillende zware diensten.
-  ( client curl -s -m 1800 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone" >"$RUNMAP/gelijk_kev_$ronde.txt" ) &
+  ( client_ok curl -s -m 1800 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone" >"$RUNMAP/gelijk_kev_$ronde.txt" ) &
   p1=$!
   ( werkmodel >"$RUNMAP/gelijk_werkmodel_$ronde.txt" ) &
   p2=$!
@@ -233,15 +243,15 @@ else
 fi
 
 # --- 1f: /v1/rerank, en de embedding-dimensie (paragraaf 4) ---
-h_rr="$(client curl -s -m 300 -o /tmp/1f.json -w '%{http_code}' -H 'Content-Type: application/json' "$LS/v1/rerank" \
+h_rr="$(client_ok curl -s -m 300 -o /tmp/1f.json -w '%{http_code}' -H 'Content-Type: application/json' "$LS/v1/rerank" \
   -d '{"model":"rerank","query":"weerstandsvermogen gemeente","documents":["Het weerstandsvermogen is voldoende.","De fietspaden worden verbreed.","De begroting sluit met een overschot.","Risicobeheersing en weerstandsvermogen.","Afvalinzameling wordt anders."]}')"
-client cat /tmp/1f.json >"$RUNMAP/1f_rerank.json"
+client cat /tmp/1f.json >"$RUNMAP/1f_rerank.json" || true
 n_rr="$(zoek -o '"relevance_score"' "$RUNMAP/1f_rerank.json" | wc -l | tr -d ' ')"
 if [[ "$h_rr" == "200" && "$n_rr" == "5" ]]; then criterium K6 geslaagd "HTTP 200, 5 resultaten met score"
 else criterium K6 mislukt "HTTP $h_rr, $n_rr resultaten"; fi
-h_emb="$(client curl -s -m 300 -o /tmp/emb.json -w '%{http_code}' -H 'Content-Type: application/json' "$LS/v1/embeddings" \
+h_emb="$(client_ok curl -s -m 300 -o /tmp/emb.json -w '%{http_code}' -H 'Content-Type: application/json' "$LS/v1/embeddings" \
   -d '{"model":"embed","input":"weerstandsvermogen"}')"
-client cat /tmp/emb.json >"$RUNMAP/embed.json"
+client cat /tmp/emb.json >"$RUNMAP/embed.json" || true
 dim="$(tr -d '\n ' <"$RUNMAP/embed.json" | zoek -o '"embedding":\[[^]]*\]' | head -n1 | tr ',' '\n' | wc -l | tr -d ' ')"
 meet embedding_dimensie "HTTP $h_emb, $dim dimensies (verwacht 1024)"
 
@@ -249,13 +259,13 @@ meet embedding_dimensie "HTTP $h_emb, $dim dimensies (verwacht 1024)"
 sleep 75
 na_ttl=""
 for c in "${ZWAAR[@]}"; do na_ttl+="${c#signaal-proef-}=$(container_toestand "$c") "; done
-client curl -s -m 900 -o /dev/null -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone" || true
+client_ok curl -s -m 900 -o /dev/null -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone" || true
 bewaar externe_stop docker stop signaal-proef-kev-1
-h_herstel="$(client curl -s -m 900 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone")"
+h_herstel="$(client_ok curl -s -m 900 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone")"
 # Aanvulling (P7): llama-swap merkt een externe stop pas na de gezondheidslus (5 s);
 # alleen vastgelegd, K7 blijft de directe aanvraag.
 sleep 20
-h_herstel_20="$(client curl -s -m 900 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone")"
+h_herstel_20="$(client_ok curl -s -m 900 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone")"
 meet 1g "na ttl+15 s: $na_ttl; na externe stop: HTTP $h_herstel; 20 s later: HTTP $h_herstel_20"
 if [[ "$na_ttl" != *running* && "$h_herstel" == "200" ]]; then criterium K7 geslaagd "$na_ttl; herstel HTTP 200"
 else criterium K7 mislukt "$na_ttl; herstel HTTP $h_herstel (20 s later: $h_herstel_20)"; fi
@@ -271,7 +281,7 @@ try:
 except urllib.error.HTTPError:
     print("internet")
 except Exception as e:
-    print("geen:" + type(e).__name__)' 2>&1 | tail -n1) "
+    print("geen:" + type(e).__name__)' 2>&1 | tail -n1 || true) "
 done
 if [[ "$k8" != *internet* ]]; then criterium K8 geslaagd "$k8"; else criterium K8 mislukt "$k8"; fi
 
