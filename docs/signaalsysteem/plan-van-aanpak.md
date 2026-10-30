@@ -18,7 +18,7 @@ Inhoud: 1 werkwijze · 2 taken per fase · 3 harde eisen en FO-dekking naar take
   3. een zoektest `tests/test_geen_verwijzingen_<onderwerp>.py` faalt zodra een verwijderd module- of routenaam nog voorkomt in `apps/`, `packages/`, `pipelines/`, `services/` of `frontend/src/`;
   4. raakt de taak routes die de interface gebruikt: `npm --prefix frontend run test` en `npm --prefix frontend run build` slagen.
 - **Bevestiging.** Een taak die bestaande gegevens weggooit, draagt de markering **vraagt expliciete bevestiging van Geert**. De bouwer start die taak pas na die bevestiging in het gesprek, en maakt vooraf een reservekopie van de database.
-- **Voorwaardelijke taken.** Een taak met de markering **voorwaardelijk** start alleen als de genoemde voorwaarde is vervuld (F2-25, F2-27, F2-32).
+- **Voorwaardelijke taken.** Een taak met de markering **voorwaardelijk** start alleen als de genoemde voorwaarde is vervuld (F2-25, F2-32).
 - **Testdata.** Alleen openbare bronnen (tabel 1.6 in `proeven.md`) of synthetische tekst. Grote bestanden worden gedownload met controle van de SHA-256 en niet in Git gezet.
 - **Werkplek.** Een stopconditie die de GPU (grafische kaart) nodig heeft, is een script onder `scripts/signaalsysteem/controle/` of `scripts/signaalsysteem/toetsen/`, met dezelfde exitcodes als de proeven (0 geslaagd, 1 criterium niet gehaald, 2 omgeving ongeschikt, 3 scriptfout). Zulke taken zijn "uit te voeren op de werkplek".
 - **Rechten.** In dit plan: `lezen_extern`, `lezen_intern`, `pijplijn` (Langflow), `ophalen` (de container `ophalen`) en `beheerder` (een persoon), volgens ADR 0002 B. Het vroegere `beheren` bestaat niet meer.
@@ -40,10 +40,10 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Stopconditie:* `p10_surrealdb_v3.sh` eindigt met exitcode 0 of 1 (2 of 3 telt niet als uitgevoerd) en schrijft `uitkomst.json` met de meetwaarden van K1–K6 en `p10_patronen.csv`; K1 (nulmeting op v2.7.0) geslaagd; de uitkomst staat in `proeven.md` P10; het besluit van Geert staat in ADR 0021.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
-**F2-27 Overstap naar SurrealDB v3.3.5** — voorwaardelijk
-- *Voorwaarde:* P10 geslaagd en besluit van Geert voor v3 (ADR 0021). Dan gaat deze taak vóór F2-03. Slaagt P10 niet, dan blijft `v2.7.0` en wordt deze taak de aparte overstaptaak na F2-24, met de lijst uit P10 10e (ADR 0021, Gevolgen).
+**F2-27 Overstap naar SurrealDB v3** — na F2-24
+- *Voorwaarde:* P10 is niet geslaagd (30-10, ADR 0021): `v2.7.0` blijft. Deze taak is de aparte overstaptaak na F2-24, met de lijst uit P10 (`p10_patronen.csv`, 41 migratiebestanden met niet-mechanische aanpassingen); daarna P10 opnieuw.
 - *Wat:* de mechanische vervangingen uit P10 10d in `migrations/` en in de Python-code (`type::thing` naar `type::record`, `type::is::*` naar `type::is_*`, `string::is::*` naar `string::is_*`, `SEARCH ANALYZER` naar `FULLTEXT ANALYZER`, `LET`), ook in de migraties die F2-01 al heeft toegevoegd; de niet-mechanische aanpassingen uit P10; `surrealdb` in `packages/surrealdb-service/pyproject.toml` op de SDK-versie waarmee P10 slaagde. Zie conflict C9 over de vorm (eigen migratie per vervanging tegenover aanpassen van bestaande migraties).
-- *Hangt af van:* F2-26, F2-01.
+- *Hangt af van:* F2-26, F2-24.
 - *Bestanden:* `migrations/*.surrealql` volgens de lijst uit P10; de Python-bestanden uit `p10_patronen.csv` (39 bestanden, waarvan 12 broncode, telling ADR 0021); `packages/surrealdb-service/pyproject.toml`; `uv.lock`; nieuw `tests/test_geen_surrealql_v2_patronen.py`.
 - *ADR:* 0021.
 - *Stopconditie:* `test_migrations_roundtrip.py` slaagt tegen `v3.3.5` (alle migraties, alle `_down`-varianten, en opnieuw alle migraties); de volledige testsuites van `packages/surrealdb-service` en `apps/app-main` slagen tegen `v3.3.5`; `tests/test_geen_surrealql_v2_patronen.py` faalt bij `SEARCH ANALYZER`, `type::thing(`, `type::is::`, `string::is::` of `MTREE` in `migrations/`, `apps/`, `packages/` of `pipelines/`.
@@ -70,8 +70,9 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 
 **F2-03 Classificatie intern/extern, standaard intern, met herclassificatie en afgeleide classificatie**
 - *Wat:* veld `classification` (`ASSERT $value IN ['intern','extern']`, `DEFAULT 'intern'`) op `source`, `chunk`, `source_embedding`, `doc_node`, `note`, `source_insight` en `notebook` (`source_version` volgt in F2-04). Er zijn geen bestaande records om om te zetten (B3). Bij schrijven neemt de repositorylaag de waarde van de bron over; een fragment, embedding of `doc_node` met een lossere waarde dan de bovenliggende geeft HTTP 409, een ontbrekende waarde geldt als `intern`. **Afgeleide classificatie** (ADR 0001): een vermelding (PC.3-herkomst) neemt de waarde van haar fragment over; `entity`, `entity_alias`, `relation` en `triage_queue` zijn `intern` zodra één onderliggende vermelding intern is, en `intern` zonder vermelding; de fork berekent dat bij elk schrijven van een vermelding en bij elke herclassificatie. Nieuwe `ClassificationService` met `POST /api/v1/sources/{id}/classification` (recht `beheerder`, reden verplicht): werkt bron, fragmenten, embeddings en `doc_node` in één transactie bij en berekent de afgeleide records opnieuw. Tabel `classification_log` (bron, van, naar, reden, sleutel-id, persoon, tijdstip) die alleen aanvult; een sleutel zonder persoon kan geen regel schrijven. De oude velden `private`, `privacy_mode` en `default_privacy_mode` blijven tot F2-09 staan, zodat de code tussen de taken blijft werken.
-- *Hangt af van:* F2-01, F2-26; F2-27 als P10 slaagt.
-- *Bestanden:* `migrations/89.surrealql` en `_down`; `packages/shared/src/shared/models/source.py`; `apps/app-main/src/app_main/api/schemas.py`; `packages/surrealdb-service/src/surrealdb_service/repositories/source.py`, `notebook.py`, `entity.py`; `apps/app-main/src/app_main/services/entity_persistence_service.py` (vermeldingen); nieuw `apps/app-main/src/app_main/services/classification_service.py`, nieuw `api/routers/classification.py`; `dependencies.py`.
+- *Hangt af van:* F2-01, F2-26.
+- *Ook:* herstel van de bestaande parsefout in `migrations/5_down.surrealql` regel 2 (`SCHEMAFULL` weg uit `REMOVE TABLE`), gevonden in P10 (ADR 0021).
+- *Bestanden:* `migrations/5_down.surrealql`; `migrations/89.surrealql` en `_down`; `packages/shared/src/shared/models/source.py`; `apps/app-main/src/app_main/api/schemas.py`; `packages/surrealdb-service/src/surrealdb_service/repositories/source.py`, `notebook.py`, `entity.py`; `apps/app-main/src/app_main/services/entity_persistence_service.py` (vermeldingen); nieuw `apps/app-main/src/app_main/services/classification_service.py`, nieuw `api/routers/classification.py`; `dependencies.py`.
 - *ADR:* 0001, 0019, 0002 B.
 - *Stopconditie:* `test_migration_89_classification.py`: per tabel het veld met standaard `intern`; de test schrijft een waarde en leest die terug, omdat een SCHEMAFULL-tabel onder v2.7.0 een onbekend veld stil weglaat (P4); een record zonder waarde is `intern`; `_down` zet `private = true` op alle bronnen. `apps/app-main/tests/test_classification_service.py`: import of poortwachter kan intern niet naar extern zetten (409); herclassificatie alleen met `beheerder` en reden, werkt fragmenten, embeddings en `doc_node` in één transactie bij en schrijft precies één logregel met persoon; er is geen pad om een logregel te wijzigen of te verwijderen. `apps/app-main/tests/test_afgeleide_classificatie.py`: een entiteit, alias, relatie en triage-item met één interne vermelding zijn `intern`; zonder vermelding `intern`; na herclassificatie van de enige interne bron worden ze opnieuw berekend. `test_rechten_pijplijn.py` uitgebreid: `pijplijn` krijgt 403 op herclassificatie.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
@@ -594,16 +595,16 @@ Langflow heeft geen internet (ADR 0022). Elke component die een externe bron oph
 
 | Fase | Taken | Waarvan voorwaardelijk | Waarvan verwijdertaken | Werkplek (GPU) |
 | --- | --- | --- | --- | --- |
-| 2 | 32 | 3 (F2-25, F2-27, F2-32) | 4 (F2-02, F2-09, F2-22, F2-23) | F2-11, F2-17 (deels), F2-24, F2-25, F2-31, F2-32 |
+| 2 | 32 | 2 (F2-25, F2-32) | 4 (F2-02, F2-09, F2-22, F2-23) | F2-11, F2-17 (deels), F2-24, F2-25, F2-31, F2-32 |
 | 3 | 15 | 0 | 1 (F3-08, met bevestiging) | F3-01, F3-02 (deels), F3-13 |
 | 4 | 11 (F4-10 en F4-11 vervallen, B3) | 0 | 0 | F4-03 |
 | 5 | 7 | 0 | 0 | — |
 
-De afhankelijkheden zijn met een script gecontroleerd (30-10): elke genoemde taak bestaat en er zijn geen kringen. Voorwaardelijke afhankelijkheden (F2-27 vóór F2-03, F2-32 vóór F2-19) zijn als afhankelijkheid meegeteld.
+De afhankelijkheden zijn met een script gecontroleerd (30-10): elke genoemde taak bestaat en er zijn geen kringen. Voorwaardelijke afhankelijkheden (F2-32 vóór F2-19) zijn als afhankelijkheid meegeteld.
 
 Kritiek pad, met de taken die het meeste werk achter zich laten wachten:
 
-- **Fase 2:** F2-26 → F2-27 → F2-03 → F2-04 → F2-06 → F2-13 → F2-14 → F2-16 → F2-17 → F2-18 → F2-19 → F2-22 (en parallel F2-31) → F2-24 → F2-23. F2-13 hangt af van F2-06 (vergrendeling); F2-22 hangt af van F2-29 (schrijfroutes), dat na F2-14 komt. Slaagt P10 niet, dan vervalt F2-27 op dit pad en begint het bij F2-26 → F2-03. Een tweede keten loopt parallel en sluit aan bij F2-16 en F2-24: F2-01 → F2-10 → F2-11, F2-12 en F2-28. Even lang als het stuk F2-04 → F2-06 → F2-13 → F2-14 → F2-16 is de keten F2-04 → F2-07 → F2-08 → F2-15 → F2-16; F2-07 moet ook klaar zijn vóór F2-11 en F2-12. Is F2-32 nodig, dan komt die tussen F2-17 en F2-19.
+- **Fase 2:** F2-26 → F2-03 → F2-04 → F2-06 → F2-13 → F2-14 → F2-16 → F2-17 → F2-18 → F2-19 → F2-22 (en parallel F2-31) → F2-24 → F2-23. F2-13 hangt af van F2-06 (vergrendeling); F2-22 hangt af van F2-29 (schrijfroutes), dat na F2-14 komt. P10 is niet geslaagd (30-10): F2-27 valt van dit pad en komt na F2-24; het pad begint bij F2-26 → F2-03. Een tweede keten loopt parallel en sluit aan bij F2-16 en F2-24: F2-01 → F2-10 → F2-11, F2-12 en F2-28. Even lang als het stuk F2-04 → F2-06 → F2-13 → F2-14 → F2-16 is de keten F2-04 → F2-07 → F2-08 → F2-15 → F2-16; F2-07 moet ook klaar zijn vóór F2-11 en F2-12. Is F2-32 nodig, dan komt die tussen F2-17 en F2-19.
 - **Fase 3:** F3-03 → F3-02 → F3-13 → F3-04 → F3-12, met de referentieset F3-02 als lange pool: die hangt af van de steekproeven door Geert. F3-01 loopt parallel (F3-03 → F3-01 → F3-13). F3-02 kan starten zodra F2-17 en F3-03 klaar zijn.
 - **Fase 4:** F4-01 en F4-13 → F4-02 → F4-12. F4-07 wacht op een ADR, F4-06 op het besluit B24.
 - **Fase 5:** de besluiten B12 en B20 → F5-01 → F5-07 → F5-03 → F5-06.
@@ -644,7 +645,7 @@ Dit is een schets voor `docker-compose.signaalsysteem.yml`, nog geen echt bestan
 
 | Dienst | Image of build | Netwerken | Poort op de host | GPU | Fase |
 | --- | --- | --- | --- | --- | --- |
-| `surrealdb` | `surrealdb/surrealdb:v3.3.5@sha256:<digest>` als F2-26 tot v3 leidt, anders `v2.7.0` (B3, ADR 0021) | opslag | — | nee | 2 |
+| `surrealdb` | `surrealdb/surrealdb:v2.7.0@sha256:<digest>` (B3, ADR 0021) | opslag | — | nee | 2 |
 | `open-notebook` | build `Dockerfile` (basis-tags vast) | opslag, verwerking, werkbak-intern; ophalen-intern (4), gateway-intern (5) | — | nee | 2 |
 | `werkbak-toegang` | omgekeerde proxy, vaste tag (keuze bouwtaak) | werkbak-intern, toegang | `127.0.0.1:<werkbak>` | nee | 2 |
 | `langflow` | build `services/langflow` op `langflowai/langflow:1.13.0@sha256:<volledige digest>` | verwerking, editor-intern; ophalen-intern (4), gateway-intern (5) | — | nee | 2 |
@@ -713,7 +714,7 @@ volumes:
 
 services:
   surrealdb:
-    image: surrealdb/surrealdb:<v3.3.5@sha256:… of v2.7.0, volgens F2-26>
+    image: surrealdb/surrealdb:v2.7.0@sha256:<digest>
     networks: [opslag]
     secrets: [surreal_gebruiker, surreal_wachtwoord]
     volumes: [signaal_surreal_data:/data]
@@ -1063,14 +1064,14 @@ Vastgelegd, niet opgelost.
 | --- | --- | --- | --- |
 | B1 | ADR 0009, Docker-toegang optie 2 met configuratie B: **besloten** (Geert, 30-10), met de restrisico's uit R9. Geert werkt de driver voorlopig niet bij (30-10); de CUDA-omweg blijft staan en F2-25 is voorwaardelijk (R3). | — | — |
 | B2 | Plaats van de bronkaart: **besloten** (Geert, 30-10). Tabel in SurrealDB, beheerd met de migraties van de fork, alleen via de API van de fork (sleutel en classificatiefilter); niet als YAML in Git, omdat de bronkaart vaak verandert door watchfolder-besluiten en bulkbatches. ADR 0020. | — | — (F2-13, F2-14, F4-01 aangepast) |
-| B3 | Database: **besloten** (Geert, 30-10). Start met een lege database, zonder migratie van bestaande gegevens; het bestaande volume `./surreal_data` blijft onaangeroerd als archief; de nieuwe omgeving krijgt een eigen volume `signaal_surreal_data`. De versie hangt af van P10 en ADR 0021 (voorgesteld): `v3.3.5` als P10 slaagt en Geert daartoe besluit, anders `v2.7.0` (als in P4) met een aparte overstaptaak. Referentiegegevens komen uit een laadscript (F2-28). Gevolgen in ADR 0001 en 0003; F2-01, F2-03, F2-04, F2-09 en F2-10 vereenvoudigd; F4-10 en F4-11 vervallen. | — | F2-10 (versie, via F2-26) |
+| B3 | Database: **besloten** (Geert, 30-10). Start met een lege database, zonder migratie van bestaande gegevens; het bestaande volume `./surreal_data` blijft onaangeroerd als archief; de nieuwe omgeving krijgt een eigen volume `signaal_surreal_data`. Versie `v2.7.0` (ADR 0021, besloten na P10, 30-10); de overstap naar v3 is F2-27, na F2-24. Referentiegegevens komen uit een laadscript (F2-28). Gevolgen in ADR 0001 en 0003; F2-01, F2-03, F2-04, F2-09 en F2-10 vereenvoudigd; F4-10 en F4-11 vervallen. | — | F2-10 (versie, via F2-26) |
 | B4 | Werkmodel: **besloten** (Geert, 30-10) volgens voorstel: Qwen3.5-9B Q4_K_M, context 8 192 (P1, P3). | — | — (F2-07, F2-11) |
 | B5 | Contract voor `wacht_op_review` en de richting van de innamewachtrij (§5.4): **besloten** (Geert, 30-10) volgens voorstel. | — | — (F2-15, F2-16, F3-07) |
 | B6 | Vervangen van `docker-compose.yml` aan het eind van fase 2: **besloten** (Geert, 30-10) volgens voorstel, na een geslaagde F2-24; volumes blijven. | — | — (F2-23) |
 | B7 | Plaats van de Langflow-code en de configuratie: **besloten** (Geert, 30-10) volgens voorstel: `services/langflow/` en `config/`. | — | — (F2-12) |
 | B8 | Obsidian: **besloten** (Geert, 30-10), gecorrigeerd op 30-10: de vault is `D:\# Vault`, niet `D:\# Obsidian`. De export volgt de vaultregels van `D:\# Vault`; alleen in bestaande notities onder `20 Atlas/28 Entities/`, programma's in `28.06 Programma's`; schrijven alleen in het gegenereerde blok, met classificatie, id en herkomst in het blok. Nieuwe notities via de Obsidian-CLI (B16). Het schrijven naar de echte vault is een latere fase (F5-05); tot dan schrijft niets in `D:\# Vault` en gebruiken tests een tijdelijke testvault. FO 10 en ADR 0018 bijgewerkt. | — | — (F2-21, F5-05) |
 | B16 | ADR 0018, nieuwe vaultnotities: **besloten** (Geert, 30-10), optie c: na review via de Obsidian-CLI op de host, met de OSK-skills en -sjablonen. | — | — (F2-21, F5-05) |
-| B18 | ADR 0021, grens K5 van P10: **besloten** (Geert, 30-10) volgens voorstel; na P10 het besluit v3.3.5 of v2.7.0 volgens de beslisregel. | — | — (F2-26 (grens), F2-27, F2-03 en F2-10 (besluit)) |
+| B18 | ADR 0021, grens K5 van P10: **besloten** (Geert, 30-10) volgens voorstel; na P10 het besluit v3.3.5 of v2.7.0 volgens de beslisregel. | — | — (P10 niet geslaagd; `v2.7.0`, ADR 0021) |
 | B19 | Het extra recht `ophalen` (ADR 0002 B, 0022 B): **besloten** (Geert, 30-10) volgens voorstel; het recht komt in de migratie van F2-01. | — | — (F2-01) |
 | B20 | Gateway strenger dan gevraagd (ADR 0022 C, F): **besloten** (Geert, 30-10) voor fase 2 tot en met 4; voor fase 5 besluiten samen met B12 (C8). | — | — (F2-12; F5-03, F5-07) |
 | B21 | `DOCLING_SERVE_MAX_SYNC_WAIT`: **besloten** (Geert, 30-10), 3 600 s. | — | — (F2-11, F2-17) |

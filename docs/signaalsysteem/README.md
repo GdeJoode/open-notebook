@@ -37,7 +37,7 @@ De agentdefinities staan in `.claude/agents/` (`signaal-planner`, `signaal-ontwe
 | [0018](adr/0018-obsidian-export-als-langflow-flow.md) | Obsidian-export als Langflow-flow met een gegenereerd blok | besloten |
 | [0019](adr/0019-classificatie-per-innameroute.md) | Classificatie en pipelinestart per innameroute; externe verwerking voor extern | besloten |
 | [0020](adr/0020-bronkaart-als-tabel-in-de-fork.md) | De bronkaart als tabel in de fork, alleen via de API | besloten |
-| [0021](adr/0021-surrealdb-v3.md) | SurrealDB v3 | voorgesteld (na P10) |
+| [0021](adr/0021-surrealdb-v3.md) | SurrealDB v3 | besloten: `v2.7.0`, overstap later (na P10) |
 | [0022](adr/0022-afscherming-van-langflow.md) | Afscherming van Langflow | besloten |
 
 `adr/0000-sjabloon.md` is het sjabloon.

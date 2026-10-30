@@ -1,6 +1,6 @@
 # ADR 0021: SurrealDB v3
 
-- **Status:** voorgesteld
+- **Status:** besloten: `v2.7.0` voor nu, overstap naar v3 later (Geert, 30-10, na P10)
 - **Datum:** 2026-10-30
 - **Raakt FO-paragraaf:** 8 (datamodel), 12.1 (`surrealdb`, vaste imageversies), 14 (database van de SPOT)
 - **Wijzigt bij besluit:** plan van aanpak §8, besluitpunt B3 (SurrealDB vast op `v2.7.0`)
@@ -71,6 +71,18 @@ Optie 3.
 - **Referentiegegevens** (akkoord Geert, 30-10): bij een lege database ontbreken gegevens die niet uit een migratie of een laadscript komen, zoals ontologieën en woordenlijsten. De bouwer inventariseert die in fase 2 en maakt voor elk een laadscript (F3-03 doet dat voor Iv3 en het Basiswettenbestand (BWB), ADR 0013). Dat geldt voor v2 en v3.
 
 Geert beslist, na P10.
+
+## Besluit
+
+`v2.7.0` blijft (Geert, 30-10). P10 (runmap `p10/20261030T205153`, exitcode 1) haalt de beslisregel niet:
+
+- K1 geslaagd op v2.7.0, na correctie van een bestaande parsefout in `migrations/5_down.surrealql` (`REMOVE TABLE IF EXISTS transformation SCHEMAFULL;`, ook op v2 fout). Geert accepteert die correctie in de nulmeting; het herstel in de repository hoort bij F2-03.
+- K2 tot en met K5 mislukt: na 126 mechanische vervangingen falen op v3.3.5 nog 41 migratiebestanden (grens 10). Vooral `FLEXIBLE TYPE x` naar `TYPE x FLEXIBLE` (25 bestanden), `FLEXIBLE` alleen bij `object` (16 bestanden met `FLEXIBLE TYPE array`) en fouten bij `REMOVE`, `UPDATE` of `DELETE` op iets dat niet bestaat (17 bestanden). Geen tabel vraagt herontwerp. De SDK `1.0.6` maakt verbinding met v3.3.5.
+- K6: v3 weigert een onbekend veld op een SCHEMAFULL-tabel, v2.7.0 laat het stil weg.
+
+**Restrisico.** GHSA-vx2p-7hhm-wv62 en GHSA-w5v9-jc5f-5rmc blijven open. Ze vragen meer dan één namespace of database, of aanroepen zonder rootbereik met de headers; het signaalsysteem gebruikt één namespace en database, en alleen `open-notebook` bereikt SurrealDB, op het netwerk `opslag` zonder poort en zonder internet. GHSA-pm86-cc75-q463 heeft nog geen bevestigde versiereeks.
+
+**Overstap later.** F2-27 wordt de aparte overstaptaak na F2-24, met de lijst uit P10 (`p10_patronen.csv`). Daarna draait P10 opnieuw; pas dan wordt de testset zelf op v3 gemeten.
 
 ## Gevolgen
 
