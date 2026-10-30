@@ -1,0 +1,22 @@
+-- ============================================================================
+-- Migratie 88: rechten van sleutels voor het signaalsysteem (F2-01, ADR 0002 A/B).
+--
+-- `agent_keys.permission` krijgt de vijf rechten `lezen_extern`, `lezen_intern`,
+-- `pijplijn`, `ophalen` en `beheerder`. De oude waarden `read`/`write`/`admin`
+-- zeggen niets over classificatie en worden geweigerd.
+--
+-- `person` is de naam van de persoon achter een sleutel. Verplicht (niet leeg)
+-- bij `beheerder` (ADR 0001: een herclassificatie draagt een persoon). De
+-- controle staat op `permission`, met `$this.person`: onder v2.7.0 werkt een
+-- ASSERT op een `option<>`-veld niet als het veld ontbreekt.
+--
+-- Lege database (B3): er zijn geen bestaande sleutels om in te trekken.
+-- Idempotent via OVERWRITE.
+-- ============================================================================
+
+DEFINE FIELD OVERWRITE person ON agent_keys TYPE option<string>;
+DEFINE FIELD OVERWRITE permission ON agent_keys TYPE string
+    ASSERT $value IN ["lezen_extern", "lezen_intern", "pijplijn", "ophalen", "beheerder"]
+        AND ($value != "beheerder" OR string::len(string::trim($this.person ?? "")) > 0);
+
+RETURN NONE;

@@ -1,0 +1,18 @@
+-- ============================================================================
+-- Migratie 88 terug: de oude rechten `read`/`write`/`admin`.
+--
+-- Eerst worden alle sleutels met een recht dat het oude schema niet kent
+-- ingetrokken (`revoked = true`), zodat geen sleutel na het terugdraaien een
+-- onbekend recht draagt en toch geldig is. Dat moet vóór het terugzetten van de
+-- ASSERT: daarna zou elke schrijfactie op zo'n sleutel falen. Daarna vervalt
+-- `person`. Idempotent: OVERWRITE, IF EXISTS en `revoked = false` in de
+-- WHERE (een tweede run raakt geen al ingetrokken sleutel).
+-- ============================================================================
+
+UPDATE agent_keys SET revoked = true
+    WHERE permission NOT IN ["read", "write", "admin"] AND revoked = false;
+REMOVE FIELD IF EXISTS person ON agent_keys;
+DEFINE FIELD OVERWRITE permission ON agent_keys TYPE string
+    ASSERT $value IN ["read", "write", "admin"];
+
+RETURN NONE;
