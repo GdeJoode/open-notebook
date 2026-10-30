@@ -1,6 +1,6 @@
 # Functioneel ontwerp signaalsysteem
 
-Stand: 29 oktober 2026 · Geert de Joode
+Stand: 30 oktober 2026 · Geert de Joode
 
 > Dit bestand is de export van het functioneel ontwerp (FO). Het FO is leidend voor het werk in deze map. Wijzigingen in het ontwerp lopen via een ontwerpbesluit in `adr/` en worden daarna in dit bestand verwerkt.
 
@@ -33,7 +33,7 @@ Acht principes sturen alle ontwerpkeuzes in dit document.
 
 1. **Modulair.** Elke stap is een losse bouwsteen met vaste invoer en uitvoer. Een bouwsteen is te vervangen zonder de rest van de keten aan te passen.
 2. **Declaratief.** Een pipeline is een definitiebestand onder versiebeheer. De grafische editor en Claude Code-agents bewerken hetzelfde bestand.
-3. **Modelagnostisch.** Elke modelaanroep loopt via één modelpoort. Per stap is het model een instelling: lokaal via llama-swap, via een cloud-API zoals Claude of via de Claude Command Line Interface (CLI) in niet-interactieve modus (claude -p). Elke taak die de GPU gebruikt, loopt via llama-swap (paragraaf 12).
+3. **Modelagnostisch.** Elke modelaanroep loopt via één modelpoort. Per stap is het model een instelling: lokaal via llama-swap, via een cloud-API zoals Claude of via de Claude Command Line Interface (CLI) in niet-interactieve modus (claude -p). Elke taak die de grafische kaart (GPU) gebruikt, loopt via llama-swap (paragraaf 12).
 4. **Intern blijft lokaal.** Classificatie gaat vóór elke modelaanroep. Een intern fragment wordt alleen door lokale modellen verwerkt en komt nooit in een externe uitvraag.
 5. **Herkomst altijd.** Elk fragment verwijst naar bronversie, positie, verwerkingsrun en model. Door modellen gegenereerde tekst is gemarkeerd als afgeleid en keert niet terug als bronmateriaal; anders versterken modelteksten zichzelf in het corpus.
 6. **Herhaalbaar.** Dezelfde bronversie met dezelfde pipelineversie geeft hetzelfde resultaat. Herverwerking levert een nieuwe versie op en overschrijft niets.
@@ -60,6 +60,8 @@ Elke bron doorloopt dezelfde tien stappen; alleen de extractie verschilt per bro
 
 Stap 4 splitst per brontype en komt bij stap 5 weer samen. Twijfelachtige samenvoegingen van entiteiten wachten in de reviewwachtrij op een besluit.
 
+De poortwachter (stap 3) leest de inhoud al vóór de extractie van stap 4. Hij werkt daarom op tekst die lokaal is gemaakt: de tekstlaag van een PDF via PyMuPDF, of anders de lokale docling-serve. Pas daarna mag een externe verwerkingsdienst een extern document zien (paragraaf 6; ADR 0019).
+
 | Stap | Functie | Uitvoer |
 | --- | --- | --- |
 | 1. Inname | bron ontvangen of ophalen | ruwe bron |
@@ -83,10 +85,10 @@ De bronkaart bepaalt per bron wat het systeem ophaalt, hoe vaak, langs welke rou
 | --- | --- | --- | --- |
 | PDF (handmatig) | uploadvenster of inboxmap | direct | Docling |
 | Lokale map | mapbewaker op een opgegeven pad | bij nieuw of gewijzigd bestand | volgens bestandstype |
-| Website | pagina of sitemap ophalen | volgens schema | HTML naar tekst, wijzigingsdetectie op inhoud |
+| Website | pagina of sitemap ophalen | volgens schema | HTML (HyperText Markup Language) naar tekst, wijzigingsdetectie op inhoud |
 | API, bijvoorbeeld raadsmoties | connector per API | volgens schema | velden naar tekst en metadata, bijlagen als document |
 | Video | bestand, link of YouTube-kanaal | direct of volgens schema | transcript plus slides uit beeld |
-| Podcast | RSS-feed (ook via Spotify-link) of bestand | volgens schema | transcript met sprekerherkenning |
+| Podcast | RSS-feed (Really Simple Syndication; ook via Spotify-link) of bestand | volgens schema | transcript met sprekerherkenning |
 | MCP-bron | MCP-client naar een externe server | volgens schema of op verzoek | resultaat als document |
 
 **Planning**
@@ -151,7 +153,7 @@ Een markering intern op de bronkaart gaat altijd voor. Ook bronnen met markering
 
 - Regels eerst: bronkaart, map en bestandskenmerken beslissen de meeste gevallen.
 - Een lokaal keuzemodel beoordeelt alleen wat de regels openlaten. Het geeft per mogelijke route een gekalibreerde kans; onder een drempel gaat de bron naar review.
-- De poortwachter draait altijd lokaal, omdat hij inhoud ziet voordat de classificatie bekend is.
+- De poortwachter draait altijd lokaal, omdat hij inhoud ziet voordat de classificatie bekend is. Hij leest lokaal geëxtraheerde tekst (de tekstlaag via PyMuPDF of de lokale docling-serve), vóór elke externe verwerking. Is geen lokale tekst te maken, dan blijft de bron intern (ADR 0019).
 - De poortwachter kan een bron niet van intern naar extern zetten; dat kan alleen de beheerder.
 
 **Keuzemodel**
@@ -211,7 +213,7 @@ Lijnen tonen relaties met hun kardinaliteit; n:m betekent dat beide kanten meerd
 **Herkomstregistratie**
 
 - Elk record verwijst naar de run die het maakte; elke run naar pipelineversie en modellen.
-- De registratie volgt de begrippen van PROV-O (entiteit, activiteit, actor), zodat een export naar het Resource Description Framework (RDF) mogelijk blijft.
+- De registratie volgt de begrippen van PROV-O (PROV Ontology: entiteit, activiteit, actor), zodat een export naar het Resource Description Framework (RDF) mogelijk blijft.
 
 ## 9. Modelbeleid en beveiliging
 
@@ -223,7 +225,7 @@ Per model legt het register vast: naam en versie, aanroepwijze (llama-swap, API 
 
 **Claude-CLI als model**
 
-De modelpoort kan een stap ook uitvoeren met `claude -p`: de prompt gaat via stdin naar de CLI en het antwoord komt terug als JSON (`--output-format json`). Voor het beleid is dit een cloudmodel als elk ander.
+De modelpoort kan een stap ook uitvoeren met `claude -p`: de prompt gaat via stdin naar de CLI en het antwoord komt terug als JavaScript Object Notation (JSON) (`--output-format json`). Voor het beleid is dit een cloudmodel als elk ander.
 
 - Alleen voor fragmenten met label extern; dezelfde beleidsregels als voor de cloud-API.
 - De CLI draait in een lege, tijdelijke werkmap, zonder tools of met een vaste lijst toegestane tools. Zo kan hij geen lokale bestanden lezen, ook geen interne.
@@ -244,7 +246,7 @@ De modelpoort kan een stap ook uitvoeren met `claude -p`: de prompt gaat via std
 
 **Toegang**
 
-- De toegangsbeveiliging van Open Notebook blijft de basis. Elke gebruiker en elke agent krijgt een eigen sleutel met rechten: lezen extern, lezen intern of beheren.
+- De toegangsbeveiliging van Open Notebook blijft de basis. Elke gebruiker en elke agent krijgt een eigen sleutel met rechten: lezen extern, lezen intern, pijplijn (Langflow), ophalen (de ophaalcontainer) of beheerder (een persoon). Alleen een sleutel met het recht beheerder kan herclassificeren of een bron op extern zetten; het logboek legt de persoon vast (ADR 0001, 0002).
 - API-sleutels van cloudaanbieders worden versleuteld opgeslagen.
 - Toegang op afstand loopt alleen via het eigen privénetwerk (Tailscale).
 
@@ -273,18 +275,19 @@ De MCP-server is het bestaande open-notebook-mcp. Het biedt tools voor notebooks
 
 **Export naar Obsidian**
 
-- **Vaultregels.** De vault staat op `D:\# Obsidian`. Haar regels staan in `D:\# Obsidian\CLAUDE.md`; dat bestand is de bron voor mappen, notitietypen en frontmattervelden. De export neemt geen paden over die daar niet staan en wijzigt dat bestand niet.
-- **Plaats.** Volgens die regels schrijft de export alleen in het domein werk: onder `1000 Atlas (resources)/Werk/`, met `domain: work`. Nooit in `0500 Bronnen/`. De export verwijdert, verplaatst en hernoemt geen bestanden.
-- **Notitietypen.** Persoon: `type: person`. Organisatie en gebied: `type: entity` met `entity_kind` uit de lijst in de vaultregels. Programma: `type: program`. Is het `entity_kind` niet te bepalen, dan gaat het item naar review.
-- **Submap.** De export zoekt de submap op in de vault, alleen lezend: een nieuwe notitie komt in de map waar de bestaande notities met hetzelfde `type` en `entity_kind` staan. Staan die in meer dan één map, of nergens, dan maakt de export geen bestand en gaat het item naar review.
-- **Programma's** zijn eigen notities, gekoppeld aan het codeboek. Een bestaande programmanotitie krijgt het gegenereerde blok. Een nieuw programma gaat naar review, omdat de vaultregels voor een programma `status` en `lead_organisation` vragen, die niet uit fragmenten volgen. Na goedkeuring komt de notitie in de map van de bestaande programmanotities, volgens de regel hierboven.
+- **Vaultregels.** De vault staat op `D:\# Vault`. Haar regels staan in `D:\# Vault\CLAUDE.md` en `AGENTS.md`, met de notitietypen van de Obsidian Starter Kit (OSK) en de sjablonen in de vault. De export neemt alleen map- en veldnamen over en wijzigt die bestanden niet (ADR 0018).
+- **Plaats.** De export schrijft alleen in bestaande notities onder `20 Atlas/28 Entities/`: personen in `28.01 People`, organisaties in `28.03 Organisaties`, gebieden in `28.05 Gebieden` en programma's in `28.06 Programma's`. Het codeboek staat in `28.04 Thema's`. De export verwijdert, verplaatst en hernoemt geen bestanden, en schrijft niet in de dagnotitie of een onderhoudslog.
+- **Soort.** De export herkent de soort van een notitie aan haar tag: `type/entity/organisation`, `type/entity/region`, `type/entity/government_programme`, of `type/person` en `type/contact`.
+- **Programma's** zijn eigen notities in `28.06 Programma's`, gekoppeld aan het codeboek. Een bestaande programmanotitie krijgt het gegenereerde blok.
 - **Personen.** Persoonsnamen uit bronnen worden alleen gekoppeld aan bestaande persoonsnotities; nieuwe personen gaan naar review.
-- **Gegenereerd blok.** De export schrijft alleen in het blok tussen `<!-- signaalsysteem:begin -->` en `<!-- signaalsysteem:end -->`. Het blok bevat het id van de entiteit, herkomst (bron, versie, fragment-id's), classificatie en codeboekkoppelingen. Frontmatter en tekst buiten het blok van een bestaande notitie blijven ongemoeid. Alleen een nieuwe notitie krijgt eenmalig frontmatter met de verplichte velden uit de vaultregels (`type`, `maturity: seedling`, `domain: work`, `topics`, bij een entiteit `entity_kind`) en `aliases`.
+- **Nieuwe notities.** Volgens de vaultregels worden notities met de OSK-sjablonen gemaakt. Voorstel (ADR 0018, Geert beslist): elke nieuwe entiteit gaat naar review; de beheerder maakt de notitie met het sjabloon, en de volgende run vult het blok.
+- **Gegenereerd blok.** De export schrijft alleen in het blok tussen `<!-- signaalsysteem:begin -->` en `<!-- signaalsysteem:end -->`. Het blok bevat het id van de entiteit, herkomst (bron, versie, fragment-id's), classificatie en codeboekkoppelingen; die staan in het blok en niet in de frontmatter (Geert, 30-10). Frontmatter en tekst buiten het blok blijven ongemoeid.
 - **Idempotent.** Een bestaande notitie wordt gevonden op het id in het blok, en anders op een unieke overeenkomst van titel of `aliases` met de canonieke naam of een alias. Ze wordt bijgewerkt en niet gedupliceerd. Meer dan één overeenkomst gaat naar review.
-- **Wikilinks** gebruiken de canonieke naam; aliassen staan in `aliases`.
-- **Logboek.** De export schrijft niet in `log.md` van de vault; zijn logboek is de run.
+- **Wikilinks** gebruiken de canonieke naam en verwijzen alleen naar notities die bestaan; aliassen staan in `aliases`.
+- **Logboek.** Het logboek van de export is de run.
+- **Geen terugvoer.** Een bronkaartregel mag niet naar de vault of de exportmap wijzen, en het importeindpunt weigert inhoud met het gegenereerde blok (ADR 0004).
 - De export is een Langflow-flow met een eigen sjabloon. De vault-beheer-agent toetst de export aan de vaultregels.
-- **Latere fase.** Het schrijven naar de echte vault is een latere fase, na een besluit van Geert. Tot dan schrijft niets in `D:\# Obsidian` en koppelt geen container die map. Bouw en tests gebruiken een tijdelijke testvault met alleen openbare gegevens. De repository bevat geen inhoud uit de vault, alleen map- en veldnamen.
+- **Latere fase.** Het schrijven naar de echte vault is een latere fase, na een besluit van Geert. Tot dan schrijft niets in `D:\# Vault` en koppelt geen container die map. Daarna koppelt alleen `langflow` de map `20 Atlas/28 Entities/`. Bouw en tests gebruiken een tijdelijke testvault met alleen openbare gegevens. De repository bevat geen inhoud uit de vault, alleen map- en veldnamen.
 
 ## 11. Beheeromgeving: visuele workflow-editor
 
@@ -322,7 +325,8 @@ Het voorbeeld haalt wekelijks jaarstukken op en houdt alleen de paragraaf weerst
 
 De editor wordt Langflow, dat in Python is gebouwd: bouwstenen zijn eigen Python-componenten. De afspraken hieronder houden de pipelinedefinitie leidend en de editor vervangbaar.
 
-- Flows worden als JSON geëxporteerd en vanuit Git geladen (`LANGFLOW_LOAD_FLOWS_PATH`). Die export is de pipelinedefinitie; elke run legt vast welke versie hij gebruikte.
+- Flows worden als JSON geëxporteerd en vanuit Git geladen: een opstartscript laadt ze via de API van Langflow, met aanmelden aan (ADR 0017). Die export is de pipelinedefinitie; elke run legt vast welke versie hij gebruikte. Een run met een flow die niet in Git staat, mislukt bij interne invoer (ADR 0022).
+- Langflow heeft geen uitgaand netwerk, geen eigen code in de editor, alleen componenten van een vaste lijst en geen tracing naar buiten (ADR 0022).
 - Eigen bouwstenen staan als Python-componenten in de repository (`LANGFLOW_COMPONENTS_PATH`). Zware stappen zoals docling-serve en WhisperX zijn aparte containers die een component aanroept; ze draaien niet in het Langflow-proces.
 - Modelcomponenten wijzen naar llama-swap, nooit rechtstreeks naar een modelserver (paragraaf 12.2).
 - Langflow kan flows als MCP-server aanbieden. Dat staat uit: alle ontsluiting loopt via de eigen MCP-server met het filter op intern.
@@ -359,23 +363,25 @@ Het systeem draait als één Docker Compose-omgeving. llama-swap laat alle GPU-d
 
 | Container | Rol | GPU | Netwerk |
 | --- | --- | --- | --- |
-| `surrealdb` | database van de SPOT | nee | intern |
+| `surrealdb` | database van de SPOT | nee | intern, alleen `opslag` (met `open-notebook`) |
 | `open-notebook` | API van de fork: importeindpunt, zoeken, classificatiefilter | nee | intern |
 | `open-notebook-mcp` | MCP-server voor Claude, via de API van de fork | nee | intern, bereikbaar op localhost via een kleine omgekeerde proxy (ADR 0002; P8) |
 | interface van de fork | reviewomgeving: de werkbak van Track WB voor de wachtrijen van de beheerder (ADR 0016) | nee | intern, alleen bereikbaar op localhost via een omgekeerde proxy |
-| `langflow` | workflow-editor, flows, planning en export naar Obsidian | nee | intern en uitgaand, voor bronnen |
+| `langflow` | workflow-editor, flows, planning en export naar Obsidian | nee | intern, geen uitgaand netwerk; editor via een omgekeerde proxy (ADR 0022) |
+| `ophalen` (fase 4) | haalt externe bronnen op, alleen voor actieve externe bronkaartregels | nee | intern en uitgaand (ADR 0022) |
+| `cloud-gateway` (fase 5) | cloudaanroepen: controleert per aanroep de classificatie bij de fork, laat alleen het domein van Anthropic door, bewaart de Claude-sleutel | nee | intern en uitgaand (ADR 0022) |
 | `llama-swap` | één eindpunt voor lokale taal- en embeddingmodellen; wisselt en ontlaadt | ja | intern |
 | `kev` | keuzemodel voor poortwachter en labels | ja | intern |
 | `docling-serve` | documentextractie en OCR | ja | intern |
 | `whisperx` | transcriptie en sprekerherkenning | ja | intern |
-| `claude-cli` | aanroepen met claude -p, zonder mappen met brongegevens | nee | uitgaand |
+| `claude-cli` | aanroepen met claude -p, zonder mappen met brongegevens | nee | intern, alleen via `cloud-gateway` (ADR 0022) |
 
 - Eén Compose-bestand onder versiebeheer, met vaste imageversies; zo is een run herhaalbaar.
-- GPU-toegang via de NVIDIA Container Toolkit; onder Windows via Docker Desktop met WSL2.
+- GPU-toegang via de NVIDIA Container Toolkit; onder Windows via Docker Desktop met WSL2 (Windows Subsystem for Linux).
 - Docker kan het videogeheugen niet per container begrenzen: elke GPU-container ziet de hele kaart. De coördinatie ligt daarom bij llama-swap (paragraaf 12.2).
 - Invoermappen worden alleen-lezen gekoppeld; alleen `langflow` mag in de vault schrijven.
 - Alleen de Langflow-editor en de MCP-server zijn bereikbaar, op localhost of via Tailscale. De reviewomgeving is alleen bereikbaar op localhost (ADR 0016).
-- Een container die aan het interne netwerk én aan een gewoon netwerk hangt, heeft internet (P8, 29-10). Een bereikbare dienst zonder internet krijgt daarom een omgekeerde proxy op beide netwerken, en hangt zelf alleen aan het interne netwerk (ADR 0002).
+- Een container die aan het interne netwerk én aan een gewoon netwerk hangt, heeft internet (P8, 29-10). Een bereikbare dienst zonder internet krijgt daarom een eigen omgekeerde proxy, met een eigen intern netwerk waarop alleen die proxy en zijn doeldienst hangen; de dienst zelf hangt alleen aan interne netwerken (ADR 0002).
 - Geheimen (API-sleutels, CLI-login, Hugging Face-token) lopen via Docker secrets, niet via images of het Compose-bestand.
 
 **Volledig lokaal**
@@ -390,8 +396,8 @@ Alle containers draaien op de eigen machine. Na de eerste installatie is voor de
 | Langflow | niets; wel haalt LiteLLM in Langflow uit zichzelf een kostentabel van GitHub (P2, 30-10) | anonieme telemetrie uitzetten met `DO_NOT_TRACK=true`; de kostentabel uit het pakket met `LITELLM_LOCAL_MODEL_COST_MAP=True` (ADR 0017) |
 | Alle images | eenmalig ophalen uit de registry | vaste versies |
 
-- Een apart Docker-netwerk zonder internettoegang (`internal: true`) voor `surrealdb`, `llama-swap`, `docling-serve`, `whisperx` en Kev. Zo kan geen verwerkingscontainer gegevens naar buiten sturen. Onder Docker Desktop beproefd: geen internet en geen bereikbare poort (P8, 29-10; P1, 30-10).
-- Alleen `langflow` (bronnen ophalen) en `claude-cli` krijgen uitgaand internet. Wie het strikter wil, zet het ophalen van bronnen in een eigen container en geeft ook Langflow geen internet.
+- Aparte Docker-netwerken zonder internettoegang (`internal: true`): `opslag` voor alleen `surrealdb` en `open-notebook`, `verwerking` voor de keten (onder meer `open-notebook`, `langflow`, `llama-swap`, `docling-serve`, `whisperx` en Kev), en een eigen netwerk per omgekeerde proxy (ADR 0002). Zo kan geen verwerkingscontainer gegevens naar buiten sturen. Onder Docker Desktop beproefd: geen internet en geen bereikbare poort (P8, 29-10; P1, 30-10).
+- Alleen `ophalen` (fase 4) en `cloud-gateway` (fase 5) krijgen uitgaand internet, elk met een eigen controle bij de fork. Langflow en `claude-cli` krijgen geen internet (ADR 0022).
 - `HF_HUB_OFFLINE=1` na het downloaden voorkomt dat containers alsnog contact zoeken met Hugging Face.
 
 Bronnen: [Docling offline en externe diensten](https://docling-project.github.io/docling/usage/advanced_options) · [WhisperX en Hugging Face-token](https://pypi.org/project/transcribe-audio/0.1.6/) · [Langflow-telemetrie](https://docs.langflow.org/contributing-telemetry) · [llama-swap](https://github.com/mostlygeek/llama-swap)
@@ -408,12 +414,12 @@ De groepsregels bepalen welke modellen samen mogen draaien. Na een periode zonde
 
 **Werking**
 
-- Alle lokale modellen draaien achter llama-swap: taal- en embeddingmodellen via llama-server (GGUF), Kev via zijn eigen server.
+- Alle lokale modellen draaien achter llama-swap: taal- en embeddingmodellen via llama-server (GGUF), Kev via zijn eigen server. Uitzondering: de reranker draait voorlopig als dienst op de processor (CPU), buiten llama-swap, en de fork roept hem rechtstreeks aan via de modelpoort. Dat wijkt af van deze regel en van "één toegangspunt" hieronder; het gebruikt geen GPU en blijft lokaal zonder internet (ADR 0015).
 - Groepen leggen vast wat samen mag. Voorstel: één exclusieve groep voor de zware diensten, die één tegelijk draaien, en een vaste groep voor het kleine embeddingmodel.
-- llama-swap kan containers starten en stoppen. docling-serve, WhisperX en Kev passen zo onder llama-swap: hij start en stopt vooraf aangemaakte containers via een socket-proxy die alleen starten en stoppen toelaat (P1, P7, 30-10; ADR 0009). llama-swap heeft daarvoor toegang tot Docker nodig; dat vraagt een bewuste afweging, omdat die toegang ruime rechten geeft.
+- llama-swap kan containers starten en stoppen. docling-serve, WhisperX en Kev passen zo onder llama-swap: hij start en stopt vooraf aangemaakte containers via een socket-proxy die alleen starten en stoppen toelaat (P1, P7, 30-10; ADR 0009). llama-swap heeft daarvoor toegang tot Docker nodig; dat vraagt een bewuste afweging, omdat die toegang ruime rechten geeft. Na een stop van buitenaf gaf de eerste aanvraag in P7 HTTP 502 (K4) en in P1 direct 200 (K7); de afnemer probeert het bij 502 opnieuw.
 - Lukt dat niet, dan gebruiken de Langflow-componenten voor docling-serve en WhisperX een gedeelde vergrendeling, zodat ze niet tegelijk met een zwaar model draaien.
 - docling-serve en WhisperX stoppen na een bundel taken; dat geeft het CUDA-geheugen volledig vrij. Voor docling-serve is stoppen de enige manier: na een taak houdt hij 2,1 tot 2,5 GB vast (P5, 30-10).
-- De TTL van docling-serve ligt ruim boven de langste pauze tussen twee statusvragen van een taak. llama-swap telt de TTL vanaf de laatste aanvraag, en een gestopte docling-serve verliest zijn lopende taken (P1, 30-10). Een taak die verdwenen is (HTTP 404), wordt opnieuw ingediend.
+- docling-serve wordt aangeroepen via het synchrone eindpunt, met een ruime maximale wachttijd (`DOCLING_SERVE_MAX_SYNC_WAIT`). De aanvraag staat dan open zolang de conversie loopt, zodat llama-swap ziet dat docling-serve bezig is. llama-swap telt de TTL vanaf de laatste aanvraag, en een gestopte docling-serve verliest zijn lopende taken (P1, 30-10). Of llama-swap een dienst met een openstaande aanvraag laat staan, toetst de bouwtaak; anders volgen bundeling en een vergrendeling (ADR 0009). Een verloren taak wordt hooguit drie keer opnieuw ingediend; daarna mislukt de stap.
 - Taken voor hetzelfde model worden gebundeld, zodat een model niet steeds opnieuw wordt geladen.
 - Een geheugenfout breekt de taak af; Langflow zet de taak opnieuw in de rij en legt de fout vast in het runlogboek.
 - Cloudaanroepen (Claude-API en Claude-CLI) gebruiken geen GPU en lopen buiten llama-swap.
@@ -430,7 +436,7 @@ De groepsregels bepalen welke modellen samen mogen draaien. Na een periode zonde
 | WhisperX | zwaar, exclusief | idem | 10,2–10,3 GB |
 | Embeddingmodel | licht, vast geladen | blijft geladen; telt mee in het budget | 0,6 GB (mxbai-embed-large Q8_0, ADR 0008) |
 
-De indeling volgt uit de metingen in fase 1 (P1, P3, 30-10). Een combinatie past als ze samen ten hoogste het videogeheugen van de kaart min 1 GB gebruikt. Het embeddingmodel past naast elke zware dienst; de krapste combinatie is Kev-4B met het embeddingmodel, 15,2 GB. In de zware groep draaide nooit meer dan één dienst tegelijk, ook niet bij gelijktijdige aanvragen (P1).
+De indeling volgt uit de metingen in fase 1 (P1, P3, 30-10). De pieken in de tabel zijn per dienst gemeten. Een combinatie past als ze samen ten hoogste het videogeheugen van de kaart min 1 GB gebruikt. Gemeten zijn de combinaties van het embeddingmodel met het werkmodel (context 8 192), met Kev-4B en met docling-serve; met het werkmodel bij context 32 768 en met WhisperX is de combinatie berekend uit de losse pieken (7,1 en 10,9 GB) en niet gemeten. Volgens die metingen en berekeningen past het embeddingmodel naast elke zware dienst; de krapste combinatie is Kev-4B met het embeddingmodel, gemeten 15,2 GB. Kev-4B is gemeten met korte vragen; de bouwtaak meet hem opnieuw met fragmenten van realistische lengte en de grootste keuzelijst (ADR 0009). In de zware groep draaide nooit meer dan één dienst tegelijk, ook niet bij gelijktijdige aanvragen (P1).
 
 ## 13. Aansluiting op Open Notebook en hergebruik
 
@@ -477,7 +483,7 @@ De lagen lezen van boven naar beneden, in de volgorde van de gegevensstroom.
 | Workflow-editor en orkestratie | Langflow (MIT), met eigen Python-componenten | een zelfgebouwde editor | een volledige pipeline voor jaarstukken (nog niet beproefd) |
 | Documentextractie | docling-serve: officiële API met asynchrone taken en een Compose-bestand voor NVIDIA-GPU's | eigen docling-worker | vrijgeven van videogeheugen na een taak. Beproefd (P5, 30-10): alleen door de container te stoppen |
 | Transcriptie | WhisperX in een bestaande API-container | eigen whisperx-worker | keuze van de container. Beproefd (P1, 30-10): de AWS-container `whisperx:3.8.6-cu128-amzn2023` haalt alle criteria, ook Nederlands en Engels en offline (ADR 0014) |
-| Modelwissel en GPU-wachtrij | llama-swap: één OpenAI-compatibel eindpunt, groepen, automatisch ontladen na inactiviteit (TTL), wachtrij op volgorde van binnenkomst, start en stop van containers | een zelfgebouwde GPU-beheerder | docling-serve, WhisperX en Kev als containers onder llama-swap. Beproefd (P1, P7, 30-10): werkt via een socket-proxy die alleen starten en stoppen toelaat; na een stop van buitenaf geeft de eerste aanvraag 502 (ADR 0009) |
+| Modelwissel en GPU-wachtrij | llama-swap: één OpenAI-compatibel eindpunt, groepen, automatisch ontladen na inactiviteit (TTL), wachtrij op volgorde van binnenkomst, start en stop van containers | een zelfgebouwde GPU-beheerder | docling-serve, WhisperX en Kev als containers onder llama-swap. Beproefd (P1, P7, 30-10): werkt via een socket-proxy die alleen starten en stoppen toelaat; na een stop van buitenaf gaf de eerste aanvraag in P7 502 (K4) en in P1 direct 200 (K7) (ADR 0009) |
 | Keuzemodel | Kev, met lokale server | eigen classificatielogica in de poortwachter | drempelwaarden op de referentieset (nog niet beproefd; Kev-4B werkt onder llama-swap, P1) |
 | MCP-server | open-notebook-mcp, dat de REST-API van Open Notebook gebruikt | eigen MCP-server (paragraaf 10) | filter op intern in de API. Nulmeting (P4, 30-10): de fork filtert nog niet; dezelfde proef is de acceptatietest na ADR 0001 en 0002 |
 
@@ -490,7 +496,7 @@ De lagen lezen van boven naar beneden, in de volgorde van de gegevensstroom.
 | Taal | Python; componenten zijn Python-klassen | TypeScript; Python via de Code-node |
 | Planning, map en feeds | webhooks en triggers; een schema-trigger met cron sinds versie 1.13.0 (P2, 30-10); map en feeds via eigen componenten | ingebouwde Schedule-, Local File- en RSS Feed-triggers |
 | Versiebeheer | flows als JSON-bestanden uit Git laden | ingebouwde Git-koppeling alleen in de Enterprise-versie |
-| LLM en MCP | componenten voor modellen, agents en MCP | AI-nodes op basis van LangChain voor JavaScript |
+| Taalmodellen (Large Language Models, LLM) en MCP | componenten voor modellen, agents en MCP | AI-nodes op basis van LangChain voor JavaScript |
 
 Besluit: Langflow, passend bij de voorkeur voor een open-source Python-ecosysteem. De ontbrekende triggers zijn klein: de schema-trigger uit Langflow 1.13.0 (P2, 30-10), met APScheduler als terugval, en twee Python-componenten voor map- en feedcontrole met watchdog en feedparser. LangGraph is geen alternatief voor de planning: het framework is gratis (MIT), maar geplande runs horen bij het betaalde serverplatform.
 
@@ -524,7 +530,7 @@ Alle twaalf keuzes zijn besloten.
 | Fragmentstrategie | structuurgebonden of vaste lengte | structuurgebonden | Besloten |
 | Herclassificatie | wie een bron van intern naar extern mag zetten | alleen de beheerder, met logregel | Besloten |
 | Gebruik door collega's | persoonlijk systeem, of voeding voor het informatieplatform van de directie Bestuur, Financiën en Regio (BFR) | eerst persoonlijk; aansluiting op het informatieplatform verkennen | Besloten |
-| Implementatie GPU-beheerder | eigen lichte dienst op NVML, of een bestaande takenwachtrij met een GPU-slot | lichte dienst met één eindpunt; invulling met llama-swap (paragraaf 12.2) | Besloten |
+| Implementatie GPU-beheerder | eigen lichte dienst op NVIDIA Management Library (NVML), of een bestaande takenwachtrij met een GPU-slot | lichte dienst met één eindpunt; invulling met llama-swap (paragraaf 12.2) | Besloten |
 | Inname en Open Notebook | eigen pipeline via een importeindpunt, of de ingebouwde bronverwerking | eigen pipeline is de enige inname; Open Notebook is nog niet in productie, dus er is geen overgang nodig | Besloten |
 | Lokale modelserver | Ollama, of llama-server achter llama-swap | llama-swap met llama-server (GGUF) | Besloten |
 | MCP-server | eigen server, of het bestaande open-notebook-mcp | open-notebook-mcp, met het filter op intern in de API van de fork | Besloten |

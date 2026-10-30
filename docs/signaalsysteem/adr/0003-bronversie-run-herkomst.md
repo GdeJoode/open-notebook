@@ -1,7 +1,7 @@
 # ADR 0003: Bronversie, verwerkingsrun en herkomst; herverwerking zonder overschrijven
 
 - **Status:** besloten
-- **Datum:** 2026-10-29
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (`doc_node`, `source.full_text`, `models` uit `model_call`)
 - **Raakt FO-paragraaf:** 2 (principe 5 en 6), 4 (stap 2 en 9), 5 (planning), 8
 - **Lost op:** verschilanalyse conflict 7, open vraag 5 (de vraag of de run een nieuwe tabel wordt) en open vraag 15
 
@@ -53,7 +53,7 @@ Optie 2, met velden die op PROV-O passen.
   - `status`: `bezig`, `geslaagd`, `mislukt` of `niets_nieuws`;
   - `trigger`: schema, mapcontrole, feed, handmatig of herverwerking;
   - `pipeline_id` en `pipeline_version` (Git-commit en hash van de flow in JSON, JavaScript Object Notation);
-  - `models`: per model naam, versie en aanroepwijze, en bij de Claude-CLI (Command Line Interface) ook CLI-versie en exitcode;
+  - `models`: per model naam, versie en aanroepwijze, en bij de Claude-CLI (Command Line Interface) ook CLI-versie en exitcode. De fork leidt dit veld af uit de regels in `model_call` met dezelfde run (ADR 0007), bij het afsluiten van de run en daarna bij elke nieuwe regel. Een opgave van Langflow in `PATCH` wordt niet overgenomen, maar vergeleken: een model dat Langflow noemt en dat niet in `model_call` staat, of omgekeerd, komt als waarschuwing in het logboek. Zo is het model in de herkomst niet afhankelijk van wat de afnemer meldt (harde eis 2);
   - `log`: per stap tijdstip, status en melding;
   - `error`, `attempts`, `notified_at`.
 
@@ -63,8 +63,10 @@ Optie 2, met velden die op PROV-O passen.
 **Bestaande tabellen uitbreiden**
 
 - `chunk`: `source_version` en `run` (beide verplicht), `extractor` (bijvoorbeeld docling-serve met versie) en `classification`.
+- `doc_node`: `source_version` en `run` (beide verplicht) en `classification` (ADR 0001). De documentstructuur hoort zo bij één bronversie en één run, net als de fragmenten.
+- `source.full_text` vervalt (ADR 0001): de tekst per versie staat in `chunk` en `doc_node`.
 - `source_embedding`: `run` en `embedding_model` (naam en versie).
-- vermeldingen van entiteiten (de PC.3-herkomst in `entity_persistence_service.py`): `run` erbij.
+- vermeldingen van entiteiten (de PC.3-herkomst in `entity_persistence_service.py`): `run` en `classification` erbij. `entity`, `entity_alias`, `relation` en `triage_queue` krijgen een afgeleide `classification` volgens ADR 0001.
 - `job`: `run` (optioneel) erbij. De wachtrij blijft de uitvoerder van stappen in de fork. Wie die stappen start, bepaalt ADR 0011.
 
 **Herverwerking zonder overschrijven**
@@ -77,12 +79,12 @@ Optie 2, met velden die op PROV-O passen.
 
 | PROV-O | Fork |
 | --- | --- |
-| entiteit | `source_version`, `chunk`, `source_embedding`, kennisproduct |
+| entiteit | `source_version`, `chunk`, `doc_node`, `source_embedding`, kennisproduct |
 | activiteit | `processing_run` |
-| actor | model (register, ADR 0007), beheerder (sleutelhouder, ADR 0002) |
-| `wasDerivedFrom` | `chunk.source_version`, `source_version.predecessor` |
-| `wasGeneratedBy` | `chunk.run`, `source_version.created_by_run` |
-| `wasAssociatedWith` | `processing_run.models` |
+| actor | model (register, ADR 0007), beheerder (persoon van de sleutel, ADR 0002) |
+| `wasDerivedFrom` | `chunk.source_version`, `doc_node.source_version`, `source_version.predecessor` |
+| `wasGeneratedBy` | `chunk.run`, `doc_node.run`, `source_version.created_by_run` |
+| `wasAssociatedWith` | `processing_run.models`, afgeleid uit `model_call` |
 
 `provenance_chain` op `entity` en `relation` vervalt zodra de lezers ervan naar de vermeldingen met run zijn omgezet. De bouwtaak inventariseert eerst wie het veld leest.
 
@@ -111,7 +113,8 @@ Optie 2, met velden die op PROV-O passen.
   - de vergrendelingshulp in `packages/surrealdb-service`.
 - **Opslag:** fragmenten en embeddings stapelen zich op bij elke herverwerking. Opschonen van oude runs is een bewuste beheeractie, geen automatisme.
 - **Tests (stopcondities):**
-  - een schemacontrole dat `chunk.source_version` en `chunk.run` verplicht zijn;
+  - een schemacontrole dat `source_version` en `run` verplicht zijn op `chunk` en `doc_node`, en dat `source.full_text` niet meer bestaat;
+  - een test dat `processing_run.models` gelijk is aan de modellen in `model_call` van die run, ook als Langflow een andere lijst meestuurt;
   - een test dat herverwerking het aantal fragmenten van de oude run ongewijzigd laat;
   - een test dat een run zonder nieuwe inhoud een record `niets_nieuws` oplevert;
   - een test dat een wijziging met een verouderde `rev` HTTP 409 geeft;

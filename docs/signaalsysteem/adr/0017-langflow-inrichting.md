@@ -1,7 +1,8 @@
 # ADR 0017: Inrichting van Langflow: flows uit Git, aanmelding, planning en MCP
 
 - **Status:** besloten (Geert, 2026-10-30); onderdeel C beslist door P2 (30-10)
-- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 met P2
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 met P2, en na de review (onderdeel B, netwerk)
+- **Gewijzigd door:** ADR 0022 (afscherming van Langflow)
 - **Raakt FO-paragraaf:** 2 (principe 2), 5 (planning), 11 (Langflow als editor), 12.1, 13.1, 14 (workflow-editor, orchestratie en scheduler)
 - **Lost op:** geen nummer uit de verschilanalyse; keuzes die het FO openlaat en die bij het controleren van de documentatie naar boven kwamen
 
@@ -88,10 +89,11 @@ Geert beslist over A. Over C beslist proef 2.
 ## Besluit
 
 - **A: optie 2** (Geert, 30-10). Automatisch aanmelden uit; een opstartscript laadt de flows uit Git via `POST /api/v1/flows/upload/`, een exportscript haalt ze terug.
-- **B: optie 1** en **D: optie 1**, volgens het voorstel; daarover was geen aparte keuze voorgelegd.
+- **B: optie 1** en **D: optie 1**, volgens het voorstel; daarover was geen aparte keuze voorgelegd. Aangescherpt na de review (30-10, ADR 0022): een run met een flow die niet in Git staat (Git-commit en hash van de flow-JSON wijken af van de laatste commit) mislukt zodra de invoer intern of onbekend is; alleen bij externe invoer blijft het een waarschuwing `niet_vastgelegd` in het runlogboek. De fork controleert dat bij `POST /api/v1/runs` en bij de import.
 - **C: optie 1**, de schema-trigger van Langflow 1.13.0 (P2, 30-10, volgens de beslisregel in proeven.md). De trigger wordt na het laden van een flow via `POST /api/v1/triggers/{id}/enable` aangezet; dat doet het opstartscript uit A. `ENABLE_TRIGGERS` wordt niet gezet. Inhaalbeleid per bronkaartregel: `coalesce` of `skip`. APScheduler in een container `planner` blijft de beproefde terugval (P2, K5) en wordt nu niet gebouwd.
 - **Vaste versie:** `langflowai/langflow:1.13.0` (digest `sha256:ff2716e0…e303f`, proeven.md 1.7), de versie waarmee P2 slaagde.
-- **Uitgaande aanvragen van LiteLLM:** Langflow krijgt `LITELLM_LOCAL_MODEL_COST_MAP=True` (P2, 30-10). De bouwtaak herhaalt de telling van P2 op het netwerk `verwerking` met deze variabele; het criterium is 0 uitgaande pogingen. Blijven er pogingen over, dan blijft de afscherming door het netwerk de maatregel, en komt het ophalen van bronnen in een eigen container zonder dat Langflow internet krijgt (FO 12.1, "wie het strikter wil").
+- **Uitgaande aanvragen van LiteLLM:** Langflow krijgt `LITELLM_LOCAL_MODEL_COST_MAP=True` (P2, 30-10). De bouwtaak herhaalt de telling van P2 op het netwerk `verwerking` met deze variabele; het criterium is 0 uitgaande pogingen. Langflow krijgt hoe dan ook geen uitgaand netwerk: het ophalen van bronnen gaat via een eigen container, en cloudaanroepen via een gateway (ADR 0022).
+- **Afscherming:** de netwerken, de lijst met toegestane componenten, de verboden tracingvariabelen en de sleutels staan in ADR 0022.
 - Vast volgens het FO, zoals in het voorstel: `LANGFLOW_MCP_SERVER_ENABLED=false`, `LANGFLOW_ADD_PROJECTS_TO_MCP_SERVERS=false`, `DO_NOT_TRACK=true` en `LANGFLOW_COMPONENTS_PATH`.
 
 ## Gevolgen

@@ -42,7 +42,8 @@ Optie 2.
 
 **Het importeindpunt**
 
-- Pad: `POST /api/v1/import` in de API (Application Programming Interface) van de fork, met recht beheren (ADR 0002). Langflow gebruikt een eigen sleutel met dat recht.
+- Pad: `POST /api/v1/import` in de API (Application Programming Interface) van de fork, met recht `pijplijn` (ADR 0002). Langflow gebruikt een eigen sleutel met dat recht.
+- Het eindpunt weigert een verzoek met de markering van het gegenereerde blok van de export naar Obsidian in de inhoud (HTTP 422; ADR 0004).
 - Inhoud van het verzoek:
   - id van de bronkaartregel;
   - bron: extern id, type, locatie en titel;
@@ -73,9 +74,9 @@ Optie 2.
 **Wat vervalt in de fork**
 
 - De routes in `sources_upload.py` die bronnen maken of opnieuw verwerken.
-- `process-url`, `process-document` en `process-audio` in `agents.py`. De overige agentroutes vallen onder het algemene rechtenmodel (ADR 0002); routes die een model starten, krijgen recht beheren.
+- `process-url`, `process-document` en `process-audio` in `agents.py`. De overige agentroutes vallen onder het algemene rechtenmodel (ADR 0002); routes die een model starten, krijgen recht `beheerder`.
 - `file_watcher.py`, de router `watcher` en de schakelaar in `config.py`.
-- De router `zotero`, en de OKF-import in `okf_import_service.py` met zijn route. De OKF-export blijft, met recht beheren.
+- De router `zotero`, en de OKF-import in `okf_import_service.py` met zijn route. De OKF-export blijft, met recht `beheerder`.
 - In `SOURCE_PIPELINE`:
   - de stap INGEST en het automatisch starten bij upload;
   - de stap INSIGHTS, die afgeleide tekst maakt (ADR 0004).

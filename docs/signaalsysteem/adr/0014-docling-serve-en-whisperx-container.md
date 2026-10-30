@@ -1,7 +1,7 @@
 # ADR 0014: Documentextractie met docling-serve en transcriptie met een bestaande WhisperX-container
 
 - **Status:** besloten; WhisperX-container gekozen op grond van P1 (30-10): variant A
-- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 met P1, P3 en P5
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 met P1, P3 en P5, en na de review (synchroon eindpunt)
 - **Raakt FO-paragraaf:** 7, 11 (zware stappen in aparte containers), 12.1 (offline-instellingen), 12.2, 13.1
 - **Lost op:** verschilanalyse conflict 10
 - **Gewijzigd door:** ADR 0019 (classificatie en pipelinestart per innameroute)
@@ -98,9 +98,10 @@ Uitkomst van proef 1 (30-10): de AWS-container (variant A) haalt alle criteria. 
   - `DOCLING_SERVE_API_KEY` uit een Docker secret;
   - `DOCLING_SERVE_ENG_LOC_NUM_WORKERS=1`, één taak tegelijk op de GPU;
   - `HF_HUB_OFFLINE=1`;
-  - `DOCLING_SERVE_LOAD_MODELS_AT_BOOT=false` en `DOCLING_SERVE_OPTIONS_CACHE_SIZE=1`: 364 MiB minder videogeheugen (P5, 30-10).
+  - `DOCLING_SERVE_LOAD_MODELS_AT_BOOT=false` en `DOCLING_SERVE_OPTIONS_CACHE_SIZE=1`: 364 MiB minder videogeheugen (P5, 30-10);
+  - `DOCLING_SERVE_MAX_SYNC_WAIT` boven de langste conversie (voorstel 3 600 s; standaard 120 s), voor het synchrone eindpunt.
 - Starten en stoppen via llama-swap (ADR 0009). Stoppen is de enige manier om het videogeheugen vrij te geven (P5, 30-10).
-- Een Langflow-component stuurt het bestand naar `/v1/convert/file/async`, met `to_formats` met `json` en `ocr_lang` `nl` en `en`. Hij volgt de taak via `/v1/status/poll/{task_id}` en haalt het resultaat op. De pauze tussen twee statusvragen blijft ruim onder de `ttl` van docling in llama-swap; bij HTTP 404 op een taak dient de component hem opnieuw in (P1, 1a, 30-10; regel in ADR 0009).
+- Een Langflow-component stuurt het bestand naar het synchrone eindpunt `/v1/convert/file`, met `to_formats` met `json` en `ocr_lang` `nl` en `en`, en `DOCLING_SERVE_MAX_SYNC_WAIT` ruim boven de langste conversie (ADR 0009; aangepast na de review, 30-10). Zo staat de aanvraag open zolang docling-serve werkt, en ziet llama-swap dat de dienst bezig is. Het asynchrone eindpunt met pollen is de terugval als F2-17 laat zien dat llama-swap docling-serve ook met een openstaande aanvraag stopt; dan komen er bundeling en een vergrendeling bij (ADR 0009). Een verloren taak dient de component hooguit drie keer opnieuw in; daarna is de stap `mislukt` (ADR 0009).
 - **Adres instelbaar (ADR 0019).** Het adres van docling-serve is een instelling van de bouwsteen, per aanroepwijze lokaal of extern. Standaard is het lokale adres via llama-swap (`/upstream/docling/...`). Vóór elke aanroep controleert de bouwsteen de classificatie: een intern document gaat alleen naar een adres dat in het register (ADR 0007) is toegestaan voor intern, en bij een fout valt hij niet terug op een extern adres. Een externe docling-dienst wordt nu niet ingericht; dat vraagt een eigen ADR (ADR 0019).
 - OCR met RapidOCR draait in dit image op de CPU (P5, 30-10). Of OCR op de GPU kan, is geen voorwaarde voor fase 2; de keuze van de OCR-engine valt buiten deze ADR.
 - Het DoclingDocument uit de JSON-uitvoer (JavaScript Object Notation) gaat naar `ChunkExtractor` (`pipelines/ingestion/src/ingestion/chunking/extractor.py:121`, `extract_chunks` op `:577`) en `regrouper.py`. Die code wordt hergebruikt, niet herschreven.

@@ -7,11 +7,11 @@ Deze opdracht zet het functioneel ontwerp (FO) in `functioneel-ontwerp.md` om in
 - **Het FO is leidend.** De besluiten in paragraaf 14 van het FO staan vast. Heropen ze alleen met een voorstel aan Geert.
 - **De fork wijkt af van het oorspronkelijke Open Notebook.** `ARCHITECTURE.md` beschrijft de huidige opbouw: een monorepo met `apps/`, `packages/`, `pipelines/` en `services/`. Volg de conventies daaruit: naamgeving Service, Orchestrator, Processor en Repository; idempotente migraties met een `_down`-variant; tests naast de code.
 - **Hergebruik gaat boven zelf bouwen** (FO paragraaf 2 en 13). Bouw alleen wat geen bestaande software en geen bestaande code in de fork al doet.
-- **Harde eisen.** Deze worden nooit afgezwakt:
-  1. Intern blijft lokaal. Een fragment met label intern bereikt nooit een cloudmodel en verschijnt nooit in een uitvraag via de MCP-server (Model Context Protocol). Dit wordt op drie plekken afgedwongen: het Docker-netwerk, de modelkeuze in de Langflow-componenten en het filter in de API van de fork.
+- **Harde eisen.** Deze worden alleen afgezwakt met een ADR (Architecture Decision Record) dat Geert besluit, zoals ADR 0019 voor eis 4:
+  1. Intern blijft lokaal. Een fragment met label intern bereikt nooit een cloudmodel of een externe verwerkingsdienst, en verschijnt nooit in een uitvraag via de MCP-server (Model Context Protocol). Dit wordt op drie plekken afgedwongen: het Docker-netwerk, de modelkeuze in de Langflow-componenten en het filter in de API (Application Programming Interface) van de fork.
   2. Herkomst: elk fragment is herleidbaar tot bronversie, verwerkingsrun en model.
   3. Afgeleide teksten, zoals notities en wiki-pagina's, tellen nooit als bron.
-  4. Intern draait altijd lokaal in Docker; GPU-diensten lopen via llama-swap. Een extern document mag ook door een externe verwerkingsdienst gaan (ADR 0019).
+  4. Intern draait altijd lokaal in Docker; diensten op de grafische kaart (GPU) lopen via llama-swap. Een extern document mag ook door een externe verwerkingsdienst gaan (ADR 0019).
 - **Geen interne documenten** in de repository of in tests. Testdata komt alleen uit openbare bronnen.
 - **Geen geheimen** in code, Compose-bestanden of commits.
 

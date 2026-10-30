@@ -1,7 +1,7 @@
 # ADR 0005: Handmatige fragmentbewerking
 
 - **Status:** besloten (optie 2, Geert, 2026-10-29)
-- **Datum:** 2026-10-29
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (alle schrijfroutes, bron verwijderen)
 - **Raakt FO-paragraaf:** 2 (principe 6), 8 (versiebeheer)
 - **Lost op:** verschilanalyse open vraag 11
 
@@ -30,9 +30,23 @@ Geert beslist.
 
 ## Besluit
 
-Optie 2, besloten door Geert op 2026-10-29: handmatig samenvoegen en splitsen blijft mogelijk als handmatige run met nieuwe fragmenten. De regel die handmatige runs beschermt, komt in ADR 0003.
+Optie 2, besloten door Geert op 2026-10-29: handmatig samenvoegen en splitsen blijft mogelijk als handmatige run met nieuwe fragmenten. De regel die handmatige runs beschermt, staat in ADR 0003.
+
+**Alle schrijfroutes voor fragmenten en bronnen** (aanvulling na de review, 30-10). Naast samenvoegen en splitsen wijzigen ook deze routes in `apps/app-main/src/app_main/api/routers/sources_crud.py` fragmenten of bronnen ter plekke:
+
+| Route | Regel | Wordt |
+| --- | --- | --- |
+| `PATCH /api/sources/{source_id}/chunks/{chunk_id}` (wijzigen) | `:964` | handmatige run: een nieuw fragment met de gewijzigde tekst; het oude blijft staan |
+| `DELETE /api/sources/{source_id}/chunks/{chunk_id}` (verwijderen) | `:998` | handmatige run: de nieuwe fragmentenset zonder dat fragment; het oude record blijft staan |
+| `POST /api/sources/{source_id}/chunks` (handmatig toevoegen) | `:1027` | handmatige run: de nieuwe fragmentenset met het toegevoegde fragment |
+| `DELETE /api/sources/{source_id}` (bron verwijderen) | `:475` | een vervalmarkering op de bron, geen wissen |
+
+- Wijzigen, verwijderen en toevoegen volgen dezelfde regel als samenvoegen en splitsen: een handmatige run (`trigger = handmatig`, de persoon van de sleutel `beheerder` als actor) met een volledige nieuwe fragmentenset voor dezelfde bronversie; `source_version.current_run` wijst daarna naar die run, beschermd volgens ADR 0003. Elk nieuw fragment krijgt de classificatie van de bronversie (ADR 0001) en `extractor = handmatig`. Er is geen route meer die een bestaand `chunk`-record wijzigt of wist.
+- **Bron verwijderen** wordt `POST /api/v1/sources/{id}/retire` (recht `beheerder`, verplichte reden): de bron krijgt `retired_at`, `retired_by` en `retired_reason`. Bronversies, runs, fragmenten, embeddings en herkomst blijven staan. Zoeken en de leesroutes laten een vervallen bron standaard weg; met `history=true` blijft ze raadpleegbaar, met het classificatiefilter. De bronkaartregel van zo'n bron wordt niet vanzelf uitgezet; dat beslist de beheerder. `DELETE /api/sources/{source_id}` vervalt.
+- Alle routes vragen het recht `beheerder` (ADR 0002).
 
 ## Gevolgen
 
-- **Optie 1:** de genoemde code en tests worden verwijderd. Het scherm voor het samenvoegen en splitsen van fragmenten in de interface werkt niet meer (ADR 0016). Er is geen migratie nodig: al bewerkte fragmenten vallen onder de migratie `pre-signaalsysteem` van ADR 0003.
-- **Optie 2:** `ChunkMutator` wordt omgebouwd tot een dienst die een handmatige run en nieuwe fragmenten maakt. De regel die handmatige runs beschermt, komt bij in ADR 0003.
+- `ChunkMutator` wordt omgebouwd tot een dienst die een handmatige run en een nieuwe fragmentenset maakt, voor samenvoegen, splitsen, wijzigen, verwijderen en toevoegen. De regel die handmatige runs beschermt, staat in ADR 0003.
+- **Tests (stopcondities):** na elke handmatige bewerking is het aantal fragmenten van de vorige run ongewijzigd en hun tekst gelijk; een test dat geen route een `chunk`-record wijzigt of verwijdert (uitbreiding van de routetest uit ADR 0010); een test dat een vervallen bron niet in een zoekresultaat staat, maar haar fragmenten wel in de database.
+- **Interface:** de schermen voor fragmentbewerking en het verwijderen van een bron roepen de nieuwe routes aan (ADR 0016).

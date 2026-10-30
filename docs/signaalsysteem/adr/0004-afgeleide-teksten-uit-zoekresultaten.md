@@ -1,8 +1,8 @@
 # ADR 0004: Afgeleide teksten uit de zoekresultaten
 
 - **Status:** besloten
-- **Datum:** 2026-10-29
-- **Raakt FO-paragraaf:** 2 (principe 5), 8 (kennisproduct), 10 (wiki-pagina is afgeleid), 13.2 punt 4
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (geen terugvoer via de vault)
+- **Raakt FO-paragraaf:** 2 (principe 5), 8 (kennisproduct), 10 (wiki-pagina is afgeleid; export naar Obsidian), 13.2 punt 4
 - **Lost op:** verschilanalyse conflict 8
 
 ## Context
@@ -37,6 +37,11 @@ Optie 2.
 - De MCP-tool `add_note` vervalt met `surrealdb-mcp` (ADR 0002). `create_note` via open-notebook-mcp krijgt HTTP 403, omdat de sleutel alleen `lezen_extern` heeft.
 - Koppelingen van notitie naar notitie en van notitie naar bron (Tracks Y en NS: `related_note`, `note_about`; `ARCHITECTURE.md` paragraaf 12 en 12a) blijven. Ze leggen een relatie vanuit een kennisproduct, maar voeren dat product niet terug als bron.
 - Bestaande gegevens: de migratie zet `is_derived = true` op alle bestaande `note`- en `source_insight`-records.
+- **Geen terugvoer via de vault of de export.** De export naar Obsidian (ADR 0018) schrijft afgeleide tekst in notities. Die mag niet als bron terugkomen:
+  - een bronkaartregel mag niet wijzen naar een locatie binnen de vault (`D:\# Vault`, of de koppeling daarvan in een container) of binnen de exportmap van de export. De API van de fork weigert zo'n regel (HTTP 422, ADR 0020); de controle vergelijkt het genormaliseerde pad, ook na het oplossen van symbolische koppelingen;
+  - het importeindpunt (ADR 0010) weigert een verzoek waarvan de ruwe inhoud of een fragment de markering `<!-- signaalsysteem:begin -->` of `<!-- signaalsysteem:end -->` bevat (HTTP 422), en legt dat vast in het runlogboek.
+  
+  De referentieset (F3-02) leest openbare bronnen uit de vault, alleen lezend. Het script kopieert die originelen eerst naar de lokale map van de set buiten de vault; de pipeline verwerkt de kopieën. Zo wijst ook daar geen bronkaartregel naar de vault, en komt geen fragment uit een notitie.
 
 ## Gevolgen
 
@@ -44,5 +49,7 @@ Optie 2.
 - **Tests (stopcondities):**
   - een test met een notitie en een inzicht waarvan de tekst gelijk is aan de zoekvraag: geen van beide komt in het resultaat, voor tekst, vector en hybride zoeken;
   - een test dat elk zoekresultaat naar een `chunk` of `source_embedding` verwijst;
-  - een schemacontrole op `is_derived`.
+  - een schemacontrole op `is_derived`;
+  - een test dat een bronkaartregel met een locatie in de vault of de exportmap HTTP 422 krijgt;
+  - een test dat een import met de markering van het gegenereerde blok HTTP 422 krijgt.
 - **Interface:** zoeken in de interface toont geen notities meer. Dat past bij FO 13.2.

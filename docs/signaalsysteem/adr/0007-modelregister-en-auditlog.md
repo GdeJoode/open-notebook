@@ -41,7 +41,7 @@ In de fork:
 **Auditlog**
 
 1. **De regel `routing.served` in `metrics` uitbreiden** met run en classificatie. `metrics` is een algemene tabel voor telemetrie, met een ander bewaarbeleid en andere lezers.
-2. **Nieuwe tabel `model_call`**: alleen aanvulbaar en schemavast, met tijdstip, run, model, aanroepwijze, taak, classificatie, aantal tokens, duur, status en bron van de aanroep (fork of Langflow). De tabel bevat nooit prompt- of antwoordtekst. Langflow-componenten schrijven via `POST /api/v1/model-calls` (recht beheren, ADR 0002).
+2. **Nieuwe tabel `model_call`**: alleen aanvulbaar en schemavast, met tijdstip, run, model, aanroepwijze, taak, classificatie, aantal tokens, duur, status en bron van de aanroep (fork of Langflow). De tabel bevat nooit prompt- of antwoordtekst. Langflow-componenten schrijven via `POST /api/v1/model-calls` (recht `pijplijn`, ADR 0002).
 
 ## Voorstel
 
@@ -60,6 +60,7 @@ Volgens het voorstel (Geert, 30-10): register optie 2 (YAML-bestand in Git), aud
 - **Code:**
   - een registerlader in `packages/llm-manager`, gebruikt door `ModelGate`;
   - een migratie voor `model_call`, met `_down`;
+  - `processing_run.models` wordt afgeleid uit `model_call` (ADR 0003, aanvulling na de review van 30-10). Elke modelaanroep, ook die van `ModelGate` in de fork en die van de gateway voor cloudaanroepen (ADR 0022), schrijft daarom een regel met `run` als de aanroep bij een run hoort; alleen aanroepen buiten een run, zoals het embedden van een zoekvraag, hebben geen run;
   - `/api/models` wordt alleen-lezen;
   - een test die het register naast de llama-swap-configuratie legt.
 - **Interface:** het scherm voor modelbeheer kan alleen nog lezen.

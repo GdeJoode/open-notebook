@@ -2,7 +2,7 @@
 
 Stand: 30 oktober 2026 · stap 3 van `opdracht.md`: plan (3a) en scripts met eerste uitvoering (3b) · branch `docs/signaalsysteem-fo`
 
-Dit plan beschrijft de proeven uit het functioneel ontwerp (FO) paragraaf 13.1 en de open punten die de ontwerpbesluiten (Architecture Decision Records, ADR's) naar de proeven verwijzen. De bouwagent (`signaal-bouwer`) schrijft de scripts en voert ze uit; hij vult per proef het veld "Uitkomst". Stap 3b: alle scripts staan er; P0, P8, P6, P2 en P4 zijn uitgevoerd, P1, P3, P5 en P7 nog niet (zie paragraaf 8).
+Dit plan beschrijft de proeven uit het functioneel ontwerp (FO) paragraaf 13.1 en de open punten die de ontwerpbesluiten (Architecture Decision Records, ADR's) naar de proeven verwijzen. De bouwagent (`signaal-bouwer`) schrijft de scripts en voert ze uit; hij vult per proef het veld "Uitkomst". Stand 30-10: de scripts voor P0–P9 staan er en zijn uitgevoerd, P3 deels (zie de uitkomsten en paragraaf 8). P10 (SurrealDB v3, ADR 0021) is beschreven; het script moet nog worden geschreven.
 
 ## 1. Gemeenschappelijke opzet
 
@@ -120,6 +120,7 @@ Aanbevolen volgorde: P0, P8, P7, P6, P2, P4, P5, P1, P3. P7 moet slagen voordat 
 | P7 | Docker-toegang voor llama-swap: socket-proxy en Docker-client | ADR 0009 (Docker-toegang) | nee | werkplek (akkoord Docker-socket) | `p7_docker_toegang.sh` |
 | P8 | Netwerkafscherming met `internal: true` | ADR 0002 F; FO 12.1 | nee | hier | `p8_netwerkafscherming.sh` |
 | P9 | Opruimen van het project `signaal-proef` | — | nee | hier | `p9_opruimen.sh` |
+| P10 | Migraties en testset van de fork op SurrealDB v3 | ADR 0021 | nee | hier | `p10_surrealdb_v3.sh` (nog te schrijven) |
 
 Alle scripts staan onder `scripts/signaalsysteem/proeven/`. Gedeelde onderdelen: `lib/gemeenschappelijk.sh` (Compose-aanroep, momentopnamen, exitcodes, maskeren), `lib/vram_meter.sh` (meting 1.5), `compose.proef.yml` (één bestand met een profiel per proef) en per proef een submap `pN/` met configuratie en hulpscripts.
 
@@ -655,6 +656,58 @@ Beslisregel voor ADR 0009: K2 en K4 geslaagd betekent dat optie 2 uitvoerbaar is
 
 GPU-ronde, 30-10-2026, `p9_opruimen.sh` zonder opties, exitcode 0 (11:45 voor de herstart van P1, en 14:44 na P3): geen containers en netwerken van het project meer; momentopname zonder afwijking. Bewust behouden: de images en de 7 modelvolumes (`modellen` 7,3 GB, `kev_hf` 9,5 GB, `whisperx_hf` 5,6 GB, `docling_artifacts` 1,4 GB, `whisperx_torch` 0,4 GB, `p1_audio` en `whisperx_nltk` samen 36 MB; samen 24,3 GB). Images van de GPU-ronde: docling-serve 11,2 GB, WhisperX 9,0 GB, Kev 8,5 GB, llama-swap 4,1 GB (de afgeleide images met de Docker-client delen die lagen), Docker-CLI 0,2 GB, socket-proxy en curl samen 0,1 GB; samen ongeveer 33 GB. Het volume `geheimen` is verwijderd.
 
+### P10. Migraties en testset van de fork op SurrealDB v3
+
+**Doel.** Vaststellen of de migraties en de databasetests van de fork zonder grote aanpassingen op SurrealDB v3 draaien, op een lege database (ADR 0021).
+
+**Beslist.** ADR 0021: SurrealDB `v3.3.5` of `v2.7.0` (B3) met v3 als aparte taak.
+
+**Gecontroleerd vooraf** (30-10-2026; bronnen in ADR 0021). Nieuwste uitgave v3.3.5 (29-10); v2.7.0 is de nieuwste v2. De migratiegids 2.x naar 3.x noemt onder meer `SEARCH ANALYZER` naar `FULLTEXT ANALYZER`, hernoemde functies (`type::thing` naar `type::record`, `type::is::*` naar `type::is_*`), verplichte `LET`, en een fout in plaats van stil weglaten bij een onbekend veld op een SCHEMAFULL-tabel. In de fork staan `SEARCH ANALYZER` in `migrations/1.surrealql:67-72` en `type::is::array` in `migrations/82.surrealql:28`; `type::thing`, `type::is::*` of `string::is::*` komen 111 keer voor in 39 Python-bestanden. De fork gebruikt `surrealdb==1.0.6`; de nieuwste stabiele SDK is 2.0.0, en 3.0.0 is nog een bèta.
+
+**Aanpak.**
+
+1. **Isolatie** volgens 1.2: project `signaal-proef`, SurrealDB met `start memory` en zonder volume, alleen op `verwerking`. Twee databasecontainers: `surrealdb/surrealdb:v3.3.5` en, als nulmeting, `surrealdb/surrealdb:v2.7.0`. Het script legt de digest van beide images vast.
+2. **Werkkopie.** Het script maakt met `git archive` een kopie van de laatste commit in de runmap (zoals P4, §8 punt 5). Alle aanpassingen in deze proef gebeuren in die kopie; de repository verandert niet.
+3. **10a, statische telling.** In de kopie telt het script per patroon uit de migratiegids het aantal treffers in `migrations/` en in de Python-code onder `apps/`, `packages/` en `pipelines/`: hernoemde functies, `SEARCH ANALYZER`, `MTREE`, futures, de like-operatoren, `GROUP` met `SPLIT`, toekenning zonder `LET`, `.*`-idiomen en optionele ketens met `?`. Uitvoer: `p10_patronen.csv`.
+4. **10b, migraties op v2.7.0 (nulmeting).** Alle migraties in volgorde met de migratiecode van de fork (dezelfde code als bij het opstarten van de API, `apps/app-main/src/app_main/api/app.py:131-137`), daarna alle `_down`-varianten in omgekeerde volgorde, daarna weer alle migraties. Per migratie: geslaagd of de foutmelding.
+5. **10c, migraties op v3.3.5 zonder aanpassing.** Als 10b.
+6. **10d, mechanische vervangingen.** In de kopie past het script alleen de vervangingen uit de tabel van de migratiegids toe (functienamen, `SEARCH ANALYZER` naar `FULLTEXT ANALYZER`, `LET`). Het legt elke vervanging vast (bestand, regel, oud, nieuw). Daarna 10c opnieuw.
+7. **10e, testset.** De databasetests van de fork (de tests die een SurrealDB-verbinding gebruiken, onder meer in `packages/surrealdb-service/tests/` en `apps/app-main/tests/`) draaien tegen v2.7.0 (nulmeting, originele kopie) en tegen v3.3.5 (kopie na 10d). Per test: geslaagd, mislukt of overgeslagen. Eerst met `surrealdb==1.0.6`; maakt die geen verbinding met v3, dan nog een keer met `surrealdb==2.0.0`. Een bètaversie van de SDK wordt niet gebruikt.
+8. **10f, schemacontrole.** Het geval uit P4: een veld schrijven dat de SCHEMAFULL-tabel niet kent. Verwacht op v2.7.0 stil weglaten, op v3.3.5 een fout.
+9. **Uitvoer.** `uitkomst.json` met per criterium de meetwaarden, en een lijst van alle tests die op v3.3.5 falen en op v2.7.0 slagen, met de foutmelding. Voor elke zulke test legt de bouwagent vast of de oorzaak mechanisch of niet-mechanisch is, en welke bestanden een niet-mechanische aanpassing vragen.
+
+**Benodigdheden.** `surrealdb/surrealdb:v3.3.5` en `v2.7.0`, `python:3.12.16-slim-bookworm` met de afhankelijkheden van de fork, `surrealdb==1.0.6` en `==2.0.0` van PyPI. Geen GPU, geen modellen, geen echte documenten. Internet alleen voor het ophalen van images en pakketten.
+
+**Succescriterium.**
+
+| Nr | Criterium | Meting |
+| --- | --- | --- |
+| K1 | 10b: alle migraties en `_down`-varianten slagen op v2.7.0. Anders is de nulmeting ongeldig (exitcode 2) | telling |
+| K2 | 10d: alle migraties en `_down`-varianten slagen op v3.3.5, na alleen mechanische vervangingen | telling, lijst van vervangingen |
+| K3 | 10e: aantal tests dat op v3.3.5 faalt en op v2.7.0 slaagt = 0, na alleen mechanische vervangingen | vergelijking per test |
+| K4 | 10e: K3 gehaald met een stabiele SDK (`1.0.6` of `2.0.0`) | vastgelegde versie |
+| K5 | niet-mechanische aanpassingen nodig in ten hoogste 10 bestanden, zonder herontwerp van een tabel | lijst van bestanden |
+| K6 | 10f vastgelegd: gedrag bij een onbekend veld op v2.7.0 en v3.3.5 | vaststelling |
+
+Beslisregel voor ADR 0021: K2 tot en met K5 geslaagd betekent v3.3.5; de mechanische vervangingen worden een bouwtaak in fase 2. Anders blijft v2.7.0, en wordt de overstap een aparte taak met de lijst uit 10e. De grens in K5 is een voorstel; Geert stelt hem vast vóór de uitvoering.
+
+**Verwachte uitkomst.**
+
+- K1 slaagt; P4 draaide de migraties al op v2.7.0.
+- 10c faalt zeker op `migrations/1.surrealql` (`SEARCH ANALYZER`) en `migrations/82.surrealql` (`type::is::array`); na 10d waarschijnlijk niet meer.
+- K3 is onzeker: `type::thing` komt veel voor in de Python-code (mechanisch), maar de strengere schemacontrole kan tests laten falen die velden schrijven die het schema niet kent. Dat zijn echte fouten, maar ze vragen niet-mechanisch werk.
+- K4 is onbekend: welke serverversies SDK 1.0.6 en 2.0.0 ondersteunen, staat niet in de geraadpleegde documentatie.
+
+**Script.** `scripts/signaalsysteem/proeven/p10_surrealdb_v3.sh`, met hulpscripts in `p10/` (telling van patronen, mechanische vervangingen, vergelijking van testuitkomsten). Compose-profiel `p10`. Nog te schrijven door de bouwagent.
+
+**Plek.** Hier.
+
+**Uitkomst.**
+
+| Datum | Commit | Exitcode | Meetwaarden | Conclusie |
+| --- | --- | --- | --- | --- |
+| — | — | niet uitgevoerd | — | Beschreven op 30-10; script nog te schrijven. |
+
 ## 4. Embeddingmodellen vergelijken (ADR 0008)
 
 Een kwaliteitsvergelijking is in fase 1 geen zinvolle proef. Het meetcriterium uit ADR 0008 is het zoekdeel van de referentieset uit FO 7, en die set bestaat nog niet. FO 7 zegt zelf: zonder die set is een verbetering in precisie of recall niet aantoonbaar. Een vergelijking op een geïmproviseerde set zou een schijnzekerheid geven.
@@ -668,7 +721,7 @@ De kwaliteitsvergelijking hoort in het plan van aanpak, als taak in fase 3 na he
 
 ## 5. Bevindingen bij het opstellen die ADR's raken
 
-Deze punten volgen uit de gecontroleerde documentatie. De proeven bevestigen of weerleggen ze; de ADR's zijn niet aangepast.
+Deze punten volgen uit de gecontroleerde documentatie. De proeven bevestigen of weerleggen ze. Stand 30-10: de punten en de uitkomsten van de proeven zijn verwerkt in de genoemde ADR's.
 
 1. **ADR 0009, socket-proxy.** `ALLOW_START` werkt volgens `haproxy.cfg` niet zonder `POST=1`. De veilige combinatie is `POST=1` met `CONTAINERS=0`, niet `CONTAINERS=1` zoals de ADR nu noemt (P7).
 2. **ADR 0006 en 0009, image.** Voor de RTX 5070 Ti (Blackwell) is een CUDA 13-image van llama-swap nodig. Volgens de README dekt `unified-cuda` (CUDA 12) alleen Pascal tot en met Ada (P0).

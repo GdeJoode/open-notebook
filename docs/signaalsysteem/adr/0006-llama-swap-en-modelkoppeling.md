@@ -62,7 +62,7 @@ Optie 2.
   - de classificatie van de invoer toetsen: is die intern en is het model niet toegestaan voor intern, dan weigert de poort, zonder terugval;
   - een auditregel schrijven (ADR 0007).
 - Hergebruikt wordt de weigerlogica voor cloudproviders in `route_resolver.py:199-216` en de telemetrie in `telemetry.py`, die in ADR 0007 opgaat.
-- Aanroepwijzen: `llama-swap` (OpenAI-compatibel, via Esperanto `openai-compatible` met `base_url=http://llama-swap:<poort>/v1`), `api` (Claude-API, alleen vanuit Langflow) en `cli` (`claude -p` via de container `claude-cli`, FO 9; uitwerking in fase 5).
+- Aanroepwijzen: `llama-swap` (OpenAI-compatibel, via Esperanto `openai-compatible` met `base_url=http://llama-swap:<poort>/v1`), `api` (Claude-API, alleen vanuit Langflow, via de gateway uit ADR 0022) en `cli` (`claude -p` via de container `claude-cli`, ook via die gateway, FO 9; uitwerking in fase 5).
 - In de fork staan alleen modellen met aanroepwijze `llama-swap` in de configuratie. Een poging om vanuit de fork een cloudmodel aan te roepen faalt op het netwerk (ADR 0002) én in de poort.
 
 **Ombouw van de vier routes**

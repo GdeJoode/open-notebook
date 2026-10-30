@@ -35,7 +35,7 @@ Na ADR 0001, 0002, 0005, 0006 en 0010 werken delen van de interface niet meer:
 - samenvoegen en splitsen van fragmenten;
 - de PDF-weergave zonder header.
 
-Chat, ask en podcasts werken nog wel, met een sleutel met recht beheren en een lokaal model.
+Chat, ask en podcasts werken nog wel, met een sleutel met recht `beheerder` en een lokaal model.
 
 Een MCP-route via Claude valt af voor de wachtrijen: interne items komen nooit via MCP (harde eis 1).
 
@@ -45,7 +45,7 @@ Een MCP-route via Claude valt af voor de wachtrijen: interne items komen nooit v
    - Voor: past letterlijk bij FO 11 en 12.1.
    - Tegen: Langflow is geen reviewomgeving, dus er moet een reviewscherm worden gebouwd. Dat gaat in tegen hergebruik boven zelf bouwen (FO 2, principe 7).
 2. **De werkbak van Track WB als reviewomgeving, alleen op localhost.**
-   - De interface blijft, en wordt bereikbaar op `127.0.0.1` (niet via Tailscale) met een sleutel met recht beheren (ADR 0002).
+   - De interface blijft, en wordt bereikbaar op `127.0.0.1` (niet via Tailscale) met een sleutel met recht `beheerder` (ADR 0002).
    - Menu-items die op vervallen routes steunen, worden verborgen. Er komen wachtrijen bij voor 1, 2, 3, 5 en 6, op het bestaande patroon van het aandachtsoverzicht.
    - Voor: hergebruik van recent en getest werk.
    - Tegen: wijkt af van FO 12.1 (een derde bereikbare dienst) en van FO 13.2 (interface niet gebruikt). Het FO moet daarvoor worden aangepast. Kleine wijzigingen in de interface zijn nodig: inloggen met een sleutel en de PDF-weergave met header.
@@ -55,13 +55,11 @@ Een MCP-route via Claude valt af voor de wachtrijen: interne items komen nooit v
 
 ## Voorstel
 
-Optie 2. De interface hindert dan niet: hij is alleen lokaal bereikbaar, hij gebruikt dezelfde API met sleutel en filter, en de werkbak doet precies wat de wachtrijen vragen. Dit vraagt een aanpassing van FO 12.1 en 13.2. Daarom is de status voorgesteld en geen besluit.
-
-Geert beslist. Kiest hij optie 1, dan komt er een aparte ADR voor de reviewcomponenten in Langflow.
+Optie 2. De interface hindert dan niet: hij is alleen lokaal bereikbaar, hij gebruikt dezelfde API met sleutel en filter, en de werkbak doet precies wat de wachtrijen vragen. Dit vraagt een aanpassing van FO 12.1 en 13.2; Geert heeft daarover besloten (zie Besluit).
 
 ## Besluit
 
-Optie 2 (Geert, 30-10): de werkbak van Track WB wordt de reviewomgeving, alleen bereikbaar op `127.0.0.1`, niet via Tailscale, met een sleutel met recht beheren. FO 12.1 en 13.2 punt 7 zijn daarop aangepast (30-10).
+Optie 2 (Geert, 30-10): de werkbak van Track WB wordt de reviewomgeving, alleen bereikbaar op `127.0.0.1`, niet via Tailscale, met een persoonlijke sleutel met het recht `beheerder` (ADR 0002 B, na de review van 30-10; eerder "beheren"). FO 12.1 en 13.2 punt 7 zijn daarop aangepast (30-10).
 
 ## Gevolgen
 
@@ -69,6 +67,6 @@ Optie 2 (Geert, 30-10): de werkbak van Track WB wordt de reviewomgeving, alleen 
   - het FO wordt aangepast: in 12.1 komt de interface als dienst op localhost, en in 13.2 punt 7 komt "interface alleen als reviewomgeving";
   - in `frontend/` veranderen inloggen met een sleutel en de PDF-weergave met header, en menu-items worden verborgen;
   - de wachtrijen 1, 2, 3, 5 en 6 krijgen API-eindpunten en schermen;
-  - de interface wordt bereikbaar op `127.0.0.1` via een omgekeerde proxy op `verwerking` en `toegang`, net als open-notebook-mcp (ADR 0002 F). De container `open-notebook` zelf hangt niet aan `toegang`: een container aan `verwerking` én een gewoon netwerk heeft internet (P8, K5, 29-10). Eerder stond hier dat `open-notebook` de interface via `toegang` publiceert.
+  - de interface wordt bereikbaar op `127.0.0.1` via de omgekeerde proxy `werkbak-toegang` op `werkbak-intern` en `toegang`, net als open-notebook-mcp (ADR 0002 F). Op `werkbak-intern` hangen alleen die proxy en `open-notebook` (aangepast na de review, 30-10). De container `open-notebook` zelf hangt niet aan `toegang`: een container aan een intern én een gewoon netwerk heeft internet (P8, K5, 29-10).
 - **Bij optie 1:** de interface krijgt geen gepubliceerde poort meer, en er komen reviewcomponenten in Langflow.
 - **In beide gevallen:** de deduplicatielus hervat via de triage-API (ADR 0012). De plek van de bediening verandert daar niets aan.
