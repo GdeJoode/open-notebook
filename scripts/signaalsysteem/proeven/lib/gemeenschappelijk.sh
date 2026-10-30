@@ -215,6 +215,7 @@ proef_opruimen_profiel() {
                  [[ "$v" =~ ^[0-9a-f]{64}$ ]] && echo "$v"
                done)
   done < <(dc --profile "$PROEF_PROFIEL" ps -aq 2>/dev/null)
+  bewaar logs_profiel dc --profile "$PROEF_PROFIEL" logs --no-color --timestamps || true
   bewaar compose_down dc --profile "$PROEF_PROFIEL" down --timeout 10 || log "compose down gaf een fout, zie compose_down.log"
   for v in "${anoniem[@]}"; do
     bewaar "anoniem_volume_rm" docker volume rm "$v" || log "anoniem volume $v niet verwijderd"
@@ -372,6 +373,9 @@ testdata() {
   fi
   printf '%s\n' "$doel"
 }
+
+# grep voor tellingen in een pijplijn: geen treffer is geen fout (set -o pipefail).
+zoek() { grep "$@" || true; }
 
 # Is een container van het project op een bepaalde toestand?
 container_toestand() {

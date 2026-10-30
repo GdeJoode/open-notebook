@@ -84,10 +84,10 @@ docling_taak() { # <pdf> <naam> -> status
   local pdf=$1 naam=$2 task status hdr
   hdr="$(doc_hdr)"
   task="$(client curl -s -m 900 -H "$hdr" -F "files=@$pdf" -F to_formats=json -F ocr_lang=nl -F ocr_lang=en \
-    "$LS/upstream/docling/v1/convert/file/async" | grep -o '"task_id": *"[^"]*"' | cut -d'"' -f4)"
+    "$LS/upstream/docling/v1/convert/file/async" | zoek -o '"task_id": *"[^"]*"' | cut -d'"' -f4)"
   [[ -z "$task" ]] && { echo "geen_task_id"; return 0; }
   for _ in $(seq 1 360); do
-    status="$(client curl -s -H "$hdr" "$LS/upstream/docling/v1/status/poll/$task" | grep -o '"task_status": *"[^"]*"' | cut -d'"' -f4)"
+    status="$(client curl -s -H "$hdr" "$LS/upstream/docling/v1/status/poll/$task" | zoek -o '"task_status": *"[^"]*"' | cut -d'"' -f4)"
     [[ "$status" == "success" || "$status" == "failure" ]] && break
     sleep 5
   done
@@ -104,7 +104,7 @@ k2_voor="docling=$(container_toestand signaal-proef-docling-1)"
 s_d2="$(docling_taak /tmp/D2.pdf 1a_D2)"
 k2_tijdens="docling=$(cat "$RUNMAP/docling_tijdens.txt" 2>/dev/null)"
 s_d1="$(docling_taak /tmp/D1.pdf 1a_D1)"
-tabellen="$(grep -o '"tables": *\[ *{' "$RUNMAP/1a_D2.json" | wc -l | tr -d ' ')"
+tabellen="$(zoek -o '"tables": *\[ *{' "$RUNMAP/1a_D2.json" | wc -l | tr -d ' ')"
 weerstand="$(grep -ci weerstandsvermogen "$RUNMAP/1a_D2.json" || true)"
 meet 1a "D2=$s_d2 D1=$s_d1 tabellen_D2=$tabellen weerstandsvermogen_D2=$weerstand"
 if [[ "$s_d2" == "success" && "$tabellen" -ge 1 && "$weerstand" -ge 1 ]]; then
@@ -124,9 +124,9 @@ k2_voor+=" whisperx=$(container_toestand signaal-proef-whisperx-1)"
 ( sleep 60; container_toestand signaal-proef-whisperx-1 >"$RUNMAP/whisperx_tijdens.txt" ) &
 h_1b="$(transcribeer /audio/D4-de-dag.mp3 1b_D4 -F language=nl -F diarize=true)"
 k2_tijdens+=" whisperx=$(cat "$RUNMAP/whisperx_tijdens.txt" 2>/dev/null)"
-sprekers="$(grep -o '"speaker": *"[^"]*"' "$RUNMAP/1b_D4.json" | sort -u | wc -l | tr -d ' ')"
-woorden="$(grep -o '"words": *\[ *{' "$RUNMAP/1b_D4.json" | wc -l | tr -d ' ')"
-segmenten="$(grep -o '"segments": *\[ *{' "$RUNMAP/1b_D4.json" | wc -l | tr -d ' ')"
+sprekers="$(zoek -o '"speaker": *"[^"]*"' "$RUNMAP/1b_D4.json" | sort -u | wc -l | tr -d ' ')"
+woorden="$(zoek -o '"words": *\[ *{' "$RUNMAP/1b_D4.json" | wc -l | tr -d ' ')"
+segmenten="$(zoek -o '"segments": *\[ *{' "$RUNMAP/1b_D4.json" | wc -l | tr -d ' ')"
 meet 1b "HTTP $h_1b, sprekers $sprekers, segmenten met woorden $woorden, segmentlijst $segmenten"
 if [[ "$h_1b" == "200" && "$sprekers" -ge 2 && "$woorden" -ge 1 && "$segmenten" -ge 1 ]]; then
   criterium K3 geslaagd "HTTP 200, $sprekers sprekers, woordtijden aanwezig"
@@ -138,9 +138,9 @@ fi
 for taal in nl en; do
   b=/audio/D7-nl.ogg; [[ $taal == en ]] && b=/audio/D8-en.ogg
   h="$(transcribeer "$b" "1h_$taal")"
-  gedetecteerd="$(grep -o '"language": *"[^"]*"' "$RUNMAP/1h_$taal.json" | head -n1 | cut -d'"' -f4)"
-  tekst="$(grep -o '"text": *"[^"]\{20,\}' "$RUNMAP/1h_$taal.json" | head -n1 | wc -l | tr -d ' ')"
-  wt="$(grep -o '"start": *[0-9.]*' "$RUNMAP/1h_$taal.json" | wc -l | tr -d ' ')"
+  gedetecteerd="$(zoek -o '"language": *"[^"]*"' "$RUNMAP/1h_$taal.json" | head -n1 | cut -d'"' -f4)"
+  tekst="$(zoek -o '"text": *"[^"]\{20,\}' "$RUNMAP/1h_$taal.json" | head -n1 | wc -l | tr -d ' ')"
+  wt="$(zoek -o '"start": *[0-9.]*' "$RUNMAP/1h_$taal.json" | wc -l | tr -d ' ')"
   meet "1h_$taal" "HTTP $h, taal $gedetecteerd, tekst $tekst, tijden $wt"
   if [[ "$h" == "200" && "$tekst" == "1" && "$wt" -ge 1 && "${gedetecteerd,,}" =~ ^($taal|dutch|english)$ ]]; then
     criterium "K9_$taal" geslaagd "HTTP 200, niet-leeg transcript met woordtijden, taal $gedetecteerd"
@@ -164,7 +164,7 @@ for url in ("https://example.org", "https://aws.amazon.com"):
 meldingen="$(docker logs signaal-proef-whisperx-1 2>&1 | grep -ciE 'track|telemetry|usage' || true)"
 meet 1h_tracking "$opt; uitgaand: $uitgaand; logregels met track/telemetry/usage: $meldingen"
 # Beide adressen moeten "geen verbinding" geven; een lege of mislukte controle telt niet.
-n_geen="$(grep -o 'geen verbinding' <<<"$uitgaand" | wc -l | tr -d ' ')"
+n_geen="$(zoek -o 'geen verbinding' <<<"$uitgaand" | wc -l | tr -d ' ')"
 if [[ "$opt" == "OPT_OUT_TRACKING=true" && "$n_geen" == "2" && "$uitgaand" != *bereikbaar* ]]; then
   criterium K10 geslaagd "OPT_OUT_TRACKING=true en geen uitgaande verbinding vanaf verwerking"
 else
@@ -179,7 +179,7 @@ h_kev="$(client curl -s -m 900 -o /tmp/1d.json -w '%{http_code}' -H "$(kev_hdr)"
   -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone")"
 client cat /tmp/1d.json >"$RUNMAP/1d_kev.json"
 k2_tijdens+=" kev=$(cat "$RUNMAP/kev_tijdens.txt" 2>/dev/null)"
-som="$(tr -d '\n ' <"$RUNMAP/1d_kev.json" | grep -o '"probabilities":{[^}]*}' | head -n1 | grep -o ':[0-9.eE-]*' | tr -d ':' | awk '{s+=$1} END {print s+0}')"
+som="$(tr -d '\n ' <"$RUNMAP/1d_kev.json" | zoek -o '"probabilities":{[^}]*}' | head -n1 | zoek -o ':[0-9.eE-]*' | tr -d ':' | awk '{s+=$1} END {print s+0}')"
 zonder_sleutel=""
 for pad in / /docs /openapi.json /v1/models /health; do
   zonder_sleutel+="$pad=$(client curl -s -o /dev/null -w '%{http_code}' -m 30 "http://kev:8009$pad") "
@@ -236,13 +236,13 @@ fi
 h_rr="$(client curl -s -m 300 -o /tmp/1f.json -w '%{http_code}' -H 'Content-Type: application/json' "$LS/v1/rerank" \
   -d '{"model":"rerank","query":"weerstandsvermogen gemeente","documents":["Het weerstandsvermogen is voldoende.","De fietspaden worden verbreed.","De begroting sluit met een overschot.","Risicobeheersing en weerstandsvermogen.","Afvalinzameling wordt anders."]}')"
 client cat /tmp/1f.json >"$RUNMAP/1f_rerank.json"
-n_rr="$(grep -o '"relevance_score"' "$RUNMAP/1f_rerank.json" | wc -l | tr -d ' ')"
+n_rr="$(zoek -o '"relevance_score"' "$RUNMAP/1f_rerank.json" | wc -l | tr -d ' ')"
 if [[ "$h_rr" == "200" && "$n_rr" == "5" ]]; then criterium K6 geslaagd "HTTP 200, 5 resultaten met score"
 else criterium K6 mislukt "HTTP $h_rr, $n_rr resultaten"; fi
 h_emb="$(client curl -s -m 300 -o /tmp/emb.json -w '%{http_code}' -H 'Content-Type: application/json' "$LS/v1/embeddings" \
   -d '{"model":"embed","input":"weerstandsvermogen"}')"
 client cat /tmp/emb.json >"$RUNMAP/embed.json"
-dim="$(tr -d '\n ' <"$RUNMAP/embed.json" | grep -o '"embedding":\[[^]]*\]' | head -n1 | tr ',' '\n' | wc -l | tr -d ' ')"
+dim="$(tr -d '\n ' <"$RUNMAP/embed.json" | zoek -o '"embedding":\[[^]]*\]' | head -n1 | tr ',' '\n' | wc -l | tr -d ' ')"
 meet embedding_dimensie "HTTP $h_emb, $dim dimensies (verwacht 1024)"
 
 # --- 1g: ontladen en herstel ---

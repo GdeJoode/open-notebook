@@ -22,10 +22,10 @@ converteer() { # <pdf-in-client> <extra form-velden...> -> resultaat in $RUNMAP/
   local hdr task status
   hdr="$(sleutel_hdr)"
   task="$(client curl -s -H "$hdr" -F "files=@$pdf" -F to_formats=json -F 'ocr_lang=nl' -F 'ocr_lang=en' "$@" \
-    "$DOC/v1/convert/file/async" | grep -o '"task_id": *"[^"]*"' | cut -d'"' -f4)"
+    "$DOC/v1/convert/file/async" | zoek -o '"task_id": *"[^"]*"' | cut -d'"' -f4)"
   [[ -z "$task" ]] && { echo "geen_task_id"; return 0; }
   for _ in $(seq 1 360); do
-    status="$(client curl -s -H "$hdr" "$DOC/v1/status/poll/$task" | grep -o '"task_status": *"[^"]*"' | cut -d'"' -f4)"
+    status="$(client curl -s -H "$hdr" "$DOC/v1/status/poll/$task" | zoek -o '"task_status": *"[^"]*"' | cut -d'"' -f4)"
     [[ "$status" == "success" || "$status" == "failure" ]] && break
     sleep 5
   done

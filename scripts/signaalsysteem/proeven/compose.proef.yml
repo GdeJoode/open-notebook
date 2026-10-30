@@ -30,6 +30,7 @@ volumes:
   kev_hf: {}              # Kev-4B en basismodel (P1, P3)
   whisperx_hf: {}         # Whisper en uitlijnmodel nl (HF_HOME van variant A)
   whisperx_torch: {}      # uitlijnmodel en (torchaudio) (TORCH_HOME van variant A)
+  whisperx_nltk: {}       # NLTK punkt_tab: de uitlijning van WhisperX haalt die anders bij elk verzoek op
   docling_artifacts: {}   # Docling-modellen (P1, P3, P5)
   p1_audio: {}            # testaudio voor P1/P3 (D4, D7, D8)
   geheimen: {}            # proefsleutels voor docling en kev (P1, P3); per run overschreven
@@ -365,6 +366,7 @@ services:
     volumes:
       - whisperx_hf:/opt/models/hf
       - whisperx_torch:/opt/models/torch
+      - whisperx_nltk:/root/nltk_data
 
   kev:
     profiles: [p1]
@@ -439,6 +441,7 @@ services:
     volumes:
       - whisperx_hf:/opt/models/hf
       - whisperx_torch:/opt/models/torch
+      - whisperx_nltk:/root/nltk_data
       - p1_audio:/audio:ro
 
   # ---------------------------------------------------------------- P5
