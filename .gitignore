@@ -156,3 +156,6 @@ graphify-out*/NIM info.txt
 # Secret: NVIDIA NIM credentials (Track J) — never commit
 NIM info.txt
 /NIM info.txt
+
+# Geheimbestanden voor Docker secrets (signaalsysteem, ADR 0002 F)
+secrets/
