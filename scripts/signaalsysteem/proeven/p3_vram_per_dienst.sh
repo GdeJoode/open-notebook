@@ -84,7 +84,11 @@ dienst_start() {
     embed-bge-m3) llama_start "$1" embed-bge-m3-q8_0.gguf --embeddings -c 8192 -b 8192 -ub 8192 ;;
     werkmodel-8k) llama_start "$1" werkmodel-qwen3.5-9b-q4_k_m.gguf -c 8192 ;;
     werkmodel-32k) llama_start "$1" werkmodel-qwen3.5-9b-q4_k_m.gguf -c 32768 ;;
-    kev-4b) docker start signaal-proef-kev-1 >/dev/null; wacht_tot 900 client curl -sf -H "Authorization: Bearer $(client cat /run/secrets/kev_api_sleutel)" http://kev:8009/v1/models ;;
+    kev-4b)
+      # Eén poging van 900 s; is Kev dan niet gereed, dan slaan de volgende metingen hem over.
+      [[ "${KEV_FAALT:-0}" == "1" ]] && return 1
+      docker start signaal-proef-kev-1 >/dev/null
+      wacht_tot 900 client curl -sf -H "Authorization: Bearer $(client cat /run/secrets/kev_api_sleutel)" http://kev:8009/v1/models         || { KEV_FAALT=1; return 1; } ;;
     docling) docker start signaal-proef-docling-1 >/dev/null; wacht_tot 600 client curl -sf http://docling:5001/health ;;
     whisperx) docker start signaal-proef-whisperx-1 >/dev/null; wacht_tot 900 client curl -sf http://whisperx:8000/ping ;;
   esac

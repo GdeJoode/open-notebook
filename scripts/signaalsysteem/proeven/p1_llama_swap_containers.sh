@@ -208,6 +208,14 @@ else
   criterium K2 mislukt "voor: $k2_voor; tijdens: $k2_tijdens"
 fi
 
+# Kev bruikbaar? Zo niet (bijvoorbeeld niet gereed binnen healthCheckTimeout), dan in
+# 1e en 1g WhisperX in plaats van Kev, zodat de proef niet per Kev-aanvraag 10 min wacht.
+KEV_OK=0; [[ "$h_kev" == "200" ]] && KEV_OK=1
+meet kev_bruikbaar "$KEV_OK"
+kev_aanvraag() { # [-m seconden] -> http-status
+  client_ok curl -s -m "${1:-900}" -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json'     -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone"
+}
+
 # --- 1e: wisselen en wachtrij ---
 T_1E="$(date +%s)"
 werkmodel() {
@@ -217,16 +225,20 @@ werkmodel() {
 reeks=""
 for ronde in 1 2; do
   reeks+="docling=$(docling_taak /tmp/D1.pdf "1e_D1_$ronde") "
-  reeks+="kev=$(client_ok curl -s -m 900 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone") "
+  if [[ $KEV_OK -eq 1 ]]; then reeks+="kev=$(kev_aanvraag) "; else reeks+="kev=overgeslagen "; fi
   reeks+="whisperx=$(transcribeer /audio/D7-nl.ogg "1e_wx_$ronde" -F language=nl) "
   reeks+="werkmodel=$(werkmodel) "
   # Twee gelijktijdige aanvragen voor verschillende zware diensten.
-  ( client_ok curl -s -m 1800 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone" >"$RUNMAP/gelijk_kev_$ronde.txt" ) &
+  if [[ $KEV_OK -eq 1 ]]; then
+    ( kev_aanvraag 1800 >"$RUNMAP/gelijk_kev_$ronde.txt" ) &
+  else
+    ( transcribeer /audio/D7-nl.ogg "gelijk_wx_$ronde" -F language=nl >"$RUNMAP/gelijk_kev_$ronde.txt" ) &
+  fi
   p1=$!
   ( werkmodel >"$RUNMAP/gelijk_werkmodel_$ronde.txt" ) &
   p2=$!
   wait "$p1" "$p2" || true
-  reeks+="gelijktijdig=kev:$(cat "$RUNMAP/gelijk_kev_$ronde.txt"),werkmodel:$(cat "$RUNMAP/gelijk_werkmodel_$ronde.txt") "
+  reeks+="gelijktijdig=$([[ $KEV_OK -eq 1 ]] && echo kev || echo whisperx):$(cat "$RUNMAP/gelijk_kev_$ronde.txt" 2>/dev/null || echo onbekend),werkmodel:$(cat "$RUNMAP/gelijk_werkmodel_$ronde.txt" 2>/dev/null || echo onbekend) "
 done
 T_1E_EIND="$(date +%s)"
 meet 1e_reeks "$reeks"
@@ -261,16 +273,24 @@ meet embedding_dimensie "HTTP $h_emb, $dim dimensies (verwacht 1024)"
 sleep 75
 na_ttl=""
 for c in "${ZWAAR[@]}"; do na_ttl+="${c#signaal-proef-}=$(container_toestand "$c") "; done
-client_ok curl -s -m 900 -o /dev/null -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone" || true
-bewaar externe_stop docker stop signaal-proef-kev-1
-h_herstel="$(client_ok curl -s -m 900 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone")"
+if [[ $KEV_OK -eq 1 ]]; then
+  herstel_dienst=kev
+  herstel() { kev_aanvraag; }
+else
+  herstel_dienst=whisperx
+  herstel() { transcribeer /audio/D7-nl.ogg 1g_wx -F language=nl; }
+fi
+herstel >/dev/null
+bewaar externe_stop docker stop "signaal-proef-$herstel_dienst-1"
+h_herstel="$(herstel)"
 # Aanvulling (P7): llama-swap merkt een externe stop pas na de gezondheidslus (5 s);
 # alleen vastgelegd, K7 blijft de directe aanvraag.
 sleep 20
-h_herstel_20="$(client_ok curl -s -m 900 -o /dev/null -w '%{http_code}' -H "$(kev_hdr)" -H 'Content-Type: application/json' -d "$KEV_BODY" "$LS/upstream/kev-4b/v1/systemone")"
-meet 1g "na ttl+15 s: $na_ttl; na externe stop: HTTP $h_herstel; 20 s later: HTTP $h_herstel_20"
-if [[ "$na_ttl" != *running* && "$h_herstel" == "200" ]]; then criterium K7 geslaagd "$na_ttl; herstel HTTP 200"
-else criterium K7 mislukt "$na_ttl; herstel HTTP $h_herstel (20 s later: $h_herstel_20)"; fi
+h_herstel_20="$(herstel)"
+meet 1g "na ttl+15 s: $na_ttl; externe stop van $herstel_dienst; daarna HTTP $h_herstel; 20 s later: HTTP $h_herstel_20"
+if [[ $KEV_OK -eq 1 && "$na_ttl" != *running* && "$h_herstel" == "200" ]]; then criterium K7 geslaagd "$na_ttl; herstel Kev HTTP 200"
+elif [[ $KEV_OK -eq 1 ]]; then criterium K7 mislukt "$na_ttl; herstel Kev HTTP $h_herstel (20 s later: $h_herstel_20)"
+else criterium K7 mislukt "Kev niet bruikbaar (zie K4); ontladen: $na_ttl; herstel gemeten op whisperx: HTTP $h_herstel (20 s later: $h_herstel_20)"; fi
 
 # --- K8: geen internet vanaf verwerking (whisperx en kev) ---
 k8=""
