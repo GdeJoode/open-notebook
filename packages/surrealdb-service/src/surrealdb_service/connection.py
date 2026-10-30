@@ -69,6 +69,22 @@ class DatabaseUnavailableError(RuntimeError):
     """
 
 
+class ClassificationConflictError(RuntimeError):
+    """De database weigert een classificatie (F2-03, ADR 0001; de API geeft 409).
+
+    Bijvoorbeeld een fragment dat losser is dan zijn bron, of 'intern' naar
+    'extern' buiten een herclassificatie. Een subklasse van ``RuntimeError``,
+    zodat bestaande afhandeling van databasefouten blijft werken.
+    """
+
+
+def as_classification_conflict(error: BaseException) -> Optional[ClassificationConflictError]:
+    """Een ``ClassificationConflictError`` als de ASSERT op ``classification`` faalde."""
+    if "for field `classification`" in str(error):
+        return ClassificationConflictError(str(error))
+    return None
+
+
 # Errors after which a connection's socket state is unknown. A statement the
 # server rejected arrives as a plain ``Exception`` from the SDK and leaves the
 # socket usable, so it is not listed here.
@@ -401,6 +417,8 @@ async def execute_query(
         except Exception as e:
             logger.error(f"Query failed: {query[:200]} params: {params}")
             logger.exception(e)
+            if (conflict := as_classification_conflict(e)) is not None:
+                raise conflict from e
             raise
 
 
@@ -429,7 +447,8 @@ def _check_transaction_response(response: Any) -> List[Any]:
         if isinstance(s, dict) and s.get("status") == "ERR"
     ]
     if errors:
-        raise RuntimeError(f"SurrealQL transaction failed: {errors}")
+        fout = RuntimeError(f"SurrealQL transaction failed: {errors}")
+        raise as_classification_conflict(fout) or fout
     return [
         s.get("result") for s in statements if isinstance(s, dict)
     ]

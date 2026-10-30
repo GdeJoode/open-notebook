@@ -1,0 +1,160 @@
+-- ============================================================================
+-- Migratie 89: classificatie intern/extern (F2-03, ADR 0001, 0019, 0002 B).
+--
+-- 1. `classification` op `source`, `chunk`, `source_embedding`, `doc_node`,
+--    `note`, `source_insight` en `notebook`: 'intern' of 'extern', standaard
+--    'intern'. Een fragment, embedding, `doc_node` of inzicht neemt bij het
+--    schrijven de waarde van zijn bron over (embedding: van zijn fragment) en
+--    mag niet losser zijn dan die bron (ASSERT; de fork geeft dan HTTP 409).
+-- 2. Van 'intern' naar 'extern' kan alleen binnen een herclassificatie: de
+--    `ClassificationService` zet daarvoor `$herclassificatie = true` in haar
+--    transactie. Elk ander pad (import, poortwachter, gewone update) faalt
+--    op de ASSERT.
+-- 3. Afgeleide classificatie (ADR 0001): een vermelding (PC.3-herkomst: een
+--    bron in `source_documents`, met het fragment uit
+--    `properties.grounding[bron].chunk_id`) neemt de waarde van haar fragment
+--    over, zonder fragment die van haar bron; onbekend is 'intern'.
+--    `entity`, `entity_alias`, `relation` en `triage_queue` zijn 'intern'
+--    zodra een onderliggende vermelding 'intern' is, en 'intern' zonder
+--    vermelding. De database berekent dat bij elk schrijven (VALUE); een
+--    gewijzigde entiteit werkt haar relaties, aliassen en triage-items bij
+--    (EVENT). Een relatie telt ook de waarde van haar twee entiteiten mee.
+-- 4. De strengste waarde wint: wordt een bron van 'extern' 'intern', dan
+--    worden haar fragmenten, embeddings, `doc_node`-records en inzichten
+--    'intern' en worden de afgeleide records opnieuw berekend (EVENT).
+-- 5. `classification_log`: alleen aanvulbaar (EVENT weigert UPDATE en
+--    DELETE), met een verplichte reden en persoon.
+--
+-- De oude velden `private`, `privacy_mode` en `default_privacy_mode` blijven
+-- tot F2-09. Lege database (B3): geen omzetting van bestaande records.
+-- DEFAULT ALWAYS: ook een record zonder waarde dat wordt bijgewerkt, krijgt de
+-- standaard (een gewone DEFAULT geldt onder v2.7.0 alleen bij CREATE).
+-- Idempotent via OVERWRITE. Alleen hele regels commentaar: de migratieloader
+-- plakt de regels aan elkaar.
+-- ============================================================================
+
+-- Classificatie van een record (bron, fragment, entiteit) uit een record of
+-- een tekst-id. Onbekend, onleesbaar of ontbrekend is 'intern'.
+DEFINE FUNCTION OVERWRITE fn::classificatie_van($ref: any) {
+    LET $rid = IF type::is::record($ref) { $ref }
+        ELSE IF type::is::string($ref) AND string::is::record($ref) { type::thing($ref) }
+        ELSE { NONE };
+    LET $waarde = IF $rid { (SELECT VALUE classification FROM ONLY $rid) } ELSE { NONE };
+    RETURN IF $waarde = 'extern' { 'extern' } ELSE { 'intern' };
+};
+
+-- Een vermelding neemt de waarde van haar fragment over; zonder fragment die
+-- van haar bron.
+DEFINE FUNCTION OVERWRITE fn::vermelding_classificatie($bron: any, $grounding: any) {
+    LET $fragment = IF type::is::object($grounding) { $grounding[<string> $bron].chunk_id } ELSE { NONE };
+    RETURN IF $fragment { fn::classificatie_van($fragment) } ELSE { fn::classificatie_van($bron) };
+};
+
+-- 'extern' alleen als er waarden zijn en ze allemaal 'extern' zijn.
+DEFINE FUNCTION OVERWRITE fn::afgeleide_classificatie($waarden: array) {
+    RETURN IF array::len($waarden) > 0 AND array::distinct($waarden) = ['extern'] { 'extern' } ELSE { 'intern' };
+};
+
+-- 1 en 2. De bron, notities en notebooks.
+DEFINE FIELD OVERWRITE classification ON source TYPE string DEFAULT ALWAYS 'intern'
+    ASSERT $value IN ['intern', 'extern']
+        AND ($before = NONE OR $before = 'extern' OR $value = 'intern' OR $herclassificatie = true);
+DEFINE FIELD OVERWRITE classification ON note TYPE string DEFAULT ALWAYS 'intern'
+    ASSERT $value IN ['intern', 'extern']
+        AND ($before = NONE OR $before = 'extern' OR $value = 'intern' OR $herclassificatie = true);
+DEFINE FIELD OVERWRITE classification ON notebook TYPE string DEFAULT ALWAYS 'intern'
+    ASSERT $value IN ['intern', 'extern']
+        AND ($before = NONE OR $before = 'extern' OR $value = 'intern' OR $herclassificatie = true);
+
+-- 1 en 2. Wat bij een bron hoort: standaard de waarde van de bron, nooit losser.
+DEFINE FIELD OVERWRITE classification ON chunk TYPE string DEFAULT ALWAYS fn::classificatie_van(source)
+    ASSERT $value IN ['intern', 'extern']
+        AND ($value = 'intern' OR fn::classificatie_van(source) = 'extern')
+        AND ($before = NONE OR $before = 'extern' OR $value = 'intern' OR $herclassificatie = true);
+DEFINE FIELD OVERWRITE classification ON doc_node TYPE string DEFAULT ALWAYS fn::classificatie_van(source)
+    ASSERT $value IN ['intern', 'extern']
+        AND ($value = 'intern' OR fn::classificatie_van(source) = 'extern')
+        AND ($before = NONE OR $before = 'extern' OR $value = 'intern' OR $herclassificatie = true);
+DEFINE FIELD OVERWRITE classification ON source_insight TYPE string DEFAULT ALWAYS fn::classificatie_van(source)
+    ASSERT $value IN ['intern', 'extern']
+        AND ($value = 'intern' OR fn::classificatie_van(source) = 'extern')
+        AND ($before = NONE OR $before = 'extern' OR $value = 'intern' OR $herclassificatie = true);
+DEFINE FIELD OVERWRITE classification ON source_embedding TYPE string
+    DEFAULT ALWAYS IF chunk { fn::classificatie_van(chunk) } ELSE { fn::classificatie_van(source) }
+    ASSERT $value IN ['intern', 'extern']
+        AND ($value = 'intern' OR (fn::classificatie_van(source) = 'extern'
+            AND (chunk = NONE OR fn::classificatie_van(chunk) = 'extern')))
+        AND ($before = NONE OR $before = 'extern' OR $value = 'intern' OR $herclassificatie = true);
+
+-- 3. Afgeleide classificatie, bij elk schrijven berekend. Onder v2.7.0 draait
+-- VALUE niet op een ontbrekend veld; DEFAULT ALWAYS zorgt dat het er altijd is.
+-- Een closure (`.map(|$b| ...)`) ziet geen variabele uit een LET erbuiten,
+-- wel `$this`.
+DEFINE FIELD OVERWRITE classification ON entity TYPE string DEFAULT ALWAYS 'intern'
+    VALUE fn::afgeleide_classificatie(
+        ($this.source_documents ?? []).map(|$b| fn::vermelding_classificatie($b, $this.properties.grounding))
+    )
+    ASSERT $value IN ['intern', 'extern'];
+DEFINE FIELD OVERWRITE classification ON relation TYPE string DEFAULT ALWAYS 'intern'
+    VALUE {
+        LET $vermeldingen = ($this.source_documents ?? []).map(|$b| fn::vermelding_classificatie($b, $this.properties.grounding));
+        RETURN IF array::len($vermeldingen) = 0 { 'intern' } ELSE {
+            fn::afgeleide_classificatie(array::concat($vermeldingen,
+                [fn::classificatie_van($this.in), fn::classificatie_van($this.out)]))
+        };
+    }
+    ASSERT $value IN ['intern', 'extern'];
+DEFINE FIELD OVERWRITE classification ON entity_alias TYPE string DEFAULT ALWAYS 'intern'
+    VALUE {
+        LET $waarden = [fn::classificatie_van($this.canonical_entity)];
+        RETURN fn::afgeleide_classificatie(IF $this.source_document {
+            array::append($waarden, fn::classificatie_van($this.source_document))
+        } ELSE { $waarden });
+    }
+    ASSERT $value IN ['intern', 'extern'];
+DEFINE FIELD OVERWRITE classification ON triage_queue TYPE string DEFAULT ALWAYS 'intern'
+    VALUE fn::classificatie_van($this.entity)
+    ASSERT $value IN ['intern', 'extern'];
+
+-- 3. Een entiteit met een andere waarde werkt wat van haar afhangt bij.
+DEFINE EVENT OVERWRITE afgeleide_classificatie ON entity
+    WHEN $event = 'UPDATE' AND $before.classification != $after.classification
+    THEN {
+        UPDATE relation WHERE in = $after.id OR out = $after.id RETURN NONE;
+        UPDATE entity_alias WHERE canonical_entity = $after.id RETURN NONE;
+        UPDATE triage_queue WHERE entity = $after.id RETURN NONE;
+    };
+
+-- 4. De strengste waarde wint.
+DEFINE EVENT OVERWRITE strengste_classificatie ON source
+    WHEN $event = 'UPDATE' AND $before.classification = 'extern' AND $after.classification = 'intern'
+    THEN {
+        UPDATE chunk SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
+        UPDATE source_embedding SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
+        UPDATE doc_node SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
+        UPDATE source_insight SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
+        UPDATE entity WHERE source_documents CONTAINS <string> $after.id RETURN NONE;
+        UPDATE relation WHERE source_documents CONTAINS <string> $after.id RETURN NONE;
+        UPDATE entity_alias WHERE source_document = <string> $after.id RETURN NONE;
+    };
+
+-- 5. Het logboek van herclassificaties: alleen aanvullen.
+DEFINE TABLE OVERWRITE classification_log SCHEMAFULL;
+DEFINE FIELD OVERWRITE source ON classification_log TYPE record<source> READONLY;
+DEFINE FIELD OVERWRITE from_classification ON classification_log TYPE string READONLY
+    ASSERT $value IN ['intern', 'extern'];
+DEFINE FIELD OVERWRITE to_classification ON classification_log TYPE string READONLY
+    ASSERT $value IN ['intern', 'extern'];
+DEFINE FIELD OVERWRITE reason ON classification_log TYPE string READONLY
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE agent_key ON classification_log TYPE string READONLY
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE person ON classification_log TYPE string READONLY
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE created_at ON classification_log TYPE datetime VALUE time::now() READONLY;
+DEFINE INDEX OVERWRITE classification_log_source ON classification_log FIELDS source;
+DEFINE EVENT OVERWRITE alleen_aanvullen ON classification_log
+    WHEN $event IN ['UPDATE', 'DELETE']
+    THEN { THROW 'classification_log is alleen aanvulbaar' };
+
+RETURN NONE;

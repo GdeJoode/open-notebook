@@ -1,0 +1,32 @@
+-- ============================================================================
+-- Migratie 89 terug: classificatie intern/extern weg (F2-03, ADR 0001).
+--
+-- Eerst de events, dan het logboek, de velden en de functies (de velden
+-- gebruiken de functies). Daarna `private = true` op alle bronnen: ook een
+-- terugdraaiactie maakt niets extern. Idempotent: IF EXISTS en een UPDATE
+-- zonder voorwaarde.
+-- ============================================================================
+
+REMOVE EVENT IF EXISTS strengste_classificatie ON source;
+REMOVE EVENT IF EXISTS afgeleide_classificatie ON entity;
+REMOVE TABLE IF EXISTS classification_log;
+
+REMOVE FIELD IF EXISTS classification ON source;
+REMOVE FIELD IF EXISTS classification ON note;
+REMOVE FIELD IF EXISTS classification ON notebook;
+REMOVE FIELD IF EXISTS classification ON chunk;
+REMOVE FIELD IF EXISTS classification ON doc_node;
+REMOVE FIELD IF EXISTS classification ON source_insight;
+REMOVE FIELD IF EXISTS classification ON source_embedding;
+REMOVE FIELD IF EXISTS classification ON entity;
+REMOVE FIELD IF EXISTS classification ON relation;
+REMOVE FIELD IF EXISTS classification ON entity_alias;
+REMOVE FIELD IF EXISTS classification ON triage_queue;
+
+REMOVE FUNCTION IF EXISTS fn::afgeleide_classificatie;
+REMOVE FUNCTION IF EXISTS fn::vermelding_classificatie;
+REMOVE FUNCTION IF EXISTS fn::classificatie_van;
+
+UPDATE source SET private = true RETURN NONE;
+
+RETURN NONE;
