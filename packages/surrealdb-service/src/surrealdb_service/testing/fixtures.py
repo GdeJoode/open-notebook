@@ -4,7 +4,7 @@ There is no first-party ``testcontainers-surrealdb`` adapter on PyPI as of
 2026-06, so we use the generic ``DockerContainer`` plus a custom HTTP-health
 wait strategy. The fixture:
 
-1. Pulls ``surrealdb/surrealdb:v2`` (matching ``docker-compose.yml``).
+1. Pulls ``surrealdb/surrealdb:v2.7.0`` (ADR 0021).
 2. Boots it with the ``memory`` storage engine and root/root credentials.
    Production uses ``rocksdb`` but no migration we exercise depends on
    rocksdb-specific behaviour; ``memory`` gives a faster boot and a
@@ -35,9 +35,9 @@ from surrealdb_service import connection as connection_module
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.migrations import AsyncMigrationManager
 
-# Pin to the same major tag used in docker-compose.yml. Bumping this should be
+# Pinned to v2.7.0 (ADR 0021, signaalsysteem). Bumping this should be
 # a deliberate decision — schema migrations are written against this version.
-SURREALDB_IMAGE = "surrealdb/surrealdb:v2"
+SURREALDB_IMAGE = "surrealdb/surrealdb:v2.7.0"
 
 # SurrealDB inside the container listens on 8000. Testcontainers maps it to a
 # random host port we discover via .get_exposed_port().
