@@ -409,6 +409,9 @@ services:
     image: quay.io/docling-project/docling-serve-cu128:v1.38.2
     <<: *geen-herstart
     networks: [uitgaand]
+    # Het image draait als uid 1001; een nieuw benoemd volume is van root. Alleen deze
+    # downloadcontainer draait daarom als root; docling-serve leest het volume alleen.
+    user: "0:0"
     entrypoint: ["docling-tools", "models", "download", "--output-dir", "/artifacts"]
     volumes:
       - docling_artifacts:/artifacts

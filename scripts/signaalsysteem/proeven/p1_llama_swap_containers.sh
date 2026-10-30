@@ -17,7 +17,12 @@ if [[ $VOORBEREIDEN -eq 1 ]]; then
   proef_start p1-voorbereiden p1-voorbereiden
   p0_voorwaarde --gpu
   for img in "$IMG_LLAMA_SWAP" "$IMG_DOCLING" "$IMG_WHISPERX_A" "$IMG_SOCKET_PROXY" "$IMG_DOCKER_CLI" "$IMG_CURL" "$IMG_PY" "$IMG_PY_KEV"; do
-    docker image inspect "$img" >/dev/null 2>&1 || bewaar "pull_${img//[\/:]/_}" docker pull "$img"
+    # public.ecr.aws geeft anoniem soms "toomanyrequests"; drie pogingen met 60 s ertussen.
+    for poging in 1 2 3; do
+      docker image inspect "$img" >/dev/null 2>&1 && break
+      bewaar "pull_${img//[\/:]/_}_$poging" docker pull "$img" || sleep 60
+    done
+    docker image inspect "$img" >/dev/null 2>&1 || omgeving_ongeschikt "image $img niet op te halen, zie pull-logs"
   done
   geheim_maken SP_KEV_API_KEY; geheim_maken SP_DOCLING_API_KEY
   bewaar build dc --profile p1 --profile p1-voorbereiden build kev llama-swap p1-modellen-voorbereiden
