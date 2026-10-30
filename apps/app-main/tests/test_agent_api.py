@@ -25,6 +25,10 @@ from app_main.api.rate_limit import limiter
 from app_main.api.routers import agents
 
 
+# F2-01: these tests exercise the real key check (no test key from conftest).
+pytestmark = pytest.mark.echte_sleutels
+
+
 def _make_client() -> TestClient:
     app = FastAPI()
     app.state.limiter = limiter
@@ -64,12 +68,12 @@ def test_extract_entities_rejects_an_unknown_key(monkeypatch):
     resp = client.post(
         "/api/v1/agents/extract-entities",
         json={"text": "Alice works at Acme."},
-        headers={"X-API-Key": "ak_bogus"},
+        headers={"Authorization": "Bearer ak_bogus"},
     )
     assert resp.status_code == 401
 
 
-def test_extract_entities_with_valid_read_key_returns_entities(monkeypatch):
+def test_extract_entities_with_beheerder_key_returns_entities(monkeypatch):
     monkeypatch.setattr(
         agent_auth.AgentKeyService,
         "authenticate",
@@ -77,7 +81,8 @@ def test_extract_entities_with_valid_read_key_returns_entities(monkeypatch):
             return_value={
                 "id": "agent_keys:1",
                 "agent_id": "agent-x",
-                "permission": "read",
+                "permission": "beheerder",
+                "person": "Testpersoon",
             }
         ),
     )
@@ -85,7 +90,7 @@ def test_extract_entities_with_valid_read_key_returns_entities(monkeypatch):
     resp = client.post(
         "/api/v1/agents/extract-entities",
         json={"text": "Alice works at Acme."},
-        headers={"X-API-Key": "ak_good"},
+        headers={"Authorization": "Bearer ak_good"},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -107,15 +112,16 @@ def test_throttled_429_is_not_audited(monkeypatch):
     monkeypatch.setattr(
         agent_auth.AgentKeyService,
         "authenticate",
-        AsyncMock(return_value={"id": "agent_keys:1", "agent_id": "a", "permission": "read"}),
+        AsyncMock(return_value={"id": "agent_keys:1", "agent_id": "a", "permission": "beheerder",
+                                       "person": "Testpersoon"}),
     )
     client = _make_client()
 
     r1 = client.post(
-        "/api/v1/agents/extract-entities", json={"text": "x"}, headers={"X-API-Key": "ak"}
+        "/api/v1/agents/extract-entities", json={"text": "x"}, headers={"Authorization": "Bearer ak"}
     )
     r2 = client.post(
-        "/api/v1/agents/extract-entities", json={"text": "x"}, headers={"X-API-Key": "ak"}
+        "/api/v1/agents/extract-entities", json={"text": "x"}, headers={"Authorization": "Bearer ak"}
     )
     assert r1.status_code == 200
     assert r2.status_code == 429

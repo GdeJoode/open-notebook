@@ -13,8 +13,9 @@ from app_main.exceptions import InvalidInputError
 from app_main.services.note_service import NoteService
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(tags=["context"])
+router = APIRouter(tags=["context"], dependencies=[RECHT_BEHEERDER])
 
 
 def _token_count(content: str) -> int:

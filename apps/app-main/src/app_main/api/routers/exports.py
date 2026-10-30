@@ -70,8 +70,9 @@ from app_main.services.obsidian_export_service import (
 )
 from app_main.services.okf_export_service import OkfExportService
 from app_main.services.okf_import_service import OkfImportService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["exports"])
+router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["exports"], dependencies=[RECHT_BEHEERDER])
 
 # Above this surviving-entity count an OKF export is deferred to the job
 # queue rather than built inline on the request path (OKF.2 constraint §5).

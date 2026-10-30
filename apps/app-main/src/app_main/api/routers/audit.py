@@ -26,8 +26,9 @@ from app_main.dependencies import (
 from app_main.services.audit.audit_service import AuditService
 from app_main.services.audit.deep_audit_service import DeepAuditService
 from app_main.services.notebook_service import NotebookService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["audit"])
+router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["audit"], dependencies=[RECHT_BEHEERDER])
 
 
 @router.post("/audit", response_model=AuditRunResponse)

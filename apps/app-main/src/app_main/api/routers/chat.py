@@ -12,8 +12,9 @@ from pydantic import BaseModel, Field
 from app_main.dependencies import get_chat_service, get_notebook_service
 from app_main.services.chat_service import ChatService
 from app_main.services.notebook_service import NotebookService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/chat", tags=["chat"])
+router = APIRouter(prefix="/chat", tags=["chat"], dependencies=[RECHT_BEHEERDER])
 
 
 # ---------------------------------------------------------------------------

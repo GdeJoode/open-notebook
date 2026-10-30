@@ -30,6 +30,10 @@ from app_main.dependencies import (
 )
 
 
+# F2-01: these tests exercise the real key check (no test key from conftest).
+pytestmark = pytest.mark.echte_sleutels
+
+
 def _make_client(source_svc=None) -> TestClient:
     app = FastAPI()
     app.state.limiter = limiter
@@ -48,7 +52,12 @@ def _auth(monkeypatch, permission, agent_id="a1"):
         agent_auth.AgentKeyService,
         "authenticate",
         AsyncMock(
-            return_value={"id": "agent_keys:1", "agent_id": agent_id, "permission": permission}
+            return_value={
+                "id": "agent_keys:1",
+                "agent_id": agent_id,
+                "permission": permission,
+                "person": "Testpersoon",
+            }
         ),
     )
 
@@ -57,7 +66,7 @@ def _auth(monkeypatch, permission, agent_id="a1"):
 
 
 def test_process_url_reuses_ingest_and_returns_job_id(monkeypatch):
-    _auth(monkeypatch, "write")
+    _auth(monkeypatch, "beheerder")
     create_impl = AsyncMock(return_value=SimpleNamespace(id="source:x"))
     monkeypatch.setattr(sources_upload, "_create_source_impl", create_impl)
     source_svc = AsyncMock()
@@ -67,7 +76,7 @@ def test_process_url_reuses_ingest_and_returns_job_id(monkeypatch):
     resp = client.post(
         "/api/v1/agents/process-url",
         json={"url": "https://example.com", "notebook_id": "notebook:n"},
-        headers={"X-API-Key": "ak_w"},
+        headers={"Authorization": "Bearer ak_w"},
     )
 
     assert resp.status_code == 200
@@ -81,20 +90,20 @@ def test_process_url_reuses_ingest_and_returns_job_id(monkeypatch):
     assert sc.notebook_id == "notebook:n"
 
 
-def test_process_url_read_key_is_403(monkeypatch):
-    _auth(monkeypatch, "read")  # write-gated
+def test_process_url_pijplijn_key_is_403(monkeypatch):
+    _auth(monkeypatch, "pijplijn")  # beheerder-gated
     client = _make_client()
     resp = client.post(
         "/api/v1/agents/process-url",
         json={"url": "https://x", "notebook_id": "notebook:n"},
-        headers={"X-API-Key": "ak_r"},
+        headers={"Authorization": "Bearer ak_r"},
     )
     assert resp.status_code == 403
 
 
 def test_process_url_rejects_ssrf_target(monkeypatch):
-    """A write key cannot make the server fetch a loopback/metadata target."""
-    _auth(monkeypatch, "write")
+    """A beheerder key cannot make the server fetch a loopback/metadata target."""
+    _auth(monkeypatch, "beheerder")
     create_impl = AsyncMock(return_value=SimpleNamespace(id="source:x"))
     monkeypatch.setattr(sources_upload, "_create_source_impl", create_impl)
 
@@ -122,7 +131,7 @@ def test_process_url_rejects_ssrf_target(monkeypatch):
         resp = client.post(
             "/api/v1/agents/process-url",
             json={"url": bad, "notebook_id": "notebook:n"},
-            headers={"X-API-Key": "ak_w"},
+            headers={"Authorization": "Bearer ak_w"},
         )
         assert resp.status_code == 422, bad
     # Unicode-16 "outlined digits" (U+1CCF0–U+1CCF9) → 127.0.0.1 under UTS-46.
@@ -130,7 +139,7 @@ def test_process_url_rejects_ssrf_target(monkeypatch):
     resp = client.post(
         "/api/v1/agents/process-url",
         json={"url": outlined_127, "notebook_id": "notebook:n"},
-        headers={"X-API-Key": "ak_w"},
+        headers={"Authorization": "Bearer ak_w"},
     )
     assert resp.status_code == 422, outlined_127
     # The ingest chain was never entered for any blocked URL.
@@ -149,7 +158,7 @@ def _own_job(monkeypatch, owns: bool):
 
 
 def test_job_status_passthrough_for_owned_job(monkeypatch):
-    _auth(monkeypatch, "read")
+    _auth(monkeypatch, "beheerder")
     _own_job(monkeypatch, True)  # the caller enqueued this job
     import app_main.services.command_service as cs
 
@@ -159,13 +168,13 @@ def test_job_status_passthrough_for_owned_job(monkeypatch):
         AsyncMock(return_value={"job_id": "j1", "status": "running", "result": None}),
     )
     client = _make_client()
-    resp = client.get("/api/v1/agents/jobs/j1", headers={"X-API-Key": "ak_r"})
+    resp = client.get("/api/v1/agents/jobs/j1", headers={"Authorization": "Bearer ak_r"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "running"
 
 
 def test_job_status_unknown_is_200_for_owned_job(monkeypatch):
-    _auth(monkeypatch, "read")
+    _auth(monkeypatch, "beheerder")
     _own_job(monkeypatch, True)
     import app_main.services.command_service as cs
 
@@ -175,15 +184,14 @@ def test_job_status_unknown_is_200_for_owned_job(monkeypatch):
         AsyncMock(return_value={"job_id": "nope", "status": "unknown"}),
     )
     client = _make_client()
-    resp = client.get("/api/v1/agents/jobs/nope", headers={"X-API-Key": "ak_r"})
+    resp = client.get("/api/v1/agents/jobs/nope", headers={"Authorization": "Bearer ak_r"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "unknown"
 
 
-def test_job_status_foreign_job_is_404_and_does_not_leak(monkeypatch):
-    """IDOR guard: a job the caller did NOT enqueue → 404, status never read."""
-    _auth(monkeypatch, "read")
-    _own_job(monkeypatch, False)  # not the caller's job
+def test_job_status_non_beheerder_is_403_and_does_not_leak(monkeypatch):
+    """F2-01: only `beheerder` reaches the agent routes; status never read."""
+    _auth(monkeypatch, "pijplijn")
     import app_main.services.command_service as cs
 
     status_fn = AsyncMock(
@@ -192,15 +200,14 @@ def test_job_status_foreign_job_is_404_and_does_not_leak(monkeypatch):
     monkeypatch.setattr(cs.CommandService, "get_command_status", status_fn)
 
     client = _make_client()
-    resp = client.get("/api/v1/agents/jobs/victim", headers={"X-API-Key": "ak_r"})
-    assert resp.status_code == 404
-    # The job's status/result was never fetched — no existence oracle, no leak.
+    resp = client.get("/api/v1/agents/jobs/victim", headers={"Authorization": "Bearer ak_p"})
+    assert resp.status_code == 403
     status_fn.assert_not_awaited()
 
 
-def test_job_status_admin_bypasses_ownership(monkeypatch):
-    """An admin key may poll any job (no ownership binding)."""
-    _auth(monkeypatch, "admin")
+def test_job_status_beheerder_bypasses_ownership(monkeypatch):
+    """A beheerder key may poll any job (no ownership binding)."""
+    _auth(monkeypatch, "beheerder")
     owns = AsyncMock(return_value=False)
     import app_main.services.agents.audit_service as aud
 
@@ -213,34 +220,17 @@ def test_job_status_admin_bypasses_ownership(monkeypatch):
         AsyncMock(return_value={"job_id": "any", "status": "complete"}),
     )
     client = _make_client()
-    resp = client.get("/api/v1/agents/jobs/any", headers={"X-API-Key": "ak_admin"})
+    resp = client.get("/api/v1/agents/jobs/any", headers={"Authorization": "Bearer ak_admin"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "complete"
-    owns.assert_not_awaited()  # admin skips the ownership check entirely
+    owns.assert_not_awaited()  # beheerder skips the ownership check entirely
 
 
 # -- audit-log --------------------------------------------------------------
 
 
-def test_audit_log_read_key_scoped_to_self(monkeypatch):
-    _auth(monkeypatch, "read", agent_id="a1")
-    import app_main.services.agents.audit_service as aud
-
-    lister = AsyncMock(return_value=[{"method": "POST", "path": "/x", "status": 200}])
-    monkeypatch.setattr(aud.AgentAuditService, "list_for_agent", lister)
-
-    client = _make_client()
-    # A read key asking for another agent's log is still scoped to ITSELF.
-    resp = client.get(
-        "/api/v1/agents/audit-log?agent_id=other", headers={"X-API-Key": "ak_r"}
-    )
-    assert resp.status_code == 200
-    assert resp.json()["agent_id"] == "a1"
-    assert lister.await_args.args[0] == "a1"  # not "other"
-
-
-def test_audit_log_admin_can_read_other_agent(monkeypatch):
-    _auth(monkeypatch, "admin", agent_id="admin1")
+def test_audit_log_non_beheerder_is_403(monkeypatch):
+    _auth(monkeypatch, "pijplijn", agent_id="a1")
     import app_main.services.agents.audit_service as aud
 
     lister = AsyncMock(return_value=[])
@@ -248,7 +238,22 @@ def test_audit_log_admin_can_read_other_agent(monkeypatch):
 
     client = _make_client()
     resp = client.get(
-        "/api/v1/agents/audit-log?agent_id=other", headers={"X-API-Key": "ak_admin"}
+        "/api/v1/agents/audit-log?agent_id=other", headers={"Authorization": "Bearer ak_r"}
+    )
+    assert resp.status_code == 403
+    lister.assert_not_awaited()
+
+
+def test_audit_log_beheerder_can_read_other_agent(monkeypatch):
+    _auth(monkeypatch, "beheerder", agent_id="admin1")
+    import app_main.services.agents.audit_service as aud
+
+    lister = AsyncMock(return_value=[])
+    monkeypatch.setattr(aud.AgentAuditService, "list_for_agent", lister)
+
+    client = _make_client()
+    resp = client.get(
+        "/api/v1/agents/audit-log?agent_id=other", headers={"Authorization": "Bearer ak_admin"}
     )
     assert resp.status_code == 200
     assert resp.json()["agent_id"] == "other"

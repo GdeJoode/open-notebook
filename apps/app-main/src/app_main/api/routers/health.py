@@ -23,8 +23,9 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from app_main.services.mineru_http_client import MineruHttpClient
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/health", tags=["health"])
+router = APIRouter(prefix="/health", tags=["health"], dependencies=[RECHT_BEHEERDER])
 
 
 class MineruHealthResponse(BaseModel):

@@ -6,8 +6,9 @@ from loguru import logger
 from app_main.api.schemas import NoteResponse, SaveAsNoteRequest, SourceInsightResponse
 from app_main.dependencies import get_insight_service
 from app_main.services.insight_service import InsightService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/insights", tags=["insights"])
+router = APIRouter(prefix="/insights", tags=["insights"], dependencies=[RECHT_BEHEERDER])
 
 
 def _insight_to_response(insight) -> SourceInsightResponse:

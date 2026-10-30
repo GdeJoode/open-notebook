@@ -1,128 +1,159 @@
-"""Agent API-key authentication dependency (Track G.1, decision G-D1).
+"""Sleutels en rechten per route, standaard weigeren (F2-01, ADR 0002 A/B).
 
-The SOLE authenticator for ``/api/v1/agents/*`` routes. Those routes are excluded
-from the shared-password middleware (``auth.py``), so this dependency is the only
-gate — and it is **fail-closed and password-independent**: a missing / invalid /
-revoked key is always a 401, regardless of whether ``OPEN_NOTEBOOK_PASSWORD`` is
-set. That is a net security improvement over the shared-password middleware, which
-is fail-OPEN when no password is configured.
+Elk verzoek draagt ``Authorization: Bearer <sleutel>``. :func:`authenticate_request`
+zoekt de sleutel op (SHA-256, niet ingetrokken) en geeft een
+:class:`AgentKeyContext` met het recht en de persoon. De sleutelmiddleware
+(``auth.py``) doet dat voor elk verzoek behalve :data:`ZONDER_SLEUTEL`; een route
+declareert haar minimale recht met :func:`require_right`. Een route zonder
+declaratie faalt in ``tests/test_route_rechten.py``.
 
-Scope: a route declares a minimum permission via :func:`require_agent_key`; a key
-whose scope is >= it passes (``read`` < ``write`` < ``admin``). The resolved key
-context is attached to ``request.state.agent_key`` so the sub-app's audit
-middleware can record the call.
+Rechten (ADR 0002 B): ``lezen_extern`` < ``lezen_intern`` < ``pijplijn`` <
+``beheerder``. ``ophalen`` staat daarbuiten: het mag alleen een route die
+``ophalen`` declareert (de ophaalcontrole, F4-13), en ziet geen records.
+``beheerder`` mag alles.
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Optional
 
-from fastapi import Header, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
+from shared.models.agents import SCOPE_PER_RIGHT, ClassificationScope, Right
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app_main.services.agents.key_service import AgentKeyService
 
-_AGENT_PREFIX = "/api/v1/agents"
+#: De enige paden zonder sleutelplicht. Geen van beide geeft inhoud terug.
+ZONDER_SLEUTEL = frozenset({"/health", "/api/auth/status"})
 
-_PERMISSION_LEVEL = {"read": 0, "write": 1, "admin": 2}
+#: Per minimaal recht van een route: de rechten die de route mogen aanroepen.
+_TOEGESTAAN: dict[Right, frozenset[Right]] = {
+    Right.LEZEN_EXTERN: frozenset(
+        {Right.LEZEN_EXTERN, Right.LEZEN_INTERN, Right.PIJPLIJN, Right.BEHEERDER}
+    ),
+    Right.LEZEN_INTERN: frozenset({Right.LEZEN_INTERN, Right.PIJPLIJN, Right.BEHEERDER}),
+    Right.PIJPLIJN: frozenset({Right.PIJPLIJN, Right.BEHEERDER}),
+    Right.OPHALEN: frozenset({Right.OPHALEN, Right.BEHEERDER}),
+    Right.BEHEERDER: frozenset({Right.BEHEERDER}),
+}
+
+_WEIGER_401 = {"WWW-Authenticate": "Bearer"}
 
 
 @dataclass(frozen=True)
 class AgentKeyContext:
-    """The resolved, authenticated key for a request."""
+    """De geauthenticeerde sleutel van een verzoek."""
 
     key_id: str
     agent_id: str
-    permission: str
+    permission: Right
+    person: Optional[str] = None
     rate_limit_rpm: Optional[int] = None
 
+    @property
+    def scope(self) -> ClassificationScope:
+        return SCOPE_PER_RIGHT[self.permission]
 
-def _level(permission: str) -> int:
-    return _PERMISSION_LEVEL.get(permission, -1)
+
+def bearer_token(request: Request) -> Optional[str]:
+    """De sleutel uit ``Authorization: Bearer <sleutel>``, anders ``None``."""
+    header = request.headers.get("Authorization") or ""
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
 
 
-def require_agent_key(min_permission: str = "read"):
-    """FastAPI dependency factory gating an agent route by ``min_permission``.
+async def authenticate_request(request: Request) -> AgentKeyContext:
+    """Zoek de sleutel van het verzoek op; 401 als die ontbreekt of ongeldig is.
 
-    Reads ``X-API-Key``, authenticates it (SHA-256 lookup of a non-revoked key),
-    enforces the scope, attaches the :class:`AgentKeyContext` to
-    ``request.state.agent_key``, and returns it. Raises 401 (missing / invalid /
-    revoked) or 403 (insufficient scope). Never falls open.
+    Een rij met een recht buiten de vijf (bijvoorbeeld een oude ``read``-sleutel)
+    of een ``beheerder`` zonder persoon geldt als ongeldig: standaard weigeren.
     """
-    required = _level(min_permission)
+    token = bearer_token(request)
+    if token is None:
+        raise HTTPException(status_code=401, detail="Sleutel ontbreekt", headers=_WEIGER_401)
+    row = await AgentKeyService().authenticate(token)
+    if row is None:
+        raise HTTPException(status_code=401, detail="Ongeldige sleutel", headers=_WEIGER_401)
+    try:
+        permission = Right(str(row.get("permission")))
+    except ValueError:
+        raise HTTPException(
+            status_code=401, detail="Ongeldige sleutel", headers=_WEIGER_401
+        ) from None
+    person = (row.get("person") or "").strip() or None
+    if permission == Right.BEHEERDER and person is None:
+        raise HTTPException(status_code=401, detail="Ongeldige sleutel", headers=_WEIGER_401)
+    return AgentKeyContext(
+        key_id=str(row.get("id")),
+        agent_id=str(row.get("agent_id")),
+        permission=permission,
+        person=person,
+        rate_limit_rpm=row.get("rate_limit_rpm"),
+    )
 
-    async def _dependency(
-        request: Request,
-        x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
-    ) -> AgentKeyContext:
-        # Reuse a key already resolved by a broader gate this request (the
-        # router-level read gate), so a route that additionally requires a higher
-        # scope (e.g. write) re-checks the SCOPE without a second DB lookup +
-        # last_used_at write. Fixes the round-1 N4 double-authenticate.
-        cached = getattr(request.state, "agent_key", None)
-        if cached is not None:
-            if _level(cached.permission) < required:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"API key lacks '{min_permission}' scope",
-                )
-            return cached
-        if not x_api_key:
-            raise HTTPException(
-                status_code=401,
-                detail="Missing X-API-Key",
-                headers={"WWW-Authenticate": "X-API-Key"},
-            )
-        row = await AgentKeyService().authenticate(x_api_key)
-        if row is None:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid or revoked API key",
-                headers={"WWW-Authenticate": "X-API-Key"},
-            )
-        permission = str(row.get("permission", "read"))
-        if _level(permission) < required:
-            raise HTTPException(
-                status_code=403,
-                detail=f"API key lacks '{min_permission}' scope",
-            )
-        ctx = AgentKeyContext(
-            key_id=str(row.get("id")),
-            agent_id=str(row.get("agent_id")),
-            permission=permission,
-            rate_limit_rpm=row.get("rate_limit_rpm"),
-        )
-        # Expose to the sub-app audit middleware + the per-key rate limiter.
+
+async def current_key(request: Request) -> AgentKeyContext:
+    """De sleutel van dit verzoek, zoals de middleware die vond.
+
+    Ontbreekt die (een router zonder de middleware, zoals in een test), dan
+    authenticeert deze functie zelf. Zo valt een route nooit open.
+    """
+    ctx = getattr(request.state, "agent_key", None)
+    if ctx is None:
+        ctx = await authenticate_request(request)
         request.state.agent_key = ctx
+    return ctx
+
+
+def require_right(minimum: Right | str):
+    """Dependency: de route vraagt minimaal recht ``minimum``; anders 403.
+
+    Per recht één en dezelfde functie, met ``required_right`` als kenmerk,
+    zodat de routetest de declaratie kan vinden.
+    """
+    return _require_right(Right(minimum))
+
+
+@lru_cache(maxsize=None)
+def _require_right(minimum: Right):
+    toegestaan = _TOEGESTAAN[minimum]
+
+    async def _dependency(request: Request) -> AgentKeyContext:
+        ctx = await current_key(request)
+        if ctx.permission not in toegestaan:
+            raise HTTPException(status_code=403, detail="Onvoldoende recht")
         return ctx
 
+    _dependency.required_right = minimum  # type: ignore[attr-defined]
+    _dependency.__name__ = f"require_right_{minimum.value}"
     return _dependency
 
 
-class AgentAuditMiddleware(BaseHTTPMiddleware):
-    """Append-only per-call audit for the agent API (G.1).
+#: Kant-en-klare declaraties voor ``dependencies=[...]`` van een router of route.
+RECHT_LEZEN_EXTERN = Depends(require_right(Right.LEZEN_EXTERN))
+RECHT_BEHEERDER = Depends(require_right(Right.BEHEERDER))
 
-    Records every ``/api/v1/agents/*`` call — including auth failures (401/403,
-    where no key context was attached) — with method / path / status / latency.
-    Best-effort: an audit write never affects the response. Reads the resolved
-    key context off ``request.state.agent_key`` (set by :func:`require_agent_key`
-    on the success path).
+
+class AgentAuditMiddleware(BaseHTTPMiddleware):
+    """Logboek per aanroep, voor alle routes (ADR 0002 A).
+
+    Ook mislukte aanroepen (401/403) komen erin, zonder sleutel. Uitgezonderd:
+    ``/health`` (de healthcheck van Docker, zonder inhoud) en een afgeknepen
+    verzoek (429), dat anders zelf een schrijfvloed zou worden. Het logboek
+    beïnvloedt het antwoord nooit.
     """
 
     async def dispatch(self, request: Request, call_next):
-        if not request.url.path.startswith(_AGENT_PREFIX):
+        if request.url.path == "/health":
             return await call_next(request)
         start = time.time()
         response = await call_next(request)
         latency_ms = int((time.time() - start) * 1000)
-        # Do NOT audit a throttled (429) request. The per-IP pre-auth throttle
-        # already bounds those to the per-minute cap; writing one agent_audit_log
-        # row per rejected flood request would itself be a write-amplification DoS
-        # (the throttle bounds the auth DB READ, this bounds the audit DB WRITE).
-        # The ~N/min requests that pass the throttle and reach auth ARE recorded
-        # (incl. 401s), so brute-force visibility is preserved — and bounded.
         if response.status_code == 429:
             return response
         ctx = getattr(request.state, "agent_key", None)
@@ -145,4 +176,14 @@ class AgentAuditMiddleware(BaseHTTPMiddleware):
         return response
 
 
-__all__ = ["AgentAuditMiddleware", "AgentKeyContext", "require_agent_key"]
+__all__ = [
+    "RECHT_BEHEERDER",
+    "RECHT_LEZEN_EXTERN",
+    "ZONDER_SLEUTEL",
+    "AgentAuditMiddleware",
+    "AgentKeyContext",
+    "authenticate_request",
+    "bearer_token",
+    "current_key",
+    "require_right",
+]

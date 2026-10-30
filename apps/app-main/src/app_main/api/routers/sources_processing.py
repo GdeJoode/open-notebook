@@ -18,8 +18,9 @@ from app_main.services.contradiction_judge_service import (
 )
 from app_main.services.source_service import SourceService
 from surrealdb_service.repositories.base import _validate_record_id
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter()
+router = APIRouter(dependencies=[RECHT_BEHEERDER])
 
 
 def _validate_source_id(source_id: str) -> str:

@@ -42,8 +42,9 @@ from app_main.services.triage.triage_queue import (
     QueueItem,
     TriageQueueRepository,
 )
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/triage", tags=["triage"])
+router = APIRouter(prefix="/triage", tags=["triage"], dependencies=[RECHT_BEHEERDER])
 
 
 # --- Response / request schemas -----------------------------------------------

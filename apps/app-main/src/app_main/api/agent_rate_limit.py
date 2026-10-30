@@ -1,7 +1,7 @@
 """Per-key rate limiting for the agent API (Track G.1, decision G-D3).
 
 The agent routes reuse the app's existing slowapi ``Limiter`` but with a per-route
-``key_func`` that buckets by the **X-API-Key** header (so each agent key gets its
+``key_func`` that buckets by the **Bearer** key (so each agent key gets its
 own quota, not a shared per-IP one) and a dynamic limit string from the config
 default ``AGENT_RATE_LIMIT_RPM``.
 
@@ -24,8 +24,10 @@ from app_main.config import get_agent_rate_limit_rpm
 
 
 def agent_key_func(request: Request) -> str:
-    """Rate-limit bucket identity: the X-API-Key header, else the client IP."""
-    api_key = request.headers.get("X-API-Key")
+    """Rate-limit bucket identity: the Bearer key, else the client IP."""
+    from app_main.api.agent_auth import bearer_token
+
+    api_key = bearer_token(request)
     if api_key:
         return f"agentkey:{api_key}"
     from slowapi.util import get_remote_address

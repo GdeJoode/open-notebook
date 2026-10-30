@@ -25,7 +25,7 @@ from app_main.api.routers import agents
 from app_main.dependencies import get_summarization_service
 from app_main.services.summarization_service import SummarizationService
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.echte_sleutels]
 
 
 # -- service method ---------------------------------------------------------
@@ -86,13 +86,18 @@ def _auth_returns(monkeypatch, permission):
         agent_auth.AgentKeyService,
         "authenticate",
         AsyncMock(
-            return_value={"id": "agent_keys:1", "agent_id": "a", "permission": permission}
+            return_value={
+                "id": "agent_keys:1",
+                "agent_id": "a",
+                "permission": permission,
+                "person": "Testpersoon",
+            }
         ),
     )
 
 
-def test_generate_summary_write_key_returns_200(monkeypatch):
-    _auth_returns(monkeypatch, "write")
+def test_generate_summary_beheerder_key_returns_200(monkeypatch):
+    _auth_returns(monkeypatch, "beheerder")
     svc = AsyncMock()
     svc.summarize_text = AsyncMock(
         return_value={"summary": "Sum.", "strategy": "naive"}
@@ -101,19 +106,19 @@ def test_generate_summary_write_key_returns_200(monkeypatch):
     resp = client.post(
         "/api/v1/agents/generate-summary",
         json={"text": "text", "strategy": "naive"},
-        headers={"X-API-Key": "ak_w"},
+        headers={"Authorization": "Bearer ak_w"},
     )
     assert resp.status_code == 200
     assert resp.json()["summary"] == "Sum."
 
 
-def test_generate_summary_read_key_is_403(monkeypatch):
-    _auth_returns(monkeypatch, "read")  # read < write → forbidden
+def test_generate_summary_pijplijn_key_is_403(monkeypatch):
+    _auth_returns(monkeypatch, "pijplijn")  # pijplijn < beheerder → forbidden
     client = _make_client(AsyncMock())
     resp = client.post(
         "/api/v1/agents/generate-summary",
         json={"text": "text"},
-        headers={"X-API-Key": "ak_r"},
+        headers={"Authorization": "Bearer ak_r"},
     )
     assert resp.status_code == 403
 

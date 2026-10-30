@@ -16,8 +16,9 @@ from app_main.services.ontology_edit_service import (
     OntologyEditService,
 )
 from app_main.services.ontology_service import OntologyService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/ontologies", tags=["ontologies"])
+router = APIRouter(prefix="/ontologies", tags=["ontologies"], dependencies=[RECHT_BEHEERDER])
 
 
 @router.get("", response_model=List[Dict[str, Any]])

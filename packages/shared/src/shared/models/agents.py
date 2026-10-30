@@ -8,27 +8,60 @@ capability's request/response (`extract-entities` over raw text). Kept in
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-#: Permission scopes, least→most privileged. A route requiring scope X accepts a
-#: key whose scope is >= X (read < write < admin).
-AGENT_PERMISSIONS = ("read", "write", "admin")
+
+class Right(str, Enum):
+    """Het recht van een sleutel (ADR 0002 B, migratie 88)."""
+
+    LEZEN_EXTERN = "lezen_extern"
+    LEZEN_INTERN = "lezen_intern"
+    PIJPLIJN = "pijplijn"
+    OPHALEN = "ophalen"
+    BEHEERDER = "beheerder"
+
+
+class ClassificationScope(str, Enum):
+    """Welke classificaties een sleutel mag zien (ADR 0002 C, plan §5.3)."""
+
+    EXTERN = "EXTERN"
+    ALLES = "ALLES"
+    LEEG = "LEEG"
+
+
+#: Het bereik volgt uit het recht. `ophalen` ziet geen records.
+SCOPE_PER_RIGHT = {
+    Right.LEZEN_EXTERN: ClassificationScope.EXTERN,
+    Right.LEZEN_INTERN: ClassificationScope.ALLES,
+    Right.PIJPLIJN: ClassificationScope.ALLES,
+    Right.OPHALEN: ClassificationScope.LEEG,
+    Right.BEHEERDER: ClassificationScope.ALLES,
+}
 
 
 class AgentKeyCreate(BaseModel):
-    """Request to mint a new agent key (session-auth key management)."""
+    """Verzoek om een nieuwe sleutel (alleen met recht `beheerder`)."""
 
     agent_id: str = Field(description="Stable id of the calling agent.")
-    permission: str = Field(
-        default="read", description='One of "read" | "write" | "admin".'
+    permission: Right = Field(description="Het recht van de sleutel.")
+    person: Optional[str] = Field(
+        default=None,
+        description="Naam van de persoon; verplicht bij `beheerder`.",
     )
     label: Optional[str] = Field(default=None, description="Human-readable note.")
     rate_limit_rpm: Optional[int] = Field(
         default=None,
         description="Per-key requests-per-minute cap; None → the config default.",
     )
+
+    @model_validator(mode="after")
+    def _beheerder_heeft_person(self) -> "AgentKeyCreate":
+        if self.permission == Right.BEHEERDER and not (self.person or "").strip():
+            raise ValueError("een sleutel met recht beheerder vraagt een person")
+        return self
 
 
 class AgentKeyPublic(BaseModel):
@@ -39,6 +72,7 @@ class AgentKeyPublic(BaseModel):
     key_prefix: str
     label: Optional[str] = None
     permission: str
+    person: Optional[str] = None
     rate_limit_rpm: Optional[int] = None
     revoked: bool = False
     created: Optional[str] = None
@@ -129,11 +163,12 @@ class JobStatusResponse(BaseModel):
 
 
 __all__ = [
-    "AGENT_PERMISSIONS",
+    "SCOPE_PER_RIGHT",
     "AgentAuditEntry",
     "AgentKeyCreate",
     "AgentKeyCreated",
     "AgentKeyPublic",
+    "ClassificationScope",
     "ExtractEntitiesRequest",
     "ExtractEntitiesResponse",
     "ExtractedEntity",
@@ -142,4 +177,5 @@ __all__ = [
     "JobStatusResponse",
     "ProcessSourceResponse",
     "ProcessUrlRequest",
+    "Right",
 ]

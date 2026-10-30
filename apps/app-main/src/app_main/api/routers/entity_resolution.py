@@ -29,8 +29,9 @@ from app_main.services.entity_resolution import (
     RecanonicalizationService,
     merge_audit,
 )
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/entity-resolution", tags=["entity-resolution"])
+router = APIRouter(prefix="/entity-resolution", tags=["entity-resolution"], dependencies=[RECHT_BEHEERDER])
 
 
 def get_recanonicalization_service() -> RecanonicalizationService:

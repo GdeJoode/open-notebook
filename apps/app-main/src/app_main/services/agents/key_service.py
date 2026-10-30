@@ -20,6 +20,7 @@ import secrets
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
+from shared.models.agents import Right
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
 
@@ -46,6 +47,7 @@ def _to_public(row: Dict[str, Any]) -> Dict[str, Any]:
         "key_prefix": row.get("key_prefix"),
         "label": row.get("label"),
         "permission": row.get("permission"),
+        "person": row.get("person"),
         "rate_limit_rpm": row.get("rate_limit_rpm"),
         "revoked": bool(row.get("revoked", False)),
         "created": str(row.get("created")) if row.get("created") else None,
@@ -65,13 +67,23 @@ class AgentKeyService:
         self,
         *,
         agent_id: str,
-        permission: str = "read",
+        permission: Right | str,
+        person: Optional[str] = None,
         label: Optional[str] = None,
         rate_limit_rpm: Optional[int] = None,
     ) -> Tuple[Dict[str, Any], str]:
-        """Mint a key. Returns ``(public_row, plaintext)`` — plaintext shown ONCE."""
-        if permission not in ("read", "write", "admin"):
-            raise ValueError(f"invalid permission: {permission!r}")
+        """Mint a key. Returns ``(public_row, plaintext)`` — plaintext shown ONCE.
+
+        ``permission`` is one of the five rights (ADR 0002 B); ``beheerder``
+        requires a non-empty ``person`` (migration 88 enforces the same).
+        """
+        try:
+            right = Right(permission)
+        except ValueError:
+            raise ValueError(f"invalid permission: {permission!r}") from None
+        person = (person or "").strip() or None
+        if right == Right.BEHEERDER and person is None:
+            raise ValueError("permission 'beheerder' requires a person")
         plaintext = generate_key()
         rows = await execute_query(
             "CREATE agent_keys CONTENT $data",
@@ -81,7 +93,8 @@ class AgentKeyService:
                     "key_hash": hash_key(plaintext),
                     "key_prefix": plaintext[:_DISPLAY_PREFIX_LEN],
                     "label": label,
-                    "permission": permission,
+                    "permission": right.value,
+                    "person": person,
                     "rate_limit_rpm": rate_limit_rpm,
                     "revoked": False,
                 }

@@ -12,8 +12,9 @@ from loguru import logger
 from app_main.config import UPLOADS_FOLDER
 from app_main.dependencies import get_source_service
 from app_main.services.source_service import SourceService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter()
+router = APIRouter(dependencies=[RECHT_BEHEERDER])
 
 
 # ---------------------------------------------------------------------------

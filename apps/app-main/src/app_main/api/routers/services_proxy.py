@@ -15,8 +15,9 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel, Field
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/services", tags=["services"])
+router = APIRouter(prefix="/services", tags=["services"], dependencies=[RECHT_BEHEERDER])
 
 # Service URLs — configurable via env vars
 EXTRACTION_URL = os.getenv("EXTRACTION_SERVICE_URL", "http://localhost:8103")

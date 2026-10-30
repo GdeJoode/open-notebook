@@ -11,8 +11,9 @@ from app_main.api.schemas import (
     RebuildStatusResponse,
 )
 from surrealdb_service.connection import execute_query
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(tags=["embedding"])
+router = APIRouter(tags=["embedding"], dependencies=[RECHT_BEHEERDER])
 
 
 async def _count_query(query: str) -> int:

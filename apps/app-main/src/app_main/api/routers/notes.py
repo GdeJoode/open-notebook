@@ -23,6 +23,7 @@ from app_main.services.note_auto_link_service import (
 from app_main.services.note_service import NoteService
 from app_main.services.notebook_service import NotebookService
 from surrealdb_service.repositories.base import _validate_record_id
+from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
@@ -59,7 +60,7 @@ def _note_to_response(note) -> NoteResponse:
     )
 
 
-@router.get("", response_model=list[NoteResponse])
+@router.get("", response_model=list[NoteResponse], dependencies=[RECHT_LEZEN_EXTERN])
 async def list_notes(
     notebook_id: Optional[str] = None,
     limit: int = Query(50, ge=1, le=100, description="Max notes to return"),
@@ -93,7 +94,7 @@ async def list_notes(
     return [_note_to_response(n) for n in notes]
 
 
-@router.post("", response_model=NoteResponse, status_code=201)
+@router.post("", response_model=NoteResponse, status_code=201, dependencies=[RECHT_BEHEERDER])
 async def create_note(
     body: NoteCreate,
     note_service: NoteService = Depends(get_note_service),
@@ -120,7 +121,7 @@ async def create_note(
     return _note_to_response(note)
 
 
-@router.get("/{note_id}", response_model=NoteResponse)
+@router.get("/{note_id}", response_model=NoteResponse, dependencies=[RECHT_LEZEN_EXTERN])
 async def get_note(
     note_id: str,
     note_service: NoteService = Depends(get_note_service),
@@ -132,7 +133,7 @@ async def get_note(
     return _note_to_response(note)
 
 
-@router.put("/{note_id}", response_model=NoteResponse)
+@router.put("/{note_id}", response_model=NoteResponse, dependencies=[RECHT_BEHEERDER])
 async def update_note(
     note_id: str,
     body: NoteUpdate,
@@ -152,7 +153,7 @@ async def update_note(
     return _note_to_response(note)
 
 
-@router.delete("/{note_id}", status_code=204)
+@router.delete("/{note_id}", status_code=204, dependencies=[RECHT_BEHEERDER])
 async def delete_note(
     note_id: str,
     note_service: NoteService = Depends(get_note_service),
@@ -165,7 +166,7 @@ async def delete_note(
     logger.info("Deleted note {}", note_id)
 
 
-@router.post("/{note_id}/auto-link", response_model=NoteAutoLinkResponse)
+@router.post("/{note_id}/auto-link", response_model=NoteAutoLinkResponse, dependencies=[RECHT_BEHEERDER])
 async def auto_link_note(
     note_id: str,
     k: int = Query(

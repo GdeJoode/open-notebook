@@ -8,8 +8,9 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from surrealdb_service.connection import execute_query
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/zotero", tags=["zotero"])
+router = APIRouter(prefix="/zotero", tags=["zotero"], dependencies=[RECHT_BEHEERDER])
 
 
 # ---------------------------------------------------------------------------

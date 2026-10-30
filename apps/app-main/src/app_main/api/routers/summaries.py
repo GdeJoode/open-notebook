@@ -7,8 +7,9 @@ from pydantic import BaseModel
 
 from app_main.dependencies import get_summarization_service
 from app_main.services.summarization_service import SummarizationService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/summaries", tags=["summaries"])
+router = APIRouter(prefix="/summaries", tags=["summaries"], dependencies=[RECHT_BEHEERDER])
 
 
 class GenerateSummaryRequest(BaseModel):

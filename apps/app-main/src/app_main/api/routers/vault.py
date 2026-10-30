@@ -9,8 +9,9 @@ from pydantic import BaseModel
 from app_main.dependencies import get_settings_service
 from app_main.services.settings_service import SettingsService
 from app_main.services.vault_sync_service import VaultSyncService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/vault", tags=["vault"])
+router = APIRouter(prefix="/vault", tags=["vault"], dependencies=[RECHT_BEHEERDER])
 
 
 def _get_vault_service() -> VaultSyncService:

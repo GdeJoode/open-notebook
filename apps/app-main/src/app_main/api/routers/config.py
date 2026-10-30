@@ -10,8 +10,9 @@ from fastapi import APIRouter
 from loguru import logger
 
 from surrealdb_service.connection import execute_query
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(tags=["config"])
+router = APIRouter(tags=["config"], dependencies=[RECHT_BEHEERDER])
 
 # In-memory cache for version check results
 _version_cache: dict = {

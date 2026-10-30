@@ -38,8 +38,9 @@ from app_main.services.model_routing.route_resolver import (
     _DEFAULT_LOCAL_PROVIDER,
     _DEFAULT_PROVIDER_MODEL_NAME,
 )
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/model-routes", tags=["model-routes"])
+router = APIRouter(prefix="/model-routes", tags=["model-routes"], dependencies=[RECHT_BEHEERDER])
 
 # The three routed LLM stages (mirror of ``LLMTask`` values). Embeddings and
 # parsing are deliberately absent — the §1.2 guardrail keeps them local.

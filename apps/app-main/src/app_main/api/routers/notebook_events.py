@@ -56,9 +56,10 @@ from pydantic import BaseModel, Field
 
 from app_main.dependencies import get_notebook_service
 from app_main.services.notebook_service import NotebookService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
 
-router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["notebook-events"])
+router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["notebook-events"], dependencies=[RECHT_BEHEERDER])
 
 
 # Event types the soft-nudge UI knows how to render. The frontend always

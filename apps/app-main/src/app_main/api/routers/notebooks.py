@@ -15,6 +15,7 @@ from app_main.dependencies import (
 from app_main.services.notebook_merge_service import NotebookMergeService
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
+from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN
 
 router = APIRouter(prefix="/notebooks", tags=["notebooks"])
 
@@ -36,7 +37,7 @@ def _notebook_dict_to_response(data: dict) -> NotebookResponse:
     )
 
 
-@router.get("", response_model=list[NotebookResponse])
+@router.get("", response_model=list[NotebookResponse], dependencies=[RECHT_LEZEN_EXTERN])
 async def list_notebooks(
     archived: Optional[bool] = None,
     order_by: str = "updated desc",
@@ -51,7 +52,7 @@ async def list_notebooks(
     return [_notebook_dict_to_response(nb) for nb in notebooks]
 
 
-@router.post("", response_model=NotebookResponse, status_code=201)
+@router.post("", response_model=NotebookResponse, status_code=201, dependencies=[RECHT_BEHEERDER])
 async def create_notebook(
     body: NotebookCreate,
     notebook_service: NotebookService = Depends(get_notebook_service),
@@ -68,7 +69,7 @@ async def create_notebook(
     return _notebook_dict_to_response(data)
 
 
-@router.get("/{notebook_id}", response_model=NotebookResponse)
+@router.get("/{notebook_id}", response_model=NotebookResponse, dependencies=[RECHT_LEZEN_EXTERN])
 async def get_notebook(
     notebook_id: str,
     notebook_service: NotebookService = Depends(get_notebook_service),
@@ -80,7 +81,7 @@ async def get_notebook(
     return _notebook_dict_to_response(data)
 
 
-@router.put("/{notebook_id}", response_model=NotebookResponse)
+@router.put("/{notebook_id}", response_model=NotebookResponse, dependencies=[RECHT_BEHEERDER])
 async def update_notebook(
     notebook_id: str,
     body: NotebookUpdate,
@@ -102,7 +103,7 @@ async def update_notebook(
     return _notebook_dict_to_response(data)
 
 
-@router.post("/{notebook_id}/sources/{source_id}", status_code=204)
+@router.post("/{notebook_id}/sources/{source_id}", status_code=204, dependencies=[RECHT_BEHEERDER])
 async def add_source_to_notebook(
     notebook_id: str,
     source_id: str,
@@ -122,7 +123,7 @@ async def add_source_to_notebook(
     logger.info("Added source {} to notebook {}", source_id, notebook_id)
 
 
-@router.delete("/{notebook_id}/sources/{source_id}", status_code=204)
+@router.delete("/{notebook_id}/sources/{source_id}", status_code=204, dependencies=[RECHT_BEHEERDER])
 async def remove_source_from_notebook(
     notebook_id: str,
     source_id: str,
@@ -137,7 +138,7 @@ async def remove_source_from_notebook(
     logger.info("Removed source {} from notebook {}", source_id, notebook_id)
 
 
-@router.delete("/{notebook_id}", status_code=204)
+@router.delete("/{notebook_id}", status_code=204, dependencies=[RECHT_BEHEERDER])
 async def delete_notebook(
     notebook_id: str,
     notebook_service: NotebookService = Depends(get_notebook_service),
@@ -209,7 +210,7 @@ class NotebookMergeReportResponse(BaseModel):
     dry_run: bool
 
 
-@router.post("/merge", response_model=NotebookMergeReportResponse)
+@router.post("/merge", response_model=NotebookMergeReportResponse, dependencies=[RECHT_BEHEERDER])
 async def merge_notebooks(
     body: NotebookMergeRequest,
     merge_service: NotebookMergeService = Depends(get_notebook_merge_service),

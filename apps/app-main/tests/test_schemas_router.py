@@ -29,6 +29,8 @@ import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock
 
+import pytest
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from rdflib import Graph, URIRef
@@ -302,44 +304,23 @@ class TestFilenameSanitisation:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.echte_sleutels
 class TestAuthExclusionAllowList:
-    """Reviewer minor #5 — confirm the endpoint inherits the global
-    ``PasswordAuthMiddleware`` policy.
+    """The schema-TTL endpoint is not in the no-key allow-list (F2-01).
 
-    Strategy: stand up a minimal FastAPI app with only the
-    ``PasswordAuthMiddleware`` and the schemas router (mirroring the
-    auth config from ``app_main.api.app.create_app``), set
-    ``OPEN_NOTEBOOK_PASSWORD``, and confirm an unauthenticated request
-    to the schema-TTL endpoint is blocked with 401.
-
-    Avoids the full app's lifespan (DB migrations, worker startup) so
-    the test runs in <100ms with no external deps.
+    Stands up a minimal FastAPI app with only the ``ApiKeyMiddleware`` and
+    the schemas router, and confirms an unauthenticated request to the
+    schema-TTL endpoint is blocked with 401. Avoids the full app's lifespan
+    (DB migrations, worker startup).
     """
 
-    def test_endpoint_returns_401_when_password_set_and_no_auth_header(
-        self, monkeypatch
-    ):
-        monkeypatch.setenv("OPEN_NOTEBOOK_PASSWORD", "test-secret")
+    def test_endpoint_returns_401_without_a_key(self):
+        from app_main.api import agent_auth
+        from app_main.api.auth import ApiKeyMiddleware
 
-        from app_main.api.auth import PasswordAuthMiddleware
-
+        assert "/api/notebooks/{notebook_id}/schema.ttl" not in agent_auth.ZONDER_SLEUTEL
         app = FastAPI()
-        # SAME excluded_paths list as app_main.api.app.create_app —
-        # if this drifts and someone adds "schema.ttl" to the
-        # production list, this test still catches it because it
-        # asserts the production list verbatim.
-        app.add_middleware(
-            PasswordAuthMiddleware,
-            excluded_paths=[
-                "/",
-                "/health",
-                "/docs",
-                "/openapi.json",
-                "/redoc",
-                "/api/auth/status",
-                "/api/config",
-            ],
-        )
+        app.add_middleware(ApiKeyMiddleware)
         app.include_router(router, prefix="/api")
 
         with TestClient(app) as client:
@@ -347,11 +328,9 @@ class TestAuthExclusionAllowList:
 
         # 401 (no Authorization header) — the middleware short-circuits
         # before the router runs. Anything else (e.g. 404 from
-        # NotebookService) would mean the auth check was bypassed.
+        # NotebookService) would mean the key check was bypassed.
         assert resp.status_code == 401, (
-            f"Expected 401 from PasswordAuthMiddleware, got "
-            f"{resp.status_code}. The schema.ttl endpoint must NOT be "
-            f"in the auth excluded_paths allow-list."
+            f"Expected 401 from ApiKeyMiddleware, got {resp.status_code}."
         )
 
 

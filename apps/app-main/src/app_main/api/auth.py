@@ -1,120 +1,42 @@
-"""
-Authentication middleware and utilities for app-main.
-"""
+"""Sleutelmiddleware: geen verzoek zonder geldige sleutel (F2-01, ADR 0002 A).
 
-import os
-from typing import Optional
+Vervangt de wachtwoordmiddleware en ``OPEN_NOTEBOOK_PASSWORD``. Elk verzoek,
+ook buiten ``/api`` en ook naar een onbekend pad, moet een geldige sleutel
+dragen in ``Authorization: Bearer <sleutel>``; anders HTTP 401. Uitgezonderd
+zijn alleen de paden in :data:`~app_main.api.agent_auth.ZONDER_SLEUTEL`.
+De middleware zet de sleutel op ``request.state.agent_key``; het recht per
+route controleert :func:`~app_main.api.agent_auth.require_right`.
+"""
 
 from fastapi import HTTPException, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from surrealdb_service.connection import DatabaseUnavailableError
+
+from app_main.api import agent_auth
 
 
-class PasswordAuthMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware to check password authentication for all API requests.
-    Only active when OPEN_NOTEBOOK_PASSWORD environment variable is set.
-    """
-
-    def __init__(self, app, excluded_paths: Optional[list] = None):
-        super().__init__(app)
-        self.password = os.environ.get("OPEN_NOTEBOOK_PASSWORD")
-        self.excluded_paths = excluded_paths or [
-            "/", "/health", "/docs", "/openapi.json", "/redoc",
-        ]
+class ApiKeyMiddleware(BaseHTTPMiddleware):
+    """Authenticeert elk verzoek met een sleutel, standaard weigeren."""
 
     async def dispatch(self, request: Request, call_next):
-        if not self.password:
+        if request.url.path in agent_auth.ZONDER_SLEUTEL:
             return await call_next(request)
-
-        if request.url.path in self.excluded_paths:
-            return await call_next(request)
-
-        for excluded_path in self.excluded_paths:
-            # A trailing "/" on a MULTI-char entry marks a PREFIX exclusion (a whole
-            # sub-tree). Used for the agent API (Track G.1, G-D1): /api/v1/agents/*
-            # is excluded from the shared-password gate because require_agent_key is
-            # its SOLE (fail-closed) authenticator. The bare root "/" is an EXACT
-            # match only (handled above) — it must never be treated as a prefix, or
-            # it would match every path and disable the gate entirely.
-            if (
-                len(excluded_path) > 1
-                and excluded_path.endswith("/")
-                and request.url.path.startswith(excluded_path)
-            ):
-                return await call_next(request)
-            if "*" in excluded_path:
-                import re
-
-                pattern = excluded_path.replace("*", "[^/]+")
-                if re.match(f"^{pattern}$", request.url.path):
-                    return await call_next(request)
-
-        # Allow PDF endpoint access for react-pdf-highlighter
-        if request.url.path.startswith("/api/sources/") and request.url.path.endswith(
-            "/pdf"
-        ):
-            return await call_next(request)
-
-        if request.method == "OPTIONS":
-            return await call_next(request)
-
-        auth_header = request.headers.get("Authorization")
-
-        if not auth_header:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Missing authorization header"},
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
         try:
-            scheme, credentials = auth_header.split(" ", 1)
-            if scheme.lower() != "bearer":
-                raise ValueError("Invalid authentication scheme")
-        except ValueError:
+            request.state.agent_key = await agent_auth.authenticate_request(request)
+        except HTTPException as exc:
             return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid authorization header format"},
-                headers={"WWW-Authenticate": "Bearer"},
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=exc.headers,
             )
-
-        if credentials != self.password:
+        except DatabaseUnavailableError:
             return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid password"},
-                headers={"WWW-Authenticate": "Bearer"},
+                status_code=503,
+                content={"detail": "Database unavailable"},
+                headers={"Retry-After": "5"},
             )
-
-        response = await call_next(request)
-        return response
+        return await call_next(request)
 
 
-security = HTTPBearer(auto_error=False)
-
-
-def check_api_password(
-    credentials: Optional[HTTPAuthorizationCredentials] = None,
-) -> bool:
-    """Utility function to check API password."""
-    password = os.environ.get("OPEN_NOTEBOOK_PASSWORD")
-
-    if not password:
-        return True
-
-    if not credentials:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing authorization",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    if credentials.credentials != password:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return True
+__all__ = ["ApiKeyMiddleware"]

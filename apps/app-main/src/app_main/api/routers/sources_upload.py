@@ -38,8 +38,9 @@ from app_main.exceptions import InvalidInputError
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
 from app_main.services.transformation_service import TransformationService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter()
+router = APIRouter(dependencies=[RECHT_BEHEERDER])
 
 
 # ---------------------------------------------------------------------------

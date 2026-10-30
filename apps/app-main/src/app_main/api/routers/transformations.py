@@ -14,8 +14,9 @@ from app_main.api.schemas import (
 )
 from app_main.dependencies import get_transformation_service
 from app_main.services.transformation_service import TransformationService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/transformations", tags=["transformations"])
+router = APIRouter(prefix="/transformations", tags=["transformations"], dependencies=[RECHT_BEHEERDER])
 
 
 def _transformation_to_response(t) -> TransformationResponse:

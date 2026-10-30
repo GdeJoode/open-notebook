@@ -10,10 +10,16 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import pytest
+
 import app_main.api.agent_auth as agent_auth
 from app_main.api.routers import agents
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+
+# F2-01: these tests exercise the real key check (no test key from conftest).
+pytestmark = pytest.mark.echte_sleutels
 
 
 def _client(monkeypatch) -> TestClient:
@@ -25,7 +31,8 @@ def _client(monkeypatch) -> TestClient:
         agent_auth.AgentKeyService,
         "authenticate",
         AsyncMock(
-            return_value={"id": "agent_keys:1", "agent_id": "t", "permission": "admin"}
+            return_value={"id": "agent_keys:1", "agent_id": "t", "permission": "beheerder",
+                          "person": "Testpersoon"}
         ),
     )
     return TestClient(app, raise_server_exceptions=False)
@@ -33,7 +40,7 @@ def _client(monkeypatch) -> TestClient:
 
 def test_agent_openapi_is_valid_and_covers_the_surface(monkeypatch):
     resp = _client(monkeypatch).get(
-        "/api/v1/agents/openapi.json", headers={"X-API-Key": "ak"}
+        "/api/v1/agents/openapi.json", headers={"Authorization": "Bearer ak"}
     )
     assert resp.status_code == 200
     spec = resp.json()
@@ -67,7 +74,7 @@ def test_agent_openapi_is_valid_and_covers_the_surface(monkeypatch):
 
 def test_agent_openapi_response_models_referenced(monkeypatch):
     spec = _client(monkeypatch).get(
-        "/api/v1/agents/openapi.json", headers={"X-API-Key": "ak"}
+        "/api/v1/agents/openapi.json", headers={"Authorization": "Bearer ak"}
     ).json()
     schemas = spec["components"]["schemas"]
     # The agent request/response models are emitted into the components.

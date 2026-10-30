@@ -58,9 +58,10 @@ from entity_filtering.resolution.orphan_prune import (
     retry_pending_reconnects,
 )
 from surrealdb_service.repositories import EntityRepository, SourceRepository
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
 
-router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["orphans"])
+router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["orphans"], dependencies=[RECHT_BEHEERDER])
 
 
 # ---------------------------------------------------------------------------

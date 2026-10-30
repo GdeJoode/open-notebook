@@ -52,6 +52,7 @@ from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
 from app_main.services.stopped_sources import NEEDS_YOU_STAGES, stopped_sources
 from app_main.services.transformation_service import TransformationService
+from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN
 
 router = APIRouter()
 
@@ -63,7 +64,7 @@ _STAGES = {s.value for s in ProcessingStage}
 # ---------------------------------------------------------------------------
 
 
-@router.get("/", response_model=List[SourceListResponse])
+@router.get("/", response_model=List[SourceListResponse], dependencies=[RECHT_LEZEN_EXTERN])
 async def get_sources(
     notebook_id: Optional[str] = Query(
         None, description="Filter by notebook ID"
@@ -227,7 +228,7 @@ async def get_sources(
         )
 
 
-@router.get("/counts", response_model=SourceCountsResponse)
+@router.get("/counts", response_model=SourceCountsResponse, dependencies=[RECHT_BEHEERDER])
 async def get_source_counts(
     notebook_id: Optional[str] = Query(
         None, description="Count within this notebook only"
@@ -268,7 +269,7 @@ async def get_source_counts(
         )
 
 
-@router.get("/{source_id}", response_model=SourceResponse)
+@router.get("/{source_id}", response_model=SourceResponse, dependencies=[RECHT_LEZEN_EXTERN])
 async def get_source(
     source_id: str,
     source_svc: SourceService = Depends(get_source_service),
@@ -420,7 +421,7 @@ async def get_source(
         )
 
 
-@router.put("/{source_id}", response_model=SourceResponse)
+@router.put("/{source_id}", response_model=SourceResponse, dependencies=[RECHT_BEHEERDER])
 async def update_source(
     source_id: str,
     source_update: SourceUpdate,
@@ -472,7 +473,7 @@ async def update_source(
         )
 
 
-@router.delete("/{source_id}")
+@router.delete("/{source_id}", dependencies=[RECHT_BEHEERDER])
 async def delete_source(
     source_id: str,
     source_svc: SourceService = Depends(get_source_service),
@@ -495,7 +496,7 @@ async def delete_source(
         )
 
 
-@router.get("/{source_id}/status", response_model=SourceStatusResponse)
+@router.get("/{source_id}/status", response_model=SourceStatusResponse, dependencies=[RECHT_BEHEERDER])
 async def get_source_status(
     source_id: str,
     source_svc: SourceService = Depends(get_source_service),
@@ -571,6 +572,7 @@ async def get_source_status(
 @router.get(
     "/{source_id}/related",
     response_model=List[RelatedSourceResponse],
+    dependencies=[RECHT_BEHEERDER],
 )
 async def get_related_sources(
     source_id: str,
@@ -623,6 +625,7 @@ async def get_related_sources(
 @router.get(
     "/{source_id}/related-kg",
     response_model=List[RelatedSourceKGResponse],
+    dependencies=[RECHT_BEHEERDER],
 )
 async def get_related_sources_kg(
     source_id: str,
@@ -695,6 +698,7 @@ async def get_related_sources_kg(
 @router.get(
     "/{source_id}/related-hybrid",
     response_model=List[RelatedSourceHybridResponse],
+    dependencies=[RECHT_BEHEERDER],
 )
 async def get_related_sources_hybrid(
     source_id: str,
@@ -808,6 +812,7 @@ async def get_related_sources_hybrid(
 @router.get(
     "/{source_id}/insights",
     response_model=List[SourceInsightResponse],
+    dependencies=[RECHT_BEHEERDER],
 )
 async def get_source_insights(
     source_id: str,
@@ -846,6 +851,7 @@ async def get_source_insights(
 @router.post(
     "/{source_id}/insights",
     response_model=SourceInsightResponse,
+    dependencies=[RECHT_BEHEERDER],
 )
 async def create_source_insight(
     source_id: str,
@@ -905,7 +911,7 @@ async def create_source_insight(
         )
 
 
-@router.get("/{source_id}/chunks")
+@router.get("/{source_id}/chunks", dependencies=[RECHT_BEHEERDER])
 async def get_source_chunks(
     source_id: str,
     source_svc: SourceService = Depends(get_source_service),
@@ -961,7 +967,7 @@ async def get_source_chunks(
         )
 
 
-@router.patch("/{source_id}/chunks/{chunk_id:path}")
+@router.patch("/{source_id}/chunks/{chunk_id:path}", dependencies=[RECHT_BEHEERDER])
 async def update_chunk(
     source_id: str,
     chunk_id: str,
@@ -995,7 +1001,7 @@ async def update_chunk(
         raise HTTPException(status_code=500, detail=f"Error updating chunk: {str(e)}")
 
 
-@router.delete("/{source_id}/chunks/{chunk_id:path}")
+@router.delete("/{source_id}/chunks/{chunk_id:path}", dependencies=[RECHT_BEHEERDER])
 async def delete_chunk(
     source_id: str,
     chunk_id: str,
@@ -1024,7 +1030,7 @@ async def delete_chunk(
         raise HTTPException(status_code=500, detail=f"Error deleting chunk: {str(e)}")
 
 
-@router.post("/{source_id}/chunks")
+@router.post("/{source_id}/chunks", dependencies=[RECHT_BEHEERDER])
 async def create_chunk(
     source_id: str,
     body: ChunkCreate,
@@ -1069,7 +1075,7 @@ async def create_chunk(
         raise HTTPException(status_code=500, detail=f"Error creating chunk: {str(e)}")
 
 
-@router.post("/{source_id}/chunks/{chunk_id:path}/merge")
+@router.post("/{source_id}/chunks/{chunk_id:path}/merge", dependencies=[RECHT_BEHEERDER])
 async def merge_chunk(
     source_id: str,
     chunk_id: str,
@@ -1102,7 +1108,7 @@ async def merge_chunk(
         raise HTTPException(status_code=500, detail=f"Error merging chunk: {str(e)}")
 
 
-@router.post("/{source_id}/chunks/{chunk_id:path}/split")
+@router.post("/{source_id}/chunks/{chunk_id:path}/split", dependencies=[RECHT_BEHEERDER])
 async def split_chunk(
     source_id: str,
     chunk_id: str,
@@ -1135,7 +1141,7 @@ async def split_chunk(
         raise HTTPException(status_code=500, detail=f"Error splitting chunk: {str(e)}")
 
 
-@router.get("/{source_id}/chunk-history")
+@router.get("/{source_id}/chunk-history", dependencies=[RECHT_BEHEERDER])
 async def get_chunk_history(
     source_id: str,
     source_svc: SourceService = Depends(get_source_service),

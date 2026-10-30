@@ -12,6 +12,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 import app_main.api.agent_auth as agent_auth
 import app_main.api.routers.sources_upload as sources_upload
 from app_main.api.agent_auth import AgentAuditMiddleware
@@ -27,6 +29,10 @@ from fastapi.testclient import TestClient
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+
+
+# F2-01: these tests exercise the real key check (no test key from conftest).
+pytestmark = pytest.mark.echte_sleutels
 
 
 def _make_client(source_svc=None) -> TestClient:
@@ -51,6 +57,7 @@ def _auth(monkeypatch, permission, agent_id="a1"):
                 "id": "agent_keys:1",
                 "agent_id": agent_id,
                 "permission": permission,
+                "person": "Testpersoon",
             }
         ),
     )
@@ -67,7 +74,7 @@ def _mock_impl(monkeypatch, source_svc):
 
 
 def test_process_document_reuses_upload_chain_and_returns_job_id(monkeypatch):
-    _auth(monkeypatch, "write")
+    _auth(monkeypatch, "beheerder")
     source_svc = AsyncMock()
     create_impl = _mock_impl(monkeypatch, source_svc)
 
@@ -76,7 +83,7 @@ def test_process_document_reuses_upload_chain_and_returns_job_id(monkeypatch):
         "/api/v1/agents/process-document",
         files={"file": ("paper.pdf", b"%PDF-1.4 fake", "application/pdf")},
         data={"notebook_id": "notebook:n", "transformations": '["t1", "t2"]'},
-        headers={"X-API-Key": "ak_w"},
+        headers={"Authorization": "Bearer ak_w"},
     )
 
     assert resp.status_code == 200
@@ -93,20 +100,20 @@ def test_process_document_reuses_upload_chain_and_returns_job_id(monkeypatch):
     assert create_impl.await_args.args[1] is not None  # the upload file
 
 
-def test_process_document_read_key_is_403(monkeypatch):
-    _auth(monkeypatch, "read")  # write-gated
+def test_process_document_pijplijn_key_is_403(monkeypatch):
+    _auth(monkeypatch, "pijplijn")  # beheerder-gated
     client = _make_client()
     resp = client.post(
         "/api/v1/agents/process-document",
         files={"file": ("d.txt", b"hi", "text/plain")},
         data={"notebook_id": "notebook:n"},
-        headers={"X-API-Key": "ak_r"},
+        headers={"Authorization": "Bearer ak_r"},
     )
     assert resp.status_code == 403
 
 
 def test_process_document_parses_comma_separated_transformations(monkeypatch):
-    _auth(monkeypatch, "write")
+    _auth(monkeypatch, "beheerder")
     source_svc = AsyncMock()
     create_impl = _mock_impl(monkeypatch, source_svc)
 
@@ -115,14 +122,14 @@ def test_process_document_parses_comma_separated_transformations(monkeypatch):
         "/api/v1/agents/process-document",
         files={"file": ("d.txt", b"hi", "text/plain")},
         data={"notebook_id": "notebook:n", "transformations": "t1, t2 , t3"},
-        headers={"X-API-Key": "ak_w"},
+        headers={"Authorization": "Bearer ak_w"},
     )
     assert resp.status_code == 200
     assert create_impl.await_args.args[0].transformations == ["t1", "t2", "t3"]
 
 
 def test_process_document_no_transformations_is_none(monkeypatch):
-    _auth(monkeypatch, "write")
+    _auth(monkeypatch, "beheerder")
     source_svc = AsyncMock()
     create_impl = _mock_impl(monkeypatch, source_svc)
 
@@ -131,7 +138,7 @@ def test_process_document_no_transformations_is_none(monkeypatch):
         "/api/v1/agents/process-document",
         files={"file": ("d.txt", b"hi", "text/plain")},
         data={"notebook_id": "notebook:n"},
-        headers={"X-API-Key": "ak_w"},
+        headers={"Authorization": "Bearer ak_w"},
     )
     assert resp.status_code == 200
     assert create_impl.await_args.args[0].transformations is None
@@ -141,7 +148,7 @@ def test_process_document_no_transformations_is_none(monkeypatch):
 
 
 def test_process_audio_reuses_same_upload_chain(monkeypatch):
-    _auth(monkeypatch, "write")
+    _auth(monkeypatch, "beheerder")
     source_svc = AsyncMock()
     create_impl = _mock_impl(monkeypatch, source_svc)
 
@@ -150,20 +157,20 @@ def test_process_audio_reuses_same_upload_chain(monkeypatch):
         "/api/v1/agents/process-audio",
         files={"file": ("talk.mp3", b"ID3 fake", "audio/mpeg")},
         data={"notebook_id": "notebook:n"},
-        headers={"X-API-Key": "ak_w"},
+        headers={"Authorization": "Bearer ak_w"},
     )
     assert resp.status_code == 200
     assert resp.json()["job_id"] == "cmd:job1"
     assert create_impl.await_args.args[0].type == "upload"
 
 
-def test_process_audio_read_key_is_403(monkeypatch):
-    _auth(monkeypatch, "read")
+def test_process_audio_pijplijn_key_is_403(monkeypatch):
+    _auth(monkeypatch, "pijplijn")
     client = _make_client()
     resp = client.post(
         "/api/v1/agents/process-audio",
         files={"file": ("talk.mp3", b"ID3 fake", "audio/mpeg")},
         data={"notebook_id": "notebook:n"},
-        headers={"X-API-Key": "ak_r"},
+        headers={"Authorization": "Bearer ak_r"},
     )
     assert resp.status_code == 403

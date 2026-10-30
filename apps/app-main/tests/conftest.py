@@ -46,6 +46,34 @@ REGISTRY_LIST_ONTOLOGIES = _OntologyRegistry.list_ontologies
 
 
 @pytest.fixture(autouse=True)
+def _testsleutel_beheerder(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Elk verzoek in een test krijgt een sleutel met recht ``beheerder`` (F2-01).
+
+    Sinds F2-01 vraagt elke route een sleutel. De meeste tests gaan over de
+    route zelf, niet over de sleutel, en sturen geen header. Deze fixture
+    vervangt daarom alleen in tests ``authenticate_request`` door een vaste
+    sleutel ``beheerder``. Tests van de sleutelcontrole zelf dragen de markering
+    ``echte_sleutels`` en lopen door de echte controle.
+    """
+    if request.node.get_closest_marker("echte_sleutels"):
+        return
+    from app_main.api import agent_auth
+    from shared.models.agents import Right
+
+    ctx = agent_auth.AgentKeyContext(
+        key_id="agent_keys:test",
+        agent_id="test",
+        permission=Right.BEHEERDER,
+        person="Testpersoon",
+    )
+
+    async def _vaste_sleutel(_request):
+        return ctx
+
+    monkeypatch.setattr(agent_auth, "authenticate_request", _vaste_sleutel)
+
+
+@pytest.fixture(autouse=True)
 def _disable_metrics_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """Suppress ``record_metric`` writes in unit tests.
 

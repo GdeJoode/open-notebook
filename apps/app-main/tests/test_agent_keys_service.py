@@ -18,10 +18,10 @@ async def test_mint_stores_hash_not_plaintext_and_authenticates(live_surrealdb):
     from surrealdb_service.connection import ensure_record_id, execute_query
 
     svc = AgentKeyService(config=live_surrealdb)
-    public, plaintext = await svc.mint(agent_id="agent-x", permission="write")
+    public, plaintext = await svc.mint(agent_id="agent-x", permission="pijplijn")
 
     assert plaintext.startswith("ak_")
-    assert public["permission"] == "write"
+    assert public["permission"] == "pijplijn"
     # The plaintext is NOT stored anywhere; only its SHA-256 hash is.
     rows = await execute_query(
         "SELECT key_hash, key_prefix FROM $id",
@@ -41,7 +41,7 @@ async def test_mint_stores_hash_not_plaintext_and_authenticates(live_surrealdb):
 @pytest.mark.requires_docker
 async def test_revoked_key_stops_authenticating(live_surrealdb):
     svc = AgentKeyService(config=live_surrealdb)
-    public, plaintext = await svc.mint(agent_id="agent-y", permission="read")
+    public, plaintext = await svc.mint(agent_id="agent-y", permission="lezen_extern")
     assert await svc.authenticate(plaintext) is not None
 
     await svc.revoke(public["id"])
@@ -51,7 +51,7 @@ async def test_revoked_key_stops_authenticating(live_surrealdb):
 @pytest.mark.requires_docker
 async def test_list_never_exposes_secrets(live_surrealdb):
     svc = AgentKeyService(config=live_surrealdb)
-    _, plaintext = await svc.mint(agent_id="agent-z", permission="read")
+    _, plaintext = await svc.mint(agent_id="agent-z", permission="lezen_extern")
     rows = await svc.list()
     assert rows  # at least the one we minted
     for r in rows:
@@ -64,7 +64,7 @@ async def test_list_never_exposes_secrets(live_surrealdb):
 async def test_get_returns_public_row_and_none_for_missing(live_surrealdb):
     # get() powers the G.4 audit-log drawer's key→agent_id resolution.
     svc = AgentKeyService(config=live_surrealdb)
-    public, plaintext = await svc.mint(agent_id="agent-get", permission="read")
+    public, plaintext = await svc.mint(agent_id="agent-get", permission="lezen_extern")
 
     got = await svc.get(public["id"])
     assert got is not None
@@ -109,3 +109,29 @@ async def test_revoke_is_table_scoped(live_surrealdb):
     # The cross-table write did NOT happen: the notebook's revoked stays unset
     # (SurrealDB projects a missing field back as None), never flipped to True.
     assert rows[0].get("revoked") is not True
+
+
+@pytest.mark.requires_docker
+async def test_beheerder_key_carries_its_person(live_surrealdb):
+    """F2-01: `beheerder` is a personal key; `person` is stored and read back."""
+    svc = AgentKeyService(config=live_surrealdb)
+    public, plaintext = await svc.mint(
+        agent_id="werkbak", permission="beheerder", person="Testpersoon"
+    )
+    assert public["person"] == "Testpersoon"
+    row = await svc.authenticate(plaintext)
+    assert row["permission"] == "beheerder" and row["person"] == "Testpersoon"
+
+
+@pytest.mark.parametrize(
+    "permission, person",
+    [("read", None), ("admin", "x"), ("beheerder", None), ("beheerder", "  ")],
+)
+async def test_mint_refuses_unknown_right_or_beheerder_without_person(
+    permission, person
+):
+    """Refused before any database call: no config needed."""
+    with pytest.raises(ValueError):
+        await AgentKeyService().mint(
+            agent_id="a", permission=permission, person=person
+        )

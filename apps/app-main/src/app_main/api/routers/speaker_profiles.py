@@ -7,8 +7,9 @@ from loguru import logger
 
 from app_main.dependencies import get_podcast_service
 from app_main.services.podcast_service import PodcastService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/speaker-profiles", tags=["podcast"])
+router = APIRouter(prefix="/speaker-profiles", tags=["podcast"], dependencies=[RECHT_BEHEERDER])
 
 
 def _profile_to_dict(profile) -> Dict[str, Any]:

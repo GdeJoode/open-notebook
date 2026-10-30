@@ -16,8 +16,9 @@ from app_main.api.schemas import (
 )
 from app_main.dependencies import get_model_service
 from app_main.services.model_service import ModelService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/models", tags=["models"])
+router = APIRouter(prefix="/models", tags=["models"], dependencies=[RECHT_BEHEERDER])
 
 
 def _model_to_response(model) -> ModelResponse:

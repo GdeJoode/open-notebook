@@ -12,11 +12,12 @@ from app_main.dependencies import get_model_service, get_search_service
 from app_main.exceptions import DatabaseOperationError, InvalidInputError
 from app_main.services.model_service import ModelService
 from app_main.services.search_service import SearchService
+from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN
 
 router = APIRouter(tags=["search"])
 
 
-@router.post("/search", response_model=SearchResponse)
+@router.post("/search", response_model=SearchResponse, dependencies=[RECHT_LEZEN_EXTERN])
 async def search_knowledge_base(
     search_request: SearchRequest,
     search_svc: SearchService = Depends(get_search_service),
@@ -154,7 +155,7 @@ async def stream_ask_response(
         yield f"data: {json.dumps(error_data)}\n\n"
 
 
-@router.post("/search/ask")
+@router.post("/search/ask", dependencies=[RECHT_BEHEERDER])
 async def ask_knowledge_base(
     ask_request: AskRequest,
     model_svc: ModelService = Depends(get_model_service),
@@ -210,7 +211,7 @@ async def ask_knowledge_base(
         )
 
 
-@router.post("/search/ask/simple", response_model=AskResponse)
+@router.post("/search/ask/simple", response_model=AskResponse, dependencies=[RECHT_BEHEERDER])
 async def ask_knowledge_base_simple(
     ask_request: AskRequest,
     model_svc: ModelService = Depends(get_model_service),

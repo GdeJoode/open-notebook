@@ -6,10 +6,11 @@ import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
+from shared.models.agents import Right
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -17,8 +18,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from surrealdb_service.connection import DatabaseUnavailableError
 from surrealdb_service.migrations import AsyncMigrationManager
 
-from app_main.api.agent_auth import AgentAuditMiddleware
-from app_main.api.auth import PasswordAuthMiddleware
+from app_main.api.agent_auth import AgentAuditMiddleware, require_right
+from app_main.api.auth import ApiKeyMiddleware
 from app_main.api.rate_limit import limiter
 from app_main.exceptions import (
     AuthenticationError,
@@ -255,11 +256,17 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
+    # F2-01: no unauthenticated docs. /docs and /redoc cannot send a Bearer key
+    # from the browser, so they are off; the schema is a route for `beheerder`
+    # below.
     application = FastAPI(
         title="Noesis API",
         description="API for Noesis - Research Assistant",
         version="0.2.2",
         lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
 
     # --- Rate limiting (slowapi, per-IP) ---
@@ -275,21 +282,9 @@ def create_app() -> FastAPI:
     application.add_middleware(SlowAPIMiddleware)
 
     # --- Middleware ---
-    application.add_middleware(
-        PasswordAuthMiddleware,
-        excluded_paths=[
-            "/",
-            "/health",
-            "/docs",
-            "/openapi.json",
-            "/redoc",
-            "/api/auth/status",
-            "/api/config",
-            # Track G.1 (G-D1): the agent API is key-authed by require_agent_key
-            # (fail-closed), NOT the shared password. Trailing "/" = prefix exclude.
-            "/api/v1/agents/",
-        ],
-    )
+    # F2-01 (ADR 0002 A): every request needs a valid key, except /health and
+    # /api/auth/status. The audit middleware sits outside it, so a 401 is logged.
+    application.add_middleware(ApiKeyMiddleware)
     application.add_middleware(AgentAuditMiddleware)
     application.add_middleware(
         CORSMiddleware,
@@ -346,6 +341,7 @@ def create_app() -> FastAPI:
     )
 
     application.include_router(auth.router, prefix="/api", tags=["auth"])
+    application.include_router(auth.scope_router, prefix="/api", tags=["auth"])
     application.include_router(config.router, prefix="/api", tags=["config"])
     application.include_router(notebooks.router, prefix="/api", tags=["notebooks"])
     application.include_router(schemas.router, prefix="/api", tags=["schemas"])
@@ -386,9 +382,9 @@ def create_app() -> FastAPI:
     application.include_router(orphans.router, prefix="/api", tags=["orphans"])
     application.include_router(audit.router, prefix="/api", tags=["audit"])
     application.include_router(watcher.router, prefix="/api", tags=["watcher"])
-    # Agent integration (G.1): key management under /api (password-gated) + the
-    # versioned agent capability router (already carries its /api/v1/agents prefix,
-    # key-authed by require_agent_key).
+    # Agent integration (G.1): key management under /api + the versioned agent
+    # capability router (already carries its /api/v1/agents prefix). Both need
+    # `beheerder`.
     application.include_router(agent_keys.router, prefix="/api", tags=["agent-keys"])
     application.include_router(agents.router, tags=["agents"])
     application.include_router(
@@ -494,9 +490,17 @@ def create_app() -> FastAPI:
     application.add_middleware(RequestLoggingMiddleware)
 
     # --- Routes ---
-    @application.get("/")
+    @application.get("/", dependencies=[Depends(require_right(Right.LEZEN_EXTERN))])
     async def root():
         return {"message": "Noesis API is running"}
+
+    @application.get(
+        "/openapi.json",
+        include_in_schema=False,
+        dependencies=[Depends(require_right(Right.BEHEERDER))],
+    )
+    async def openapi_schema():
+        return application.openapi()
 
     @application.get("/health")
     async def health():

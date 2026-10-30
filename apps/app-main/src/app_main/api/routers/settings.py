@@ -6,8 +6,9 @@ from loguru import logger
 from app_main.api.schemas import SettingsResponse, SettingsUpdate
 from app_main.dependencies import get_settings_service
 from app_main.services.settings_service import SettingsService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/settings", tags=["settings"])
+router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[RECHT_BEHEERDER])
 
 
 def _build_settings_response(settings) -> SettingsResponse:

@@ -9,8 +9,9 @@ from app_main.services.resolution_log_service import (
     MergeRecordImmutable,
     ResolutionLogService,
 )
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/resolution-log", tags=["resolution-log"])
+router = APIRouter(prefix="/resolution-log", tags=["resolution-log"], dependencies=[RECHT_BEHEERDER])
 
 
 def get_resolution_log_service() -> ResolutionLogService:

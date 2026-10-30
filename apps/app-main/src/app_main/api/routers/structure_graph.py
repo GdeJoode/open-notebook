@@ -14,8 +14,9 @@ from app_main.services.graph.structure_graph_reader import (
     MAX_PAGE_LIMIT,
     read_structure_graph,
 )
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/sources", tags=["structure-graph"])
+router = APIRouter(prefix="/sources", tags=["structure-graph"], dependencies=[RECHT_BEHEERDER])
 
 
 @router.get("/{source_id}/structure-graph", response_model=Dict[str, Any])

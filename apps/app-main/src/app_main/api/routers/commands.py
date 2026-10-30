@@ -7,8 +7,9 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from app_main.services.command_service import CommandService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/commands", tags=["commands"])
+router = APIRouter(prefix="/commands", tags=["commands"], dependencies=[RECHT_BEHEERDER])
 
 
 class CommandExecutionRequest(BaseModel):

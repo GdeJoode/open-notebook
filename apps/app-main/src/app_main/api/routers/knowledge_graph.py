@@ -12,8 +12,9 @@ from app_main.services.knowledge_graph_service import KnowledgeGraphService
 from app_main.services.mentions_projection_service import (
     MentionsProjectionService,
 )
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/knowledge-graph", tags=["knowledge-graph"])
+router = APIRouter(prefix="/knowledge-graph", tags=["knowledge-graph"], dependencies=[RECHT_BEHEERDER])
 
 
 @router.get("/entities", response_model=Dict[str, Any])

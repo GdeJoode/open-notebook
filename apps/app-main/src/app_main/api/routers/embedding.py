@@ -8,8 +8,9 @@ from app_main.dependencies import get_model_service, get_note_service, get_sourc
 from app_main.services.model_service import ModelService
 from app_main.services.note_service import NoteService
 from app_main.services.source_service import SourceService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(tags=["embedding"])
+router = APIRouter(tags=["embedding"], dependencies=[RECHT_BEHEERDER])
 
 
 @router.post("/embed", response_model=EmbedResponse)

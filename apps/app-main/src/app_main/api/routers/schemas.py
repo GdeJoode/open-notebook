@@ -70,9 +70,10 @@ from surrealdb_service.repositories.notebook_schema import (
     Pass1ResultRepository,
 )
 from surrealdb_service.repositories.source import SourceRepository
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
 
-router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["schemas"])
+router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["schemas"], dependencies=[RECHT_BEHEERDER])
 
 
 # ---------------------------------------------------------------------------

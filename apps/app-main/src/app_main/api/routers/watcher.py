@@ -14,8 +14,9 @@ it does not mutate it.
 from pathlib import Path
 
 from fastapi import APIRouter
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/watcher", tags=["watcher"])
+router = APIRouter(prefix="/watcher", tags=["watcher"], dependencies=[RECHT_BEHEERDER])
 
 _PROCESSED = "_processed"
 _ERRORS = "_errors"

@@ -1,17 +1,12 @@
 """Versioned agent capability API (Track G.1).
 
-The ``/api/v1/agents`` surface external agents call with an ``X-API-Key``. The
-whole router is gated at the ROUTER level by two dependencies, so EVERY current
-and future route is protected without opting in per-route (the exclusion from the
-shared-password middleware is subtree-wide — a route that forgot the gate would
-be fully open):
+The ``/api/v1/agents`` surface. Gated at the ROUTER level by two dependencies:
 
-  1. :func:`agent_ip_throttle` — a per-IP requests/min cap that runs BEFORE auth,
-     so a flood of invalid keys from one host is bounded (each such request
-     otherwise costs a DB read + an audit write);
-  2. :func:`require_agent_key` (``read`` baseline) — the SOLE authenticator, fail-
-     closed and password-independent. A route needing a higher scope adds its own
-     ``Depends(require_agent_key("write"|"admin"))``.
+  1. :func:`agent_ip_throttle` — a per-IP requests/min cap;
+  2. :func:`require_right` (``beheerder``) — every route here starts a model or
+     writes, so it needs ``beheerder`` (ADR 0010, ADR 0002 B). The key itself is
+     authenticated by the key middleware (``auth.py``) with ``Authorization:
+     Bearer``.
 
 G.1 ships one real capability — ``POST /extract-entities`` (typed entities from
 raw text, no DB) — proving the throttle + auth + per-key limit + audit path end to
@@ -43,9 +38,10 @@ from shared.models.agents import (
     JobStatusResponse,
     ProcessSourceResponse,
     ProcessUrlRequest,
+    Right,
 )
 
-from app_main.api.agent_auth import AgentKeyContext, require_agent_key
+from app_main.api.agent_auth import AgentKeyContext, current_key, require_right
 from app_main.api.agent_rate_limit import (
     agent_default_limit,
     agent_ip_throttle,
@@ -157,11 +153,11 @@ def _reject_ssrf_url(url: str) -> None:
 router = APIRouter(
     prefix="/api/v1/agents",
     tags=["agents"],
-    # Router-level gate: per-IP pre-auth throttle THEN the read-scope key check,
+    # Router-level gate: per-IP throttle THEN the right check (beheerder),
     # applied to every route on this router (in order).
     dependencies=[
         Depends(agent_ip_throttle()),
-        Depends(require_agent_key("read")),
+        Depends(require_right(Right.BEHEERDER)),
     ],
 )
 
@@ -175,7 +171,7 @@ async def extract_entities(
 ) -> ExtractEntitiesResponse:
     """Extract typed entities from raw text (stateless — no source is created).
 
-    Gated by the router-level read-scope dependency; the per-key slowapi limit
+    Gated by the router-level right check (beheerder); the per-key slowapi limit
     below bounds authenticated abuse (the pre-auth throttle bounds floods).
     """
     from app_main.services.entity_extraction_service import extract_from_text
@@ -197,13 +193,11 @@ async def generate_summary(
     request: Request,
     response: Response,
     body: GenerateSummaryRequest,
-    _key=Depends(require_agent_key("write")),
     service: SummarizationService = Depends(get_summarization_service),
 ) -> GenerateSummaryResponse:
     """Summarize raw text (stateless — no source/summary is persisted).
 
-    WRITE scope: the router-level read gate resolves the key; this adds the
-    write-scope check (reusing the cached key — no second lookup). An unknown /
+    Gated by the router-level right check (beheerder). An unknown /
     unimplemented strategy is a 422.
     """
     try:
@@ -223,7 +217,6 @@ async def process_url(
     request: Request,
     response: Response,
     body: ProcessUrlRequest,
-    _key=Depends(require_agent_key("write")),
     source_svc=Depends(get_source_service),
     notebook_svc=Depends(get_notebook_service),
     transformation_svc=Depends(get_transformation_service),
@@ -333,14 +326,13 @@ async def process_document(
     file: UploadFile = File(...),
     notebook_id: str = Form(...),
     transformations: Optional[str] = Form(None),
-    _key=Depends(require_agent_key("write")),
     source_svc=Depends(get_source_service),
     notebook_svc=Depends(get_notebook_service),
     transformation_svc=Depends(get_transformation_service),
 ) -> ProcessSourceResponse:
     """Ingest an uploaded document headlessly (multipart) via process_source.
 
-    WRITE scope. Reuses the shipped upload path incl. `enforce_upload_guards`
+    Right beheerder (router level). Reuses the shipped upload path incl. `enforce_upload_guards`
     (413 oversized / 422 over-paged); returns a pollable `job_id`. Audio files
     are accepted here too, but `POST /process-audio` documents that intent.
     """
@@ -363,14 +355,13 @@ async def process_audio(
     file: UploadFile = File(...),
     notebook_id: str = Form(...),
     transformations: Optional[str] = Form(None),
-    _key=Depends(require_agent_key("write")),
     source_svc=Depends(get_source_service),
     notebook_svc=Depends(get_notebook_service),
     transformation_svc=Depends(get_transformation_service),
 ) -> ProcessSourceResponse:
     """Ingest an uploaded audio file headlessly (multipart) via process_source.
 
-    WRITE scope. Same upload chain as process-document (the process_source
+    Right beheerder (router level). Same upload chain as process-document (the process_source
     pipeline transcribes/parses by file type); returns a pollable `job_id`.
     """
     return await _ingest_upload(
@@ -390,20 +381,20 @@ async def get_job_status(
     request: Request,
     response: Response,
     job_id: str,
-    key: AgentKeyContext = Depends(require_agent_key("read")),
+    key: AgentKeyContext = Depends(current_key),
 ) -> JobStatusResponse:
     """Poll a job's status — but ONLY a job THIS agent enqueued.
 
     Jobs carry no owner column, so ownership is authorized via the agent's own
     audit trail (process-url stamps the job_id there). A job the calling agent
     did not enqueue → 404 (not the status), so this is neither an IDOR nor an
-    existence oracle. An admin key may poll any job. On a hit, the payload is
+    existence oracle. A beheerder key may poll any job. On a hit, the payload is
     verbatim CommandService.get_command_status; an unknown id → status:"unknown".
     """
     from app_main.services.agents.audit_service import AgentAuditService
     from app_main.services.command_service import CommandService
 
-    if key.permission != "admin":
+    if key.permission != Right.BEHEERDER:
         owns = await AgentAuditService().agent_owns_job(key.agent_id, job_id)
         if not owns:
             raise HTTPException(status_code=404, detail="Job not found")
@@ -426,18 +417,18 @@ async def get_audit_log(
     response: Response,
     agent_id: Optional[str] = None,
     limit: int = 100,
-    key: AgentKeyContext = Depends(require_agent_key("read")),
+    key: AgentKeyContext = Depends(current_key),
 ) -> dict:
     """The calling key's own agent_audit_log entries (newest first).
 
     Scoped to the caller's ``agent_id`` — a ``read`` key passing a different
-    ``?agent_id=`` is still scoped to itself (no cross-agent leak). Only an
-    ``admin`` key may read another agent's trail via ``?agent_id=``.
+    ``?agent_id=`` is still scoped to itself (no cross-agent leak). Only a
+    ``beheerder`` key may read another agent's trail via ``?agent_id=``.
     """
     from app_main.services.agents.audit_service import AgentAuditService
 
     target = key.agent_id
-    if agent_id and key.permission == "admin":
+    if agent_id and key.permission == Right.BEHEERDER:
         target = agent_id
     limit = max(1, min(limit, 500))
     entries = await AgentAuditService().list_for_agent(target, limit=limit)

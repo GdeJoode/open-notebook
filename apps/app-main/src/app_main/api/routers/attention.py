@@ -11,8 +11,9 @@ from fastapi import APIRouter, Depends, Query
 
 from app_main.dependencies import get_attention_service
 from app_main.services.attention_service import AttentionReport, AttentionService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(tags=["attention"])
+router = APIRouter(tags=["attention"], dependencies=[RECHT_BEHEERDER])
 
 
 @router.get("/attention", response_model=AttentionReport)

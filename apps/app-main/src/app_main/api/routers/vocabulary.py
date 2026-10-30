@@ -36,8 +36,9 @@ from app_main.services.entity_resolution.vocabulary_reconcile_service import (
 from app_main.services.entity_resolution.vocabulary_reconciler import (
     VocabularyReconciler,
 )
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/vocabulary", tags=["vocabulary"])
+router = APIRouter(prefix="/vocabulary", tags=["vocabulary"], dependencies=[RECHT_BEHEERDER])
 
 
 def _crossref_contact() -> str:

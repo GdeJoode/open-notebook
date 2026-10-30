@@ -10,8 +10,9 @@ from app_main.dependencies import (
     get_preprocessing_service_with_llm,
 )
 from app_main.services.preprocessing_service import PreprocessingService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/preprocessing", tags=["preprocessing"])
+router = APIRouter(prefix="/preprocessing", tags=["preprocessing"], dependencies=[RECHT_BEHEERDER])
 
 
 class RunPreprocessingRequest(BaseModel):

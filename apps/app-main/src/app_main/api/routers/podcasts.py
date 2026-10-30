@@ -12,8 +12,9 @@ from pydantic import BaseModel, Field
 from app_main.dependencies import get_notebook_service, get_podcast_service
 from app_main.services.notebook_service import NotebookService
 from app_main.services.podcast_service import PodcastService
+from app_main.api.agent_auth import RECHT_BEHEERDER
 
-router = APIRouter(prefix="/podcasts", tags=["podcast"])
+router = APIRouter(prefix="/podcasts", tags=["podcast"], dependencies=[RECHT_BEHEERDER])
 
 
 # ---------------------------------------------------------------------------
