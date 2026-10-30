@@ -49,12 +49,11 @@ vram_markeer() {
 
 vram_stop() {
   if [[ -n "$VRAM_PID" ]]; then
-    pkill -P "$VRAM_PID" 2>/dev/null || true
-    kill "$VRAM_PID" 2>/dev/null || true
+    # Git Bash kent geen pkill: de hele boom stoppen, ook nvidia-smi.exe.
+    kill_boom "$VRAM_PID"
     wait "$VRAM_PID" 2>/dev/null || true
     VRAM_PID=""
   fi
-  # nvidia-smi.exe blijft onder Git Bash soms lopen; alleen onze eigen lus stoppen.
 }
 
 vram_nu() {

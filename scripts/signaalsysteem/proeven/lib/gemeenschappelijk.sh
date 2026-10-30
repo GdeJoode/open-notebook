@@ -221,6 +221,19 @@ proef_opruimen_profiel() {
   done
 }
 
+# Achtergrondprocessen (meting van het videogeheugen, docker events, wachtende
+# subshells) stoppen, met al hun kindprocessen. Git Bash kent geen pkill; het
+# MSYS-proces van nvidia-smi.exe of docker.exe stoppen stopt ook het Windows-proces.
+kill_boom() {
+  local p=$1 c
+  for c in $(ps -ef | awk -v p="$p" '$3==p {print $2}'); do kill_boom "$c"; done
+  kill "$p" 2>/dev/null || true
+}
+stop_kindprocessen() {
+  local c
+  for c in $(ps -ef | awk -v p="$$" '$3==p {print $2}'); do kill_boom "$c"; done
+}
+
 # Bepaal de exitcode uit de criteria en sluit af.
 proef_einde() {
   local code=$EXIT_GESLAAGD
@@ -234,6 +247,7 @@ proef_einde_met() {
   local code=$1 afwijking
   trap - ERR
   PROEF_AFGEROND=1
+  stop_kindprocessen
   proef_opruimen_profiel
   momentopname "$RUNMAP/na"
   if ! afwijking="$(vergelijk_momentopnamen "$RUNMAP/voor" "$RUNMAP/na")"; then
@@ -257,6 +271,7 @@ proef_scriptfout() {
   log "scriptfout op regel $regel: $opdracht"
   criterium script mislukt "scriptfout op regel $regel: $opdracht"
   PROEF_AFGEROND=1
+  stop_kindprocessen || true
   proef_opruimen_profiel || true
   proef_schrijf_uitkomst "$EXIT_SCRIPT" || true
   exit "$EXIT_SCRIPT"
@@ -266,6 +281,7 @@ proef_onderbroken() {
   log "onderbroken"
   criterium script mislukt "onderbroken"
   PROEF_AFGEROND=1
+  stop_kindprocessen || true
   proef_opruimen_profiel || true
   proef_schrijf_uitkomst "$EXIT_SCRIPT" || true
   exit "$EXIT_SCRIPT"
