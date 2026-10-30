@@ -97,7 +97,7 @@ def vullen() -> dict:
                 f"{kenmerk(soort)} " + zin.format(jaar=2020 + i) + f" Fragment {n + 1} over {onderwerp}."
                 for n in range(3)
             ]
-            inhoud = {
+            velden = {
                 "title": titel,
                 "full_text": " ".join(fragmenten),
                 "private": label == "intern",
@@ -105,7 +105,7 @@ def vullen() -> dict:
                 "classification": label,
                 "topics": [onderwerp],
             }
-            bron = een(f"CREATE source CONTENT {json.dumps(inhoud)};")[0]
+            bron = een(f"CREATE source CONTENT {json.dumps(velden)};")[0]
             bid = bron["id"]
             nb = ref["notebooks"]["extern"] if label == "extern" and i % 2 == 0 else ref["notebooks"]["gemengd"]
             een(f"RELATE {bid}->reference->{nb};")

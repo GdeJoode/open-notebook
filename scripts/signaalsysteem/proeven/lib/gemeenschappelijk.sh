@@ -203,7 +203,22 @@ proef_opruimen_profiel() {
     log "PROEF_LAAT_STAAN=1: containers van profiel $PROEF_PROFIEL blijven staan"
     return 0
   fi
+  # Anonieme volumes (VOLUME in een image, zoals /data en /logs van SurrealDB) krijgen
+  # geen projectlabel. Alleen die van de eigen containers verwijderen we na down.
+  local anoniem=() c v
+  while IFS= read -r c; do
+    [[ -z "$c" ]] && continue
+    while IFS= read -r v; do
+      [[ -n "$v" ]] && anoniem+=("$v")
+    done < <(docker inspect -f '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}{{"\n"}}{{end}}{{end}}' "$c" \
+             | while IFS= read -r v; do
+                 [[ "$v" =~ ^[0-9a-f]{64}$ ]] && echo "$v"
+               done)
+  done < <(dc --profile "$PROEF_PROFIEL" ps -aq 2>/dev/null)
   bewaar compose_down dc --profile "$PROEF_PROFIEL" down --timeout 10 || log "compose down gaf een fout, zie compose_down.log"
+  for v in "${anoniem[@]}"; do
+    bewaar "anoniem_volume_rm" docker volume rm "$v" || log "anoniem volume $v niet verwijderd"
+  done
 }
 
 # Bepaal de exitcode uit de criteria en sluit af.

@@ -1,8 +1,8 @@
 # Proefplan signaalsysteem
 
-Stand: 29 oktober 2026 · stap 3 van `opdracht.md`, eerste helft · branch `docs/signaalsysteem-fo`
+Stand: 30 oktober 2026 · stap 3 van `opdracht.md`: plan (3a) en scripts met eerste uitvoering (3b) · branch `docs/signaalsysteem-fo`
 
-Dit plan beschrijft de proeven uit het functioneel ontwerp (FO) paragraaf 13.1 en de open punten die de ontwerpbesluiten (Architecture Decision Records, ADR's) naar de proeven verwijzen. De bouwagent (`signaal-bouwer`) schrijft de scripts en voert ze uit; hij vult per proef het veld "Uitkomst". Er is nog niets gebouwd of uitgevoerd.
+Dit plan beschrijft de proeven uit het functioneel ontwerp (FO) paragraaf 13.1 en de open punten die de ontwerpbesluiten (Architecture Decision Records, ADR's) naar de proeven verwijzen. De bouwagent (`signaal-bouwer`) schrijft de scripts en voert ze uit; hij vult per proef het veld "Uitkomst". Stap 3b: alle scripts staan er; P0, P8, P6, P2 en P4 zijn uitgevoerd, P1, P3, P5 en P7 nog niet (zie paragraaf 8).
 
 ## 1. Gemeenschappelijke opzet
 
@@ -58,6 +58,8 @@ Het script downloadt de bestanden naar de werkmap buiten de repository, legt de 
 | D4 | Podcastfeed NOS De Dag | `https://podcast.npo.nl/feed/de-dag.xml` | P6; audio van de nieuwste aflevering (circa 19 MB, 20 minuten, meerdere sprekers) voor WhisperX in P1 en P3 |
 | D5 | Spotify-link van dezelfde show | `https://open.spotify.com/show/2Oeh3L5u0y9R54jEz8Mgty` | P6: omzetten naar D4 |
 | D6 | Synthetische fragmenten, door het script gemaakt | geen URL | P4: nooit echte interne documenten |
+| D7 | Audio, Nederlands: gesproken Wikipedia-artikel "Fractievoorzitter" (Wikimedia Commons, CC BY-SA 3.0; 75 s, 0,77 MB, SHA-1 `893cc979…ac075`) | `https://upload.wikimedia.org/wikipedia/commons/5/58/Nl-Fractievoorzitter.ogg` | P1, deelstap 1h (nl) en voorbereiden (uitlijnmodel nl) |
+| D8 | Audio, Engels: gesproken Wikipedia-artikel "Elongate carpet shark" (Wikimedia Commons, CC BY-SA 4.0; 64 s, 0,91 MB, SHA-1 `9ff5baa0…e55e361`) | `https://upload.wikimedia.org/wikipedia/commons/4/47/Spoken_Wikipedia_en_Elongate_carpet_shark.ogg` | P1, deelstap 1h (en) en voorbereiden (uitlijnmodel en) |
 
 Het audiobestand van D4 is een openbare aflevering uit de openbare feed. Het wordt alleen lokaal getranscribeerd en daarna met de runmap verwijderd. Van YouTube haalt geen proef iets anders op dan de feed (FO 5).
 
@@ -92,7 +94,9 @@ Gecontroleerd op 29-10-2026. Grootte is de downloadgrootte volgens de genoemde b
 | Embedding, standaard (ADR 0008) | `ChristianAzinn/mxbai-embed-large-v1-gguf@3ec6d46a…`, `Q8_0` | 358 MB | P1, P3 |
 | Embedding, meertalige kandidaat (voorstel) | `gpustack/bge-m3-GGUF`, `bge-m3-Q8_0.gguf`, SHA-256 `950f4a8e…7821167` | 635 MB | P3 |
 | Reranker | `gpustack/bge-reranker-v2-m3-GGUF`, `bge-reranker-v2-m3-Q8_0.gguf`, SHA-256 `a43c7c9b…aaa1d3` | 636 MB | P1 |
-| Whisper | `large-v3` (faster-whisper), plus het standaard uitlijnmodel van WhisperX voor `nl` | meten | P1, P3 |
+| Whisper | `large-v3` (faster-whisper), in `HF_HOME` (`/opt/models/hf`) | meten | P1, P3 |
+| Uitlijnmodel Nederlands | standaard van WhisperX voor `nl`: `jonatasgrosman/wav2vec2-large-xlsr-53-dutch` (Hugging Face), in `HF_HOME` | meten | P1, P3 |
+| Uitlijnmodel Engels | standaard van WhisperX voor `en`: torchaudio-pijplijn `WAV2VEC2_ASR_BASE_960H`, in `TORCH_HOME` (`/opt/models/torch`) | meten | P1 |
 | Sprekerherkenning | `pyannote/speaker-diarization-community-1` (CC-BY-4.0); in variant A al in het image | in image | P1, P3 |
 | Docling-modellen | door docling-serve bij de voorbereiding gedownload naar het volume `signaal-proef_docling_artifacts` | meten | P1, P3, P5 |
 
@@ -164,7 +168,7 @@ Toewijzing van de open punten uit de ADR's:
 
 | Datum | Commit | Exitcode | Meetwaarden | Conclusie |
 | --- | --- | --- | --- | --- |
-| | | | | |
+| 29-10-2026 | b31c4857 | 0 | Windows 11 (10.0.22621), Git Bash; Docker Desktop 29.7.2, Linux-containers; NVIDIA GeForce RTX 5070 Ti, 16 303 MiB, compute_cap 12.0, driver 610.88; `CUDA UMD Version: 13.3`; 674 GB vrij in de Docker-VM, 737 GB op E:; geen GPU-container buiten het project, `ollama ps` leeg (de bestaande stack was door Geert gestopt). GPU in een container gezien via `python:3.12.16-slim-bookworm` met `--gpus all`: het llama-swap-image is niet opgehaald (geen akkoord voor deze download) | Geslaagd. Alle criteria gehaald. Voorwaarde voor GPU-proeven voldaan op het moment van meten; P1, P3 en P5 controleren dat opnieuw. Eerste run gaf exitcode 1 door een fout in het script (de driver meldt `CUDA UMD Version`), hersteld. |
 
 ### P1. docling-serve, WhisperX en Kev als containers onder llama-swap
 
@@ -198,8 +202,10 @@ Toewijzing van de open punten uit de ADR's:
    - **1e, wisselen en wachtrij.** Achter elkaar docling (D1), Kev, WhisperX, werkmodel (`/v1/chat/completions`), elk twee keer, met daartussen twee gelijktijdige aanvragen voor verschillende zware diensten. Op de host `docker events --filter label=com.docker.compose.project=signaal-proef` volgen (alleen lezen), en het videogeheugen meten.
    - **1f, `/v1/rerank`.** `POST /v1/rerank` met `model=rerank`, één vraag en vijf documenten. De README noemt `v1/rerank`, `v1/reranking` en `/rerank` als doorgegeven paden.
    - **1g, ontladen en herstel.** Na `ttl` + 15 s moeten de zware containers gestopt zijn. Daarna van buitenaf `docker stop` op de Kev-container van de proef, en een nieuwe Kev-aanvraag doen.
+   - **1h, Nederlands en Engels (aanvulling Geert, 29-10).** Transcriptie moet lokaal werken voor beide talen. `POST /v1/audio/transcriptions` met D7 (nl) en D8 (en), zonder `language`, zodat de taaldetectie meetelt, met `timestamp_granularities[]=word` en `response_format=verbose_json`. De uitlijnmodellen voor beide talen (zie 1.7) worden bij het voorbereiden opgehaald door D7 en D8 één keer met internet te transcriberen (`whisperx`-CLI in de container `whisperx-voorbereiden`); de proef zelf draait offline.
+   - **1h, gebruiksmeldingen van variant A.** De container draait met `OPT_OUT_TRACKING=true`. Het script controleert met `docker inspect` dat de variabele staat, en vanuit de container dat `https://example.org` en `https://aws.amazon.com` op het netwerk `verwerking` (`internal: true`) geen verbinding geven; logregels met "track", "telemetry" of "usage" worden geteld. Wat de documentatie zegt: de pagina "Monitoring and Usage Tracking" van AWS Deep Learning Containers meldt dat gebruiksregistratie standaard aan staat, dat ze instance-id, frameworks en versies, containertype en Python-versie verzamelt en geen opdrachten, en dat `OPT_OUT_TRACKING=true` haar uitzet. Een eindpunt noemt de pagina niet. De WhisperX-pagina's (configuratie, EC2-uitrol) noemen tracking en `OPT_OUT_TRACKING` niet; of het WhisperX-image de registratie bevat, is dus niet gedocumenteerd en blijkt uit deze controle.
 
-**Benodigdheden.** Alle images en modellen uit 1.7 voor P1; D1, D2 en D4; GPU ja; Docker-socket via de socket-proxy (akkoord Geert); het resultaat van P7.
+**Benodigdheden.** Alle images en modellen uit 1.7 voor P1; D1, D2, D4, D7 en D8; GPU ja; Docker-socket via de socket-proxy (akkoord Geert); het resultaat van P7.
 
 **Succescriterium.**
 
@@ -213,6 +219,8 @@ Toewijzing van de open punten uit de ADR's:
 | K6 | 1f: HTTP 200 en 5 resultaten met een score | telling |
 | K7 | 1g: zware containers `exited` binnen `ttl` + 15 s; na de externe stop geeft de volgende Kev-aanvraag HTTP 200 | `docker inspect`, HTTP-status |
 | K8 | geen proefcontainer op `verwerking` bereikt internet tijdens de proef | P8-controle vanuit `whisperx` en `kev` |
+| K9 | 1h, per taal (nl, en): HTTP 200, een niet-leeg transcript met woordtijden, en de gedetecteerde taal is `nl` respectievelijk `en` | HTTP-status, telling, veld `language` |
+| K10 | 1h: `OPT_OUT_TRACKING=true` staat in de container, en de container krijgt op `verwerking` geen uitgaande verbinding | `docker inspect`, verbindingsproef |
 
 **Verwachte uitkomst.**
 
@@ -221,6 +229,7 @@ Toewijzing van de open punten uit de ADR's:
 - K4 hangt af van de gezondheidscontrole van Kev (1d).
 - K5: groep `zwaar` met `exclusive` zou overlap moeten voorkomen. De wachtrij voor gelijktijdige aanvragen is beschreven, maar niet beproefd.
 - Kev-4B is een LoRA-adapter op `Qwen3.5-4B-Base` met 9,3 GB aan gewichten in bf16. Of hij samen met het embeddingmodel binnen 16 GB past, volgt uit P3.
+- K9: waarschijnlijk geslaagd; large-v3 herkent beide talen. K10: de variabele staat; of het image zonder internet tracking probeert, blijkt uit de logregels.
 
 **Script.** `scripts/signaalsysteem/proeven/p1_llama_swap_containers.sh`, met `p1/llama-swap.yaml`, `p1/kev.Dockerfile`, `p1/llama-swap-dockercli.Dockerfile` en `p1/wacht_op_dienst.sh` (de `cmd` die blijft lopen zolang de dienst gezond is). De diensten staan in `compose.proef.yml`, profiel `p1`.
 
@@ -230,7 +239,7 @@ Toewijzing van de open punten uit de ADR's:
 
 | Datum | Commit | Exitcode | Meetwaarden | Conclusie |
 | --- | --- | --- | --- | --- |
-| | | | | |
+| 29-10-2026 | 013704dd | niet uitgevoerd | — | Niet uitgevoerd: vraagt GPU exclusief, ruim 30 GB aan downloads en de Docker-socket in `socket-proxy`; Geert beslist nog (opdracht 3b). Voorwaarde: P7 geslaagd. Script geschreven, `bash -n` geslaagd. |
 
 ### P2. Schema-trigger van Langflow 1.13.0, met APScheduler als terugval
 
@@ -294,7 +303,7 @@ Beslisregel voor ADR 0017 C:
 
 | Datum | Commit | Exitcode | Meetwaarden | Conclusie |
 | --- | --- | --- | --- | --- |
-| | | | | |
+| 30-10-2026 | 013704dd | 0 | K1 (vastgelegd): in alle drie de starts (zonder vlag, `ENABLE_TRIGGERS=true`, `LANGFLOW_ENABLE_TRIGGERS=true`) staat `ScheduleTrigger` in `/api/v1/all` (categorie `triggers`); de meegeleverde frontendbundel bevat de tekst `ENABLE_TRIGGERS` nergens (0 bestanden); `/api/v1/config` kent geen triggervlag; de backend kent ook geen `LANGFLOW_FEATURE_`-vlag voor triggers. K2: trigger ontstaat bij het opslaan van de flow met status `pending`; `POST /api/v1/triggers/{id}/enable` HTTP 200, daarna `active`. K3: 4 ticks in 240 s, elk gepland moment uniek, grootste vertraging 1,0 s. K4: coalesce na 150 s stilstand precies 1 inhaalrun met 2 gemiste momenten in `missed_ticks` (gepland 23:48:00 UTC, uitgevoerd 22 s later, na het opstarten); met skip 0 inhaalruns. Replayvenster: `trigger_replay_window_days`, standaard 7 dagen (instelling in `lfx`, niet in de documentatie). 2f: `next_fire_at` van `0 8 * * 1-5` in Europe/Amsterdam is 2026-10-30T07:00:00 (UTC, wintertijd). K5: terugval 4 runs met HTTP 200, grootste vertraging 0,4 s; na 150 s stilstand precies 1 inhaalrun. Langflow probeerde vanaf `verwerking` 21 keer een uitgaande verbinding (LiteLLM haalt `model_prices_and_context_window.json` op GitHub), geblokkeerd door het netwerk | Geslaagd. Beslisregel ADR 0017 C: de schema-trigger van Langflow 1.13.0, via de API aangezet (de interface kan dat niet; `ENABLE_TRIGGERS` bestaat in deze versie niet als vlag). De terugval met APScheduler werkt ook. Voor ADR 0017: Langflow doet uit zichzelf uitgaande aanvragen (LiteLLM-kostentabel); op `verwerking` is dat afgevangen. Eerdere runs faalden op fouten in het script (Fernet-sleutel, schrijfrechten op het tickvolume, telling van de inhaalrun van APScheduler); hersteld en volledig opnieuw gedraaid. |
 
 ### P3. Videogeheugen per dienst op de RTX 5070 Ti
 
@@ -348,7 +357,7 @@ Geeft Kev-4B samen met het embeddingmodel een geheugenfout, dan legt de bouwagen
 
 | Datum | Commit | Exitcode | Meetwaarden | Conclusie |
 | --- | --- | --- | --- | --- |
-| | | | | |
+| 29-10-2026 | 013704dd | niet uitgevoerd | — | Niet uitgevoerd: vraagt GPU exclusief en de voorbereiding van P1; Geert beslist nog. Script geschreven, `bash -n` geslaagd. |
 
 ### P4. open-notebook-mcp met het classificatiefilter: geen intern fragment in een antwoord
 
@@ -411,7 +420,7 @@ Geeft Kev-4B samen met het embeddingmodel een geheugenfout, dan legt de bouwagen
 
 | Datum | Commit | Exitcode | Meetwaarden | Conclusie |
 | --- | --- | --- | --- | --- |
-| | | | | |
+| 30-10-2026 | 013704dd (fork f7bb6d55) | 1 | K1: 38 verschillende `PRF-INT-`-kenmerken in antwoorden van open-notebook-mcp, via `list_sources`, `get_source` (ook met interne id's), `list_notes`, `get_note` en `search` (`text` en `hybrid`). K2: positieve controle geldig (`PRF-EXT-` in `list_sources` 20, `get_source` 40, `search` 30). K3: `get_source` met een intern id gaf in 9 van 10 gevallen de inhoud; 1 keer een fout, maar alleen omdat het antwoordmodel `SourceResponse` de bron met een `source_insight` niet kon valideren (HTTP 500). K4: aantal records gelijk, maar alleen doordat de schrijfacties faalden: `create_note` HTTP 500, `create_source` HTTP 422 (veld `type` ontbreekt: open-notebook-mcp stuurt JSON, de fork verwacht een formulier), `ask_simple` faalt op `No module named 'ai_prompter'`. K5: 0 leesaanroepen met een verwerkingsfout. K6: API zonder wachtwoord HTTP 401. Vector-zoeken niet uitvoerbaar: geen embeddingmodel ingesteld (HTTP 400); hybride zoeken valt terug op tekst en lekt mee. Het veld `classification` wordt door het schema (SCHEMAFULL) stil weggelaten; de proef werkte met `private = true`. Officieel startpunt van open-notebook-mcp 0.3.0 faalt met `mcp==1.30.0`: `FastMCP.run() got an unexpected keyword argument 'host'` | Mislukt, zoals verwacht als nulmeting: de fork filtert in geen enkele leesroute op `private` of classificatie (harde eis 1 niet gehaald). De proef ziet het lek, dus de test werkt. Bevindingen voor A2 en ADR 0002: (1) open-notebook-mcp 0.3.0 start niet met mcp 1.30.0 zonder eigen startbestand; (2) `create_source` past niet bij het importeindpunt van de fork; (3) K4 toetst nu alleen dat schrijven faalt, niet dat het geweigerd wordt (na ADR 0002: HTTP 403); (4) `SourceResponse` faalt op een bron met inzicht. |
 
 ### P5. docling-serve geeft het videogeheugen vrij
 
@@ -452,7 +461,7 @@ Geeft Kev-4B samen met het embeddingmodel een geheugenfout, dan legt de bouwagen
 
 | Datum | Commit | Exitcode | Meetwaarden | Conclusie |
 | --- | --- | --- | --- | --- |
-| | | | | |
+| 29-10-2026 | 013704dd | niet uitgevoerd | — | Niet uitgevoerd: vraagt GPU exclusief en de Docling-modellen uit de voorbereiding van P1; Geert beslist nog. Script geschreven, `bash -n` geslaagd. |
 
 ### P6. Feedcontrole voor een YouTube-kanaal en een Spotify-podcast
 
@@ -499,7 +508,7 @@ Geeft Kev-4B samen met het embeddingmodel een geheugenfout, dan legt de bouwagen
 
 | Datum | Commit | Exitcode | Meetwaarden | Conclusie |
 | --- | --- | --- | --- | --- |
-| | | | | |
+| 29-10-2026 | b31c4857 | 0 | K1: HTTP 200, 15 items, alle met `videoId` en datum. K2: tweede ophaling na 60 s 0 nieuwe id's (YouTube en podcast). K3: na verwijderen van 1 en 3 id's precies 1 en 3 nieuw (beide feeds). K4: podcastfeed HTTP 200, 2 357 items, alle met `guid` en `audio/mpeg`-bijlage. K5: Spotify-paginatitel "De Dag \| Listen to the Podcast on Spotify", oEmbed-titel = nieuwste aflevering, iTunes-kandidaat `https://podcast.npo.nl/feed/de-dag.xml` met titelovereenkomst. Geen van beide feeds stuurt `ETag` of `Last-Modified`, dus een voorwaardelijke aanvraag is niet bruikbaar. 6c met Podcast Index en 6d overgeslagen: geen sleutels | Geslaagd. Detectie op id werkt voor beide feeds; Spotify-link is zonder sleutel om te zetten naar de RSS-feed. Voor de Langflow-component: elke controle haalt de hele feed op (De Dag: 2 357 items). |
 
 ### P7. Docker-toegang voor llama-swap: socket-proxy en Docker-client
 
@@ -567,7 +576,7 @@ Beslisregel voor ADR 0009: K2 en K4 geslaagd betekent dat optie 2 uitvoerbaar is
 
 | Datum | Commit | Exitcode | Meetwaarden | Conclusie |
 | --- | --- | --- | --- | --- |
-| | | | | |
+| 29-10-2026 | 013704dd | niet uitgevoerd | — | Niet uitgevoerd: vraagt het akkoord van Geert om de Docker-socket alleen-lezen in `socket-proxy` te koppelen (`SIGNAAL_PROEF_AKKOORD_SOCKET=ja`), en het llama-swap-image (download). Script geschreven, `bash -n` geslaagd. |
 
 ### P8. Netwerkafscherming met `internal: true`
 
@@ -614,11 +623,13 @@ Beslisregel voor ADR 0009: K2 en K4 geslaagd betekent dat optie 2 uitvoerbaar is
 
 | Datum | Commit | Exitcode | Meetwaarden | Conclusie |
 | --- | --- | --- | --- | --- |
-| | | | | |
+| 29-10-2026 | b31c4857 | 0 | K1: host (Git Bash) naar `alleen_intern` curl-exitcode 7, ook vanuit WSL2 (exitcode 7). K2: `alleen_intern` naar internet: geen DNS (`gaierror`) en geen verbinding. K3: host naar `dubbel` en `controle` HTTP 200 (ook vanuit WSL2). K4: `alleen_intern` naar `dubbel` HTTP 200. K5: `dubbel` en `controle` hebben internet (DNS ok, example.org antwoordt met HTTP 403 op de Python-client, dus wel verbinding). `docker compose up` gaf geen waarschuwing | Geslaagd. Onder Docker Desktop publiceert een container met alleen een `internal: true`-netwerk geen bereikbare poort. Een container die ook aan een gewoon netwerk hangt (`dubbel`) heeft uitgaand internet: voor ADR 0002 F betekent dit dat open-notebook-mcp niet tegelijk aan `verwerking` en `toegang` mag hangen zonder extra maatregel (zie de verwachte uitkomst). Eerste run telde een HTTP-foutstatus als "geen verbinding"; script hersteld. |
 
 ### P9. Opruimen
 
 `scripts/signaalsysteem/proeven/p9_opruimen.sh` stopt en verwijdert de containers en netwerken van het project `signaal-proef`. Met `--volumes` verwijdert het ook de volumes met het label `com.docker.compose.project=signaal-proef`, en met `--images` de lokaal gebouwde images met het voorvoegsel `signaal-proef/`. Het script controleert achteraf met de momentopname (1.2) dat niets buiten het project is veranderd. Plek: hier.
+
+**Uitkomst.** 30-10-2026, commit 013704dd, `p9_opruimen.sh --volumes`, exitcode 0: geen containers, netwerken of volumes van het project meer; momentopname zonder afwijking. Containers, volumes en netwerken zijn gelijk aan de beginstand van P0 (de zeven gestopte containers van project `open-notebook` ongemoeid). Blijven staan, bewust: de lokaal gebouwde images `signaal-proef/*` (waaronder de fork-API van 18,7 GB, nodig voor de acceptatietest van P4 na ADR 0001 en 0002) en de opgehaalde images uit 1.7 (Langflow 1.13.0, SurrealDB v2.7.0, python 3.12.16-slim). Verwijderen kan met `p9_opruimen.sh --images`; de build-cache van de fork-API ruimt het script niet op (`docker builder prune` valt onder de verboden opdrachten).
 
 ## 4. Embeddingmodellen vergelijken (ADR 0008)
 
@@ -721,3 +732,24 @@ Alle geraadpleegd op 29-10-2026.
   - [Spotify-link van De Dag](https://www.podengine.ai/podcasts/de-dag)
   - [oEmbed van Spotify](https://open.spotify.com/oembed?url=https://open.spotify.com/show/2Oeh3L5u0y9R54jEz8Mgty)
   - de PDF-URL's in tabel 1.6
+
+## 8. Aanpassingen bij het uitwerken van de scripts (stap 3b)
+
+Stand 29-10-2026. De scripts volgen het plan; deze punten wijken af of vullen aan.
+
+1. **Bestanden die het plan niet noemt.** Geen bind mounts naar mappen in de repository (1.2) betekent dat scripts en configuratie in kleine lokale images zitten: `p2/langflow.Dockerfile` (TickLogger in Langflow), `p2/hulp.Dockerfile` en `p2/langflow_api.py` (API-aanroepen en analyse van de ticks), `p4/start_mcp.py`, `p6/feedcontrole.Dockerfile`, `p1/modellen.Dockerfile` en `p1/modellen_downloaden.py` (voorbereiden). Losse `docker run`-containers krijgen het label `com.docker.compose.project=signaal-proef`, zodat ze tot het project tellen.
+2. **Momentopname van images.** Nieuwe images zijn toegestaan als ze in 1.7 staan, `signaal-proef/*` heten of `<none>` zijn. Een verdwenen of gewijzigd image buiten die reeks geeft exitcode 3.
+3. **P0, GPU in een container.** Het llama-swap-image staat niet in het akkoord voor deze ronde. P0 gebruikt het als het lokaal staat of met `--voorbereiden`; anders `python:3.12.16-slim-bookworm` met `--gpus all` (Docker Desktop koppelt `nvidia-smi` in elke GPU-container), en als laatste `nvidia-smi.exe` op de host. De bron staat in de uitkomst. Niet-GPU-proeven roepen P0 aan met `--als-voorwaarde` en eisen alleen Docker, Linux-containers en ruimte.
+4. **P0, CUDA-versie.** Driver 610 meldt `CUDA UMD Version: 13.3` in plaats van `CUDA Version`; het script herkent beide.
+5. **P4, image van de fork.** Gebouwd uit `git archive` van de laatste commit die de code van de fork raakt (buiten `docs/` en `scripts/signaalsysteem/`), niet uit de werkmap, zodat ongetrackte mappen als `notebook_data_live` niet in de buildcontext komen. In die kopie van de `Dockerfile` zijn alleen de zwevende basis-tags vervangen: `python:3.12-slim-bookworm` door `python:3.12.16-slim-bookworm` en `ghcr.io/astral-sh/uv:latest` door `ghcr.io/astral-sh/uv:0.11.13` (de versie van uv in de WSL-omgeving). Zo wisselen de lokale tags van de bestaande omgeving niet van versie. De API start met `uvicorn` rechtstreeks, zonder supervisord en frontend.
+6. **P4, open-notebook-mcp.** Het officiële startpunt (`open_notebook_mcp.main`) geeft `host`, `port` en `path` mee aan `FastMCP.run`; in `mcp==1.30.0` kent `run` alleen `transport` en `mount_path`. Het script legt de uitkomst van het officiële startpunt vast en start de server met `p4/start_mcp.py`, dat dezelfde waarden via `mcp.settings` zet en de localhost-beperking op de Host-header uitzet (wat `host=0.0.0.0` in het origineel ook doet). Aan de tools verandert niets.
+7. **P4, testdata.** Fragmenten staan als `chunk` en `source_embedding` (met een willekeurige vector van 1 024 dimensies), notities via `artifact`, bronnen via `reference` aan een notebook. Recordverwijzingen gaan via `type::thing`.
+8. **P8.** Een HTTP-foutstatus (bijvoorbeeld 403 van example.org) telt als "wel verbinding": het antwoord kwam van internet.
+9. **P6.** Kopregels worden hoofdletterongevoelig gelezen.
+10. **P2.** Componenten uit `LANGFLOW_COMPONENTS_PATH` staan in 1.13.0 in `/api/v1/all` onder een sleutel als `ext:proef:TickLogger@extra`; die sleutel is ook het knooptype in de flow. De uitvoertypen van de randen komen uit het sjabloon (in 1.13.0 `JSON`, niet `Data`). Elke run begint met lege P2-volumes, omdat het superuser-wachtwoord per run nieuw is.
+11. **Wachttijden instelbaar.** P2 kent `P2_STOP_S`, `P2_NA_HERSTART_S` en `P2_LOOPTIJD_S` (standaard 150, 120 en 240 s); alleen de standaardwaarden tellen voor de uitkomst.
+12. **Akkoord Docker-socket.** P1 en P7 starten alleen met `SIGNAAL_PROEF_AKKOORD_SOCKET=ja` in de omgeving; anders exitcode 2.
+13. **Anonieme volumes.** Het image van SurrealDB declareert `VOLUME /data /logs`. Compose maakt daar anonieme volumes voor zonder projectlabel; de momentopname zag die als wijziging buiten het project. Het opruimen per profiel verwijdert nu de anonieme volumes van de eigen containers.
+14. **P2, inhaalrun van de terugval.** APScheduler meldt bij `coalesce` het laatst gemiste moment als gepland moment. Een run waarvan dat moment vóór het startcommando ligt, telt als inhaalrun; het herstartmoment wordt vóór het starten gemeten. Bij de schema-trigger telt `missed_ticks` in de payload.
+15. **P2, Langflow-sleutel.** `LANGFLOW_SECRET_KEY` moet een Fernet-sleutel zijn (32 bytes, url-veilig base64); met een hex-waarde geeft `POST /api/v1/api_key/` HTTP 400.
+16. **Open in de modellenlijst (1.7).** De revisie van `ChristianAzinn/mxbai-embed-large-v1-gguf` staat ingekort (`3ec6d46a…`); `modellen_downloaden.py` gebruikt die korte waarde. Slaagt dat niet, dan is de volledige commit-hash nodig. Hetzelfde geldt voor de ingekorte SHA-256-waarden: het script controleert begin en einde.
