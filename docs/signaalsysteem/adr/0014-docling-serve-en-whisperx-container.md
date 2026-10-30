@@ -4,6 +4,7 @@
 - **Datum:** 2026-10-29
 - **Raakt FO-paragraaf:** 7, 11 (zware stappen in aparte containers), 12.1 (offline-instellingen), 12.2, 13.1
 - **Lost op:** verschilanalyse conflict 10
+- **Gewijzigd door:** ADR 0019 (classificatie en pipelinestart per innameroute)
 
 ## Context
 

@@ -4,6 +4,7 @@
 - **Datum:** 2026-10-29
 - **Raakt FO-paragraaf:** 4, 5, 11 (bouwstenen), 13.2 punt 1, 14 (inname en Open Notebook)
 - **Lost op:** verschilanalyse conflict 9, open vraag 3
+- **Gewijzigd door:** ADR 0019 (classificatie en pipelinestart per innameroute)
 
 ## Context
 

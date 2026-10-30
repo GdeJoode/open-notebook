@@ -122,7 +122,7 @@ Bronnen: [YouTube-feedformaat en beperkingen](https://finder.wprssaggregator.com
 | Naam | herkenbare naam | Jaarstukken gemeenten |
 | Brontype en locatie | type plus pad, URL of API-eindpunt | lokale map met jaarstukken |
 | Schema | moment van ophalen of controleren | wekelijks |
-| Classificatie | intern of extern; onbekend geldt als intern | extern |
+| Classificatie | intern of extern; onbekend geldt als intern; standaard per innameroute (ADR 0019) | extern |
 | Documentsoort | verwacht soort document | jaarrekening, begroting |
 | Route | pipeline die het document volgt | risicoparagrafen gemeenten |
 | Selectie | te extraheren onderdelen; leeg betekent alles | paragraaf weerstandsvermogen en risicobeheersing |
@@ -235,7 +235,7 @@ De modelpoort kan een stap ook uitvoeren met `claude -p`: de prompt gaat via std
 | Regel | Uitwerking |
 | --- | --- |
 | Intern alleen lokaal | De poort weigert een cloudmodel voor een intern fragment. Bij een fout is er geen terugval naar de cloud. |
-| Onbekend is intern | Een bron zonder classificatie wordt als intern behandeld tot de beheerder anders beslist. |
+| Onbekend is intern | Een bron zonder classificatie wordt als intern behandeld tot de beheerder anders beslist. Bronnen via API, MCP, feed of website zijn standaard extern; een bulkupload krijgt een classificatie per batch; een watchfolder wacht op de beheerder (ADR 0019). |
 | Overerving | Classificatie gaat over van bron op versie, fragment en embedding. Een kennisproduct is intern zodra één bronfragment intern is. |
 | Externe uitvraag | Elke vraag die via een cloudmodel loopt, ook via MCP naar Claude, is een externe uitvraag. Interne fragmenten worden in de query uitgefilterd, voordat een model iets ziet. |
 | Lokale embeddings | Embeddings van interne fragmenten worden lokaal berekend. |
@@ -373,7 +373,7 @@ Het systeem draait als één Docker Compose-omgeving. llama-swap laat alle GPU-d
 
 **Volledig lokaal**
 
-Alle containers draaien op de eigen machine. Na de eerste installatie is voor de verwerking geen internet nodig. De uitzonderingen zijn bewust: het ophalen van externe bronnen en de Claude-API en -CLI voor fragmenten met label extern.
+Alle containers draaien op de eigen machine. Na de eerste installatie is voor de verwerking geen internet nodig. De uitzonderingen zijn bewust: het ophalen van externe bronnen, de Claude-API en -CLI voor fragmenten met label extern, en eventueel een externe verwerkingsdienst (bijvoorbeeld docling-serve in de cloud) voor documenten met label extern (ADR 0019).
 
 | Onderdeel | Eenmalig nodig | Instelling voor offline gebruik |
 | --- | --- | --- |

@@ -11,7 +11,7 @@ Deze opdracht zet het functioneel ontwerp (FO) in `functioneel-ontwerp.md` om in
   1. Intern blijft lokaal. Een fragment met label intern bereikt nooit een cloudmodel en verschijnt nooit in een uitvraag via de MCP-server (Model Context Protocol). Dit wordt op drie plekken afgedwongen: het Docker-netwerk, de modelkeuze in de Langflow-componenten en het filter in de API van de fork.
   2. Herkomst: elk fragment is herleidbaar tot bronversie, verwerkingsrun en model.
   3. Afgeleide teksten, zoals notities en wiki-pagina's, tellen nooit als bron.
-  4. Alles draait lokaal in Docker; GPU-diensten lopen via llama-swap.
+  4. Intern draait altijd lokaal in Docker; GPU-diensten lopen via llama-swap. Een extern document mag ook door een externe verwerkingsdienst gaan (ADR 0019).
 - **Geen interne documenten** in de repository of in tests. Testdata komt alleen uit openbare bronnen.
 - **Geen geheimen** in code, Compose-bestanden of commits.
 

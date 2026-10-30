@@ -1,0 +1,62 @@
+# ADR 0019: Classificatie en pipelinestart per innameroute; externe verwerking voor extern
+
+- **Status:** besloten (Geert, 2026-10-30)
+- **Datum:** 2026-10-30
+- **Raakt FO-paragraaf:** 2 (principe 4), 5 (brontypen, bronkaartregel), 6, 9 (beleidsregel "onbekend is intern"), 12.1 (volledig lokaal); opdracht.md §1, harde eis 4
+- **Wijzigt:** ADR 0001 (standaardclassificatie), ADR 0010 (inname), ADR 0014 (adres van docling-serve)
+
+## Context
+
+Het FO behandelt elke bron zonder classificatie als intern (FO 9). Het laat alle verwerking lokaal draaien (FO 12.1, harde eis 4). ADR 0001 werkt dat uit met standaard intern voor alle bronnen.
+
+Geert verfijnde dit op 2026-10-30:
+
+1. Wat via een API, een MCP-bron, een feed (RSS, YouTube, podcast) of een website binnenkomt, is in de regel openbaar. Die bronnen zijn standaard extern, en hun pipeline start automatisch.
+2. Een bulkupload krijgt één classificatie en één route voor de hele batch.
+3. Documenten uit een watchfolder wachten in de wachtrij. De beheerder kiest per document de pipeline en de classificatie.
+4. Documentextractie mag later voor externe documenten bij een externe dienst draaien, bijvoorbeeld docling-serve op Google Cloud of AWS, om de eigen pc te ontlasten. Harde eis 4 wordt daarvoor afgezwakt.
+
+## Opties
+
+1. **Alles standaard intern (ADR 0001 zoals besloten).** Veilig, maar elke openbare bron vraagt een handmatig besluit. Dat werkt niet bij feeds met veel items.
+2. **Standaard per innameroute, vastgelegd in de bronkaartregel, met de controle van de poortwachter aan.** Openbare routes lopen automatisch door. Een vertrouwelijk document op een openbare route valt nog op door zijn kenmerken.
+3. **Standaard per innameroute, zonder controle van de poortwachter.** Eenvoudiger, maar dan is het label van de route de enige bescherming.
+
+## Besluit
+
+Optie 2.
+
+**Standaard per route**
+
+| Innameroute | Classificatie | Pipelinestart |
+| --- | --- | --- |
+| API, MCP-bron, feed (RSS, YouTube, podcast), website | extern, als voorstel in de bronkaartregel; de beheerder bevestigt het bij het aanmaken van de regel | automatisch, volgens de route en het schema van de regel |
+| Bulkupload | één keuze voor de hele batch: intern of extern; zonder keuze intern | volgens de route die bij de batch is gekozen |
+| Watchfolder | geen standaard; tot het besluit van de beheerder geldt intern | geen; het document wacht in de wachtrij tot de beheerder de pipeline en de classificatie kiest |
+| Losse handmatige upload | voorstel van de poortwachter; zonder keuze intern (FO 5) | na bevestiging |
+
+- De classificatie hoort bij de bronkaartregel of de batch, niet bij de route alleen. Een API of MCP-server van een intern systeem krijgt bij het aanmaken van de regel het label intern.
+- De poortwachter blijft ook externe bronnen controleren op interne kenmerken (FO 6). Een treffer zet het document op intern en in de wachtrij. Van intern naar extern kan alleen de beheerder, met een logregel (FO 14).
+- "Onbekend is intern" (FO 9) blijft de terugval: een document zonder bronkaartregel, batchkeuze of besluit van de beheerder is intern.
+
+**Externe verwerking**
+
+- Harde eis 4 wordt: *intern draait altijd lokaal in Docker; GPU-diensten lopen via llama-swap. Een extern document mag ook door een externe verwerkingsdienst gaan.*
+- Een externe verwerkingsdienst valt onder dezelfde regel als een cloudmodel (FO 9, harde eis 1). De bouwsteen weigert een intern document en valt bij een fout niet terug op een extern adres.
+- De docling-bouwsteen krijgt een instelbaar adres per aanroepwijze, lokaal of extern. Het register uit ADR 0007 legt per adres vast of het is toegestaan voor intern.
+- Een externe docling-dienst wordt nu niet ingericht. Dat gebeurt pas als de lokale verwerking aantoonbaar te traag is (P1 en P5). Het vraagt dan een eigen ADR over de aanbieder, de authenticatie, de versleuteling onderweg en het bewaren van bestanden bij de aanbieder.
+
+## Gevolgen
+
+- **ADR 0001:** de standaardclassificatie volgt deze tabel in plaats van "alles intern". Bestaande records blijven bij de migratie intern.
+- **ADR 0010:**
+  - het importeindpunt ontvangt de classificatie uit de bronkaartregel of de batch;
+  - de bulkupload krijgt een batchveld voor classificatie en route;
+  - de mapcontrole zet nieuwe documenten in de wachtrij in plaats van ze te verwerken.
+- **ADR 0014:** het adres van docling-serve is een instelling, en de bouwsteen controleert de classificatie voor de aanroep.
+- **ADR 0002:**
+  - een externe verwerkingsdienst vraagt uitgaand verkeer vanuit een eigen, kleine container;
+  - de verwerkingscontainers op het netwerk `verwerking` blijven zonder internet.
+- **FO:** §5 (bronkaartregel en brontypen), §9 (beleidsregels) en §12.1 (volledig lokaal) worden bijgewerkt.
+- **Opdracht:** harde eis 4 in `opdracht.md` §1 wordt bijgewerkt.
+- **Proef P4:** de lektest blijft gelijk, want het filter werkt op het label, niet op de route.

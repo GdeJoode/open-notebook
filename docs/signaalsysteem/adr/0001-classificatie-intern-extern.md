@@ -4,6 +4,7 @@
 - **Datum:** 2026-10-29
 - **Raakt FO-paragraaf:** 5 (bronkaartregel), 6, 9 (beleidsregels), 14 (herclassificatie)
 - **Lost op:** verschilanalyse conflict 3 en 4, open vraag 6
+- **Gewijzigd door:** ADR 0019 (classificatie en pipelinestart per innameroute)
 
 ## Context
 
