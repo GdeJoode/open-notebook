@@ -1,6 +1,6 @@
 # ADR 0011: Orkestratie van de stappen na de import
 
-- **Status:** voorgesteld
+- **Status:** besloten (Geert, 2026-10-30)
 - **Datum:** 2026-10-29
 - **Raakt FO-paragraaf:** 2 (principe 2), 5 (planning), 11 (rolverdeling, wat LangGraph toevoegt), 12.2 (geheugenfout), 14 (orchestratie en scheduler)
 - **Lost op:** verschilanalyse open vraag 5 (wie de stappen in de fork start; de runtabel staat in ADR 0003)
@@ -42,6 +42,10 @@ Optie 2.
 - Embeddings van fragmenten berekent de fork via `pipelines/embeddings` en `ModelGate` (ADR 0006), niet de Langflow-component. Zo gebruiken fragmenten en zoekvragen gegarandeerd hetzelfde model.
 
 Geert beslist.
+
+## Besluit
+
+Optie 2 (Geert, 30-10): Langflow start elke stap via de API van de fork, en de wachtrij van de fork voert ze uit.
 
 ## Gevolgen
 

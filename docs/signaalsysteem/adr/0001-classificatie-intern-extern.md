@@ -63,6 +63,6 @@ Optie 1.
 ## Gevolgen
 
 - **Code:** schema's in `apps/app-main/src/app_main/api/schemas.py` en `packages/shared/src/shared/models/source.py` krijgen `classification` in plaats van `private`. De repositories in `packages/surrealdb-service` zetten het veld bij het schrijven. Er komt een nieuwe `ClassificationService` met het herclassificatie-eindpunt en `classification_log`.
-- **Tests:** een schemacontrole dat elke genoemde tabel `classification` heeft met standaard `intern`; een test dat een record zonder waarde `intern` wordt; een test dat import of poortwachter intern niet naar extern kan zetten; een test dat herclassificatie alle versies, fragmenten en embeddings in één transactie bijwerkt en precies één logregel schrijft.
+- **Tests:** een schemacontrole dat elke genoemde tabel `classification` heeft met standaard `intern`. Zolang de migratie het veld niet definieert, laat een SCHEMAFULL-tabel een geschreven `classification` stil weg (P4, 30-10); de test leest de waarde daarom terug na het schrijven; een test dat een record zonder waarde `intern` wordt; een test dat import of poortwachter intern niet naar extern kan zetten; een test dat herclassificatie alle versies, fragmenten en embeddings in één transactie bijwerkt en precies één logregel schrijft.
 - **Interface:** schermen die `private` of `privacy_mode` tonen of zetten, werken niet meer (zie ADR 0016).
 - **Afhankelijkheden:** het filter dat deze waarde gebruikt, staat in ADR 0002; bronversie en run in ADR 0003.

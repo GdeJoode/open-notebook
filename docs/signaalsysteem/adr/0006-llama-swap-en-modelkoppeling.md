@@ -51,7 +51,7 @@ Optie 2.
 
 **llama-swap in Compose**
 
-- Container `llama-swap` op het netwerk `verwerking` (ADR 0002). Het image ligt vast op een uitgebrachte versie met CUDA. De modelbestanden staan in een alleen-lezen volume. De configuratie staat onder versiebeheer in de repository, op een plek die de bouwtaak kiest, bijvoorbeeld `services/llama-swap/config.yaml`.
+- Container `llama-swap` op het netwerk `verwerking` (ADR 0002). Het image ligt vast op een uitgebrachte versie met CUDA 13: voor de RTX 5070 Ti (Blackwell) dekt `unified-cuda` (CUDA 12) volgens de README alleen Pascal tot en met Ada (proeven.md §5 punt 2). Beproefd is `ghcr.io/mostlygeek/llama-swap:v268-cuda13-b11977`, in een afgeleid image met de Docker-client (ADR 0009; P1, P7, 30-10). Die tag eist `cuda>=13.4`; met driver 610.88 (CUDA 13.3) start hij alleen met `NVIDIA_DISABLE_REQUIRE=1` en `LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64` (P1, proeven.md §8 punt 23). De modelbestanden staan in een alleen-lezen volume. De configuratie staat onder versiebeheer in de repository, op een plek die de bouwtaak kiest, bijvoorbeeld `services/llama-swap/config.yaml`.
 - De groepen en het laden van docling-serve, WhisperX en Kev staan in ADR 0009; het embeddingmodel in ADR 0008.
 
 **Modelpoort**

@@ -1,6 +1,6 @@
 # ADR 0007: Plaats van het modelregister en het auditlog van modelaanroepen
 
-- **Status:** voorgesteld
+- **Status:** besloten (Geert, 2026-10-30)
 - **Datum:** 2026-10-29
 - **Raakt FO-paragraaf:** 9 (modelregister, beleidsregel audit), 11 (validatie bij het verbinden)
 - **Lost op:** verschilanalyse open vraag 7 (de plaats van het register) en open vraag 13
@@ -50,6 +50,10 @@ In de fork:
 - Validatie bij het verbinden in Langflow (FO 11): een eigen modelcomponent leest hetzelfde register en weigert een model met `toegestaan voor intern = nee` zodra de bron intern of onbekend is.
 
 Geert beslist.
+
+## Besluit
+
+Volgens het voorstel (Geert, 30-10): register optie 2 (YAML-bestand in Git), auditlog optie 2 (nieuwe tabel `model_call`), en validatie bij het verbinden in Langflow met hetzelfde register.
 
 ## Gevolgen
 

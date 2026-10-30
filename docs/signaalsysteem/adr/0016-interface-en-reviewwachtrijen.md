@@ -1,6 +1,6 @@
 # ADR 0016: Interface en de plek waar de beheerder zijn wachtrijen afhandelt
 
-- **Status:** voorgesteld
+- **Status:** besloten (Geert, 2026-10-30)
 - **Datum:** 2026-10-29
 - **Raakt FO-paragraaf:** 5, 6, 7, 10, 11, 12.1, 13.2 punt 7
 - **Lost op:** verschilanalyse conflict 13, open vraag 14
@@ -59,12 +59,16 @@ Optie 2. De interface hindert dan niet: hij is alleen lokaal bereikbaar, hij geb
 
 Geert beslist. Kiest hij optie 1, dan komt er een aparte ADR voor de reviewcomponenten in Langflow.
 
+## Besluit
+
+Optie 2 (Geert, 30-10): de werkbak van Track WB wordt de reviewomgeving, alleen bereikbaar op `127.0.0.1`, niet via Tailscale, met een sleutel met recht beheren. FO 12.1 en 13.2 punt 7 zijn daarop aangepast (30-10).
+
 ## Gevolgen
 
 - **Bij optie 2:**
   - het FO wordt aangepast: in 12.1 komt de interface als dienst op localhost, en in 13.2 punt 7 komt "interface alleen als reviewomgeving";
   - in `frontend/` veranderen inloggen met een sleutel en de PDF-weergave met header, en menu-items worden verborgen;
   - de wachtrijen 1, 2, 3, 5 en 6 krijgen API-eindpunten en schermen;
-  - de container `open-notebook` publiceert de interface op `127.0.0.1` via het netwerk `toegang` (ADR 0002).
+  - de interface wordt bereikbaar op `127.0.0.1` via een omgekeerde proxy op `verwerking` en `toegang`, net als open-notebook-mcp (ADR 0002 F). De container `open-notebook` zelf hangt niet aan `toegang`: een container aan `verwerking` én een gewoon netwerk heeft internet (P8, K5, 29-10). Eerder stond hier dat `open-notebook` de interface via `toegang` publiceert.
 - **Bij optie 1:** de interface krijgt geen gepubliceerde poort meer, en er komen reviewcomponenten in Langflow.
 - **In beide gevallen:** de deduplicatielus hervat via de triage-API (ADR 0012). De plek van de bediening verandert daar niets aan.

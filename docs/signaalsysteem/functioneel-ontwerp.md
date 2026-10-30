@@ -91,7 +91,7 @@ De bronkaart bepaalt per bron wat het systeem ophaalt, hoe vaak, langs welke rou
 
 **Planning**
 
-- De schema-trigger van Langflow start flows volgens het schema in de bronkaart. Zolang die trigger niet in een uitgebrachte versie zit, doet APScheduler dit.
+- De schema-trigger van Langflow start flows volgens het schema in de bronkaart. Hij zit in Langflow 1.13.0 en wordt via de API aangezet; APScheduler is de beproefde terugval (P2, 30-10; ADR 0017).
 - Map- en feedcontrole zijn Python-componenten in Langflow, op basis van watchdog en feedparser.
 - Wijzigingsdetectie op inhoudshash: alleen nieuwe of gewijzigde inhoud gaat de keten in.
 - Elke taak levert een verwerkingsrun op met status en logboek, ook als er niets nieuws was.
@@ -107,7 +107,8 @@ Nieuwe video's en afleveringen zijn eenvoudig te detecteren via feeds. De beperk
 | YouTube, alternatief | YouTube Data API: uploads-playlist van het kanaal (kanaal-id met UU in plaats van UC), 1 quota-eenheid per aanroep | als hierboven | API-sleutel nodig; standaardquotum 10.000 eenheden per dag |
 | Podcast met Spotify-link | Spotify-link omzetten naar de openbare RSS-feed van dezelfde show, bijvoorbeeld via de [Podcast Index](https://podcastindex.org); daarna die feed pollen | audiobestand uit de feed, lokaal getranscribeerd met WhisperX | Spotify stelt geen audiobestanden beschikbaar; een show die alleen op Spotify staat, is niet te verwerken |
 
-- De feedcontrole in Langflow pollt de feed. Elk nieuw item (video-id of aflevering-GUID) wordt een eigen bron met een bronversie; detectie loopt op id, niet op inhoudshash.
+- De feedcontrole in Langflow pollt de feed. Elk nieuw item (video-id of aflevering-GUID) wordt een eigen bron met een bronversie; detectie loopt op id, niet op inhoudshash. Dat werkt voor een YouTube-kanaalfeed en een podcastfeed (P6, 29-10). Geen van beide stuurde `ETag` of `Last-Modified`, dus elke controle haalt de hele feed op (bij NOS De Dag 2 357 items).
+- Een Spotify-link is zonder API-sleutel om te zetten: shownaam uit de Spotify-pagina, kandidaatfeed via de iTunes Search API, en een controle dat de titel van de nieuwste aflevering (oEmbed van Spotify) in die feed staat (P6, 29-10).
 - Het schema moet zo kort zijn dat er tussen twee controles minder dan 15 video's verschijnen. Voor het archief van een kanaal is de Data API nodig.
 - Polling vanaf de eigen machine is betrouwbaarder dan vanaf een cloudserver; de YouTube-feed geeft aan datacenter-IP-adressen soms foutmeldingen.
 - Voor debatten van de Tweede Kamer of gemeenteraden is de officiële bron (verslag of raadsinformatiesysteem) te verkiezen boven de YouTube-versie: die levert tekst zonder transcriptie.
@@ -160,9 +161,9 @@ Een keuzemodel (decision model) geeft geen tekst terug, maar per vraag een keuze
 | Model | Beschikbaarheid | Inzet |
 | --- | --- | --- |
 | Jev (TypeSafe AI) | alleen als gehoste API, geen publieke gewichten | niet gebruikt |
-| Kev (Jared Palmer) | open gewichten (Apache-2.0) in 0,8B, 4B en 9B op Qwen3.5, met lokale server | poortwachter en alle labels |
+| Kev (Jared Palmer) | open gewichten (Apache-2.0) in 0,8B, 4B, 9B en 27B op Qwen3.5, met lokale server | poortwachter en alle labels |
 
-De poortwachter ziet inhoud voordat de classificatie vaststaat en draait daarom altijd lokaal, dus met Kev. Volgens de publicaties scoort Kev-9B iets lager dan Jev; de referentieset toetst of dat voor dit gebruik uitmaakt. De modelgrootte volgt uit het GPU-budget.
+De poortwachter ziet inhoud voordat de classificatie vaststaat en draait daarom altijd lokaal, dus met Kev. Volgens de publicaties scoort Kev-9B iets lager dan Jev; de referentieset toetst of dat voor dit gebruik uitmaakt. De modelgrootte volgt uit het GPU-budget. Kev-9B vraagt volgens de README ongeveer 17 GB en past niet. Gekozen is Kev-4B (ADR 0009): in bf16 gebruikt hij ongeveer 14,6 GB videogeheugen, en samen met het embeddingmodel 15,2 GB, net binnen het budget (P3, 30-10). Kev-0,8B is de terugval.
 
 Bronnen: [Jev uitgelegd](https://simonw.substack.com/p/jev-introduces-a-new-shape-of-llm) · [Jev lokaal draaien](https://horadecodar.com.br/?p=47570) · [Kev](https://runtimewire.com/article/jared-palmer-kev-qwen35-decision-models)
 
@@ -356,7 +357,8 @@ Het systeem draait als één Docker Compose-omgeving. llama-swap laat alle GPU-d
 | --- | --- | --- | --- |
 | `surrealdb` | database van de SPOT | nee | intern |
 | `open-notebook` | API van de fork: importeindpunt, zoeken, classificatiefilter | nee | intern |
-| `open-notebook-mcp` | MCP-server voor Claude, via de API van de fork | nee | intern, bereikbaar op localhost |
+| `open-notebook-mcp` | MCP-server voor Claude, via de API van de fork | nee | intern, bereikbaar op localhost via een kleine omgekeerde proxy (ADR 0002; P8) |
+| interface van de fork | reviewomgeving: de werkbak van Track WB voor de wachtrijen van de beheerder (ADR 0016) | nee | intern, alleen bereikbaar op localhost via een omgekeerde proxy |
 | `langflow` | workflow-editor, flows, planning en export naar Obsidian | nee | intern en uitgaand, voor bronnen |
 | `llama-swap` | één eindpunt voor lokale taal- en embeddingmodellen; wisselt en ontlaadt | ja | intern |
 | `kev` | keuzemodel voor poortwachter en labels | ja | intern |
@@ -368,7 +370,8 @@ Het systeem draait als één Docker Compose-omgeving. llama-swap laat alle GPU-d
 - GPU-toegang via de NVIDIA Container Toolkit; onder Windows via Docker Desktop met WSL2.
 - Docker kan het videogeheugen niet per container begrenzen: elke GPU-container ziet de hele kaart. De coördinatie ligt daarom bij llama-swap (paragraaf 12.2).
 - Invoermappen worden alleen-lezen gekoppeld; alleen `langflow` mag in de vault schrijven.
-- Alleen de Langflow-editor en de MCP-server zijn bereikbaar, op localhost of via Tailscale.
+- Alleen de Langflow-editor en de MCP-server zijn bereikbaar, op localhost of via Tailscale. De reviewomgeving is alleen bereikbaar op localhost (ADR 0016).
+- Een container die aan het interne netwerk én aan een gewoon netwerk hangt, heeft internet (P8, 29-10). Een bereikbare dienst zonder internet krijgt daarom een omgekeerde proxy op beide netwerken, en hangt zelf alleen aan het interne netwerk (ADR 0002).
 - Geheimen (API-sleutels, CLI-login, Hugging Face-token) lopen via Docker secrets, niet via images of het Compose-bestand.
 
 **Volledig lokaal**
@@ -378,12 +381,12 @@ Alle containers draaien op de eigen machine. Na de eerste installatie is voor de
 | Onderdeel | Eenmalig nodig | Instelling voor offline gebruik |
 | --- | --- | --- |
 | docling-serve | modellen downloaden bij eerste gebruik | modellen vooraf in een vaste map (artifacts path); externe diensten blijven uit, want Docling vraagt daarvoor een expliciete opt-in |
-| WhisperX | Whisper-modellen en het sprekermodel van pyannote; dat laatste vraagt een Hugging Face-token en akkoord met de voorwaarden | na het downloaden draait het uit de cache, zonder token |
+| WhisperX | Whisper-modellen, uitlijnmodellen en NLTK `punkt_tab`; in de gekozen container (ADR 0014) zit het sprekermodel van pyannote al in het image, zonder Hugging Face-token (P1, 30-10) | na het downloaden draait het uit de cache, zonder token; gebruiksregistratie uit met `OPT_OUT_TRACKING=true` (P1) |
 | llama-swap en Kev | modelbestanden downloaden | lokaal opgeslagen; llama-swap is één programma zonder afhankelijkheden |
-| Langflow | niets | anonieme telemetrie uitzetten met `DO_NOT_TRACK=true` |
+| Langflow | niets; wel haalt LiteLLM in Langflow uit zichzelf een kostentabel van GitHub (P2, 30-10) | anonieme telemetrie uitzetten met `DO_NOT_TRACK=true`; de kostentabel uit het pakket met `LITELLM_LOCAL_MODEL_COST_MAP=True` (ADR 0017) |
 | Alle images | eenmalig ophalen uit de registry | vaste versies |
 
-- Een apart Docker-netwerk zonder internettoegang (`internal: true`) voor `surrealdb`, `llama-swap`, `docling-serve`, `whisperx` en Kev. Zo kan geen verwerkingscontainer gegevens naar buiten sturen.
+- Een apart Docker-netwerk zonder internettoegang (`internal: true`) voor `surrealdb`, `llama-swap`, `docling-serve`, `whisperx` en Kev. Zo kan geen verwerkingscontainer gegevens naar buiten sturen. Onder Docker Desktop beproefd: geen internet en geen bereikbare poort (P8, 29-10; P1, 30-10).
 - Alleen `langflow` (bronnen ophalen) en `claude-cli` krijgen uitgaand internet. Wie het strikter wil, zet het ophalen van bronnen in een eigen container en geeft ook Langflow geen internet.
 - `HF_HUB_OFFLINE=1` na het downloaden voorkomt dat containers alsnog contact zoeken met Hugging Face.
 
@@ -403,26 +406,27 @@ De groepsregels bepalen welke modellen samen mogen draaien. Na een periode zonde
 
 - Alle lokale modellen draaien achter llama-swap: taal- en embeddingmodellen via llama-server (GGUF), Kev via zijn eigen server.
 - Groepen leggen vast wat samen mag. Voorstel: één exclusieve groep voor de zware diensten, die één tegelijk draaien, en een vaste groep voor het kleine embeddingmodel.
-- llama-swap kan containers starten en stoppen. Of docling-serve en WhisperX zo onder llama-swap passen, wordt in fase 1 beproefd. llama-swap heeft daarvoor toegang tot Docker nodig; dat vraagt een bewuste afweging, omdat die toegang ruime rechten geeft.
+- llama-swap kan containers starten en stoppen. docling-serve, WhisperX en Kev passen zo onder llama-swap: hij start en stopt vooraf aangemaakte containers via een socket-proxy die alleen starten en stoppen toelaat (P1, P7, 30-10; ADR 0009). llama-swap heeft daarvoor toegang tot Docker nodig; dat vraagt een bewuste afweging, omdat die toegang ruime rechten geeft.
 - Lukt dat niet, dan gebruiken de Langflow-componenten voor docling-serve en WhisperX een gedeelde vergrendeling, zodat ze niet tegelijk met een zwaar model draaien.
-- docling-serve en WhisperX stoppen na een bundel taken; dat geeft het CUDA-geheugen volledig vrij.
+- docling-serve en WhisperX stoppen na een bundel taken; dat geeft het CUDA-geheugen volledig vrij. Voor docling-serve is stoppen de enige manier: na een taak houdt hij 2,1 tot 2,5 GB vast (P5, 30-10).
+- De TTL van docling-serve ligt ruim boven de langste pauze tussen twee statusvragen van een taak. llama-swap telt de TTL vanaf de laatste aanvraag, en een gestopte docling-serve verliest zijn lopende taken (P1, 30-10). Een taak die verdwenen is (HTTP 404), wordt opnieuw ingediend.
 - Taken voor hetzelfde model worden gebundeld, zodat een model niet steeds opnieuw wordt geladen.
 - Een geheugenfout breekt de taak af; Langflow zet de taak opnieuw in de rij en legt de fout vast in het runlogboek.
 - Cloudaanroepen (Claude-API en Claude-CLI) gebruiken geen GPU en lopen buiten llama-swap.
 
 **Eén toegangspunt.** Open Notebook (embeddings voor zoekvragen) en Langflow praten alleen met llama-swap, nooit rechtstreeks met een modelserver.
 
-**Groepsindeling (voorstel)**
+**Groepsindeling (beproefd in P1, 30-10)**
 
-| Dienst | Groep in llama-swap | Laden en ontladen |
-| --- | --- | --- |
-| Werkmodel (taalmodel, GGUF) | zwaar, exclusief | laden bij aanvraag; ontladen na TTL of bij een wissel |
-| Kev-keuzemodel | zwaar, exclusief | idem; aanvragen per run gebundeld |
-| docling-serve | zwaar, exclusief (te beproeven) | container start bij aanvraag en stopt na de bundel |
-| WhisperX | zwaar, exclusief (te beproeven) | idem |
-| Embeddingmodel | licht, vast geladen | blijft geladen; telt mee in het budget |
+| Dienst | Groep in llama-swap | Laden en ontladen | Videogeheugen, piek (P3, 30-10) |
+| --- | --- | --- | --- |
+| Werkmodel (taalmodel, GGUF) | zwaar, exclusief | laden bij aanvraag; ontladen na TTL of bij een wissel | 5,7 GB (context 8 192); 6,5 GB (context 32 768) |
+| Kev-keuzemodel | zwaar, exclusief | idem; aanvragen per run gebundeld | 14,6 GB (Kev-4B, bf16) |
+| docling-serve | zwaar, exclusief | container start bij aanvraag en stopt na de bundel | 2,4–2,5 GB |
+| WhisperX | zwaar, exclusief | idem | 10,2–10,3 GB |
+| Embeddingmodel | licht, vast geladen | blijft geladen; telt mee in het budget | 0,6 GB (mxbai-embed-large Q8_0, ADR 0008) |
 
-De definitieve indeling volgt uit metingen van het geheugengebruik in fase 1.
+De indeling volgt uit de metingen in fase 1 (P1, P3, 30-10). Een combinatie past als ze samen ten hoogste het videogeheugen van de kaart min 1 GB gebruikt. Het embeddingmodel past naast elke zware dienst; de krapste combinatie is Kev-4B met het embeddingmodel, 15,2 GB. In de zware groep draaide nooit meer dan één dienst tegelijk, ook niet bij gelijktijdige aanvragen (P1).
 
 ## 13. Aansluiting op Open Notebook en hergebruik
 
@@ -465,13 +469,13 @@ De lagen lezen van boven naar beneden, in de volgorde van de gegevensstroom.
 
 | Rol | Bestaande software | Vervangt | Te beproeven in fase 1 |
 | --- | --- | --- | --- |
-| Planning, mapbewaking en feeds | schema-trigger van Langflow of APScheduler; map en feeds via Python-componenten met watchdog en feedparser | een zelfgebouwde scheduler (paragraaf 5) | of de schema-trigger in de gekozen Langflow-versie zit |
-| Workflow-editor en orkestratie | Langflow (MIT), met eigen Python-componenten | een zelfgebouwde editor | een volledige pipeline voor jaarstukken |
-| Documentextractie | docling-serve: officiële API met asynchrone taken en een Compose-bestand voor NVIDIA-GPU's | eigen docling-worker | vrijgeven van videogeheugen na een taak |
-| Transcriptie | WhisperX in een bestaande API-container | eigen whisperx-worker | keuze van de container |
-| Modelwissel en GPU-wachtrij | llama-swap: één OpenAI-compatibel eindpunt, groepen, automatisch ontladen na inactiviteit (TTL), wachtrij op volgorde van binnenkomst, start en stop van containers | een zelfgebouwde GPU-beheerder | docling-serve, WhisperX en Kev als containers onder llama-swap |
-| Keuzemodel | Kev, met lokale server | eigen classificatielogica in de poortwachter | drempelwaarden op de referentieset |
-| MCP-server | open-notebook-mcp, dat de REST-API van Open Notebook gebruikt | eigen MCP-server (paragraaf 10) | filter op intern in de API |
+| Planning, mapbewaking en feeds | schema-trigger van Langflow of APScheduler; map en feeds via Python-componenten met watchdog en feedparser | een zelfgebouwde scheduler (paragraaf 5) | of de schema-trigger in de gekozen Langflow-versie zit. Beproefd (P2, 30-10): hij zit in 1.13.0 en werkt, ook na een herstart, als hij via de API wordt aangezet; APScheduler werkt als terugval |
+| Workflow-editor en orkestratie | Langflow (MIT), met eigen Python-componenten | een zelfgebouwde editor | een volledige pipeline voor jaarstukken (nog niet beproefd) |
+| Documentextractie | docling-serve: officiële API met asynchrone taken en een Compose-bestand voor NVIDIA-GPU's | eigen docling-worker | vrijgeven van videogeheugen na een taak. Beproefd (P5, 30-10): alleen door de container te stoppen |
+| Transcriptie | WhisperX in een bestaande API-container | eigen whisperx-worker | keuze van de container. Beproefd (P1, 30-10): de AWS-container `whisperx:3.8.6-cu128-amzn2023` haalt alle criteria, ook Nederlands en Engels en offline (ADR 0014) |
+| Modelwissel en GPU-wachtrij | llama-swap: één OpenAI-compatibel eindpunt, groepen, automatisch ontladen na inactiviteit (TTL), wachtrij op volgorde van binnenkomst, start en stop van containers | een zelfgebouwde GPU-beheerder | docling-serve, WhisperX en Kev als containers onder llama-swap. Beproefd (P1, P7, 30-10): werkt via een socket-proxy die alleen starten en stoppen toelaat; na een stop van buitenaf geeft de eerste aanvraag 502 (ADR 0009) |
+| Keuzemodel | Kev, met lokale server | eigen classificatielogica in de poortwachter | drempelwaarden op de referentieset (nog niet beproefd; Kev-4B werkt onder llama-swap, P1) |
+| MCP-server | open-notebook-mcp, dat de REST-API van Open Notebook gebruikt | eigen MCP-server (paragraaf 10) | filter op intern in de API. Nulmeting (P4, 30-10): de fork filtert nog niet; dezelfde proef is de acceptatietest na ADR 0001 en 0002 |
 
 **Editorkeuze: Langflow of een lokale n8n.** Beide draaien volledig lokaal; n8n Community Edition heeft geen n8n-cloud nodig. Het verschil zit in licentie, beheer en taal.
 
@@ -480,11 +484,11 @@ De lagen lezen van boven naar beneden, in de volgorde van de gegevensstroom.
 | Licentie | MIT, open source | Sustainable Use License: broncode inzichtelijk en intern gebruik vrij, maar geen open source |
 | Beheer | open-sourceproject; componenten bouwen op LangChain | één bedrijf bepaalt de koers |
 | Taal | Python; componenten zijn Python-klassen | TypeScript; Python via de Code-node |
-| Planning, map en feeds | webhooks en triggers; een schema-trigger met cron is in ontwikkeling; map en feeds via eigen componenten | ingebouwde Schedule-, Local File- en RSS Feed-triggers |
+| Planning, map en feeds | webhooks en triggers; een schema-trigger met cron sinds versie 1.13.0 (P2, 30-10); map en feeds via eigen componenten | ingebouwde Schedule-, Local File- en RSS Feed-triggers |
 | Versiebeheer | flows als JSON-bestanden uit Git laden | ingebouwde Git-koppeling alleen in de Enterprise-versie |
 | LLM en MCP | componenten voor modellen, agents en MCP | AI-nodes op basis van LangChain voor JavaScript |
 
-Besluit: Langflow, passend bij de voorkeur voor een open-source Python-ecosysteem. De ontbrekende triggers zijn klein: de schema-trigger zodra die in een uitgebrachte versie zit, anders APScheduler, en twee Python-componenten voor map- en feedcontrole met watchdog en feedparser. LangGraph is geen alternatief voor de planning: het framework is gratis (MIT), maar geplande runs horen bij het betaalde serverplatform.
+Besluit: Langflow, passend bij de voorkeur voor een open-source Python-ecosysteem. De ontbrekende triggers zijn klein: de schema-trigger uit Langflow 1.13.0 (P2, 30-10), met APScheduler als terugval, en twee Python-componenten voor map- en feedcontrole met watchdog en feedparser. LangGraph is geen alternatief voor de planning: het framework is gratis (MIT), maar geplande runs horen bij het betaalde serverplatform.
 
 Bronnen vergelijking: [schema-trigger Langflow](https://github.com/langflow-ai/langflow/pull/14958) · [n8n-licentie](https://docs.n8n.io/n8n-community-license/community-license/license-faq.md) · [n8n Community en Enterprise](https://www.ssdnodes.com/learn/is-n8n-free-community-vs-enterprise) · [LangGraph-prijzen](https://www.truefoundry.com/blog/langgraph-pricing)
 
@@ -492,7 +496,7 @@ Bronnen: [n8n RSS Feed Trigger](https://docs.n8n.io/integrations/builtin/core-no
 
 ### 13.2 Refactorvoorstel voor de fork
 
-Open Notebook wordt de kennislaag: datamodel, API, zoekfunctie en modelkoppeling. Interface, chat, ask en podcasts worden niet gebruikt. Wat overblijft is genoeg om Open Notebook als basis te houden; het alternatief is die onderdelen zelf bouwen.
+Open Notebook wordt de kennislaag: datamodel, API, zoekfunctie en modelkoppeling. Chat, ask en podcasts worden niet gebruikt; de interface alleen als reviewomgeving (ADR 0016). Wat overblijft is genoeg om Open Notebook als basis te houden; het alternatief is die onderdelen zelf bouwen.
 
 1. **Bronverwerking ontkoppelen.** De ingebouwde bronverwerking vervalt. Een importeindpunt neemt verwerkte fragmenten aan, met Docling-structuur, sectiepad, labels en herkomst.
 2. **Datamodel uitbreiden.** Bronversie, verwerkingsrun, herkomst en classificatie, via de migraties van Open Notebook.
@@ -500,7 +504,7 @@ Open Notebook wordt de kennislaag: datamodel, API, zoekfunctie en modelkoppeling
 4. **Afgeleide teksten markeren.** Notities en wiki-pagina's tellen niet als bron in zoekresultaten.
 5. **Modelkoppeling.** Esperanto wijst naar llama-swap; dat is configuratie, geen code.
 6. **Eigen modules.** Entiteitextractie, deduplicatie en wiki-generatie als LangGraph-modules naast de bestaande.
-7. **Ongebruikte onderdelen laten staan.** Interface, chat en podcasts blijven ongewijzigd zolang ze niet hinderen; verwijderen kost bij elke update vanuit het oorspronkelijke project extra werk.
+7. **Ongebruikte onderdelen laten staan.** De interface wordt alleen gebruikt als reviewomgeving: de werkbak van Track WB, alleen op localhost (ADR 0016). Chat en podcasts blijven ongewijzigd zolang ze niet hinderen; verwijderen kost bij elke update vanuit het oorspronkelijke project extra werk.
 8. **Dicht bij het origineel blijven.** Wijzigingen in eigen modules met kleine aanhaakpunten. Algemeen bruikbare uitbreidingen, zoals het importeindpunt en de classificatie, kunnen aan het Open Notebook-project worden voorgelegd.
 
 ## 14. Ontwerpkeuzes en besluiten

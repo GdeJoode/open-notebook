@@ -78,4 +78,5 @@ Geert beslist per onderdeel.
   - de routes voor samenvatten in `services_proxy` (al met ADR 0002);
   - het volume `mineru_models`.
 - **GROBID en de reranker** komen in `docker-compose.signaalsysteem.yml` op het netwerk `verwerking`, zonder gepubliceerde poort. De reranker krijgt `HF_HUB_OFFLINE=1` na de eerste download.
-- **Proef 1 of een bouwtaak:** nagaan of llama-swap `/v1/rerank` doorgeeft.
+- **Proef 1 of een bouwtaak:** nagaan of llama-swap `/v1/rerank` doorgeeft. Uitkomst: ja. `POST /v1/rerank` met `model=rerank` (`bge-reranker-v2-m3` Q8_0 in llama-server met `--reranking`) gaf HTTP 200 en 5 scores (P1, K6, 30-10). Daarmee is de voorwaarde voor 5b vervuld.
+- **Plek van de reranker onder llama-swap.** In P1 stond de reranker in de vaste groep `licht`, naast het embeddingmodel. Dat kan niet blijven: Kev-4B en mxbai samen laten maar 121 MiB marge onder de grens van P3 (ADR 0009). Het geheugen van de reranker is niet gemeten; het bestand is 636 MB. Of 5b uitvoerbaar is zonder dat zoekvragen een zware dienst verdringen, is daarmee open. Tot een meting en een besluit daarover blijft de reranker de CPU-dienst van 5c.

@@ -1,7 +1,7 @@
 # ADR 0017: Inrichting van Langflow: flows uit Git, aanmelding, planning en MCP
 
-- **Status:** voorgesteld
-- **Datum:** 2026-10-29
+- **Status:** besloten (Geert, 2026-10-30); onderdeel C beslist door P2 (30-10)
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 met P2
 - **Raakt FO-paragraaf:** 2 (principe 2), 5 (planning), 11 (Langflow als editor), 12.1, 13.1, 14 (workflow-editor, orchestratie en scheduler)
 - **Lost op:** geen nummer uit de verschilanalyse; keuzes die het FO openlaat en die bij het controleren van de documentatie naar boven kwamen
 
@@ -24,6 +24,15 @@ Het functioneel ontwerp (FO) zegt over Langflow:
 - **Flows laden.** `LANGFLOW_LOAD_FLOWS_PATH` laadt JSON-flows bij het opstarten en vereist dat automatisch aanmelden aan staat. Met `LANGFLOW_AUTO_LOGIN=true` is de editor zonder wachtwoord te gebruiken. De API kent `POST /api/v1/flows/upload/` om te importeren en `POST /api/v1/flows/download/` om te exporteren (ZIP met flow-JSON). De voorbeelden sturen `x-api-key` mee.
 - **MCP.** `LANGFLOW_MCP_SERVER_ENABLED` staat standaard aan; met `false` start Langflow geen MCP-servers.
 - **Geheimen.** Globale variabelen worden versleuteld opgeslagen in de database van Langflow.
+
+**Proef 2 (30-10-2026), Langflow 1.13.0**
+
+- `ENABLE_TRIGGERS` bestaat niet als vlag. Zonder vlag, met `ENABLE_TRIGGERS=true` en met `LANGFLOW_ENABLE_TRIGGERS=true` staat `ScheduleTrigger` in `/api/v1/all`; de frontendbundel bevat de tekst niet, en `/api/v1/config` kent geen triggervlag (K1).
+- Een trigger ontstaat bij het opslaan van de flow met status `pending`. `POST /api/v1/triggers/{id}/enable` geeft 200 en zet hem op `active`; de interface kan dat niet (K2).
+- Een cron van elke minuut ging 4 keer af in 240 s, met hooguit 1,0 s vertraging (K3). Na 150 s stilstand gaf `coalesce` precies één inhaalrun met 2 gemiste momenten in `missed_ticks`, en `skip` geen (K4). Het replayvenster is `trigger_replay_window_days`, standaard 7 dagen; dat staat in de code van `lfx`, niet in de documentatie.
+- De tijdzone werkt: `0 8 * * 1-5` in `Europe/Amsterdam` gaf als volgend moment 07:00 UTC (wintertijd).
+- De terugval met APScheduler 3.11.3 werkt ook: 4 runs via `POST /api/v1/run/{flow_id}`, hooguit 0,4 s vertraging, na een herstart precies één inhaalrun (K5).
+- Langflow probeerde vanaf het netwerk `verwerking` 21 keer een uitgaande verbinding: LiteLLM haalt `model_prices_and_context_window.json` van GitHub. Het netwerk (`internal: true`) blokkeerde dat. Volgens de documentatie van LiteLLM slaat `LITELLM_LOCAL_MODEL_COST_MAP=True` het ophalen over en gebruikt het de tabel die in het pakket zit; mislukt het ophalen, dan valt LiteLLM zonder fout terug op die tabel ([LiteLLM, custom model cost map](https://docs.litellm.ai/docs/proxy/custom_model_cost_map), geraadpleegd 30-10-2026). Die pagina beschrijft de proxy van LiteLLM; of de variabele in Langflow alle 21 pogingen stopt, is niet beproefd.
 
 De editor kan alles: interne bronnen lezen, cloudmodellen aanroepen en in de vault schrijven. Aanmelden zonder wachtwoord via Tailscale geeft die macht aan elk apparaat in het privénetwerk.
 
@@ -54,7 +63,7 @@ Externe bronnen (geraadpleegd 29-10-2026):
 
 **C. Planning**
 
-1. De schema-trigger van Langflow, als proef 2 slaagt in de vastgezette versie, eventueel met `ENABLE_TRIGGERS`.
+1. De schema-trigger van Langflow, als proef 2 slaagt in de vastgezette versie, eventueel met `ENABLE_TRIGGERS`. Proef 2 slaagde, zonder vlag (P2, 30-10).
 2. Terugval: APScheduler in een kleine eigen container `planner`. Die leest de schema's uit de bronkaart via de API van de fork en start flows via de API van Langflow.
 
 **D. Database van Langflow**
@@ -76,11 +85,22 @@ Externe bronnen (geraadpleegd 29-10-2026):
 
 Geert beslist over A. Over C beslist proef 2.
 
+## Besluit
+
+- **A: optie 2** (Geert, 30-10). Automatisch aanmelden uit; een opstartscript laadt de flows uit Git via `POST /api/v1/flows/upload/`, een exportscript haalt ze terug.
+- **B: optie 1** en **D: optie 1**, volgens het voorstel; daarover was geen aparte keuze voorgelegd.
+- **C: optie 1**, de schema-trigger van Langflow 1.13.0 (P2, 30-10, volgens de beslisregel in proeven.md). De trigger wordt na het laden van een flow via `POST /api/v1/triggers/{id}/enable` aangezet; dat doet het opstartscript uit A. `ENABLE_TRIGGERS` wordt niet gezet. Inhaalbeleid per bronkaartregel: `coalesce` of `skip`. APScheduler in een container `planner` blijft de beproefde terugval (P2, K5) en wordt nu niet gebouwd.
+- **Vaste versie:** `langflowai/langflow:1.13.0` (digest `sha256:ff2716e0…e303f`, proeven.md 1.7), de versie waarmee P2 slaagde.
+- **Uitgaande aanvragen van LiteLLM:** Langflow krijgt `LITELLM_LOCAL_MODEL_COST_MAP=True` (P2, 30-10). De bouwtaak herhaalt de telling van P2 op het netwerk `verwerking` met deze variabele; het criterium is 0 uitgaande pogingen. Blijven er pogingen over, dan blijft de afscherming door het netwerk de maatregel, en komt het ophalen van bronnen in een eigen container zonder dat Langflow internet krijgt (FO 12.1, "wie het strikter wil").
+- Vast volgens het FO, zoals in het voorstel: `LANGFLOW_MCP_SERVER_ENABLED=false`, `LANGFLOW_ADD_PROJECTS_TO_MCP_SERVERS=false`, `DO_NOT_TRACK=true` en `LANGFLOW_COMPONENTS_PATH`.
+
 ## Gevolgen
 
 - **Code:**
   - een opstartscript en een exportscript voor flows;
   - een map voor Langflow-componenten in de repository, met een plek die het plan van aanpak vastlegt;
-  - bij terugval op APScheduler de container `planner`.
-- **FO:** bij optie A2 vervalt in FO 11 de verwijzing naar `LANGFLOW_LOAD_FLOWS_PATH` als laadmechanisme. Het principe "flows als JSON uit Git" blijft.
-- **Proef 2:** vastgezette versie, vlag `ENABLE_TRIGGERS`, een cron-schema dat twee keer achter elkaar op tijd afgaat, en gedrag na een herstart (inhaalbeleid).
+  - bij terugval op APScheduler de container `planner`;
+  - het opstartscript zet na het laden de triggers aan via de API (P2).
+- **FO:** bij optie A2 vervalt in FO 11 de verwijzing naar `LANGFLOW_LOAD_FLOWS_PATH` als laadmechanisme. Het principe "flows als JSON uit Git" blijft. FO 5 en 13.1 zijn bijgewerkt met de uitkomst van P2.
+- **Proef 2:** uitgevoerd op 30-10, geslaagd: vastgezette versie 1.13.0, geen vlag `ENABLE_TRIGGERS`, cron op tijd, inhaalbeleid na een herstart werkt.
+- **Geheimen:** `LANGFLOW_SECRET_KEY` moet een Fernet-sleutel zijn (32 bytes, url-veilig base64); met een hex-waarde faalt het aanmaken van een API-sleutel (HTTP 400; proeven.md §8 punt 15).

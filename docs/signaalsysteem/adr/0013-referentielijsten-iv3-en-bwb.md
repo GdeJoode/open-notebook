@@ -1,6 +1,6 @@
 # ADR 0013: Referentielijsten voor Iv3-taakvelden en BWB-id's
 
-- **Status:** voorgesteld
+- **Status:** besloten (Geert, 2026-10-30)
 - **Datum:** 2026-10-29
 - **Raakt FO-paragraaf:** 5 (labelschema in de bronkaartregel), 7 (entiteiten, labels, codeboek)
 - **Lost op:** verschilanalyse open vraag 10
@@ -40,6 +40,12 @@ Niet geverifieerd in deze stap: de precieze vindplaats en het formaat van de ope
 Optie 3. Een identificatie wordt opgezocht, een codeboekterm wordt gekozen. Die twee hebben verschillende eisen. Het labelschema in de bronkaartregel (FO 5) verwijst naar een codeboekversie.
 
 Geert beslist. Hij bevestigt ook welke Iv3-versie (het jaar van de taakveldenlijst) het codeboek volgt.
+
+## Besluit
+
+Optie 3 (Geert, 30-10): BWB-id's als woordenlijst in `reference_entity`; Iv3-taakvelden als onderdeel van het codeboek, met versies in `ontology_version`.
+
+Iv3-versie 2025: het codeboek volgt de taakveldenlijst 2025.
 
 ## Gevolgen
 

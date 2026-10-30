@@ -1,7 +1,7 @@
 # ADR 0002: Afscherming van de API, de MCP-routes en de Compose-omgeving
 
 - **Status:** besloten
-- **Datum:** 2026-10-29
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 met P4 en P8 (onderdeel D en F)
 - **Raakt FO-paragraaf:** 9 (toegang, externe uitvraag), 10 (MCP-server), 11 (Langflow als MCP-server uit), 12.1, 13.2 punt 3, 14 (MCP-server)
 - **Lost op:** verschilanalyse conflict 5, 6 en 12, open vraag 1 en 2
 
@@ -31,6 +31,21 @@ In de fork is elk van die plekken te omzeilen:
 - standaard draait het via stdio, en via `MCP_TRANSPORT=streamable-http` via HTTP.
 
 Aanname A2 klopt daarmee voor authenticatie en paden. Of de antwoorden van de fork precies de vorm hebben die het pakket verwacht, is niet nagegaan; dat valt onder proef 4.
+
+**Proeven (29 en 30-10-2026)**
+
+- **Nulmeting P4 (30-10).** Een echte client van open-notebook-mcp 0.3.0 tegen de huidige fork, met synthetische interne en externe testdata:
+  - 38 verschillende interne kenmerken (`PRF-INT-…`) in de antwoorden, via `list_sources`, `get_source` (ook met interne id's), `list_notes`, `get_note` en `search` (`text`; `hybrid` valt zonder embeddingmodel terug op tekst). Geen leesroute filtert op `private` of classificatie: harde eis 1 wordt nu niet gehaald (K1). De positieve controle was geldig (K2), dus de proef ziet een lek.
+  - `get_source` met een intern id gaf in 9 van 10 gevallen de inhoud. De ene fout kwam doordat het antwoordmodel `SourceResponse` een bron met een `source_insight` niet kon valideren (HTTP 500), niet door een weigering (K3).
+  - Schrijven faalde, maar door fouten en niet doordat het geweigerd werd: `create_note` HTTP 500, `create_source` HTTP 422 (open-notebook-mcp stuurt JSON, de fork verwacht een formulier met `type`), `ask_simple` faalt op `No module named 'ai_prompter'` (K4).
+  - Leesantwoorden passen bij wat open-notebook-mcp verwacht: 0 verwerkingsfouten (K5; aanname A2). Zonder wachtwoord geeft de API 401 (K6).
+  - Het veld `classification` liet het schema (SCHEMAFULL) stil weg; de proef werkte met `private = true`.
+  - Vector-zoeken was niet uitvoerbaar zonder embeddingmodel (HTTP 400). De zoektool van open-notebook-mcp gebruikt standaard `type="vector"` (proeven.md §5 punt 6), dus de API moet het embeddingmodel via llama-swap bereiken. Vector- en hybride zoeken toetst P4 opnieuw na de bouwtaak voor ADR 0006 (deelstap 4c).
+- **open-notebook-mcp en de MCP-bibliotheek (P4).** Versie 0.3.0 (22-12-2025, nieuwste) vraagt `mcp[cli]>=1.23.2` zonder bovengrens ([PyPI](https://pypi.org/pypi/open-notebook-mcp/json), geraadpleegd 30-10-2026). Het officiële startpunt start niet met `mcp==1.30.0`: `FastMCP.run() got an unexpected keyword argument 'host'`. P4 startte de server met een eigen startbestand dat `host`, `port` en `path` via `mcp.settings` zet (proeven.md §8 punt 6).
+- **Netwerk (P8, 29-10; P1, 30-10).** Onder Docker Desktop met WSL2:
+  - een container die alleen aan een netwerk met `internal: true` hangt, publiceert geen bereikbare poort en heeft geen internet (K1, K2);
+  - een container die aan `verwerking` én aan een gewoon netwerk hangt, heeft uitgaand internet (K5);
+  - WhisperX en Kev op `verwerking` bereikten tijdens P1 geen internet (P1, K8).
 
 **Langflow.** `LANGFLOW_MCP_SERVER_ENABLED` staat standaard aan. Met `false` start Langflow geen MCP-servers. `LANGFLOW_MCP_SSE_ENABLED=false` alleen is niet genoeg.
 
@@ -88,7 +103,8 @@ Optie 2, in zes onderdelen.
 **D. MCP-servers**
 
 - Het pakket `open-notebook-mcp` komt in een eigen container. De versie ligt vast op een uitgebrachte versie of commit. De container draait met `MCP_TRANSPORT=streamable-http` en `OPEN_NOTEBOOK_URL=http://open-notebook:5055`. `OPEN_NOTEBOOK_PASSWORD` bevat een sleutel met `lezen_extern`. Die komt uit een Docker secret: een klein startscript leest het geheimbestand, omdat het pakket alleen een omgevingsvariabele leest.
-- De HTTP-transport van open-notebook-mcp heeft zelf geen authenticatie. Daarom luistert de poort alleen op `127.0.0.1` en via Tailscale. Wie de poort bereikt, ziet hooguit externe inhoud.
+- Dat startscript start de server ook zelf, zoals `p4/start_mcp.py`: het zet `host`, `port` en `path` via `mcp.settings` en roept `run` alleen met de transport aan. Het officiële startpunt van 0.3.0 werkt niet met `mcp==1.30.0` (P4, 30-10). Zowel `open-notebook-mcp` als `mcp` liggen vast op een versie; een nieuwere `mcp` vraagt eerst een herhaling van P4.
+- De HTTP-transport van open-notebook-mcp heeft zelf geen authenticatie. Daarom is de poort alleen bereikbaar op `127.0.0.1` en via Tailscale (onderdeel F). Wie de poort bereikt, ziet hooguit externe inhoud.
 - Verwijderd, met script-ingang en tests:
   - `packages/surrealdb-service/src/surrealdb_service/mcp/` (`packages/surrealdb-service/pyproject.toml:30`);
   - `packages/llm-manager/src/llm_manager/mcp/` (`packages/llm-manager/pyproject.toml:38`);
@@ -107,7 +123,13 @@ Optie 2, in zes onderdelen.
 
 - Netwerk `verwerking` met `internal: true` voor `surrealdb`, `open-notebook`, `llama-swap`, `docling-serve`, `whisperx`, `kev` en `open-notebook-mcp`.
 - Netwerk `uitgaand` voor `langflow` (bronnen ophalen) en `claude-cli`.
-- Een dienst die alleen aan een netwerk met `internal: true` hangt, kan geen poort naar de host publiceren. Dat staat in de Compose-documentatie en is in de bouwtaak te bevestigen. Daarom hangen `langflow` en `open-notebook-mcp` ook aan een netwerk `toegang`, en publiceren ze alleen op `127.0.0.1:<poort>`. Geen andere dienst publiceert een poort. Daarmee vervallen de gepubliceerde poorten van SurrealDB, de API, de interface en alle hulpdiensten.
+- Een dienst die alleen aan een netwerk met `internal: true` hangt, kan geen poort naar de host publiceren. Dat is onder Docker Desktop bevestigd (P8, K1, 29-10). Een dienst die ook aan een gewoon netwerk hangt, heeft uitgaand internet (P8, K5). De eerdere opzet, met `open-notebook-mcp` op `verwerking` en `toegang`, gaf die container dus internet. Daarom (P8):
+  - `open-notebook-mcp` en `open-notebook` (de API) hangen alleen aan `verwerking`. Ze publiceren geen poort en hebben geen internet;
+  - een kleine omgekeerde proxy `mcp-toegang` (vast image, de bouwtaak kiest het) hangt aan `verwerking` en `toegang`, publiceert alleen `127.0.0.1:<poort>` en stuurt alleen `/mcp` door naar `open-notebook-mcp:8000`. Hij heeft geen secrets, geen volumes en geen toegang tot de API of de database;
+  - via `toegang` heeft die proxy uitgaand internet. Het restrisico is klein: wat hij ziet, is MCP-verkeer met hooguit externe inhoud. Een extra laag is de bridge-optie `com.docker.network.bridge.enable_ip_masquerade: "false"` op `toegang`. Volgens de Docker-documentatie zet die masquerading uit ([bridge-driver](https://docs.docker.com/engine/network/drivers/bridge/), [port publishing](https://docs.docker.com/engine/network/port-publishing/), geraadpleegd 30-10-2026); wat dat onder Docker Desktop doet met uitgaand verkeer en met gepubliceerde poorten, beschrijft de documentatie niet. De bouwtaak beproeft het met de opzet van P8 en neemt de optie alleen op als de poort bereikbaar blijft en internet wegvalt;
+  - `langflow` hangt aan `verwerking`, `uitgaand` en `toegang` en publiceert de editor op `127.0.0.1:<poort>`. Langflow heeft bewust internet (FO 12.1).
+  
+  Geen andere dienst publiceert een poort. Daarmee vervallen de gepubliceerde poorten van SurrealDB, de API, de interface en alle hulpdiensten. De reviewomgeving (interface, ADR 0016) volgt hetzelfde patroon: een omgekeerde proxy op `verwerking` en `toegang`, alleen op `127.0.0.1`, niet via Tailscale.
 - Geheimen staan in een `secrets:`-blok met bestanden buiten Git (bijvoorbeeld `secrets/` in `.gitignore`): de SurrealDB-inloggegevens, de sleutels van open-notebook-mcp en Langflow, het Hugging Face-token, de Claude-API-sleutel en de CLI-login. De diensten lezen ze via `/run/secrets/...`, eventueel met een startscript. `root`/`root` en `extra_hosts: host.docker.internal` vervallen.
 - **Versleutelde opslag van cloudsleutels.** Na ADR 0006 doet de fork geen cloudaanroepen meer; daar vervallen de cloudsleutels, zoals `NVIDIA_API_KEY` en `api_key_env_var` voor cloudaanbieders. De Claude-API-sleutel staat alleen in Langflow, als globale variabele van het type Credential. Langflow versleutelt die in zijn database. Het geheim komt binnen via `LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT`, gevuld vanuit een Docker secret.
 - Images en versies liggen vast. `surrealdb/surrealdb:v2` met `pull_policy: always` (`docker-compose.yml:8`, `:25`) wordt een vaste versie.
@@ -119,7 +141,10 @@ Optie 2, in zes onderdelen.
 - **Tests (stopcondities):**
   - een routetest faalt bij een route zonder rechtendeclaratie;
   - een contracttest vult interne en externe testgegevens uit openbare bronnen en roept elke route voor `lezen_extern` aan; geen intern id of interne tekst mag in een antwoord staan;
-  - dezelfde test via een echte open-notebook-mcp-client is proef 4;
+  - dezelfde test via een echte open-notebook-mcp-client is proef 4. De nulmeting faalde zoals verwacht (P4, 30-10: 38 interne kenmerken). Na de bouwtaken voor ADR 0001 en 0002 is P4 de acceptatietest: K1 nul treffers, K3 HTTP 404 op een intern id, en K4 HTTP 403 op elke schrijftool en op `ask_simple`. Een schrijfactie die faalt op een fout telt dan niet als geslaagd;
+  - `SourceResponse` moet een bron met een `source_insight` kunnen teruggeven; nu geeft dat HTTP 500 (P4, K3). De contracttest bevat zo'n bron;
+  - `create_source` van open-notebook-mcp past niet bij het importeindpunt van de fork (P4, K4: JSON tegenover formulier). Voor `lezen_extern` is dat zonder gevolg, want de tool krijgt 403;
   - een test dat elk verzoek zonder sleutel HTTP 401 krijgt.
+- **Compose:** de omgekeerde proxy `mcp-toegang` uit onderdeel F; een controle zoals P8 dat `open-notebook-mcp` en `open-notebook` geen internet hebben.
 - **Interface:** de interface moet inloggen met een sleutel in plaats van een wachtwoord. Het invoerveld blijft gelijk, het Bearer-schema ook. De PDF-weergave moet de header meesturen (ADR 0016).
 - **Open punt:** wanneer een entiteit voor `lezen_extern` zichtbaar is. Dat wordt vastgelegd zodra de herkomsteindpunten uit FO 10 worden gebouwd.
