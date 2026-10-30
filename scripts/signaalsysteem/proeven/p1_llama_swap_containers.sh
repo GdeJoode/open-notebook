@@ -63,6 +63,8 @@ leg_images_vast "$IMG_LLAMA_SWAP" "$IMG_DOCLING" "$IMG_WHISPERX_A" "$IMG_SOCKET_
   signaal-proef/llama-swap:v268-cuda13-b11977-dockercli
 
 ZWAAR=(signaal-proef-docling-1 signaal-proef-whisperx-1 signaal-proef-kev-1)
+# De configuratie zit in het image; opnieuw bouwen (uit de cache) zodat p1/llama-swap.yaml actueel is.
+bewaar build_llama_swap dc --profile p1 build llama-swap
 bewaar create dc --profile p1 create --force-recreate docling whisperx kev
 geheimen_volume_vullen
 bewaar up dc --profile p1 up -d --no-deps socket-proxy llama-swap p1-client
