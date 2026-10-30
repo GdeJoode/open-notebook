@@ -149,17 +149,8 @@ def test_process_url_rejects_ssrf_target(monkeypatch):
 # -- jobs/{id} --------------------------------------------------------------
 
 
-def _own_job(monkeypatch, owns: bool):
-    import app_main.services.agents.audit_service as aud
-
-    monkeypatch.setattr(
-        aud.AgentAuditService, "agent_owns_job", AsyncMock(return_value=owns)
-    )
-
-
-def test_job_status_passthrough_for_owned_job(monkeypatch):
+def test_job_status_passthrough(monkeypatch):
     _auth(monkeypatch, "beheerder")
-    _own_job(monkeypatch, True)  # the caller enqueued this job
     import app_main.services.command_service as cs
 
     monkeypatch.setattr(
@@ -173,9 +164,8 @@ def test_job_status_passthrough_for_owned_job(monkeypatch):
     assert resp.json()["status"] == "running"
 
 
-def test_job_status_unknown_is_200_for_owned_job(monkeypatch):
+def test_job_status_unknown_is_200(monkeypatch):
     _auth(monkeypatch, "beheerder")
-    _own_job(monkeypatch, True)
     import app_main.services.command_service as cs
 
     monkeypatch.setattr(
@@ -203,27 +193,6 @@ def test_job_status_non_beheerder_is_403_and_does_not_leak(monkeypatch):
     resp = client.get("/api/v1/agents/jobs/victim", headers={"Authorization": "Bearer ak_p"})
     assert resp.status_code == 403
     status_fn.assert_not_awaited()
-
-
-def test_job_status_beheerder_bypasses_ownership(monkeypatch):
-    """A beheerder key may poll any job (no ownership binding)."""
-    _auth(monkeypatch, "beheerder")
-    owns = AsyncMock(return_value=False)
-    import app_main.services.agents.audit_service as aud
-
-    monkeypatch.setattr(aud.AgentAuditService, "agent_owns_job", owns)
-    import app_main.services.command_service as cs
-
-    monkeypatch.setattr(
-        cs.CommandService,
-        "get_command_status",
-        AsyncMock(return_value={"job_id": "any", "status": "complete"}),
-    )
-    client = _make_client()
-    resp = client.get("/api/v1/agents/jobs/any", headers={"Authorization": "Bearer ak_admin"})
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "complete"
-    owns.assert_not_awaited()  # beheerder skips the ownership check entirely
 
 
 # -- audit-log --------------------------------------------------------------

@@ -153,8 +153,10 @@ def _reject_ssrf_url(url: str) -> None:
 router = APIRouter(
     prefix="/api/v1/agents",
     tags=["agents"],
-    # Router-level gate: per-IP throttle THEN the right check (beheerder),
-    # applied to every route on this router (in order).
+    # Router-level gate: per-IP request cap THEN the right check (beheerder),
+    # applied to every route on this router (in order). The key itself is
+    # already authenticated by ApiKeyMiddleware, which also throttles failed
+    # keys per IP before the database lookup (auth.py).
     dependencies=[
         Depends(agent_ip_throttle()),
         Depends(require_right(Right.BEHEERDER)),
@@ -172,7 +174,7 @@ async def extract_entities(
     """Extract typed entities from raw text (stateless — no source is created).
 
     Gated by the router-level right check (beheerder); the per-key slowapi limit
-    below bounds authenticated abuse (the pre-auth throttle bounds floods).
+    below bounds authenticated abuse (failed-key floods are bounded in ApiKeyMiddleware).
     """
     from app_main.services.entity_extraction_service import extract_from_text
 
@@ -248,12 +250,8 @@ async def process_url(
     # The enqueued process_source command id is stashed on the source as `command`.
     src = await source_svc.get(result.id)
     job_id = str(getattr(src, "command", "") or "")
-    # Record the (agent, job) ownership so GET /jobs/{id} can authorize the caller
-    # (jobs carry no owner column). The audit middleware reads request.state.job_id.
-    # Caveat: this couples poll-authz to the best-effort audit write — if that
-    # CREATE fails (the failure the middleware's try/except swallows), the caller
-    # gets a valid job_id but 404s on their own poll. That is FAIL-SAFE (deny, not
-    # leak); a dedicated ownership store would decouple it (deployment follow-up).
+    # Record the enqueued job in the audit trail (the audit middleware reads
+    # request.state.job_id).
     request.state.job_id = job_id
     return ProcessSourceResponse(
         job_id=job_id, source_id=str(result.id), status="queued"
@@ -381,23 +379,13 @@ async def get_job_status(
     request: Request,
     response: Response,
     job_id: str,
-    key: AgentKeyContext = Depends(current_key),
 ) -> JobStatusResponse:
-    """Poll a job's status — but ONLY a job THIS agent enqueued.
+    """Poll a job's status (``beheerder`` only, router level, F2-01).
 
-    Jobs carry no owner column, so ownership is authorized via the agent's own
-    audit trail (process-url stamps the job_id there). A job the calling agent
-    did not enqueue → 404 (not the status), so this is neither an IDOR nor an
-    existence oracle. A beheerder key may poll any job. On a hit, the payload is
-    verbatim CommandService.get_command_status; an unknown id → status:"unknown".
+    The payload is verbatim CommandService.get_command_status; an unknown id →
+    status:"unknown".
     """
-    from app_main.services.agents.audit_service import AgentAuditService
     from app_main.services.command_service import CommandService
-
-    if key.permission != Right.BEHEERDER:
-        owns = await AgentAuditService().agent_owns_job(key.agent_id, job_id)
-        if not owns:
-            raise HTTPException(status_code=404, detail="Job not found")
 
     status = await CommandService.get_command_status(job_id)
     return JobStatusResponse(
@@ -419,17 +407,12 @@ async def get_audit_log(
     limit: int = 100,
     key: AgentKeyContext = Depends(current_key),
 ) -> dict:
-    """The calling key's own agent_audit_log entries (newest first).
-
-    Scoped to the caller's ``agent_id`` — a ``read`` key passing a different
-    ``?agent_id=`` is still scoped to itself (no cross-agent leak). Only a
-    ``beheerder`` key may read another agent's trail via ``?agent_id=``.
+    """agent_audit_log entries (newest first) for ``?agent_id=``, else the
+    calling key's own agent id. ``beheerder`` only (router level, F2-01).
     """
     from app_main.services.agents.audit_service import AgentAuditService
 
-    target = key.agent_id
-    if agent_id and key.permission == Right.BEHEERDER:
-        target = agent_id
+    target = agent_id or key.agent_id
     limit = max(1, min(limit, 500))
     entries = await AgentAuditService().list_for_agent(target, limit=limit)
     return {"agent_id": target, "entries": entries}
