@@ -78,7 +78,8 @@ Gecontroleerd op 29-10-2026. Grootte is de downloadgrootte volgens de genoemde b
 | docker-socket-proxy | `tecnativa/docker-socket-proxy:v0.5.0` | ca. 20 MB | P7, P1 | Docker Hub |
 | Docker-client (in afgeleid llama-swap-image en als testclient) | `docker:29.9.2-cli` | 67 MB | P7, P1 | Docker Hub |
 | HTTP-testclient | `curlimages/curl:8.23.0` | 11 MB | alle | Docker Hub |
-| SurrealDB voor proef 4 | `surrealdb/surrealdb:v2.7.0` | 32 MB | P4 | Docker Hub |
+| SurrealDB voor proef 4 | `surrealdb/surrealdb:v2.7.0` | 32 MB | P4, P10 | Docker Hub |
+| SurrealDB v3 | `surrealdb/surrealdb:v3.3.5` | meten | P10 | GitHub-releases, ADR 0021 |
 | Python voor hulpscripts | `python:3.12.16-slim-bookworm` | meten | P2, P4, P6, P7, P8 | Docker Hub |
 | API van de fork | lokaal gebouwd uit de huidige commit met de bestaande `Dockerfile`, tag `signaal-proef/open-notebook:<commit>` | meten | P4 | repository |
 | open-notebook-mcp | PyPI `open-notebook-mcp==0.3.0` (22-12-2025, nieuwste) | klein | P4 | PyPI |
@@ -698,7 +699,7 @@ Beslisregel voor ADR 0021: K2 tot en met K5 geslaagd betekent v3.3.5; de mechani
 - K3 is onzeker: `type::thing` komt veel voor in de Python-code (mechanisch), maar de strengere schemacontrole kan tests laten falen die velden schrijven die het schema niet kent. Dat zijn echte fouten, maar ze vragen niet-mechanisch werk.
 - K4 is onbekend: welke serverversies SDK 1.0.6 en 2.0.0 ondersteunen, staat niet in de geraadpleegde documentatie.
 
-**Script.** `scripts/signaalsysteem/proeven/p10_surrealdb_v3.sh`, met hulpscripts in `p10/` (telling van patronen, mechanische vervangingen, vergelijking van testuitkomsten). Compose-profiel `p10`. Nog te schrijven door de bouwagent.
+**Script.** `scripts/signaalsysteem/proeven/p10_surrealdb_v3.sh`, met hulpscripts in `p10/` (telling van patronen, mechanische vervangingen, vergelijking van testuitkomsten). Compose-profiel `p10`. Aanvullingen bij het uitwerken staan in §8, punten 30–33.
 
 **Plek.** Hier.
 
@@ -706,7 +707,21 @@ Beslisregel voor ADR 0021: K2 tot en met K5 geslaagd betekent v3.3.5; de mechani
 
 | Datum | Commit | Exitcode | Meetwaarden | Conclusie |
 | --- | --- | --- | --- | --- |
-| — | — | niet uitgevoerd | — | Beschreven op 30-10; script nog te schrijven. |
+| 30-10-2026 | dbfb1b00 (scripts en kopie) | 1 | Zie hieronder. Runmap `runs/p10/20261030T205153`. Digests: v2.7.0 `sha256:e5d7387e…f745723`, v3.3.5 `sha256:3db515b8…3f1ad4b9`. SDK `surrealdb==1.0.6` maakt verbinding met v3.3.5, dus 2.0.0 is niet nodig geweest | K1 geslaagd, K2–K5 niet. Volgens de beslisregel blijft `v2.7.0` (B3); de overstap naar v3 wordt een aparte taak. Besluit Geert in ADR 0021 |
+
+Meetwaarden:
+
+- **K1 geslaagd** (met nulcorrectie): op v2.7.0 slagen alle 72 migraties, alle 72 `_down`-varianten en daarna weer alle migraties. Zonder correctie faalt `5_down.surrealql` (`REMOVE TABLE IF EXISTS transformation SCHEMAFULL;`, parsefout, ook op v2.7.0). Dat is een bestaande fout in de fork, los van v3 (§8, punt 33).
+- **K2 mislukt.** 10a telt: `SEARCH ANALYZER` 6 keer in `1.surrealql`, `type::is::array` 1 keer in `82.surrealql`, `type::thing` 122 keer in 35 Python-bestanden (12 broncode, 23 tests), `type::is::*` 2 keer in tests; `string::is::*`, `time::from::*`, `rand::guid`, `MTREE`, futures, `GROUP` met `SPLIT` en toekenning zonder `LET`: 0. 10d past 126 mechanische vervangingen toe in 40 bestanden. Toch falen op v3.3.5 nog 41 migratiebestanden (heen of terug), net als zonder vervangingen (10c). Met ook de volgorde van `FLEXIBLE` (10g, 64 vervangingen in 28 bestanden) falen er nog 30.
+- **K3 mislukt.** Testset: 603 tests in 79 bestanden van 5 workspace-leden. v2.7.0: 599 geslaagd, 0 mislukt, 4 overgeslagen. v3.3.5 na 10d: 146 geslaagd, 453 mislukt, 4 overgeslagen. Alle 453 falen in de fixture, die de migraties niet kan toepassen (`FLEXIBLE must be specified after TYPE` in `1.surrealql`). Wat de tests zelf op v3 doen, is dus niet gemeten.
+- **K4 mislukt**, omdat K3 niet is gehaald. `surrealdb==1.0.6` werkt wel met v3.3.5: verbinding, `query_raw` en de migratierunner.
+- **K5 mislukt.** Niet-mechanische aanpassingen in 41 migratiebestanden (grens 10), zonder herontwerp van een tabel. Per oorzaak (`p10/indeling.csv`):
+  - `FLEXIBLE TYPE x` moet `TYPE x FLEXIBLE` worden: 25 bestanden. Wel met een regex te doen, maar het staat niet in de migratiegids;
+  - `FLEXIBLE` alleen bij een type met `object`: 16 bestanden met `FLEXIBLE TYPE array`. Per veld een keuze (`array<object>`, `array<any>` of zonder `FLEXIBLE`);
+  - een fout op een tabel, index of veld dat niet bestaat (`UPDATE`, `DELETE`, `REMOVE` en backfills op een lege database): 17 bestanden, waarvan 8 `_down`-varianten.
+  
+  Ook als de `FLEXIBLE`-volgorde mechanisch zou tellen, blijven 33 bestanden over. Achter deze fouten kunnen nog andere zitten: de testset kwam op v3 niet voorbij de migraties.
+- **K6 vastgelegd.** Een onbekend veld op een SCHEMAFULL-tabel (`CREATE … SET`, `CREATE … CONTENT`, `UPDATE … SET`): op v2.7.0 stil weggelaten, op v3.3.5 een fout (`Found field 'classification', but no such field exists for table …`).
 
 ## 4. Embeddingmodellen vergelijken (ADR 0008)
 
@@ -846,3 +861,10 @@ Aanvullingen bij de GPU-ronde van 30-10-2026:
 27. **Git Bash.** `curl` is daar een Windows-programma en kreeg door `MSYS2_ARG_CONV_EXCL` een POSIX-pad (curl-fout 23); `testdata` zet het pad nu om. Git Bash kent geen `pkill`: na een scriptfout liepen `nvidia-smi.exe` en `docker events` door. `kill_boom` stopt nu de hele procesboom, en elk einde van een proef stopt alle kindprocessen. Tellingen met `grep` in een pijplijn geven bij nul treffers geen scriptfout meer (`zoek`). De logs van het profiel worden bewaard vóór `compose down`.
 28. **P1, `docker events`.** Onder Git Bash is `docker` van Docker Desktop een sh-wrapper rond `docker.exe`; `kill` op het achtergrondproces stopte alleen de wrapper, en `docker.exe events` bleef na de proef lopen. P1 stopt het nu met `kill_boom`.
 29. **P3, embeddingbelasting.** 32 fragmenten in één `-d`-argument (ongeveer 160 kB) passen niet op de Windows-opdrachtregel (`docker.exe: Argument list too long`). Daardoor faalde elke aanvraag, en telde de meting alleen het laden. De aanvraag gaat nu via stdin (`--data-binary @-`), en de fragmentlengte volgt uit `/tokenize` van het model zelf (ongeveer 500 tokens). Een HTTP-status anders dan 200 telt nu als fout in de CSV.
+
+Aanvullingen bij P10 (30-10-2026):
+
+30. **P10, netwerk en poorten.** De tests draaien in de WSL-`.venv` buiten Docker en hebben een gepubliceerde poort nodig; op een netwerk met `internal: true` publiceert Docker Desktop geen poort (P8). De twee SurrealDB-containers staan daarom op een eigen, gewoon netwerk `p10`, met `127.0.0.1:18100` (v2.7.0) en `127.0.0.1:18101` (v3.3.5), in geheugenmodus en zonder gegevens. `surrealdb/surrealdb:v3.3.5` staat in 1.7 en in de lijst van toegestane images.
+31. **P10, testfixture.** `live_surrealdb` start met testcontainers een eigen container met de zwevende tag `surrealdb/surrealdb:v2`, zonder projectlabel en met een Ryuk-container. `p10/harnas.py` laat de fixture in de kopie de proefserver gebruiken (`P10_SURREAL_URL`), met een nieuwe lege namespace en database per pytest-sessie en dezelfde migratiecode. De aanpassing is gelijk voor v2.7.0 en v3.3.5 en staat als `harnas.diff` in de runmap. De code komt uit de kopie via `PYTHONPATH`, niet uit de repository.
+32. **P10, migratiecode.** Heen via `execute_transaction` zoals `AsyncMigrationRunner._apply_up`. Terug ook via `execute_transaction`: `run_one_down` gebruikt `execute_query`, dat een fout in een latere opdracht niet meldt. Na een fout gaat de proef door met de volgende migratie (de runner stopt), zodat alle fouten zichtbaar worden.
+33. **P10, nulcorrectie en 10g.** `migrations/5_down.surrealql` (`REMOVE TABLE IF EXISTS transformation SCHEMAFULL;`) is ook op v2.7.0 een parsefout; zonder correctie kan K1 nooit slagen. Het script meet eerst zonder correctie (`p10b_v2_onaangepast`) en verwijdert daarna `SCHEMAFULL` in alle kopieën. Stap 10g (ter informatie, telt niet voor K2–K4) past ook `FLEXIBLE TYPE x` → `TYPE x FLEXIBLE` toe: de parser van v3.3.5 eist die volgorde, de migratiegids noemt haar niet. K5 telt de fouten van 10d en 10g samen, ingedeeld met `p10/indeling.csv`.
