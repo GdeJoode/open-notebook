@@ -47,7 +47,12 @@ def lees(map_: Path) -> dict[str, dict]:
             for kind in tc:
                 if kind.tag in ("failure", "error"):
                     stand = "mislukt"
-                    bericht = (kind.get("message") or "") + "\n" + (kind.text or "")
+                    # Alleen de foutregels van pytest ("E   ..."), niet de hele
+                    # traceback: die bevat broncode, en het maskeren van regels met
+                    # "password=" in uitkomst.json brak de JSON.
+                    foutregels = [r[1:].strip() for r in (kind.text or "").split("\n")
+                                  if r.startswith("E ")]
+                    bericht = (kind.get("message") or "") + "\n" + "\n".join(foutregels)
                     break
                 if kind.tag == "skipped":
                     stand = "overgeslagen"
