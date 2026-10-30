@@ -25,7 +25,7 @@ De agentdefinities staan in `.claude/agents/` (`signaal-planner`, `signaal-ontwe
 | [0006](adr/0006-llama-swap-en-modelkoppeling.md) | llama-swap als lokale modelserver en één modelpoort | besloten |
 | [0007](adr/0007-modelregister-en-auditlog.md) | Plaats van het modelregister en het auditlog van modelaanroepen | besloten |
 | [0008](adr/0008-embeddingmodel.md) | Embeddingmodel onder llama-swap | besloten (mxbai-embed-large Q8_0) |
-| [0009](adr/0009-gpu-beheer-en-docker-toegang.md) | GPU-beheer: docling-serve, WhisperX en Kev onder llama-swap, en Docker-toegang | voorgesteld (Kev-4B besloten; open: akkoord op Docker-toegang optie 2, configuratie B) |
+| [0009](adr/0009-gpu-beheer-en-docker-toegang.md) | GPU-beheer: docling-serve, WhisperX en Kev onder llama-swap, en Docker-toegang | besloten |
 | [0010](adr/0010-een-inname-via-importeindpunt.md) | Eén inname via het importeindpunt | besloten |
 | [0011](adr/0011-orkestratie-na-de-import.md) | Orkestratie van de stappen na de import | besloten |
 | [0012](adr/0012-entiteitextractie-en-deduplicatie-als-langgraph.md) | Entiteitextractie en deduplicatie als LangGraph-modules; één extractiepad | besloten |
